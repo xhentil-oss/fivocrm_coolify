@@ -1,0 +1,313 @@
+import { useCollection, setGlobalTeamId, getGlobalTeamId } from './useFirestore';
+import { useAuth } from '../contexts/AuthContext';
+import { useMemo, useEffect, useRef } from 'react';
+import { doc, updateDoc, Timestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
+import { db } from '../lib/firebase';
+
+// Data scope determines what data a user can see
+// 'all' = everything (admin/owner)
+// 'team' = everything in their team (manager)
+// 'assigned' = only data assigned to them (member)
+// 'readonly' = same as assigned but no edits (viewer)
+export type DataScope = 'all' | 'team' | 'assigned' | 'readonly';
+
+export type UserPermissions = {
+  canAccessProjects: boolean;
+  canAccessTasks: boolean;
+  canAccessCRM: boolean;
+  canAccessInvoices: boolean;
+  canAccessReports: boolean;
+  canAccessSettings: boolean;
+  canAccessGoals: boolean;
+  canAccessTeams: boolean;
+  canAccessChat: boolean;
+  canAccessCustomers: boolean;
+  canAccessServices: boolean;
+  canAccessExpenses: boolean;
+  canAccessProfile: boolean;
+  canAccessTimeTracking: boolean;
+  canEdit: boolean;
+  canAssignTasks: boolean;
+  canManageMembers: boolean;
+  role: string | null;
+  dataScope: DataScope;
+  teamId: string | null;
+  teamName: string | null;
+  isAdmin: boolean;
+  isOwner: boolean;
+  isManager: boolean;
+  isLoading: boolean;
+};
+
+// Full access for admin/owner
+const fullAccessPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamId' | 'teamName' | 'isAdmin' | 'isOwner' | 'isManager' | 'isLoading'> = {
+  canAccessProjects: true,
+  canAccessTasks: true,
+  canAccessCRM: true,
+  canAccessInvoices: true,
+  canAccessReports: true,
+  canAccessSettings: true,
+  canAccessGoals: true,
+  canAccessTeams: true,
+  canAccessChat: true,
+  canAccessCustomers: true,
+  canAccessServices: true,
+  canAccessExpenses: true,
+  canAccessProfile: true,
+  canAccessTimeTracking: true,
+  canEdit: true,
+  canAssignTasks: true,
+  canManageMembers: true,
+};
+
+// Minimal access for users not yet assigned to a team
+const restrictedPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamId' | 'teamName' | 'isAdmin' | 'isOwner' | 'isManager' | 'isLoading'> = {
+  canAccessProjects: false,
+  canAccessTasks: false,
+  canAccessCRM: false,
+  canAccessInvoices: false,
+  canAccessReports: false,
+  canAccessSettings: false,
+  canAccessGoals: false,
+  canAccessTeams: false,
+  canAccessChat: false,
+  canAccessCustomers: false,
+  canAccessServices: false,
+  canAccessExpenses: false,
+  canAccessProfile: true,
+  canAccessTimeTracking: false,
+  canEdit: false,
+  canAssignTasks: false,
+  canManageMembers: false,
+};
+
+export function usePermissions(): UserPermissions {
+  const { user, loading: userLoading } = useAuth();
+  
+  // Query team members for this specific user (by uid or email) instead of ALL members
+  const userIds = useMemo(() => {
+    if (!user) return [];
+    const ids = [user.uid];
+    if (user.email) ids.push(user.email);
+    return ids;
+  }, [user]);
+
+  // Query teamMembers with single field only (avoids composite index requirement).
+  // Filter Active status client-side.
+  const { data: rawTeamMembers, loading: membersLoading, error: membersError } = useCollection<any>('teamMembers', {
+    where: userIds.length > 0
+      ? [{ field: 'userId', operator: 'in', value: userIds }]
+      : [{ field: 'userId', operator: '==', value: '__never__' }],
+    skipTeamFilter: true,
+  });
+
+  const teamMembers = useMemo(() => {
+    if (!rawTeamMembers) return [];
+    return rawTeamMembers.filter((m: any) => m.status === 'Active');
+  }, [rawTeamMembers]);
+
+  const { data: teams, loading: teamsLoading, error: teamsError } = useCollection<any>('teams', {
+    skipTeamFilter: true,
+  });
+
+  // Check if the current user is the creator/owner of any team
+  const isOwner = useMemo(() => {
+    if (!user || !teams) return false;
+    return teams.some((t: any) => t.createdByUserId === user.uid);
+  }, [user, teams]);
+
+  // Don't stay stuck loading forever if Firebase returns an error.
+  // On error, isLoading becomes false but we still show restrictedPermissions (fail-safe).
+  const isLoading = userLoading || (membersLoading && !membersError) || (teamsLoading && !teamsError);
+  const hasError = !!(membersError || teamsError);
+
+  const permissions = useMemo((): UserPermissions => {
+    // While loading or on error, return restricted permissions with loading flag (fail-safe)
+    if (!user || isLoading || hasError) {
+      return {
+        ...restrictedPermissions,
+        role: null,
+        dataScope: 'assigned',
+        teamId: null,
+        teamName: null,
+        isAdmin: false,
+        isOwner: false,
+        isManager: false,
+        isLoading: isLoading,
+      };
+    }
+
+    // OWNER: User who created a team gets full admin access
+    if (isOwner) {
+      // Check if owner also has a team membership (for teamId/teamName)
+      const ownerMembership = teamMembers.length > 0 ? teamMembers[0] : null;
+      let ownerTeamId = ownerMembership?.teamId || null;
+      let ownerTeam = ownerTeamId ? teams?.find((t: any) => t.id === ownerTeamId) : null;
+
+      // Fallback: if no teamMembers record, derive teamId from owned team directly
+      if (!ownerTeamId && teams && teams.length > 0) {
+        const ownedTeam = teams.find((t: any) => t.createdByUserId === user?.uid);
+        if (ownedTeam) {
+          ownerTeamId = ownedTeam.id;
+          ownerTeam = ownedTeam;
+        }
+      }
+
+      return {
+        ...fullAccessPermissions,
+        role: ownerMembership?.role || 'Admin',
+        dataScope: 'all',
+        teamId: ownerTeamId,
+        teamName: ownerTeam?.name || null,
+        isAdmin: true,
+        isOwner: true,
+        isManager: false,
+        isLoading: false,
+      };
+    }
+
+    // NO TEAM MEMBERSHIP and NOT OWNER: restricted access
+    if (!teamMembers || teamMembers.length === 0) {
+      return {
+        ...restrictedPermissions,
+        role: null,
+        dataScope: 'assigned',
+        teamId: null,
+        teamName: null,
+        isAdmin: false,
+        isOwner: false,
+        isManager: false,
+        isLoading: false,
+      };
+    }
+
+    // Has team membership — use role-based permissions
+    const membership = teamMembers[0];
+    const team = teams?.find((t: any) => t.id === membership.teamId);
+    const memberIsAdmin = membership.role === 'Admin';
+    const memberIsManager = membership.role === 'Manager';
+
+    // Admin role gets full access with 'all' data scope
+    if (memberIsAdmin) {
+      return {
+        ...fullAccessPermissions,
+        role: membership.role,
+        dataScope: 'all',
+        teamId: membership.teamId,
+        teamName: team?.name || null,
+        isAdmin: true,
+        isOwner: false,
+        isManager: false,
+        isLoading: false,
+      };
+    }
+
+    // Manager role: full module access within team, can assign tasks/manage members
+    if (memberIsManager) {
+      return {
+        canAccessProjects: true,
+        canAccessTasks: true,
+        canAccessCRM: membership.canAccessCRM === true,
+        canAccessInvoices: membership.canAccessInvoices === true,
+        canAccessReports: true,
+        canAccessSettings: false,
+        canAccessGoals: true,
+        canAccessTeams: false,
+        canAccessChat: true,
+        canAccessCustomers: membership.canAccessCustomers === true || membership.canAccessCRM === true,
+        canAccessServices: membership.canAccessServices === true || membership.canAccessInvoices === true,
+        canAccessExpenses: membership.canAccessExpenses === true || membership.canAccessInvoices === true,
+        canAccessProfile: true,
+        canAccessTimeTracking: true,
+        canEdit: true,
+        canAssignTasks: true,
+        canManageMembers: false,
+        role: membership.role,
+        dataScope: 'team',
+        teamId: membership.teamId,
+        teamName: team?.name || null,
+        isAdmin: false,
+        isOwner: false,
+        isManager: true,
+        isLoading: false,
+      };
+    }
+
+    // Viewer role: read-only access to assigned items only
+    // Member role: access to assigned items with edit rights
+    const isViewer = membership.role === 'Viewer';
+    
+    return {
+      canAccessProjects: membership.canAccessProjects === true,
+      canAccessTasks: membership.canAccessTasks === true,
+      canAccessCRM: membership.canAccessCRM === true,
+      canAccessInvoices: membership.canAccessInvoices === true,
+      canAccessReports: membership.canAccessReports === true,
+      canAccessSettings: membership.canAccessSettings === true,
+      canAccessGoals: membership.canAccessGoals === true || membership.canAccessTasks === true,
+      canAccessTeams: false, // Only admin/owner can manage teams
+      canAccessChat: true,
+      canAccessCustomers: membership.canAccessCustomers === true || membership.canAccessCRM === true,
+      canAccessServices: membership.canAccessServices === true || membership.canAccessInvoices === true,
+      canAccessExpenses: membership.canAccessExpenses === true || membership.canAccessInvoices === true,
+      canAccessProfile: true,
+      canAccessTimeTracking: membership.canAccessTasks === true,
+      canEdit: !isViewer, // Viewers can only read, Members can edit
+      canAssignTasks: false, // Members can't assign to others
+      canManageMembers: false,
+      role: membership.role,
+      dataScope: isViewer ? 'readonly' : 'assigned',
+      teamId: membership.teamId,
+      teamName: team?.name || null,
+      isAdmin: false,
+      isOwner: false,
+      isManager: false,
+      isLoading: false,
+    };
+  }, [user, teamMembers, teams, isOwner, isLoading]);
+
+  // One-time normalization: if teamMember.userId is stored as email instead of UID,
+  // update it and reassign any tasks/records that reference the old email-based userId.
+  const normalizedRef = useRef(false);
+  useEffect(() => {
+    if (normalizedRef.current || !user || !user.email || !teamMembers || teamMembers.length === 0) return;
+
+    const emailMember = teamMembers.find(
+      (m: any) => m.userId === user.email && m.userId !== user.uid
+    );
+    if (!emailMember) return;
+
+    normalizedRef.current = true;
+
+    // Update the teamMember record to use the actual Firebase Auth UID
+    (async () => {
+      try {
+        const memberRef = doc(db, 'teamMembers', emailMember.id);
+        await updateDoc(memberRef, { userId: user.uid, updatedAt: Timestamp.now() });
+
+        // Also update any tasks assigned to the old email-based userId
+        const tasksSnap = await getDocs(
+          query(collection(db, 'tasks'), where('assignedToUserId', '==', user.email))
+        );
+        if (!tasksSnap.empty) {
+          const batch = writeBatch(db);
+          tasksSnap.docs.forEach(d => {
+            batch.update(d.ref, { assignedToUserId: user.uid, updatedAt: Timestamp.now() });
+          });
+          await batch.commit();
+        }
+      } catch {
+        // Non-blocking — RBAC filters already handle both uid and email
+      }
+    })();
+  }, [user, teamMembers]);
+
+  // Sync teamId to global state DURING RENDER (not useEffect) so child components
+  // like TasksView see globalTeamId immediately when they mount in the same render cycle.
+  // useEffect would be 1 render late — TasksView would mount with globalTeamId=null → stuck loading.
+  if (permissions.teamId !== getGlobalTeamId()) {
+    setGlobalTeamId(permissions.teamId);
+  }
+
+  return permissions;
+}

@@ -1,0 +1,209 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── Helper Functions ──
+
+    // Check if user is authenticated
+    function isAuth() {
+      return request.auth != null;
+    }
+
+    // Check if the current user belongs to the document's team
+    function isTeamMember() {
+      return isAuth() && resource.data.teamId != null
+        && exists(/databases/$(database)/documents/teamMembers/$(resource.data.teamId + '_' + request.auth.uid));
+    }
+
+    // Check if user has the same teamId as the document being written
+    function isWritingToOwnTeam() {
+      return isAuth() && request.resource.data.teamId != null
+        && exists(/databases/$(database)/documents/teamMembers/$(request.resource.data.teamId + '_' + request.auth.uid));
+    }
+
+    // Allow read only if doc has no teamId (legacy) OR user is a member of that team
+    function canReadTeamDoc() {
+      return isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    // ── Team-Scoped Collections ──
+    // Data isolation: users can only read/write docs with matching teamId
+
+    match /tasks/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    match /invoices/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    match /customers/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    match /leads/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    match /services/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    match /expenses/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    match /goals/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    match /timeEntries/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    match /projects/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    match /channels/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    match /messages/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
+    }
+
+    match /activities/{docId} {
+      allow read: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow create: if isAuth();
+      allow update, delete: if false;
+    }
+
+    match /invoiceItems/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    match /taskComments/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
+    }
+
+    match /taskCollaborators/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create, update, delete: if isAuth();
+    }
+
+    match /clientRequests/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    match /customIndustries/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    match /projectComments/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
+    }
+
+    match /serviceInquiries/{docId} {
+      allow read: if canReadTeamDoc();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+    }
+
+    // ── Global Collections (not team-scoped) ──
+
+    match /teams/{docId} {
+      allow read: if isAuth();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
+    }
+
+    match /teamMembers/{docId} {
+      allow read: if isAuth();
+      allow create: if isAuth();
+      allow update, delete: if isAuth();
+    }
+
+    match /teamInvites/{docId} {
+      allow read: if isAuth();
+      allow create: if isAuth();
+      allow update, delete: if isAuth();
+    }
+
+    match /userProfiles/{docId} {
+      allow read: if isAuth();
+      allow create: if isAuth();
+      allow update: if isAuth() && resource.data.userId == request.auth.uid;
+      allow delete: if false;
+    }
+
+    match /notifications/{docId} {
+      allow read: if isAuth() && resource.data.userId == request.auth.uid;
+      allow create: if isAuth();
+      allow update: if isAuth() && resource.data.userId == request.auth.uid;
+      allow delete: if isAuth() && resource.data.userId == request.auth.uid;
+    }
+
+    match /clientPortalAccess/{docId} {
+      allow read: if isAuth();
+      allow create: if isAuth();
+      allow update: if isAuth();
+      allow delete: if isAuth();
+    }
+
+    match /typingIndicators/{docId} {
+      allow read, write: if isAuth();
+    }
+
+    match /directMessages/{docId} {
+      allow read: if isAuth() && (resource.data.senderId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+      allow create: if isAuth();
+      allow update: if isAuth() && (resource.data.senderId == request.auth.uid || resource.data.receiverId == request.auth.uid);
+      allow delete: if isAuth() && resource.data.senderId == request.auth.uid;
+    }
+
+    match /milestones/{docId} {
+      allow read, write: if isAuth();
+    }
+
+    match /workspaceFolders/{docId} {
+      allow read, write: if isAuth();
+    }
+
+    match /workspaceDriveFiles/{docId} {
+      allow read, write: if isAuth();
+    }
+  }
+}

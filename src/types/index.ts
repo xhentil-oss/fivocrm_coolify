@@ -1,0 +1,422 @@
+// Firebase/Firestore type definitions for the application
+
+export interface Project {
+  id: string;
+  name: string;
+  description?: string;
+  status: 'Planning' | 'Active' | 'On Hold' | 'Completed';
+  teamId?: string;
+  customerId?: string;
+  budget?: number;
+  spent?: number;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface Team {
+  id: string;
+  name: string;
+  department?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface TeamMember {
+  id: string;
+  teamId: string;
+  userId: string;
+  email?: string;
+  role: 'Admin' | 'Manager' | 'Member' | 'Viewer';
+  status: 'Active' | 'Inactive';
+  canAccessProjects?: boolean;
+  canAccessTasks?: boolean;
+  canAccessCRM?: boolean;
+  canAccessInvoices?: boolean;
+  canAccessReports?: boolean;
+  canAccessSettings?: boolean;
+  canAccessGoals?: boolean;
+  canAccessTeams?: boolean;
+  canAccessChat?: boolean;
+  canAccessCustomers?: boolean;
+  canAccessServices?: boolean;
+  canAccessExpenses?: boolean;
+  canAccessProfile?: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface Task {
+  id: string;
+  title: string;
+  description?: string;
+  status: 'Todo' | 'In Progress' | 'Review' | 'Done';
+  priority?: 'low' | 'medium' | 'high' | 'urgent';
+  teamId?: string;
+  projectId?: string;
+  assignedToUserId?: string;
+  dueDate?: Date;
+  startDate?: Date;
+  endDate?: Date;
+  parentTaskId?: string;
+  dependsOn?: string[];
+  estimatedHours?: number;
+  isRecurring?: boolean;
+  recurringFrequency?: 'daily' | 'weekly' | 'monthly' | 'yearly';
+  recurringDayOfWeek?: number; // 0=Sunday, 1=Monday, ... 6=Saturday
+  recurringDayOfMonth?: number; // 1-31
+  nextRecurringDate?: Date;
+  dueNotificationSent?: boolean;
+  attachments?: string;
+  collaboratorIds?: string[];
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface Customer {
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  company?: string;
+  address?: string;
+  teamId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface Invoice {
+  id: string;
+  invoiceNumber?: string;
+  customerId?: string;
+  projectId?: string;
+  teamId?: string;
+  amount: number;
+  total?: number;
+  subtotal?: number;
+  tax?: number;
+  notes?: string;
+  status: 'Draft' | 'Pending' | 'Paid' | 'Overdue';
+  paymentMethod?: string;
+  paymentUrl?: string;
+  dueDate?: Date;
+  paidAt?: Date;
+  emailSent?: boolean;
+  reminderSent?: boolean;
+  isRecurring?: boolean;
+  recurringFrequency?: 'weekly' | 'monthly' | 'quarterly' | 'yearly';
+  nextRecurringDate?: Date;
+  parentInvoiceId?: string;
+  stripeSessionId?: string;
+  stripePaymentIntentId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface Service {
+  id: string;
+  name?: string;
+  title?: string;
+  description?: string;
+  price: number;
+  category?: string;
+  currency?: string;
+  teamId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface Expense {
+  id: string;
+  description: string;
+  amount: number;
+  category?: string;
+  date?: Date;
+  teamId?: string;
+  projectId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface Goal {
+  id: string;
+  title: string;
+  description?: string;
+  targetValue?: number;
+  currentValue?: number;
+  dueDate?: Date;
+  status: 'Not Started' | 'In Progress' | 'Completed';
+  teamId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface Lead {
+  id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  phoneNumber?: string;
+  company?: string;
+  teamId?: string;
+  jobTitle?: string;
+  address?: string;
+  website?: string;
+  status: 'New' | 'Contacted' | 'Qualified' | 'Proposal' | 'Won' | 'Lost';
+  source?: string;
+  value?: number;
+  score?: number;
+  estimatedValue?: number;
+  notes?: string;
+  lastFollowUpDate?: Date;
+  tags?: string[];
+  serviceInquiryId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface ServiceInquiry {
+  id: string;
+  // 1. Basic Info
+  businessName: string;
+  contactName: string;
+  email: string;
+  phoneNumber: string;
+  jobTitle?: string;
+  industry: string;
+  cityMarket?: string;
+  website?: string;
+  instagramLink?: string;
+  facebookLink?: string;
+  tiktokLink?: string;
+  linkedinLink?: string;
+  // 2. Service Interest
+  servicesInterestedIn: string[];
+  mainGoal: string;
+  projectNeedDescription: string;
+  currentMainChallenge: string;
+  hasWorkedWithAgency?: string;
+  whatHaveYouTried?: string;
+  // 3. Budget & Timeline
+  budgetRange: string;
+  timeline: string;
+  isUrgent?: string;
+  decisionMaker: string;
+  preferredContactMethod?: string;
+  // 4. Existing Materials
+  hasExistingMaterials: string;
+  googleDriveLink?: string;
+  secondGoogleDriveLink?: string;
+  folderIncludes?: string[];
+  hasBrandGuidelines?: string;
+  // 5. Service-specific: Social Media
+  smm_mainPlatforms?: string[];
+  smm_organicOrAds?: string;
+  smm_hasContent?: string;
+  smm_postingFrequency?: string;
+  smm_toneOfCommunication?: string;
+  // 5. Service-specific: Web Design
+  web_hasExistingWebsite?: string;
+  web_existingWebsiteLink?: string;
+  web_mainPurpose?: string;
+  web_estimatedPages?: string;
+  web_hasTextsAndPhotos?: string;
+  web_websitesYouLike?: string;
+  // 5. Service-specific: Paid Ads
+  ads_platforms?: string[];
+  ads_mainConversionAction?: string;
+  ads_monthlyBudget?: string;
+  ads_hasRunAdsBefore?: string;
+  ads_pastResults?: string;
+  // Meta
+  status: 'New' | 'Reviewed' | 'Converted';
+  leadId?: string;
+  customerId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface InvoiceItem {
+  id: string;
+  invoiceId: string;
+  serviceId?: string;
+  description?: string;
+  quantity: number;
+  unitPrice: number;
+  totalPrice: number;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface TaskComment {
+  id: string;
+  taskId: string;
+  content: string;
+  userId: string;
+  createdByUserId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface TaskCollaborator {
+  id: string;
+  taskId: string;
+  userId: string;
+  role?: string;
+  createdAt: Date;
+}
+
+export interface ChatMessage {
+  id: string;
+  content: string;
+  senderId: string;
+  receiverId?: string;
+  channelId?: string;
+  isRead?: boolean;
+  attachmentUrl?: string;
+  senderType?: 'staff' | 'client';
+  replyToId?: string;
+  replyToContent?: string;
+  replyToSender?: string;
+  editedAt?: Date;
+  deletedAt?: Date;
+  reactions?: Record<string, string[]>; // emoji -> userId[]
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Channel {
+  id: string;
+  name: string;
+  description?: string;
+  teamId?: string;
+  isPrivate?: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface TimeEntry {
+  id: string;
+  taskId?: string;
+  projectId?: string;
+  teamId?: string;
+  userId: string;
+  description?: string;
+  startTime: Date;
+  endTime?: Date;
+  duration?: number;
+  isBillable?: boolean;
+  isPomodoroSession?: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Milestone {
+  id: string;
+  goalId: string;
+  title: string;
+  completed?: boolean;
+  dueDate?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface TeamInvite {
+  id: string;
+  teamId: string;
+  email: string;
+  role: string;
+  token?: string;
+  expiresAt?: Date;
+  invitedByUserId?: string;
+  canAccessProjects?: boolean;
+  canAccessTasks?: boolean;
+  canAccessCRM?: boolean;
+  canAccessInvoices?: boolean;
+  canAccessReports?: boolean;
+  canAccessSettings?: boolean;
+  status: 'Pending' | 'Accepted' | 'Rejected' | 'Cancelled';
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface UserProfile {
+  id: string;
+  userId: string;
+  displayName?: string;
+  avatarUrl?: string;
+  bio?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+export interface Notification {
+  id: string;
+  userId: string;
+  type: string;
+  title: string;
+  message?: string;
+  isRead?: boolean;
+  actionType?: 'link' | 'approve' | 'view';
+  actionUrl?: string;
+  actionLabel?: string;
+  createdAt: Date;
+}
+
+export interface Activity {
+  id: string;
+  type: 'invoice_created' | 'invoice_paid' | 'lead_created' | 'lead_converted' | 'task_completed' | 'project_created' | 'customer_created' | 'expense_added' | 'request_created' | 'meeting' | 'call' | 'email_sent' | 'note';
+  title: string;
+  description?: string;
+  teamId?: string;
+  entityType?: 'invoice' | 'lead' | 'task' | 'project' | 'customer' | 'expense' | 'request';
+  entityId?: string;
+  customerId?: string;
+  userId: string;
+  createdAt: Date;
+}
+
+// ── Client Portal Types ──
+
+export interface ClientPortalAccess {
+  id: string;
+  customerId: string;
+  userId: string; // Firebase Auth UID
+  email: string;
+  status: 'Active' | 'Suspended';
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface ClientRequest {
+  id: string;
+  customerId: string;
+  clientUserId: string; // Firebase Auth UID of the client
+  title: string;
+  description: string;
+  category: 'Design' | 'Development' | 'Support' | 'Marketing' | 'Consulting' | 'Other';
+  status: 'New' | 'In Review' | 'In Progress' | 'Completed' | 'Rejected';
+  priority: 'low' | 'medium' | 'high' | 'urgent';
+  projectId?: string;
+  serviceId?: string;
+  assignedTeamId?: string;
+  assignedToUserId?: string;
+  linkedTaskId?: string;
+  attachmentUrl?: string;
+  adminNotes?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
