@@ -303,10 +303,12 @@ export function usePermissions(): UserPermissions {
   }, [user, teamMembers]);
 
   // Sync resolved teamId to global state via useEffect (safe, no side effects during render).
-  // useCollection hooks subscribe via useSyncExternalStore and will re-fetch when teamId changes.
-  // Note: multiple usePermissions instances are in-flight simultaneously; only update once resolved.
+  // Guard 1: only fire when fully loaded.
+  // Guard 2: only update with a non-null teamId — a usePermissions instance that resolves
+  //   with teamId=null (e.g. a non-member component that loaded before its data arrived)
+  //   must NOT reset globalTeamId back to null and wipe out team-scoped collection data.
   useEffect(() => {
-    if (!permissions.isLoading) {
+    if (!permissions.isLoading && permissions.teamId !== null) {
       setGlobalTeamId(permissions.teamId);
     }
   }, [permissions.isLoading, permissions.teamId]);

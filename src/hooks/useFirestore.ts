@@ -87,8 +87,15 @@ export function useCollection<T = DocumentData>(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
-  const globalTeamId = useGlobalTeamId();
+  const reactiveTeamId = useGlobalTeamId();
   const isTeamScoped = teamScopedCollections.has(collectionName) && !options?.skipTeamFilter;
+
+  // For non-team-scoped collections (teamMembers, teams, notifications, etc.) use a stable
+  // null sentinel so that changes to globalTeamId don't cause their effects to re-run and
+  // re-subscribe. This prevents a cascade where globalTeamId being set causes the
+  // usePermissions Firestore subscriptions to recreate, which briefly re-evaluates permissions,
+  // which can call setGlobalTeamId again, creating an oscillation loop.
+  const globalTeamId = isTeamScoped ? reactiveTeamId : null;
 
   // Stable dependency keys to avoid excessive re-renders from new object references
   const whereKey = JSON.stringify(options?.where || null);
