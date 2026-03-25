@@ -425,6 +425,13 @@ const ChatView: React.FC = () => {
     return `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
   };
 
+  const totalUnread = useMemo(() => {
+    let count = 0;
+    CHANNELS.forEach(c => { count += channelUnreadMap.get(c.id) || 0; });
+    directConversations.forEach(uid => { count += directUnreadMap.get(uid) || 0; });
+    return count;
+  }, [channelUnreadMap, directUnreadMap, directConversations]);
+
   if (isPending) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
@@ -727,13 +734,6 @@ const ChatView: React.FC = () => {
     { id: 'dm', label: 'DM' },
     { id: 'approvals', label: 'Aprovim' },
   ];
-
-  const totalUnread = useMemo(() => {
-    let count = 0;
-    CHANNELS.forEach(c => { count += channelUnreadMap.get(c.id) || 0; });
-    directConversations.forEach(uid => { count += directUnreadMap.get(uid) || 0; });
-    return count;
-  }, [channelUnreadMap, directUnreadMap, directConversations]);
 
   return (
     <div className="flex flex-col h-[calc(100dvh-96px)] sm:h-[calc(100dvh-120px)] lg:h-[calc(100dvh-136px)]">
