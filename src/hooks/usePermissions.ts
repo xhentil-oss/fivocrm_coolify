@@ -1,4 +1,4 @@
-import { useCollection, setGlobalTeamId, getGlobalTeamId } from './useFirestore';
+import { useCollection, setGlobalTeamId } from './useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useMemo, useEffect, useRef } from 'react';
 import { doc, updateDoc, Timestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
@@ -302,16 +302,14 @@ export function usePermissions(): UserPermissions {
     })();
   }, [user, teamMembers]);
 
-  // Sync teamId to global state DURING RENDER (not useEffect) so child components
-  // like TasksView see globalTeamId immediately when they mount in the same render cycle.
-  // useEffect would be 1 render late — TasksView would mount with globalTeamId=null → stuck loading.
-  // Guard: only update when fully loaded — multiple usePermissions instances can be in-flight
-  // simultaneously (Sidebar, PermissionGate, CRMView, etc.). A still-loading instance returns
-  // teamId=null and would reset globalTeamId back to null, causing all useCollection hooks to
-  // flip back to loading state and creating an infinite reload cycle.
-  if (!permissions.isLoading && permissions.teamId !== getGlobalTeamId()) {
-    setGlobalTeamId(permissions.teamId);
-  }
+  // Sync resolved teamId to global state via useEffect (safe, no side effects during render).
+  // useCollection hooks subscribe via useSyncExternalStore and will re-fetch when teamId changes.
+  // Note: multiple usePermissions instances are in-flight simultaneously; only update once resolved.
+  useEffect(() => {
+    if (!permissions.isLoading) {
+      setGlobalTeamId(permissions.teamId);
+    }
+  }, [permissions.isLoading, permissions.teamId]);
 
   return permissions;
 }
