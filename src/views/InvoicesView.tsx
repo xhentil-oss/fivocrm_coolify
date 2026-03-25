@@ -50,6 +50,13 @@ const InvoicesView: React.FC = () => {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
 
+  const { data: rawInvoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', {
+    orderBy: { field: 'createdAt', direction: 'desc' },
+    skipTeamFilter: true,
+  });
+  // Role-based filtering: Member/Viewer see only invoices they created
+  const invoices = useFilteredByOwner(rawInvoices);
+
   // Handle Stripe redirect params — verify actual invoice status before showing success
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
@@ -79,13 +86,6 @@ const InvoicesView: React.FC = () => {
       window.history.replaceState({}, '', window.location.pathname);
     }
   }, [rawInvoices]);
-
-  const { data: rawInvoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', {
-    orderBy: { field: 'createdAt', direction: 'desc' },
-    skipTeamFilter: true,
-  });
-  // Role-based filtering: Member/Viewer see only invoices they created
-  const invoices = useFilteredByOwner(rawInvoices);
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const invoiceMutation = useMutation<Invoice>('invoices');
 
