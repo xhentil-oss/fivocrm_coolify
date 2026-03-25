@@ -305,7 +305,11 @@ export function usePermissions(): UserPermissions {
   // Sync teamId to global state DURING RENDER (not useEffect) so child components
   // like TasksView see globalTeamId immediately when they mount in the same render cycle.
   // useEffect would be 1 render late — TasksView would mount with globalTeamId=null → stuck loading.
-  if (permissions.teamId !== getGlobalTeamId()) {
+  // Guard: only update when fully loaded — multiple usePermissions instances can be in-flight
+  // simultaneously (Sidebar, PermissionGate, CRMView, etc.). A still-loading instance returns
+  // teamId=null and would reset globalTeamId back to null, causing all useCollection hooks to
+  // flip back to loading state and creating an infinite reload cycle.
+  if (!permissions.isLoading && permissions.teamId !== getGlobalTeamId()) {
     setGlobalTeamId(permissions.teamId);
   }
 
