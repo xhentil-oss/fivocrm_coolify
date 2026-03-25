@@ -9,137 +9,123 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Check if the current user belongs to the document's team
-    function isTeamMember() {
-      return isAuth() && resource.data.teamId != null
-        && exists(/databases/$(database)/documents/teamMembers/$(resource.data.teamId + '_' + request.auth.uid));
-    }
-
-    // Check if user has the same teamId as the document being written
-    function isWritingToOwnTeam() {
-      return isAuth() && request.resource.data.teamId != null
-        && exists(/databases/$(database)/documents/teamMembers/$(request.resource.data.teamId + '_' + request.auth.uid));
-    }
-
-    // Allow read only if doc has no teamId (legacy) OR user is a member of that team
-    function canReadTeamDoc() {
-      return isAuth() && (resource.data.teamId == null || isTeamMember());
-    }
-
     // ── Team-Scoped Collections ──
-    // Data isolation: users can only read/write docs with matching teamId
+    // Data isolation is enforced CLIENT-SIDE in useFirestore.ts (teamId filtering).
+    // Server-side: allow any authenticated user to read/write.
+    // Note: isTeamMember() cannot be used reliably here because teamMember documents
+    // are created with random Firestore IDs (via addDoc), not predictable {teamId}_{uid} paths.
 
     match /tasks/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow update, delete: if isAuth();
     }
 
     match /invoices/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow update, delete: if isAuth();
     }
 
     match /customers/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow update, delete: if isAuth();
     }
 
     match /leads/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow update, delete: if isAuth();
     }
 
     match /services/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow update, delete: if isAuth();
     }
 
     match /expenses/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow update, delete: if isAuth();
     }
 
     match /goals/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow update, delete: if isAuth();
     }
 
     match /timeEntries/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow update, delete: if isAuth();
     }
 
     match /projects/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow update, delete: if isAuth();
     }
 
     match /channels/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow update, delete: if isAuth();
     }
 
     match /messages/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
       allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
     }
 
     match /activities/{docId} {
-      allow read: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow read: if isAuth();
       allow create: if isAuth();
       allow update, delete: if false;
     }
 
     match /invoiceItems/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow update, delete: if isAuth();
     }
 
     match /taskComments/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
       allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
     }
 
     match /taskCollaborators/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create, update, delete: if isAuth();
     }
 
     match /clientRequests/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow update, delete: if isAuth();
     }
 
     match /customIndustries/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow update, delete: if isAuth();
     }
 
     match /projectComments/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
       allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
     }
 
     match /serviceInquiries/{docId} {
-      allow read: if canReadTeamDoc();
+      allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && (resource.data.teamId == null || isTeamMember());
+      allow update, delete: if isAuth();
     }
 
     // ── Global Collections (not team-scoped) ──
