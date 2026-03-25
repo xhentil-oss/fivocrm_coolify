@@ -4,11 +4,12 @@ import { useAuth } from '../contexts/AuthContext';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import { ScrollArea } from '../components/ui/scroll-area';
-import { Send, MessageSquare, Users, Hash, Paperclip, X, FileIcon, User, FolderOpen, ArrowLeft, Search, Pencil, Trash2, Reply, SmilePlus, Check } from 'lucide-react';
+import { Send, MessageSquare, Users, Hash, Paperclip, X, FileIcon, FolderOpen, ArrowLeft, Search, Pencil, Trash2, Reply, SmilePlus, Check, Bell, Plus, Mic, AtSign, ChevronDown, CheckCircle2, Eye, Link2 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember } from '../types';
 
 type ChatMode = 'channel' | 'direct';
+type SidebarTab = 'all' | 'projects' | 'clients' | 'dm' | 'approvals';
 
 const CHANNELS = [
   { id: 'general' as const, name: 'Përgjithshme', icon: Hash, description: 'Diskutime në të gjithë kompaninë' },
@@ -43,6 +44,7 @@ const ChatView: React.FC = () => {
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null); // C13: reply
   const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null); // C10: reactions
   const [clientSearch, setClientSearch] = useState('');
+  const [sidebarTab, setSidebarTab] = useState<SidebarTab>('all');
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevMessageCountRef = useRef(0);
   const markedAsReadRef = useRef<Set<string>>(new Set()); // A5: mark-as-read only once
@@ -444,46 +446,56 @@ const ChatView: React.FC = () => {
 
   // --- SIDEBAR ---
   const sidebarContent = (
-    <div className="flex flex-col h-full">
-      {/* Channels */}
-      <div className="px-3 pt-4 pb-2">
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground px-2 mb-2">Kanalet</h3>
-        <div className="space-y-0.5">
-          {CHANNELS.map((channel) => {
-            const Icon = channel.icon;
-            const isActive = chatMode === 'channel' && activeChannel === channel.id;
-            const unreadCount = channelUnreadMap.get(channel.id) || 0;
-            return (
-              <button
-                key={channel.id}
-                onClick={() => handleSelectChannel(channel.id)}
-                className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-all text-left text-sm ${
-                  isActive
-                    ? 'bg-primary/10 text-primary font-medium'
-                    : 'text-foreground/80 hover:bg-accent/60'
-                }`}
-              >
-                <Icon className={`h-4 w-4 flex-shrink-0 ${isActive ? 'text-primary' : 'text-muted-foreground'}`} />
-                <span className="flex-1 truncate">{channel.name}</span>
-                {unreadCount > 0 && !isActive && (
-                  <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold">
-                    {unreadCount}
-                  </span>
-                )}
-              </button>
-            );
-          })}
+    <div className="flex flex-col">
+      {/* Channels — shown in 'all' or 'projects' tab */}
+      {(sidebarTab === 'all' || sidebarTab === 'projects') && (
+        <div className="px-3 pt-2 pb-2">
+          <button
+            className="w-full flex items-center gap-1 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
+            onClick={() => {}}
+          >
+            <ChevronDown className="h-3 w-3" />
+            Projekte
+          </button>
+          <div className="space-y-0.5">
+            {CHANNELS.map((channel) => {
+              const Icon = channel.icon;
+              const isActive = chatMode === 'channel' && activeChannel === channel.id;
+              const unreadCount = channelUnreadMap.get(channel.id) || 0;
+              return (
+                <button
+                  key={channel.id}
+                  onClick={() => handleSelectChannel(channel.id)}
+                  className={`w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg transition-all text-left text-sm ${
+                    isActive
+                      ? 'bg-primary/10 text-primary font-medium'
+                      : 'text-foreground/80 hover:bg-muted'
+                  }`}
+                >
+                  <Icon className={`h-4 w-4 flex-shrink-0 ${isActive ? 'text-primary' : 'text-muted-foreground'}`} />
+                  <span className="flex-1 truncate">{channel.name}</span>
+                  {unreadCount > 0 && !isActive && (
+                    <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold">
+                      {unreadCount}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Client Channels */}
-      {portalAccess && portalAccess.length > 0 && (
+      {(sidebarTab === 'all' || sidebarTab === 'clients') && portalAccess && portalAccess.length > 0 && (
         <div className="px-3 pb-2">
-          <div className="h-px bg-border my-2" />
-          <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground px-2 mb-2 flex items-center gap-1.5">
-            <MessageSquare className="h-3 w-3" />
+          {(sidebarTab === 'all') && <div className="h-px bg-border my-2" />}
+          <button
+            className="w-full flex items-center gap-1 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
+          >
+            <ChevronDown className="h-3 w-3" />
             Klientët
-          </h3>
+          </button>
           <div className="relative px-1 mb-2">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
             <Input
@@ -593,12 +605,15 @@ const ChatView: React.FC = () => {
       )}
 
       {/* Direct Messages */}
-      <div className="px-3 pb-3 flex-1 overflow-y-auto">
-        <div className="h-px bg-border my-2" />
-        <h3 className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground px-2 mb-2 flex items-center gap-1.5">
-          <User className="h-3 w-3" />
+      {(sidebarTab === 'all' || sidebarTab === 'dm') && (
+      <div className="px-3 pb-3">
+        {sidebarTab === 'all' && <div className="h-px bg-border my-2" />}
+        <button
+          className="w-full flex items-center gap-1 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
+        >
+          <ChevronDown className="h-3 w-3" />
           Mesazhe Direkte
-        </h3>
+        </button>
         <div className="space-y-0.5">
           {directConversations.map((userId) => {
             const unreadCount = directUnreadMap.get(userId) || 0;
@@ -668,28 +683,110 @@ const ChatView: React.FC = () => {
           )}
         </div>
       </div>
+      )}
+
+      {/* Aprovime tab */}
+      {sidebarTab === 'approvals' && (
+        <div className="px-3 pt-2 pb-3">
+          <button
+            className="w-full flex items-center gap-1 px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground"
+          >
+            <ChevronDown className="h-3 w-3" />
+            Aprovime
+          </button>
+          <div className="space-y-1 mt-1">
+            <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-muted cursor-pointer">
+              <div className="h-6 w-6 rounded-full bg-warning/20 flex items-center justify-center flex-shrink-0">
+                <CheckCircle2 className="h-3.5 w-3.5 text-warning" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium truncate">Logo Approval</p>
+                <p className="text-[10px] text-muted-foreground">Në pritje</p>
+              </div>
+              <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-warning/20 text-warning font-medium">2</span>
+            </div>
+            <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg hover:bg-muted cursor-pointer">
+              <div className="h-6 w-6 rounded-full bg-success/20 flex items-center justify-center flex-shrink-0">
+                <Eye className="h-3.5 w-3.5 text-success" />
+              </div>
+              <div className="flex-1 min-w-0">
+                <p className="text-xs font-medium truncate">Brief Sign-off</p>
+                <p className="text-[10px] text-muted-foreground">Aprovuar</p>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
+
+  const SIDEBAR_TABS: { id: SidebarTab; label: string }[] = [
+    { id: 'all', label: 'Të gjitha' },
+    { id: 'projects', label: 'Projekte' },
+    { id: 'clients', label: 'Klientë' },
+    { id: 'dm', label: 'DM' },
+    { id: 'approvals', label: 'Aprovim' },
+  ];
+
+  const totalUnread = useMemo(() => {
+    let count = 0;
+    CHANNELS.forEach(c => { count += channelUnreadMap.get(c.id) || 0; });
+    directConversations.forEach(uid => { count += directUnreadMap.get(uid) || 0; });
+    return count;
+  }, [channelUnreadMap, directUnreadMap, directConversations]);
 
   return (
     <div className="flex flex-col h-[calc(100dvh-96px)] sm:h-[calc(100dvh-120px)] lg:h-[calc(100dvh-136px)]">
       {/* Compact top bar */}
       <div className="flex items-center justify-between px-4 py-2 border-b bg-background/95 backdrop-blur-sm">
-        <h1 className="text-lg font-semibold tracking-tight">Biseda</h1>
-        <Button
-          variant="ghost"
-          size="sm"
-          className="lg:hidden h-8"
-          onClick={() => setShowSidebar(!showSidebar)}
-        >
-          {showSidebar ? <X className="h-4 w-4" /> : <MessageSquare className="h-4 w-4" />}
-        </Button>
+        <div className="flex items-center gap-2">
+          <h1 className="text-lg font-semibold tracking-tight">Special Chat</h1>
+          {totalUnread > 0 && (
+            <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-destructive text-destructive-foreground text-[10px] font-bold">
+              {totalUnread}
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1">
+          <Button variant="ghost" size="icon" className="h-8 w-8">
+            <Bell className="h-4 w-4" />
+          </Button>
+          <Button variant="ghost" size="icon" className="h-8 w-8">
+            <Plus className="h-4 w-4" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            className="lg:hidden h-8"
+            onClick={() => setShowSidebar(!showSidebar)}
+          >
+            {showSidebar ? <X className="h-4 w-4" /> : <MessageSquare className="h-4 w-4" />}
+          </Button>
+        </div>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        {/* Sidebar — clean flat layout */}
-        <div className={`w-64 lg:w-72 border-r bg-muted/20 flex-shrink-0 overflow-y-auto ${showSidebar ? 'block' : 'hidden lg:block'}`}>
-          {sidebarContent}
+        {/* Sidebar */}
+        <div className={`w-64 lg:w-72 border-r bg-background flex-shrink-0 flex flex-col ${showSidebar ? 'flex' : 'hidden lg:flex'}`}>
+          {/* Sidebar Tabs */}
+          <div className="flex gap-0.5 px-2 pt-3 pb-2 overflow-x-auto">
+            {SIDEBAR_TABS.map(tab => (
+              <button
+                key={tab.id}
+                onClick={() => setSidebarTab(tab.id)}
+                className={`flex-shrink-0 px-3 py-1.5 rounded-full text-xs font-medium transition-all ${
+                  sidebarTab === tab.id
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:bg-muted hover:text-foreground'
+                }`}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+          <div className="flex-1 overflow-y-auto">
+            {sidebarContent}
+          </div>
         </div>
 
         {/* Chat Area */}
@@ -726,8 +823,16 @@ const ChatView: React.FC = () => {
                           return customer?.name || 'Klient';
                         })()}
                       </p>
-                      <p className="text-[11px] text-muted-foreground">
-                        {activeChannel.includes('-project-') ? 'Kanal projekti' : 'Kanal klienti'}
+                      <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+                        <Link2 className="h-2.5 w-2.5" />
+                        {(() => {
+                          const match = activeChannel.match(/^client-(.+?)-project-(.+)$/);
+                          if (match) {
+                            const project = projects?.find(p => p.id === match[2]);
+                            return project?.name ? `Lidhur me: ${project.name}` : 'Kanal projekti';
+                          }
+                          return 'Kanal klienti';
+                        })()}
                       </p>
                     </div>
                   </>
@@ -740,7 +845,7 @@ const ChatView: React.FC = () => {
                     </div>
                     <div className="min-w-0">
                       <p className="font-medium text-sm truncate">
-                        {CHANNELS.find(c => c.id === activeChannel)?.name}
+                        #{CHANNELS.find(c => c.id === activeChannel)?.name}
                       </p>
                       <p className="text-[11px] text-muted-foreground">
                         {CHANNELS.find(c => c.id === activeChannel)?.description}
@@ -753,8 +858,11 @@ const ChatView: React.FC = () => {
               <div className="flex items-center gap-2.5 flex-1 min-w-0">
                 {activeDirectUserId ? (
                   <>
-                    <div className={`h-8 w-8 rounded-full ${getAvatarColor(activeDirectUserId)} flex items-center justify-center flex-shrink-0`}>
-                      <span className="text-[10px] font-bold text-white">{getUserDisplayName(activeDirectUserId).slice(0, 2).toUpperCase()}</span>
+                    <div className="relative flex-shrink-0">
+                      <div className={`h-8 w-8 rounded-full ${getAvatarColor(activeDirectUserId)} flex items-center justify-center`}>
+                        <span className="text-[10px] font-bold text-white">{getUserDisplayName(activeDirectUserId).slice(0, 2).toUpperCase()}</span>
+                      </div>
+                      <div className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 border-2 border-background" />
                     </div>
                     <div className="min-w-0">
                       <p className="font-medium text-sm truncate">{getUserDisplayName(activeDirectUserId)}</p>
@@ -775,6 +883,9 @@ const ChatView: React.FC = () => {
                 onClick={() => { setShowSearch(!showSearch); setSearchQuery(''); }}
               >
                 <Search className="h-4 w-4" />
+              </Button>
+              <Button variant="ghost" size="icon" className="h-8 w-8">
+                <Bell className="h-4 w-4" />
               </Button>
             </div>
           </div>
@@ -1021,14 +1132,14 @@ const ChatView: React.FC = () => {
           )}
 
           {/* Input area */}
-          <div className="p-3 border-t bg-background/80">
+          <div className="px-3 pt-2 pb-3 border-t bg-background">
             {showAttachmentInput && (
               <div className="flex gap-2 items-center p-2 mb-2 bg-muted/50 rounded-xl">
                 <Paperclip className="h-4 w-4 text-muted-foreground flex-shrink-0" />
                 <Input
                   value={attachmentUrl}
                   onChange={(e) => setAttachmentUrl(e.target.value)}
-                  placeholder="Ngjit URL..."
+                  placeholder="Ngjit URL skedari..."
                   disabled={isSending}
                   className="h-8 text-sm border-0 bg-transparent focus-visible:ring-0 shadow-none min-w-0"
                 />
@@ -1043,38 +1154,93 @@ const ChatView: React.FC = () => {
                 </Button>
               </div>
             )}
-            <form onSubmit={handleSendMessage} className="flex gap-2 items-center">
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="flex-shrink-0 h-9 w-9 rounded-full text-muted-foreground hover:text-foreground"
-                onClick={() => setShowAttachmentInput(!showAttachmentInput)}
-                disabled={isSending}
-              >
-                <Paperclip className="h-4 w-4" />
-              </Button>
-              <Input
-                value={messageText}
-                onChange={(e) => {
-                  setMessageText(e.target.value);
-                  if (e.target.value) handleTyping();
-                }}
-                placeholder="Shkruaj mesazhin..."
-                disabled={isSending}
-                className="flex-1 min-w-0 rounded-full h-10 bg-muted/40 border-muted-foreground/10 focus:bg-background transition-colors"
-              />
-              <Button
-                type="submit"
-                size="icon"
-                className="flex-shrink-0 h-9 w-9 rounded-full"
-                disabled={isSending || (!messageText.trim() && !attachmentUrl.trim()) || (chatMode === 'direct' && !activeDirectUserId)}
-              >
-                <Send className="h-4 w-4" />
-              </Button>
+            <form onSubmit={handleSendMessage}>
+              <div className="flex items-center gap-1 bg-muted/40 border border-muted-foreground/10 rounded-2xl px-3 py-1 focus-within:border-primary/30 focus-within:bg-background transition-all">
+                {/* Left toolbar icons */}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="flex-shrink-0 h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
+                  onClick={() => setShowAttachmentInput(!showAttachmentInput)}
+                  disabled={isSending}
+                  title="Bashkangjit skedar"
+                >
+                  <Paperclip className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="flex-shrink-0 h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
+                  disabled={isSending}
+                  title="Mention"
+                >
+                  <AtSign className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="flex-shrink-0 h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
+                  disabled={isSending}
+                  title="Emoji"
+                  onClick={() => setShowEmojiPicker(showEmojiPicker ? null : 'input')}
+                >
+                  <SmilePlus className="h-4 w-4" />
+                </Button>
+
+                <Input
+                  value={messageText}
+                  onChange={(e) => {
+                    setMessageText(e.target.value);
+                    if (e.target.value) handleTyping();
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                      e.preventDefault();
+                      handleSendMessage(e as any);
+                    }
+                  }}
+                  placeholder={`Mesazh ${chatMode === 'channel' ? `#${CHANNELS.find(c => c.id === activeChannel)?.name || activeChannel}` : getUserDisplayName(activeDirectUserId || '')}...`}
+                  disabled={isSending}
+                  className="flex-1 min-w-0 h-9 border-0 bg-transparent focus-visible:ring-0 shadow-none text-sm"
+                />
+
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="flex-shrink-0 h-8 w-8 rounded-full text-muted-foreground hover:text-foreground"
+                  disabled={isSending}
+                  title="Regjistro zë"
+                >
+                  <Mic className="h-4 w-4" />
+                </Button>
+                <Button
+                  type="submit"
+                  size="icon"
+                  className={`flex-shrink-0 h-8 w-8 rounded-full transition-all ${
+                    messageText.trim() || attachmentUrl.trim()
+                      ? 'bg-primary text-primary-foreground shadow-sm'
+                      : 'bg-transparent text-muted-foreground'
+                  }`}
+                  disabled={isSending || (!messageText.trim() && !attachmentUrl.trim()) || (chatMode === 'direct' && !activeDirectUserId)}
+                >
+                  <Send className="h-4 w-4" />
+                </Button>
+              </div>
             </form>
+            {/* Bottom hint */}
+            <div className="flex items-center justify-between mt-1.5 px-1">
+              <p className="text-[10px] text-muted-foreground/50">Enter dërgon · Shift+Enter rresht i ri · @ për mention</p>
+              <button className="text-[10px] text-muted-foreground/50 hover:text-primary transition-colors flex items-center gap-1">
+                <Link2 className="h-2.5 w-2.5" />
+                Lidh me task / faturë
+              </button>
+            </div>
             {messageMutation.error && (
-              <p className="text-xs text-destructive mt-2">
+              <p className="text-xs text-destructive mt-1">
                 Gabim: {messageMutation.error.message}
               </p>
             )}
