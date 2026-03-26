@@ -129,9 +129,9 @@ const GoalsView: React.FC = () => {
             {goals.length} objektivat totale · {myGoals.length} të tuat
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-wrap items-center gap-2 sm:gap-3">
           <Select value={filterStatus} onValueChange={setFilterStatus}>
-            <SelectTrigger className="w-[160px] sm:w-[180px]">
+            <SelectTrigger className="w-full sm:w-[160px]">
               <SelectValue placeholder="Filtro sipas statusit" />
             </SelectTrigger>
             <SelectContent>
@@ -163,7 +163,7 @@ const GoalsView: React.FC = () => {
       </div>
 
       {/* Goals Grid */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 sm:gap-6">
         {goals.map((goal) => {
           const goalMilestones = milestones?.filter(m => m.goalId === goal.id) || [];
           const completedMilestones = goalMilestones.filter(m => m.status === 'Completed').length;

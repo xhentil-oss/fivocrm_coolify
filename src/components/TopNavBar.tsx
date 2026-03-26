@@ -41,8 +41,8 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 h-[72px] bg-gradient-primary border-b border-border/20">
-      <div className="h-full px-6 flex items-center justify-between">
-        <div className="flex items-center gap-4">
+      <div className="h-full px-3 sm:px-4 lg:px-6 flex items-center justify-between">
+        <div className="flex items-center gap-2 sm:gap-4">
           <Button
             variant="ghost"
             size="icon"
@@ -68,7 +68,7 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
           </h1>
         </div>
 
-        <div className="flex-1 max-w-xl mx-8 hidden md:block">
+        <div className="flex-1 max-w-xs lg:max-w-xl mx-2 lg:mx-8 hidden md:block">
           <button
             onClick={onOpenCommandPalette}
             className="w-full h-11 px-4 flex items-center gap-3 bg-white/10 backdrop-blur-sm rounded-lg text-primary-foreground/80 hover:bg-white/20 transition-colors duration-fast"

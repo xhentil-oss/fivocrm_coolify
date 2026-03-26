@@ -111,24 +111,24 @@ const ServicesView: React.FC = () => {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-h2 text-foreground">Services</h1>
+          <h1 className="text-h2 text-foreground">Shërbime</h1>
           <p className="text-body text-muted-foreground mt-1">
-            {services?.length || 0} total services
+            {services?.length || 0} shërbime gjithsej
           </p>
         </div>
         {permissions.canEdit && (
           <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
             <DialogTrigger asChild>
-              <Button className="bg-primary text-primary-foreground">
+              <Button className="bg-primary text-primary-foreground w-full sm:w-auto">
                 <Plus className="w-4 h-4 mr-2" />
-                New Service
+                Shërbim i Ri
               </Button>
             </DialogTrigger>
             <DialogContent className="max-w-2xl">
               <DialogHeader>
-                <DialogTitle>Create New Service</DialogTitle>
+                <DialogTitle>Krijo Shërbim të Ri</DialogTitle>
               </DialogHeader>
               <ServiceForm onSubmit={handleCreateService} />
             </DialogContent>

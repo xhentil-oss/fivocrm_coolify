@@ -187,12 +187,12 @@ const ProjectsView: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-2xl font-semibold text-foreground">Shfleto projektet</h1>
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <h1 className="text-xl sm:text-2xl font-semibold text-foreground">Shfleto projektet</h1>
         {permissions.canEdit && (
           <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
             <DialogTrigger asChild>
-              <Button className="bg-primary text-primary-foreground">
+              <Button className="bg-primary text-primary-foreground w-full sm:w-auto">
                 <Plus className="w-4 h-4 mr-2" />
                 Krijo projekt
               </Button>

@@ -267,7 +267,7 @@ const TimeTrackingView: React.FC = () => {
 
   return (
     <div className="space-y-8">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-h2 text-foreground">Gjurmimi i Kohës & Pomodoro</h1>
           <p className="text-body text-muted-foreground mt-1">
@@ -276,7 +276,7 @@ const TimeTrackingView: React.FC = () => {
         </div>
         <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
           <DialogTrigger asChild>
-            <Button className="bg-primary text-primary-foreground">
+            <Button className="bg-primary text-primary-foreground w-full sm:w-auto">
               <Plus className="w-4 h-4 mr-2" />
               Hyrje Manuale
             </Button>
@@ -290,7 +290,7 @@ const TimeTrackingView: React.FC = () => {
         </Dialog>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 sm:gap-6">
         <Card className="p-6 space-y-2">
           <div className="flex items-center justify-between">
             <p className="text-body-sm text-muted-foreground">Koha Totale</p>

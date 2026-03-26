@@ -215,7 +215,7 @@ const CRMView: React.FC = () => {
           </div>
           <div className="h-10 w-28 skeleton rounded" />
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-6">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-6">
           {[1, 2, 3, 4].map((i) => (
             <div key={i} className="p-6 bg-card rounded-lg border space-y-3">
               <div className="flex justify-between">

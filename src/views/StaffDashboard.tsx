@@ -296,7 +296,7 @@ const StaffDashboard: React.FC = () => {
     <div className="max-w-6xl mx-auto space-y-6">
 
       {/* ── Hero: Greeting + Stats ── */}
-      <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-primary/10 via-primary/5 to-transparent border border-primary/10 p-6">
+      <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-primary/10 via-primary/5 to-transparent border border-primary/10 p-4 sm:p-6">
         <div className="relative z-10">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
