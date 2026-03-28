@@ -37,8 +37,10 @@ function getNextCycleDate(lastCompletedAt: Date, frequency: string): Date {
     d.setDate(d.getDate() + 7);
   } else {
     // monthly: 1st of next month
-    d.setMonth(d.getMonth() + 1);
+    // IMPORTANT: set date to 1 BEFORE setMonth to avoid JS overflow
+    // e.g. Jan 31 → setMonth(1) → March 3, not Feb 1
     d.setDate(1);
+    d.setMonth(d.getMonth() + 1);
     d.setHours(0, 0, 0, 0);
   }
   return d;

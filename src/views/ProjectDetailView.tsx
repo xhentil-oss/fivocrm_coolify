@@ -88,8 +88,13 @@ const ProjectDetailView: React.FC = () => {
     }
   }, [allTasks, selectedTask]);
 
-  const completedTasks = tasks.filter(t => t.status === 'Done').length;
-  const totalTasks = tasks.length;
+  // Progress uses ALL top-level tasks (unfiltered), not the search/status-filtered view
+  const allTopLevelTasks = React.useMemo(() =>
+    (allTasks || []).filter(t => !t.parentTaskId),
+    [allTasks]
+  );
+  const completedTasks = allTopLevelTasks.filter(t => t.status === 'Done').length;
+  const totalTasks = allTopLevelTasks.length;
   const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
   const getStatusColor = (status: string) => {
@@ -170,8 +175,10 @@ const ProjectDetailView: React.FC = () => {
     await taskMutation.update(taskId, data);
     // Only check when a task is being set to Done
     if (data.status !== 'Done') return;
-    if (!project || project.status === 'Completed' || !allTasks?.length) return;
-    const topLevelTasks = allTasks.filter(t => !t.parentTaskId);
+    if (!project || project.status === 'Completed' || !rawProjectTasks?.length) return;
+    // Use RAW (unfiltered) tasks so Members/Viewers can't trigger auto-complete
+    // based on only their own visible subset of tasks
+    const topLevelTasks = rawProjectTasks.filter(t => !t.parentTaskId);
     if (topLevelTasks.length === 0) return;
     // Optimistically check: the task we just updated + the rest
     const updatedStatuses = topLevelTasks.map(t =>
@@ -198,7 +205,7 @@ const ProjectDetailView: React.FC = () => {
         createdAt: now,
       });
     }
-  }, [taskMutation, project, allTasks, projectMutation, notificationMutation, user]);
+  }, [taskMutation, project, rawProjectTasks, projectMutation, notificationMutation, user]);
 
   const handleDragStart = (e: React.DragEvent, taskId: string) => {
     e.dataTransfer.setData('taskId', taskId);
