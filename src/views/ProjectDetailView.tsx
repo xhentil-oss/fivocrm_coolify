@@ -165,6 +165,41 @@ const ProjectDetailView: React.FC = () => {
     { id: 'Done', title: 'Përfunduar', status: 'Done' },
   ];
 
+  // Auto-complete project when every task is marked Done
+  const handleTaskUpdate = React.useCallback(async (taskId: string, data: any) => {
+    await taskMutation.update(taskId, data);
+    // Only check when a task is being set to Done
+    if (data.status !== 'Done') return;
+    if (!project || project.status === 'Completed' || !allTasks?.length) return;
+    const topLevelTasks = allTasks.filter(t => !t.parentTaskId);
+    if (topLevelTasks.length === 0) return;
+    // Optimistically check: the task we just updated + the rest
+    const updatedStatuses = topLevelTasks.map(t =>
+      t.id === taskId ? 'Done' : t.status
+    );
+    const allDone = updatedStatuses.every(s => s === 'Done');
+    if (allDone) {
+      const now = new Date();
+      // For recurring projects: keep Active, just record lastCompletedAt
+      if ((project as any).isRecurring) {
+        await projectMutation.update(project.id, { lastCompletedAt: now });
+      } else {
+        await projectMutation.update(project.id, {
+          status: 'Completed',
+          lastCompletedAt: now,
+        });
+      }
+      await notificationMutation.create({
+        userId: project.createdByUserId || user?.uid,
+        type: 'project_completed',
+        title: `✅ Projekti "${project.name}" u mbyll automatikisht`,
+        message: 'Të gjitha detyrat u shënuan si Përfunduar.',
+        isRead: false,
+        createdAt: now,
+      });
+    }
+  }, [taskMutation, project, allTasks, projectMutation, notificationMutation, user]);
+
   const handleDragStart = (e: React.DragEvent, taskId: string) => {
     e.dataTransfer.setData('taskId', taskId);
   };
@@ -177,7 +212,7 @@ const ProjectDetailView: React.FC = () => {
     e.preventDefault();
     const taskId = e.dataTransfer.getData('taskId');
     if (taskId) {
-      await taskMutation.update(taskId, { status: newStatus });
+      await handleTaskUpdate(taskId, { status: newStatus });
     }
   };
 
@@ -370,7 +405,7 @@ const ProjectDetailView: React.FC = () => {
                       <Checkbox 
                         checked={task.status === 'Done'}
                         onCheckedChange={async (checked) => {
-                          await taskMutation.update(task.id, { 
+                          await handleTaskUpdate(task.id, { 
                             status: checked ? 'Done' : 'Todo' 
                           });
                         }}
@@ -501,7 +536,7 @@ const ProjectDetailView: React.FC = () => {
               onClose={() => setSelectedTask(null)}
               comments={comments?.filter(c => c.taskId === selectedTask.id) || []}
               onAddComment={handleAddComment}
-              onUpdate={taskMutation.update}
+              onUpdate={handleTaskUpdate}
               onDelete={taskMutation.remove}
               projects={project ? [project] : undefined}
               onSelectSubtask={(subtask) => setSelectedTask(subtask)}

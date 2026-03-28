@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { useCollection } from '../hooks/useFirestore';
 import { usePermissions } from '../hooks/usePermissions';
+import { useAuth } from '../contexts/AuthContext';
 import { Award, TrendingUp, DollarSign, Users, ChevronDown, ChevronUp, Info } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -105,6 +106,8 @@ const MONTHS = [
 
 const BonusView: React.FC = () => {
   const permissions = usePermissions();
+  const { user } = useAuth();
+  const isAdmin = permissions.canAccessReports; // managers/admins see everyone
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth().toString());
   const [selectedYear, setSelectedYear] = useState(now.getFullYear().toString());
@@ -122,23 +125,27 @@ const BonusView: React.FC = () => {
     skipTeamFilter: true,
   });
 
-  // Filter projects: Completed in the selected month/year
+  // Filter projects completed in the selected month/year
+  // Uses lastCompletedAt (set on completion) first, falls back to updatedAt
   const periodProjects = useMemo(() => {
     if (!projects) return [];
     const month = parseInt(selectedMonth);
     const year = parseInt(selectedYear);
     return projects.filter(p => {
-      if (p.status !== 'Completed') return false;
+      // Count recurring projects by lastCompletedAt; regular by status=Completed
+      const isCompleted = p.status === 'Completed' || (p.isRecurring && p.lastCompletedAt);
+      if (!isCompleted) return false;
       if (!p.responsibleUserId) return false;
-      // Use updatedAt as the completion date proxy
-      const date = p.updatedAt ? new Date(p.updatedAt) : null;
+      // Prefer lastCompletedAt over updatedAt for accuracy
+      const raw = p.lastCompletedAt || p.updatedAt;
+      const date = raw ? new Date(raw) : null;
       if (!date || isNaN(date.getTime())) return false;
       return date.getMonth() === month && date.getFullYear() === year;
     });
   }, [projects, selectedMonth, selectedYear]);
 
-  // Build per-member bonus calculations
-  const memberResults = useMemo(() => {
+  // Build per-member bonus calculations (all members)
+  const allMemberResults = useMemo(() => {
     if (!teamMembers) return [];
 
     return teamMembers
@@ -171,21 +178,25 @@ const BonusView: React.FC = () => {
       .sort((a, b) => b.totalBonus - a.totalBonus);
   }, [teamMembers, periodProjects, expenses]);
 
+  // Workers only see their own row
+  const memberResults = useMemo(() => {
+    if (isAdmin) return allMemberResults;
+    return allMemberResults.filter(r => r.member.userId === user?.uid);
+  }, [allMemberResults, isAdmin, user?.uid]);
+
+  // My own result (for worker personal view)
+  const myResult = useMemo(() =>
+    allMemberResults.find(r => r.member.userId === user?.uid),
+    [allMemberResults, user?.uid]
+  );
+
   const totalBonusPayout = useMemo(
-    () => memberResults.reduce((sum, r) => sum + r.totalBonus, 0),
-    [memberResults]
+    () => allMemberResults.reduce((sum, r) => sum + r.totalBonus, 0),
+    [allMemberResults]
   );
 
   const membersWithSalary = teamMembers?.filter(m => m.monthlySalary && m.monthlySalary > 0).length || 0;
-  const membersEarningBonus = memberResults.filter(r => r.totalBonus > 0).length;
-
-  if (!permissions.canAccessReports) {
-    return (
-      <div className="flex items-center justify-center h-64 text-muted-foreground">
-        <p>Nuk keni akses në këtë faqe.</p>
-      </div>
-    );
-  }
+  const membersEarningBonus = allMemberResults.filter(r => r.totalBonus > 0).length;
 
   return (
     <div className="space-y-6 max-w-5xl">
@@ -282,70 +293,122 @@ const BonusView: React.FC = () => {
         </Badge>
       </div>
 
-      {/* KPI Summary */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-        <Card className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
-              <Award className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+      {/* KPI Summary — admin only */}
+      {isAdmin && (
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+          <Card className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+                <Award className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Bonus Total</p>
+                <p className="text-lg font-bold text-foreground">€{totalBonusPayout.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Bonus Total</p>
-              <p className="text-lg font-bold text-foreground">€{totalBonusPayout.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
+                <TrendingUp className="h-5 w-5 text-green-600 dark:text-green-400" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Marrin Bonus</p>
+                <p className="text-lg font-bold text-foreground">{membersEarningBonus} / {membersWithSalary}</p>
+              </div>
             </div>
-          </div>
-        </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-green-100 dark:bg-green-900/30 rounded-lg">
-              <TrendingUp className="h-5 w-5 text-green-600 dark:text-green-400" />
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
+                <DollarSign className="h-5 w-5 text-blue-600 dark:text-blue-400" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Projekte të Mbyllura</p>
+                <p className="text-lg font-bold text-foreground">{periodProjects.length}</p>
+              </div>
             </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Marrin Bonus</p>
-              <p className="text-lg font-bold text-foreground">{membersEarningBonus} / {membersWithSalary}</p>
+          </Card>
+          <Card className="p-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
+                <Users className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Me Rroge Caktuar</p>
+                <p className="text-lg font-bold text-foreground">{membersWithSalary}</p>
+              </div>
             </div>
-          </div>
-        </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-blue-100 dark:bg-blue-900/30 rounded-lg">
-              <DollarSign className="h-5 w-5 text-blue-600 dark:text-blue-400" />
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Projekte Aktive</p>
-              <p className="text-lg font-bold text-foreground">{periodProjects.length}</p>
-            </div>
-          </div>
-        </Card>
-        <Card className="p-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
-              <Users className="h-5 w-5 text-purple-600 dark:text-purple-400" />
-            </div>
-            <div>
-              <p className="text-xs text-muted-foreground">Me Rroge Caktuar</p>
-              <p className="text-lg font-bold text-foreground">{membersWithSalary}</p>
-            </div>
-          </div>
-        </Card>
-      </div>
+          </Card>
+        </div>
+      )}
 
-      {/* Setup hint if no salaries set */}
-      {membersWithSalary === 0 && (
+      {/* Worker personal motivation banner */}
+      {!isAdmin && myResult && (
+        <Card className={`p-5 ${myResult.totalBonus > 0 ? 'border-amber-300 dark:border-amber-700 bg-amber-50/50 dark:bg-amber-950/20' : ''}`}>
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <p className="text-sm text-muted-foreground">Bonusi yt këtë muaj</p>
+              <p className={`text-3xl font-bold mt-1 ${myResult.totalBonus > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'}`}>
+                {myResult.totalBonus > 0 ? `€${myResult.totalBonus.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : 'Ende pa arritur pragun'}
+              </p>
+              {myResult.totalBonus === 0 && (
+                <p className="text-xs text-muted-foreground mt-1">
+                  Ke bërë €{myResult.netContribution.toLocaleString(undefined, { maximumFractionDigits: 0 })} nga €{myResult.threshold.toLocaleString()} pragu
+                </p>
+              )}
+            </div>
+            <div className="flex-1 max-w-xs">
+              <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                <span>Progresi drejt pragut</span>
+                <span>{Math.min(100, Math.round((myResult.netContribution / myResult.threshold) * 100))}%</span>
+              </div>
+              <div className="h-3 bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full rounded-full transition-all"
+                  style={{
+                    width: getProgressWidth(myResult.netContribution, myResult.threshold * (5/3)),
+                    background: myResult.totalBonus > 0
+                      ? 'linear-gradient(90deg, #f59e0b, #d97706)'
+                      : 'hsl(var(--primary) / 0.6)',
+                  }}
+                />
+              </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Pragu: €{myResult.threshold.toLocaleString()} · Çfarë ke bërë: €{myResult.netContribution.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
+
+      {/* Worker: no salary configured yet */}
+      {!isAdmin && !myResult && (
+        <Card className="border-dashed border-2 p-6 text-center">
+          <Award className="h-10 w-10 mx-auto text-muted-foreground/40 mb-3" />
+          <p className="font-medium text-foreground/70">Rroga jote nuk është caktuar ende</p>
+          <p className="text-sm text-muted-foreground mt-1">
+            Administratori duhet të caktojë rrogën tënde mujore te <strong>Ekipet</strong> për të aktivizuar bonusin.
+          </p>
+        </Card>
+      )}
+
+      {/* Admin: setup hint if no salaries set */}
+      {isAdmin && membersWithSalary === 0 && (
         <Card className="border-dashed border-2 p-6 text-center">
           <Award className="h-10 w-10 mx-auto text-muted-foreground/40 mb-3" />
           <p className="font-medium text-foreground/70">Sistemi i bonusit është gati</p>
           <p className="text-sm text-muted-foreground mt-1">
             Shko te <strong>Ekipet</strong> → edito anëtarët dhe cakto rrogën mujore për secilin.
-            Edito gjithashtu projektet e mbyllura dhe cakto <strong>Personi Përgjegjshëm</strong>.
+            Edito gjithashtu projektet dhe cakto <strong>Përgjegjësin e Projektit</strong>.
           </p>
         </Card>
       )}
-
-      {/* Member Bonus Cards */}
       {memberResults.length > 0 && (
         <div className="space-y-3">
-          <h2 className="text-base font-semibold text-foreground">Detajet për Punonësit</h2>
+          <h2 className="text-base font-semibold text-foreground">
+            {isAdmin ? 'Detajet për Punonësit' : `Projektet e mia — ${MONTHS[parseInt(selectedMonth)]} ${selectedYear}`}
+          </h2>
           {memberResults.map(result => {
             const isExpanded = expandedMember === result.member.id;
             const hasBonus = result.totalBonus > 0;

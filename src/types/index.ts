@@ -10,6 +10,11 @@ export interface Project {
   budget?: number;
   spent?: number;
   responsibleUserId?: string;
+  // Recurring project support
+  isRecurring?: boolean;
+  recurringFrequency?: 'weekly' | 'monthly';
+  nextRecurringDate?: Date;
+  lastCompletedAt?: Date; // used for bonus calculation instead of updatedAt
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

@@ -142,6 +142,8 @@ const ProjectsView: React.FC = () => {
     const budgetStr = formData.get('budget') as string;
     const custId = formData.get('customerId') as string;
     const responsibleUserId = formData.get('responsibleUserId') as string;
+    const isRecurring = formData.get('isRecurring') === 'true';
+    const recurringFrequency = formData.get('recurringFrequency') as string;
 
     const newProject = await projectMutation.create({
       name,
@@ -152,6 +154,8 @@ const ProjectsView: React.FC = () => {
       spent: 0,
       customerId: custId && custId !== '__none__' ? custId : undefined,
       responsibleUserId: responsibleUserId && responsibleUserId !== '__none__' ? responsibleUserId : undefined,
+      isRecurring: isRecurring || undefined,
+      recurringFrequency: isRecurring && recurringFrequency ? recurringFrequency as any : undefined,
     });
 
     logActivity('project_created', `Projekt i ri: ${name}`, { entityType: 'project', entityId: newProject.id });
@@ -494,6 +498,8 @@ const ProjectForm: React.FC<{
   const [teamId, setTeamId] = useState(initialData?.teamId || '__none__');
   const [custId, setCustId] = useState((initialData as any)?.customerId || '__none__');
   const [responsibleUserId, setResponsibleUserId] = useState(initialData?.responsibleUserId || '__none__');
+  const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
+  const [recurringFrequency, setRecurringFrequency] = useState(initialData?.recurringFrequency || 'monthly');
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -507,6 +513,8 @@ const ProjectForm: React.FC<{
     if (responsibleUserId && responsibleUserId !== '__none__') {
       formData.set('responsibleUserId', responsibleUserId);
     }
+    formData.set('isRecurring', isRecurring ? 'true' : 'false');
+    if (isRecurring) formData.set('recurringFrequency', recurringFrequency);
     onSubmit(formData);
   };
 
@@ -593,6 +601,45 @@ const ProjectForm: React.FC<{
             </SelectContent>
           </Select>
           <p className="text-xs text-muted-foreground mt-1">Punonjësi që merr kredit për këtë projekt në llogaritjen e bonusit</p>
+        </div>
+      )}
+
+      {/* Recurring Project */}
+      <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/40">
+        <div>
+          <p className="text-sm font-medium">Projekt Periodik</p>
+          <p className="text-xs text-muted-foreground">Projekti ripërsëritet automatikisht çdo javë/muaj</p>
+        </div>
+        <button
+          type="button"
+          role="switch"
+          aria-checked={isRecurring}
+          onClick={() => setIsRecurring(!isRecurring)}
+          className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+            isRecurring ? 'bg-primary' : 'bg-muted-foreground/30'
+          }`}
+        >
+          <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${
+            isRecurring ? 'translate-x-4' : 'translate-x-1'
+          }`} />
+        </button>
+      </div>
+
+      {isRecurring && (
+        <div>
+          <Label>Frekuenca e Përsëritjes</Label>
+          <Select value={recurringFrequency} onValueChange={setRecurringFrequency}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="weekly">Javore (çdo javë)</SelectItem>
+              <SelectItem value="monthly">Mujore (çdo muaj)</SelectItem>
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground mt-1">
+            Kur të gjitha detyrat mbarojnë, projekti shënohet si kompletuar për atë periudhë dhe rifillon automatikisht.
+          </p>
         </div>
       )}
 
