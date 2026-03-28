@@ -829,7 +829,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             {task.projectId && (
               <div className="flex items-center gap-3 sm:gap-4">
                 <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0">Projekti</span>
-                <span className="text-sm">{task.projectId.slice(0, 12)}...</span>
+                <span className="text-sm">{projects.find(p => p.id === task.projectId)?.name || task.projectId.slice(0, 12) + '...'}</span>
               </div>
             )}
 

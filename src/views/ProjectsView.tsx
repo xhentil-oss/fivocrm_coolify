@@ -578,7 +578,7 @@ const ProjectForm: React.FC<{
       {/* Responsible Person */}
       {teamMembers && teamMembers.length > 0 && (
         <div>
-          <Label htmlFor="responsibleUserId">Personi Përgjegjshmë (për bonus)</Label>
+          <Label htmlFor="responsibleUserId">Përgjegjësi i Projektit</Label>
           <Select value={responsibleUserId} onValueChange={setResponsibleUserId}>
             <SelectTrigger>
               <SelectValue placeholder="Zgjidh punonjësin" />

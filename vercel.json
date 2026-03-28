@@ -1,8 +1,9 @@
 {
   "crons": [
-    { "path": "/api/cron/task-deadline-alerts", "schedule": "0 8 * * *" },
-    { "path": "/api/cron/invoice-reminders",    "schedule": "0 9 * * *" },
-    { "path": "/api/cron/recurring-tasks",       "schedule": "0 0 * * *" }
+    { "path": "/api/cron/task-deadline-alerts",       "schedule": "0 8 * * *" },
+    { "path": "/api/cron/invoice-reminders",           "schedule": "0 9 * * *" },
+    { "path": "/api/cron/recurring-tasks",             "schedule": "0 0 * * *" },
+    { "path": "/api/cron/project-completion-reminder", "schedule": "0 8 * * 1" }
   ],
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },

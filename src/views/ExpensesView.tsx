@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { usePermissions } from '../hooks/usePermissions';
-import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil } from 'lucide-react';
+import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil, Search } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -389,6 +389,8 @@ const ExpenseForm: React.FC<{
   initialData?: Expense;
 }> = ({ onSubmit, teams, projects, initialData }) => {
   const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
+  const [projectSearch, setProjectSearch] = useState('');
+  const [selectedProjectId, setSelectedProjectId] = useState<string>((initialData as any)?.projectId || '__none__');
   const [nextRecurringDate, setNextRecurringDate] = useState<Date | undefined>(
     initialData?.nextRecurringDate ? new Date(initialData.nextRecurringDate) : undefined
   );
@@ -485,15 +487,34 @@ const ExpenseForm: React.FC<{
 
       <div>
         <Label htmlFor="projectId">Projekti (Opsionale)</Label>
-        <Select name="projectId" defaultValue={(initialData as any)?.projectId || '__none__'}>
+        {/* Hidden input so FormData picks up the value */}
+        <input type="hidden" name="projectId" value={selectedProjectId} />
+        <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
           <SelectTrigger>
             <SelectValue placeholder="Lidh me projekt" />
           </SelectTrigger>
           <SelectContent>
+            {/* Search box inside dropdown */}
+            <div className="flex items-center gap-1.5 px-2 py-1.5 border-b">
+              <Search className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+              <input
+                className="flex-1 text-sm bg-transparent outline-none placeholder:text-muted-foreground"
+                placeholder="Kërko projekt..."
+                value={projectSearch}
+                onChange={e => setProjectSearch(e.target.value)}
+                onClick={e => e.stopPropagation()}
+                onKeyDown={e => e.stopPropagation()}
+              />
+            </div>
             <SelectItem value="__none__">Asnjë projekt</SelectItem>
-            {projects?.map(p => (
-              <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-            ))}
+            {projects
+              ?.filter(p => p.name.toLowerCase().includes(projectSearch.toLowerCase()))
+              .map(p => (
+                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+              ))}
+            {projects?.filter(p => p.name.toLowerCase().includes(projectSearch.toLowerCase())).length === 0 && (
+              <div className="px-3 py-2 text-sm text-muted-foreground">Asnjë rezultat</div>
+            )}
           </SelectContent>
         </Select>
       </div>
