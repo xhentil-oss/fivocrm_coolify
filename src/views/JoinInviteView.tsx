@@ -112,6 +112,7 @@ const JoinInviteView: React.FC = () => {
       // Create team member
       await addDoc(collection(db, 'teamMembers'), {
         userId: user.uid,
+        email: user.email || invite.email || '',
         teamId: invite.teamId,
         role: invite.role,
         canAccessProjects: invite.canAccessProjects ?? false,

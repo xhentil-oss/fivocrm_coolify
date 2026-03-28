@@ -21,6 +21,7 @@ import {
   DropdownMenuTrigger,
 } from '../components/ui/dropdown-menu';
 import ExportButton from '../components/ExportButton';
+import { useUserNames } from '../hooks/useUserNames';
 import type { Team, TeamMember, TeamInvite } from '../types';
 
 const TeamsView: React.FC = () => {
@@ -42,6 +43,8 @@ const TeamsView: React.FC = () => {
   });
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers');
   const { data: teamInvites } = useCollection<TeamInvite>('teamInvites');
+
+  const { getName, getInitials } = useUserNames(teamMembers || []);
   
   const teamMutation = useMutation<Team>('teams');
   const memberMutation = useMutation<TeamMember>('teamMembers');
@@ -537,7 +540,7 @@ const TeamsView: React.FC = () => {
                     <div className="space-y-2 flex-1">
                       <div className="flex items-center gap-3">
                         <Badge variant="secondary">{member.role}</Badge>
-                        <span className="text-sm font-medium">{member.email || member.userId}</span>
+                        <span className="text-sm font-medium">{getName(member.userId)}</span>
                         <Badge className={member.status === 'Active' ? 'bg-success' : 'bg-muted'}>
                           {member.status}
                         </Badge>
@@ -867,7 +870,7 @@ const EditMemberForm: React.FC<{
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       <div className="p-4 bg-muted rounded-lg">
-        <p className="text-sm font-medium">Anëtari: <span className="text-primary">{member.userId}</span></p>
+        <p className="text-sm font-medium">Anëtari: <span className="text-primary">{getName(member.userId)}</span></p>
       </div>
 
       <div className="grid grid-cols-2 gap-4">

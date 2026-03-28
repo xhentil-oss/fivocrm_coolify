@@ -2,6 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useCollection } from '../hooks/useFirestore';
 import { usePermissions } from '../hooks/usePermissions';
 import { useAuth } from '../contexts/AuthContext';
+import { useUserNames } from '../hooks/useUserNames';
 import { Award, TrendingUp, DollarSign, Users, ChevronDown, ChevronUp, Info } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -118,6 +119,8 @@ const BonusView: React.FC = () => {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
     skipTeamFilter: true,
   });
+
+  const { getName, getInitials } = useUserNames(teamMembers || []);
   const { data: projects } = useCollection<Project>('projects', {
     skipTeamFilter: true,
   });
@@ -433,10 +436,10 @@ const BonusView: React.FC = () => {
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className={`h-9 w-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${hasBonus ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300' : 'bg-muted text-muted-foreground'}`}>
-                      {(result.member.email || result.member.userId).slice(0, 2).toUpperCase()}
+                      {getInitials(result.member.userId)}
                     </div>
                     <div className="min-w-0">
-                      <p className="font-medium text-sm truncate">{result.member.email || result.member.userId}</p>
+                      <p className="font-medium text-sm truncate">{getName(result.member.userId)}</p>
                       <p className="text-xs text-muted-foreground">{result.member.role} · Rroga: €{result.member.monthlySalary?.toLocaleString()}/muaj</p>
                     </div>
                   </div>
