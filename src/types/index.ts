@@ -9,6 +9,7 @@ export interface Project {
   customerId?: string;
   budget?: number;
   spent?: number;
+  responsibleUserId?: string;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
@@ -43,6 +44,7 @@ export interface TeamMember {
   canAccessServices?: boolean;
   canAccessExpenses?: boolean;
   canAccessProfile?: boolean;
+  monthlySalary?: number;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

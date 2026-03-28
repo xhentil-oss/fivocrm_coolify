@@ -541,6 +541,11 @@ const TeamsView: React.FC = () => {
                         <Badge className={member.status === 'Active' ? 'bg-success' : 'bg-muted'}>
                           {member.status}
                         </Badge>
+                        {member.monthlySalary && (
+                          <Badge variant="outline" className="text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-700 text-xs">
+                            💶 {member.monthlySalary.toLocaleString()} EUR
+                          </Badge>
+                        )}
                       </div>
                       <div className="flex flex-wrap gap-2">
                         {member.canAccessProjects && <Badge variant="outline">Projektet</Badge>}
@@ -830,6 +835,7 @@ const EditMemberForm: React.FC<{
   const [canAccessReports, setCanAccessReports] = useState(member.canAccessReports ?? false);
   const [canAccessSettings, setCanAccessSettings] = useState(member.canAccessSettings ?? false);
   const [status, setStatus] = useState(member.status);
+  const [monthlySalary, setMonthlySalary] = useState(member.monthlySalary?.toString() || '');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -842,6 +848,7 @@ const EditMemberForm: React.FC<{
       canAccessReports,
       canAccessSettings,
       status,
+      monthlySalary: monthlySalary ? parseFloat(monthlySalary) : undefined,
     });
   };
 
@@ -960,6 +967,24 @@ const EditMemberForm: React.FC<{
             <Label htmlFor="editCanAccessSettings" className="font-normal">Cilësimet</Label>
           </div>
         </div>
+      </div>
+
+      {/* Salary */}
+      <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-800/30 rounded-lg space-y-2">
+        <Label htmlFor="monthlySalary" className="flex items-center gap-2 text-amber-800 dark:text-amber-300 font-medium">
+          💶 Rroga Mujore (EUR)
+        </Label>
+        <p className="text-xs text-muted-foreground">Kjo përdoret për llogaritjen e sistemit të bonusit</p>
+        <input
+          id="monthlySalary"
+          type="number"
+          min="0"
+          step="0.01"
+          value={monthlySalary}
+          onChange={(e) => setMonthlySalary(e.target.value)}
+          placeholder="p.sh. 800"
+          className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+        />
       </div>
 
       <Button type="submit" className="w-full">

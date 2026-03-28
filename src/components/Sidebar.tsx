@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect, useRef, useCallback } from 'react';
 import { NavLink } from 'react-router-dom';
-import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Receipt, MessageSquare, Target, UserCircle, DollarSign, Shield, FileText, Briefcase, LayoutDashboard, Timer } from 'lucide-react';
+import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Receipt, MessageSquare, Target, UserCircle, DollarSign, Shield, FileText, Briefcase, LayoutDashboard, Timer, Award } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { usePermissions } from '../hooks/usePermissions';
 import { useAuth } from '../contexts/AuthContext';
@@ -36,6 +36,7 @@ const allNavItems: NavItem[] = [
   { path: '/app/workspace', label: 'Workspace', icon: Briefcase, permissionKey: 'canAccessProjects' },
   { path: '/app/chat', label: 'Chat', icon: MessageSquare, permissionKey: 'canAccessChat' },
   { path: '/app/reports', label: 'Raportet', icon: BarChart3, permissionKey: 'canAccessReports' },
+  { path: '/app/bonus', label: 'Bonuset', icon: Award, permissionKey: 'canAccessReports' },
   { path: '/app/profile', label: 'Profili', icon: UserCircle, permissionKey: 'canAccessProfile' },
   { path: '/app/settings', label: 'Cilësimet', icon: Settings, permissionKey: 'canAccessSettings' },
 ];

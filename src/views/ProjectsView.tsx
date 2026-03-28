@@ -141,6 +141,7 @@ const ProjectsView: React.FC = () => {
     const teamId = formData.get('teamId') as string;
     const budgetStr = formData.get('budget') as string;
     const custId = formData.get('customerId') as string;
+    const responsibleUserId = formData.get('responsibleUserId') as string;
 
     const newProject = await projectMutation.create({
       name,
@@ -150,6 +151,7 @@ const ProjectsView: React.FC = () => {
       budget: budgetStr ? parseFloat(budgetStr) : undefined,
       spent: 0,
       customerId: custId && custId !== '__none__' ? custId : undefined,
+      responsibleUserId: responsibleUserId && responsibleUserId !== '__none__' ? responsibleUserId : undefined,
     });
 
     logActivity('project_created', `Projekt i ri: ${name}`, { entityType: 'project', entityId: newProject.id });
@@ -201,7 +203,7 @@ const ProjectsView: React.FC = () => {
               <DialogHeader>
                 <DialogTitle>Krijo Projekt të Ri</DialogTitle>
               </DialogHeader>
-              <ProjectForm onSubmit={handleCreateProject} teams={teams || []} customers={customers || []} />
+              <ProjectForm onSubmit={handleCreateProject} teams={teams || []} customers={customers || []} teamMembers={teamMembers || []} />
             </DialogContent>
           </Dialog>
         )}
@@ -486,10 +488,12 @@ const ProjectForm: React.FC<{
   onSubmit: (data: FormData) => void;
   teams: Team[];
   customers?: Customer[];
+  teamMembers?: import('../types').TeamMember[];
   initialData?: Project;
-}> = ({ onSubmit, teams, customers, initialData }) => {
+}> = ({ onSubmit, teams, customers, teamMembers, initialData }) => {
   const [teamId, setTeamId] = useState(initialData?.teamId || '__none__');
   const [custId, setCustId] = useState((initialData as any)?.customerId || '__none__');
+  const [responsibleUserId, setResponsibleUserId] = useState(initialData?.responsibleUserId || '__none__');
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -499,6 +503,9 @@ const ProjectForm: React.FC<{
     }
     if (custId && custId !== '__none__') {
       formData.set('customerId', custId);
+    }
+    if (responsibleUserId && responsibleUserId !== '__none__') {
+      formData.set('responsibleUserId', responsibleUserId);
     }
     onSubmit(formData);
   };
@@ -563,9 +570,31 @@ const ProjectForm: React.FC<{
 
       {/* Budget */}
       <div>
-        <Label htmlFor="budget">Buxheti (ALL)</Label>
+        <Label htmlFor="budget">Buxheti / Të Ardhurat e Projektit (EUR)</Label>
         <Input id="budget" name="budget" type="number" step="0.01" defaultValue={(initialData as any)?.budget || ''} placeholder="0.00" />
+        <p className="text-xs text-muted-foreground mt-1">Shuma që projekti gjeneron si të ardhura</p>
       </div>
+
+      {/* Responsible Person */}
+      {teamMembers && teamMembers.length > 0 && (
+        <div>
+          <Label htmlFor="responsibleUserId">Personi Përgjegjshmë (për bonus)</Label>
+          <Select value={responsibleUserId} onValueChange={setResponsibleUserId}>
+            <SelectTrigger>
+              <SelectValue placeholder="Zgjidh punonjësin" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">Asnjë i caktuar</SelectItem>
+              {teamMembers.map(m => (
+                <SelectItem key={m.id} value={m.userId}>
+                  {m.email || m.userId.slice(0, 20)} ({m.role})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground mt-1">Punonjësi që merr kredit për këtë projekt në llogaritjen e bonusit</p>
+        </div>
+      )}
 
       <Button type="submit" className="w-full">
         {initialData ? 'Ruaj Ndryshimet' : 'Krijo Projektin'}

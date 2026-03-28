@@ -16,6 +16,7 @@ import TeamsView from './views/TeamsView';
 import InvoicesView from './views/InvoicesView';
 import ChatView from './views/ChatView';
 import ReportsView from './views/ReportsView';
+import BonusView from './views/BonusView';
 import UserProfileView from './views/UserProfileView';
 import SettingsView from './views/SettingsView';
 import CustomersView from './views/CustomersView';
@@ -161,6 +162,7 @@ function AppContent() {
                       <Route path="/app/invoices" element={<PermissionGate permissionKey="canAccessInvoices"><InvoicesView /></PermissionGate>} />
                       <Route path="/app/chat" element={<PermissionGate permissionKey="canAccessChat"><ChatView /></PermissionGate>} />
                       <Route path="/app/reports" element={<PermissionGate permissionKey="canAccessReports"><ReportsView /></PermissionGate>} />
+                      <Route path="/app/bonus" element={<PermissionGate permissionKey="canAccessReports"><BonusView /></PermissionGate>} />
                       <Route path="/app/profile" element={<UserProfileView />} />
                       <Route path="/app/customers" element={<PermissionGate permissionKey="canAccessCustomers"><CustomersView /></PermissionGate>} />
                       <Route path="/app/customers/:customerId" element={<PermissionGate permissionKey="canAccessCustomers"><Customer360View /></PermissionGate>} />
