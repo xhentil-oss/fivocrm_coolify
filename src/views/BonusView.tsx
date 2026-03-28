@@ -133,11 +133,14 @@ const BonusView: React.FC = () => {
     const year = parseInt(selectedYear);
     return projects.filter(p => {
       // Count recurring projects by lastCompletedAt; regular by status=Completed
-      const isCompleted = p.status === 'Completed' || (p.isRecurring && p.lastCompletedAt);
+      const isCompleted = p.status === 'Completed' || ((p as any).isRecurring && (p as any).lastCompletedAt);
       if (!isCompleted) return false;
-      if (!p.responsibleUserId) return false;
+      // Use responsibleUserId first; fall back to createdByUserId so projects
+      // created before the responsibleUserId field existed are still counted
+      const owner = p.responsibleUserId || p.createdByUserId;
+      if (!owner) return false;
       // Prefer lastCompletedAt over updatedAt for accuracy
-      const raw = p.lastCompletedAt || p.updatedAt;
+      const raw = (p as any).lastCompletedAt || p.updatedAt;
       const date = raw ? new Date(raw) : null;
       if (!date || isNaN(date.getTime())) return false;
       return date.getMonth() === month && date.getFullYear() === year;
@@ -151,7 +154,11 @@ const BonusView: React.FC = () => {
     return teamMembers
       .filter(m => m.monthlySalary && m.monthlySalary > 0)
       .map(member => {
-        const memberProjects = periodProjects.filter(p => p.responsibleUserId === member.userId);
+        // Match by responsibleUserId first; fall back to createdByUserId
+        const memberProjects = periodProjects.filter(p => {
+          const owner = p.responsibleUserId || p.createdByUserId;
+          return owner === member.userId;
+        });
 
         const projectDetails = memberProjects.map(p => {
           const projectExpenses = expenses?.filter(e => (e as any).projectId === p.id) || [];
