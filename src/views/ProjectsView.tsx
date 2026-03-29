@@ -503,6 +503,7 @@ const ProjectForm: React.FC<{
   const [responsibleUserId, setResponsibleUserId] = useState(initialData?.responsibleUserId || '__none__');
   const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
   const [recurringFrequency, setRecurringFrequency] = useState(initialData?.recurringFrequency || 'monthly');
+  const { getName } = useUserNames(teamMembers || []);
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
