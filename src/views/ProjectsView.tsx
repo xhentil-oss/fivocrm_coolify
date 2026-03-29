@@ -23,7 +23,7 @@ import {
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useFilteredProjects } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
-import type { Project, Task, Team, TeamMember, Customer, Invoice } from '../types';
+import type { Project, Task, Team, TeamMember, Customer, Invoice, Service } from '../types';
 
 const ProjectsView: React.FC = () => {
   const navigate = useNavigate();
@@ -52,6 +52,7 @@ const ProjectsView: React.FC = () => {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
+  const { data: services } = useCollection<Service>('services');
   
   const projectMutation = useMutation<Project>('projects');
   const taskMutation = useMutation<Task>('tasks');
@@ -166,6 +167,11 @@ const ProjectsView: React.FC = () => {
     if (memberUserIdsStr) {
       try { memberUserIds = JSON.parse(memberUserIdsStr); } catch { memberUserIds = undefined; }
     }
+    const selectedServiceIdsStr = formData.get('selectedServiceIds') as string;
+    let selectedServiceIds: string[] | undefined;
+    if (selectedServiceIdsStr) {
+      try { selectedServiceIds = JSON.parse(selectedServiceIdsStr); } catch { selectedServiceIds = undefined; }
+    }
 
     const budgetRaw = budgetStr ? parseFloat(budgetStr) : undefined;
     const budget = budgetRaw !== undefined && !isNaN(budgetRaw) ? budgetRaw : undefined;
@@ -184,6 +190,7 @@ const ProjectsView: React.FC = () => {
       isRecurring: isRecurring || undefined,
       recurringFrequency: isRecurring && recurringFrequency ? recurringFrequency as any : undefined,
       memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
+      serviceIds: selectedServiceIds && selectedServiceIds.length > 0 ? selectedServiceIds : undefined,
     });
 
     // Always create a Draft invoice when a project is created
@@ -294,7 +301,7 @@ const ProjectsView: React.FC = () => {
               <DialogHeader>
                 <DialogTitle>Krijo Projekt të Ri</DialogTitle>
               </DialogHeader>
-              <ProjectForm onSubmit={handleCreateProject} teams={teams || []} customers={customers || []} teamMembers={teamMembers || []} />
+              <ProjectForm onSubmit={handleCreateProject} teams={teams || []} customers={customers || []} teamMembers={teamMembers || []} services={services || []} />
             </DialogContent>
           </Dialog>
         )}
@@ -592,15 +599,24 @@ const ProjectForm: React.FC<{
   teams: Team[];
   customers?: Customer[];
   teamMembers?: import('../types').TeamMember[];
+  services?: Service[];
   initialData?: Project;
-}> = ({ onSubmit, teams, customers, teamMembers, initialData }) => {
+}> = ({ onSubmit, teams, customers, teamMembers, services, initialData }) => {
   const [teamId, setTeamId] = useState(initialData?.teamId || '__none__');
   const [custId, setCustId] = useState((initialData as any)?.customerId || '__none__');
   const [responsibleUserId, setResponsibleUserId] = useState(initialData?.responsibleUserId || '__none__');
   const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
   const [recurringFrequency, setRecurringFrequency] = useState(initialData?.recurringFrequency || 'monthly');
   const [memberUserIds, setMemberUserIds] = useState<string[]>(initialData?.memberUserIds || []);
+  const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
   const { getName } = useUserNames(teamMembers || []);
+
+  const serviceBudget = React.useMemo(() => {
+    if (!services || selectedServiceIds.length === 0) return null;
+    return services
+      .filter(s => selectedServiceIds.includes(s.id))
+      .reduce((sum, s) => sum + (s.price || 0), 0);
+  }, [services, selectedServiceIds]);
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -617,6 +633,11 @@ const ProjectForm: React.FC<{
     formData.set('isRecurring', isRecurring ? 'true' : 'false');
     if (isRecurring) formData.set('recurringFrequency', recurringFrequency);
     formData.set('memberUserIds', JSON.stringify(memberUserIds));
+    formData.set('selectedServiceIds', JSON.stringify(selectedServiceIds));
+    // Override budget with computed service total if services are selected
+    if (serviceBudget !== null) {
+      formData.set('budget', String(serviceBudget));
+    }
     onSubmit(formData);
   };
 
@@ -678,11 +699,57 @@ const ProjectForm: React.FC<{
         </Select>
       </div>
 
+      {/* Services → Budget */}
+      {services && services.length > 0 && (
+        <div>
+          <Label>Shërbimet e Projektit</Label>
+          <p className="text-xs text-muted-foreground mb-2">Zgjidh shërbimet — vlera totale do të vendoset automatikisht si buxhet</p>
+          <div className="space-y-2 max-h-44 overflow-y-auto border rounded-md p-2">
+            {services.map(s => (
+              <label key={s.id} className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 px-2 py-1 rounded">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-primary"
+                  checked={selectedServiceIds.includes(s.id)}
+                  onChange={(e) => {
+                    setSelectedServiceIds(prev =>
+                      e.target.checked ? [...prev, s.id] : prev.filter(id => id !== s.id)
+                    );
+                  }}
+                />
+                <div className="flex-1 flex items-center justify-between">
+                  <span className="text-sm font-medium">{s.name || s.title}</span>
+                  <span className="text-sm text-primary font-medium">{(s.price || 0).toLocaleString()} {s.currency || 'ALL'}</span>
+                </div>
+              </label>
+            ))}
+          </div>
+          {selectedServiceIds.length > 0 && (
+            <p className="text-xs text-primary font-medium mt-1">
+              Total: {serviceBudget?.toLocaleString()} {services[0]?.currency || 'ALL'}
+            </p>
+          )}
+        </div>
+      )}
+
       {/* Budget */}
       <div>
         <Label htmlFor="budget">Buxheti / Të Ardhurat e Projektit (L)</Label>
-        <Input id="budget" name="budget" type="number" step="0.01" defaultValue={(initialData as any)?.budget || ''} placeholder="0.00" />
-        <p className="text-xs text-muted-foreground mt-1">Shuma që projekti gjeneron si të ardhura</p>
+        <Input
+          id="budget"
+          name="budget"
+          type="number"
+          step="0.01"
+          value={serviceBudget !== null ? String(serviceBudget) : undefined}
+          defaultValue={serviceBudget !== null ? undefined : ((initialData as any)?.budget || '')}
+          onChange={() => {}}
+          placeholder="0.00"
+          readOnly={serviceBudget !== null}
+          className={serviceBudget !== null ? 'bg-muted cursor-not-allowed' : ''}
+        />
+        <p className="text-xs text-muted-foreground mt-1">
+          {serviceBudget !== null ? 'Llogaritet automatikisht nga shërbimet e zgjedhura' : 'Shuma që projekti gjeneron si të ardhura'}
+        </p>
       </div>
 
       {/* Responsible Person */}
