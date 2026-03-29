@@ -130,16 +130,16 @@ const DonutChart: React.FC<{ segments: { label: string; value: number; color: st
 };
 
 const ReportsView: React.FC = () => {
-  const { data: invoices, loading: invoicesLoading } = useCollection<Invoice>('invoices');
-  const { data: projects, loading: projectsLoading } = useCollection<Project>('projects');
+  const { data: invoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
+  const { data: projects, loading: projectsLoading } = useCollection<Project>('projects', { skipTeamFilter: true });
   const { data: teams } = useCollection<Team>('teams');
-  const { data: expenses, loading: expensesLoading } = useCollection<Expense>('expenses');
-  const { data: services } = useCollection<Service>('services');
-  const { data: invoiceItems } = useCollection<InvoiceItem>('invoiceItems');
-  const { data: tasks } = useCollection<Task>('tasks');
-  const { data: leads } = useCollection<Lead>('leads');
-  const { data: customers } = useCollection<Customer>('customers');
-  const { data: activities } = useCollection<Activity>('activities');
+  const { data: expenses, loading: expensesLoading } = useCollection<Expense>('expenses', { skipTeamFilter: true });
+  const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
+  const { data: invoiceItems } = useCollection<InvoiceItem>('invoiceItems', { skipTeamFilter: true });
+  const { data: tasks } = useCollection<Task>('tasks', { skipTeamFilter: true });
+  const { data: leads } = useCollection<Lead>('leads', { skipTeamFilter: true });
+  const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
+  const { data: activities } = useCollection<Activity>('activities', { skipTeamFilter: true });
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
   });
