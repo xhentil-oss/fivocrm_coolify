@@ -190,17 +190,25 @@ const BonusView: React.FC = () => {
             .filter(e => (e as any).projectId === p.id)
             .reduce((sum, e) => sum + (e.amount || 0), 0);
 
-          // ── salary cost of each assigned member (prorated by project count) ─
+          // ── salary cost of each assigned member (prorated by project budget) ─
+          // Each member's monthly salary is split proportionally across the
+          // projects they are assigned to, weighted by each project's budget.
+          // This avoids over-charging small projects and under-charging large ones.
           const memberIds: string[] = (p.memberUserIds as string[] | undefined) || [];
           const salaryCosts = memberIds.reduce((sum, uid) => {
             const tm = teamMembers.find(m => m.userId === uid);
             if (!tm?.monthlySalary) return sum;
-            // How many projects is this member assigned to this period?
-            const assignedCount = periodProjects.filter(pp =>
+            // All projects this member is assigned to in this period
+            const assignedProjects = periodProjects.filter(pp =>
               ((pp.memberUserIds as string[] | undefined) || []).includes(uid) ||
               pp.responsibleUserId === uid
-            ).length;
-            return sum + tm.monthlySalary / Math.max(1, assignedCount);
+            );
+            const totalAssignedBudget = assignedProjects.reduce((s, pp) => s + (pp.budget || 0), 0);
+            // Fraction = this project's budget / total budget across all assigned projects
+            const fraction = totalAssignedBudget > 0
+              ? (p.budget || 0) / totalAssignedBudget
+              : 1 / Math.max(1, assignedProjects.length); // fallback: equal split if no budgets set
+            return sum + tm.monthlySalary * fraction;
           }, 0);
 
           const budget = p.budget || 0;
