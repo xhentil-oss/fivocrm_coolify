@@ -117,6 +117,8 @@ export interface Invoice {
   paidAt?: Date;
   emailSent?: boolean;
   reminderSent?: boolean;
+  reminder25Sent?: boolean;
+  reminderLastDaySent?: boolean;
   isRecurring?: boolean;
   recurringFrequency?: 'weekly' | 'monthly' | 'quarterly' | 'yearly';
   nextRecurringDate?: Date;
