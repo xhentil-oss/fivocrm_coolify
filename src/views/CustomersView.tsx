@@ -184,17 +184,9 @@ const CustomersView: React.FC = () => {
   };
 
   const handleDeleteCustomer = async (id: string) => {
-    if (window.confirm('Je i sigurt?')) {
+    if (window.confirm('Je i sigurt? Faturat, aksesi portal dhe kerkesat e lidhura do te fshihen gjithashtu.')) {
       await customerMutation.remove(id);
-      const [inv, acc, req] = await Promise.all([
-        getDocs(query(collection(db, ''invoices''), where(''customerId'', ''=='', id))),
-        getDocs(query(collection(db, ''clientPortalAccess''), where(''customerId'', ''=='', id))),
-        getDocs(query(collection(db, ''clientRequests''), where(''customerId'', ''=='', id))),
-      ]);
-      await Promise.all([...inv.docs.map(d => deleteDoc(doc(db, 'invoices', d.id))), ...acc.docs.map(d => deleteDoc(doc(db, 'clientPortalAccess', d.id))), ...req.docs.map(d => deleteDoc(doc(db, 'clientRequests', d.id)))]);
-      toast({ title: 'Klienti u fshi!', description: 'Faturat dhe te dhenat e lidhura u fshin gjithashtu.' });
-    }
-  };
+      const [invoicesSnap, accessSnap, requestsSnap] = await Promise.all([
         getDocs(query(collection(db, 'invoices'), where('customerId', '==', id))),
         getDocs(query(collection(db, 'clientPortalAccess'), where('customerId', '==', id))),
         getDocs(query(collection(db, 'clientRequests'), where('customerId', '==', id))),
@@ -204,11 +196,9 @@ const CustomersView: React.FC = () => {
         ...accessSnap.docs.map(d => deleteDoc(doc(db, 'clientPortalAccess', d.id))),
         ...requestsSnap.docs.map(d => deleteDoc(doc(db, 'clientRequests', d.id))),
       ]);
-
-      toast({ title: 'Klienti u fshi!', description: 'Faturat dhe t\u00eb dh\u00ebnat e lidhura u fshin\u00eb gjithashtu.' });
+      toast({ title: 'Klienti u fshi!', description: 'Faturat dhe te dhenat e lidhura u fshin gjithashtu.' });
     }
   };
-
   const handleUpdateCustomer = async (formData: FormData) => {
     if (!selectedCustomer) return;
     const data: Record<string, any> = {};
