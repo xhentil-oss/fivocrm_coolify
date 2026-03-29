@@ -143,12 +143,20 @@ export interface Service {
 
 export interface Expense {
   id: string;
-  description: string;
+  title: string;
+  description?: string;
   amount: number;
-  category?: string;
+  currency?: string;
+  category: string;
   date?: Date;
   teamId?: string;
   projectId?: string;
+  departmentId?: string;
+  status?: string;
+  isRecurring?: boolean;
+  recurringFrequency?: string;
+  nextRecurringDate?: Date;
+  paidDate?: Date;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

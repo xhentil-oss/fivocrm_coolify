@@ -171,9 +171,8 @@ const BonusView: React.FC = () => {
       if (d.getMonth() !== month || d.getFullYear() !== year) return sum;
       return sum + (e.amount || 0);
     }, 0);
-    const perProjectOffice = periodProjects.length > 0
-      ? totalOfficeExpenses / periodProjects.length
-      : 0;
+    // Allocate office expenses proportionally to each project's budget weight
+    const totalPeriodBudget = periodProjects.reduce((s, p) => s + (p.budget || 0), 0);
 
     return teamMembers
       .filter(m => m.monthlySalary && m.monthlySalary > 0)
@@ -189,6 +188,12 @@ const BonusView: React.FC = () => {
           const directExpenses = (expenses || [])
             .filter(e => (e as any).projectId === p.id)
             .reduce((sum, e) => sum + (e.amount || 0), 0);
+
+          // ── office expenses allocated by this project's budget share ────
+          const budgetFraction = totalPeriodBudget > 0
+            ? (p.budget || 0) / totalPeriodBudget
+            : periodProjects.length > 0 ? 1 / periodProjects.length : 0;
+          const perProjectOffice = totalOfficeExpenses * budgetFraction;
 
           // ── salary cost of each assigned member (prorated by project budget) ─
           // Each member's monthly salary is split proportionally across the

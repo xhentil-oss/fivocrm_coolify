@@ -94,9 +94,14 @@ const ProjectsView: React.FC = () => {
       filtered = filtered.filter(p => p.status === filterStatus);
     }
 
-    // Members filter
+    // Members filter — checks memberUserIds first, falls back to team membership
     if (filterMembers.length > 0 && teamMembers) {
       filtered = filtered.filter(p => {
+        const explicit = (p.memberUserIds as string[] | undefined);
+        if (explicit && explicit.length > 0) {
+          return filterMembers.some(id => explicit.includes(id));
+        }
+        // fallback: any member of the project's team
         if (!p.teamId) return false;
         const projectTeamMembers = teamMembers.filter(m => m.teamId === p.teamId);
         return filterMembers.some(memberId => projectTeamMembers.some(m => m.userId === memberId));
@@ -106,9 +111,16 @@ const ProjectsView: React.FC = () => {
     return filtered;
   }, [projects, searchQuery, filterOwner, filterTeam, filterStatus, filterMembers, teamMembers]);
 
-  // Get members for a project (based on team)
+  // Get members for a project:
+  //  - if memberUserIds is set → show exactly those people
+  //  - otherwise fall back to everyone on the project's team
   const getProjectMembers = (project: Project) => {
-    if (!project.teamId || !teamMembers) return [];
+    if (!teamMembers) return [];
+    const explicit = (project.memberUserIds as string[] | undefined);
+    if (explicit && explicit.length > 0) {
+      return teamMembers.filter(m => explicit.includes(m.userId));
+    }
+    if (!project.teamId) return [];
     return teamMembers.filter(m => m.teamId === project.teamId);
   };
 
