@@ -1,5 +1,5 @@
 import React from 'react';
-import { usePermissions, UserPermissions } from '../hooks/usePermissions';
+import { usePermissions, UserPermissions } from '../contexts/PermissionsContext';
 import { ShieldX, Loader2 } from 'lucide-react';
 
 interface PermissionGateProps {

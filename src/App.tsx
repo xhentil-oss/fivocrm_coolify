@@ -41,7 +41,8 @@ import CommandPalette from './components/CommandPalette';
 import PermissionGate from './components/PermissionGate';
 import PendingInvitesBanner from './components/PendingInvitesBanner';
 import { GoogleApiProvider } from './contexts/GoogleApiContext';
-import { usePermissions } from './hooks/usePermissions';
+import { PermissionsProvider } from './contexts/PermissionsContext';
+import { usePermissions } from './contexts/PermissionsContext';
 import { useTeamDataMigration } from './hooks/useTeamDataMigration';
 import { Toaster } from './components/ui/toaster';
 import { Loader2 } from 'lucide-react';
@@ -208,7 +209,9 @@ function App() {
     <ErrorBoundary>
       <Router>
         <GoogleApiProvider>
-          <AppContent />
+          <PermissionsProvider>
+            <AppContent />
+          </PermissionsProvider>
         </GoogleApiProvider>
       </Router>
     </ErrorBoundary>

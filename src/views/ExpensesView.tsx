@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
-import { usePermissions } from '../hooks/usePermissions';
+import { usePermissions } from '../contexts/PermissionsContext';
 import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil, Search } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';

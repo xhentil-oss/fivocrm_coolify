@@ -1,7 +1,7 @@
-ï»¿import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
-import { usePermissions } from '../hooks/usePermissions';
+import { usePermissions } from '../contexts/PermissionsContext';
 import {
   Building2, Plus, Mail, Phone, Search, Filter, X,
   CheckCircle2, XCircle, AlertCircle, Star, Users,
@@ -98,7 +98,7 @@ const CustomersView: React.FC = () => {
     const name = newIndustryName.trim();
     if (!name) return;
     if (allIndustries.some(i => i.toLowerCase() === name.toLowerCase())) {
-      toast({ title: 'Kjo industri ekziston tashmÃ«', variant: 'destructive' });
+      toast({ title: 'Kjo industri ekziston tashmë', variant: 'destructive' });
       return;
     }
     await customIndustryMutation.create({ name });
@@ -173,7 +173,7 @@ const CustomersView: React.FC = () => {
 
     // Duplicate check by email
     if (data.email && customers?.some(c => c.email?.toLowerCase() === data.email.toLowerCase())) {
-      toast({ title: 'Ky email ekziston tashmÃ«!', description: 'Ka njÃ« klient me kÃ«tÃ« email.', variant: 'destructive' });
+      toast({ title: 'Ky email ekziston tashmë!', description: 'Ka një klient me këtë email.', variant: 'destructive' });
       return;
     }
 
@@ -182,7 +182,7 @@ const CustomersView: React.FC = () => {
   };
 
   const handleDeleteCustomer = async (id: string) => {
-    if (window.confirm('Je i sigurt qÃ« dÃ«shiron tÃ« fshish kÃ«tÃ« klient?')) {
+    if (window.confirm('Je i sigurt që dëshiron të fshish këtë klient?')) {
       await customerMutation.remove(id);
       toast({ title: 'Klienti u fshi me sukses!' });
     }
@@ -403,7 +403,7 @@ const CustomersView: React.FC = () => {
             <TabsTrigger value="requests" className="gap-1 sm:gap-2 text-xs sm:text-sm">
               <ClipboardList className="h-4 w-4" />
               <span className="hidden sm:inline">Kerkesat</span>
-              <span className="sm:hidden">KÃ«rk.</span>
+              <span className="sm:hidden">Kërk.</span>
               {newRequestsCount > 0 && (
                 <Badge variant="destructive" className="ml-1 h-5 min-w-5 px-1.5 text-xs">
                   {newRequestsCount}
@@ -560,7 +560,7 @@ const CustomersView: React.FC = () => {
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem onClick={() => navigate(`/app/customers/${customer.id}`)}>
-                                <ExternalLink className="w-3.5 h-3.5 mr-2" /> Shiko 360Â°
+                                <ExternalLink className="w-3.5 h-3.5 mr-2" /> Shiko 360°
                               </DropdownMenuItem>
                               <DropdownMenuItem onClick={() => { setSelectedCustomer(customer); setIsEditDialogOpen(true); }}>
                                 Ndrysho
@@ -679,7 +679,7 @@ const CustomersView: React.FC = () => {
                           <td className="px-3 sm:px-6 py-3 sm:py-4">
                             <div className="flex items-center gap-1 sm:gap-2">
                               <Button variant="ghost" size="sm" className="gap-1" onClick={() => navigate(`/app/customers/${customer.id}`)}>
-                                <ExternalLink className="w-3.5 h-3.5" /> 360Â°
+                                <ExternalLink className="w-3.5 h-3.5" /> 360°
                               </Button>
                               {permissions.canEdit && (
                                 <Button variant="outline" size="sm" onClick={() => { setSelectedCustomer(customer); setIsEditDialogOpen(true); }}>
@@ -999,11 +999,11 @@ const CustomersView: React.FC = () => {
       <Dialog open={showAddIndustry} onOpenChange={setShowAddIndustry}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Shto Industri tÃ« Re</DialogTitle>
+            <DialogTitle>Shto Industri të Re</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>Emri i IndustrisÃ«</Label>
+              <Label>Emri i Industrisë</Label>
               <Input
                 value={newIndustryName}
                 onChange={e => setNewIndustryName(e.target.value)}

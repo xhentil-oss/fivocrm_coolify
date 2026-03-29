@@ -2,7 +2,7 @@ import React, { useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
-import { usePermissions } from '../hooks/usePermissions';
+import { usePermissions } from '../contexts/PermissionsContext';
 import { useToast } from '../hooks/use-toast';
 import {
   CheckCircle2, Clock, AlertTriangle, Flame, Target, TrendingUp,

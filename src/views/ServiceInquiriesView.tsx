@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
-import { usePermissions } from '../hooks/usePermissions';
+import { usePermissions } from '../contexts/PermissionsContext';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';

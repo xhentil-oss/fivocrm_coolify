@@ -2,7 +2,7 @@ import React, { useMemo, useEffect, useRef, useCallback } from 'react';
 import { NavLink } from 'react-router-dom';
 import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Receipt, MessageSquare, Target, UserCircle, DollarSign, Shield, FileText, Briefcase, LayoutDashboard, Timer, Award } from 'lucide-react';
 import { cn } from '../lib/utils';
-import { usePermissions } from '../hooks/usePermissions';
+import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useCollection } from '../hooks/useFirestore';
 import { Badge } from './ui/badge';

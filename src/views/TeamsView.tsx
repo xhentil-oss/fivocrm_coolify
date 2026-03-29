@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { Users, Plus, MoreVertical, Mail, UserPlus, Shield, Trash2, CheckCircle, XCircle, Clock, Edit2, Check, X, Settings, Eye } from 'lucide-react';
-import { usePermissions } from '../hooks/usePermissions';
+import { usePermissions } from '../contexts/PermissionsContext';
 import { cn } from '../lib/utils';
 import { toast } from '../hooks/use-toast';
 import { Card } from '../components/ui/card';

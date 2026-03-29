@@ -1,6 +1,6 @@
 import React, { useMemo, useState } from 'react';
 import { useCollection } from '../hooks/useFirestore';
-import { usePermissions } from '../hooks/usePermissions';
+import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useUserNames } from '../hooks/useUserNames';
 import { Award, TrendingUp, DollarSign, Users, ChevronDown, ChevronUp, Info } from 'lucide-react';

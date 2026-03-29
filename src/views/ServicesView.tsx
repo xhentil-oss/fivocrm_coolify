@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
-import { usePermissions } from '../hooks/usePermissions';
+import { usePermissions } from '../contexts/PermissionsContext';
 import { Globe, Plus, DollarSign, Search, Share2, PenTool, Palette, Package, Edit, Trash2 } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
-import { usePermissions } from '../hooks/usePermissions';
+import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useAuth } from '../contexts/AuthContext';
 import { DollarSign, Plus, Calendar as CalendarIcon, CreditCard, Mail, Send, Building2, ShoppingCart, Trash2, Eye, Edit2, Check, X, ExternalLink, Loader2, MoreVertical } from 'lucide-react';
