@@ -642,7 +642,20 @@ const ProjectForm: React.FC<{
   const [recurringFrequency, setRecurringFrequency] = useState(initialData?.recurringFrequency || 'monthly');
   const [memberUserIds, setMemberUserIds] = useState<string[]>(initialData?.memberUserIds || []);
   const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
+  const [serviceCategory, setServiceCategory] = useState<string>('__all__');
   const { getName } = useUserNames(teamMembers || []);
+
+  const serviceCategories = React.useMemo(() => {
+    if (!services) return [];
+    const cats = [...new Set(services.map(s => s.category).filter(Boolean))] as string[];
+    return cats.sort();
+  }, [services]);
+
+  const filteredServices = React.useMemo(() => {
+    if (!services) return [];
+    if (serviceCategory === '__all__') return services;
+    return services.filter(s => s.category === serviceCategory);
+  }, [services, serviceCategory]);
 
   const serviceBudget = React.useMemo(() => {
     if (!services || selectedServiceIds.length === 0) return null;
@@ -736,9 +749,44 @@ const ProjectForm: React.FC<{
       {services && services.length > 0 && (
         <div>
           <Label>Shërbimet e Projektit</Label>
-          <p className="text-xs text-muted-foreground mb-2">Zgjidh shërbimet — vlera totale do të vendoset automatikisht si buxhet</p>
-          <div className="space-y-2 max-h-44 overflow-y-auto border rounded-md p-2">
-            {services.map(s => (
+          <p className="text-xs text-muted-foreground mb-2">Zgjidh kategorinë dhe mëpas shërbimet — totali llogaritet automatikisht si buxhet</p>
+
+          {/* Category filter pills */}
+          {serviceCategories.length > 0 && (
+            <div className="flex flex-wrap gap-1.5 mb-2">
+              <button
+                type="button"
+                onClick={() => setServiceCategory('__all__')}
+                className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                  serviceCategory === '__all__'
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'bg-muted text-muted-foreground border-border hover:bg-muted/70'
+                }`}
+              >
+                Të gjitha
+              </button>
+              {serviceCategories.map(cat => (
+                <button
+                  key={cat}
+                  type="button"
+                  onClick={() => setServiceCategory(cat)}
+                  className={`px-2.5 py-1 rounded-full text-xs font-medium border transition-colors ${
+                    serviceCategory === cat
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-muted text-muted-foreground border-border hover:bg-muted/70'
+                  }`}
+                >
+                  {cat}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Services list filtered by category */}
+          <div className="space-y-1.5 max-h-44 overflow-y-auto border rounded-md p-2">
+            {filteredServices.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-2 text-center">Nuk ka shërbime në këtë kategori</p>
+            ) : filteredServices.map(s => (
               <label key={s.id} className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 px-2 py-1 rounded">
                 <input
                   type="checkbox"
@@ -750,16 +798,22 @@ const ProjectForm: React.FC<{
                     );
                   }}
                 />
-                <div className="flex-1 flex items-center justify-between">
-                  <span className="text-sm font-medium">{s.name || s.title}</span>
-                  <span className="text-sm text-primary font-medium">{(s.price || 0).toLocaleString()} {s.currency || 'ALL'}</span>
+                <div className="flex-1 flex items-center justify-between gap-2">
+                  <div className="min-w-0">
+                    <span className="text-sm font-medium">{s.name || s.title}</span>
+                    {s.category && serviceCategory === '__all__' && (
+                      <span className="ml-1.5 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{s.category}</span>
+                    )}
+                  </div>
+                  <span className="text-sm text-primary font-medium shrink-0">{(s.price || 0).toLocaleString()} {s.currency || 'ALL'}</span>
                 </div>
               </label>
             ))}
           </div>
+
           {selectedServiceIds.length > 0 && (
             <p className="text-xs text-primary font-medium mt-1">
-              Total: {serviceBudget?.toLocaleString()} {services[0]?.currency || 'ALL'}
+              {selectedServiceIds.length} shërbim{selectedServiceIds.length !== 1 ? 'e' : ''} zgjedhur · Total: {serviceBudget?.toLocaleString()} {services[0]?.currency || 'ALL'}
             </p>
           )}
         </div>
