@@ -186,10 +186,11 @@ const ProjectsView: React.FC = () => {
       memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
     });
 
-    // For recurring projects: immediately create a Pending invoice and email the customer
+    // Always create a Draft invoice when a project is created
+    const now = new Date();
+    const dueDate = new Date(now.getFullYear(), now.getMonth() + 1, 0); // last day of month
+
     if (isRecurring) {
-      const now = new Date();
-      const dueDate = new Date(now.getFullYear(), now.getMonth() + 1, 0); // last day of month
       const invoiceLabel = `AUTO-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${newProject.id.slice(0, 6).toUpperCase()}`;
       const newInvoice = await invoiceMutation.create({
         invoiceNumber: invoiceLabel,
@@ -228,6 +229,22 @@ const ProjectsView: React.FC = () => {
           // email failure is non-blocking
         }
       }
+    } else {
+      // Non-recurring project: create a plain Draft invoice
+      const invoiceLabel = `DRAFT-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${newProject.id.slice(0, 6).toUpperCase()}`;
+      await invoiceMutation.create({
+        invoiceNumber: invoiceLabel,
+        projectId: newProject.id,
+        customerId: resolvedCustomerId,
+        teamId: resolvedTeamId,
+        amount: budget || 0,
+        subtotal: budget || 0,
+        total: budget || 0,
+        tax: 0,
+        status: 'Draft',
+        notes: `Faturë draft e krijuar automatikisht për projektin "${name}".`,
+        dueDate,
+      } as any);
     }
 
     logActivity('project_created', `Projekt i ri: ${name}`, { entityType: 'project', entityId: newProject.id });
