@@ -23,7 +23,7 @@ import {
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useFilteredProjects } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
-import type { Project, Task, Team, TeamMember, Customer, Invoice, Service } from '../types';
+import type { Project, Task, Team, TeamMember, Customer, Invoice, Service, InvoiceItem } from '../types';
 
 const ProjectsView: React.FC = () => {
   const navigate = useNavigate();
@@ -57,6 +57,7 @@ const ProjectsView: React.FC = () => {
   const projectMutation = useMutation<Project>('projects');
   const taskMutation = useMutation<Task>('tasks');
   const invoiceMutation = useMutation<Invoice>('invoices');
+  const invoiceItemMutation = useMutation<InvoiceItem>('invoiceItems');
   const logActivity = useActivityLogger();
 
   const { getName, getInitials } = useUserNames(teamMembers || []);
@@ -209,7 +210,7 @@ const ProjectsView: React.FC = () => {
         total: budget || 0,
         tax: 0,
         status: 'Draft',
-        notes: `Fatur\u00eb e gjeneruar automatikisht p\u00ebr projektin periodik "${name}".`,
+        notes: `Faturë e gjeneruar automatikisht për projektin periodik "${name}".`,
         dueDate,
         isRecurring: true,
         recurringFrequency: (recurringFrequency || 'monthly') as any,
@@ -219,6 +220,22 @@ const ProjectsView: React.FC = () => {
         reminder25Sent: false,
         reminderLastDaySent: false,
       } as any);
+
+      // Create invoiceItems for selected services
+      if (selectedServiceIds && selectedServiceIds.length > 0 && services) {
+        for (const serviceId of selectedServiceIds) {
+          const service = services.find(s => s.id === serviceId);
+          if (service) {
+            await invoiceItemMutation.create({
+              invoiceId: (newInvoice as any).id,
+              serviceId: service.id,
+              quantity: 1,
+              unitPrice: service.price || 0,
+              totalPrice: service.price || 0,
+            } as any);
+          }
+        }
+      }
 
       // Send invoice email to customer via API (sets status → Pending)
       if (resolvedCustomerId) {
@@ -239,7 +256,7 @@ const ProjectsView: React.FC = () => {
     } else {
       // Non-recurring project: create a plain Draft invoice
       const invoiceLabel = `DRAFT-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${newProject.id.slice(0, 6).toUpperCase()}`;
-      await invoiceMutation.create({
+      const newInvoice = await invoiceMutation.create({
         invoiceNumber: invoiceLabel,
         projectId: newProject.id,
         customerId: resolvedCustomerId,
@@ -252,6 +269,22 @@ const ProjectsView: React.FC = () => {
         notes: `Faturë draft e krijuar automatikisht për projektin "${name}".`,
         dueDate,
       } as any);
+
+      // Create invoiceItems for selected services
+      if (selectedServiceIds && selectedServiceIds.length > 0 && services) {
+        for (const serviceId of selectedServiceIds) {
+          const service = services.find(s => s.id === serviceId);
+          if (service) {
+            await invoiceItemMutation.create({
+              invoiceId: (newInvoice as any).id,
+              serviceId: service.id,
+              quantity: 1,
+              unitPrice: service.price || 0,
+              totalPrice: service.price || 0,
+            } as any);
+          }
+        }
+      }
     }
 
     logActivity('project_created', `Projekt i ri: ${name}`, { entityType: 'project', entityId: newProject.id });

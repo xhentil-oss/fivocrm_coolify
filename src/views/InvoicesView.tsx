@@ -1023,8 +1023,8 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             <div key={item.id} className="p-3 bg-muted/50 rounded-lg">
               <p className="text-sm font-medium">{services[item.serviceId]?.title || 'Duke ngarkuar...'}</p>
               <div className="flex items-center justify-between mt-1.5 text-xs text-muted-foreground">
-                <span>Sasia: {item.quantity} × {item.unitPrice.toFixed(2)} L</span>
-                <span className="font-semibold text-foreground text-sm">{item.totalPrice.toFixed(2)} L</span>
+                <span>Sasia: {item.quantity} × {(item.unitPrice ?? 0).toFixed(2)} L</span>
+                <span className="font-semibold text-foreground text-sm">{(item.totalPrice ?? 0).toFixed(2)} L</span>
               </div>
             </div>
           ))}
@@ -1045,8 +1045,8 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
                 <tr key={item.id}>
                   <td className="px-4 py-2">{services[item.serviceId]?.title || 'Duke ngarkuar...'}</td>
                   <td className="px-4 py-2 text-right">{item.quantity}</td>
-                  <td className="px-4 py-2 text-right">{item.unitPrice.toFixed(2)} L</td>
-                  <td className="px-4 py-2 text-right font-medium">{item.totalPrice.toFixed(2)} L</td>
+                  <td className="px-4 py-2 text-right">{(item.unitPrice ?? 0).toFixed(2)} L</td>
+                  <td className="px-4 py-2 text-right font-medium">{(item.totalPrice ?? 0).toFixed(2)} L</td>
                 </tr>
               ))}
             </tbody>
