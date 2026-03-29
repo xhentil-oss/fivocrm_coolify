@@ -385,6 +385,7 @@ const ProjectDetailView: React.FC = () => {
                   onSubmit={handleCreateTask} 
                   projects={project ? [project] : []} 
                   defaultProjectId={projectId}
+                  teamMembers={teamMembers || []}
                 />
               </DialogContent>
             </Dialog>
@@ -556,7 +557,9 @@ const TaskForm: React.FC<{
   projects: Project[];
   initialData?: Task;
   defaultProjectId?: string;
-}> = ({ onSubmit, projects, initialData, defaultProjectId }) => {
+  teamMembers?: import('../types').TeamMember[];
+}> = ({ onSubmit, projects, initialData, defaultProjectId, teamMembers }) => {
+  const { getName } = useUserNames(teamMembers || []);
   const [startDate, setStartDate] = useState<Date | undefined>(
     initialData?.startDate ? new Date(initialData.startDate) : new Date()
   );
@@ -566,6 +569,7 @@ const TaskForm: React.FC<{
   const [status, setStatus] = useState(initialData?.status || 'Todo');
   const [priority, setPriority] = useState(initialData?.priority || 'medium');
   const [projectId, setProjectId] = useState(initialData?.projectId || defaultProjectId || '__none__');
+  const [assignedUserId, setAssignedUserId] = useState(initialData?.assignedToUserId || '__none__');
   const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
   const [recurringFrequency, setRecurringFrequency] = useState(initialData?.recurringFrequency || 'weekly');
 
@@ -585,6 +589,10 @@ const TaskForm: React.FC<{
     
     if (projectId && projectId !== '__none__') {
       formData.set('projectId', projectId);
+    }
+    
+    if (assignedUserId && assignedUserId !== '__none__') {
+      formData.set('assignedToUserId', assignedUserId);
     }
     
     if (isRecurring) {
@@ -683,15 +691,17 @@ const TaskForm: React.FC<{
 
       <div>
         <Label htmlFor="assignedToUserId">Cakto te</Label>
-        <Input 
-          id="assignedToUserId" 
-          name="assignedToUserId" 
-          defaultValue={initialData?.assignedToUserId || ''} 
-          placeholder="User ID (lër bosh për veten)"
-        />
-        <p className="text-xs text-muted-foreground mt-1">
-          Lër bosh për ta caktuar vetes
-        </p>
+        <Select value={assignedUserId} onValueChange={setAssignedUserId}>
+          <SelectTrigger id="assignedToUserId">
+            <SelectValue placeholder="Zgjidh anëtarin" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">I pacaktuar</SelectItem>
+            {(teamMembers || []).map(m => (
+              <SelectItem key={m.id} value={m.userId}>{getName(m.userId)}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       <div>
