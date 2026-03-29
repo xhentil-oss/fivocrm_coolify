@@ -578,6 +578,7 @@ const TeamsView: React.FC = () => {
               member={editingMember} 
               onSubmit={async (data) => {
                 await memberMutation.update(editingMember.id, data);
+                toast({ title: 'Lejet u përditësuan!', description: `Roli u ndryshua në ${data.role}.` });
                 setIsEditMemberDialogOpen(false);
                 setEditingMember(null);
               }}
@@ -941,16 +942,26 @@ const EditMemberForm: React.FC<{
     });
   };
 
-  // Auto-set all permissions for Admin role
+  // Auto-adjust permissions when role changes
   React.useEffect(() => {
     if (role === 'Admin') {
+      // Admin gets everything
       setCanAccessProjects(true);
       setCanAccessTasks(true);
       setCanAccessCRM(true);
       setCanAccessInvoices(true);
       setCanAccessReports(true);
       setCanAccessSettings(true);
+    } else if (role === 'Member' || role === 'Viewer') {
+      // Reset to baseline — admin configures explicitly
+      setCanAccessProjects(false);
+      setCanAccessTasks(false);
+      setCanAccessCRM(false);
+      setCanAccessInvoices(false);
+      setCanAccessReports(false);
+      setCanAccessSettings(false);
     }
+    // Manager: keep existing checkboxes — admin decides per-person
   }, [role]);
 
   return (
