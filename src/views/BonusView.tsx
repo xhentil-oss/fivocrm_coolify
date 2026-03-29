@@ -108,7 +108,8 @@ const MONTHS = [
 const BonusView: React.FC = () => {
   const permissions = usePermissions();
   const { user } = useAuth();
-  const isAdmin = permissions.canAccessReports; // managers/admins see everyone
+  // Only actual admins/owners/managers can see everyone's bonuses
+  const isAdmin = permissions.isAdmin || permissions.isOwner || permissions.isManager;
   const now = new Date();
   const [selectedMonth, setSelectedMonth] = useState(now.getMonth().toString());
   const [selectedYear, setSelectedYear] = useState(now.getFullYear().toString());
