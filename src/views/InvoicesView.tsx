@@ -834,7 +834,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
                     <SelectItem value="placeholder" disabled>Zgjidh shërbimin</SelectItem>
                     {services?.map(service => (
                       <SelectItem key={service.id} value={service.id}>
-                        {service.title} - {service.price} L
+                        {service.title || service.name} - {service.price} L
                       </SelectItem>
                     ))}
                   </SelectContent>

@@ -108,6 +108,9 @@ const ProjectDetailView: React.FC = () => {
       case 'Planning': return 'bg-info text-info-foreground';
       case 'Completed': return 'bg-gray-500 text-white';
       case 'On Hold': return 'bg-warning text-warning-foreground';
+      case 'In Review': return 'bg-purple-500 text-white';
+      case 'Archived': return 'bg-slate-500 text-white';
+      case 'Cancelled': return 'bg-destructive text-destructive-foreground';
       default: return 'bg-muted text-muted-foreground';
     }
   };
@@ -180,7 +183,7 @@ const ProjectDetailView: React.FC = () => {
     await taskMutation.update(taskId, data);
     // Only check when a task is being set to Done
     if (data.status !== 'Done') return;
-    if (!project || project.status === 'Completed' || !rawProjectTasks?.length) return;
+    if (!project || project.status === 'Completed' || project.status === 'Archived' || project.status === 'Cancelled' || !rawProjectTasks?.length) return;
     // Use RAW (unfiltered) tasks so Members/Viewers can't trigger auto-complete
     // based on only their own visible subset of tasks
     const topLevelTasks = rawProjectTasks.filter(t => !t.parentTaskId);

@@ -459,7 +459,7 @@ const ProjectsView: React.FC = () => {
               >
                 Të gjitha
               </button>
-              {['Active', 'Planning', 'On Hold', 'Completed'].map(status => (
+              {['Active', 'Planning', 'In Review', 'On Hold', 'Completed', 'Archived', 'Cancelled'].map(status => (
                 <button
                   key={status}
                   className={`w-full text-left px-2 py-1.5 text-sm rounded hover:bg-muted ${filterStatus === status ? 'bg-muted' : ''}`}
@@ -708,8 +708,11 @@ const ProjectForm: React.FC<{
           <SelectContent>
             <SelectItem value="Planning">Planifikim</SelectItem>
             <SelectItem value="Active">Aktiv</SelectItem>
+            <SelectItem value="In Review">Nën Vlerësim</SelectItem>
             <SelectItem value="On Hold">Në pritje</SelectItem>
             <SelectItem value="Completed">Përfunduar</SelectItem>
+            <SelectItem value="Archived">Arkivuar</SelectItem>
+            <SelectItem value="Cancelled">Anuluar</SelectItem>
           </SelectContent>
         </Select>
       </div>

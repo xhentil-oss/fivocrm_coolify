@@ -210,6 +210,11 @@ const CustomersView: React.FC = () => {
     });
     const creditLimit = formData.get('creditLimit') as string;
     if (creditLimit) data.creditLimit = parseFloat(creditLimit);
+    // Duplicate email check (exclude current customer)
+    if (data.email && customers?.some(c => c.id !== selectedCustomer.id && c.email?.toLowerCase() === data.email.toLowerCase())) {
+      toast({ title: 'Ky email ekziston tashmë!', description: 'Ka një klient tjetër me këtë email.', variant: 'destructive' });
+      return;
+    }
     await customerMutation.update(selectedCustomer.id, data as any);
     setIsEditDialogOpen(false);
     setSelectedCustomer(null);

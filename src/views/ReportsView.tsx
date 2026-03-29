@@ -371,7 +371,7 @@ const ReportsView: React.FC = () => {
         </Card>
         <Card className="p-5 space-y-2 border-l-4 border-l-red-500">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Shpenzime</p>
+            <p className="text-sm text-muted-foreground">Shpenzime (Gjithsej)</p>
             <Receipt className="w-5 h-5 text-red-500" />
           </div>
           <p className="text-2xl font-bold">{totalExpenses.toLocaleString()} ALL</p>

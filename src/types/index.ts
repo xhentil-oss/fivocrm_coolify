@@ -4,7 +4,7 @@ export interface Project {
   id: string;
   name: string;
   description?: string;
-  status: 'Planning' | 'Active' | 'On Hold' | 'Completed';
+  status: 'Planning' | 'Active' | 'In Review' | 'On Hold' | 'Completed' | 'Archived' | 'Cancelled';
   teamId?: string;
   customerId?: string;
   budget?: number;
