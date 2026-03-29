@@ -206,10 +206,10 @@ const InvoicesView: React.FC = () => {
     cancelEditing();
   };
 
-  const totalRevenue = invoices?.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + (inv.total || 0), 0) || 0;
+  const totalRevenue = invoices?.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + (inv.total ?? inv.amount ?? 0), 0) || 0;
   const paidInvoices = invoices?.filter(inv => inv.status === 'Paid').length || 0;
-  const pendingAmount = invoices?.filter(inv => inv.status === 'Pending').reduce((sum, inv) => sum + (inv.total || 0), 0) || 0;
-  const draftAmount = invoices?.filter(inv => inv.status === 'Draft').reduce((sum, inv) => sum + (inv.total || 0), 0) || 0;
+  const pendingAmount = invoices?.filter(inv => inv.status === 'Pending').reduce((sum, inv) => sum + (inv.total ?? inv.amount ?? 0), 0) || 0;
+  const draftAmount = invoices?.filter(inv => inv.status === 'Draft').reduce((sum, inv) => sum + (inv.total ?? inv.amount ?? 0), 0) || 0;
   const projectedRevenue = pendingAmount + draftAmount;
 
   if (invoicesLoading) {
@@ -662,9 +662,10 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
     e.preventDefault();
 
     const subtotal = calculateSubtotal();
-    // When editing with no line items, preserve the original total rather than overwriting with 0
-    const resolvedSubtotal = (isEditing && lineItems.length === 0 && subtotal === 0)
-      ? (editInvoice?.subtotal ?? editInvoice?.amount ?? 0)
+    // When editing and calculated subtotal is 0 (no items loaded or services deleted),
+    // preserve original invoice value to avoid overwriting with 0
+    const resolvedSubtotal = (isEditing && subtotal === 0)
+      ? (editInvoice?.total || editInvoice?.subtotal || editInvoice?.amount || 0)
       : subtotal;
     const total = resolvedSubtotal + tax;
 
