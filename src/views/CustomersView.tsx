@@ -1,7 +1,9 @@
-import React, { useState, useMemo } from 'react';
+ï»¿import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { usePermissions } from '../contexts/PermissionsContext';
+import { getDocs, query, where, collection, deleteDoc, doc } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import {
   Building2, Plus, Mail, Phone, Search, Filter, X,
   CheckCircle2, XCircle, AlertCircle, Star, Users,
@@ -98,7 +100,7 @@ const CustomersView: React.FC = () => {
     const name = newIndustryName.trim();
     if (!name) return;
     if (allIndustries.some(i => i.toLowerCase() === name.toLowerCase())) {
-      toast({ title: 'Kjo industri ekziston tashmë', variant: 'destructive' });
+      toast({ title: 'Kjo industri ekziston tashmï¿½', variant: 'destructive' });
       return;
     }
     await customIndustryMutation.create({ name });
@@ -173,7 +175,7 @@ const CustomersView: React.FC = () => {
 
     // Duplicate check by email
     if (data.email && customers?.some(c => c.email?.toLowerCase() === data.email.toLowerCase())) {
-      toast({ title: 'Ky email ekziston tashmë!', description: 'Ka një klient me këtë email.', variant: 'destructive' });
+      toast({ title: 'Ky email ekziston tashmï¿½!', description: 'Ka njï¿½ klient me kï¿½tï¿½ email.', variant: 'destructive' });
       return;
     }
 
@@ -182,9 +184,28 @@ const CustomersView: React.FC = () => {
   };
 
   const handleDeleteCustomer = async (id: string) => {
-    if (window.confirm('Je i sigurt që dëshiron të fshish këtë klient?')) {
+    if (window.confirm('Je i sigurt?')) {
       await customerMutation.remove(id);
-      toast({ title: 'Klienti u fshi me sukses!' });
+      const [inv, acc, req] = await Promise.all([
+        getDocs(query(collection(db, ''invoices''), where(''customerId'', ''=='', id))),
+        getDocs(query(collection(db, ''clientPortalAccess''), where(''customerId'', ''=='', id))),
+        getDocs(query(collection(db, ''clientRequests''), where(''customerId'', ''=='', id))),
+      ]);
+      await Promise.all([...inv.docs.map(d => deleteDoc(doc(db, 'invoices', d.id))), ...acc.docs.map(d => deleteDoc(doc(db, 'clientPortalAccess', d.id))), ...req.docs.map(d => deleteDoc(doc(db, 'clientRequests', d.id)))]);
+      toast({ title: 'Klienti u fshi!', description: 'Faturat dhe te dhenat e lidhura u fshin gjithashtu.' });
+    }
+  };
+        getDocs(query(collection(db, 'invoices'), where('customerId', '==', id))),
+        getDocs(query(collection(db, 'clientPortalAccess'), where('customerId', '==', id))),
+        getDocs(query(collection(db, 'clientRequests'), where('customerId', '==', id))),
+      ]);
+      await Promise.all([
+        ...invoicesSnap.docs.map(d => deleteDoc(doc(db, 'invoices', d.id))),
+        ...accessSnap.docs.map(d => deleteDoc(doc(db, 'clientPortalAccess', d.id))),
+        ...requestsSnap.docs.map(d => deleteDoc(doc(db, 'clientRequests', d.id))),
+      ]);
+
+      toast({ title: 'Klienti u fshi!', description: 'Faturat dhe t\u00eb dh\u00ebnat e lidhura u fshin\u00eb gjithashtu.' });
     }
   };
 
@@ -403,7 +424,7 @@ const CustomersView: React.FC = () => {
             <TabsTrigger value="requests" className="gap-1 sm:gap-2 text-xs sm:text-sm">
               <ClipboardList className="h-4 w-4" />
               <span className="hidden sm:inline">Kerkesat</span>
-              <span className="sm:hidden">Kërk.</span>
+              <span className="sm:hidden">Kï¿½rk.</span>
               {newRequestsCount > 0 && (
                 <Badge variant="destructive" className="ml-1 h-5 min-w-5 px-1.5 text-xs">
                   {newRequestsCount}
@@ -560,7 +581,7 @@ const CustomersView: React.FC = () => {
                             </DropdownMenuTrigger>
                             <DropdownMenuContent align="end">
                               <DropdownMenuItem onClick={() => navigate(`/app/customers/${customer.id}`)}>
-                                <ExternalLink className="w-3.5 h-3.5 mr-2" /> Shiko 360°
+                                <ExternalLink className="w-3.5 h-3.5 mr-2" /> Shiko 360ï¿½
                               </DropdownMenuItem>
                               <DropdownMenuItem onClick={() => { setSelectedCustomer(customer); setIsEditDialogOpen(true); }}>
                                 Ndrysho
@@ -679,7 +700,7 @@ const CustomersView: React.FC = () => {
                           <td className="px-3 sm:px-6 py-3 sm:py-4">
                             <div className="flex items-center gap-1 sm:gap-2">
                               <Button variant="ghost" size="sm" className="gap-1" onClick={() => navigate(`/app/customers/${customer.id}`)}>
-                                <ExternalLink className="w-3.5 h-3.5" /> 360°
+                                <ExternalLink className="w-3.5 h-3.5" /> 360ï¿½
                               </Button>
                               {permissions.canEdit && (
                                 <Button variant="outline" size="sm" onClick={() => { setSelectedCustomer(customer); setIsEditDialogOpen(true); }}>
@@ -999,11 +1020,11 @@ const CustomersView: React.FC = () => {
       <Dialog open={showAddIndustry} onOpenChange={setShowAddIndustry}>
         <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Shto Industri të Re</DialogTitle>
+            <DialogTitle>Shto Industri tï¿½ Re</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             <div>
-              <Label>Emri i Industrisë</Label>
+              <Label>Emri i Industrisï¿½</Label>
               <Input
                 value={newIndustryName}
                 onChange={e => setNewIndustryName(e.target.value)}

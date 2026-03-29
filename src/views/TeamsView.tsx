@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
+import { getDocs, query, where, collection, deleteDoc, doc, updateDoc } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import { Users, Plus, MoreVertical, Mail, UserPlus, Shield, Trash2, CheckCircle, XCircle, Clock, Edit2, Check, X, Settings, Eye } from 'lucide-react';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { cn } from '../lib/utils';
@@ -269,7 +271,35 @@ const TeamsView: React.FC = () => {
 
   const handleRemoveMember = async (memberId: string) => {
     if (confirm('Je i sigurt që dëshiron të heqësh këtë anëtar?')) {
+      // Find member data before deleting (need userId + email for cleanup)
+      const member = teamMembers?.find(m => m.id === memberId);
+
       await memberMutation.remove(memberId);
+
+      if (member) {
+        // Cascade: cancel any pending invites for this member's email in this team
+        if (member.email) {
+          const invitesSnap = await getDocs(
+            query(collection(db, 'teamInvites'),
+              where('email', '==', member.email),
+              where('teamId', '==', member.teamId),
+              where('status', '==', 'Pending')
+            )
+          );
+          await Promise.all(invitesSnap.docs.map(d => deleteDoc(doc(db, 'teamInvites', d.id))));
+        }
+
+        // Cascade: remove userId from memberUserIds in all projects
+        const projectsSnap = await getDocs(query(collection(db, 'projects')));
+        await Promise.all(
+          projectsSnap.docs
+            .filter(d => ((d.data().memberUserIds as string[]) || []).includes(member.userId))
+            .map(d => updateDoc(doc(db, 'projects', d.id), {
+              memberUserIds: (d.data().memberUserIds as string[]).filter((id: string) => id !== member.userId),
+            }))
+        );
+      }
+
       toast({ title: 'Anëtari u hoq nga ekipi.' });
     }
   };
@@ -462,9 +492,19 @@ const TeamsView: React.FC = () => {
                           <Edit2 className="w-4 h-4 mr-2" />
                           Ndrysho Emrin
                         </DropdownMenuItem>
-                        <DropdownMenuItem className="text-error" onClick={() => {
-                          if (confirm('Je i sigurt që dëshiron të fshish këtë ekip?')) {
-                            teamMutation.remove(team.id);
+                        <DropdownMenuItem className="text-error" onClick={async () => {
+                          if (confirm('Je i sigurt që dëshiron të fshish këtë ekip? Të gjithë anëtarët dhe ftesat do të fshihen gjithashtu.')) {
+                            await teamMutation.remove(team.id);
+                            // Cascade: delete all teamMembers and teamInvites for this team
+                            const [membersSnap, invitesSnap] = await Promise.all([
+                              getDocs(query(collection(db, 'teamMembers'), where('teamId', '==', team.id))),
+                              getDocs(query(collection(db, 'teamInvites'), where('teamId', '==', team.id))),
+                            ]);
+                            await Promise.all([
+                              ...membersSnap.docs.map(d => deleteDoc(doc(db, 'teamMembers', d.id))),
+                              ...invitesSnap.docs.map(d => deleteDoc(doc(db, 'teamInvites', d.id))),
+                            ]);
+                            toast({ title: 'Ekipi u fshi!', description: 'Anëtarët dhe ftesat u fshinë gjithashtu.' });
                           }
                         }}>
                           <Trash2 className="w-4 h-4 mr-2" />
