@@ -147,7 +147,8 @@ const ProjectsView: React.FC = () => {
     const responsibleUserId = formData.get('responsibleUserId') as string;
     const isRecurring = formData.get('isRecurring') === 'true';
     const recurringFrequency = formData.get('recurringFrequency') as string;
-    const maxMembersStr = formData.get('maxMembers') as string;
+    const memberUserIdsStr = formData.get('memberUserIds') as string;
+    const memberUserIds = memberUserIdsStr ? JSON.parse(memberUserIdsStr) : undefined;
 
     const newProject = await projectMutation.create({
       name,
@@ -160,7 +161,7 @@ const ProjectsView: React.FC = () => {
       responsibleUserId: responsibleUserId && responsibleUserId !== '__none__' ? responsibleUserId : undefined,
       isRecurring: isRecurring || undefined,
       recurringFrequency: isRecurring && recurringFrequency ? recurringFrequency as any : undefined,
-      maxMembers: maxMembersStr && maxMembersStr !== '__unlimited__' ? parseInt(maxMembersStr) : undefined,
+      memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
     });
 
     logActivity('project_created', `Projekt i ri: ${name}`, { entityType: 'project', entityId: newProject.id });
@@ -505,7 +506,7 @@ const ProjectForm: React.FC<{
   const [responsibleUserId, setResponsibleUserId] = useState(initialData?.responsibleUserId || '__none__');
   const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
   const [recurringFrequency, setRecurringFrequency] = useState(initialData?.recurringFrequency || 'monthly');
-  const [maxMembers, setMaxMembers] = useState(initialData?.maxMembers ? String(initialData.maxMembers) : '__unlimited__');
+  const [memberUserIds, setMemberUserIds] = useState<string[]>(initialData?.memberUserIds || []);
   const { getName } = useUserNames(teamMembers || []);
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
@@ -522,7 +523,7 @@ const ProjectForm: React.FC<{
     }
     formData.set('isRecurring', isRecurring ? 'true' : 'false');
     if (isRecurring) formData.set('recurringFrequency', recurringFrequency);
-    formData.set('maxMembers', maxMembers);
+    formData.set('memberUserIds', JSON.stringify(memberUserIds));
     onSubmit(formData);
   };
 
@@ -612,29 +613,41 @@ const ProjectForm: React.FC<{
         </div>
       )}
 
-      {/* Max Members */}
-      <div>
-        <Label htmlFor="maxMembers">Numri Maksimal i Anëtarëve</Label>
-        <Select value={maxMembers} onValueChange={setMaxMembers}>
-          <SelectTrigger>
-            <SelectValue placeholder="Pa limit" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__unlimited__">Pa limit</SelectItem>
-            <SelectItem value="1">1 person</SelectItem>
-            <SelectItem value="2">2 persona</SelectItem>
-            <SelectItem value="3">3 persona</SelectItem>
-            <SelectItem value="4">4 persona</SelectItem>
-            <SelectItem value="5">5 persona</SelectItem>
-            <SelectItem value="6">6 persona</SelectItem>
-            <SelectItem value="8">8 persona</SelectItem>
-            <SelectItem value="10">10 persona</SelectItem>
-            <SelectItem value="15">15 persona</SelectItem>
-            <SelectItem value="20">20 persona</SelectItem>
-          </SelectContent>
-        </Select>
-        <p className="text-xs text-muted-foreground mt-1">Sa anëtarë mund të jenë pjesë e këtij projekti</p>
-      </div>
+      {/* Project Members */}
+      {teamMembers && teamMembers.length > 0 && (
+        <div>
+          <Label>Anëtarët e Projektit</Label>
+          <p className="text-xs text-muted-foreground mb-2">Zgjidh personat që do të marrin pjesë në këtë projekt</p>
+          <div className="space-y-2 max-h-48 overflow-y-auto border rounded-md p-2">
+            {teamMembers.map(m => (
+              <label key={m.id} className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 px-2 py-1 rounded">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-primary"
+                  checked={memberUserIds.includes(m.userId)}
+                  onChange={(e) => {
+                    setMemberUserIds(prev =>
+                      e.target.checked ? [...prev, m.userId] : prev.filter(id => id !== m.userId)
+                    );
+                  }}
+                />
+                <div className="flex items-center gap-2 flex-1">
+                  <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-xs font-medium text-primary">
+                    {getName(m.userId).charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">{getName(m.userId)}</p>
+                    <p className="text-xs text-muted-foreground">{m.role}</p>
+                  </div>
+                </div>
+              </label>
+            ))}
+          </div>
+          {memberUserIds.length > 0 && (
+            <p className="text-xs text-primary mt-1">{memberUserIds.length} person{memberUserIds.length !== 1 ? 'a' : ''} të zgjedhur</p>
+          )}
+        </div>
+      )}
 
       {/* Recurring Project */}
       <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/40">

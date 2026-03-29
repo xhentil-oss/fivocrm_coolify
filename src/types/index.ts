@@ -10,8 +10,8 @@ export interface Project {
   budget?: number;
   spent?: number;
   responsibleUserId?: string;
+  memberUserIds?: string[];
   // Recurring project support
-  maxMembers?: number;
   isRecurring?: boolean;
   recurringFrequency?: 'weekly' | 'monthly';
   nextRecurringDate?: Date;

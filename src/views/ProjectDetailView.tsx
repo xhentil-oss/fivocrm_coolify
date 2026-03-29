@@ -402,8 +402,9 @@ const ProjectDetailView: React.FC = () => {
           </DialogHeader>
           <ProjectSettingsForm
             project={project}
-            onSave={async (maxMembers) => {
-              await projectMutation.update(project.id, { maxMembers });
+            teamMembers={teamMembers || []}
+            onSave={async (memberUserIds) => {
+              await projectMutation.update(project.id, { memberUserIds });
               setIsSettingsOpen(false);
             }}
           />
@@ -571,43 +572,51 @@ const ProjectDetailView: React.FC = () => {
 // Project Settings Form
 const ProjectSettingsForm: React.FC<{
   project: Project;
-  onSave: (maxMembers: number | undefined) => void;
-}> = ({ project, onSave }) => {
-  const [maxMembers, setMaxMembers] = useState(project.maxMembers ? String(project.maxMembers) : '__unlimited__');
+  teamMembers: import('../types').TeamMember[];
+  onSave: (memberUserIds: string[]) => void;
+}> = ({ project, teamMembers, onSave }) => {
+  const { getName } = useUserNames(teamMembers);
+  const [selected, setSelected] = React.useState<string[]>(project.memberUserIds || []);
+
+  const toggle = (userId: string) => {
+    setSelected(prev => prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]);
+  };
 
   return (
     <div className="space-y-4">
       <div>
-        <Label htmlFor="maxMembersSettings">Numri Maksimal i Anëtarëve</Label>
-        <Select value={maxMembers} onValueChange={setMaxMembers}>
-          <SelectTrigger className="mt-1">
-            <SelectValue placeholder="Pa limit" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__unlimited__">Pa limit</SelectItem>
-            <SelectItem value="1">1 person</SelectItem>
-            <SelectItem value="2">2 persona</SelectItem>
-            <SelectItem value="3">3 persona</SelectItem>
-            <SelectItem value="4">4 persona</SelectItem>
-            <SelectItem value="5">5 persona</SelectItem>
-            <SelectItem value="6">6 persona</SelectItem>
-            <SelectItem value="8">8 persona</SelectItem>
-            <SelectItem value="10">10 persona</SelectItem>
-            <SelectItem value="15">15 persona</SelectItem>
-            <SelectItem value="20">20 persona</SelectItem>
-          </SelectContent>
-        </Select>
-        <p className="text-xs text-muted-foreground mt-1">Sa anëtarë mund të jenë pjesë e këtij projekti</p>
+        <Label>Anëtarët e Projektit</Label>
+        <p className="text-xs text-muted-foreground mb-2">Zgjidh personat që do të marrin pjesë në këtë projekt</p>
+        {teamMembers.length === 0 ? (
+          <p className="text-sm text-muted-foreground italic">Nuk ka anëtarë të disponueshëm</p>
+        ) : (
+          <div className="space-y-2 max-h-64 overflow-y-auto border rounded-md p-2">
+            {teamMembers.map(m => (
+              <label key={m.id} className="flex items-center gap-3 cursor-pointer hover:bg-muted/50 px-2 py-1.5 rounded">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-primary"
+                  checked={selected.includes(m.userId)}
+                  onChange={() => toggle(m.userId)}
+                />
+                <div className="flex items-center gap-2 flex-1">
+                  <div className="w-8 h-8 rounded-full bg-primary/10 flex items-center justify-center text-xs font-semibold text-primary">
+                    {getName(m.userId).charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">{getName(m.userId)}</p>
+                    <p className="text-xs text-muted-foreground">{m.role}</p>
+                  </div>
+                </div>
+              </label>
+            ))}
+          </div>
+        )}
+        {selected.length > 0 && (
+          <p className="text-xs text-primary mt-1">{selected.length} person{selected.length !== 1 ? 'a' : ''} të zgjedhur</p>
+        )}
       </div>
-      {project.maxMembers && (
-        <p className="text-sm text-muted-foreground">
-          Aktualisht: <span className="font-medium text-foreground">{project.maxMembers} persona</span>
-        </p>
-      )}
-      <Button
-        className="w-full"
-        onClick={() => onSave(maxMembers !== '__unlimited__' ? parseInt(maxMembers) : undefined)}
-      >
+      <Button className="w-full" onClick={() => onSave(selected)}>
         Ruaj Ndryshimet
       </Button>
     </div>
