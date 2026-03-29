@@ -947,6 +947,7 @@ const EditMemberForm: React.FC<{
   const [status, setStatus] = useState(member.status);
   const [monthlySalary, setMonthlySalary] = useState(member.monthlySalary?.toString() || '');
   const [displayName, setDisplayName] = useState(member.displayName || member.email?.split('@')[0] || '');
+  const [email, setEmail] = useState(member.email || '');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -960,6 +961,7 @@ const EditMemberForm: React.FC<{
       canAccessSettings,
       status,
       displayName: displayName.trim() || undefined,
+      email: email.trim() || undefined,
       monthlySalary: monthlySalary ? parseFloat(monthlySalary) : undefined,
     });
   };
@@ -988,8 +990,10 @@ const EditMemberForm: React.FC<{
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
-      <div className="p-4 bg-muted rounded-lg">
+      <div className="p-4 bg-muted rounded-lg space-y-1">
         <p className="text-sm font-medium">Anëtari: <span className="text-primary">{getName(member.userId)}</span></p>
+        {member.email && <p className="text-xs text-muted-foreground">{member.email}</p>}
+        {!member.email && <p className="text-xs text-amber-600 dark:text-amber-400">Nuk ka email — shto një më poshtë</p>}
       </div>
 
       {/* Display name override */}
@@ -1002,6 +1006,19 @@ const EditMemberForm: React.FC<{
           placeholder="p.sh. Emir Mbiemri"
         />
         <p className="text-xs text-muted-foreground mt-1">Ky emër shfaqet kudo në platformë</p>
+      </div>
+
+      {/* Email field */}
+      <div>
+        <Label htmlFor="editEmail">Email</Label>
+        <Input
+          id="editEmail"
+          type="email"
+          value={email}
+          onChange={e => setEmail(e.target.value)}
+          placeholder="email@shembull.com"
+        />
+        <p className="text-xs text-muted-foreground mt-1">Përdoret për ftesa dhe njoftime</p>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
