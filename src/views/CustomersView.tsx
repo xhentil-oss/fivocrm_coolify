@@ -199,7 +199,6 @@ const CustomersView: React.FC = () => {
     toast({ title: 'Klienti u fshi!', description: 'Faturat dhe te dhenat e lidhura u fshin gjithashtu.' });
     setCustomerToDelete(null);
   };
-  };
   const handleUpdateCustomer = async (formData: FormData) => {
     if (!selectedCustomer) return;
     const data: Record<string, any> = {};
