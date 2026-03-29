@@ -8,9 +8,8 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
-import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import RichTextEditor from '../components/RichTextEditor';
 import { sanitizeHtml } from '../lib/utils';
 import type { Service } from '../types';
 
@@ -126,7 +125,7 @@ const ServicesView: React.FC = () => {
                 Shërbim i Ri
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-2xl">
+            <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Krijo Shërbim të Ri</DialogTitle>
               </DialogHeader>
@@ -222,7 +221,6 @@ const ServiceForm: React.FC<{
   initialData?: Service;
 }> = ({ onSubmit, initialData }) => {
   const [htmlContent, setHtmlContent] = useState(initialData?.description || '');
-  const [activeTab, setActiveTab] = useState<'edit' | 'preview'>('edit');
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -287,33 +285,13 @@ const ServiceForm: React.FC<{
       </div>
 
       <div>
-        <Label>Description (HTML Editor)</Label>
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as 'edit' | 'preview')} className="w-full">
-          <TabsList className="grid w-full grid-cols-2">
-            <TabsTrigger value="edit">Edit HTML</TabsTrigger>
-            <TabsTrigger value="preview">Preview</TabsTrigger>
-          </TabsList>
-          <TabsContent value="edit" className="mt-2">
-            <Textarea
-              id="description"
-              name="description"
-              rows={12}
-              value={htmlContent}
-              onChange={(e) => setHtmlContent(e.target.value)}
-              placeholder="Enter HTML content here..."
-              className="font-mono text-sm"
-            />
-            <p className="text-xs text-muted-foreground mt-2">
-              You can use HTML tags like {'<h1>'}, {'<p>'}, {'<ul>'}, {'<strong>'}, {'<em>'}, etc.
-            </p>
-          </TabsContent>
-          <TabsContent value="preview" className="mt-2">
-            <div 
-              className="border rounded-md p-4 min-h-[200px] prose prose-sm max-w-none"
-              dangerouslySetInnerHTML={{ __html: sanitizeHtml(htmlContent) }}
-            />
-          </TabsContent>
-        </Tabs>
+        <Label className="mb-1.5 block">Përshkrimi</Label>
+        <RichTextEditor
+          content={htmlContent}
+          onChange={setHtmlContent}
+          placeholder="Shkruaj përshkrimin e shërbimit..."
+          minHeight="200px"
+        />
       </div>
 
       <Button type="submit" className="w-full">
