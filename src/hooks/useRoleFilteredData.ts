@@ -79,12 +79,19 @@ export function useFilteredProjects<T extends Partial<Project> & { id: string }>
 
     if (dataScope === 'all' || dataScope === 'team') return projects;
 
-    // Member/Viewer: see projects they created or have tasks in
+    // Member/Viewer: see projects they created, are a member of, or have tasks in
     const myProjectIds = new Set<string>();
 
     // Projects they created
     projects.forEach(p => {
       if (matchesUser(p.createdByUserId, userIds)) myProjectIds.add(p.id);
+    });
+
+    // Projects where they are explicitly listed as a member
+    projects.forEach(p => {
+      if (Array.isArray(p.memberUserIds) && p.memberUserIds.some(id => userIds.includes(id))) {
+        myProjectIds.add(p.id);
+      }
     });
 
     // Projects where they have assigned tasks
