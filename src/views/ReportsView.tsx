@@ -240,7 +240,8 @@ const ReportsView: React.FC = () => {
 
   // ── KPI Calculations ──
   const totalRevenue = invoices?.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + (inv.total ?? inv.amount ?? 0), 0) || 0;
-  const paidRevenue = invoices?.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + (inv.total ?? inv.amount ?? 0), 0) || 0;
+  const paidRevenue = totalRevenue;
+  const projectedRevenue = invoices?.filter(inv => inv.status === 'Pending' || inv.status === 'Draft').reduce((sum, inv) => sum + (inv.total ?? inv.amount ?? 0), 0) || 0;
   const totalExpenses = expenses?.reduce((sum, exp) => sum + (exp.amount ?? 0), 0) || 0;
   const profit = paidRevenue - totalExpenses;
   const activeProjects = projects?.filter(p => p.status === 'Active').length || 0;
@@ -325,10 +326,10 @@ const ReportsView: React.FC = () => {
   return (
     <div className="space-y-8">
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 lg:gap-6">
+      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 lg:gap-6">
         <Card className="p-5 space-y-2 border-l-4 border-l-green-500">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Të Ardhura Totale</p>
+            <p className="text-sm text-muted-foreground">Të Ardhura (Paguar)</p>
             <DollarSign className="w-5 h-5 text-green-500" />
           </div>
           <p className="text-2xl font-bold">{totalRevenue.toLocaleString()} ALL</p>
@@ -337,6 +338,14 @@ const ReportsView: React.FC = () => {
             <span className={revenueChange >= 0 ? 'text-green-600' : 'text-red-600'}>{revenueChange >= 0 ? '+' : ''}{revenueChange}%</span>
             <span className="text-muted-foreground">nga muaji i kaluar</span>
           </div>
+        </Card>
+        <Card className="p-5 space-y-2 border-l-4 border-l-amber-400">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">Parashikuara</p>
+            <TrendingUp className="w-5 h-5 text-amber-400" />
+          </div>
+          <p className="text-2xl font-bold text-amber-500">{projectedRevenue.toLocaleString()} ALL</p>
+          <p className="text-xs text-muted-foreground">Fatura Draft + Në Pritje</p>
         </Card>
         <Card className="p-5 space-y-2 border-l-4 border-l-red-500">
           <div className="flex items-center justify-between">

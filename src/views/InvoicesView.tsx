@@ -204,6 +204,8 @@ const InvoicesView: React.FC = () => {
   const totalRevenue = invoices?.reduce((sum, inv) => sum + (inv.total || 0), 0) || 0;
   const paidInvoices = invoices?.filter(inv => inv.status === 'Paid').length || 0;
   const pendingAmount = invoices?.filter(inv => inv.status === 'Pending').reduce((sum, inv) => sum + (inv.total || 0), 0) || 0;
+  const draftAmount = invoices?.filter(inv => inv.status === 'Draft').reduce((sum, inv) => sum + (inv.total || 0), 0) || 0;
+  const projectedRevenue = pendingAmount + draftAmount;
 
   if (invoicesLoading) {
     return (
@@ -314,15 +316,17 @@ const InvoicesView: React.FC = () => {
 
         <Card className="p-3 sm:p-6 space-y-1 sm:space-y-2 card-hover metric-card-warning border-l-4 border-l-warning">
           <div className="flex items-center justify-between">
-            <p className="text-[10px] sm:text-body-sm text-muted-foreground">Në Pritje</p>
+            <p className="text-[10px] sm:text-body-sm text-muted-foreground">Parashikuara</p>
             <div className="p-1 sm:p-2 bg-warning/10 rounded-lg">
               <CalendarIcon className="w-3.5 h-3.5 sm:w-5 sm:h-5 text-warning" />
             </div>
           </div>
           <p className="text-sm sm:text-h2 text-foreground font-medium animate-count-up">
-            {pendingAmount.toLocaleString()} L
+            {projectedRevenue.toLocaleString()} L
           </p>
-          <p className="text-[10px] sm:text-xs text-warning hidden sm:block">Në pritje të pagesës</p>
+          <p className="text-[10px] sm:text-xs text-muted-foreground hidden sm:block">
+            Pritje: {pendingAmount.toLocaleString()} · Draft: {draftAmount.toLocaleString()} L
+          </p>
         </Card>
       </div>
 
