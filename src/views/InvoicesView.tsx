@@ -470,6 +470,7 @@ const InvoicesView: React.FC = () => {
                             className="px-2 py-1 border rounded"
                             autoFocus
                           >
+                            <option value="Draft">Draft</option>
                             <option value="Pending">Pending</option>
                             <option value="Paid">Paid</option>
                             <option value="Overdue">Overdue</option>
@@ -661,7 +662,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
     e.preventDefault();
 
     const subtotal = calculateSubtotal();
-    const total = subtotal + tax;
+    // When editing with no line items, preserve the original total rather than overwriting with 0
+    const resolvedSubtotal = (isEditing && lineItems.length === 0 && subtotal === 0)
+      ? (editInvoice?.subtotal ?? editInvoice?.amount ?? 0)
+      : subtotal;
+    const total = resolvedSubtotal + tax;
 
     const invoiceData: any = {
       customerId: selectedCustomerId,
@@ -671,7 +676,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
       status,
       dueDate: dueDate || new Date(),
       notes,
-      subtotal,
+      subtotal: resolvedSubtotal,
       tax,
       total,
       amount: total,
@@ -681,6 +686,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
     };
 
     if (isEditing) {
+      // Set paidAt when manually marking as Paid via the full edit form
+      if (status === 'Paid' && editInvoice?.status !== 'Paid') {
+        invoiceData.paidAt = new Date();
+      }
+
       // Update existing invoice
       await invoiceMutation.update(editInvoice!.id, invoiceData);
 
