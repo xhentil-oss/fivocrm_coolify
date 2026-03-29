@@ -268,16 +268,18 @@ const ReportsView: React.FC = () => {
   const totalLeads = leads?.length || 0;
   const conversionRate = totalLeads > 0 ? Math.round((wonLeads / totalLeads) * 100) : 0;
 
-  // ── Last month comparison for trends ──
+  // ── Last month comparison for trends (Paid invoices only, by paidAt date) ──
   const lastMonthRevenue = useMemo(() => {
     if (!invoices) return 0;
     const now = new Date();
     const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
     return invoices.filter(inv => {
-      const cd = inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt);
-      return cd >= lastMonth && cd <= lastMonthEnd;
-    }).reduce((s, inv) => s + (inv.total || inv.amount || 0), 0);
+      if (inv.status !== 'Paid') return false;
+      const d = inv.paidAt ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt))
+        : (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt));
+      return d >= lastMonth && d <= lastMonthEnd;
+    }).reduce((s, inv) => s + (inv.total ?? inv.amount ?? 0), 0);
   }, [invoices]);
 
   const thisMonthRevenue = useMemo(() => {
@@ -285,9 +287,11 @@ const ReportsView: React.FC = () => {
     const now = new Date();
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     return invoices.filter(inv => {
-      const cd = inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt);
-      return cd >= thisMonth;
-    }).reduce((s, inv) => s + (inv.total || inv.amount || 0), 0);
+      if (inv.status !== 'Paid') return false;
+      const d = inv.paidAt ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt))
+        : (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt));
+      return d >= thisMonth;
+    }).reduce((s, inv) => s + (inv.total ?? inv.amount ?? 0), 0);
   }, [invoices]);
 
   const revenueChange = lastMonthRevenue > 0 ? Math.round(((thisMonthRevenue - lastMonthRevenue) / lastMonthRevenue) * 100) : 0;
