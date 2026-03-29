@@ -52,7 +52,7 @@ const ProjectsView: React.FC = () => {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
-  const { data: services } = useCollection<Service>('services');
+  const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
   
   const projectMutation = useMutation<Project>('projects');
   const taskMutation = useMutation<Task>('tasks');
