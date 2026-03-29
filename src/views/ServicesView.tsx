@@ -271,7 +271,7 @@ const ServiceForm: React.FC<{
         </div>
 
         <div>
-          <Label htmlFor="currency">Currency *</Label>
+          <Label htmlFor="currency">Monedha *</Label>
           <Select name="currency" defaultValue={initialData?.currency || 'ALL'}>
             <SelectTrigger>
               <SelectValue />

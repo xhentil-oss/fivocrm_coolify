@@ -51,16 +51,16 @@ const PortalServicesView: React.FC = () => {
     if (formData.servicesInterestedIn.includes('Web Design')) tags.push('Web Design Lead');
     if (formData.servicesInterestedIn.includes('Social Media Marketing')) tags.push('SMM Lead');
     if (formData.servicesInterestedIn.includes('Paid Ads')) tags.push('Ads Lead');
-    if (['€1000–€3000', '€3000+'].includes(formData.budgetRange)) tags.push('High Value Lead');
+    if (['100,000–300,000 L', '300,000+ L'].includes(formData.budgetRange)) tags.push('High Value Lead');
     if (formData.timeline === 'Menjëherë') tags.push('Urgent Lead');
 
     // 3. Estimate value from budget range
     let estimatedValue = 0;
-    if (formData.budgetRange === 'Nën €300') estimatedValue = 200;
-    else if (formData.budgetRange === '€300–€500') estimatedValue = 400;
-    else if (formData.budgetRange === '€500–€1000') estimatedValue = 750;
-    else if (formData.budgetRange === '€1000–€3000') estimatedValue = 2000;
-    else if (formData.budgetRange === '€3000+') estimatedValue = 4000;
+    if (formData.budgetRange === 'Nën 30,000 L') estimatedValue = 20000;
+    else if (formData.budgetRange === '30,000–50,000 L') estimatedValue = 40000;
+    else if (formData.budgetRange === '50,000–100,000 L') estimatedValue = 75000;
+    else if (formData.budgetRange === '100,000–300,000 L') estimatedValue = 200000;
+    else if (formData.budgetRange === '300,000+ L') estimatedValue = 400000;
 
     // 4. Create Lead in CRM
     const lead = await leadMutation.create({

@@ -547,7 +547,7 @@ const TeamsView: React.FC = () => {
                         </Badge>
                         {member.monthlySalary && (
                           <Badge variant="outline" className="text-amber-700 dark:text-amber-400 border-amber-300 dark:border-amber-700 text-xs">
-                            💶 {member.monthlySalary.toLocaleString()} EUR
+                            {member.monthlySalary.toLocaleString()} L
                           </Badge>
                         )}
                       </div>
@@ -991,7 +991,7 @@ const EditMemberForm: React.FC<{
       {/* Salary */}
       <div className="p-4 bg-amber-50 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-800/30 rounded-lg space-y-2">
         <Label htmlFor="monthlySalary" className="flex items-center gap-2 text-amber-800 dark:text-amber-300 font-medium">
-          💶 Rroga Mujore (EUR)
+          � Rroga Mujore (L)
         </Label>
         <p className="text-xs text-muted-foreground">Kjo përdoret për llogaritjen e sistemit të bonusit</p>
         <input

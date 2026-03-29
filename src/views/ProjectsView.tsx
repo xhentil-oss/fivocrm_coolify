@@ -582,7 +582,7 @@ const ProjectForm: React.FC<{
 
       {/* Budget */}
       <div>
-        <Label htmlFor="budget">Buxheti / Të Ardhurat e Projektit (EUR)</Label>
+        <Label htmlFor="budget">Buxheti / Të Ardhurat e Projektit (L)</Label>
         <Input id="budget" name="budget" type="number" step="0.01" defaultValue={(initialData as any)?.budget || ''} placeholder="0.00" />
         <p className="text-xs text-muted-foreground mt-1">Shuma që projekti gjeneron si të ardhura</p>
       </div>

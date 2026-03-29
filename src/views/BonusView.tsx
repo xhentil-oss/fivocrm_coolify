@@ -25,13 +25,13 @@ import type { Project, TeamMember, Expense } from '../types';
 //     · 4× → 5× salary band   → 12% of that band
 //     · above 5× salary       → 18% of the remainder
 //
-//  Example @ €800/mo salary, €5,000 net contribution:
-//     Threshold  = €2,400  (no bonus below this)
-//     Surplus    = €2,600
-//     Tier 1     = min(€2,600, €800) × 8%  = €64
-//     Tier 2     = min(€1,800, €800) × 12% = €96
-//     Tier 3     = €1,000 × 18%            = €180
-//     TOTAL BONUS = €340
+//  Example @ 80,000 L/mo salary, 500,000 L net contribution:
+//     Threshold  = 240,000 L  (no bonus below this)
+//     Surplus    = 260,000 L
+//     Tier 1     = min(260,000 L, 80,000 L) × 8%  = 6,400 L
+//     Tier 2     = min(180,000 L, 80,000 L) × 12% = 9,600 L
+//     Tier 3     = 100,000 L × 18%                = 18,000 L
+//     TOTAL BONUS = 34,000 L
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -261,10 +261,10 @@ const BonusView: React.FC = () => {
                 </div>
               </div>
               <div className="mt-3 p-3 bg-muted/60 rounded-lg text-xs">
-                <strong>Shembull:</strong> Rroga €800 · Kontributi €5,000<br />
-                Pragu: €2,400 · Teprica: €2,600<br />
-                N1: min(€2,600, €800) × 8% = €64 · N2: €800 × 12% = €96 · N3: €1,000 × 18% = €180<br />
-                <strong>Bonus total: €340</strong>
+                <strong>Shembull:</strong> Rroga 80,000 L · Kontributi 500,000 L<br />
+                Pragu: 240,000 L · Teprica: 260,000 L<br />
+                N1: min(260,000 L, 80,000 L) × 8% = 6,400 L · N2: 80,000 L × 12% = 9,600 L · N3: 100,000 L × 18% = 18,000 L<br />
+                <strong>Bonus total: 34,000 L</strong>
               </div>
             </div>
           </CardContent>
@@ -314,7 +314,7 @@ const BonusView: React.FC = () => {
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Bonus Total</p>
-                <p className="text-lg font-bold text-foreground">€{totalBonusPayout.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+                <p className="text-lg font-bold text-foreground">{totalBonusPayout.toLocaleString(undefined, { maximumFractionDigits: 0 })} L</p>
               </div>
             </div>
           </Card>
@@ -361,11 +361,11 @@ const BonusView: React.FC = () => {
             <div>
               <p className="text-sm text-muted-foreground">Bonusi yt këtë muaj</p>
               <p className={`text-3xl font-bold mt-1 ${myResult.totalBonus > 0 ? 'text-amber-600 dark:text-amber-400' : 'text-foreground'}`}>
-                {myResult.totalBonus > 0 ? `€${myResult.totalBonus.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : 'Ende pa arritur pragun'}
+                {myResult.totalBonus > 0 ? `${myResult.totalBonus.toLocaleString(undefined, { maximumFractionDigits: 0 })} L` : 'Ende pa arritur pragun'}
               </p>
               {myResult.totalBonus === 0 && (
                 <p className="text-xs text-muted-foreground mt-1">
-                  Ke bërë €{myResult.netContribution.toLocaleString(undefined, { maximumFractionDigits: 0 })} nga €{myResult.threshold.toLocaleString()} pragu
+                  Ke bërë {myResult.netContribution.toLocaleString(undefined, { maximumFractionDigits: 0 })} L nga {myResult.threshold.toLocaleString()} L pragu
                 </p>
               )}
             </div>
@@ -386,7 +386,7 @@ const BonusView: React.FC = () => {
                 />
               </div>
               <p className="text-xs text-muted-foreground mt-1">
-                Pragu: €{myResult.threshold.toLocaleString()} · Çfarë ke bërë: €{myResult.netContribution.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                Pragu: {myResult.threshold.toLocaleString()} L · Çfarë ke bërë: {myResult.netContribution.toLocaleString(undefined, { maximumFractionDigits: 0 })} L
               </p>
             </div>
           </div>
@@ -441,7 +441,7 @@ const BonusView: React.FC = () => {
                     </div>
                     <div className="min-w-0">
                       <p className="font-medium text-sm truncate">{getName(result.member.userId, result.member.displayName || result.member.email?.split('@')[0])}</p>
-                      <p className="text-xs text-muted-foreground">{result.member.role} · Rroga: €{result.member.monthlySalary?.toLocaleString()}/muaj</p>
+                      <p className="text-xs text-muted-foreground">{result.member.role} · Rroga: {result.member.monthlySalary?.toLocaleString()} L/muaj</p>
                     </div>
                   </div>
 
@@ -449,12 +449,12 @@ const BonusView: React.FC = () => {
                     {/* Progress to threshold */}
                     <div className="hidden sm:block text-right">
                       <p className="text-xs text-muted-foreground">Kontribut neto</p>
-                      <p className="text-sm font-semibold text-foreground">€{result.netContribution.toLocaleString(undefined, { maximumFractionDigits: 0 })}</p>
+                      <p className="text-sm font-semibold text-foreground">{result.netContribution.toLocaleString(undefined, { maximumFractionDigits: 0 })} L</p>
                     </div>
                     <div className={`text-right ${hasBonus ? '' : 'opacity-50'}`}>
                       <p className="text-xs text-muted-foreground">Bonus</p>
                       <p className={`text-sm font-bold ${hasBonus ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground'}`}>
-                        {hasBonus ? `€${result.totalBonus.toLocaleString(undefined, { maximumFractionDigits: 0 })}` : '—'}
+                        {hasBonus ? `${result.totalBonus.toLocaleString(undefined, { maximumFractionDigits: 0 })} L` : '—'}
                       </p>
                     </div>
                     {isExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
@@ -465,7 +465,7 @@ const BonusView: React.FC = () => {
                 <div className="px-4 pb-3">
                   <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1">
                     <span>Progresi drejt pragut (3× rrogë)</span>
-                    <span>{Math.min(100, Math.round((result.netContribution / result.threshold) * 100))}% · Pragu: €{result.threshold.toLocaleString()}</span>
+                    <span>{Math.min(100, Math.round((result.netContribution / result.threshold) * 100))}% · Pragu: {result.threshold.toLocaleString()} L</span>
                   </div>
                   <div className="h-2 bg-muted rounded-full overflow-hidden">
                     <div
@@ -482,7 +482,7 @@ const BonusView: React.FC = () => {
                     <div className="flex gap-1 mt-1">
                       {result.tiers.map((tier, i) => tier.reached && (
                         <span key={i} className="text-[10px] px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300">
-                          N{i + 1}: €{tier.amount.toLocaleString(undefined, { maximumFractionDigits: 0 })}
+                          N{i + 1}: {tier.amount.toLocaleString(undefined, { maximumFractionDigits: 0 })} L
                         </span>
                       ))}
                     </div>
@@ -506,13 +506,13 @@ const BonusView: React.FC = () => {
                               <Badge variant="outline" className="text-xs">{tier.rate}%</Badge>
                             </div>
                             <span className={`text-sm font-semibold ${tier.reached ? 'text-foreground' : 'text-muted-foreground'}`}>
-                              {tier.reached ? `€${tier.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })}` : 'Pa arritur'}
+                              {tier.reached ? `${tier.amount.toLocaleString(undefined, { maximumFractionDigits: 2 })} L` : 'Pa arritur'}
                             </span>
                           </div>
                         ))}
                         <div className="flex items-center justify-between p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 mt-1">
                           <span className="text-sm font-semibold text-amber-800 dark:text-amber-300">BONUS TOTAL</span>
-                          <span className="text-base font-bold text-amber-700 dark:text-amber-400">€{result.totalBonus.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span>
+                          <span className="text-base font-bold text-amber-700 dark:text-amber-400">{result.totalBonus.toLocaleString(undefined, { maximumFractionDigits: 2 })} L</span>
                         </div>
                       </div>
                     </div>
@@ -526,15 +526,15 @@ const BonusView: React.FC = () => {
                             <div key={p.id} className="flex items-center justify-between text-sm py-1.5 px-3 rounded-lg bg-background border">
                               <span className="truncate font-medium flex-1">{p.name}</span>
                               <div className="flex items-center gap-3 text-xs ml-3 flex-shrink-0">
-                                <span className="text-muted-foreground">Buxhet: €{p.budget.toLocaleString()}</span>
-                                {p.expenses > 0 && <span className="text-destructive/70">−€{p.expenses.toLocaleString()}</span>}
-                                <span className="font-semibold text-foreground">= €{p.net.toLocaleString()}</span>
+                                <span className="text-muted-foreground">Buxhet: {p.budget.toLocaleString()} L</span>
+                                {p.expenses > 0 && <span className="text-destructive/70">−{p.expenses.toLocaleString()} L</span>}
+                                <span className="font-semibold text-foreground">= {p.net.toLocaleString()} L</span>
                               </div>
                             </div>
                           ))}
                           <div className="flex items-center justify-between text-sm py-1.5 px-3 rounded-lg bg-muted/40 font-medium">
                             <span>Total neto</span>
-                            <span className="text-foreground">€{result.netContribution.toLocaleString(undefined, { maximumFractionDigits: 0 })}</span>
+                            <span className="text-foreground">{result.netContribution.toLocaleString(undefined, { maximumFractionDigits: 0 })} L</span>
                           </div>
                         </div>
                       </div>

@@ -78,7 +78,7 @@ function computeTaskScore(
       if (project.budget && project.budget > 0) {
         const budgetScore = Math.min(15, Math.floor(project.budget / 1000));
         score += budgetScore;
-        if (budgetScore >= 10) reasons.push(`Projekt me buxhet €${project.budget.toLocaleString()}`);
+        if (budgetScore >= 10) reasons.push(`Projekt me buxhet ${project.budget.toLocaleString()} L`);
       }
 
       // Customer revenue from invoices
@@ -87,7 +87,7 @@ function computeTaskScore(
         if (clientRevenue > 0) {
           const revenueScore = Math.min(15, Math.floor(clientRevenue / 2000));
           score += revenueScore;
-          if (revenueScore >= 8) reasons.push(`Klient VIP (€${clientRevenue.toLocaleString()} të ardhura)`);
+          if (revenueScore >= 8) reasons.push(`Klient VIP (${clientRevenue.toLocaleString()} L të ardhura)`);
           else if (revenueScore >= 4) reasons.push(`Klient i rëndësishëm`);
         }
       }

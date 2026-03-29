@@ -377,7 +377,7 @@ const CRMView: React.FC = () => {
                     </Badge>
                     {lead.source && <Badge variant="outline" className="text-xs">{lead.source}</Badge>}
                     {lead.estimatedValue ? (
-                      <span className="text-xs font-medium text-foreground">${lead.estimatedValue.toLocaleString()}</span>
+                      <span className="text-xs font-medium text-foreground">{lead.estimatedValue.toLocaleString()} L</span>
                     ) : null}
                   </div>
                   <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
@@ -502,7 +502,7 @@ const CRMView: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 text-body text-foreground">
                         {lead.estimatedValue 
-                          ? `$${lead.estimatedValue.toLocaleString()}`
+                          ? `${lead.estimatedValue.toLocaleString()} L`
                           : '-'}
                       </td>
                       <td className="px-6 py-4">
@@ -681,7 +681,7 @@ const LeadForm: React.FC<{
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <Label htmlFor="estimatedValue">Vlera e Parashikuar (€)</Label>
+          <Label htmlFor="estimatedValue">Vlera e Parashikuar (L)</Label>
           <Input 
             id="estimatedValue" 
             name="estimatedValue" 

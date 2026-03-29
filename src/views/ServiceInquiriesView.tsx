@@ -78,7 +78,7 @@ const ServiceInquiriesView: React.FC = () => {
   };
 
   const getBudgetBadge = (budget: string) => {
-    const isHigh = ['€1000–€3000', '€3000+'].includes(budget);
+    const isHigh = ['100,000–300,000 L', '300,000+ L'].includes(budget);
     return (
       <Badge className={isHigh
         ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/40 dark:text-emerald-300'
@@ -188,7 +188,7 @@ const ServiceInquiriesView: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map(inquiry => {
             const isUrgent = inquiry.timeline === 'Menjëherë' || inquiry.isUrgent === 'Po';
-            const isHighValue = ['€1000–€3000', '€3000+'].includes(inquiry.budgetRange);
+            const isHighValue = ['100,000–300,000 L', '300,000+ L'].includes(inquiry.budgetRange);
 
             return (
               <Card

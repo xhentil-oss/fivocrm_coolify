@@ -295,7 +295,7 @@ const InvoicesView: React.FC = () => {
             </div>
           </div>
           <p className="text-sm sm:text-h2 text-foreground font-medium animate-count-up">
-            ${totalRevenue.toLocaleString()}
+            {totalRevenue.toLocaleString()} L
           </p>
           <p className="text-[10px] sm:text-xs text-success hidden sm:block">+12% nga muaji i kaluar</p>
         </Card>
@@ -321,7 +321,7 @@ const InvoicesView: React.FC = () => {
             </div>
           </div>
           <p className="text-sm sm:text-h2 text-foreground font-medium animate-count-up">
-            ${pendingAmount.toLocaleString()}
+            {pendingAmount.toLocaleString()} L
           </p>
           <p className="text-[10px] sm:text-xs text-warning hidden sm:block">Në pritje të pagesës</p>
         </Card>
@@ -341,7 +341,7 @@ const InvoicesView: React.FC = () => {
                   </div>
                   <p className="text-xs text-muted-foreground truncate">{customer?.name || 'Unknown'}</p>
                   <div className="flex items-center gap-3 mt-1.5">
-                    <span className="text-sm font-semibold">${((invoice.total ?? invoice.amount ?? 0)).toLocaleString()}</span>
+                    <span className="text-sm font-semibold">{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} L</span>
                     <span className="text-[10px] text-muted-foreground">Afati: {new Date(invoice.dueDate).toLocaleDateString()}</span>
                   </div>
                 </div>
@@ -448,7 +448,7 @@ const InvoicesView: React.FC = () => {
                           className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 px-2 py-1 rounded"
                           onClick={() => startEditing(invoice.id, 'total', invoice.total ?? invoice.amount ?? 0)}
                         >
-                          ${((invoice.total ?? invoice.amount ?? 0)).toLocaleString()}
+                          {((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} L
                           <Edit2 className="w-3 h-3 opacity-0 group-hover:opacity-100" />
                         </div>
                       )}
@@ -803,7 +803,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
                     <SelectItem value="placeholder" disabled>Zgjidh shërbimin</SelectItem>
                     {services?.map(service => (
                       <SelectItem key={service.id} value={service.id}>
-                        {service.title} - ${service.price}
+                        {service.title} - {service.price} L
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -820,7 +820,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
                   />
                 </div>
                 <div className="w-20 sm:w-24 text-right text-sm font-medium">
-                  ${((services?.find(s => s.id === item.serviceId)?.price || 0) * item.quantity).toFixed(2)}
+                  {((services?.find(s => s.id === item.serviceId)?.price || 0) * item.quantity).toFixed(2)} L
                 </div>
                 <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(index)}>
                   <Trash2 className="w-4 h-4" />
@@ -935,15 +935,15 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
         <div className="space-y-2 text-right">
           <div className="flex justify-between">
             <span className="text-muted-foreground">Nëntotali:</span>
-            <span className="font-medium">${calculateSubtotal().toFixed(2)}</span>
+            <span className="font-medium">{calculateSubtotal().toFixed(2)} L</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Taksa:</span>
-            <span className="font-medium">${tax.toFixed(2)}</span>
+            <span className="font-medium">{tax.toFixed(2)} L</span>
           </div>
           <div className="flex justify-between text-lg font-bold">
             <span>Total:</span>
-            <span>${(calculateSubtotal() + tax).toFixed(2)}</span>
+            <span>{(calculateSubtotal() + tax).toFixed(2)} L</span>
           </div>
         </div>
       </div>
@@ -1003,8 +1003,8 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             <div key={item.id} className="p-3 bg-muted/50 rounded-lg">
               <p className="text-sm font-medium">{services[item.serviceId]?.title || 'Duke ngarkuar...'}</p>
               <div className="flex items-center justify-between mt-1.5 text-xs text-muted-foreground">
-                <span>Sasia: {item.quantity} × ${item.unitPrice.toFixed(2)}</span>
-                <span className="font-semibold text-foreground text-sm">${item.totalPrice.toFixed(2)}</span>
+                <span>Sasia: {item.quantity} × {item.unitPrice.toFixed(2)} L</span>
+                <span className="font-semibold text-foreground text-sm">{item.totalPrice.toFixed(2)} L</span>
               </div>
             </div>
           ))}
@@ -1025,8 +1025,8 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
                 <tr key={item.id}>
                   <td className="px-4 py-2">{services[item.serviceId]?.title || 'Duke ngarkuar...'}</td>
                   <td className="px-4 py-2 text-right">{item.quantity}</td>
-                  <td className="px-4 py-2 text-right">${item.unitPrice.toFixed(2)}</td>
-                  <td className="px-4 py-2 text-right font-medium">${item.totalPrice.toFixed(2)}</td>
+                  <td className="px-4 py-2 text-right">{item.unitPrice.toFixed(2)} L</td>
+                  <td className="px-4 py-2 text-right font-medium">{item.totalPrice.toFixed(2)} L</td>
                 </tr>
               ))}
             </tbody>
@@ -1038,17 +1038,17 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
         <div className="space-y-2 text-right">
           <div className="flex justify-between">
             <span className="text-muted-foreground">Nëntotali:</span>
-            <span className="font-medium">${(invoice.subtotal || 0).toFixed(2)}</span>
+            <span className="font-medium">{(invoice.subtotal || 0).toFixed(2)} L</span>
           </div>
           {invoice.tax && (
             <div className="flex justify-between">
               <span className="text-muted-foreground">Taksa:</span>
-              <span className="font-medium">${invoice.tax.toFixed(2)}</span>
+              <span className="font-medium">{invoice.tax.toFixed(2)} L</span>
             </div>
           )}
           <div className="flex justify-between text-lg font-bold">
             <span>Totali:</span>
-            <span>${(invoice.total || 0).toFixed(2)}</span>
+            <span>{(invoice.total || 0).toFixed(2)} L</span>
           </div>
         </div>
       </div>

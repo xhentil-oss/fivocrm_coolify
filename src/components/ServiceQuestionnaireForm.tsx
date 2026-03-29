@@ -154,7 +154,7 @@ const SERVICE_DESCRIPTION_HINTS: Record<string, string> = {
 const SERVICES_WITH_QUESTIONS = ['Social Media Marketing', 'Web Design', 'Paid Ads', 'Branding', 'Content Creation', 'SEO'];
 
 const BUDGETS = [
-  'Nën €300', '€300–€500', '€500–€1000', '€1000–€3000', '€3000+',
+  'Nën 30,000 L', '30,000–50,000 L', '50,000–100,000 L', '100,000–300,000 L', '300,000+ L',
 ];
 
 const TIMELINES = [
@@ -788,10 +788,10 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                 <Select value={form.ads_monthlyBudget} onValueChange={v => set('ads_monthlyBudget', v)}>
                   <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Nën €300">Nën €300</SelectItem>
-                    <SelectItem value="€300–€500">€300–€500</SelectItem>
-                    <SelectItem value="€500–€1000">€500–€1000</SelectItem>
-                    <SelectItem value="€1000+">€1000+</SelectItem>
+                    <SelectItem value="Nën 30,000 L">Nën 30,000 L</SelectItem>
+                    <SelectItem value="30,000–50,000 L">30,000–50,000 L</SelectItem>
+                    <SelectItem value="50,000–100,000 L">50,000–100,000 L</SelectItem>
+                    <SelectItem value="100,000+ L">100,000+ L</SelectItem>
                   </SelectContent>
                 </Select>
                 <FieldError field="ads_monthlyBudget" />
