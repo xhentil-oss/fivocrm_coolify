@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil, Search } from 'lucide-react';
+import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil, Search, Check, X } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -382,6 +382,17 @@ const ExpensesView: React.FC = () => {
   );
 };
 
+const DEFAULT_CATEGORIES: { value: string; label: string }[] = [
+  { value: 'Salary', label: 'Paga' },
+  { value: 'Rent', label: 'Qira' },
+  { value: 'Utilities', label: 'Shërbime (Ujë, Dritë)' },
+  { value: 'Office', label: 'Furnizime Zyre' },
+  { value: 'Hosting', label: 'Hosting & Software' },
+  { value: 'Marketing', label: 'Marketing' },
+  { value: 'Travel', label: 'Udhëtim' },
+  { value: 'Other', label: 'Tjetër' },
+];
+
 const ExpenseForm: React.FC<{
   onSubmit: (data: FormData) => void;
   teams: Team[];
@@ -390,6 +401,30 @@ const ExpenseForm: React.FC<{
 }> = ({ onSubmit, teams, projects, initialData }) => {
   const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
   const [projectSearch, setProjectSearch] = useState('');
+
+  // Custom categories stored in Firestore
+  const { data: customCategoryDocs } = useCollection<{ id: string; label: string }>('expenseCategories', { skipTeamFilter: true });
+  const categoryMutation = useMutation<{ label: string }>('expenseCategories');
+  const [selectedCategory, setSelectedCategory] = useState(initialData?.category || 'Office');
+  const [newCategoryInput, setNewCategoryInput] = useState('');
+  const [isAddingCategory, setIsAddingCategory] = useState(false);
+
+  const allCategories = [
+    ...DEFAULT_CATEGORIES,
+    ...(customCategoryDocs || []).map(d => ({ value: d.label, label: d.label })),
+  ];
+
+  const handleAddCategory = async () => {
+    const trimmed = newCategoryInput.trim();
+    if (!trimmed) return;
+    const alreadyExists = allCategories.some(c => c.value.toLowerCase() === trimmed.toLowerCase());
+    if (!alreadyExists) {
+      await categoryMutation.create({ label: trimmed });
+    }
+    setSelectedCategory(trimmed);
+    setIsAddingCategory(false);
+    setNewCategoryInput('');
+  };
   const [selectedProjectId, setSelectedProjectId] = useState<string>((initialData as any)?.projectId || '__none__');
   const [nextRecurringDate, setNextRecurringDate] = useState<Date | undefined>(
     initialData?.nextRecurringDate ? new Date(initialData.nextRecurringDate) : undefined
@@ -421,19 +456,42 @@ const ExpenseForm: React.FC<{
 
         <div>
           <Label htmlFor="category">Kategoria *</Label>
-          <Select name="category" defaultValue={initialData?.category || 'Office'}>
+          {/* Hidden input so FormData always carries the value */}
+          <input type="hidden" name="category" value={selectedCategory} />
+          <Select value={selectedCategory} onValueChange={v => { if (v !== '__add__') setSelectedCategory(v); }}>
             <SelectTrigger>
-              <SelectValue />
+              <SelectValue placeholder="Zgjidh kategorinë" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="Salary">Paga</SelectItem>
-              <SelectItem value="Rent">Qira</SelectItem>
-              <SelectItem value="Utilities">Shërbime (Ujë, Dritë)</SelectItem>
-              <SelectItem value="Office">Furnizime Zyre</SelectItem>
-              <SelectItem value="Hosting">Hosting & Software</SelectItem>
-              <SelectItem value="Marketing">Marketing</SelectItem>
-              <SelectItem value="Travel">Udhëtim</SelectItem>
-              <SelectItem value="Other">Tjetër</SelectItem>
+              {allCategories.map(cat => (
+                <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
+              ))}
+              {/* Inline add new category */}
+              <div className="border-t mt-1 pt-1">
+                {isAddingCategory ? (
+                  <div className="flex items-center gap-1 px-2 py-1.5" onClick={e => e.stopPropagation()} onKeyDown={e => e.stopPropagation()}>
+                    <input
+                      autoFocus
+                      className="flex-1 text-sm bg-transparent outline-none border-b border-border placeholder:text-muted-foreground"
+                      placeholder="Emri i kategorisë..."
+                      value={newCategoryInput}
+                      onChange={e => setNewCategoryInput(e.target.value)}
+                      onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAddCategory(); } if (e.key === 'Escape') { setIsAddingCategory(false); setNewCategoryInput(''); } }}
+                    />
+                    <button type="button" onClick={handleAddCategory} className="p-0.5 text-green-600 hover:text-green-700"><Check className="h-3.5 w-3.5" /></button>
+                    <button type="button" onClick={() => { setIsAddingCategory(false); setNewCategoryInput(''); }} className="p-0.5 text-muted-foreground hover:text-foreground"><X className="h-3.5 w-3.5" /></button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="w-full flex items-center gap-2 px-2 py-1.5 text-sm text-primary hover:bg-muted/50 rounded-sm"
+                    onClick={e => { e.preventDefault(); e.stopPropagation(); setIsAddingCategory(true); }}
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                    Shto kategori të re...
+                  </button>
+                )}
+              </div>
             </SelectContent>
           </Select>
         </div>
