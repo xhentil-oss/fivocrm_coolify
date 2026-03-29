@@ -49,6 +49,7 @@ const InvoicesView: React.FC = () => {
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
+  const [invoiceToDelete, setInvoiceToDelete] = useState<string | null>(null);
 
   const { data: rawInvoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', {
     orderBy: { field: 'createdAt', direction: 'desc' },
