@@ -276,7 +276,7 @@ const TasksView: React.FC = () => {
       recurringDayOfWeek: isRecurring && recurringFrequency === 'weekly' ? recurringDayOfWeek : undefined,
       recurringDayOfMonth: isRecurring && recurringFrequency === 'monthly' ? recurringDayOfMonth : undefined,
       nextRecurringDate,
-      estimatedHours: estimatedHoursRaw ? parseFloat(estimatedHoursRaw) : undefined,
+      estimatedHours: estimatedHoursRaw ? (v => !isNaN(v) ? v : undefined)(parseFloat(estimatedHoursRaw)) : undefined,
     });
 
     // Create collaborator records in parallel

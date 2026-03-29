@@ -3,6 +3,7 @@ import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
+import { useToast } from '../hooks/use-toast';
 import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -26,6 +27,8 @@ const CRMView: React.FC = () => {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
   const [saving, setSaving] = useState(false);
+  const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
+  const { toast } = useToast();
 
   const { user } = useAuth();
   const permissions = usePermissions();
@@ -132,9 +135,8 @@ const CRMView: React.FC = () => {
   };
 
   const handleDeleteLead = async (id: string) => {
-    if (window.confirm('Je i sigurt që dëshiron të fshish këtë lead?')) {
-      await leadMutation.remove(id);
-    }
+    await leadMutation.remove(id);
+    setLeadToDelete(null);
   };
 
   const handleFollowUp = async (leadId: string) => {
@@ -150,28 +152,40 @@ const CRMView: React.FC = () => {
 
     // If status is "Converted", create a customer + portal access
     if (newStatus === 'Converted') {
-      const customerDoc = await customerMutation.create({
-        name: lead.name,
-        email: lead.email,
-        phone: lead.phoneNumber,
-        address: lead.address,
-        company: lead.company,
-        website: lead.website,
-        notes: lead.notes,
-        status: 'Active',
-      });
-
-      // Auto-create client portal access if customer has an email
-      if (lead.email && customerDoc?.id) {
-        await portalAccessMutation.create({
-          customerId: customerDoc.id,
-          userId: '', // Will be linked when client registers/logs in
+      let customerDoc: { id: string } | undefined | null = null;
+      try {
+        customerDoc = await customerMutation.create({
+          name: lead.name,
           email: lead.email,
+          phone: lead.phoneNumber,
+          address: lead.address,
+          company: lead.company,
+          website: lead.website,
+          notes: lead.notes,
           status: 'Active',
         });
+
+        // Auto-create client portal access if customer has an email
+        if (lead.email && customerDoc?.id) {
+          await portalAccessMutation.create({
+            customerId: customerDoc.id,
+            userId: '', // Will be linked when client registers/logs in
+            email: lead.email,
+            status: 'Active',
+          });
+        }
+      } catch (err) {
+        // If portal access creation failed after customer was created, roll back customer
+        if (customerDoc?.id) {
+          await customerMutation.remove(customerDoc.id);
+        }
+        // Revert lead status
+        await leadMutation.update(lead.id, { status: lead.status });
+        toast({ title: 'Gabim gjatë konvertimit', description: 'Ndodhi një gabim. Statusi nuk u ndryshua.', variant: 'destructive' });
+        return;
       }
 
-      // Send notification to Admin + Sales (canAccessCRM) team members
+      // Send notification to Admin + Sales (canAccessCRM) team members (best-effort)
       if (user && teamMembers) {
         const notifyPromises = teamMembers
           .filter(m => m.userId !== user.uid && (m.role === 'Admin' || m.canAccessCRM))
@@ -181,7 +195,7 @@ const CRMView: React.FC = () => {
             message: `${lead.name} u konvertua me sukses në klient!`,
             isRead: false,
           }));
-        await Promise.all(notifyPromises);
+        await Promise.all(notifyPromises).catch(() => {});
       }
 
       logActivity('lead_converted', `Lead u konvertua: ${lead.name}`, { entityType: 'lead', entityId: lead.id });
@@ -551,7 +565,7 @@ const CRMView: React.FC = () => {
                               className="text-destructive hover:text-destructive"
                               onClick={(e) => {
                                 e.stopPropagation();
-                                handleDeleteLead(lead.id);
+                                setLeadToDelete(lead);
                               }}
                             >
                               <Trash2 className="w-4 h-4" />
@@ -577,6 +591,18 @@ const CRMView: React.FC = () => {
           await leadMutation.update(selectedLead.id, { notes });
         } : undefined}
       />
+
+      {/* Delete Lead Confirmation */}
+      <Dialog open={!!leadToDelete} onOpenChange={(open) => { if (!open) setLeadToDelete(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Fshi Lead</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">Je i sigurt q\u00eb d\u00ebshiron t\u00eb fshish <span className="font-semibold text-foreground">{leadToDelete?.name}</span>?</p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setLeadToDelete(null)}>Anulo</Button>
+            <Button variant="destructive" onClick={() => leadToDelete && handleDeleteLead(leadToDelete.id)}>Fshi</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

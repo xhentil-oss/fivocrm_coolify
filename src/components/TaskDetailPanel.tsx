@@ -15,6 +15,7 @@ import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Checkbox } from './ui/checkbox';
 import { ScrollArea } from './ui/scroll-area';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import RichTextEditor, { RichTextDisplay } from './RichTextEditor';
 import type { Task, TaskComment } from '../types';
 
@@ -56,6 +57,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const [showSubtaskForm, setShowSubtaskForm] = useState(false);
   const [editingSubtask, setEditingSubtask] = useState<string | null>(null);
   const [showDrivePicker, setShowDrivePicker] = useState(false);
+  const [deleteConfirm, setDeleteConfirm] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   
@@ -536,6 +538,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   };
 
   return (
+    <>
     <div className="h-full flex flex-col bg-background border-l">
       {/* Header with Status Badge and Close */}
       <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b bg-muted/30">
@@ -1364,17 +1367,25 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
       {/* Footer Actions */}
       <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-t bg-muted/30">
-        <Button variant="ghost" size="sm" className="text-error hover:text-error" onClick={() => {
-          if (window.confirm('Je i sigurt që dëshiron të fshish këtë detyrë?')) {
-            onDelete(task.id);
-            onClose();
-          }
-        }}>
+        <Button variant="ghost" size="sm" className="text-error hover:text-error" onClick={() => setDeleteConfirm(true)}>
           <Trash2 className="w-4 h-4 mr-1" />
           Fshi
         </Button>
       </div>
     </div>
+
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={deleteConfirm} onOpenChange={setDeleteConfirm}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Fshi Detyrën</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">Je i sigurt që dëshiron të fshish detyrën <span className="font-semibold text-foreground">"{task.title}"</span>? Ky veprim nuk mund të zhbëhet.</p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setDeleteConfirm(false)}>Anulo</Button>
+            <Button variant="destructive" onClick={() => { onDelete(task.id); onClose(); setDeleteConfirm(false); }}>Fshi</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+    </>
   );
 };
 

@@ -61,12 +61,13 @@ const PortalRequestsView: React.FC = () => {
 
   const requestMutation = useMutation<ClientRequest>('clientRequests');
 
+  const [requestToDelete, setRequestToDelete] = useState<string | null>(null);
+
   const handleDeleteRequest = async (id: string) => {
-    if (window.confirm('Je i sigurt që dëshiron të fshish këtë kërkesë?')) {
-      await requestMutation.remove(id);
-      setSelectedRequest(null);
-      toast({ title: 'Kërkesa u fshi me sukses!' });
-    }
+    await requestMutation.remove(id);
+    setSelectedRequest(null);
+    toast({ title: 'Kërkesa u fshi me sukses!' });
+    setRequestToDelete(null);
   };
   const notificationMutation = useMutation<any>('notifications');
 
@@ -612,7 +613,7 @@ const PortalRequestsView: React.FC = () => {
                   variant="outline"
                   size="sm"
                   className="text-destructive hover:text-destructive gap-1.5 w-full"
-                  onClick={() => handleDeleteRequest(selectedRequest.id)}
+                  onClick={() => setRequestToDelete(selectedRequest.id)}
                 >
                   <Trash2 className="w-3.5 h-3.5" />
                   Fshi Kërkesën
@@ -620,6 +621,18 @@ const PortalRequestsView: React.FC = () => {
               </div>
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Request Confirmation */}
+      <Dialog open={!!requestToDelete} onOpenChange={(open) => { if (!open) setRequestToDelete(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Fshi Kërkesën</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">Je i sigurt që dëshiron të fshish këtë kërkesë? Ky veprim nuk mund të zhbëhet.</p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setRequestToDelete(null)}>Anulo</Button>
+            <Button variant="destructive" onClick={() => requestToDelete && handleDeleteRequest(requestToDelete)}>Fshi</Button>
+          </div>
         </DialogContent>
       </Dialog>
     </div>

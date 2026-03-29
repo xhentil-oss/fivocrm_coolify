@@ -57,6 +57,7 @@ const CustomersView: React.FC = () => {
   // Portal State
   const [portalSearchQuery, setPortalSearchQuery] = useState('');
   const [isGrantDialogOpen, setIsGrantDialogOpen] = useState(false);
+  const [customerToDelete, setCustomerToDelete] = useState<string | null>(null);
 
   // Requests State
   const [selectedRequest, setSelectedRequest] = useState<ClientRequest | null>(null);
@@ -184,20 +185,20 @@ const CustomersView: React.FC = () => {
   };
 
   const handleDeleteCustomer = async (id: string) => {
-    if (window.confirm('Je i sigurt? Faturat, aksesi portal dhe kerkesat e lidhura do te fshihen gjithashtu.')) {
-      await customerMutation.remove(id);
-      const [invoicesSnap, accessSnap, requestsSnap] = await Promise.all([
-        getDocs(query(collection(db, 'invoices'), where('customerId', '==', id))),
-        getDocs(query(collection(db, 'clientPortalAccess'), where('customerId', '==', id))),
-        getDocs(query(collection(db, 'clientRequests'), where('customerId', '==', id))),
-      ]);
-      await Promise.all([
-        ...invoicesSnap.docs.map(d => deleteDoc(doc(db, 'invoices', d.id))),
-        ...accessSnap.docs.map(d => deleteDoc(doc(db, 'clientPortalAccess', d.id))),
-        ...requestsSnap.docs.map(d => deleteDoc(doc(db, 'clientRequests', d.id))),
-      ]);
-      toast({ title: 'Klienti u fshi!', description: 'Faturat dhe te dhenat e lidhura u fshin gjithashtu.' });
-    }
+    await customerMutation.remove(id);
+    const [invoicesSnap, accessSnap, requestsSnap] = await Promise.all([
+      getDocs(query(collection(db, 'invoices'), where('customerId', '==', id))),
+      getDocs(query(collection(db, 'clientPortalAccess'), where('customerId', '==', id))),
+      getDocs(query(collection(db, 'clientRequests'), where('customerId', '==', id))),
+    ]);
+    await Promise.all([
+      ...invoicesSnap.docs.map(d => deleteDoc(doc(db, 'invoices', d.id))),
+      ...accessSnap.docs.map(d => deleteDoc(doc(db, 'clientPortalAccess', d.id))),
+      ...requestsSnap.docs.map(d => deleteDoc(doc(db, 'clientRequests', d.id))),
+    ]);
+    toast({ title: 'Klienti u fshi!', description: 'Faturat dhe te dhenat e lidhura u fshin gjithashtu.' });
+    setCustomerToDelete(null);
+  };
   };
   const handleUpdateCustomer = async (formData: FormData) => {
     if (!selectedCustomer) return;
@@ -581,7 +582,7 @@ const CustomersView: React.FC = () => {
                                   <Globe className="w-3.5 h-3.5 mr-2" /> Jep Akses Portal
                                 </DropdownMenuItem>
                               )}
-                              <DropdownMenuItem className="text-destructive" onClick={() => handleDeleteCustomer(customer.id)}>
+                              <DropdownMenuItem className="text-destructive" onClick={() => setCustomerToDelete(customer.id)}>
                                 <Trash2 className="w-3.5 h-3.5 mr-2" /> Fshi
                               </DropdownMenuItem>
                             </DropdownMenuContent>
@@ -703,7 +704,7 @@ const CustomersView: React.FC = () => {
                                 </Button>
                               )}
                               {permissions.canEdit && (
-                                <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={(e) => { e.stopPropagation(); handleDeleteCustomer(customer.id); }}>
+                                <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive" onClick={(e) => { e.stopPropagation(); setCustomerToDelete(customer.id); }}>
                                   <Trash2 className="w-3.5 h-3.5" />
                                 </Button>
                               )}
@@ -1025,6 +1026,18 @@ const CustomersView: React.FC = () => {
             <Button onClick={handleAddIndustry} className="w-full" disabled={!newIndustryName.trim()}>
               <PlusCircle className="w-4 h-4 mr-2" /> Shto
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete Customer Confirmation */}
+      <Dialog open={!!customerToDelete} onOpenChange={(open) => { if (!open) setCustomerToDelete(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Fshi Klientin</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">Je i sigurt? Faturat, aksesi portal dhe kërkesat e lidhura do të fshihen gjithashtu.</p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setCustomerToDelete(null)}>Anulo</Button>
+            <Button variant="destructive" onClick={() => customerToDelete && handleDeleteCustomer(customerToDelete)}>Fshi</Button>
           </div>
         </DialogContent>
       </Dialog>

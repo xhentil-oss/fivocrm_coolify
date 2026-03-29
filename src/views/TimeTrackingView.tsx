@@ -29,6 +29,7 @@ const TimeTrackingView: React.FC = () => {
   const [pomodoroCount, setPomodoroCount] = useState(0);
   const [isBreak, setIsBreak] = useState(false);
   const pomodoroIntervalRef = useRef<NodeJS.Timeout | null>(null);
+  const pomodoroCompleteRef = useRef(false);
 
   // Running Timer State
   const [runningEntry, setRunningEntry] = useState<TimeEntry | null>(null);
@@ -77,13 +78,14 @@ const TimeTrackingView: React.FC = () => {
   // Pomodoro timer interval
   useEffect(() => {
     if (isPomodoroRunning) {
+      pomodoroCompleteRef.current = false;
       pomodoroIntervalRef.current = setInterval(() => {
         setPomodoroSeconds(prevSec => {
           if (prevSec === 0) {
             setPomodoroMinutes(prevMin => {
               if (prevMin === 0) {
-                // Timer finished
-                handlePomodoroComplete();
+                // Mark done — handlePomodoroComplete runs in a separate effect
+                pomodoroCompleteRef.current = true;
                 return 0;
               }
               return prevMin - 1;
@@ -105,6 +107,14 @@ const TimeTrackingView: React.FC = () => {
       }
     };
   }, [isPomodoroRunning]);
+
+  // Detect completion separately to avoid stale closure in setState
+  useEffect(() => {
+    if (pomodoroMinutes === 0 && pomodoroSeconds === 59 && pomodoroCompleteRef.current && isPomodoroRunning) {
+      pomodoroCompleteRef.current = false;
+      handlePomodoroComplete();
+    }
+  }, [pomodoroMinutes, pomodoroSeconds, isPomodoroRunning]);
 
   const handlePomodoroComplete = () => {
     setIsPomodoroRunning(false);

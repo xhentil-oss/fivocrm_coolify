@@ -35,6 +35,7 @@ const ProjectDetailView: React.FC = () => {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isCreateTaskOpen, setIsCreateTaskOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -301,10 +302,7 @@ const ProjectDetailView: React.FC = () => {
               <DropdownMenuItem
                 className="text-error"
                 onClick={async () => {
-                  if (window.confirm('Jeni i sigurt që dëshironi të fshini këtë projekt?')) {
-                    await projectMutation.remove(projectId!);
-                    navigate('/app/projects');
-                  }
+                  setShowDeleteConfirm(true);
                 }}
               >
                 <Trash2 className="w-4 h-4 mr-2" />
@@ -565,6 +563,18 @@ const ProjectDetailView: React.FC = () => {
           </div>
         )}
       </div>
+
+      {/* Delete Project Confirmation */}
+      <Dialog open={showDeleteConfirm} onOpenChange={setShowDeleteConfirm}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Fshi Projektin</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">Jeni i sigurt që dëshironi të fshini këtë projekt? Ky veprim nuk mund të zhbëhet.</p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setShowDeleteConfirm(false)}>Anulo</Button>
+            <Button variant="destructive" onClick={async () => { setShowDeleteConfirm(false); await projectMutation.remove(projectId!); navigate('/app/projects'); }}>Fshi</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

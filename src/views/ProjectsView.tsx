@@ -30,6 +30,7 @@ const ProjectsView: React.FC = () => {
   const { user } = useAuth();
   const permissions = usePermissions();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [projectToDelete, setProjectToDelete] = useState<{ id: string; name: string } | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   
   // Filters
@@ -161,9 +162,13 @@ const ProjectsView: React.FC = () => {
     const isRecurring = formData.get('isRecurring') === 'true';
     const recurringFrequency = formData.get('recurringFrequency') as string;
     const memberUserIdsStr = formData.get('memberUserIds') as string;
-    const memberUserIds = memberUserIdsStr ? JSON.parse(memberUserIdsStr) : undefined;
+    let memberUserIds: string[] | undefined;
+    if (memberUserIdsStr) {
+      try { memberUserIds = JSON.parse(memberUserIdsStr); } catch { memberUserIds = undefined; }
+    }
 
-    const budget = budgetStr ? parseFloat(budgetStr) : undefined;
+    const budgetRaw = budgetStr ? parseFloat(budgetStr) : undefined;
+    const budget = budgetRaw !== undefined && !isNaN(budgetRaw) ? budgetRaw : undefined;
     const resolvedCustomerId = custId && custId !== '__none__' ? custId : undefined;
     const resolvedTeamId = teamId && teamId !== '__none__' ? teamId : undefined;
 
@@ -231,13 +236,11 @@ const ProjectsView: React.FC = () => {
   };
 
   const handleDeleteProject = async (id: string, name: string) => {
-    if (window.confirm(`Je i sigurt që dëshiron të fshish projektin "${name}"?\n\nKjo do të fshijë gjithashtu të gjitha detyrat e lidhura.`)) {
-      // Cascade delete: remove all tasks belonging to this project
-      const projectTasks = allTasks?.filter(t => (t as any).projectId === id) || [];
-      await Promise.all(projectTasks.map(t => taskMutation.remove(t.id)));
-      await projectMutation.remove(id);
-      logActivity('project_deleted', `Projekt i fshirë: ${name}`, { entityType: 'project', entityId: id });
-    }
+    const projectTasks = allTasks?.filter(t => (t as any).projectId === id) || [];
+    await Promise.all(projectTasks.map(t => taskMutation.remove(t.id)));
+    await projectMutation.remove(id);
+    logActivity('project_deleted', `Projekt i fshiër: ${name}`, { entityType: 'project', entityId: id });
+    setProjectToDelete(null);
   };
 
   if (projectsLoading) {
@@ -517,7 +520,7 @@ const ProjectsView: React.FC = () => {
                       variant="ghost"
                       size="sm"
                       className="text-destructive hover:text-destructive h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
-                      onClick={(e) => { e.stopPropagation(); handleDeleteProject(project.id, project.name); }}
+                      onClick={(e) => { e.stopPropagation(); setProjectToDelete({ id: project.id, name: project.name }); }}
                       title="Fshi projektin"
                     >
                       <Trash2 className="w-3.5 h-3.5" />
@@ -550,6 +553,18 @@ const ProjectsView: React.FC = () => {
       <div className="text-sm text-muted-foreground">
         {filteredProjects.length} projekt{filteredProjects.length !== 1 ? 'e' : ''}
       </div>
+
+      {/* Delete Project Confirmation */}
+      <Dialog open={!!projectToDelete} onOpenChange={(open) => { if (!open) setProjectToDelete(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Fshi Projektin</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">Je i sigurt që dëshiron të fshish projektin <span className="font-semibold">"{projectToDelete?.name}"</span>? Të gjitha detyrat e lidhura do të fshihen gjithashtu.</p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setProjectToDelete(null)}>Anulo</Button>
+            <Button variant="destructive" onClick={() => projectToDelete && handleDeleteProject(projectToDelete.id, projectToDelete.name)}>Fshi</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

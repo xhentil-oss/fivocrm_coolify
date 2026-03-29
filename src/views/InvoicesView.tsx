@@ -90,10 +90,9 @@ const InvoicesView: React.FC = () => {
   const invoiceMutation = useMutation<Invoice>('invoices');
 
   const handleDeleteInvoice = async (id: string) => {
-    if (window.confirm('Je i sigurt që dëshiron të fshish këtë faturë?')) {
-      await invoiceMutation.remove(id);
-      toast({ title: 'Fatura u fshi me sukses!' });
-    }
+    await invoiceMutation.remove(id);
+    toast({ title: 'Fatura u fshi me sukses!' });
+    setInvoiceToDelete(null);
   };
 
   const handleSendEmail = async (invoiceId: string) => {
@@ -376,7 +375,7 @@ const InvoicesView: React.FC = () => {
                       </DropdownMenuItem>
                     )}
                     {permissions.canEdit && (
-                      <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); handleDeleteInvoice(invoice.id); }}>
+                      <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); setInvoiceToDelete(invoice.id); }}>
                         <Trash2 className="w-4 h-4 mr-2" /> Fshi
                       </DropdownMenuItem>
                     )}
@@ -546,7 +545,7 @@ const InvoicesView: React.FC = () => {
                             variant="outline"
                             size="sm"
                             className="text-destructive hover:text-destructive"
-                            onClick={() => handleDeleteInvoice(invoice.id)}
+                            onClick={() => setInvoiceToDelete(invoice.id)}
                             title="Fshi"
                           >
                             <Trash2 className="w-4 h-4" />
@@ -572,6 +571,18 @@ const InvoicesView: React.FC = () => {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* Delete Invoice Confirmation */}
+      <Dialog open={!!invoiceToDelete} onOpenChange={(open) => { if (!open) setInvoiceToDelete(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Fshi Fatur\u00ebn</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">Je i sigurt q\u00eb d\u00ebshiron t\u00eb fshish k\u00ebt\u00eb fatur\u00eb? Ky veprim nuk mund t\u00eb zhb\u00ebhet.</p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setInvoiceToDelete(null)}>Anulo</Button>
+            <Button variant="destructive" onClick={() => invoiceToDelete && handleDeleteInvoice(invoiceToDelete)}>Fshi</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
