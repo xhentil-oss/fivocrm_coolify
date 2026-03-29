@@ -39,6 +39,7 @@ const TeamsView: React.FC = () => {
   const [editValue, setEditValue] = useState<string>('');
   const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
   const [isEditMemberDialogOpen, setIsEditMemberDialogOpen] = useState(false);
+  const [memberToDelete, setMemberToDelete] = useState<TeamMember | null>(null);
 
   const { data: teams, loading: teamsLoading } = useCollection<Team>('teams', {
     orderBy: { field: 'createdAt', direction: 'desc' }
@@ -269,38 +270,38 @@ const TeamsView: React.FC = () => {
     toast({ title: 'Ftesa u pranua!', description: 'Je shtuar me sukses në ekip.' });
   };
 
-  const handleRemoveMember = async (memberId: string) => {
-    if (confirm('Je i sigurt që dëshiron të heqësh këtë anëtar?')) {
-      // Find member data before deleting (need userId + email for cleanup)
-      const member = teamMembers?.find(m => m.id === memberId);
+  const handleRemoveMember = async (member: TeamMember) => {
+    try {
+      await memberMutation.remove(member.id);
 
-      await memberMutation.remove(memberId);
-
-      if (member) {
-        // Cascade: cancel any pending invites for this member's email in this team
-        if (member.email) {
-          const invitesSnap = await getDocs(
-            query(collection(db, 'teamInvites'),
-              where('email', '==', member.email),
-              where('teamId', '==', member.teamId),
-              where('status', '==', 'Pending')
-            )
-          );
-          await Promise.all(invitesSnap.docs.map(d => deleteDoc(doc(db, 'teamInvites', d.id))));
-        }
-
-        // Cascade: remove userId from memberUserIds in all projects
-        const projectsSnap = await getDocs(query(collection(db, 'projects')));
-        await Promise.all(
-          projectsSnap.docs
-            .filter(d => ((d.data().memberUserIds as string[]) || []).includes(member.userId))
-            .map(d => updateDoc(doc(db, 'projects', d.id), {
-              memberUserIds: (d.data().memberUserIds as string[]).filter((id: string) => id !== member.userId),
-            }))
+      // Cascade: cancel any pending invites for this member's email in this team
+      if (member.email) {
+        const invitesSnap = await getDocs(
+          query(collection(db, 'teamInvites'),
+            where('email', '==', member.email),
+            where('teamId', '==', member.teamId),
+            where('status', '==', 'Pending')
+          )
         );
+        await Promise.all(invitesSnap.docs.map(d => deleteDoc(doc(db, 'teamInvites', d.id))));
       }
 
+      // Cascade: remove userId from memberUserIds in all projects
+      const projectsSnap = await getDocs(query(collection(db, 'projects')));
+      await Promise.all(
+        projectsSnap.docs
+          .filter(d => ((d.data().memberUserIds as string[]) || []).includes(member.userId))
+          .map(d => updateDoc(doc(db, 'projects', d.id), {
+            memberUserIds: (d.data().memberUserIds as string[]).filter((id: string) => id !== member.userId),
+          }))
+      );
+
       toast({ title: 'Anëtari u hoq nga ekipi.' });
+    } catch (err) {
+      console.error('Failed to remove member:', err);
+      toast({ title: 'Gabim!', description: 'Nuk u arrit të hiqej anëtari. Provoni përsëri.', variant: 'destructive' });
+    } finally {
+      setMemberToDelete(null);
     }
   };
 
@@ -587,6 +588,27 @@ const TeamsView: React.FC = () => {
         </DialogContent>
       </Dialog>
 
+      {/* Confirm Remove Member Dialog */}
+      <Dialog open={!!memberToDelete} onOpenChange={(open) => { if (!open) setMemberToDelete(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Hiq Anëtarin</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Je i sigurt që dëshiron të heqësh <span className="font-semibold text-foreground">{memberToDelete ? getName(memberToDelete.userId) : ''}</span> nga ekipi? Ky veprim nuk mund të zhbëhet.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setMemberToDelete(null)}>Anulo</Button>
+            <Button
+              variant="destructive"
+              onClick={() => memberToDelete && handleRemoveMember(memberToDelete)}
+            >
+              Hiq
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Team Members Dialog */}
       <Dialog open={isMembersDialogOpen} onOpenChange={setIsMembersDialogOpen}>
         <DialogContent className="max-w-3xl max-h-[80vh] overflow-y-auto">
@@ -647,7 +669,7 @@ const TeamsView: React.FC = () => {
                         <Button
                           variant="ghost"
                           size="sm"
-                          onClick={() => handleRemoveMember(member.id)}
+                          onClick={() => setMemberToDelete(member)}
                         >
                           <Trash2 className="w-4 h-4 text-error" />
                         </Button>
