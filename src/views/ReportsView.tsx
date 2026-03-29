@@ -159,8 +159,12 @@ const ReportsView: React.FC = () => {
       const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
       const label = d.toLocaleDateString('sq-AL', { month: 'short' });
       const monthInvoices = invoices.filter(inv => {
-        const cd = inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt);
-        return inv.status === 'Paid' && cd.getMonth() === d.getMonth() && cd.getFullYear() === d.getFullYear();
+        if (inv.status !== 'Paid') return false;
+        // Prefer paidAt date; fall back to updatedAt/createdAt
+        const paidDate = inv.paidAt ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt))
+          : (inv.updatedAt ? (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt))
+          : (inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt)));
+        return paidDate.getMonth() === d.getMonth() && paidDate.getFullYear() === d.getFullYear();
       });
       months.push({ label, value: monthInvoices.reduce((s, inv) => s + (inv.total ?? inv.amount ?? 0), 0) });
     }
@@ -224,9 +228,14 @@ const ReportsView: React.FC = () => {
         const done = projectTasks.filter(t => t.status === 'Done').length;
         const total = projectTasks.length;
         const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-        return { name: p.name, progress: pct, done, total, budget: p.budget, spent: p.spent };
+        // Revenue = sum of paid invoices linked to this project
+        const revenue = invoices
+          ? invoices.filter(inv => inv.projectId === p.id && inv.status === 'Paid')
+              .reduce((s, inv) => s + (inv.total ?? inv.amount ?? 0), 0)
+          : 0;
+        return { name: p.name, progress: pct, done, total, budget: p.budget, spent: p.spent, revenue };
       });
-  }, [projects, tasks]);
+  }, [projects, tasks, invoices]);
 
   // ── Revenue by Department ──
   const revenueByDepartment = useMemo(() => {
@@ -446,10 +455,10 @@ const ReportsView: React.FC = () => {
                       }}
                     />
                   </div>
-                  {p.budget != null && (
+                  {(p.budget != null || p.revenue > 0) && (
                     <div className="text-xs text-muted-foreground flex justify-between">
-                      <span>Buxheti: {p.budget.toLocaleString()} ALL</span>
-                      <span>Shpenzuar: {(p.spent || 0).toLocaleString()} ALL ({p.budget > 0 ? Math.round(((p.spent || 0) / p.budget) * 100) : 0}%)</span>
+                      {p.revenue > 0 && <span className="text-green-600 font-medium">Të ardhura: {p.revenue.toLocaleString()} ALL</span>}
+                      {p.budget != null && <span>Buxheti: {p.budget.toLocaleString()} ALL</span>}
                     </div>
                   )}
                 </div>

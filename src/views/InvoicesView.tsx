@@ -196,6 +196,10 @@ const InvoicesView: React.FC = () => {
       updateData[field] = parsed;
     } else {
       updateData[field] = editValue;
+      // When status is marked Paid, record paidAt timestamp
+      if (field === 'status' && editValue === 'Paid') {
+        updateData.paidAt = new Date();
+      }
     }
     
     await invoiceMutation.update(invoiceId, updateData);
