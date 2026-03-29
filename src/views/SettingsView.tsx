@@ -671,7 +671,7 @@ const ROLE_DESCRIPTIONS: Record<string, { color: string; label: string; descript
   Manager: {
     color: 'bg-blue-100 text-blue-800',
     label: 'Menaxher',
-    description: 'Menaxhon ekipin dhe projektet. Mund t'i caktojë detyra anëtarëve.',
+    description: "Menaxhon ekipin dhe projektet. Mund t'i caktojë detyra anëtarëve.",
   },
   Member: {
     color: 'bg-green-100 text-green-800',
