@@ -92,8 +92,7 @@ export function usePermissions(): UserPermissions {
     return ids;
   }, [user]);
 
-  // Query teamMembers with single field only (avoids composite index requirement).
-  // Filter Active status client-side.
+  // Primary query: by userId field (covers UID or email stored as userId)
   const { data: rawTeamMembers, loading: membersLoading, error: membersError } = useCollection<any>('teamMembers', {
     where: userIds.length > 0
       ? [{ field: 'userId', operator: 'in', value: userIds }]
@@ -101,10 +100,33 @@ export function usePermissions(): UserPermissions {
     skipTeamFilter: true,
   });
 
+  // Fallback query: by email field — catches members added manually where userId wasn't set to the Firebase UID
+  const { data: rawTeamMembersByEmail, loading: membersByEmailLoading, error: membersByEmailError } = useCollection<any>('teamMembers', {
+    where: user?.email
+      ? [{ field: 'email', operator: '==', value: user.email }]
+      : [{ field: 'email', operator: '==', value: '__never__' }],
+    skipTeamFilter: true,
+  });
+
+  // Merge both queries, deduplicate by id, prefer records already having the correct userId
   const teamMembers = useMemo(() => {
-    if (!rawTeamMembers) return [];
-    return rawTeamMembers.filter((m: any) => m.status === 'Active');
-  }, [rawTeamMembers]);
+    const merged = new Map<string, any>();
+    for (const m of rawTeamMembers || []) merged.set(m.id, m);
+    for (const m of rawTeamMembersByEmail || []) if (!merged.has(m.id)) merged.set(m.id, m);
+    return Array.from(merged.values()).filter((m: any) => m.status === 'Active');
+  }, [rawTeamMembers, rawTeamMembersByEmail]);
+
+  // Auto-link: when found by email but userId doesn't match current UID, update Firestore so future queries work
+  const linkedRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!user) return;
+    for (const m of rawTeamMembersByEmail || []) {
+      if (m.userId !== user.uid && !linkedRef.current.has(m.id)) {
+        linkedRef.current.add(m.id);
+        updateDoc(doc(db, 'teamMembers', m.id), { userId: user.uid }).catch(console.error);
+      }
+    }
+  }, [user, rawTeamMembersByEmail]);
 
   const { data: teams, loading: teamsLoading, error: teamsError } = useCollection<any>('teams', {
     skipTeamFilter: true,
@@ -118,8 +140,8 @@ export function usePermissions(): UserPermissions {
 
   // Don't stay stuck loading forever if Firebase returns an error.
   // On error, isLoading becomes false but we still show restrictedPermissions (fail-safe).
-  const isLoading = userLoading || (membersLoading && !membersError) || (teamsLoading && !teamsError);
-  const hasError = !!(membersError || teamsError);
+  const isLoading = userLoading || ((membersLoading || membersByEmailLoading) && !membersError && !membersByEmailError) || (teamsLoading && !teamsError);
+  const hasError = !!(membersError || membersByEmailError || teamsError);
 
   const permissions = useMemo((): UserPermissions => {
     // While loading or on error, return restricted permissions with loading flag (fail-safe)
