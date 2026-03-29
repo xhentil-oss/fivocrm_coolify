@@ -202,7 +202,7 @@ const InvoicesView: React.FC = () => {
     cancelEditing();
   };
 
-  const totalRevenue = invoices?.reduce((sum, inv) => sum + (inv.total || 0), 0) || 0;
+  const totalRevenue = invoices?.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + (inv.total || 0), 0) || 0;
   const paidInvoices = invoices?.filter(inv => inv.status === 'Paid').length || 0;
   const pendingAmount = invoices?.filter(inv => inv.status === 'Pending').reduce((sum, inv) => sum + (inv.total || 0), 0) || 0;
   const draftAmount = invoices?.filter(inv => inv.status === 'Draft').reduce((sum, inv) => sum + (inv.total || 0), 0) || 0;

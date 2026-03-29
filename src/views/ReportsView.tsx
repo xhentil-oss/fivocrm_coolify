@@ -151,7 +151,7 @@ const ReportsView: React.FC = () => {
       const label = d.toLocaleDateString('sq-AL', { month: 'short' });
       const monthInvoices = invoices.filter(inv => {
         const cd = inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt);
-        return cd.getMonth() === d.getMonth() && cd.getFullYear() === d.getFullYear();
+        return inv.status === 'Paid' && cd.getMonth() === d.getMonth() && cd.getFullYear() === d.getFullYear();
       });
       months.push({ label, value: monthInvoices.reduce((s, inv) => s + (inv.total ?? inv.amount ?? 0), 0) });
     }
