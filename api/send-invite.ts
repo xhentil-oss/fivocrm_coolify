@@ -19,7 +19,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  const { to, teamName, inviteLink, senderName } = req.body;
+  const { to, teamName, inviteLink, senderName, directAdd } = req.body;
 
   if (!to || !teamName || !inviteLink) {
     return res.status(400).json({ error: 'Missing required fields' });
@@ -61,8 +61,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     await transporter.sendMail({
       from: `"${escapeHtml((senderName || 'FivoCRM').replace(/["\n\r]/g, ''))}" <${smtpUser}>`,
       to,
-      subject: `Ftesë për tu bashkuar me ekipin "${String(teamName).replace(/["\n\r]/g, '')}"`,
-      html: `
+      subject: directAdd
+        ? `U shtove në ekipin "${String(teamName).replace(/["\n\r]/g, '')}"`
+        : `Ftesë për tu bashkuar me ekipin "${String(teamName).replace(/["\n\r]/g, '')}"`,
+      html: directAdd ? `
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+          <h2 style="color: #333;">U shtove në ekip!</h2>
+          <p>Administratori <strong>${escapeHtml(String(senderName || 'FivoCRM'))}</strong> të shtoi direkt në ekipin <strong>${escapeHtml(String(teamName))}</strong> në FivoCRM.</p>
+          <a href="${encodeURI(inviteLink)}"
+             style="display: inline-block; padding: 12px 24px; background-color: #3b82f6; color: white; text-decoration: none; border-radius: 6px; margin: 20px 0;">
+            Hyr në FivoCRM
+          </a>
+          <p style="color: #666; font-size: 14px;">Ose kopjo këtë link: ${escapeHtml(inviteLink)}</p>
+          <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;" />
+          <p style="color: #999; font-size: 12px;">Nëse nuk e pret këtë email, kontakto administratorin.</p>
+        </div>
+      ` : `
         <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
           <h2 style="color: #333;">Ke marrë një ftesë!</h2>
           <p>Je ftuar të bashkohesh me ekipin <strong>${escapeHtml(String(teamName))}</strong> në FivoCRM.</p>

@@ -163,6 +163,7 @@ const TeamsView: React.FC = () => {
     if (!selectedTeam || !user) return;
 
     const userId = formData.get('userId') as string;
+    const email = (formData.get('email') as string)?.trim();
     const role = formData.get('role') as string;
 
     // Duplicate check: same userId in same team
@@ -183,6 +184,7 @@ const TeamsView: React.FC = () => {
       userId,
       teamId: selectedTeam.id,
       role,
+      email: email || undefined,
       canAccessProjects,
       canAccessTasks,
       canAccessCRM,
@@ -193,6 +195,33 @@ const TeamsView: React.FC = () => {
       invitedAt: new Date(),
       status: 'Active',
     });
+
+    // Send notification email if an address was provided
+    if (email) {
+      try {
+        const appLink = window.location.origin + '/app';
+        const response = await fetch('/api/send-invite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            to: email,
+            teamName: selectedTeam.name,
+            inviteLink: appLink,
+            senderName: user.displayName || 'FivoCRM',
+            directAdd: true,
+          }),
+        });
+        if (response.ok) {
+          toast({ title: 'Anëtari u shtua!', description: `Email-i i njoftimit u dërgua te ${email}.` });
+        } else {
+          toast({ title: 'Anëtari u shtua', description: 'Nuk u dërgua email. Kontrolloni konfigurimin SMTP.', variant: 'destructive' });
+        }
+      } catch {
+        toast({ title: 'Anëtari u shtua', description: 'Nuk u dërgua email. Gabim rrjeti.' });
+      }
+    } else {
+      toast({ title: 'Anëtari u shtua!', description: 'Anëtari u shtua direkt në ekip.' });
+    }
 
     setIsAddMemberDialogOpen(false);
   };
@@ -674,15 +703,28 @@ const AddMemberForm: React.FC<{
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
       <div>
-        <Label htmlFor="userId">User ID ose Email</Label>
+        <Label htmlFor="userId">User ID *</Label>
         <Input 
           id="userId" 
           name="userId" 
           required 
-          placeholder="user-id ose email@example.com" 
+          placeholder="user-id i përdoruesit" 
         />
         <p className="text-xs text-muted-foreground mt-1">
-          Shkruaj ID ose email-in e përdoruesit. Për veten tënde: <code className="bg-muted px-1 rounded">{user?.uid}</code>
+          ID e Firebase-it. Për veten tënde: <code className="bg-muted px-1 rounded">{user?.uid}</code>
+        </p>
+      </div>
+
+      <div>
+        <Label htmlFor="email">Email për njoftim <span className="text-muted-foreground">(opsionale)</span></Label>
+        <Input 
+          id="email" 
+          name="email" 
+          type="email"
+          placeholder="email@shembull.com" 
+        />
+        <p className="text-xs text-muted-foreground mt-1">
+          Nëse plotësohet, anëtarit do t'i dërgohet email njoftimi që është shtuar në ekip.
         </p>
       </div>
 
