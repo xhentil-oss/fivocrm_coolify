@@ -113,6 +113,7 @@ const JoinInviteView: React.FC = () => {
       await addDoc(collection(db, 'teamMembers'), {
         userId: user.uid,
         email: user.email || invite.email || '',
+        displayName: user.displayName || user.email?.split('@')[0] || '',
         teamId: invite.teamId,
         role: invite.role,
         canAccessProjects: invite.canAccessProjects ?? false,

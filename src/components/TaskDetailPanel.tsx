@@ -172,8 +172,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     const profile = userProfiles?.find(p => p.userId === userId);
     if (profile?.displayName) return profile.displayName;
     const member = teamMembers?.find(m => m.userId === userId);
+    if (member?.displayName) return member.displayName;
     if (member?.email) return member.email.split('@')[0];
-    if (member?.role) return `${member.role} - ${userId.slice(0, 6)}`;
     return userId.slice(0, 12);
   }, [user, userProfiles, teamMembers]);
 
@@ -601,12 +601,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                     className="flex items-center gap-2 hover:bg-muted/50 rounded px-2 py-1 -mx-2 transition-colors"
                   >
                     <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-xs font-medium">
-                      {task.assignedToUserId?.slice(0, 2).toUpperCase() || '?'}
+                      {getUserDisplayName(task.assignedToUserId!).slice(0, 2).toUpperCase()}
                     </div>
                     <span className="text-sm">
-                      {teamMembers?.find(m => m.userId === task.assignedToUserId)?.userId?.slice(0, 12) || 
-                       task.assignedToUserId?.slice(0, 12) || 'Pa caktuar'}
-                      {task.assignedToUserId && '...'}
+                      {getUserDisplayName(task.assignedToUserId || '') || 'Pa caktuar'}
                     </span>
                     <ChevronDown className="w-3 h-3 text-muted-foreground" />
                   </button>
@@ -686,10 +684,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                               }}
                             >
                               <div className="w-6 h-6 rounded-full bg-secondary/50 flex items-center justify-center text-xs font-medium">
-                                {member.userId?.slice(0, 2).toUpperCase()}
+                                {getUserDisplayName(member.userId).slice(0, 2).toUpperCase()}
                               </div>
                               <div className="flex-1 min-w-0">
-                                <p className="text-sm truncate">{member.userId?.slice(0, 20)}...</p>
+                                <p className="text-sm truncate">{getUserDisplayName(member.userId)}</p>
                                 <p className="text-xs text-muted-foreground">{member.role}</p>
                               </div>
                               {task.assignedToUserId === member.userId && (

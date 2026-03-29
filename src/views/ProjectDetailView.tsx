@@ -23,6 +23,7 @@ import {
 } from '../components/ui/dropdown-menu';
 import TaskDetailPanel from '../components/TaskDetailPanel';
 import { useFilteredTasks } from '../hooks/useRoleFilteredData';
+import { useUserNames } from '../hooks/useUserNames';
 import type { Task, Project, Team, TeamMember } from '../types';
 
 const ProjectDetailView: React.FC = () => {
@@ -56,6 +57,8 @@ const ProjectDetailView: React.FC = () => {
   const taskMutation = useMutation<Task>('tasks');
   const commentMutation = useMutation<any>('taskComments');
   const notificationMutation = useMutation<any>('notifications');
+
+  const { getName, getInitials } = useUserNames(teamMembers || []);
 
   // Filter tasks
   const tasks = React.useMemo(() => {
@@ -267,9 +270,9 @@ const ProjectDetailView: React.FC = () => {
                 <div
                   key={member.id}
                   className="w-8 h-8 rounded-full bg-primary/20 border-2 border-background flex items-center justify-center text-xs font-medium"
-                  title={member.userId}
+                  title={getName(member.userId)}
                 >
-                  {member.userId.slice(0, 2).toUpperCase()}
+                  {getInitials(member.userId)}
                 </div>
               ))}
               {projectMembers.length > 4 && (
@@ -427,14 +430,10 @@ const ProjectDetailView: React.FC = () => {
                       {task.assignedToUserId && (
                         <div className="flex items-center gap-2 px-2 py-1 bg-muted/50 rounded-full">
                           <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-xs font-medium">
-                            {task.assignedToUserId.slice(0, 2).toUpperCase()}
+                            {getInitials(task.assignedToUserId)}
                           </div>
                           <span className="text-xs text-muted-foreground max-w-[100px] truncate">
-                            {task.assignedToUserId.includes('@') 
-                              ? task.assignedToUserId.split('@')[0] 
-                              : task.assignedToUserId.length > 12 
-                                ? task.assignedToUserId.slice(0, 12) + '...'
-                                : task.assignedToUserId}
+                            {getName(task.assignedToUserId)}
                           </span>
                         </div>
                       )}
@@ -501,16 +500,12 @@ const ProjectDetailView: React.FC = () => {
                           <p className="text-sm font-medium mb-2">{task.title}</p>
                           <div className="flex items-center justify-between text-xs text-muted-foreground">
                             {task.assignedToUserId ? (
-                              <div className="flex items-center gap-1.5" title={task.assignedToUserId}>
+                              <div className="flex items-center gap-1.5" title={getName(task.assignedToUserId)}>
                                 <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-xs font-medium">
-                                  {task.assignedToUserId.slice(0, 2).toUpperCase()}
+                                  {getInitials(task.assignedToUserId)}
                                 </div>
                                 <span className="max-w-[80px] truncate">
-                                  {task.assignedToUserId.includes('@') 
-                                    ? task.assignedToUserId.split('@')[0] 
-                                    : task.assignedToUserId.length > 10 
-                                      ? task.assignedToUserId.slice(0, 10) + '...'
-                                      : task.assignedToUserId}
+                                  {getName(task.assignedToUserId)}
                                 </span>
                               </div>
                             ) : (

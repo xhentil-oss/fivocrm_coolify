@@ -60,6 +60,10 @@ const TasksView: React.FC = () => {
   const { data: comments } = useCollection<TaskComment>('taskComments');
   const { data: collaborators } = useCollection<TaskCollaborator>('taskCollaborators');
   const { data: userProfiles } = useCollection<UserProfile>('userProfiles');
+  const { data: teamMembers } = useCollection<any>('teamMembers', {
+    where: [{ field: 'status', operator: '==', value: 'Active' }],
+    skipTeamFilter: true,
+  });
   
   // Get all active time entries to show who's working on what
   const { data: activeTimeEntries } = useCollection<TimeEntry>('timeEntries', {
@@ -78,8 +82,11 @@ const TasksView: React.FC = () => {
     if (userId === user?.uid) return user?.displayName || 'Ti';
     const profile = userProfiles?.find(p => p.userId === userId || p.id === userId);
     if (profile?.displayName) return profile.displayName;
+    const member = teamMembers?.find((m: any) => m.userId === userId);
+    if (member?.displayName) return member.displayName;
+    if (member?.email) return member.email.split('@')[0];
     return userId.includes('@') ? userId.split('@')[0] : userId.slice(0, 8);
-  }, [user, userProfiles]);
+  }, [user, userProfiles, teamMembers]);
 
   // Helper: get subtask counts per task
   const subtaskCounts = useMemo(() => {

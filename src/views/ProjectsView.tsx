@@ -22,6 +22,7 @@ import {
 } from '../components/ui/dropdown-menu';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useFilteredProjects } from '../hooks/useRoleFilteredData';
+import { useUserNames } from '../hooks/useUserNames';
 import type { Project, Task, Team, TeamMember, Customer } from '../types';
 
 const ProjectsView: React.FC = () => {
@@ -54,6 +55,8 @@ const ProjectsView: React.FC = () => {
   const projectMutation = useMutation<Project>('projects');
   const taskMutation = useMutation<Task>('tasks');
   const logActivity = useActivityLogger();
+
+  const { getName, getInitials } = useUserNames(teamMembers || []);
 
   // Get unique owners from projects
   const owners = React.useMemo(() => {
@@ -278,9 +281,9 @@ const ProjectsView: React.FC = () => {
                     }}
                   />
                   <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-xs">
-                    {member.userId.slice(0, 2).toUpperCase()}
+                    {getInitials(member.userId)}
                   </div>
-                  <span className="text-sm truncate">{member.userId.slice(0, 15)}...</span>
+                  <span className="text-sm truncate">{getName(member.userId)}</span>
                 </div>
               ))}
             </div>
@@ -409,9 +412,9 @@ const ProjectsView: React.FC = () => {
                         <div
                           key={member.id}
                           className="w-7 h-7 rounded-full bg-primary/20 border-2 border-background flex items-center justify-center text-xs font-medium"
-                          title={member.userId}
+                          title={getName(member.userId)}
                         >
-                          {member.userId.slice(0, 2).toUpperCase()}
+                          {getInitials(member.userId)}
                         </div>
                       ))}
                     </div>
@@ -595,7 +598,7 @@ const ProjectForm: React.FC<{
               <SelectItem value="__none__">Asnjë i caktuar</SelectItem>
               {teamMembers.map(m => (
                 <SelectItem key={m.id} value={m.userId}>
-                  {m.email || m.userId.slice(0, 20)} ({m.role})
+                  {getName(m.userId)} ({m.role})
                 </SelectItem>
               ))}
             </SelectContent>

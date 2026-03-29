@@ -229,9 +229,9 @@ const ChatView: React.FC = () => {
     const profile = profileMap.get(userId);
     if (profile?.displayName) return profile.displayName;
     const member = teamMembers?.find(m => m.userId === userId);
+    if (member?.displayName) return member.displayName;
     if (member?.email) return member.email.split('@')[0];
-    if (member) return `${member.role} - ${userId.slice(0, 6)}`;
-    // Check if team owner
+    // Check if team owner/admin
     const ownerTeam = teams?.find((t: any) => t.createdByUserId === userId);
     if (ownerTeam) return 'Admin';
     return `User ${userId.slice(0, 6)}`;

@@ -67,6 +67,7 @@ const TeamsView: React.FC = () => {
         teamId: newTeam.id,
         role: 'Admin',
         email: user.email || '',
+        displayName: user.displayName || user.email?.split('@')[0] || '',
         canAccessProjects: true,
         canAccessTasks: true,
         canAccessCRM: true,
