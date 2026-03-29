@@ -831,6 +831,7 @@ const EditMemberForm: React.FC<{
   member: TeamMember;
   onSubmit: (data: Partial<TeamMember>) => void;
 }> = ({ member, onSubmit }) => {
+  const { getName } = useUserNames([member]);
   const [role, setRole] = useState(member.role);
   const [canAccessProjects, setCanAccessProjects] = useState(member.canAccessProjects ?? true);
   const [canAccessTasks, setCanAccessTasks] = useState(member.canAccessTasks ?? true);
