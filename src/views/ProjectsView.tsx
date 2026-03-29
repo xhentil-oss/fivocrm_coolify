@@ -147,6 +147,7 @@ const ProjectsView: React.FC = () => {
     const responsibleUserId = formData.get('responsibleUserId') as string;
     const isRecurring = formData.get('isRecurring') === 'true';
     const recurringFrequency = formData.get('recurringFrequency') as string;
+    const maxMembersStr = formData.get('maxMembers') as string;
 
     const newProject = await projectMutation.create({
       name,
@@ -159,6 +160,7 @@ const ProjectsView: React.FC = () => {
       responsibleUserId: responsibleUserId && responsibleUserId !== '__none__' ? responsibleUserId : undefined,
       isRecurring: isRecurring || undefined,
       recurringFrequency: isRecurring && recurringFrequency ? recurringFrequency as any : undefined,
+      maxMembers: maxMembersStr && maxMembersStr !== '__unlimited__' ? parseInt(maxMembersStr) : undefined,
     });
 
     logActivity('project_created', `Projekt i ri: ${name}`, { entityType: 'project', entityId: newProject.id });
@@ -503,6 +505,7 @@ const ProjectForm: React.FC<{
   const [responsibleUserId, setResponsibleUserId] = useState(initialData?.responsibleUserId || '__none__');
   const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
   const [recurringFrequency, setRecurringFrequency] = useState(initialData?.recurringFrequency || 'monthly');
+  const [maxMembers, setMaxMembers] = useState(initialData?.maxMembers ? String(initialData.maxMembers) : '__unlimited__');
   const { getName } = useUserNames(teamMembers || []);
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
@@ -519,6 +522,7 @@ const ProjectForm: React.FC<{
     }
     formData.set('isRecurring', isRecurring ? 'true' : 'false');
     if (isRecurring) formData.set('recurringFrequency', recurringFrequency);
+    formData.set('maxMembers', maxMembers);
     onSubmit(formData);
   };
 
@@ -607,6 +611,30 @@ const ProjectForm: React.FC<{
           <p className="text-xs text-muted-foreground mt-1">Punonjësi që merr kredit për këtë projekt në llogaritjen e bonusit</p>
         </div>
       )}
+
+      {/* Max Members */}
+      <div>
+        <Label htmlFor="maxMembers">Numri Maksimal i Anëtarëve</Label>
+        <Select value={maxMembers} onValueChange={setMaxMembers}>
+          <SelectTrigger>
+            <SelectValue placeholder="Pa limit" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__unlimited__">Pa limit</SelectItem>
+            <SelectItem value="1">1 person</SelectItem>
+            <SelectItem value="2">2 persona</SelectItem>
+            <SelectItem value="3">3 persona</SelectItem>
+            <SelectItem value="4">4 persona</SelectItem>
+            <SelectItem value="5">5 persona</SelectItem>
+            <SelectItem value="6">6 persona</SelectItem>
+            <SelectItem value="8">8 persona</SelectItem>
+            <SelectItem value="10">10 persona</SelectItem>
+            <SelectItem value="15">15 persona</SelectItem>
+            <SelectItem value="20">20 persona</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground mt-1">Sa anëtarë mund të jenë pjesë e këtij projekti</p>
+      </div>
 
       {/* Recurring Project */}
       <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/40">

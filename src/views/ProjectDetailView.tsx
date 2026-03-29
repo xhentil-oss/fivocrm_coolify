@@ -34,6 +34,7 @@ const ProjectDetailView: React.FC = () => {
   const [viewMode, setViewMode] = useState<'list' | 'board' | 'calendar'>('list');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isCreateTaskOpen, setIsCreateTaskOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -293,7 +294,7 @@ const ProjectDetailView: React.FC = () => {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setIsSettingsOpen(true)}>
                 <Settings className="w-4 h-4 mr-2" />
                 Cilësimet
               </DropdownMenuItem>
@@ -392,6 +393,22 @@ const ProjectDetailView: React.FC = () => {
           </div>
         </div>
       </div>
+
+      {/* Settings Dialog */}
+      <Dialog open={isSettingsOpen} onOpenChange={setIsSettingsOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Cilësimet e Projektit</DialogTitle>
+          </DialogHeader>
+          <ProjectSettingsForm
+            project={project}
+            onSave={async (maxMembers) => {
+              await projectMutation.update(project.id, { maxMembers });
+              setIsSettingsOpen(false);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
 
       {/* Main Content */}
       <div className="flex-1 flex overflow-hidden">
@@ -547,6 +564,52 @@ const ProjectDetailView: React.FC = () => {
           </div>
         )}
       </div>
+    </div>
+  );
+};
+
+// Project Settings Form
+const ProjectSettingsForm: React.FC<{
+  project: Project;
+  onSave: (maxMembers: number | undefined) => void;
+}> = ({ project, onSave }) => {
+  const [maxMembers, setMaxMembers] = useState(project.maxMembers ? String(project.maxMembers) : '__unlimited__');
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <Label htmlFor="maxMembersSettings">Numri Maksimal i Anëtarëve</Label>
+        <Select value={maxMembers} onValueChange={setMaxMembers}>
+          <SelectTrigger className="mt-1">
+            <SelectValue placeholder="Pa limit" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__unlimited__">Pa limit</SelectItem>
+            <SelectItem value="1">1 person</SelectItem>
+            <SelectItem value="2">2 persona</SelectItem>
+            <SelectItem value="3">3 persona</SelectItem>
+            <SelectItem value="4">4 persona</SelectItem>
+            <SelectItem value="5">5 persona</SelectItem>
+            <SelectItem value="6">6 persona</SelectItem>
+            <SelectItem value="8">8 persona</SelectItem>
+            <SelectItem value="10">10 persona</SelectItem>
+            <SelectItem value="15">15 persona</SelectItem>
+            <SelectItem value="20">20 persona</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground mt-1">Sa anëtarë mund të jenë pjesë e këtij projekti</p>
+      </div>
+      {project.maxMembers && (
+        <p className="text-sm text-muted-foreground">
+          Aktualisht: <span className="font-medium text-foreground">{project.maxMembers} persona</span>
+        </p>
+      )}
+      <Button
+        className="w-full"
+        onClick={() => onSave(maxMembers !== '__unlimited__' ? parseInt(maxMembers) : undefined)}
+      >
+        Ruaj Ndryshimet
+      </Button>
     </div>
   );
 };

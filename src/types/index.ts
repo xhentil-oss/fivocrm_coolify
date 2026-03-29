@@ -11,6 +11,7 @@ export interface Project {
   spent?: number;
   responsibleUserId?: string;
   // Recurring project support
+  maxMembers?: number;
   isRecurring?: boolean;
   recurringFrequency?: 'weekly' | 'monthly';
   nextRecurringDate?: Date;
