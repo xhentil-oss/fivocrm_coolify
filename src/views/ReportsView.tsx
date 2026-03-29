@@ -4,7 +4,7 @@ import { Card } from '../components/ui/card';
 import { useCollection } from '../hooks/useFirestore';
 import { Badge } from '../components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import type { Invoice, Project, Team, Expense, Service, InvoiceItem, Task, Lead, Customer, Activity } from '../types';
+import type { Invoice, Project, Team, Expense, Service, InvoiceItem, Task, Lead, Customer, Activity, TeamMember } from '../types';
 
 // ── Simple SVG Bar Chart ──
 const BarChart: React.FC<{ data: { label: string; value: number; color?: string }[]; height?: number }> = ({ data, height = 200 }) => {
@@ -140,6 +140,15 @@ const ReportsView: React.FC = () => {
   const { data: leads } = useCollection<Lead>('leads');
   const { data: customers } = useCollection<Customer>('customers');
   const { data: activities } = useCollection<Activity>('activities');
+  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
+    where: [{ field: 'status', operator: '==', value: 'Active' }],
+  });
+
+  // ── Monthly salary cost from all active team members ──
+  const totalMonthlySalary = useMemo(() => {
+    if (!teamMembers) return 0;
+    return teamMembers.reduce((sum, m) => sum + (m.monthlySalary || 0), 0);
+  }, [teamMembers]);
 
   // ── Revenue by Month (last 6 months) ──
   const revenueByMonth = useMemo(() => {
@@ -170,10 +179,10 @@ const ReportsView: React.FC = () => {
         const cd = exp.createdAt instanceof Date ? exp.createdAt : new Date(exp.createdAt);
         return cd.getMonth() === d.getMonth() && cd.getFullYear() === d.getFullYear();
       });
-      months.push({ label, value: monthExpenses.reduce((s, exp) => s + (exp.amount ?? 0), 0) });
+      months.push({ label, value: monthExpenses.reduce((s, exp) => s + (exp.amount ?? 0), 0) + totalMonthlySalary });
     }
     return months;
-  }, [expenses]);
+  }, [expenses, totalMonthlySalary]);
 
   // ── Lead Funnel ──
   const leadFunnel = useMemo(() => {
@@ -242,7 +251,7 @@ const ReportsView: React.FC = () => {
   const totalRevenue = invoices?.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + (inv.total ?? inv.amount ?? 0), 0) || 0;
   const paidRevenue = totalRevenue;
   const projectedRevenue = invoices?.filter(inv => inv.status === 'Pending' || inv.status === 'Draft').reduce((sum, inv) => sum + (inv.total ?? inv.amount ?? 0), 0) || 0;
-  const totalExpenses = expenses?.reduce((sum, exp) => sum + (exp.amount ?? 0), 0) || 0;
+  const totalExpenses = (expenses?.reduce((sum, exp) => sum + (exp.amount ?? 0), 0) || 0) + totalMonthlySalary;
   const profit = paidRevenue - totalExpenses;
   const activeProjects = projects?.filter(p => p.status === 'Active').length || 0;
   const totalCustomers = customers?.length || 0;
@@ -353,7 +362,7 @@ const ReportsView: React.FC = () => {
             <Receipt className="w-5 h-5 text-red-500" />
           </div>
           <p className="text-2xl font-bold">{totalExpenses.toLocaleString()} ALL</p>
-          <p className="text-xs text-muted-foreground">Kosto operative</p>
+          <p className="text-xs text-muted-foreground">Shpenzime + Rroga ({totalMonthlySalary.toLocaleString()} ALL/muaj)</p>
         </Card>
         <Card className="p-5 space-y-2 border-l-4 border-l-indigo-500">
           <div className="flex items-center justify-between">
