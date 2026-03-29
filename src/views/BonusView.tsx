@@ -436,10 +436,10 @@ const BonusView: React.FC = () => {
                 >
                   <div className="flex items-center gap-3 min-w-0">
                     <div className={`h-9 w-9 rounded-full flex items-center justify-center text-sm font-bold flex-shrink-0 ${hasBonus ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300' : 'bg-muted text-muted-foreground'}`}>
-                      {getInitials(result.member.userId)}
+                      {getInitials(result.member.userId, result.member.displayName || result.member.email?.split('@')[0])}
                     </div>
                     <div className="min-w-0">
-                      <p className="font-medium text-sm truncate">{getName(result.member.userId)}</p>
+                      <p className="font-medium text-sm truncate">{getName(result.member.userId, result.member.displayName || result.member.email?.split('@')[0])}</p>
                       <p className="text-xs text-muted-foreground">{result.member.role} · Rroga: €{result.member.monthlySalary?.toLocaleString()}/muaj</p>
                     </div>
                   </div>

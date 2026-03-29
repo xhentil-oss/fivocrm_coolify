@@ -840,6 +840,7 @@ const EditMemberForm: React.FC<{
   const [canAccessSettings, setCanAccessSettings] = useState(member.canAccessSettings ?? false);
   const [status, setStatus] = useState(member.status);
   const [monthlySalary, setMonthlySalary] = useState(member.monthlySalary?.toString() || '');
+  const [displayName, setDisplayName] = useState(member.displayName || member.email?.split('@')[0] || '');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -852,6 +853,7 @@ const EditMemberForm: React.FC<{
       canAccessReports,
       canAccessSettings,
       status,
+      displayName: displayName.trim() || undefined,
       monthlySalary: monthlySalary ? parseFloat(monthlySalary) : undefined,
     });
   };
@@ -872,6 +874,18 @@ const EditMemberForm: React.FC<{
     <form onSubmit={handleSubmit} className="space-y-6">
       <div className="p-4 bg-muted rounded-lg">
         <p className="text-sm font-medium">Anëtari: <span className="text-primary">{getName(member.userId)}</span></p>
+      </div>
+
+      {/* Display name override */}
+      <div>
+        <Label htmlFor="displayName">Emri dhe Mbiemri</Label>
+        <Input
+          id="displayName"
+          value={displayName}
+          onChange={e => setDisplayName(e.target.value)}
+          placeholder="p.sh. Emir Mbiemri"
+        />
+        <p className="text-xs text-muted-foreground mt-1">Ky emër shfaqet kudo në platformë</p>
       </div>
 
       <div className="grid grid-cols-2 gap-4">
