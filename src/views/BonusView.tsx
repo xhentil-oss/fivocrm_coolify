@@ -14,8 +14,13 @@ import type { Project, TeamMember, Expense } from '../types';
 //
 //  MODEL: "Tiered Net Revenue Sharing" — used by top digital agencies
 //
-//  1. Net contribution = sum(project.budget - project_expenses) for all
-//     COMPLETED projects where the worker is responsibleUserId
+//  1. Net contribution per project =
+//       project.budget
+//       − direct project expenses  (Expense.projectId == project.id)
+//       − allocated office expenses (general Expense with no projectId, same month,
+//                                    divided equally across all completed projects)
+//       − member salary costs       (for each memberUserId: salary ÷ projectCount
+//                                    to avoid double-counting across projects)
 //
 //  2. Threshold = monthly salary × 3
 //     (covers: 1× salary paid + 1× employer costs/overhead + 1× company margin)
@@ -25,13 +30,14 @@ import type { Project, TeamMember, Expense } from '../types';
 //     · 4× → 5× salary band   → 12% of that band
 //     · above 5× salary       → 18% of the remainder
 //
-//  Example @ 80,000 L/mo salary, 500,000 L net contribution:
+//  Example @ 80,000 L/mo salary, buxhet 600,000 L, shp.direkte 20,000 L,
+//           shp.zyrë 10,000 L, rroga anëtarësh 30,000 L  → neto = 540,000 L
 //     Threshold  = 240,000 L  (no bonus below this)
-//     Surplus    = 260,000 L
-//     Tier 1     = min(260,000 L, 80,000 L) × 8%  = 6,400 L
-//     Tier 2     = min(180,000 L, 80,000 L) × 12% = 9,600 L
-//     Tier 3     = 100,000 L × 18%                = 18,000 L
-//     TOTAL BONUS = 34,000 L
+//     Surplus    = 300,000 L
+//     Tier 1     = min(300,000 L, 80,000 L) × 8%  =  6,400 L
+//     Tier 2     = min(220,000 L, 80,000 L) × 12% =  9,600 L
+//     Tier 3     = 140,000 L × 18%                = 25,200 L
+//     TOTAL BONUS = 41,200 L
 //
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -49,7 +55,7 @@ interface BonusResult {
   threshold: number;
   surplus: number;
   tiers: BonusTier[];
-  projects: { id: string; name: string; budget: number; expenses: number; net: number }[];
+  projects: { id: string; name: string; budget: number; expenses: number; officeExpenses: number; salaryCosts: number; net: number }[];
 }
 
 function calculateBonus(salary: number, netContribution: number, salary_tiers = [3, 4, 5], rates = [0.08, 0.12, 0.18]): Omit<BonusResult, 'projects'> {
@@ -155,6 +161,20 @@ const BonusView: React.FC = () => {
   const allMemberResults = useMemo(() => {
     if (!teamMembers) return [];
 
+    // ── 1. Office / general expenses for the selected period ─────────────────
+    const month = parseInt(selectedMonth);
+    const year = parseInt(selectedYear);
+    const totalOfficeExpenses = (expenses || []).reduce((sum, e) => {
+      if ((e as any).projectId) return sum; // project-specific → skip
+      const d = e.date ? new Date(e.date) : null;
+      if (!d || isNaN(d.getTime())) return sum;
+      if (d.getMonth() !== month || d.getFullYear() !== year) return sum;
+      return sum + (e.amount || 0);
+    }, 0);
+    const perProjectOffice = periodProjects.length > 0
+      ? totalOfficeExpenses / periodProjects.length
+      : 0;
+
     return teamMembers
       .filter(m => m.monthlySalary && m.monthlySalary > 0)
       .map(member => {
@@ -165,15 +185,35 @@ const BonusView: React.FC = () => {
         });
 
         const projectDetails = memberProjects.map(p => {
-          const projectExpenses = expenses?.filter(e => (e as any).projectId === p.id) || [];
-          const totalExpenses = projectExpenses.reduce((sum, e) => sum + (e.amount || 0), 0);
+          // ── direct project expenses ─────────────────────────────────────
+          const directExpenses = (expenses || [])
+            .filter(e => (e as any).projectId === p.id)
+            .reduce((sum, e) => sum + (e.amount || 0), 0);
+
+          // ── salary cost of each assigned member (prorated by project count) ─
+          const memberIds: string[] = (p.memberUserIds as string[] | undefined) || [];
+          const salaryCosts = memberIds.reduce((sum, uid) => {
+            const tm = teamMembers.find(m => m.userId === uid);
+            if (!tm?.monthlySalary) return sum;
+            // How many projects is this member assigned to this period?
+            const assignedCount = periodProjects.filter(pp =>
+              ((pp.memberUserIds as string[] | undefined) || []).includes(uid) ||
+              pp.responsibleUserId === uid
+            ).length;
+            return sum + tm.monthlySalary / Math.max(1, assignedCount);
+          }, 0);
+
           const budget = p.budget || 0;
+          const net = budget - directExpenses - perProjectOffice - salaryCosts;
+
           return {
             id: p.id,
             name: p.name,
             budget,
-            expenses: totalExpenses,
-            net: budget - totalExpenses,
+            expenses: directExpenses,
+            officeExpenses: perProjectOffice,
+            salaryCosts,
+            net,
           };
         });
 
@@ -187,7 +227,7 @@ const BonusView: React.FC = () => {
         } as BonusResult & { member: TeamMember };
       })
       .sort((a, b) => b.totalBonus - a.totalBonus);
-  }, [teamMembers, periodProjects, expenses]);
+  }, [teamMembers, periodProjects, expenses, selectedMonth, selectedYear]);
 
   // Workers only see their own row
   const memberResults = useMemo(() => {
@@ -243,7 +283,12 @@ const BonusView: React.FC = () => {
               📐 Modeli: "Tiered Net Revenue Sharing"
             </h3>
             <div className="space-y-2 text-sm text-foreground/80">
-              <p><strong>1. Kontributi neto</strong> = Σ(buxheti i projektit − shpenzimet e projektit) për të gjitha projektet e mbyllura të muajit</p>
+              <p><strong>1. Kontributi neto</strong> = Σ(buxheti − shpenzime direkte − shpenzime zyrë − rrogat e anëtarëve) për të gjitha projektet e mbyllura të muajit</p>
+              <ul className="ml-4 space-y-0.5 text-muted-foreground list-disc">
+                <li><strong className="text-foreground">Shpenzime direkte</strong> — shpenzimet e lidhura drejtpërdrejt me projektin</li>
+                <li><strong className="text-foreground">Shpenzime zyrë</strong> — shpenzimet e përgjithshme (qira, fatura etj.) ndahen barabar mes projekteve të muajit</li>
+                <li><strong className="text-foreground">Rroga anëtarësh</strong> — rroga e secilit person të caktuar në projekt, proporcionale me numrin e projekteve ku marrin pjesë atë muaj</li>
+              </ul>
               <p><strong>2. Pragu minimal</strong> = rroga mujore × 3 <span className="text-muted-foreground">(mbulon: rrogën + kostot e punëdhënësit + marzhin e kompanisë)</span></p>
               <p><strong>3. Bonusi ndahet në 3 nivele</strong> mbi pragun:</p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 mt-2">
@@ -261,10 +306,10 @@ const BonusView: React.FC = () => {
                 </div>
               </div>
               <div className="mt-3 p-3 bg-muted/60 rounded-lg text-xs">
-                <strong>Shembull:</strong> Rroga 80,000 L · Kontributi 500,000 L<br />
-                Pragu: 240,000 L · Teprica: 260,000 L<br />
-                N1: min(260,000 L, 80,000 L) × 8% = 6,400 L · N2: 80,000 L × 12% = 9,600 L · N3: 100,000 L × 18% = 18,000 L<br />
-                <strong>Bonus total: 34,000 L</strong>
+                <strong>Shembull:</strong> Rroga 80,000 L · Buxhet 600,000 L · Shp.direkte 20,000 L · Shp.zyrë 10,000 L · Rroga anëtarësh 30,000 L<br />
+                Neto: 540,000 L · Pragu: 240,000 L · Teprica: 300,000 L<br />
+                N1: min(300,000 L, 80,000 L) × 8% = 6,400 L · N2: 80,000 L × 12% = 9,600 L · N3: 140,000 L × 18% = 25,200 L<br />
+                <strong>Bonus total: 41,200 L</strong>
               </div>
             </div>
           </CardContent>
@@ -523,12 +568,16 @@ const BonusView: React.FC = () => {
                         <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">Projektet e mbyllura ({result.projects.length})</p>
                         <div className="space-y-1.5">
                           {result.projects.map(p => (
-                            <div key={p.id} className="flex items-center justify-between text-sm py-1.5 px-3 rounded-lg bg-background border">
-                              <span className="truncate font-medium flex-1">{p.name}</span>
-                              <div className="flex items-center gap-3 text-xs ml-3 flex-shrink-0">
+                            <div key={p.id} className="py-2 px-3 rounded-lg bg-background border space-y-1">
+                              <div className="flex items-center justify-between text-sm">
+                                <span className="truncate font-medium flex-1">{p.name}</span>
+                                <span className="font-semibold text-foreground ml-3">{p.net.toLocaleString(undefined, { maximumFractionDigits: 0 })} L neto</span>
+                              </div>
+                              <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs">
                                 <span className="text-muted-foreground">Buxhet: {p.budget.toLocaleString()} L</span>
-                                {p.expenses > 0 && <span className="text-destructive/70">−{p.expenses.toLocaleString()} L</span>}
-                                <span className="font-semibold text-foreground">= {p.net.toLocaleString()} L</span>
+                                {p.expenses > 0 && <span className="text-destructive/70">− {p.expenses.toLocaleString(undefined, { maximumFractionDigits: 0 })} L shp.direkte</span>}
+                                {p.officeExpenses > 0 && <span className="text-orange-500/80">− {p.officeExpenses.toLocaleString(undefined, { maximumFractionDigits: 0 })} L shp.zyrë</span>}
+                                {p.salaryCosts > 0 && <span className="text-blue-500/80">− {p.salaryCosts.toLocaleString(undefined, { maximumFractionDigits: 0 })} L rroga</span>}
                               </div>
                             </div>
                           ))}
