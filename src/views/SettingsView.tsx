@@ -1,10 +1,18 @@
-import React, { useState } from 'react';
-import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Switch } from '../components/ui/switch';
 import { Separator } from '../components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { Checkbox } from '../components/ui/checkbox';
+import { Badge } from '../components/ui/badge';
+import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useAuth } from '../contexts/AuthContext';
+import { usePermissions } from '../contexts/PermissionsContext';
+import { getDocs, query, where, collection, writeBatch, doc, Timestamp } from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import { toast } from '../hooks/use-toast';
 
 // ─── CronJobCard sub-component ───────────────────────────────────────────────
 interface CronJobCardProps {
@@ -160,6 +168,10 @@ const SettingsView: React.FC = () => {
           <TabsTrigger value="automation" className="data-[state=active]:bg-background data-[state=active]:text-primary min-w-fit">
             <Zap className="w-4 h-4 sm:mr-2" />
             <span className="hidden sm:inline">Automatizimi</span>
+          </TabsTrigger>
+          <TabsTrigger value="roles" className="data-[state=active]:bg-background data-[state=active]:text-primary min-w-fit">
+            <Shield className="w-4 h-4 sm:mr-2" />
+            <span className="hidden sm:inline">Rolet & Lejet</span>
           </TabsTrigger>
         </TabsList>
 
@@ -630,7 +642,252 @@ const SettingsView: React.FC = () => {
             </div>
           </Card>
         </TabsContent>
-      </Tabs>
+          {/* Roles & Permissions tab */}
+          <TabsContent value="roles" className="space-y-6">
+            <RoleTemplatesSection />
+          </TabsContent>
+        </Tabs>
+    </div>
+  );
+};
+
+// ─── Module list ─────────────────────────────────────────────────────────────
+const MODULES: { key: string; label: string }[] = [
+  { key: 'canAccessProjects',    label: 'Projektet' },
+  { key: 'canAccessTasks',       label: 'Detyrat' },
+  { key: 'canAccessGoals',       label: 'Objektivat' },
+  { key: 'canAccessCRM',         label: 'CRM / Leads' },
+  { key: 'canAccessCustomers',   label: 'Klientët' },
+  { key: 'canAccessInvoices',    label: 'Faturat' },
+  { key: 'canAccessServices',    label: 'Shërbimet' },
+  { key: 'canAccessExpenses',    label: 'Shpenzimet' },
+  { key: 'canAccessReports',     label: 'Raportet' },
+  { key: 'canAccessTimeTracking',label: 'Orari' },
+  { key: 'canAccessChat',        label: 'Chat' },
+  { key: 'canAccessSettings',    label: 'Cilësimet' },
+];
+
+const ROLE_DESCRIPTIONS: Record<string, { color: string; label: string; description: string }> = {
+  Manager: {
+    color: 'bg-blue-100 text-blue-800',
+    label: 'Menaxher',
+    description: 'Menaxhon ekipin dhe projektet. Mund t'i caktojë detyra anëtarëve.',
+  },
+  Member: {
+    color: 'bg-green-100 text-green-800',
+    label: 'Anëtar',
+    description: 'Anëtar i rregullt. Punon mbi detyrat dhe projektet e caktuara.',
+  },
+  Viewer: {
+    color: 'bg-gray-100 text-gray-700',
+    label: 'Shikues',
+    description: 'Akseson vetëm si lexim. Nuk mund të krijojë ose ndryshojë asgjë.',
+  },
+};
+
+type RoleKey = 'Manager' | 'Member' | 'Viewer';
+type TemplateMap = Record<string, boolean>;
+
+const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
+  Manager: {
+    canAccessProjects: true, canAccessTasks: true, canAccessGoals: true,
+    canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
+    canAccessServices: false, canAccessExpenses: false, canAccessReports: true,
+    canAccessTimeTracking: true, canAccessChat: true, canAccessSettings: false,
+  },
+  Member: {
+    canAccessProjects: true, canAccessTasks: true, canAccessGoals: true,
+    canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
+    canAccessServices: false, canAccessExpenses: false, canAccessReports: false,
+    canAccessTimeTracking: true, canAccessChat: true, canAccessSettings: false,
+  },
+  Viewer: {
+    canAccessProjects: true, canAccessTasks: true, canAccessGoals: false,
+    canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
+    canAccessServices: false, canAccessExpenses: false, canAccessReports: false,
+    canAccessTimeTracking: false, canAccessChat: true, canAccessSettings: false,
+  },
+};
+
+const RoleTemplatesSection: React.FC = () => {
+  const { user } = useAuth();
+  const { isOwner, isAdmin, teamId } = usePermissions();
+  const canEdit = isOwner || isAdmin;
+
+  // Load saved templates from Firestore (one doc per role)
+  const { data: savedTemplates } = useCollection<any>('roleTemplates', { skipTeamFilter: false });
+  const templateMutation = useMutation<any>('roleTemplates');
+
+  // Local state: one TemplateMap per role
+  const [templates, setTemplates] = useState<Record<RoleKey, TemplateMap>>({ ...DEFAULT_TEMPLATES });
+  const [applying, setApplying] = useState<Record<RoleKey, boolean>>({ Manager: false, Member: false, Viewer: false });
+  const [templateIds, setTemplateIds] = useState<Record<string, string>>({});
+
+  // Hydrate from Firestore once loaded
+  useEffect(() => {
+    if (!savedTemplates || savedTemplates.length === 0) return;
+    const next = { ...DEFAULT_TEMPLATES };
+    const ids: Record<string, string> = {};
+    savedTemplates.forEach((t: any) => {
+      if (t.role && next[t.role as RoleKey]) {
+        next[t.role as RoleKey] = { ...next[t.role as RoleKey], ...t };
+        ids[t.role] = t.id;
+      }
+    });
+    setTemplates(next);
+    setTemplateIds(ids);
+  }, [savedTemplates]);
+
+  const handleToggle = (role: RoleKey, key: string, value: boolean) => {
+    setTemplates(prev => ({
+      ...prev,
+      [role]: { ...prev[role], [key]: value },
+    }));
+  };
+
+  const handleSaveTemplate = async (role: RoleKey) => {
+    if (!canEdit) return;
+    const data = { role, ...templates[role] };
+    if (templateIds[role]) {
+      await templateMutation.update(templateIds[role], data);
+    } else {
+      const created = await templateMutation.create(data as any);
+      setTemplateIds(prev => ({ ...prev, [role]: created.id }));
+    }
+    toast({ title: `Template "${ROLE_DESCRIPTIONS[role].label}" u ruajt!` });
+  };
+
+  const handleApplyToAll = async (role: RoleKey) => {
+    if (!canEdit) return;
+    setApplying(prev => ({ ...prev, [role]: true }));
+    try {
+      const snap = await getDocs(
+        query(collection(db, 'teamMembers'), where('role', '==', role))
+      );
+      if (snap.empty) {
+        toast({ title: 'Nuk ka anëtarë me këtë rol.' });
+        return;
+      }
+      const batch = writeBatch(db);
+      const perms = templates[role];
+      snap.docs.forEach(d => {
+        batch.update(d.ref, { ...perms, updatedAt: Timestamp.now() });
+      });
+      await batch.commit();
+      toast({
+        title: `Lejet u përditësuan!`,
+        description: `${snap.size} anëtarë me rolin "${ROLE_DESCRIPTIONS[role].label}" u përditësuan.`,
+      });
+    } catch (err: any) {
+      toast({ title: 'Gabim gjatë përditësimit', description: err.message, variant: 'destructive' });
+    } finally {
+      setApplying(prev => ({ ...prev, [role]: false }));
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Admin role — read-only info card */}
+      <Card className="p-6 border-l-4 border-l-primary">
+        <div className="flex items-center gap-3 mb-3">
+          <Shield className="w-5 h-5 text-primary" />
+          <h3 className="font-semibold text-foreground text-lg">Admin</h3>
+          <Badge className="bg-primary/10 text-primary">Akses i plotë</Badge>
+        </div>
+        <p className="text-sm text-muted-foreground mb-4">
+          Admini ka akses të plotë në të gjitha modulet dhe nuk mund të kufizohet. Roli i adminit caktohet vetëm nga pronari i ekipit.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          {MODULES.map(m => (
+            <span key={m.key} className="flex items-center gap-1 text-xs bg-primary/10 text-primary px-2 py-1 rounded-full">
+              <Check className="w-3 h-3" /> {m.label}
+            </span>
+          ))}
+        </div>
+      </Card>
+
+      {/* Configurable roles */}
+      {(['Manager', 'Member', 'Viewer'] as RoleKey[]).map(role => {
+        const meta = ROLE_DESCRIPTIONS[role];
+        return (
+          <Card key={role} className="p-6 space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <h3 className="font-semibold text-foreground text-lg">{meta.label}</h3>
+                  <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${meta.color}`}>{role}</span>
+                </div>
+                <p className="text-sm text-muted-foreground">{meta.description}</p>
+              </div>
+              {canEdit && (
+                <div className="flex gap-2 shrink-0">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleSaveTemplate(role)}
+                  >
+                    Ruaj Template
+                  </Button>
+                  <Button
+                    size="sm"
+                    onClick={() => handleApplyToAll(role)}
+                    disabled={applying[role]}
+                  >
+                    {applying[role] ? (
+                      <><RefreshCw className="w-3 h-3 mr-1 animate-spin" />Duke aplikuar...</>
+                    ) : (
+                      'Apliko te të gjithë'
+                    )}
+                  </Button>
+                </div>
+              )}
+            </div>
+
+            <Separator />
+
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+              {MODULES.map(m => {
+                const checked = !!templates[role][m.key];
+                const isViewer = role === 'Viewer';
+                const isSettingsModule = m.key === 'canAccessSettings';
+                // Viewer can never edit, Settings always off for non-admin
+                const disabled = !canEdit || isSettingsModule;
+                return (
+                  <label
+                    key={m.key}
+                    className={`flex items-center gap-2.5 p-3 rounded-lg border cursor-pointer transition-colors ${
+                      checked
+                        ? 'border-primary/40 bg-primary/5'
+                        : 'border-border bg-muted/30'
+                    } ${disabled ? 'opacity-50 cursor-not-allowed' : 'hover:border-primary/30'}`}
+                  >
+                    <Checkbox
+                      checked={checked}
+                      onCheckedChange={v => !disabled && handleToggle(role, m.key, !!v)}
+                      disabled={disabled}
+                    />
+                    <span className="text-sm font-medium text-foreground select-none">{m.label}</span>
+                  </label>
+                );
+              })}
+            </div>
+
+            {role === 'Viewer' && (
+              <p className="text-xs text-muted-foreground flex items-center gap-1">
+                <AlertCircle className="w-3 h-3 shrink-0" />
+                Shikuesi gjithmonë ka akses vetëm-lexim — nuk mund të krijojë ose ndryshojë asgjë pavarësisht moduleve.
+              </p>
+            )}
+          </Card>
+        );
+      })}
+
+      {!canEdit && (
+        <div className="flex items-start gap-2 p-4 bg-warning/10 border border-warning/20 rounded-lg">
+          <AlertCircle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+          <p className="text-sm text-warning">Vetëm Admin ose Pronari i ekipit mund të ndryshojë template-t e roleve.</p>
+        </div>
+      )}
     </div>
   );
 };
