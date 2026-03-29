@@ -1,13 +1,17 @@
 import React from 'react';
-import { Search, Plus, User, Menu, X, LogOut } from 'lucide-react';
+import { Search, Plus, User, Menu, X, LogOut, Eye, EyeOff } from 'lucide-react';
 import { Button } from './ui/button';
 import { useAuth } from '../contexts/AuthContext';
+import { usePermissions } from '../contexts/PermissionsContext';
 import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from './ui/dropdown-menu';
 import { useNavigate } from 'react-router-dom';
@@ -28,20 +32,33 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
 }) => {
   const navigate = useNavigate();
   const { user, logout } = useAuth();
+  const { isOwner, previewRole, setPreviewRole } = usePermissions();
+
+  const ROLES = ['Admin', 'Manager', 'Member', 'Viewer'] as const;
+
+  const roleLabelMap: Record<string, string> = {
+    Admin: 'Admin',
+    Manager: 'Menaxher',
+    Member: 'Anëtar',
+    Viewer: 'Shikues',
+  };
 
   const handleLogout = async () => {
+    setPreviewRole(null);
     await logout();
     navigate('/login');
   };
 
   const handleSwitchAccount = async () => {
+    setPreviewRole(null);
     await logout();
     navigate('/login');
   };
 
   return (
-    <header className="fixed top-0 left-0 right-0 z-50 h-[72px] bg-gradient-primary border-b border-border/20">
-      <div className="h-full px-3 sm:px-4 lg:px-6 flex items-center justify-between">
+    <>
+      <header className="fixed top-0 left-0 right-0 z-50 h-[72px] bg-gradient-primary border-b border-border/20">
+        <div className="h-full px-3 sm:px-4 lg:px-6 flex items-center justify-between">
         <div className="flex items-center gap-2 sm:gap-4">
           <Button
             variant="ghost"
@@ -125,7 +142,7 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
               <Button 
                 variant="ghost" 
                 size="icon"
-                className="bg-white/10 text-primary-foreground hover:bg-white/20"
+                className={`bg-white/10 text-primary-foreground hover:bg-white/20 ${previewRole ? 'ring-2 ring-yellow-400' : ''}`}
                 aria-label="Menyja e përdoruesit"
               >
                 {user?.photoURL ? (
@@ -158,6 +175,43 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
               <DropdownMenuItem onClick={() => navigate('/app/settings')} className="text-foreground">
                 Cilësimet
               </DropdownMenuItem>
+
+              {/* Role preview — only for the owner */}
+              {isOwner && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuSub>
+                    <DropdownMenuSubTrigger className="text-foreground">
+                      <Eye className="w-4 h-4 mr-2" />
+                      Shiko si rol tjetër
+                    </DropdownMenuSubTrigger>
+                    <DropdownMenuSubContent>
+                      {ROLES.map(role => (
+                        <DropdownMenuItem
+                          key={role}
+                          onClick={() => setPreviewRole(previewRole === role ? null : role)}
+                          className={previewRole === role ? 'bg-yellow-100 text-yellow-800 font-medium' : 'text-foreground'}
+                        >
+                          {previewRole === role && <EyeOff className="w-4 h-4 mr-2" />}
+                          {previewRole !== role && <Eye className="w-4 h-4 mr-2 opacity-40" />}
+                          {roleLabelMap[role]}
+                          {previewRole === role && <span className="ml-auto text-xs">(aktiv)</span>}
+                        </DropdownMenuItem>
+                      ))}
+                      {previewRole && (
+                        <>
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => setPreviewRole(null)} className="text-foreground font-medium">
+                            <EyeOff className="w-4 h-4 mr-2" />
+                            Dil nga preview
+                          </DropdownMenuItem>
+                        </>
+                      )}
+                    </DropdownMenuSubContent>
+                  </DropdownMenuSub>
+                </>
+              )}
+
               <DropdownMenuSeparator />
               <DropdownMenuItem onClick={handleSwitchAccount} className="text-foreground">
                 <User className="w-4 h-4 mr-2" />
@@ -172,6 +226,23 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
         </div>
       </div>
     </header>
+
+    {/* Preview mode banner */}
+    {isOwner && previewRole && (
+      <div className="fixed top-[72px] left-0 right-0 z-40 flex items-center justify-between px-4 py-1.5 bg-yellow-400 text-yellow-900 text-sm font-medium">
+        <span>
+          <Eye className="inline w-4 h-4 mr-1.5 mb-0.5" />
+          Po shikoni si: <strong>{roleLabelMap[previewRole]}</strong> — kjo është vetëm një preview, të dhënat janë reale.
+        </span>
+        <button
+          onClick={() => setPreviewRole(null)}
+          className="flex items-center gap-1 underline hover:no-underline"
+        >
+          <EyeOff className="w-4 h-4" /> Dil nga preview
+        </button>
+      </div>
+    )}
+    </>
   );
 };
 

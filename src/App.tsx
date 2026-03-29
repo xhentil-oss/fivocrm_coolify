@@ -41,8 +41,7 @@ import CommandPalette from './components/CommandPalette';
 import PermissionGate from './components/PermissionGate';
 import PendingInvitesBanner from './components/PendingInvitesBanner';
 import { GoogleApiProvider } from './contexts/GoogleApiContext';
-import { PermissionsProvider } from './contexts/PermissionsContext';
-import { usePermissions } from './contexts/PermissionsContext';
+import { PermissionsProvider, usePermissions } from './contexts/PermissionsContext';
 import { useTeamDataMigration } from './hooks/useTeamDataMigration';
 import { Toaster } from './components/ui/toaster';
 import { Loader2 } from 'lucide-react';
@@ -91,6 +90,7 @@ function AppContent() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { user } = useAuth();
+  const { isOwner, previewRole } = usePermissions();
 
   // One-time migration: stamp teamId on pre-isolation documents
   useTeamDataMigration();
@@ -144,7 +144,9 @@ function AppContent() {
               />
               
               <main 
-                className={`flex-1 transition-all duration-normal ease-in-out mt-[72px] ${
+                className={`flex-1 transition-all duration-normal ease-in-out ${
+                  isOwner && previewRole ? 'mt-[108px]' : 'mt-[72px]'
+                } ${
                   sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'
                 }`}
               >
