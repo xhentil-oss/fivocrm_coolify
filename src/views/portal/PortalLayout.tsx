@@ -1,7 +1,8 @@
 import React, { useState } from 'react';
-import { NavLink, Outlet, useNavigate } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate, Navigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useClientPortal } from '../../hooks/useClientPortal';
+import { usePermissions } from '../../hooks/usePermissions';
 import {
   LayoutDashboard,
   FileText,
@@ -28,11 +29,18 @@ const navItems = [
 
 const PortalLayout: React.FC = () => {
   const { user, logout } = useAuth();
+  const permissions = usePermissions();
   const { isClient, isLoading } = useClientPortal();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
 
-  if (isLoading) {
+  // Staff members should never land on the client portal.
+  // Redirect them to the main app before useClientPortal can auto-create client records.
+  if (!permissions.isLoading && (permissions.role || permissions.isOwner)) {
+    return <Navigate to="/app/dashboard" replace />;
+  }
+
+  if (isLoading || permissions.isLoading) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { collection, addDoc, Timestamp, query, onSnapshot } from 'firebase/firestore';
+import { collection, addDoc, Timestamp, query, onSnapshot, getDocs, where } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
 import { db, auth } from '../lib/firebase';
 import { Button } from '../components/ui/button';
@@ -68,6 +68,16 @@ const RegisterView: React.FC = () => {
     }
 
     try {
+      // 0. Block staff emails from registering as clients
+      const staffSnap = await getDocs(
+        query(collection(db, 'teamMembers'), where('email', '==', email.trim()))
+      );
+      if (!staffSnap.empty) {
+        setError('Ky email është i regjistruar si staf. Ju lutem hyni nga faqja e hyrjes.');
+        setLoading(false);
+        return;
+      }
+
       // 1. Create Firebase Auth account
       const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
       const user = userCredential.user;
