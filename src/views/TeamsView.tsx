@@ -3,7 +3,35 @@ import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { getDocs, query, where, collection, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Users, Plus, MoreVertical, Mail, UserPlus, Shield, Trash2, CheckCircle, XCircle, Clock, Edit2, Check, X, Settings, Eye } from 'lucide-react';
+import { Users, Plus, MoreVertical, Mail, UserPlus, Shield, Trash2, CheckCircle, XCircle, Clock, Edit2, Check, X, Settings, Eye, Globe, Search, Share2, PenTool, Palette, Megaphone, Code2, HeadphonesIcon, Briefcase, DollarSign, TrendingUp, UserCheck } from 'lucide-react';
+
+// Returns icon + colour classes based on the team's department / service category
+function getTeamDeptIcon(department?: string) {
+  const d = (department || '').toLowerCase();
+  if (d.includes('web') || d.includes('zhvillim') || d.includes('development') || d.includes('dev') || d.includes('it') || d.includes('tech'))
+    return { Icon: Code2, bg: 'bg-blue-100', color: 'text-blue-600' };
+  if (d.includes('seo') || d.includes('search'))
+    return { Icon: Search, bg: 'bg-green-100', color: 'text-green-600' };
+  if (d.includes('social') || d.includes('media'))
+    return { Icon: Share2, bg: 'bg-purple-100', color: 'text-purple-600' };
+  if (d.includes('content') || d.includes('shkrim') || d.includes('writing'))
+    return { Icon: PenTool, bg: 'bg-orange-100', color: 'text-orange-600' };
+  if (d.includes('brand') || d.includes('dizajn') || d.includes('design') || d.includes('creative') || d.includes('kreativ'))
+    return { Icon: Palette, bg: 'bg-pink-100', color: 'text-pink-600' };
+  if (d.includes('ads') || d.includes('paid') || d.includes('advertis') || d.includes('reklamë') || d.includes('marketing'))
+    return { Icon: Megaphone, bg: 'bg-yellow-100', color: 'text-yellow-600' };
+  if (d.includes('support') || d.includes('suport') || d.includes('helpdesk'))
+    return { Icon: HeadphonesIcon, bg: 'bg-sky-100', color: 'text-sky-600' };
+  if (d.includes('consult') || d.includes('konsulenc'))
+    return { Icon: Briefcase, bg: 'bg-indigo-100', color: 'text-indigo-600' };
+  if (d.includes('financ') || d.includes('account') || d.includes('kontabilitet'))
+    return { Icon: DollarSign, bg: 'bg-emerald-100', color: 'text-emerald-600' };
+  if (d.includes('sales') || d.includes('shitje'))
+    return { Icon: TrendingUp, bg: 'bg-teal-100', color: 'text-teal-600' };
+  if (d.includes('hr') || d.includes('human') || d.includes('burime njerëzore'))
+    return { Icon: UserCheck, bg: 'bg-rose-100', color: 'text-rose-600' };
+  return { Icon: Users, bg: 'bg-primary/10', color: 'text-primary' };
+}
 import { usePermissions } from '../contexts/PermissionsContext';
 import { cn } from '../lib/utils';
 import { toast } from '../hooks/use-toast';
@@ -122,6 +150,7 @@ const TeamsView: React.FC = () => {
     await inviteMutation.create({
       email,
       teamId: selectedTeam.id,
+      teamName: selectedTeam.name,
       role,
       invitedByUserId: user.uid,
       token,
@@ -372,13 +401,14 @@ const TeamsView: React.FC = () => {
         {teams?.map((team) => {
           const members = getTeamMembers(team.id);
           const invites = getTeamInvites(team.id);
+          const { Icon: TeamIcon, bg: teamIconBg, color: teamIconColor } = getTeamDeptIcon(team.department);
 
           return (
             <Card key={team.id} className="p-6 space-y-4">
               <div className="flex items-start justify-between">
                 <div className="flex items-center gap-3 flex-1">
-                  <div className="w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center">
-                    <Users className="w-6 h-6 text-primary" />
+                  <div className={`w-12 h-12 rounded-full flex items-center justify-center ${teamIconBg}`}>
+                    <TeamIcon className={`w-6 h-6 ${teamIconColor}`} />
                   </div>
                   <div className="flex-1 min-w-0">
                     {editingTeamId === team.id && editingField === 'name' ? (

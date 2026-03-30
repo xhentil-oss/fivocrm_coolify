@@ -37,7 +37,7 @@ const JoinInviteView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  // Look up the invite by token
+  // Look up the invite by token — runs immediately, no auth required to VIEW the invite
   useEffect(() => {
     if (!token) {
       setError('Link i pavlefshëm - mungon tokeni.');
@@ -85,13 +85,8 @@ const JoinInviteView: React.FC = () => {
 
         setInvite(inviteData);
 
-        // Get team name
-        const teamQuery = query(collection(db, 'teams'));
-        const teamSnapshot = await getDocs(teamQuery);
-        const team = teamSnapshot.docs.find(d => d.id === data.teamId);
-        if (team) {
-          setTeamName(team.data().name || 'Ekip');
-        }
+        // Use teamName stored on the invite (avoids a separate authenticated query on 'teams')
+        setTeamName((data as any).teamName || 'Ekip');
 
         setLoading(false);
       } catch (err) {

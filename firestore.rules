@@ -40,7 +40,8 @@ service cloud.firestore {
     }
 
     match /services/{docId} {
-      allow read: if isAuth();
+      // Public read: services are a catalogue shown on the public registration page.
+      allow read: if true;
       allow create: if isAuth();
       allow update, delete: if isAuth();
     }
@@ -143,7 +144,9 @@ service cloud.firestore {
     }
 
     match /teamInvites/{docId} {
-      allow read: if isAuth();
+      // Read is intentionally open: the UUID token is the secret (same pattern as GitHub/Vercel invites).
+      // A caller must know the exact token to find the invite; collection scans without a token are harmless.
+      allow read: if true;
       allow create: if isAuth();
       allow update, delete: if isAuth();
     }

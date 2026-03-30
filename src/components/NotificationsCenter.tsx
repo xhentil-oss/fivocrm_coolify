@@ -46,11 +46,20 @@ const NotificationsCenter: React.FC = () => {
   };
 
   const getNotificationIcon = (title: string) => {
-    if (title.includes('Task')) return <Calendar className="w-4 h-4 text-primary" />;
-    if (title.includes('Comment')) return <Mail className="w-4 h-4 text-info" />;
-    if (title.includes('Assigned')) return <User className="w-4 h-4 text-success" />;
-    if (title.includes('Due')) return <AlertCircle className="w-4 h-4 text-warning" />;
-    if (title.includes('Completed')) return <CheckCircle className="w-4 h-4 text-success" />;
+    // Task assignment (Albanian + English)
+    if (title.includes('Caktuar') || title.includes('caktua') || title.includes('Assigned') || title.includes('Task')) return <User className="w-4 h-4 text-success" />;
+    // Comments (Albanian + English)
+    if (title.includes('Koment') || title.includes('Comment')) return <Mail className="w-4 h-4 text-info" />;
+    // Deadlines / overdue (Albanian + English)
+    if (title.includes('Afati') || title.includes('skaduara') || title.includes('Due')) return <AlertCircle className="w-4 h-4 text-warning" />;
+    // Completed (Albanian + English)
+    if (title.includes('Përfundua') || title.includes('Completed')) return <CheckCircle className="w-4 h-4 text-success" />;
+    // Recurring tasks
+    if (title.includes('periodike') || title.includes('Recurring')) return <Calendar className="w-4 h-4 text-primary" />;
+    // Collaborator added
+    if (title.includes('bashkëpunëtor') || title.includes('Collaborator')) return <User className="w-4 h-4 text-info" />;
+    // Invoices
+    if (title.includes('Fatur') || title.includes('Invoice')) return <Mail className="w-4 h-4 text-warning" />;
     return <Info className="w-4 h-4 text-muted-foreground" />;
   };
 

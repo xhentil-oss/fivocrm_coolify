@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useAuth } from '../contexts/AuthContext';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -9,6 +9,8 @@ import { Loader2 } from 'lucide-react';
 
 const LoginView: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
+  const redirectTo = searchParams.get('redirect') || '/';
   const { signInWithGoogle, signInWithEmail, signUpWithEmail } = useAuth();
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');
@@ -21,8 +23,7 @@ const LoginView: React.FC = () => {
     setError(null);
     try {
       await signInWithGoogle();
-      // onAuthStateChanged will trigger, ProtectedRoute + DefaultRedirect handle navigation
-      navigate('/');
+      navigate(redirectTo);
     } catch (err: any) {
       setError(err.message || 'Gabim gjatë hyrjes me Google');
     } finally {
@@ -41,8 +42,7 @@ const LoginView: React.FC = () => {
       } else {
         await signInWithEmail(email, password);
       }
-      // onAuthStateChanged will trigger, ProtectedRoute + DefaultRedirect handle navigation
-      navigate('/');
+      navigate(redirectTo);
     } catch (err: any) {
       // Handle Firebase auth errors
       if (err.code === 'auth/user-not-found') {
