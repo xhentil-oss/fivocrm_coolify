@@ -453,7 +453,7 @@ const InvoicesView: React.FC = () => {
                         </div>
                       ) : (
                         <div 
-                          className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 px-2 py-1 rounded"
+                          className={`flex items-center gap-2 px-2 py-1 rounded ${permissions.canEdit ? 'cursor-pointer hover:bg-muted/50' : ''}`}
                           onClick={() => startEditing(invoice.id, 'total', invoice.total ?? invoice.amount ?? 0)}
                         >
                           {((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} L
@@ -494,7 +494,7 @@ const InvoicesView: React.FC = () => {
                         </div>
                       ) : (
                         <div 
-                          className="cursor-pointer hover:bg-muted/50 px-2 py-1 rounded inline-block"
+                          className={`px-2 py-1 rounded inline-block ${permissions.canEdit ? 'cursor-pointer hover:bg-muted/50' : ''}`}
                           onClick={() => startEditing(invoice.id, 'status', invoice.status)}
                         >
                           <Badge className={getStatusColor(invoice.status)}>{invoice.status}</Badge>
@@ -620,7 +620,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
   const { data: portalAccessList } = useCollection<ClientPortalAccess>('clientPortalAccess', { skipTeamFilter: true });
   const { data: existingItems } = useCollection<InvoiceItem>('invoiceItems', isEditing
     ? { where: [{ field: 'invoiceId', operator: '==', value: editInvoice!.id }], skipTeamFilter: true }
-    : { skipTeamFilter: true }
+    : undefined
   );
   const invoiceMutation = useMutation<Invoice>('invoices');
   const invoiceItemMutation = useMutation<InvoiceItem>('invoiceItems');
@@ -660,6 +660,12 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+
+    // Validate paymentUrl — only allow http/https to prevent XSS via javascript: scheme
+    if (paymentUrl && !/^https?:\/\//i.test(paymentUrl)) {
+      toast({ title: 'URL e pagesës e pavlefshme', description: 'URL duhet të fillojë me http:// ose https://', variant: 'destructive' });
+      return;
+    }
 
     const subtotal = calculateSubtotal();
     // When editing and calculated subtotal is 0 (no items loaded or services deleted),
@@ -987,6 +993,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
 };
 
 const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
+  const { user } = useAuth();
   const { data: allCustomers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const customer = allCustomers?.find(c => c.id === invoice.customerId);
   const { data: invoiceItems } = useCollection<InvoiceItem>('invoiceItems', {
@@ -1117,9 +1124,13 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
               }
               try {
                 toast({ title: 'Duke hapur Stripe Checkout...' });
+                const authToken = await user?.getIdToken();
                 const response = await fetch('/api/create-checkout-session', {
                   method: 'POST',
-                  headers: { 'Content-Type': 'application/json' },
+                  headers: {
+                    'Content-Type': 'application/json',
+                    ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
+                  },
                   body: JSON.stringify({
                     invoiceId: invoice.id,
                     invoiceNumber: invoice.invoiceNumber || invoice.id.slice(0, 8),
