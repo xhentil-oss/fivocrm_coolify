@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useToast } from '../hooks/use-toast';
-import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical } from 'lucide-react';
+import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -19,6 +19,7 @@ import { Textarea } from '../components/ui/textarea';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
 import DetailDrawer from '../components/DetailDrawer';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
+import { useUserNames } from '../hooks/useUserNames';
 import { safeHref } from '../lib/utils';
 import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember } from '../types';
 
@@ -28,6 +29,10 @@ const CRMView: React.FC = () => {
   const [activeTab, setActiveTab] = useState('all');
   const [saving, setSaving] = useState(false);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sourceFilter, setSourceFilter] = useState('all');
+  const [scoreFilter, setScoreFilter] = useState('all');
+  const [assignedFilter, setAssignedFilter] = useState('all');
   const { toast } = useToast();
 
   const { user } = useAuth();
@@ -46,6 +51,7 @@ const CRMView: React.FC = () => {
   const customerMutation = useMutation<Customer>('customers');
   const notificationMutation = useMutation<Notification>('notifications');
   const portalAccessMutation = useMutation<ClientPortalAccess>('clientPortalAccess');
+  const getName = useUserNames(teamMembers || []);
 
   const getStatusColor = (status: string) => {
     switch (status) {
@@ -94,6 +100,8 @@ const CRMView: React.FC = () => {
     const source = formData.get('source') as string;
     const notes = formData.get('notes') as string;
     const estimatedValue = formData.get('estimatedValue') as string;
+    const assignedToUserId = formData.get('assignedToUserId') as string;
+    const resolvedAssigned = assignedToUserId && assignedToUserId !== 'unassigned' ? assignedToUserId : undefined;
 
     await leadMutation.create({
       name,
@@ -109,7 +117,18 @@ const CRMView: React.FC = () => {
       notes: notes || undefined,
       estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined,
       score: calculateLeadScore({ name, email, phoneNumber, company, estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined }),
+      assignedToUserId: resolvedAssigned,
     });
+
+    // Notify assigned user
+    if (resolvedAssigned && user && resolvedAssigned !== user.uid) {
+      await notificationMutation.create({
+        userId: resolvedAssigned,
+        title: 'Lead i asignuar ty',
+        message: `${user.displayName || 'Një admin'} të asignoi lead-in "${name}"`,
+        isRead: false,
+      }).catch(() => {});
+    }
 
     logActivity('lead_created', `Lead i ri: ${name}`, { entityType: 'lead', description: company || email || '' });
     setIsCreateDialogOpen(false);
@@ -132,6 +151,19 @@ const CRMView: React.FC = () => {
     }
     if (lead.lastFollowUpDate) score += 10;
     return Math.min(100, score);
+  };
+
+  const handleAssignLead = async (lead: Lead, assignedToUserId: string) => {
+    const resolved = assignedToUserId && assignedToUserId !== 'unassigned' ? assignedToUserId : undefined;
+    await leadMutation.update(lead.id, { assignedToUserId: resolved });
+    if (resolved && user && resolved !== user.uid) {
+      await notificationMutation.create({
+        userId: resolved,
+        title: 'Lead i asignuar ty',
+        message: `${user.displayName || 'Një admin'} të asignoi lead-in "${lead.name}"`,
+        isRead: false,
+      }).catch(() => {});
+    }
   };
 
   const handleDeleteLead = async (id: string) => {
@@ -204,9 +236,28 @@ const CRMView: React.FC = () => {
 
   const filteredLeads = React.useMemo(() => {
     if (!leads) return [];
-    if (activeTab === 'all') return leads;
-    return leads.filter(lead => lead.status === activeTab);
-  }, [leads, activeTab]);
+    let result = leads;
+    if (activeTab !== 'all') result = result.filter(l => l.status === activeTab);
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      result = result.filter(l =>
+        l.name.toLowerCase().includes(q) ||
+        l.email?.toLowerCase().includes(q) ||
+        l.company?.toLowerCase().includes(q)
+      );
+    }
+    if (sourceFilter !== 'all') result = result.filter(l => l.source === sourceFilter);
+    if (scoreFilter !== 'all') result = result.filter(l => {
+      const s = (l as any).score ?? calculateLeadScore(l);
+      if (scoreFilter === 'high') return s >= 70;
+      if (scoreFilter === 'medium') return s >= 40 && s < 70;
+      if (scoreFilter === 'low') return s < 40;
+      return true;
+    });
+    if (assignedFilter === 'mine') result = result.filter(l => l.assignedToUserId === user?.uid);
+    if (assignedFilter === 'unassigned') result = result.filter(l => !l.assignedToUserId);
+    return result;
+  }, [leads, activeTab, searchQuery, sourceFilter, scoreFilter, assignedFilter, user]);
 
   const needsFollowUp = React.useMemo(() => {
     if (!leads) return [];
@@ -272,10 +323,64 @@ const CRMView: React.FC = () => {
               <DialogHeader>
                 <DialogTitle>Krijo Lead të Ri</DialogTitle>
               </DialogHeader>
-              <LeadForm onSubmit={handleCreateLead} disabled={saving} />
+              <LeadForm onSubmit={handleCreateLead} disabled={saving} teamMembers={teamMembers || []} getName={getName} />
             </DialogContent>
           </Dialog>
         )}
+      </div>
+
+      {/* Search & Filter bar */}
+      <div className="flex flex-col sm:flex-row gap-2">
+        <div className="relative flex-1">
+          <Search className="w-4 h-4 absolute left-3 top-2.5 text-muted-foreground" />
+          <Input
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="Kërko sipas emrit, email, kompanisë..."
+            className="pl-9 h-9"
+          />
+          {searchQuery && (
+            <button className="absolute right-3 top-2.5" onClick={() => setSearchQuery('')}>
+              <X className="w-4 h-4 text-muted-foreground hover:text-foreground" />
+            </button>
+          )}
+        </div>
+        <Select value={sourceFilter} onValueChange={setSourceFilter}>
+          <SelectTrigger className="w-full sm:w-[150px] h-9">
+            <SelectValue placeholder="Burimi" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Të gjithë burimet</SelectItem>
+            <SelectItem value="Website">Faqja Web</SelectItem>
+            <SelectItem value="Referral">Referim</SelectItem>
+            <SelectItem value="Cold Call">Thirrje e Ftoftë</SelectItem>
+            <SelectItem value="Social Media">Rrjete Sociale</SelectItem>
+            <SelectItem value="Email Campaign">Fushata Email</SelectItem>
+            <SelectItem value="Event">Event</SelectItem>
+            <SelectItem value="Other">Tjetër</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={scoreFilter} onValueChange={setScoreFilter}>
+          <SelectTrigger className="w-full sm:w-[145px] h-9">
+            <SelectValue placeholder="Pikët" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Të gjitha pikët</SelectItem>
+            <SelectItem value="high">I lartë (70+)</SelectItem>
+            <SelectItem value="medium">Mesatar (40–69)</SelectItem>
+            <SelectItem value="low">I ulët (&lt;40)</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={assignedFilter} onValueChange={setAssignedFilter}>
+          <SelectTrigger className="w-full sm:w-[140px] h-9">
+            <SelectValue placeholder="Asignuara" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Të gjitha</SelectItem>
+            <SelectItem value="mine">Të miat</SelectItem>
+            <SelectItem value="unassigned">Pa asignuar</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-6 stagger-children">
@@ -405,6 +510,12 @@ const CRMView: React.FC = () => {
                   <div className="text-xs text-muted-foreground">
                     Ndjekja e fundit: {lead.lastFollowUpDate ? new Date(lead.lastFollowUpDate).toLocaleDateString() : 'Asnjëherë'}
                   </div>
+                  {lead.assignedToUserId && (
+                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                      <UserCircle className="w-3 h-3" />
+                      {getName(lead.assignedToUserId, 'Pa emër')}
+                    </div>
+                  )}
                 </Card>
               );
             })}
@@ -427,6 +538,9 @@ const CRMView: React.FC = () => {
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
                       Burimi
+                    </th>
+                    <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
+                      Asignuar
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
                       Vlera Est.
@@ -513,6 +627,37 @@ const CRMView: React.FC = () => {
                       </td>
                       <td className="px-6 py-4 text-body text-foreground">
                         {lead.source || '-'}
+                      </td>
+                      <td className="px-6 py-4" onClick={e => e.stopPropagation()}>
+                        {permissions.canEdit ? (
+                          <Select
+                            value={lead.assignedToUserId || 'unassigned'}
+                            onValueChange={val => handleAssignLead(lead, val === 'unassigned' ? '' : val)}
+                          >
+                            <SelectTrigger className="w-[130px] h-8 text-xs">
+                              <SelectValue>
+                                <div className="flex items-center gap-1">
+                                  <UserCircle className="w-3 h-3 text-muted-foreground" />
+                                  <span className="truncate max-w-[80px]">
+                                    {lead.assignedToUserId ? getName(lead.assignedToUserId, '…') : 'Pa asignuar'}
+                                  </span>
+                                </div>
+                              </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="unassigned">Pa asignuar</SelectItem>
+                              {(teamMembers || []).filter(m => m.status === 'Active').map(m => (
+                                <SelectItem key={m.userId} value={m.userId}>
+                                  {getName(m.userId, m.email || m.userId)}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <span className="text-body text-foreground">
+                            {lead.assignedToUserId ? getName(lead.assignedToUserId, '—') : '—'}
+                          </span>
+                        )}
                       </td>
                       <td className="px-6 py-4 text-body text-foreground">
                         {lead.estimatedValue 
@@ -611,7 +756,9 @@ const LeadForm: React.FC<{
   onSubmit: (data: FormData) => void;
   initialData?: Lead;
   disabled?: boolean;
-}> = ({ onSubmit, initialData, disabled }) => {
+  teamMembers?: TeamMember[];
+  getName?: (userId: string | null | undefined, fallback?: string) => string;
+}> = ({ onSubmit, initialData, disabled, teamMembers = [], getName }) => {
   const [lastFollowUpDate, setLastFollowUpDate] = useState<Date | undefined>(
     initialData?.lastFollowUpDate ? new Date(initialData.lastFollowUpDate) : undefined
   );
@@ -732,6 +879,25 @@ const LeadForm: React.FC<{
           </Popover>
         </div>
       </div>
+
+      {teamMembers.length > 0 && (
+        <div>
+          <Label htmlFor="assignedToUserId">Asigno tek</Label>
+          <Select name="assignedToUserId" defaultValue={initialData?.assignedToUserId || 'unassigned'}>
+            <SelectTrigger>
+              <SelectValue placeholder="Pa asignuar" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unassigned">Pa asignuar</SelectItem>
+              {teamMembers.filter(m => m.status === 'Active').map(m => (
+                <SelectItem key={m.userId} value={m.userId}>
+                  {getName ? getName(m.userId, m.email || m.userId) : (m.displayName || m.email || m.userId)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       <div>
         <Label htmlFor="notes">Shënime</Label>

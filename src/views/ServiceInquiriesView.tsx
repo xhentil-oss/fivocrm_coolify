@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useToast } from '../hooks/use-toast';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -21,13 +22,16 @@ const ServiceInquiriesView: React.FC = () => {
   const [selectedInquiry, setSelectedInquiry] = useState<ServiceInquiry | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
+  const [convertingId, setConvertingId] = useState<string | null>(null);
+
+  const { toast } = useToast();
 
   const { data: inquiries, loading } = useCollection<ServiceInquiry>('serviceInquiries', {
     orderBy: { field: 'createdAt', direction: 'desc' },
     skipTeamFilter: true,
   });
-  useCollection<Lead>('leads');
   const inquiryMutation = useMutation<ServiceInquiry>('serviceInquiries');
+  const leadMutation = useMutation<Lead>('leads');
 
   const filtered = React.useMemo(() => {
     if (!inquiries) return [];
@@ -61,6 +65,48 @@ const ServiceInquiriesView: React.FC = () => {
     await inquiryMutation.update(id, { status: status as ServiceInquiry['status'] });
     if (selectedInquiry?.id === id) {
       setSelectedInquiry(prev => prev ? { ...prev, status: status as any } : null);
+    }
+  };
+
+  const handleConvertToLead = async (inquiry: ServiceInquiry) => {
+    if (convertingId) return;
+    setConvertingId(inquiry.id);
+    try {
+      const score = [
+        inquiry.contactName ? 10 : 0,
+        inquiry.email ? 15 : 0,
+        inquiry.phoneNumber ? 10 : 0,
+        inquiry.businessName ? 15 : 0,
+        inquiry.website ? 5 : 0,
+        5, // source known (inquiry)
+      ].reduce((a, b) => a + b, 0);
+
+      const newLead = await leadMutation.create({
+        name: inquiry.contactName,
+        email: inquiry.email,
+        phoneNumber: inquiry.phoneNumber,
+        company: inquiry.businessName,
+        jobTitle: inquiry.jobTitle,
+        website: inquiry.website,
+        source: 'Website',
+        notes: inquiry.projectNeedDescription,
+        status: 'New',
+        serviceInquiryId: inquiry.id,
+        score,
+      });
+
+      if (newLead?.id) {
+        await inquiryMutation.update(inquiry.id, {
+          status: 'Converted',
+          leadId: newLead.id,
+        });
+        setSelectedInquiry(prev => prev ? { ...prev, status: 'Converted', leadId: newLead.id } : null);
+        toast({ title: 'Lead u krijua me sukses', description: `${inquiry.contactName} u shtua në CRM.` });
+      }
+    } catch {
+      toast({ title: 'Gabim', description: 'Nuk u krijua lead-i. Provo sërish.', variant: 'destructive' });
+    } finally {
+      setConvertingId(null);
     }
   };
 
@@ -271,9 +317,14 @@ const ServiceInquiriesView: React.FC = () => {
                       </Button>
                     )}
                     {selectedInquiry.status !== 'Converted' && (
-                      <Button size="sm" className="bg-green-600 hover:bg-green-700 text-white" onClick={() => handleStatusChange(selectedInquiry.id, 'Converted')}>
+                      <Button
+                        size="sm"
+                        className="bg-green-600 hover:bg-green-700 text-white"
+                        disabled={convertingId === selectedInquiry.id}
+                        onClick={() => handleConvertToLead(selectedInquiry)}
+                      >
                         <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
-                        Konverto
+                        {convertingId === selectedInquiry.id ? 'Duke krijuar...' : 'Konverto në Lead'}
                       </Button>
                     )}
                   </div>
@@ -502,9 +553,10 @@ const ServiceInquiriesView: React.FC = () => {
                 {/* Linked Lead */}
                 {selectedInquiry.leadId && (
                   <div className="pt-2 border-t">
-                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                      <ArrowRight className="w-3.5 h-3.5" />
-                      <span>Lead i lidhur: <span className="text-foreground font-medium">{selectedInquiry.leadId.slice(0, 12)}...</span></span>
+                    <div className="flex items-center gap-2 text-xs">
+                      <ArrowRight className="w-3.5 h-3.5 text-green-600" />
+                      <span className="text-green-700 dark:text-green-400 font-medium">Lead i krijuar me sukses në CRM</span>
+                      <span className="text-muted-foreground">· ID: {selectedInquiry.leadId.slice(0, 12)}…</span>
                     </div>
                   </div>
                 )}

@@ -200,6 +200,7 @@ export interface Lead {
   lastFollowUpDate?: Date;
   tags?: string[];
   serviceInquiryId?: string;
+  assignedToUserId?: string;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
