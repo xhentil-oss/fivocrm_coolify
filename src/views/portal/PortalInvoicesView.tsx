@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useCollection, useMutation } from '../../hooks/useFirestore';
+import { useAuth } from '../../contexts/AuthContext';
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -14,6 +15,7 @@ import type { Invoice, InvoiceItem, Service, Customer } from '../../types';
 
 const PortalInvoicesView: React.FC = () => {
   const { customerId } = useClientPortal();
+  const { user } = useAuth();
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<string>('__all__');
   const [searchQuery, setSearchQuery] = useState('');
@@ -74,9 +76,13 @@ const PortalInvoicesView: React.FC = () => {
 
     try {
       toast({ title: 'Duke hapur Stripe Checkout...' });
+      const authToken = await user?.getIdToken();
       const response = await fetch('/api/create-checkout-session', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
+        },
         body: JSON.stringify({
           invoiceId: invoice.id,
           invoiceNumber: invoice.invoiceNumber || invoice.id.slice(0, 8),
