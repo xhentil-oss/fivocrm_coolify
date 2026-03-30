@@ -393,19 +393,24 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   };
 
   const insertMention = (userId: string) => {
+    const displayName = getUserDisplayName(userId);
     const lastAtIndex = commentText.lastIndexOf('@');
-    const newText = commentText.slice(0, lastAtIndex) + `@${userId} `;
+    const newText = commentText.slice(0, lastAtIndex) + `@[${displayName}](${userId}) `;
     setCommentText(newText);
     setShowMentionSuggestions(false);
   };
 
   const handleAddCommentSubmit = async () => {
     if (commentText.trim()) {
-      const mentionRegex = /@(\S+)/g;
-      const mentions = commentText.match(mentionRegex) || [];
-      
-      const notificationPromises = mentions
-        .map(m => m.slice(1))
+      // Extract userIds from both new @[Name](uid) format and legacy @uid format
+      const newFormatRegex = /@\[[^\]]+\]\(([^)]+)\)/g;
+      const legacyFormatRegex = /@([A-Za-z0-9_-]{20,})/g;
+      const mentionedUids = new Set<string>();
+      let m: RegExpExecArray | null;
+      while ((m = newFormatRegex.exec(commentText)) !== null) mentionedUids.add(m[1]);
+      while ((m = legacyFormatRegex.exec(commentText)) !== null) mentionedUids.add(m[1]);
+
+      const notificationPromises = [...mentionedUids]
         .filter(uid => uid !== user?.uid)
         .map(uid => notificationMutation.create({
           userId: uid,
@@ -470,9 +475,20 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
 
   const renderCommentWithMentions = (content: string) => {
-    const parts = content.split(/(@\S+)/g);
+    // Split on either @[Name](uid) or legacy @uid tokens
+    const parts = content.split(/(@\[[^\]]+\]\([^)]+\)|@\S+)/g);
     return parts.map((part, i) => {
       if (part.startsWith('@')) {
+        // New format: @[DisplayName](userId)
+        const newFmt = part.match(/^@\[([^\]]+)\]\(([^)]+)\)$/);
+        if (newFmt) {
+          return (
+            <span key={i} className="text-primary font-medium bg-primary/10 px-1 rounded">
+              @{newFmt[1]}
+            </span>
+          );
+        }
+        // Legacy format: @userId — resolve name via lookup
         const uid = part.slice(1);
         const displayName = getUserDisplayName(uid);
         return (
