@@ -51,7 +51,7 @@ const CRMView: React.FC = () => {
   const customerMutation = useMutation<Customer>('customers');
   const notificationMutation = useMutation<Notification>('notifications');
   const portalAccessMutation = useMutation<ClientPortalAccess>('clientPortalAccess');
-  const getName = useUserNames(teamMembers || []);
+  const { getName } = useUserNames(teamMembers || []);
 
   const getStatusColor = (status: string) => {
     switch (status) {

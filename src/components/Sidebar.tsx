@@ -45,17 +45,24 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
   const permissions = usePermissions();
   const { user } = useAuth();
 
-  // Unread direct messages count
-  const { data: unreadMessages } = useCollection<any>('directMessages', {
-    where: user ? [
-      { field: 'receiverId', operator: '==', value: user.uid },
-      { field: 'isRead', operator: '==', value: false },
-    ] : undefined,
-  });
+  // Unread direct messages count — DMs are stored in the `messages` collection
+  // (not `directMessages`).  A DM has a `receiverId` but no `channelId`.
+  const unreadDmQuery = useMemo(() => {
+    if (!user) return undefined;
+    return {
+      where: [
+        { field: 'receiverId', operator: '==', value: user.uid },
+        { field: 'isRead', operator: '==', value: false },
+      ],
+      skipTeamFilter: true,
+    };
+  }, [user]);
+
+  const { data: unreadMessages } = useCollection<any>('messages', unreadDmQuery);
 
   const unreadChatCount = useMemo(() => {
     if (!unreadMessages || !user) return 0;
-    return unreadMessages.filter(m => m.senderId !== user.uid).length;
+    return unreadMessages.filter(m => m.senderId !== user.uid && !m.channelId).length;
   }, [unreadMessages, user]);
 
   // Play notification sound when unread count increases
