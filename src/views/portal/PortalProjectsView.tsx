@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from 'react-router-dom';
 import { useClientPortal } from '../../hooks/useClientPortal';
+import { useAuth } from '../../contexts/AuthContext';
 import { useCollection } from '../../hooks/useFirestore';
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
@@ -9,11 +10,28 @@ import type { Project, Task } from '../../types';
 
 const PortalProjectsView: React.FC = () => {
   const { customerId } = useClientPortal();
+  const { user } = useAuth();
 
-  const { data: rawProjects, loading } = useCollection<Project>('projects', {
-    where: customerId ? [{ field: 'customerId', operator: '==', value: customerId }] : undefined,
+  // Query 1: projects linked to this customer by customerId
+  const { data: projectsByCustomer, loading: loadingByCustomer } = useCollection<Project>('projects', {
+    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });
+
+  // Query 2: projects where the client's user is explicitly a member
+  const { data: projectsByMember, loading: loadingByMember } = useCollection<Project>('projects', {
+    where: user?.uid ? [{ field: 'memberUserIds', operator: 'array-contains', value: user.uid }] : [{ field: 'customerId', operator: '==', value: '' }],
+    skipTeamFilter: true,
+  });
+
+  // Merge and deduplicate from both queries
+  const rawProjects = React.useMemo(() => {
+    const all = [...(projectsByCustomer || []), ...(projectsByMember || [])];
+    const seen = new Set<string>();
+    return all.filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; });
+  }, [projectsByCustomer, projectsByMember]);
+
+  const loading = loadingByCustomer || loadingByMember;
 
   // Only fetch tasks belonging to the customer's projects (not ALL tasks)
   const projectIds = React.useMemo(() => {
@@ -37,7 +55,7 @@ const PortalProjectsView: React.FC = () => {
       const pct = total > 0 ? Math.round((done / total) * 100) : 0;
       return { ...p, done, total, pct };
     }).sort((a, b) => {
-      const order = { Active: 0, Planning: 1, 'On Hold': 2, Completed: 3 };
+      const order: Record<string, number> = { Active: 0, Planning: 1, 'On Hold': 2, Completed: 3 };
       return (order[a.status] ?? 4) - (order[b.status] ?? 4);
     });
   }, [rawProjects, projectTasks]);

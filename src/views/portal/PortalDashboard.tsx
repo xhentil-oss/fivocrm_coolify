@@ -1,5 +1,6 @@
 import React from 'react';
 import { useClientPortal } from '../../hooks/useClientPortal';
+import { useAuth } from '../../contexts/AuthContext';
 import { useCollection } from '../../hooks/useFirestore';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
@@ -9,6 +10,7 @@ import type { Invoice, InvoiceItem, Service, ClientRequest, Project, Task } from
 
 const PortalDashboard: React.FC = () => {
   const { customerId } = useClientPortal();
+  const { user } = useAuth();
 
   const { data: rawInvoices } = useCollection<Invoice>('invoices', {
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
@@ -60,11 +62,20 @@ const PortalDashboard: React.FC = () => {
 
   const activeRequests = requests?.filter(r => r.status !== 'Completed' && r.status !== 'Rejected').length || 0;
 
-  // Projects for this customer
-  const { data: rawProjects } = useCollection<Project>('projects', {
+  // Projects for this customer (by customerId) or where user is a member
+  const { data: projectsByCustomer } = useCollection<Project>('projects', {
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });
+  const { data: projectsByMember } = useCollection<Project>('projects', {
+    where: user?.uid ? [{ field: 'memberUserIds', operator: 'array-contains', value: user.uid }] : [{ field: 'customerId', operator: '==', value: '' }],
+    skipTeamFilter: true,
+  });
+  const rawProjects = React.useMemo(() => {
+    const all = [...(projectsByCustomer || []), ...(projectsByMember || [])];
+    const seen = new Set<string>();
+    return all.filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; });
+  }, [projectsByCustomer, projectsByMember]);
   const { data: allTasks } = useCollection<Task>('tasks', { skipTeamFilter: true });
 
   const customerProjects = React.useMemo(() => {
