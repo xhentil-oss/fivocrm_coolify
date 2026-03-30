@@ -33,7 +33,7 @@ const DetailDrawer: React.FC<DetailDrawerProps> = ({ open, onClose, title, data,
         onClick={onClose}
         aria-hidden="true"
       />
-      <div className="fixed top-0 right-0 bottom-0 w-full md:w-[480px] bg-card border-l border-border z-50 animate-slide-in-right">
+      <div className="fixed top-[72px] right-0 bottom-0 w-full md:w-[480px] bg-card border-l border-border z-50 animate-slide-in-right">
         <div className="h-full flex flex-col">
           <div className="flex items-center justify-between p-6 border-b border-border">
             <h2 className="text-h3 text-foreground">{title}</h2>
