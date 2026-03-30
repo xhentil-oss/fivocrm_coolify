@@ -10,8 +10,11 @@ import { Label } from '../../components/ui/label';
 import { Textarea } from '../../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
-import { Clock, CheckCircle2, XCircle, AlertTriangle, Eye, Palette, Megaphone, MessageSquare, Lightbulb, ArrowRight, FileText, ChevronRight, Circle, Trash2 } from 'lucide-react';
+import { Clock, CheckCircle2, XCircle, AlertTriangle, Eye, Palette, Megaphone, MessageSquare, Lightbulb, ArrowRight, FileText, ChevronRight, Circle, Trash2, Cloud, X as XIcon, ExternalLink } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
+import { useGoogleApi } from '../../contexts/GoogleApiContext';
+import type { DriveFile } from '../../contexts/GoogleApiContext';
+import GoogleDrivePicker from '../../components/GoogleDrivePicker';
 import type { ClientRequest, Team, Service, TeamMember } from '../../types';
 
 const CATEGORIES = [
@@ -62,6 +65,9 @@ const PortalRequestsView: React.FC = () => {
   const requestMutation = useMutation<ClientRequest>('clientRequests');
 
   const [requestToDelete, setRequestToDelete] = useState<string | null>(null);
+  const [isDrivePickerOpen, setIsDrivePickerOpen] = useState(false);
+  const [driveAttachments, setDriveAttachments] = useState<DriveFile[]>([]);
+  const { isConnected: isDriveConnected, connectGoogle, isLoading: driveApiLoading } = useGoogleApi();
 
   const handleDeleteRequest = async (id: string) => {
     await requestMutation.remove(id);
@@ -127,11 +133,17 @@ const PortalRequestsView: React.FC = () => {
     const category = (formData.get('category') as string) || (formData.get('category2') as string);
     const priority = (formData.get('priority') as string) || (formData.get('priority2') as string);
     const serviceId = formData.get('serviceId') as string;
-    const attachmentUrl = formData.get('attachmentUrl') as string;
 
     if (!title || !description || !category || !priority || !user || !customerId) return;
 
     const assignedTeamId = getTeamForCategory(category);
+
+    const mappedAttachments = driveAttachments.map(f => ({
+      id: f.id,
+      name: f.name,
+      mimeType: f.mimeType,
+      webViewLink: f.webViewLink || '',
+    }));
 
     await requestMutation.create({
       customerId,
@@ -143,8 +155,8 @@ const PortalRequestsView: React.FC = () => {
       priority: priority as ClientRequest['priority'],
       serviceId: serviceId || undefined,
       assignedTeamId,
-      attachmentUrl: attachmentUrl || undefined,
-    });
+      driveAttachments: mappedAttachments.length > 0 ? mappedAttachments : undefined,
+    });  
 
     // Notify admin team members about new request
     const adminMembers = allTeamMembers?.filter(
@@ -171,6 +183,7 @@ const PortalRequestsView: React.FC = () => {
 
     setIsCreateOpen(false);
     setSelectedTemplate(null);
+    setDriveAttachments([]);
     toast({
       title: 'Kërkesa u dërgua',
       description: 'Ekipi ynë do ta shqyrtojë kërkesën tuaj së shpejti.',
@@ -392,7 +405,18 @@ const PortalRequestsView: React.FC = () => {
       )}
 
       {/* Create Request Dialog - Simplified */}
-      <Dialog open={isCreateOpen} onOpenChange={(open) => { setIsCreateOpen(open); if (!open) setSelectedTemplate(null); }}>
+      <GoogleDrivePicker
+        open={isDrivePickerOpen}
+        onOpenChange={setIsDrivePickerOpen}
+        multiple
+        onSelect={(file) => setDriveAttachments(prev => prev.find(f => f.id === file.id) ? prev : [...prev, file])}
+        onSelectMultiple={(files) => setDriveAttachments(prev => {
+          const existingIds = new Set(prev.map(f => f.id));
+          return [...prev, ...files.filter(f => !existingIds.has(f.id))];
+        })}
+      />
+
+      <Dialog open={isCreateOpen} onOpenChange={(open) => { setIsCreateOpen(open); if (!open) { setSelectedTemplate(null); setDriveAttachments([]); } }}>
         <DialogContent className="max-w-lg">
           <DialogHeader>
             <DialogTitle>
@@ -479,8 +503,50 @@ const PortalRequestsView: React.FC = () => {
               />
             </div>
             <div>
-              <Label htmlFor="attachmentUrl">Link skedari (opsionale)</Label>
-              <Input id="attachmentUrl" name="attachmentUrl" placeholder="https://drive.google.com/..." className="mt-1" />
+              <Label>Skedarë nga Google Drive (opsionale)</Label>
+              <div className="mt-1 space-y-2">
+                {driveAttachments.length > 0 && (
+                  <div className="space-y-1">
+                    {driveAttachments.map(f => (
+                      <div key={f.id} className="flex items-center gap-2 px-3 py-1.5 rounded-lg bg-blue-50 border border-blue-200 text-sm">
+                        <Cloud className="h-3.5 w-3.5 text-blue-500 flex-shrink-0" />
+                        <span className="flex-1 truncate text-blue-800">{f.name}</span>
+                        <button
+                          type="button"
+                          onClick={() => setDriveAttachments(prev => prev.filter(x => x.id !== f.id))}
+                          className="text-blue-400 hover:text-red-500 transition-colors"
+                        >
+                          <XIcon className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+                {isDriveConnected ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-2 text-blue-600 border-blue-200 hover:bg-blue-50"
+                    onClick={() => setIsDrivePickerOpen(true)}
+                  >
+                    <Cloud className="h-4 w-4" />
+                    Zgjidhni skedarë nga Drive
+                  </Button>
+                ) : (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="gap-2 text-blue-600 border-blue-200 hover:bg-blue-50"
+                    onClick={connectGoogle}
+                    disabled={driveApiLoading}
+                  >
+                    <Cloud className="h-4 w-4" />
+                    {driveApiLoading ? 'Duke u lidhur...' : 'Lidhu me Google Drive'}
+                  </Button>
+                )}
+              </div>
             </div>
             <div className="flex gap-2 pt-2">
               <Button type="button" variant="outline" className="flex-1" onClick={() => { setIsCreateOpen(false); setSelectedTemplate(null); }}>
@@ -569,7 +635,27 @@ const PortalRequestsView: React.FC = () => {
                 </div>
               </div>
 
-              {selectedRequest.attachmentUrl && (
+              {selectedRequest.driveAttachments && selectedRequest.driveAttachments.length > 0 && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-1.5">Skedarë nga Google Drive</p>
+                  <div className="space-y-1.5">
+                    {selectedRequest.driveAttachments.map(f => (
+                      <a
+                        key={f.id}
+                        href={f.webViewLink}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-2 text-sm text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 px-3 py-2 rounded-lg transition-colors"
+                      >
+                        <Cloud className="h-4 w-4 flex-shrink-0" />
+                        <span className="flex-1 truncate">{f.name}</span>
+                        <ExternalLink className="h-3.5 w-3.5 flex-shrink-0 opacity-60" />
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {!selectedRequest.driveAttachments?.length && selectedRequest.attachmentUrl && (
                 <div>
                   <p className="text-xs font-medium text-muted-foreground mb-1.5">Skedar i bashkëngjitur</p>
                   <a

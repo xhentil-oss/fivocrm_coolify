@@ -436,6 +436,7 @@ export interface ClientRequest {
   assignedToUserId?: string;
   linkedTaskId?: string;
   attachmentUrl?: string;
+  driveAttachments?: { id: string; name: string; mimeType: string; webViewLink: string }[];
   adminNotes?: string;
   createdAt: Date;
   updatedAt: Date;
