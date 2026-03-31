@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -6,11 +6,13 @@ import { Label } from './ui/label';
 import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Card } from './ui/card';
+import { Badge } from './ui/badge';
 import {
   Building, Globe,
   Target, FileText, DollarSign,
   ChevronRight, ChevronLeft, Check, Instagram, Facebook, Linkedin,
   Share2, Search, Palette, PenTool, Megaphone, Send, AlertCircle, PlusCircle,
+  ShoppingCart, Heart, Save, Clock,
 } from 'lucide-react';
 
 // --------------- Types ---------------
@@ -79,6 +81,26 @@ interface FormData {
   seo_targetMarket: string;
   seo_hasDoneSEO: string;
   seo_competitors: string;
+  // E-commerce
+  ecom_platform: string;
+  ecom_productsCount: string;
+  ecom_hasInventory: string;
+  ecom_paymentMethods: string[];
+  ecom_shippingNeeds: string;
+  ecom_hasProductPhotos: string;
+  ecom_productCategories: string;
+  ecom_existingShopLink: string;
+  ecom_features: string[];
+  // Coaching
+  coach_niche: string;
+  coach_targetAudience: string;
+  coach_deliveryMethod: string[];
+  coach_hasProgram: string;
+  coach_programDescription: string;
+  coach_needsBooking: string;
+  coach_needsPayment: string;
+  coach_contentNeeds: string[];
+  coach_socialPresence: string;
   // Step 4: Budget & Materials
   budgetRange: string;
   timeline: string;
@@ -111,6 +133,12 @@ const initialFormData: FormData = {
   content_hasModels: '', content_visualStyle: '',
   seo_hasWebsite: '', seo_websitePlatform: '', seo_targetKeywords: '',
   seo_targetMarket: '', seo_hasDoneSEO: '', seo_competitors: '',
+  ecom_platform: '', ecom_productsCount: '', ecom_hasInventory: '',
+  ecom_paymentMethods: [], ecom_shippingNeeds: '', ecom_hasProductPhotos: '',
+  ecom_productCategories: '', ecom_existingShopLink: '', ecom_features: [],
+  coach_niche: '', coach_targetAudience: '', coach_deliveryMethod: [],
+  coach_hasProgram: '', coach_programDescription: '', coach_needsBooking: '',
+  coach_needsPayment: '', coach_contentNeeds: [], coach_socialPresence: '',
   budgetRange: '', timeline: '', isUrgent: '', decisionMaker: '',
   preferredContactMethod: '',
   hasExistingMaterials: '', googleDriveLink: '', secondGoogleDriveLink: '',
@@ -130,6 +158,8 @@ const SERVICES = [
   { value: 'Branding', label: 'Branding', icon: Palette },
   { value: 'Content Creation', label: 'Content Creation', icon: PenTool },
   { value: 'SEO', label: 'SEO', icon: Search },
+  { value: 'E-commerce', label: 'E-commerce', icon: ShoppingCart },
+  { value: 'Coaching', label: 'Coaching', icon: Heart },
   { value: 'Tjetër', label: 'Tjetër', icon: FileText },
 ];
 
@@ -140,6 +170,8 @@ const SERVICE_GOALS: Record<string, string[]> = {
   'Branding': ['Logo e re', 'Identitet vizual komplet', 'Rifreskim brandi', 'Brand Guidelines'],
   'Content Creation': ['Foto profesionale', 'Video marketing', 'Reels & TikTok', 'Copywriting'],
   'SEO': ['Pozicionim në Google', 'SEO lokal', 'Më shumë trafik organik', 'Analizë konkurrentësh'],
+  'E-commerce': ['Dyqan online i ri', 'Migrim platforme', 'Rritje shitjesh online', 'Integrim pagesash', 'Menaxhim inventari'],
+  'Coaching': ['Platform online coaching', 'Website personal', 'Booking & Pagesa', 'Kurse online', 'Rritje audience'],
 };
 
 const SERVICE_DESCRIPTION_HINTS: Record<string, string> = {
@@ -149,9 +181,11 @@ const SERVICE_DESCRIPTION_HINTS: Record<string, string> = {
   'Branding': 'Përshkruani vizionin tuaj për markën, vlerat, dhe stilin që dëshironi...',
   'Content Creation': 'Përshkruani llojin e përmbajtjes që ju nevojitet dhe ku do ta përdorni...',
   'SEO': 'Përshkruani website-in tuaj, fjalët kyçe target, dhe çfarë dëshironi të arrini...',
+  'E-commerce': 'Përshkruani produktet që shisni, audiencën target, dhe çfarë funksionalitetesh dëshironi...',
+  'Coaching': 'Përshkruani llojin e coaching-ut, audiencën target, dhe si dëshironi ta ofroni shërbimin...',
 };
 
-const SERVICES_WITH_QUESTIONS = ['Social Media Marketing', 'Web Design', 'Paid Ads', 'Branding', 'Content Creation', 'SEO'];
+const SERVICES_WITH_QUESTIONS = ['Social Media Marketing', 'Web Design', 'Paid Ads', 'Branding', 'Content Creation', 'SEO', 'E-commerce', 'Coaching'];
 
 const BUDGETS = [
   'Nën 30,000 L', '30,000–50,000 L', '50,000–100,000 L', '100,000–300,000 L', '300,000+ L',
@@ -223,18 +257,79 @@ interface Props {
   preselectedService?: string;
   prefillEmail?: string;
   prefillName?: string;
+  initialDraft?: Partial<FormData> & { id?: string; lastSavedStep?: number };
+  onDraftSave?: (data: FormData, step: number) => void;
+  isEditing?: boolean;
 }
 
-const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedService, prefillEmail, prefillName }) => {
-  const [step, setStep] = useState(1);
-  const [form, setForm] = useState<FormData>(() => ({
-    ...initialFormData,
-    servicesInterestedIn: preselectedService ? [preselectedService] : [],
-    email: prefillEmail || '',
-    contactName: prefillName || '',
-  }));
+const DRAFT_STORAGE_KEY = 'fivocrm_inquiry_draft';
+
+const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedService, prefillEmail, prefillName, initialDraft, onDraftSave, isEditing }) => {
+  const [step, setStep] = useState(() => initialDraft?.lastSavedStep || 1);
+  const [form, setForm] = useState<FormData>(() => {
+    // Priority: initialDraft prop > localStorage draft > fresh form
+    if (initialDraft) {
+      return { ...initialFormData, ...initialDraft };
+    }
+    try {
+      const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        return { ...initialFormData, ...parsed.form };
+      }
+    } catch { /* ignore */ }
+    return {
+      ...initialFormData,
+      servicesInterestedIn: preselectedService ? [preselectedService] : [],
+      email: prefillEmail || '',
+      contactName: prefillName || '',
+    };
+  });
   const [submitting, setSubmitting] = useState(false);
   const [errors, setErrors] = useState<Record<string, string>>({});
+  const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [showDraftBanner, setShowDraftBanner] = useState(() => {
+    if (initialDraft) return false;
+    try {
+      return !!localStorage.getItem(DRAFT_STORAGE_KEY);
+    } catch { return false; }
+  });
+
+  // Restore step from localStorage draft if no initialDraft
+  useEffect(() => {
+    if (!initialDraft) {
+      try {
+        const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
+        if (saved) {
+          const parsed = JSON.parse(saved);
+          if (parsed.step) setStep(parsed.step);
+        }
+      } catch { /* ignore */ }
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Auto-save to localStorage on every form/step change (debounced 1s)
+  const saveDraft = useCallback(() => {
+    try {
+      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ form, step, savedAt: new Date().toISOString() }));
+      setDraftSavedAt(new Date().toLocaleTimeString('sq-AL', { hour: '2-digit', minute: '2-digit' }));
+    } catch { /* ignore */ }
+    if (onDraftSave) {
+      onDraftSave(form, step);
+    }
+  }, [form, step, onDraftSave]);
+
+  useEffect(() => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(saveDraft, 1000);
+    return () => { if (draftTimerRef.current) clearTimeout(draftTimerRef.current); };
+  }, [saveDraft]);
+
+  // Clear draft on successful submit
+  const clearDraft = useCallback(() => {
+    try { localStorage.removeItem(DRAFT_STORAGE_KEY); } catch { /* ignore */ }
+  }, []);
 
   // Custom industries
   const { data: customIndustries } = useCollection<any>('customIndustries', {
@@ -346,6 +441,15 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
         if (!form.seo_hasWebsite) e.seo_hasWebsite = 'E detyrueshme';
         if (!form.seo_targetMarket) e.seo_targetMarket = 'E detyrueshme';
       }
+      if (form.servicesInterestedIn.includes('E-commerce')) {
+        if (!form.ecom_platform) e.ecom_platform = 'E detyrueshme';
+        if (!form.ecom_productsCount) e.ecom_productsCount = 'E detyrueshme';
+        if (form.ecom_paymentMethods.length === 0) e.ecom_paymentMethods = 'Zgjidhni të paktën një metodë';
+      }
+      if (form.servicesInterestedIn.includes('Coaching')) {
+        if (!form.coach_niche.trim()) e.coach_niche = 'E detyrueshme';
+        if (form.coach_deliveryMethod.length === 0) e.coach_deliveryMethod = 'Zgjidhni të paktën një metodë';
+      }
     } else if (actual === 4) {
       if (!form.budgetRange) e.budgetRange = 'E detyrueshme';
       if (!form.timeline) e.timeline = 'E detyrueshme';
@@ -367,6 +471,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
     setSubmitting(true);
     try {
       await onSubmit(form);
+      clearDraft();
     } finally {
       setSubmitting(false);
     }
@@ -548,6 +653,8 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
     const showBranding = form.servicesInterestedIn.includes('Branding');
     const showContent = form.servicesInterestedIn.includes('Content Creation');
     const showSEO = form.servicesInterestedIn.includes('SEO');
+    const showEcommerce = form.servicesInterestedIn.includes('E-commerce');
+    const showCoaching = form.servicesInterestedIn.includes('Coaching');
 
     return (
       <div className="space-y-6">
@@ -1063,6 +1170,247 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
             </div>
           </Card>
         )}
+
+        {/* ─── E-commerce ─── */}
+        {showEcommerce && (
+          <Card className="p-4 space-y-4 border-amber-200 bg-amber-50/30 dark:bg-amber-950/10 dark:border-amber-800/40">
+            <div className="flex items-center gap-2">
+              <ShoppingCart className="w-5 h-5 text-amber-600" />
+              <h3 className="font-semibold text-sm">E-commerce</h3>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Platforma e preferuar *</Label>
+                <Select value={form.ecom_platform} onValueChange={v => set('ecom_platform', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Shopify">Shopify</SelectItem>
+                    <SelectItem value="WooCommerce">WooCommerce</SelectItem>
+                    <SelectItem value="Custom">Custom (i ndërtuar nga zero)</SelectItem>
+                    <SelectItem value="Wix">Wix</SelectItem>
+                    <SelectItem value="Nuk e di">Nuk e di, këshillomëni</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FieldError field="ecom_platform" />
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Sa produkte keni? *</Label>
+                <Select value={form.ecom_productsCount} onValueChange={v => set('ecom_productsCount', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1-10">1–10</SelectItem>
+                    <SelectItem value="11-50">11–50</SelectItem>
+                    <SelectItem value="51-200">51–200</SelectItem>
+                    <SelectItem value="200+">200+</SelectItem>
+                  </SelectContent>
+                </Select>
+                <FieldError field="ecom_productsCount" />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Keni nevojë për menaxhim inventari?</Label>
+                <Select value={form.ecom_hasInventory} onValueChange={v => set('ecom_hasInventory', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po">Po</SelectItem>
+                    <SelectItem value="Jo">Jo</SelectItem>
+                    <SelectItem value="Nuk e di">Nuk e di</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Nevojat e transportit</Label>
+                <Select value={form.ecom_shippingNeeds} onValueChange={v => set('ecom_shippingNeeds', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Lokal">Vetëm lokal</SelectItem>
+                    <SelectItem value="Kombëtar">Kombëtar</SelectItem>
+                    <SelectItem value="Ndërkombëtar">Ndërkombëtar</SelectItem>
+                    <SelectItem value="Dixhital">Produkte dixhitale (pa transport)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium mb-2 block">Metodat e pagesës *</Label>
+              <MultiSelectChips
+                options={[
+                  { value: 'Kartë krediti', label: 'Kartë krediti' },
+                  { value: 'PayPal', label: 'PayPal' },
+                  { value: 'Transfertë bankare', label: 'Transfertë bankare' },
+                  { value: 'Cash on delivery', label: 'Cash on delivery' },
+                  { value: 'Stripe', label: 'Stripe' },
+                ]}
+                selected={form.ecom_paymentMethods}
+                onChange={v => set('ecom_paymentMethods', v)}
+                columns={3}
+              />
+              <FieldError field="ecom_paymentMethods" />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Keni foto produktesh?</Label>
+                <Select value={form.ecom_hasProductPhotos} onValueChange={v => set('ecom_hasProductPhotos', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po, profesionale">Po, profesionale</SelectItem>
+                    <SelectItem value="Po, amatore">Po, por amatore</SelectItem>
+                    <SelectItem value="Jo">Jo</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Keni dyqan ekzistues online?</Label>
+                <Input value={form.ecom_existingShopLink} onChange={e => set('ecom_existingShopLink', e.target.value)} placeholder="https://..." className="mt-1" />
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium">Kategoritë e produkteve</Label>
+              <Textarea value={form.ecom_productCategories} onChange={e => set('ecom_productCategories', e.target.value)} placeholder="p.sh. Veshje, Aksesorë, Elektronikë..." className="mt-1 min-h-[60px]" />
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium mb-2 block">Funksionalitete të nevojshme</Label>
+              <MultiSelectChips
+                options={[
+                  { value: 'Filtrim produktesh', label: 'Filtrim produktesh' },
+                  { value: 'Wishlist', label: 'Wishlist' },
+                  { value: 'Kupon / Zbritje', label: 'Kupon / Zbritje' },
+                  { value: 'Vlerësime klientësh', label: 'Vlerësime klientësh' },
+                  { value: 'Chat live', label: 'Chat live' },
+                  { value: 'Multi-currency', label: 'Multi-currency' },
+                  { value: 'Abonime / Subscription', label: 'Abonime / Subscription' },
+                  { value: 'Integrim social media', label: 'Integrim social media' },
+                ]}
+                selected={form.ecom_features}
+                onChange={v => set('ecom_features', v)}
+                columns={2}
+              />
+            </div>
+          </Card>
+        )}
+
+        {/* ─── Coaching ─── */}
+        {showCoaching && (
+          <Card className="p-4 space-y-4 border-rose-200 bg-rose-50/30 dark:bg-rose-950/10 dark:border-rose-800/40">
+            <div className="flex items-center gap-2">
+              <Heart className="w-5 h-5 text-rose-600" />
+              <h3 className="font-semibold text-sm">Coaching</h3>
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium">Nisha / Fusha e coaching-ut *</Label>
+              <Input value={form.coach_niche} onChange={e => set('coach_niche', e.target.value)} placeholder="p.sh. Life coaching, Business coaching, Fitness..." className="mt-1" />
+              <FieldError field="coach_niche" />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Audienca e synuar</Label>
+                <Input value={form.coach_targetAudience} onChange={e => set('coach_targetAudience', e.target.value)} placeholder="p.sh. Profesionistë 25-40 vjeç" className="mt-1" />
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Prezencë aktuale në social media</Label>
+                <Select value={form.coach_socialPresence} onValueChange={v => set('coach_socialPresence', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="E fortë">E fortë</SelectItem>
+                    <SelectItem value="Mesatare">Mesatare</SelectItem>
+                    <SelectItem value="Fillestare">Fillestare</SelectItem>
+                    <SelectItem value="Asnjë">Asnjë</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium mb-2 block">Si e ofroni shërbimin? *</Label>
+              <MultiSelectChips
+                options={[
+                  { value: '1-on-1 online', label: '1-on-1 Online' },
+                  { value: '1-on-1 fizik', label: '1-on-1 Fizik' },
+                  { value: 'Grup online', label: 'Grup Online' },
+                  { value: 'Kurse te regjistruara', label: 'Kurse të regjistruara' },
+                  { value: 'Workshop', label: 'Workshop' },
+                  { value: 'Hibrid', label: 'Hibrid' },
+                ]}
+                selected={form.coach_deliveryMethod}
+                onChange={v => set('coach_deliveryMethod', v)}
+                columns={3}
+              />
+              <FieldError field="coach_deliveryMethod" />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Keni program të strukturuar?</Label>
+                <Select value={form.coach_hasProgram} onValueChange={v => set('coach_hasProgram', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po">Po</SelectItem>
+                    <SelectItem value="Jo, dua ta krijoj">Jo, dua ta krijoj</SelectItem>
+                    <SelectItem value="Pjesërisht">Pjesërisht</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Keni nevojë për sistem booking?</Label>
+                <Select value={form.coach_needsBooking} onValueChange={v => set('coach_needsBooking', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po">Po</SelectItem>
+                    <SelectItem value="Jo">Jo</SelectItem>
+                    <SelectItem value="E kam">E kam tashmë</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {form.coach_hasProgram !== 'Jo, dua ta krijoj' && form.coach_hasProgram && (
+              <div>
+                <Label className="text-sm font-medium">Përshkruani programin tuaj</Label>
+                <Textarea value={form.coach_programDescription} onChange={e => set('coach_programDescription', e.target.value)} placeholder="Përshkruani modulet, kohëzgjatjen, rezultatet e pritura..." className="mt-1 min-h-[70px]" />
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Keni nevojë për sistem pagesash online?</Label>
+                <Select value={form.coach_needsPayment} onValueChange={v => set('coach_needsPayment', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po">Po</SelectItem>
+                    <SelectItem value="Jo">Jo</SelectItem>
+                    <SelectItem value="E kam">E kam tashmë</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium mb-2 block">Nevojat për përmbajtje</Label>
+              <MultiSelectChips
+                options={[
+                  { value: 'Website personal', label: 'Website personal' },
+                  { value: 'Landing page', label: 'Landing page' },
+                  { value: 'Social media content', label: 'Social media content' },
+                  { value: 'Email marketing', label: 'Email marketing' },
+                  { value: 'Video promo', label: 'Video promo' },
+                  { value: 'Lead magnet / Freebie', label: 'Lead magnet / Freebie' },
+                ]}
+                selected={form.coach_contentNeeds}
+                onChange={v => set('coach_contentNeeds', v)}
+                columns={2}
+              />
+            </div>
+          </Card>
+        )}
       </div>
     );
   };
@@ -1205,6 +1553,25 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
 
   return (
     <div className="space-y-6">
+      {/* Draft resume banner */}
+      {showDraftBanner && !initialDraft && (
+        <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/40 rounded-lg p-4 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-2">
+            <Clock className="w-5 h-5 text-amber-600" />
+            <span className="text-sm font-medium">Keni një draft të ruajtur. Dëshironi ta vazhdoni?</span>
+          </div>
+          <div className="flex gap-2">
+            <Button size="sm" variant="outline" onClick={() => {
+              localStorage.removeItem(DRAFT_STORAGE_KEY);
+              setForm({ ...initialFormData, servicesInterestedIn: preselectedService ? [preselectedService] : [], email: prefillEmail || '', contactName: prefillName || '' });
+              setStep(1);
+              setShowDraftBanner(false);
+            }}>Fillo Rishtazi</Button>
+            <Button size="sm" onClick={() => setShowDraftBanner(false)}>Vazhdo Draft-in</Button>
+          </div>
+        </div>
+      )}
+
       {/* Header text */}
       <div className="bg-muted/30 rounded-lg p-4 border">
         <p className="text-sm text-muted-foreground leading-relaxed">
@@ -1269,22 +1636,31 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
           Para
         </Button>
 
-        {step < totalSteps ? (
-          <Button type="button" onClick={next} className="gap-1">
-            Vazhdo
-            <ChevronRight className="w-4 h-4" />
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            onClick={handleSubmit}
-            disabled={submitting}
-            className="gap-1 bg-success hover:bg-success/90 text-white"
-          >
-            {submitting ? 'Duke dërguar...' : 'Dërgo Formularin'}
-            <Send className="w-4 h-4" />
-          </Button>
-        )}
+        <div className="flex items-center gap-3">
+          {draftSavedAt && (
+            <span className="text-xs text-muted-foreground flex items-center gap-1">
+              <Save className="w-3 h-3" />
+              Ruajtur {draftSavedAt}
+            </span>
+          )}
+
+          {step < totalSteps ? (
+            <Button type="button" onClick={next} className="gap-1">
+              Vazhdo
+              <ChevronRight className="w-4 h-4" />
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              onClick={handleSubmit}
+              disabled={submitting}
+              className="gap-1 bg-success hover:bg-success/90 text-white"
+            >
+              {submitting ? 'Duke dërguar...' : isEditing ? 'Përditëso Kërkesën' : 'Dërgo Formularin'}
+              <Send className="w-4 h-4" />
+            </Button>
+          )}
+        </div>
       </div>
     </div>
   );

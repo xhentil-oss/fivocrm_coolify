@@ -246,6 +246,7 @@ export interface ServiceInquiry {
   smm_hasContent?: string;
   smm_postingFrequency?: string;
   smm_toneOfCommunication?: string;
+  smm_contentTypes?: string[];
   // 5. Service-specific: Web Design
   web_hasExistingWebsite?: string;
   web_existingWebsiteLink?: string;
@@ -253,16 +254,61 @@ export interface ServiceInquiry {
   web_estimatedPages?: string;
   web_hasTextsAndPhotos?: string;
   web_websitesYouLike?: string;
+  web_features?: string[];
   // 5. Service-specific: Paid Ads
   ads_platforms?: string[];
   ads_mainConversionAction?: string;
   ads_monthlyBudget?: string;
   ads_hasRunAdsBefore?: string;
   ads_pastResults?: string;
+  ads_hasLandingPage?: string;
+  // 5. Service-specific: Branding
+  brand_hasExistingLogo?: string;
+  brand_whatYouNeed?: string[];
+  brand_coreValues?: string;
+  brand_targetAudience?: string;
+  brand_competitors?: string;
+  brand_preferredStyle?: string;
+  // 5. Service-specific: Content Creation
+  content_types?: string[];
+  content_platforms?: string[];
+  content_frequency?: string;
+  content_hasModels?: string;
+  content_visualStyle?: string;
+  // 5. Service-specific: SEO
+  seo_hasWebsite?: string;
+  seo_websitePlatform?: string;
+  seo_targetKeywords?: string;
+  seo_targetMarket?: string;
+  seo_hasDoneSEO?: string;
+  seo_competitors?: string;
+  // 5. Service-specific: E-commerce
+  ecom_platform?: string;
+  ecom_productsCount?: string;
+  ecom_hasInventory?: string;
+  ecom_paymentMethods?: string[];
+  ecom_shippingNeeds?: string;
+  ecom_hasProductPhotos?: string;
+  ecom_productCategories?: string;
+  ecom_existingShopLink?: string;
+  ecom_features?: string[];
+  // 5. Service-specific: Coaching
+  coach_niche?: string;
+  coach_targetAudience?: string;
+  coach_deliveryMethod?: string[];
+  coach_hasProgram?: string;
+  coach_programDescription?: string;
+  coach_needsBooking?: string;
+  coach_needsPayment?: string;
+  coach_contentNeeds?: string[];
+  coach_socialPresence?: string;
   // Meta
-  status: 'New' | 'Reviewed' | 'Converted';
+  status: 'Draft' | 'New' | 'Reviewed' | 'Converted';
+  isDraft?: boolean;
+  lastSavedStep?: number;
   leadId?: string;
   customerId?: string;
+  clientUserId?: string;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
