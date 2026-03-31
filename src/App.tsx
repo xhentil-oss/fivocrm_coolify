@@ -17,27 +17,44 @@ import { useTeamDataMigration } from './hooks/useTeamDataMigration';
 import { Toaster } from './components/ui/toaster';
 import { Loader2 } from 'lucide-react';
 
+// Auto-reload on chunk load failure (stale deployment cache)
+function lazyRetry(factory: () => Promise<any>): React.LazyExoticComponent<any> {
+  return React.lazy(() =>
+    factory().catch((err: any) => {
+      // Only reload once to avoid infinite loops
+      const key = 'chunk_reload';
+      if (!sessionStorage.getItem(key)) {
+        sessionStorage.setItem(key, '1');
+        window.location.reload();
+        return { default: () => null };
+      }
+      sessionStorage.removeItem(key);
+      throw err;
+    })
+  );
+}
+
 // Lazy-loaded views — each becomes a separate chunk
-const ProjectsView = React.lazy(() => import('./views/ProjectsView'));
-const ProjectDetailView = React.lazy(() => import('./views/ProjectDetailView'));
-const CRMView = React.lazy(() => import('./views/CRMView'));
-const TasksView = React.lazy(() => import('./views/TasksView'));
-const GoalsView = React.lazy(() => import('./views/GoalsView'));
-const TeamsView = React.lazy(() => import('./views/TeamsView'));
-const InvoicesView = React.lazy(() => import('./views/InvoicesView'));
-const ChatView = React.lazy(() => import('./views/ChatView'));
-const ReportsView = React.lazy(() => import('./views/ReportsView'));
-const BonusView = React.lazy(() => import('./views/BonusView'));
-const UserProfileView = React.lazy(() => import('./views/UserProfileView'));
-const SettingsView = React.lazy(() => import('./views/SettingsView'));
-const CustomersView = React.lazy(() => import('./views/CustomersView'));
-const ServicesView = React.lazy(() => import('./views/ServicesView'));
-const ServiceInquiriesView = React.lazy(() => import('./views/ServiceInquiriesView'));
-const ExpensesView = React.lazy(() => import('./views/ExpensesView'));
-const TimeTrackingView = React.lazy(() => import('./views/TimeTrackingView'));
-const WorkspaceView = React.lazy(() => import('./views/WorkspaceView'));
-const StaffDashboard = React.lazy(() => import('./views/StaffDashboard'));
-const JoinInviteView = React.lazy(() => import('./views/JoinInviteView'));
+const ProjectsView = lazyRetry(() => import('./views/ProjectsView'));
+const ProjectDetailView = lazyRetry(() => import('./views/ProjectDetailView'));
+const CRMView = lazyRetry(() => import('./views/CRMView'));
+const TasksView = lazyRetry(() => import('./views/TasksView'));
+const GoalsView = lazyRetry(() => import('./views/GoalsView'));
+const TeamsView = lazyRetry(() => import('./views/TeamsView'));
+const InvoicesView = lazyRetry(() => import('./views/InvoicesView'));
+const ChatView = lazyRetry(() => import('./views/ChatView'));
+const ReportsView = lazyRetry(() => import('./views/ReportsView'));
+const BonusView = lazyRetry(() => import('./views/BonusView'));
+const UserProfileView = lazyRetry(() => import('./views/UserProfileView'));
+const SettingsView = lazyRetry(() => import('./views/SettingsView'));
+const CustomersView = lazyRetry(() => import('./views/CustomersView'));
+const ServicesView = lazyRetry(() => import('./views/ServicesView'));
+const ServiceInquiriesView = lazyRetry(() => import('./views/ServiceInquiriesView'));
+const ExpensesView = lazyRetry(() => import('./views/ExpensesView'));
+const TimeTrackingView = lazyRetry(() => import('./views/TimeTrackingView'));
+const WorkspaceView = lazyRetry(() => import('./views/WorkspaceView'));
+const StaffDashboard = lazyRetry(() => import('./views/StaffDashboard'));
+const JoinInviteView = lazyRetry(() => import('./views/JoinInviteView'));
 const Customer360View = React.lazy(() => import('./views/Customer360View'));
 const PortalLayout = React.lazy(() => import('./views/portal/PortalLayout'));
 const PortalDashboard = React.lazy(() => import('./views/portal/PortalDashboard'));
