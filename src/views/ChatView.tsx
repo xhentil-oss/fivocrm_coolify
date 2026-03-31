@@ -172,7 +172,15 @@ const ChatView: React.FC = () => {
     return map;
   }, [allMessages, user]);
 
-  const otherMembers = useMemo(() => teamMembers?.filter(m => m.userId !== user?.uid) || [], [teamMembers, user?.uid]);
+  const otherMembers = useMemo(() => {
+    if (!teamMembers) return [];
+    const seen = new Set<string>();
+    return teamMembers.filter(m => {
+      if (m.userId === user?.uid || seen.has(m.userId)) return false;
+      seen.add(m.userId);
+      return true;
+    });
+  }, [teamMembers, user?.uid]);
 
   const messageMutation = useMutation<ChatMessage>('messages');
   const notificationMutation = useMutation<any>('notifications');
