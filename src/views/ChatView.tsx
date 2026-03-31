@@ -19,12 +19,12 @@ type ChatMode = 'channel' | 'direct' | 'ai';
 
 // AI Quick Actions
 const AI_QUICK_ACTIONS = [
-  { id: 'email', label: 'Shkruaj Email', prompt: 'Shkruaj nj\u00eb email profesional p\u00ebr: ', icon: '\u2709\ufe0f' },
-  { id: 'social', label: 'Post Social Media', prompt: 'Shkruaj nj\u00eb post p\u00ebr Instagram/Facebook p\u00ebr: ', icon: '\ud83d\udcf1' },
-  { id: 'proposal', label: 'Propozim', prompt: 'Gjenero nj\u00eb propozim biznesi p\u00ebr: ', icon: '\ud83d\udcc4' },
-  { id: 'tasks', label: 'Planifiko Detyra', prompt: 'Ndihmom\u00eb t\u00eb planifikoj detyrat p\u00ebr: ', icon: '\ud83d\udccb' },
-  { id: 'reply', label: 'P\u00ebrgjigje Klientit', prompt: 'Shkruaj nj\u00eb p\u00ebrgjigje profesionale p\u00ebr klientin i cili: ', icon: '\ud83d\udcac' },
-  { id: 'pricing', label: '\u00c7mim & Ofert\u00eb', prompt: 'Ndihmom\u00eb t\u00eb krijoj nj\u00eb ofert\u00eb \u00e7mimi p\u00ebr: ', icon: '\ud83d\udcb0' },
+  { id: 'email', label: 'Shkruaj Email', prompt: 'Shkruaj një email profesional për: ', icon: '✉️' },
+  { id: 'social', label: 'Post Social Media', prompt: 'Shkruaj një post për Instagram/Facebook për: ', icon: '📱' },
+  { id: 'proposal', label: 'Propozim', prompt: 'Gjenero një propozim biznesi për: ', icon: '📄' },
+  { id: 'tasks', label: 'Planifiko Detyra', prompt: 'Ndihmomë të planifikoj detyrat për: ', icon: '📋' },
+  { id: 'reply', label: 'Përgjigje Klientit', prompt: 'Shkruaj një përgjigje profesionale për klientin i cili: ', icon: '💬' },
+  { id: 'pricing', label: 'Çmim & Ofertë', prompt: 'Ndihmomë të krijoj një ofertë çmimi për: ', icon: '💰' },
 ];
 
 interface AIMessage {
@@ -37,12 +37,12 @@ interface AIMessage {
 
 // Channels
 const CHANNELS = [
-  { id: 'general' as const, name: 'P\u00ebrgjithshme', icon: Hash, description: 'Diskutime t\u00eb p\u00ebrgjithshme' },
-  { id: 'team' as const, name: 'Ekipi', icon: Users, description: 'Bashk\u00ebpunimi i ekipit' },
-  { id: 'support' as const, name: 'Mb\u00ebshtetja', icon: MessageSquare, description: 'Mb\u00ebshtetje klienti' },
+  { id: 'general' as const, name: 'Përgjithshme', icon: Hash, description: 'Diskutime të përgjithshme' },
+  { id: 'team' as const, name: 'Ekipi', icon: Users, description: 'Bashkëpunimi i ekipit' },
+  { id: 'support' as const, name: 'Mbështetja', icon: MessageSquare, description: 'Mbështetje klienti' },
 ] as const;
 
-const EMOJI_REACTIONS = ['\ud83d\udc4d', '\u2764\ufe0f', '\ud83d\ude02', '\ud83d\ude2e', '\ud83d\ude22', '\ud83d\udd25'];
+const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
 const ACTIVE_MEMBERS_QUERY = {
   where: [{ field: 'status', operator: '==', value: 'Active' }],
@@ -278,7 +278,7 @@ const ChatView: React.FC = () => {
     try {
       const isClientChannel = activeChannel.startsWith('client-');
       const baseMessage: Partial<ChatMessage> = {
-        content: messageText || '\ud83d\udcce Attachment',
+        content: messageText || '📎 Attachment',
         senderId: user.uid,
         isRead: false,
         attachmentUrl: attachmentUrl.trim() || undefined,
@@ -305,7 +305,7 @@ const ChatView: React.FC = () => {
               const title = projectName
                 ? `Mesazh i ri nga stafi - ${projectName}`
                 : `Mesazh i ri nga stafi - ${customer?.name || 'Biseda'}`;
-              try { await notificationMutation.create({ userId: (pa as any).userId || custId, type: 'staff_message', title, message: (messageText || '\ud83d\udcce Attachment').slice(0, 100), isRead: false, linkTo: activeChannel } as any); } catch { /* skip */ }
+              try { await notificationMutation.create({ userId: (pa as any).userId || custId, type: 'staff_message', title, message: (messageText || '📎 Attachment').slice(0, 100), isRead: false, linkTo: activeChannel } as any); } catch { /* skip */ }
             }
           }
         }
@@ -321,7 +321,7 @@ const ChatView: React.FC = () => {
       const ex = typingIndicators?.find((t: any) => t.userId === user.uid && t.channelId === channelOrDm);
       if (ex) typingMutation.remove(ex.id).catch(() => {});
     } catch (err) {
-      toast({ title: 'D\u00ebrgimi d\u00ebshtoi', description: err instanceof Error ? err.message : 'Gabim', variant: 'destructive' });
+      toast({ title: 'Dërgimi dështoi', description: err instanceof Error ? err.message : 'Gabim', variant: 'destructive' });
     }
   };
 
@@ -385,7 +385,7 @@ const ChatView: React.FC = () => {
       setAiMessages(prev => prev.map(m => m.id === loadingMsg.id ? { ...m, content: data.reply, isLoading: false } : m));
     } catch (err: any) {
       setAiMessages(prev => prev.map(m =>
-        m.id === loadingMsg.id ? { ...m, content: `\u26a0\ufe0f ${err.message || 'Gabim i papritur'}`, isLoading: false } : m
+        m.id === loadingMsg.id ? { ...m, content: `⚠️ ${err.message || 'Gabim i papritur'}`, isLoading: false } : m
       ));
     } finally {
       setAiLoading(false);
@@ -399,7 +399,7 @@ const ChatView: React.FC = () => {
 
   const copyToClipboard = (text: string) => {
     navigator.clipboard.writeText(text);
-    toast({ title: 'Kopjuar!', description: 'Teksti u kopjua n\u00eb clipboard.' });
+    toast({ title: 'Kopjuar!', description: 'Teksti u kopjua në clipboard.' });
   };
 
   const resetAiChat = () => {
@@ -462,7 +462,7 @@ const ChatView: React.FC = () => {
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center space-y-3">
           <div className="w-10 h-10 border-4 border-primary/30 border-t-primary rounded-full animate-spin mx-auto" />
-          <p className="text-muted-foreground text-sm">Duke ngarkuar bised\u00ebn...</p>
+          <p className="text-muted-foreground text-sm">Duke ngarkuar bisedën...</p>
         </div>
       </div>
     );
@@ -551,13 +551,13 @@ const ChatView: React.FC = () => {
           {portalAccess && portalAccess.length > 0 && (
             <>
               <div className="h-px bg-border/50 mx-2 my-2" />
-              <p className="px-2 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Klient\u00ebt</p>
+              <p className="px-2 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Klientët</p>
               <div className="relative px-1 mb-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
                 <Input
                   value={clientSearch}
                   onChange={e => setClientSearch(e.target.value)}
-                  placeholder="K\u00ebrko klient..."
+                  placeholder="Kërko klient..."
                   className="h-7 pl-7 pr-6 text-xs rounded-lg bg-muted/40 border-0 focus-visible:ring-1"
                 />
                 {clientSearch && (
@@ -657,7 +657,7 @@ const ChatView: React.FC = () => {
           {/* Members not in conversation */}
           {otherMembers.filter(m => !directConversations.includes(m.userId)).length > 0 && (
             <>
-              <p className="px-2 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">An\u00ebtar\u00eb</p>
+              <p className="px-2 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Anëtarë</p>
               {otherMembers.filter(m => !directConversations.includes(m.userId)).map(member => {
                 const name = getUserDisplayName(member.userId);
                 const isActive = chatMode === 'direct' && activeDirectUserId === member.userId;
@@ -712,7 +712,7 @@ const ChatView: React.FC = () => {
                     <p className="font-semibold text-sm truncate">
                       {(() => {
                         const match = activeChannel.match(/^client-(.+?)-project-(.+)$/);
-                        if (match) { const c = customers?.find(cu => cu.id === match[1]); const p = projects?.find(pr => pr.id === match[2]); return `${c?.name || 'Klient'} \u2014 ${p?.name || 'Projekt'}`; }
+                        if (match) { const c = customers?.find(cu => cu.id === match[1]); const p = projects?.find(pr => pr.id === match[2]); return `${c?.name || 'Klient'} — ${p?.name || 'Projekt'}`; }
                         const custId = activeChannel.replace('client-', '');
                         return customers?.find(c => c.id === custId)?.name || 'Klient';
                       })()}
@@ -744,13 +744,13 @@ const ChatView: React.FC = () => {
                   </div>
                   <div><p className="font-semibold text-sm">{getUserDisplayName(activeDirectUserId)}</p><p className="text-[11px] text-emerald-600">Aktiv</p></div>
                 </>
-              ) : <p className="text-sm text-muted-foreground">Zgjidh nj\u00eb person</p>}
+              ) : <p className="text-sm text-muted-foreground">Zgjidh një person</p>}
             </div>
           )}
 
           <div className="flex items-center gap-1">
             {chatMode === 'ai' && aiMessages.length > 0 && (
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={resetAiChat} title="Bised\u00eb e re">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={resetAiChat} title="Bisedë e re">
                 <RefreshCw className="h-4 w-4" />
               </Button>
             )}
@@ -766,7 +766,7 @@ const ChatView: React.FC = () => {
         {showSearch && chatMode !== 'ai' && (
           <div className="flex items-center gap-2 px-5 py-2 border-b bg-muted/20">
             <Search className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-            <Input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="K\u00ebrko n\u00eb mesazhe..." className="h-7 text-sm border-0 bg-transparent focus-visible:ring-0 shadow-none" autoFocus />
+            <Input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Kërko në mesazhe..." className="h-7 text-sm border-0 bg-transparent focus-visible:ring-0 shadow-none" autoFocus />
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setShowSearch(false); setSearchQuery(''); }}><X className="h-3.5 w-3.5" /></Button>
           </div>
         )}
@@ -784,7 +784,7 @@ const ChatView: React.FC = () => {
                     </div>
                     <h2 className="text-xl font-bold mb-2">Si mund t'ju ndihmoj?</h2>
                     <p className="text-sm text-muted-foreground mb-8 text-center max-w-md">
-                      Jam FivoAI \u2014 asistenti juaj personal. Mund t\u00eb shkruaj emaile, postime, propozime, t\u00eb ndihmoj me planifikimin e detyrave dhe shum\u00eb m\u00eb tep\u00ebr.
+                      Jam FivoAI — asistenti juaj personal. Mund të shkruaj emaile, postime, propozime, të ndihmoj me planifikimin e detyrave dhe shumë më tepër.
                     </p>
                     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 w-full max-w-lg">
                       {AI_QUICK_ACTIONS.map(action => (
@@ -852,7 +852,7 @@ const ChatView: React.FC = () => {
                   onKeyDown={e => {
                     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendAiMessage(messageText); }
                   }}
-                  placeholder="Pyetni FivoAI \u00e7do gj\u00eb..."
+                  placeholder="Pyetni FivoAI çdo gjë..."
                   disabled={aiLoading}
                   rows={1}
                   className="flex-1 min-w-0 bg-transparent border-0 outline-none text-sm resize-none py-1.5 placeholder:text-muted-foreground/50 max-h-[120px]"
@@ -868,7 +868,7 @@ const ChatView: React.FC = () => {
                   {aiLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}
                 </Button>
               </div>
-              <p className="text-[10px] text-muted-foreground/50 text-center mt-1.5">FivoAI mund t\u00eb b\u00ebj\u00eb gabime. Verificoni informacionin e r\u00ebnd\u00ebsish\u00ebm.</p>
+              <p className="text-[10px] text-muted-foreground/50 text-center mt-1.5">FivoAI mund të bëjë gabime. Verificoni informacionin e rëndësishëm.</p>
             </div>
           </>
         ) : (
@@ -1017,7 +1017,7 @@ const ChatView: React.FC = () => {
                               {/* Time */}
                               <span className={`text-[10px] text-muted-foreground/40 mt-1 px-1 flex items-center gap-1 ${isOwn ? 'flex-row-reverse' : ''}`}>
                                 {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                {(message as any).editedAt && <span className="opacity-60"> \u00b7 ndryshuar</span>}
+                                {(message as any).editedAt && <span className="opacity-60"> · ndryshuar</span>}
                                 {isOwn && <Check className="h-2.5 w-2.5 opacity-50" />}
                               </span>
                             </div>
@@ -1032,9 +1032,9 @@ const ChatView: React.FC = () => {
                       <MessageSquare className="h-6 w-6 opacity-30" />
                     </div>
                     <p className="text-sm font-medium text-foreground/50">
-                      {searchQuery ? 'Nuk u gjet asnj\u00eb mesazh' : chatMode === 'direct' && !activeDirectUserId ? 'Zgjidh nj\u00eb person' : 'Fillo bised\u00ebn!'}
+                      {searchQuery ? 'Nuk u gjet asnjë mesazh' : chatMode === 'direct' && !activeDirectUserId ? 'Zgjidh një person' : 'Fillo bisedën!'}
                     </p>
-                    {!searchQuery && chatMode === 'channel' && <p className="text-xs text-muted-foreground/40 mt-1">Shkruaj mesazhin e par\u00eb</p>}
+                    {!searchQuery && chatMode === 'channel' && <p className="text-xs text-muted-foreground/40 mt-1">Shkruaj mesazhin e parë</p>}
                   </div>
                 )}
               </div>
@@ -1091,7 +1091,7 @@ const ChatView: React.FC = () => {
                     value={messageText}
                     onChange={handleTextareaInput}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e as any); } }}
-                    placeholder={`Shkruaj${chatMode === 'channel' ? ` n\u00eb #${CHANNELS.find(c => c.id === activeChannel)?.name || activeChannel}` : ` te ${getUserDisplayName(activeDirectUserId || '')}`}...`}
+                    placeholder={`Shkruaj${chatMode === 'channel' ? ` në #${CHANNELS.find(c => c.id === activeChannel)?.name || activeChannel}` : ` te ${getUserDisplayName(activeDirectUserId || '')}`}...`}
                     disabled={isSending}
                     rows={1}
                     className="flex-1 min-w-0 bg-transparent border-0 outline-none text-sm resize-none py-1.5 placeholder:text-muted-foreground/40 max-h-[120px]"
@@ -1110,7 +1110,7 @@ const ChatView: React.FC = () => {
                 </div>
               </form>
               <div className="flex items-center justify-between mt-1.5 px-1">
-                <p className="text-[10px] text-muted-foreground/30">Enter d\u00ebrgon \u00b7 Shift+Enter rresht i ri</p>
+                <p className="text-[10px] text-muted-foreground/30">Enter dërgon · Shift+Enter rresht i ri</p>
                 <button className="text-[10px] text-muted-foreground/30 hover:text-primary transition-colors flex items-center gap-1">
                   <Link2 className="h-2.5 w-2.5" /> Lidh me task
                 </button>
