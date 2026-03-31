@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useToast } from '../hooks/use-toast';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -72,6 +74,24 @@ const ServiceInquiriesView: React.FC = () => {
     if (convertingId) return;
     setConvertingId(inquiry.id);
     try {
+      // Check if a lead with the same email already exists
+      if (inquiry.email) {
+        const existingSnap = await getDocs(
+          query(collection(db, 'leads'), where('email', '==', inquiry.email))
+        );
+        if (!existingSnap.empty) {
+          // Link inquiry to existing lead instead of creating a duplicate
+          const existingLead = existingSnap.docs[0];
+          await inquiryMutation.update(inquiry.id, {
+            status: 'Converted',
+            leadId: existingLead.id,
+          });
+          setSelectedInquiry(prev => prev ? { ...prev, status: 'Converted', leadId: existingLead.id } : null);
+          toast({ title: 'Lead ekziston tashmë', description: `${inquiry.contactName} u lidh me lead-in ekzistues në CRM.` });
+          return;
+        }
+      }
+
       const score = [
         inquiry.contactName ? 10 : 0,
         inquiry.email ? 15 : 0,
