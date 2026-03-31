@@ -668,6 +668,11 @@ const MODULES: { key: string; label: string }[] = [
 ];
 
 const ROLE_DESCRIPTIONS: Record<string, { color: string; label: string; description: string }> = {
+  Sales: {
+    color: 'bg-teal-100 text-teal-800',
+    label: 'Shitje',
+    description: 'Ekipi i shitjes. Akses i plotë tek klientët, CRM dhe shërbimet.',
+  },
   Manager: {
     color: 'bg-blue-100 text-blue-800',
     label: 'Menaxher',
@@ -685,10 +690,16 @@ const ROLE_DESCRIPTIONS: Record<string, { color: string; label: string; descript
   },
 };
 
-type RoleKey = 'Manager' | 'Member' | 'Viewer';
+type RoleKey = 'Sales' | 'Manager' | 'Member' | 'Viewer';
 type TemplateMap = Record<string, boolean>;
 
 const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
+  Sales: {
+    canAccessProjects: false, canAccessTasks: false, canAccessGoals: false,
+    canAccessCRM: true, canAccessCustomers: true, canAccessInvoices: true,
+    canAccessServices: true, canAccessExpenses: false, canAccessReports: true,
+    canAccessTimeTracking: true, canAccessChat: true, canAccessSettings: false,
+  },
   Manager: {
     canAccessProjects: true, canAccessTasks: true, canAccessGoals: true,
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
@@ -720,7 +731,7 @@ const RoleTemplatesSection: React.FC = () => {
 
   // Local state: one TemplateMap per role
   const [templates, setTemplates] = useState<Record<RoleKey, TemplateMap>>({ ...DEFAULT_TEMPLATES });
-  const [applying, setApplying] = useState<Record<RoleKey, boolean>>({ Manager: false, Member: false, Viewer: false });
+  const [applying, setApplying] = useState<Record<RoleKey, boolean>>({ Sales: false, Manager: false, Member: false, Viewer: false });
   const [templateIds, setTemplateIds] = useState<Record<string, string>>({});
 
   // Hydrate from Firestore once loaded

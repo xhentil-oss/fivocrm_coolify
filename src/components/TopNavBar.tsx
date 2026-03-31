@@ -34,10 +34,11 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
   const { user, logout } = useAuth();
   const { isOwner, previewRole, setPreviewRole } = usePermissions();
 
-  const ROLES = ['Admin', 'Manager', 'Member', 'Viewer'] as const;
+  const ROLES = ['Admin', 'Sales', 'Manager', 'Member', 'Viewer'] as const;
 
   const roleLabelMap: Record<string, string> = {
     Admin: 'Admin',
+    Sales: 'Shitje',
     Manager: 'Menaxher',
     Member: 'Anëtar',
     Viewer: 'Shikues',

@@ -224,6 +224,37 @@ export function usePermissions(): UserPermissions {
       };
     }
 
+    // Sales role: access to customers, CRM, invoices, services within team
+    if (membership.role === 'Sales') {
+      return {
+        canAccessProjects: membership.canAccessProjects === true,
+        canAccessTasks: membership.canAccessTasks === true,
+        canAccessCRM: true,
+        canAccessInvoices: membership.canAccessInvoices === true,
+        canAccessReports: membership.canAccessReports === true,
+        canAccessSettings: false,
+        canAccessGoals: membership.canAccessGoals === true,
+        canAccessTeams: false,
+        canAccessChat: true,
+        canAccessCustomers: true,
+        canAccessServices: true,
+        canAccessExpenses: membership.canAccessExpenses === true,
+        canAccessProfile: true,
+        canAccessTimeTracking: membership.canAccessTasks === true,
+        canEdit: true,
+        canAssignTasks: false,
+        canManageMembers: false,
+        role: membership.role,
+        dataScope: 'team',
+        teamId: membership.teamId,
+        teamName: team?.name || null,
+        isAdmin: false,
+        isOwner: false,
+        isManager: false,
+        isLoading: false,
+      };
+    }
+
     // Manager role: full module access within team, can assign tasks/manage members
     if (memberIsManager) {
       return {

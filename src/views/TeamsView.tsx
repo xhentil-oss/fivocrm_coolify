@@ -834,6 +834,7 @@ const AddMemberForm: React.FC<{
                 Admin - Akses i plotë në gjithçka
               </div>
             </SelectItem>
+            <SelectItem value="Sales">Sales - Ekipi i shitjes (Klientë & CRM)</SelectItem>
             <SelectItem value="Manager">Manager - Menaxhon ekipin dhe projektet</SelectItem>
             <SelectItem value="Member">Member - Akses standard</SelectItem>
             <SelectItem value="Viewer">Viewer - Vetëm lexim</SelectItem>
@@ -916,6 +917,7 @@ const InviteMemberForm: React.FC<{
                 Admin - Akses i plotë në gjithçka
               </div>
             </SelectItem>
+            <SelectItem value="Sales">Sales - Ekipi i shitjes (Klientë & CRM)</SelectItem>
             <SelectItem value="Manager">Manager - Menaxhon ekipin dhe projektet</SelectItem>
             <SelectItem value="Member">Member - Akses standard</SelectItem>
             <SelectItem value="Viewer">Viewer - Vetëm lexim</SelectItem>
@@ -1065,6 +1067,7 @@ const EditMemberForm: React.FC<{
                   Admin
                 </div>
               </SelectItem>
+              <SelectItem value="Sales">Sales</SelectItem>
               <SelectItem value="Manager">Manager</SelectItem>
               <SelectItem value="Member">Member</SelectItem>
               <SelectItem value="Viewer">Viewer</SelectItem>

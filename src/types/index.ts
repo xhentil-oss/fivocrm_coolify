@@ -37,7 +37,7 @@ export interface TeamMember {
   userId: string;
   email?: string;
   displayName?: string;
-  role: 'Admin' | 'Manager' | 'Member' | 'Viewer';
+  role: 'Admin' | 'Sales' | 'Manager' | 'Member' | 'Viewer';
   status: 'Active' | 'Inactive';
   canAccessProjects?: boolean;
   canAccessTasks?: boolean;
