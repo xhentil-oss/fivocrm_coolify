@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
 import { BrowserRouter, HashRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { Capacitor } from '@capacitor/core';
 import { useAuth } from './contexts/AuthContext';
@@ -7,35 +7,6 @@ import TopNavBar from './components/TopNavBar';
 import Sidebar from './components/Sidebar';
 import LoginView from './views/LoginView';
 import RegisterView from './views/RegisterView';
-import ProjectsView from './views/ProjectsView';
-import ProjectDetailView from './views/ProjectDetailView';
-import CRMView from './views/CRMView';
-import TasksView from './views/TasksView';
-import GoalsView from './views/GoalsView';
-import TeamsView from './views/TeamsView';
-import InvoicesView from './views/InvoicesView';
-import ChatView from './views/ChatView';
-import ReportsView from './views/ReportsView';
-import BonusView from './views/BonusView';
-import UserProfileView from './views/UserProfileView';
-import SettingsView from './views/SettingsView';
-import CustomersView from './views/CustomersView';
-import ServicesView from './views/ServicesView';
-import ServiceInquiriesView from './views/ServiceInquiriesView';
-import ExpensesView from './views/ExpensesView';
-import TimeTrackingView from './views/TimeTrackingView';
-import WorkspaceView from './views/WorkspaceView';
-import StaffDashboard from './views/StaffDashboard';
-import JoinInviteView from './views/JoinInviteView';
-import Customer360View from './views/Customer360View';
-import PortalLayout from './views/portal/PortalLayout';
-import PortalDashboard from './views/portal/PortalDashboard';
-import PortalInvoicesView from './views/portal/PortalInvoicesView';
-import PortalServicesView from './views/portal/PortalServicesView';
-import PortalChatView from './views/portal/PortalChatView';
-import PortalRequestsView from './views/portal/PortalRequestsView';
-import PortalProjectsView from './views/portal/PortalProjectsView';
-import PortalProjectDetailView from './views/portal/PortalProjectDetailView';
 import FloatingActionButton from './components/FloatingActionButton';
 import CommandPalette from './components/CommandPalette';
 import PermissionGate from './components/PermissionGate';
@@ -45,6 +16,46 @@ import { PermissionsProvider, usePermissions } from './contexts/PermissionsConte
 import { useTeamDataMigration } from './hooks/useTeamDataMigration';
 import { Toaster } from './components/ui/toaster';
 import { Loader2 } from 'lucide-react';
+
+// Lazy-loaded views — each becomes a separate chunk
+const ProjectsView = React.lazy(() => import('./views/ProjectsView'));
+const ProjectDetailView = React.lazy(() => import('./views/ProjectDetailView'));
+const CRMView = React.lazy(() => import('./views/CRMView'));
+const TasksView = React.lazy(() => import('./views/TasksView'));
+const GoalsView = React.lazy(() => import('./views/GoalsView'));
+const TeamsView = React.lazy(() => import('./views/TeamsView'));
+const InvoicesView = React.lazy(() => import('./views/InvoicesView'));
+const ChatView = React.lazy(() => import('./views/ChatView'));
+const ReportsView = React.lazy(() => import('./views/ReportsView'));
+const BonusView = React.lazy(() => import('./views/BonusView'));
+const UserProfileView = React.lazy(() => import('./views/UserProfileView'));
+const SettingsView = React.lazy(() => import('./views/SettingsView'));
+const CustomersView = React.lazy(() => import('./views/CustomersView'));
+const ServicesView = React.lazy(() => import('./views/ServicesView'));
+const ServiceInquiriesView = React.lazy(() => import('./views/ServiceInquiriesView'));
+const ExpensesView = React.lazy(() => import('./views/ExpensesView'));
+const TimeTrackingView = React.lazy(() => import('./views/TimeTrackingView'));
+const WorkspaceView = React.lazy(() => import('./views/WorkspaceView'));
+const StaffDashboard = React.lazy(() => import('./views/StaffDashboard'));
+const JoinInviteView = React.lazy(() => import('./views/JoinInviteView'));
+const Customer360View = React.lazy(() => import('./views/Customer360View'));
+const PortalLayout = React.lazy(() => import('./views/portal/PortalLayout'));
+const PortalDashboard = React.lazy(() => import('./views/portal/PortalDashboard'));
+const PortalInvoicesView = React.lazy(() => import('./views/portal/PortalInvoicesView'));
+const PortalServicesView = React.lazy(() => import('./views/portal/PortalServicesView'));
+const PortalChatView = React.lazy(() => import('./views/portal/PortalChatView'));
+const PortalRequestsView = React.lazy(() => import('./views/portal/PortalRequestsView'));
+const PortalProjectsView = React.lazy(() => import('./views/portal/PortalProjectsView'));
+const PortalProjectDetailView = React.lazy(() => import('./views/portal/PortalProjectDetailView'));
+const OnboardingWizard = React.lazy(() => import('./components/OnboardingWizard'));
+
+function LazyFallback() {
+  return (
+    <div className="min-h-[40vh] flex items-center justify-center">
+      <Loader2 className="h-8 w-8 animate-spin text-primary" />
+    </div>
+  );
+}
 
 // Protected Route Component
 function ProtectedRoute({ children }: { children: React.ReactNode }) {
@@ -91,6 +102,9 @@ function AppContent() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { user } = useAuth();
   const { isOwner, previewRole } = usePermissions();
+  const [showOnboarding, setShowOnboarding] = useState(() => {
+    return !localStorage.getItem('fivocrm_onboarding_done');
+  });
 
   // One-time migration: stamp teamId on pre-isolation documents
   useTeamDataMigration();
@@ -115,19 +129,30 @@ function AppContent() {
       <Route path="/join/:token" element={<JoinInviteView />} />
 
       {/* Client Portal routes */}
-      <Route path="/portal" element={<PortalLayout />}>
-        <Route index element={<PortalDashboard />} />
-        <Route path="invoices" element={<PortalInvoicesView />} />
-        <Route path="services" element={<PortalServicesView />} />
-        <Route path="chat" element={<PortalChatView />} />
-        <Route path="requests" element={<PortalRequestsView />} />
-        <Route path="projects" element={<PortalProjectsView />} />
-        <Route path="projects/:projectId" element={<PortalProjectDetailView />} />
+      <Route path="/portal" element={<Suspense fallback={<LazyFallback />}><PortalLayout /></Suspense>}>
+        <Route index element={<Suspense fallback={<LazyFallback />}><PortalDashboard /></Suspense>} />
+        <Route path="invoices" element={<Suspense fallback={<LazyFallback />}><PortalInvoicesView /></Suspense>} />
+        <Route path="services" element={<Suspense fallback={<LazyFallback />}><PortalServicesView /></Suspense>} />
+        <Route path="chat" element={<Suspense fallback={<LazyFallback />}><PortalChatView /></Suspense>} />
+        <Route path="requests" element={<Suspense fallback={<LazyFallback />}><PortalRequestsView /></Suspense>} />
+        <Route path="projects" element={<Suspense fallback={<LazyFallback />}><PortalProjectsView /></Suspense>} />
+        <Route path="projects/:projectId" element={<Suspense fallback={<LazyFallback />}><PortalProjectDetailView /></Suspense>} />
       </Route>
       
       {/* Protected routes */}
       <Route path="/*" element={
         <ProtectedRoute>
+          {showOnboarding && user && (
+            <Suspense fallback={null}>
+              <OnboardingWizard
+                userName={user.displayName?.split(' ')[0]}
+                onComplete={() => {
+                  localStorage.setItem('fivocrm_onboarding_done', '1');
+                  setShowOnboarding(false);
+                }}
+              />
+            </Suspense>
+          )}
           <div className="min-h-screen bg-background text-foreground">
             <TopNavBar 
               onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
@@ -153,6 +178,7 @@ function AppContent() {
                 <div className="p-3 sm:p-6 lg:p-8">
                   <PendingInvitesBanner />
                   <ErrorBoundary>
+                    <Suspense fallback={<LazyFallback />}>
                     <Routes>
                       <Route path="/" element={<DefaultRedirect />} />
                       <Route path="/app/dashboard" element={<StaffDashboard />} />
@@ -185,6 +211,7 @@ function AppContent() {
                       </div>
                     } />
                     </Routes>
+                    </Suspense>
                   </ErrorBoundary>
                 </div>
               </main>

@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
+import { adminAuth } from './_firebaseAdmin';
 
 function escapeHtml(str: string): string {
   return str
@@ -17,6 +18,17 @@ function isValidEmail(email: string): boolean {
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
+  }
+
+  // Verify Firebase Auth token
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'Missing authorization header' });
+  }
+  try {
+    await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired token' });
   }
 
   const { to, teamName, inviteLink, senderName, directAdd } = req.body;

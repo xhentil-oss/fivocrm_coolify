@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
+import { DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useSensors, useDroppable, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { useCollection, useMutation, useDocument } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { ArrowLeft, Plus, LayoutGrid, List, Calendar as CalendarIcon, Users, Settings, MoreVertical, Upload, Download, Trash2, FileText, MessageSquare, CheckSquare, Filter, Search } from 'lucide-react';
@@ -215,19 +218,27 @@ const ProjectDetailView: React.FC = () => {
     }
   }, [taskMutation, project, rawProjectTasks, projectMutation, notificationMutation, user]);
 
-  const handleDragStart = (e: React.DragEvent, taskId: string) => {
-    e.dataTransfer.setData('taskId', taskId);
+  // --- @dnd-kit drag-and-drop for kanban ---
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveTaskId(String(event.active.id));
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-  };
-
-  const handleDrop = async (e: React.DragEvent, newStatus: string) => {
-    e.preventDefault();
-    const taskId = e.dataTransfer.getData('taskId');
-    if (taskId) {
-      await handleTaskUpdate(taskId, { status: newStatus });
+  const handleDragEnd = async (event: DragEndEvent) => {
+    setActiveTaskId(null);
+    const { active, over } = event;
+    if (!over) return;
+    const taskId = String(active.id);
+    const overId = String(over.id);
+    const targetStatus = columns.find(c => c.status === overId)?.status
+      || columns.find(c => tasks.filter(t => t.status === c.status).some(t => t.id === overId))?.status;
+    if (targetStatus) {
+      const task = tasks.find(t => t.id === taskId);
+      if (task && task.status !== targetStatus) {
+        await handleTaskUpdate(taskId, { status: targetStatus });
+      }
     }
   };
 
@@ -488,61 +499,66 @@ const ProjectDetailView: React.FC = () => {
           )}
 
           {viewMode === 'board' && (
-            <div className="grid grid-cols-4 gap-4 p-4 h-full overflow-x-auto">
-              {columns.map((column) => {
-                const columnTasks = tasks.filter(task => task.status === column.status);
-                
-                return (
-                  <div 
-                    key={column.id} 
-                    className="flex flex-col min-w-[250px]"
-                    onDragOver={handleDragOver}
-                    onDrop={(e) => handleDrop(e, column.status)}
-                  >
-                    <div className="flex items-center justify-between mb-3">
-                      <h3 className="text-sm font-medium text-muted-foreground">{column.title}</h3>
-                      <Badge variant="secondary" className="text-xs">
-                        {columnTasks.length}
-                      </Badge>
-                    </div>
+            <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+              <div className="grid grid-cols-4 gap-4 p-4 h-full overflow-x-auto">
+                {columns.map((column) => {
+                  const columnTasks = tasks.filter(task => task.status === column.status);
+                  
+                  return (
+                    <ProjectKanbanColumn key={column.id} id={column.status}>
+                      <div className="flex items-center justify-between mb-3">
+                        <h3 className="text-sm font-medium text-muted-foreground">{column.title}</h3>
+                        <Badge variant="secondary" className="text-xs">
+                          {columnTasks.length}
+                        </Badge>
+                      </div>
 
-                    <div className="space-y-2 flex-1 overflow-y-auto">
-                      {columnTasks.map((task) => (
-                        <Card
-                          key={task.id}
-                          draggable
-                          onDragStart={(e) => handleDragStart(e, task.id)}
-                          className={`p-3 cursor-pointer hover:shadow-md transition-shadow ${
-                            selectedTask?.id === task.id ? 'ring-2 ring-primary' : ''
-                          }`}
-                          onClick={() => setSelectedTask(task)}
-                        >
-                          <p className="text-sm font-medium mb-2">{task.title}</p>
-                          <div className="flex items-center justify-between text-xs text-muted-foreground">
-                            {task.assignedToUserId ? (
-                              <div className="flex items-center gap-1.5" title={getName(task.assignedToUserId)}>
-                                <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-xs font-medium">
-                                  {getInitials(task.assignedToUserId)}
+                      <SortableContext items={columnTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
+                        <div className="space-y-2 flex-1 overflow-y-auto min-h-[60px]">
+                          {columnTasks.map((task) => (
+                            <ProjectSortableCard key={task.id} id={task.id}>
+                              <Card
+                                className={`p-3 cursor-grab active:cursor-grabbing hover:shadow-md transition-shadow ${
+                                  selectedTask?.id === task.id ? 'ring-2 ring-primary' : ''
+                                }`}
+                                onClick={() => setSelectedTask(task)}
+                              >
+                                <p className="text-sm font-medium mb-2">{task.title}</p>
+                                <div className="flex items-center justify-between text-xs text-muted-foreground">
+                                  {task.assignedToUserId ? (
+                                    <div className="flex items-center gap-1.5" title={getName(task.assignedToUserId)}>
+                                      <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-xs font-medium">
+                                        {getInitials(task.assignedToUserId)}
+                                      </div>
+                                      <span className="max-w-[80px] truncate">
+                                        {getName(task.assignedToUserId)}
+                                      </span>
+                                    </div>
+                                  ) : (
+                                    <span className="text-warning flex items-center gap-1">
+                                      <Users className="w-3 h-3" />
+                                      Pa caktuar
+                                    </span>
+                                  )}
+                                  <span>{formatDateCompact(new Date(task.endDate)).text}</span>
                                 </div>
-                                <span className="max-w-[80px] truncate">
-                                  {getName(task.assignedToUserId)}
-                                </span>
-                              </div>
-                            ) : (
-                              <span className="text-warning flex items-center gap-1">
-                                <Users className="w-3 h-3" />
-                                Pa caktuar
-                              </span>
-                            )}
-                            <span>{formatDateCompact(new Date(task.endDate)).text}</span>
-                          </div>
-                        </Card>
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                              </Card>
+                            </ProjectSortableCard>
+                          ))}
+                        </div>
+                      </SortableContext>
+                    </ProjectKanbanColumn>
+                  );
+                })}
+              </div>
+              <DragOverlay>
+                {activeTaskId ? (
+                  <Card className="p-3 shadow-xl rotate-2 opacity-90">
+                    <p className="text-sm font-medium">{tasks.find(t => t.id === activeTaskId)?.title}</p>
+                  </Card>
+                ) : null}
+              </DragOverlay>
+            </DndContext>
           )}
 
           {viewMode === 'calendar' && (
@@ -905,5 +921,25 @@ const ProjectCalendarView: React.FC<{
     </div>
   );
 };
+
+// --- @dnd-kit helper components ---
+function ProjectKanbanColumn({ id, children }: { id: string; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div ref={setNodeRef} className={`flex flex-col min-w-[250px] transition-colors rounded-lg p-1 ${isOver ? 'bg-primary/5 ring-1 ring-primary/30' : ''}`}>
+      {children}
+    </div>
+  );
+}
+
+function ProjectSortableCard({ id, children }: { id: string; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      {children}
+    </div>
+  );
+}
 
 export default ProjectDetailView;

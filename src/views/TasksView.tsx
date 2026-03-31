@@ -1,5 +1,8 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
+import { DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useSensors, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
+import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -224,7 +227,10 @@ const TasksView: React.FC = () => {
     const recurringDayOfWeekRaw = formData.get('recurringDayOfWeek') as string;
     const recurringDayOfMonthRaw = formData.get('recurringDayOfMonth') as string;
     const estimatedHoursRaw = formData.get('estimatedHours') as string;
+    const dependsOnRaw = formData.get('dependsOn') as string;
 
+    let dependsOn: string[] = [];
+    try { dependsOn = dependsOnRaw ? JSON.parse(dependsOnRaw) : []; } catch { dependsOn = []; }
     let collaboratorIds: string[] = [];
     try { collaboratorIds = collaboratorIdsRaw ? JSON.parse(collaboratorIdsRaw) : []; } catch { collaboratorIds = []; }
     const isRecurring = isRecurringRaw === 'true';
@@ -277,6 +283,7 @@ const TasksView: React.FC = () => {
       recurringDayOfMonth: isRecurring && recurringFrequency === 'monthly' ? recurringDayOfMonth : undefined,
       nextRecurringDate,
       estimatedHours: estimatedHoursRaw ? (v => !isNaN(v) ? v : undefined)(parseFloat(estimatedHoursRaw)) : undefined,
+      dependsOn: dependsOn.length > 0 ? dependsOn : undefined,
     });
 
     // Create collaborator records in parallel
@@ -337,19 +344,28 @@ const TasksView: React.FC = () => {
     }
   };
 
-  const handleDragStart = (e: React.DragEvent, taskId: string) => {
-    e.dataTransfer.setData('taskId', taskId);
+  // --- @dnd-kit drag-and-drop for kanban ---
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
+
+  const handleDragStart = (event: DragStartEvent) => {
+    setActiveTaskId(String(event.active.id));
   };
 
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-  };
-
-  const handleDrop = async (e: React.DragEvent, newStatus: string) => {
-    e.preventDefault();
-    const taskId = e.dataTransfer.getData('taskId');
-    if (taskId) {
-      await taskMutation.update(taskId, { status: newStatus });
+  const handleDragEnd = async (event: DragEndEvent) => {
+    setActiveTaskId(null);
+    const { active, over } = event;
+    if (!over) return;
+    const taskId = String(active.id);
+    // "over" can be a column id (status string) or another task card
+    const overId = String(over.id);
+    const targetStatus = columns.find(c => c.status === overId)?.status
+      || columns.find(c => tasks.filter(t => t.status === c.status).some(t => t.id === overId))?.status;
+    if (targetStatus) {
+      const task = tasks.find(t => t.id === taskId);
+      if (task && task.status !== targetStatus) {
+        await taskMutation.update(taskId, { status: targetStatus });
+      }
     }
   };
 
@@ -455,7 +471,7 @@ const TasksView: React.FC = () => {
                   <DialogHeader>
                     <DialogTitle>Krijo Detyrë të Re</DialogTitle>
                   </DialogHeader>
-                  <TaskForm onSubmit={handleCreateTask} projects={projects || []} />
+                  <TaskForm onSubmit={handleCreateTask} projects={projects || []} allTasks={tasks} />
                 </DialogContent>
               </Dialog>
             )}
@@ -667,104 +683,109 @@ const TasksView: React.FC = () => {
           )}
 
           {viewMode === 'board' && (
-            <div className="flex gap-3 sm:gap-4 p-3 sm:p-4 h-full overflow-x-auto pb-4">
-              {columns.map((column) => {
-                const columnTasks = tasks.filter(task => task.status === column.status);
-                const columnColor = column.status === 'Todo' ? 'bg-gray-400' : column.status === 'In Progress' ? 'bg-blue-500' : column.status === 'Review' ? 'bg-amber-500' : 'bg-emerald-500';
-                
-                return (
-                  <div 
-                    key={column.id} 
-                    className="flex flex-col min-w-[260px] sm:min-w-[300px] flex-shrink-0"
-                    onDragOver={handleDragOver}
-                    onDrop={(e) => handleDrop(e, column.status)}
-                  >
-                    <div className="flex items-center gap-2 mb-3">
-                      <div className={`w-2 h-2 rounded-full ${columnColor}`} />
-                      <h3 className="text-sm font-medium text-foreground">{column.title}</h3>
-                      <Badge variant="secondary" className="text-xs ml-auto">
-                        {columnTasks.length}
-                      </Badge>
-                    </div>
+            <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+              <div className="flex gap-3 sm:gap-4 p-3 sm:p-4 h-full overflow-x-auto pb-4">
+                {columns.map((column) => {
+                  const columnTasks = tasks.filter(task => task.status === column.status);
+                  const columnColor = column.status === 'Todo' ? 'bg-gray-400' : column.status === 'In Progress' ? 'bg-blue-500' : column.status === 'Review' ? 'bg-amber-500' : 'bg-emerald-500';
+                  
+                  return (
+                    <KanbanColumn key={column.id} id={column.status}>
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className={`w-2 h-2 rounded-full ${columnColor}`} />
+                        <h3 className="text-sm font-medium text-foreground">{column.title}</h3>
+                        <Badge variant="secondary" className="text-xs ml-auto">
+                          {columnTasks.length}
+                        </Badge>
+                      </div>
 
-                    <div className="space-y-2 flex-1 overflow-y-auto">
-                      {columnTasks.map((task) => {
-                        const dateInfo = formatDateCompact(new Date(task.endDate));
-                        const isOverdue = new Date(task.endDate) < new Date() && task.status !== 'Done';
-                        const projectName = getProjectName(task.projectId);
-                        const subtaskInfo = subtaskCounts[task.id];
-                        const isBeingWorkedOn = tasksBeingWorkedOn.has(task.id);
-                        const priorityBorder = task.priority === 'urgent' ? 'border-l-red-500' : task.priority === 'high' ? 'border-l-orange-500' : task.priority === 'medium' ? 'border-l-blue-400' : 'border-l-gray-300';
+                      <SortableContext items={columnTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
+                        <div className="space-y-2 flex-1 overflow-y-auto min-h-[60px]">
+                          {columnTasks.map((task) => {
+                            const dateInfo = formatDateCompact(new Date(task.endDate));
+                            const isOverdue = new Date(task.endDate) < new Date() && task.status !== 'Done';
+                            const projectName = getProjectName(task.projectId);
+                            const subtaskInfo = subtaskCounts[task.id];
+                            const isBeingWorkedOn = tasksBeingWorkedOn.has(task.id);
+                            const priorityBorder = task.priority === 'urgent' ? 'border-l-red-500' : task.priority === 'high' ? 'border-l-orange-500' : task.priority === 'medium' ? 'border-l-blue-400' : 'border-l-gray-300';
 
-                        return (
-                          <Card
-                            key={task.id}
-                            draggable
-                            onDragStart={(e) => handleDragStart(e, task.id)}
-                            className={`p-3 cursor-pointer hover:shadow-md transition-all border-l-[3px] ${priorityBorder} ${
-                              selectedTask?.id === task.id ? 'ring-2 ring-primary shadow-md' : ''
-                            } ${isOverdue ? 'bg-error/5' : ''}`}
-                            onClick={() => setSelectedTask(task)}
-                          >
-                            {/* Title + Working indicator */}
-                            <div className="flex items-start justify-between gap-2 mb-2">
-                              <p className={`text-sm font-medium leading-snug ${task.status === 'Done' ? 'line-through text-muted-foreground' : ''}`}>
-                                {task.title}
-                              </p>
-                              {isBeingWorkedOn && (
-                                <span className="w-2 h-2 rounded-full bg-success animate-pulse flex-shrink-0 mt-1" />
-                              )}
-                            </div>
+                            return (
+                              <SortableTaskCard key={task.id} id={task.id}>
+                                <Card
+                                  className={`p-3 cursor-grab active:cursor-grabbing hover:shadow-md transition-all border-l-[3px] ${priorityBorder} ${
+                                    selectedTask?.id === task.id ? 'ring-2 ring-primary shadow-md' : ''
+                                  } ${isOverdue ? 'bg-error/5' : ''}`}
+                                  onClick={() => setSelectedTask(task)}
+                                >
+                                  {/* Title + Working indicator */}
+                                  <div className="flex items-start justify-between gap-2 mb-2">
+                                    <p className={`text-sm font-medium leading-snug ${task.status === 'Done' ? 'line-through text-muted-foreground' : ''}`}>
+                                      {task.title}
+                                    </p>
+                                    {isBeingWorkedOn && (
+                                      <span className="w-2 h-2 rounded-full bg-success animate-pulse flex-shrink-0 mt-1" />
+                                    )}
+                                  </div>
 
-                            {/* Project badge */}
-                            {projectName && (
-                              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded mb-2">
-                                <Target className="w-2.5 h-2.5" />
-                                {projectName}
-                              </span>
-                            )}
+                                  {/* Project badge */}
+                                  {projectName && (
+                                    <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded mb-2">
+                                      <Target className="w-2.5 h-2.5" />
+                                      {projectName}
+                                    </span>
+                                  )}
 
-                            {/* Subtask progress bar */}
-                            {subtaskInfo && (
-                              <div className="mb-2">
-                                <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-0.5">
-                                  <span className="flex items-center gap-1">
-                                    <ListChecks className="w-2.5 h-2.5" />
-                                    Nën-detyra
-                                  </span>
-                                  <span>{subtaskInfo.done}/{subtaskInfo.total}</span>
-                                </div>
-                                <div className="h-1 bg-muted rounded-full overflow-hidden">
-                                  <div 
-                                    className="h-full bg-primary rounded-full transition-all"
-                                    style={{ width: `${subtaskInfo.total > 0 ? (subtaskInfo.done / subtaskInfo.total) * 100 : 0}%` }}
-                                  />
-                                </div>
-                              </div>
-                            )}
+                                  {/* Subtask progress bar */}
+                                  {subtaskInfo && (
+                                    <div className="mb-2">
+                                      <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-0.5">
+                                        <span className="flex items-center gap-1">
+                                          <ListChecks className="w-2.5 h-2.5" />
+                                          Nën-detyra
+                                        </span>
+                                        <span>{subtaskInfo.done}/{subtaskInfo.total}</span>
+                                      </div>
+                                      <div className="h-1 bg-muted rounded-full overflow-hidden">
+                                        <div 
+                                          className="h-full bg-primary rounded-full transition-all"
+                                          style={{ width: `${subtaskInfo.total > 0 ? (subtaskInfo.done / subtaskInfo.total) * 100 : 0}%` }}
+                                        />
+                                      </div>
+                                    </div>
+                                  )}
 
-                            {/* Footer: Assignee + Date */}
-                            <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/50">
-                              <div className="flex items-center gap-1.5">
-                                <div className="w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center text-[9px] font-semibold text-primary">
-                                  {getUserName(task.assignedToUserId).slice(0, 2).toUpperCase()}
-                                </div>
-                                <span className="text-xs text-muted-foreground max-w-[80px] truncate">
-                                  {getUserName(task.assignedToUserId)}
-                                </span>
-                              </div>
-                              <span className={`text-[11px] ${dateInfo.className}`}>
-                                {dateInfo.text}
-                              </span>
-                            </div>
-                          </Card>
-                        );
-                      })}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                                  {/* Footer: Assignee + Date */}
+                                  <div className="flex items-center justify-between mt-2 pt-2 border-t border-border/50">
+                                    <div className="flex items-center gap-1.5">
+                                      <div className="w-5 h-5 rounded-full bg-primary/10 flex items-center justify-center text-[9px] font-semibold text-primary">
+                                        {getUserName(task.assignedToUserId).slice(0, 2).toUpperCase()}
+                                      </div>
+                                      <span className="text-xs text-muted-foreground max-w-[80px] truncate">
+                                        {getUserName(task.assignedToUserId)}
+                                      </span>
+                                    </div>
+                                    <span className={`text-[11px] ${dateInfo.className}`}>
+                                      {dateInfo.text}
+                                    </span>
+                                  </div>
+                                </Card>
+                              </SortableTaskCard>
+                            );
+                          })}
+                        </div>
+                      </SortableContext>
+                    </KanbanColumn>
+                  );
+                })}
+              </div>
+              <DragOverlay>
+                {activeTaskId ? (
+                  <Card className="p-3 shadow-xl rotate-2 opacity-90 border-l-[3px] border-l-primary">
+                    <p className="text-sm font-medium">{tasks.find(t => t.id === activeTaskId)?.title}</p>
+                  </Card>
+                ) : null}
+              </DragOverlay>
+            </DndContext>
           )}
 
           {viewMode === 'calendar' && (
@@ -797,7 +818,8 @@ const TaskForm: React.FC<{
   onSubmit: (data: FormData) => void;
   projects: Project[];
   initialData?: Task;
-}> = ({ onSubmit, projects, initialData }) => {
+  allTasks?: Task[];
+}> = ({ onSubmit, projects, initialData, allTasks = [] }) => {
   const [startDate, setStartDate] = useState<Date | undefined>(
     initialData?.startDate ? new Date(initialData.startDate) : new Date()
   );
@@ -816,6 +838,7 @@ const TaskForm: React.FC<{
   const [recurringDayOfMonth, setRecurringDayOfMonth] = useState<number>(
     (initialData as any)?.recurringDayOfMonth ?? 1
   );
+  const [dependsOn, setDependsOn] = useState<string[]>(initialData?.dependsOn || []);
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -837,8 +860,13 @@ const TaskForm: React.FC<{
       formData.set('projectId', projectId);
     }
     
+    if (dependsOn.length > 0) {
+      formData.set('dependsOn', JSON.stringify(dependsOn));
+    }
     onSubmit(formData);
   };
+
+  const availableTasks = allTasks.filter(t => t.id !== initialData?.id);
 
   return (
     <form onSubmit={handleSubmit} className="space-y-4">
@@ -1049,6 +1077,30 @@ const TaskForm: React.FC<{
         )}
       </div>
 
+      {/* Task Dependencies */}
+      {availableTasks.length > 0 && (
+        <div>
+          <Label>Varet nga (detyra paraprake)</Label>
+          <div className="max-h-32 overflow-y-auto border rounded-md p-2 space-y-1 mt-1">
+            {availableTasks.map(t => (
+              <label key={t.id} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5">
+                <Checkbox
+                  checked={dependsOn.includes(t.id)}
+                  onCheckedChange={(checked) => {
+                    setDependsOn(prev => checked ? [...prev, t.id] : prev.filter(id => id !== t.id));
+                  }}
+                />
+                <span className="truncate">{t.title}</span>
+                <Badge variant="outline" className="text-[10px] ml-auto flex-shrink-0">{t.status}</Badge>
+              </label>
+            ))}
+          </div>
+          {dependsOn.length > 0 && (
+            <p className="text-xs text-muted-foreground mt-1">{dependsOn.length} varësi të zgjedhura</p>
+          )}
+        </div>
+      )}
+
       <Button type="submit" className="w-full">
         {initialData ? 'Ruaj Ndryshimet' : 'Krijo Detyrën'}
       </Button>
@@ -1144,5 +1196,34 @@ const CalendarView: React.FC<{
     </div>
   );
 };
+
+// --- @dnd-kit helper components ---
+import { useDroppable } from '@dnd-kit/core';
+
+function KanbanColumn({ id, children }: { id: string; children: React.ReactNode }) {
+  const { setNodeRef, isOver } = useDroppable({ id });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`flex flex-col min-w-[260px] sm:min-w-[300px] flex-shrink-0 transition-colors rounded-lg p-1 ${isOver ? 'bg-primary/5 ring-1 ring-primary/30' : ''}`}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SortableTaskCard({ id, children }: { id: string; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.4 : 1,
+  };
+  return (
+    <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
+      {children}
+    </div>
+  );
+}
 
 export default TasksView;

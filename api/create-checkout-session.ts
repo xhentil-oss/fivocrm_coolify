@@ -1,29 +1,16 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import Stripe from 'stripe';
-import { initializeApp, getApps, cert } from 'firebase-admin/app';
-import { getAuth } from 'firebase-admin/auth';
+import { adminAuth } from './_firebaseAdmin';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2026-02-25.clover',
 });
 
-// Initialize Firebase Admin (once)
-if (!getApps().length && process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-  try {
-    const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-    initializeApp({ credential: cert(serviceAccount) });
-  } catch {
-    // Firebase Admin not available — auth validation will be skipped in dev
-  }
-}
-
 async function verifyAuthToken(authHeader: string | undefined): Promise<string | null> {
   if (!authHeader?.startsWith('Bearer ')) return null;
   const token = authHeader.slice(7);
   try {
-    const apps = getApps();
-    if (!apps.length) return token; // Dev/test: skip verification if Admin not configured
-    const decoded = await getAuth().verifyIdToken(token);
+    const decoded = await adminAuth.verifyIdToken(token);
     return decoded.uid;
   } catch {
     return null;

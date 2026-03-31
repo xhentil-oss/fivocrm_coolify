@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
+import { useState, useEffect, useCallback, useMemo, useSyncExternalStore } from 'react';
 import {
   collection,
   doc,
@@ -8,6 +8,7 @@ import {
   query,
   where,
   orderBy,
+  limit as firestoreLimit,
   onSnapshot,
   QueryConstraint,
   Timestamp,
@@ -21,6 +22,7 @@ interface QueryOptions {
   where?: { field: string; operator: string; value: any }[];
   orderBy?: { field: string; direction?: 'asc' | 'desc' };
   skipTeamFilter?: boolean; // For portal views and hooks that handle their own scoping
+  limit?: number; // Server-side limit for non-team-scoped collections (ignored for team-scoped)
 }
 
 // ---- Reactive global teamId for data isolation ----
@@ -126,6 +128,9 @@ export function useCollection<T = DocumentData>(
       }
       if (options?.orderBy) {
         constraints.push(orderBy(options.orderBy.field, options.orderBy.direction || 'asc'));
+      }
+      if (options?.limit && options.limit > 0) {
+        constraints.push(firestoreLimit(options.limit));
       }
     }
 
@@ -319,4 +324,55 @@ export function useMutation<T = DocumentData>(collectionName: string) {
   }, [collectionName]);
 
   return { create, update, remove, loading, error };
+}
+
+// Client-side pagination hook for any collection (works with team-scoped fetch-all strategy)
+export function usePaginatedCollection<T = DocumentData>(
+  collectionName: string,
+  options?: QueryOptions & { pageSize?: number }
+) {
+  const { pageSize = 25, ...queryOptions } = options || {};
+  const { data: allData, loading, error } = useCollection<T>(collectionName, queryOptions);
+  const [page, setPage] = useState(0);
+
+  // Reset page when data changes significantly (e.g., filter change)
+  const totalItems = allData.length;
+  const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
+
+  // Clamp page to valid range
+  const safePage = Math.min(page, totalPages - 1);
+  if (safePage !== page) setPage(safePage);
+
+  const paginatedData = useMemo(() => {
+    const start = safePage * pageSize;
+    return allData.slice(start, start + pageSize);
+  }, [allData, safePage, pageSize]);
+
+  const nextPage = useCallback(() => {
+    setPage(p => Math.min(p + 1, totalPages - 1));
+  }, [totalPages]);
+
+  const prevPage = useCallback(() => {
+    setPage(p => Math.max(p - 1, 0));
+  }, []);
+
+  const goToPage = useCallback((target: number) => {
+    setPage(Math.max(0, Math.min(target, totalPages - 1)));
+  }, [totalPages]);
+
+  return {
+    data: paginatedData,
+    allData,
+    loading,
+    error,
+    page: safePage,
+    totalPages,
+    totalItems,
+    pageSize,
+    nextPage,
+    prevPage,
+    goToPage,
+    hasNextPage: safePage < totalPages - 1,
+    hasPrevPage: safePage > 0,
+  };
 }

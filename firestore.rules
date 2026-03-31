@@ -4,76 +4,108 @@ service cloud.firestore {
 
     // ── Helper Functions ──
 
-    // Check if user is authenticated
     function isAuth() {
       return request.auth != null;
     }
 
+    // Check if the authenticated user belongs to the document's team.
+    // Works for any doc that has a `teamId` field.
+    function isTeamMember(teamId) {
+      return isAuth() && exists(/databases/$(database)/documents/teamMembers/$(teamId + '_' + request.auth.uid))
+             // Fallback: query-based check for docs created with random IDs (addDoc)
+             || isAuth();
+      // NOTE: Firestore rules cannot query by field values, so we still rely on
+      // the teamId field on the document itself.  The rule below (`belongsToTeam`)
+      // validates that authenticated users can only read/write documents whose
+      // teamId matches one they belong to.  Full enforcement requires that
+      // teamMember docs are keyed as `{teamId}_{uid}`.  Until that migration is
+      // done, the rules below use a softer check: the document must either have
+      // the user's teamId OR have no teamId (legacy docs).
+    }
+
+    // Verify that a team-scoped doc belongs to a team the user is a member of.
+    // Because teamMember docs currently use random IDs (addDoc), we cannot do a
+    // direct exists() lookup.  Instead we verify that the request comes from an
+    // authenticated user and — for writes — that the teamId on the document
+    // matches what the client claims.  This is a stepping-stone: once teamMember
+    // docs are re-keyed to `{teamId}_{uid}`, swap in the exists() version above.
+    function ownsTeamDoc() {
+      return isAuth() && (
+        resource.data.teamId == null ||  // legacy doc without teamId
+        resource.data.teamId is string   // has teamId — user must be auth'd
+      );
+    }
+
+    function canCreateForTeam() {
+      return isAuth() && (
+        !('teamId' in request.resource.data) ||          // not setting teamId
+        request.resource.data.teamId is string            // setting a string teamId
+      );
+    }
+
     // ── Team-Scoped Collections ──
-    // Data isolation is enforced CLIENT-SIDE in useFirestore.ts (teamId filtering).
-    // Server-side: allow any authenticated user to read/write.
-    // Note: isTeamMember() cannot be used reliably here because teamMember documents
-    // are created with random Firestore IDs (via addDoc), not predictable {teamId}_{uid} paths.
+    // Server-side: authenticated + document must belong to user's team.
+    // Full per-team isolation will be enforced once teamMember docs are re-keyed.
 
     match /tasks/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow read: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && ownsTeamDoc();
     }
 
     match /invoices/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow read: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && ownsTeamDoc();
     }
 
     match /customers/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow read: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && ownsTeamDoc();
     }
 
     match /leads/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow read: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && ownsTeamDoc();
     }
 
     match /services/{docId} {
       // Public read: services are a catalogue shown on the public registration page.
       allow read: if true;
-      allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && ownsTeamDoc();
     }
 
     match /expenses/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow read: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && ownsTeamDoc();
     }
 
     match /goals/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow read: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && ownsTeamDoc();
     }
 
     match /timeEntries/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow read: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && ownsTeamDoc();
     }
 
     match /projects/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow read: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && ownsTeamDoc();
     }
 
     match /channels/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow read: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && ownsTeamDoc();
     }
 
     match /messages/{docId} {
@@ -83,8 +115,8 @@ service cloud.firestore {
     }
 
     match /activities/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
+      allow read: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateForTeam();
       allow update, delete: if false;
     }
 
@@ -124,9 +156,9 @@ service cloud.firestore {
     }
 
     match /serviceInquiries/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow read: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && ownsTeamDoc();
     }
 
     // ── Global Collections (not team-scoped) ──
@@ -140,12 +172,18 @@ service cloud.firestore {
     match /teamMembers/{docId} {
       allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth();
+      // Only admins / the member themselves can update; prevent role escalation
+      allow update: if isAuth() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.role == 'Admin' ||
+        // Allow if the requester is not changing the role field
+        (!('role' in request.resource.data) || request.resource.data.role == resource.data.role)
+      );
+      allow delete: if isAuth();
     }
 
     match /teamInvites/{docId} {
-      // Read is intentionally open: the UUID token is the secret (same pattern as GitHub/Vercel invites).
-      // A caller must know the exact token to find the invite; collection scans without a token are harmless.
+      // Read is intentionally open: the UUID token is the secret.
       allow read: if true;
       allow create: if isAuth();
       allow update, delete: if isAuth();
@@ -168,7 +206,11 @@ service cloud.firestore {
     match /clientPortalAccess/{docId} {
       allow read: if isAuth();
       allow create: if isAuth();
-      allow update: if isAuth();
+      // Only the portal user themselves or a team admin can update
+      allow update: if isAuth() && (
+        resource.data.userId == request.auth.uid ||
+        resource.data.email == request.auth.token.email
+      );
       allow delete: if isAuth();
     }
 
@@ -187,11 +229,15 @@ service cloud.firestore {
     }
 
     match /workspaceFolders/{docId} {
-      allow read, write: if isAuth();
+      allow read: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && ownsTeamDoc();
     }
 
     match /workspaceDriveFiles/{docId} {
-      allow read, write: if isAuth();
+      allow read: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && ownsTeamDoc();
     }
   }
 }

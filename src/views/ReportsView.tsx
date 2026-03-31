@@ -4,118 +4,71 @@ import { Card } from '../components/ui/card';
 import { useCollection } from '../hooks/useFirestore';
 import { Badge } from '../components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import {
+  BarChart as RechartsBarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
+  LineChart as RechartsLineChart, Line, Area, AreaChart,
+  PieChart, Pie, Cell, Legend
+} from 'recharts';
 import type { Invoice, Project, Team, Expense, Service, InvoiceItem, Task, Lead, Customer, Activity, TeamMember } from '../types';
 
-// ── Simple SVG Bar Chart ──
+// ── Recharts Bar Chart ──
 const BarChart: React.FC<{ data: { label: string; value: number; color?: string }[]; height?: number }> = ({ data, height = 200 }) => {
   if (!data.length) return <div className="text-muted-foreground text-center py-8">Nuk ka të dhëna</div>;
-  const maxVal = Math.max(...data.map(d => d.value), 1);
-  const barWidth = Math.min(60, Math.floor(500 / data.length));
-  const gap = 8;
-  const chartWidth = data.length * (barWidth + gap);
-  
+  const defaultColor = '#6366f1';
   return (
-    <div className="overflow-x-auto">
-      <svg height={height + 40} className="w-full min-w-[280px]" viewBox={`0 0 ${Math.max(chartWidth, 300)} ${height + 40}`} preserveAspectRatio="xMidYEnd meet">
-        {data.map((d, i) => {
-          const barH = (d.value / maxVal) * height;
-          const x = i * (barWidth + gap) + gap;
-          return (
-            <g key={i}>
-              <rect x={x} y={height - barH} width={barWidth} height={barH} rx={4} fill={d.color || '#6366f1'} opacity={0.85} />
-              <text x={x + barWidth / 2} y={height - barH - 6} textAnchor="middle" className="fill-foreground text-[10px] font-medium">
-                {d.value >= 1000 ? `${(d.value / 1000).toFixed(1)}k` : d.value.toLocaleString()}
-              </text>
-              <text x={x + barWidth / 2} y={height + 16} textAnchor="middle" className="fill-muted-foreground text-[10px]">
-                {d.label}
-              </text>
-            </g>
-          );
-        })}
-      </svg>
-    </div>
+    <ResponsiveContainer width="100%" height={height}>
+      <RechartsBarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+        <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+        <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={40} tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} />
+        <Tooltip formatter={(value: number) => value.toLocaleString()} />
+        <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+          {data.map((d, i) => (
+            <Cell key={i} fill={d.color || defaultColor} fillOpacity={0.85} />
+          ))}
+        </Bar>
+      </RechartsBarChart>
+    </ResponsiveContainer>
   );
 };
 
-// ── Simple SVG Line Chart ──
+// ── Recharts Area/Line Chart ──
 const LineChart: React.FC<{ data: { label: string; value: number }[]; height?: number; color?: string }> = ({ data, height = 180, color = '#22c55e' }) => {
   if (!data.length) return <div className="text-muted-foreground text-center py-8">Nuk ka të dhëna</div>;
-  const maxVal = Math.max(...data.map(d => d.value), 1);
-  const padding = 30;
-  const w = Math.max(data.length * 60, 300);
-  
-  const points = data.map((d, i) => {
-    const x = padding + (i / Math.max(data.length - 1, 1)) * (w - 2 * padding);
-    const y = height - padding - (d.value / maxVal) * (height - 2 * padding);
-    return { x, y, ...d };
-  });
-  
-  const linePath = points.map((p, i) => `${i === 0 ? 'M' : 'L'} ${p.x} ${p.y}`).join(' ');
-  const areaPath = `${linePath} L ${points[points.length - 1].x} ${height - padding} L ${points[0].x} ${height - padding} Z`;
-  
   return (
-    <div className="overflow-x-auto">
-      <svg height={height + 20} className="w-full min-w-[280px]" viewBox={`0 0 ${w} ${height + 20}`} preserveAspectRatio="xMidYMid meet">
+    <ResponsiveContainer width="100%" height={height}>
+      <AreaChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
         <defs>
           <linearGradient id={`grad-${color.replace('#', '')}`} x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" stopColor={color} stopOpacity={0.3} />
             <stop offset="100%" stopColor={color} stopOpacity={0.02} />
           </linearGradient>
         </defs>
-        <path d={areaPath} fill={`url(#grad-${color.replace('#', '')})`} />
-        <path d={linePath} fill="none" stroke={color} strokeWidth={2.5} strokeLinecap="round" strokeLinejoin="round" />
-        {points.map((p, i) => (
-          <g key={i}>
-            <circle cx={p.x} cy={p.y} r={4} fill="white" stroke={color} strokeWidth={2} />
-            <text x={p.x} y={p.y - 12} textAnchor="middle" className="fill-foreground text-[10px] font-medium">
-              {p.value >= 1000 ? `${(p.value / 1000).toFixed(0)}k` : p.value}
-            </text>
-            <text x={p.x} y={height + 12} textAnchor="middle" className="fill-muted-foreground text-[10px]">
-              {p.label}
-            </text>
-          </g>
-        ))}
-      </svg>
-    </div>
+        <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+        <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={40} tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} />
+        <Tooltip formatter={(value: number) => value.toLocaleString()} />
+        <Area type="monotone" dataKey="value" stroke={color} strokeWidth={2.5} fill={`url(#grad-${color.replace('#', '')})`} dot={{ r: 4, fill: '#fff', stroke: color, strokeWidth: 2 }} />
+      </AreaChart>
+    </ResponsiveContainer>
   );
 };
 
-// ── Donut Chart ──
+// ── Recharts Donut/Pie Chart ──
 const DonutChart: React.FC<{ segments: { label: string; value: number; color: string }[]; size?: number }> = ({ segments, size = 160 }) => {
-  const total = segments.reduce((s, seg) => s + seg.value, 0) || 1;
-  const r = (size - 20) / 2;
-  const cx = size / 2;
-  const cy = size / 2;
-  let cumAngle = -90;
-  
+  const total = segments.reduce((s, seg) => s + seg.value, 0);
   return (
     <div className="flex items-center gap-4">
-      <svg width={size} height={size}>
-        {segments.map((seg, i) => {
-          const angle = (seg.value / total) * 360;
-          const startRad = (cumAngle * Math.PI) / 180;
-          const endRad = ((cumAngle + angle) * Math.PI) / 180;
-          const largeArc = angle > 180 ? 1 : 0;
-          const x1 = cx + r * Math.cos(startRad);
-          const y1 = cy + r * Math.sin(startRad);
-          const x2 = cx + r * Math.cos(endRad);
-          const y2 = cy + r * Math.sin(endRad);
-          cumAngle += angle;
-          if (seg.value === 0) return null;
-          return (
-            <path
-              key={i}
-              d={`M ${cx} ${cy} L ${x1} ${y1} A ${r} ${r} 0 ${largeArc} 1 ${x2} ${y2} Z`}
-              fill={seg.color}
-              stroke="white"
-              strokeWidth={2}
-            />
-          );
-        })}
-        <circle cx={cx} cy={cy} r={r * 0.55} fill="var(--card)" />
-        <text x={cx} y={cy - 6} textAnchor="middle" className="fill-foreground text-lg font-bold">{total}</text>
-        <text x={cx} y={cy + 12} textAnchor="middle" className="fill-muted-foreground text-[10px]">Gjithsej</text>
-      </svg>
+      <ResponsiveContainer width={size} height={size}>
+        <PieChart>
+          <Pie data={segments} dataKey="value" nameKey="label" cx="50%" cy="50%" innerRadius="55%" outerRadius="90%" paddingAngle={2} strokeWidth={0}>
+            {segments.map((seg, i) => (
+              <Cell key={i} fill={seg.color} />
+            ))}
+          </Pie>
+          <Tooltip formatter={(value: number) => value.toLocaleString()} />
+          <text x="50%" y="45%" textAnchor="middle" dominantBaseline="middle" className="fill-foreground text-lg font-bold">{total}</text>
+          <text x="50%" y="60%" textAnchor="middle" dominantBaseline="middle" className="fill-muted-foreground text-[10px]">Gjithsej</text>
+        </PieChart>
+      </ResponsiveContainer>
       <div className="space-y-1.5">
         {segments.map((seg, i) => (
           <div key={i} className="flex items-center gap-2 text-sm">

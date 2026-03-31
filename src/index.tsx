@@ -3,6 +3,10 @@ import ReactDOM from 'react-dom/client';
 import { AuthProvider } from './contexts/AuthContext';
 import App from './App';
 import './index.css';
+import { initSentry } from './lib/sentry';
+
+// Initialize error tracking
+initSentry();
 
 // Capacitor native plugin initialization
 import { Capacitor } from '@capacitor/core';
