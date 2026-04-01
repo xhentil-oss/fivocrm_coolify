@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
-import { buildInvoiceEmail } from '../_invoiceEmail';
-import admin, { adminDb as db } from '../_firebaseAdmin';
+import { buildInvoiceEmail } from '../_invoiceEmail.js';
+import admin, { adminDb as db } from '../_firebaseAdmin.js';
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const cronSecret = process.env.CRON_SECRET;

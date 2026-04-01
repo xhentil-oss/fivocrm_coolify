@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
-import { buildInvoiceEmail } from '../_invoiceEmail';
-import admin, { adminDb as db } from '../_firebaseAdmin';
+import { buildInvoiceEmail } from '../_invoiceEmail.js';
+import admin, { adminDb as db } from '../_firebaseAdmin.js';
 
 /**
  * Runs on the 1st of each month at 08:00.

@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import admin, { adminDb as db } from '../_firebaseAdmin';
+import admin, { adminDb as db } from '../_firebaseAdmin.js';
 
 // ─── Recurring Project Reset Logic ───────────────────────────────────────────
 //
