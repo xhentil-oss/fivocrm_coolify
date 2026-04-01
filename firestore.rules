@@ -58,13 +58,13 @@ service cloud.firestore {
 
     match /customers/{docId} {
       allow read: if isAuth();
-      allow create: if canCreateForTeam();
+      allow create: if isAuth();
       allow update, delete: if isAuth();
     }
 
     match /leads/{docId} {
       allow read: if isAuth();
-      allow create: if canCreateForTeam();
+      allow create: if isAuth();
       allow update, delete: if isAuth();
     }
 
