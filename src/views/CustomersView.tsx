@@ -212,22 +212,28 @@ const CustomersView: React.FC = () => {
             teamName: permissions.teamName || 'FivoCRM',
           }),
         });
-        if (!resp.ok) throw new Error('Email send failed');
+        if (!resp.ok) {
+          const errData = await resp.json().catch(() => ({}));
+          throw new Error(errData.error || 'Email send failed');
+        }
 
         toast({ title: 'Klienti u krijua!', description: `Email mirëseardhje u dërgua tek ${data.email}` });
-      } catch (err) {
+      } catch (err: any) {
         console.error('Welcome email error:', err);
-        toast({ title: 'Klienti u krijua', description: 'Por email-i nuk u dërgua. Mund ta ridërgoni më vonë.' });
+        toast({ title: 'Klienti u krijua', description: `Por email-i nuk u dërgua: ${err.message || 'Gabim i panjohur'}`, variant: 'destructive' });
       }
     }
   };
 
   const handleDeleteCustomer = async (id: string) => {
     await customerMutation.remove(id);
-    const [invoicesSnap, accessSnap, requestsSnap] = await Promise.all([
+    const [invoicesSnap, accessSnap, requestsSnap, projectsSnap, activitiesSnap, inquiriesSnap] = await Promise.all([
       getDocs(query(collection(db, 'invoices'), where('customerId', '==', id))),
       getDocs(query(collection(db, 'clientPortalAccess'), where('customerId', '==', id))),
       getDocs(query(collection(db, 'clientRequests'), where('customerId', '==', id))),
+      getDocs(query(collection(db, 'projects'), where('customerId', '==', id))),
+      getDocs(query(collection(db, 'activities'), where('customerId', '==', id))),
+      getDocs(query(collection(db, 'serviceInquiries'), where('customerId', '==', id))),
     ]);
     // Collect invoice IDs to also delete their line items
     const invoiceIds = invoicesSnap.docs.map(d => d.id);
@@ -238,9 +244,12 @@ const CustomersView: React.FC = () => {
       ...invoicesSnap.docs.map(d => deleteDoc(doc(db, 'invoices', d.id))),
       ...accessSnap.docs.map(d => deleteDoc(doc(db, 'clientPortalAccess', d.id))),
       ...requestsSnap.docs.map(d => deleteDoc(doc(db, 'clientRequests', d.id))),
+      ...projectsSnap.docs.map(d => deleteDoc(doc(db, 'projects', d.id))),
+      ...activitiesSnap.docs.map(d => deleteDoc(doc(db, 'activities', d.id))),
+      ...inquiriesSnap.docs.map(d => deleteDoc(doc(db, 'serviceInquiries', d.id))),
       ...itemSnapshots.flatMap(snap => snap.docs.map(d => deleteDoc(doc(db, 'invoiceItems', d.id)))),
     ]);
-    toast({ title: 'Klienti u fshi!', description: 'Faturat dhe te dhenat e lidhura u fshin gjithashtu.' });
+    toast({ title: 'Klienti u fshi!', description: 'Faturat, projektet, CRM dhe të dhënat e lidhura u fshinë gjithashtu.' });
     setCustomerToDelete(null);
   };
   const handleUpdateCustomer = async (formData: FormData) => {

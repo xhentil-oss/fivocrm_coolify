@@ -31,7 +31,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Invalid token' });
   }
 
-  const { invoiceId } = req.body;
+  const { invoiceId, type: requestType } = req.body;
   if (!invoiceId || typeof invoiceId !== 'string') {
     return res.status(400).json({ error: 'Missing invoiceId' });
   }
@@ -75,7 +75,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     amount: invoice.total || invoice.amount || 0,
     dueDate,
     projectName,
-    type: 'initial',
+    type: requestType === 'reminder' ? 'reminder1' : 'initial',
     currency: invoice.currency || 'ALL',
     paymentMethod: invoice.paymentMethod,
     bankName: invoice.bankName,

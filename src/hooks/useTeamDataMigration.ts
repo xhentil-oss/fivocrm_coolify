@@ -17,6 +17,7 @@ const TEAM_SCOPED_COLLECTIONS = [
   'taskCollaborators', 'customIndustries', 'typingIndicators',
   'directMessages', 'milestones', 'serviceInquiries', 'projectComments',
   'workspaceFolders', 'workspaceDriveFiles', 'projects',
+  'roleTemplates', 'dailyReports',
 ];
 
 export function useTeamDataMigration() {

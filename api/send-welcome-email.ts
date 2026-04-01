@@ -73,9 +73,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!['http:', 'https:'].includes(parsed.protocol)) {
       return res.status(400).json({ error: 'Invalid portal URL' });
     }
-    const allowedHosts = (process.env.ALLOWED_HOSTS || 'fivocrm.vercel.app,fivoo.net,localhost').split(',').map(h => h.trim());
+    const allowedHosts = (process.env.ALLOWED_HOSTS || 'fivocrm.vercel.app,fivoo.net,localhost,vercel.app').split(',').map(h => h.trim());
     if (!allowedHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h))) {
-      return res.status(400).json({ error: 'Invalid portal URL domain' });
+      return res.status(400).json({ error: `Invalid portal URL domain: ${parsed.hostname}` });
     }
   } catch {
     return res.status(400).json({ error: 'Invalid portal URL' });

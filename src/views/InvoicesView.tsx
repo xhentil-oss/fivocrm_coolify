@@ -103,13 +103,46 @@ const InvoicesView: React.FC = () => {
   };
 
   const handleSendEmail = async (invoiceId: string) => {
-    await invoiceMutation.update(invoiceId, { emailSent: true });
-    toast({ title: 'Fatura u shënua si e dërguar' });
+    try {
+      const authToken = await user?.getIdToken();
+      const response = await fetch('/api/send-invoice-email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
+        },
+        body: JSON.stringify({ invoiceId }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Dërgimi dështoi');
+      }
+      toast({ title: 'Fatura u dërgua me email me sukses!' });
+    } catch (err: any) {
+      toast({ title: 'Gabim gjatë dërgimit', description: err.message, variant: 'destructive' });
+    }
   };
 
   const handleSendReminder = async (invoiceId: string) => {
-    await invoiceMutation.update(invoiceId, { reminderSent: true });
-    toast({ title: 'Kujtesa u shënua si e dërguar' });
+    try {
+      const authToken = await user?.getIdToken();
+      const response = await fetch('/api/send-invoice-email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
+        },
+        body: JSON.stringify({ invoiceId, type: 'reminder' }),
+      });
+      if (!response.ok) {
+        const data = await response.json().catch(() => ({}));
+        throw new Error(data.error || 'Dërgimi i kujtesës dështoi');
+      }
+      await invoiceMutation.update(invoiceId, { reminderSent: true });
+      toast({ title: 'Kujtesa u dërgua me email me sukses!' });
+    } catch (err: any) {
+      toast({ title: 'Gabim gjatë dërgimit të kujtesës', description: err.message, variant: 'destructive' });
+    }
   };
 
   const handleStripePayment = async (invoice: Invoice) => {
@@ -642,7 +675,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
   const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
   const { data: portalAccessList } = useCollection<ClientPortalAccess>('clientPortalAccess', { skipTeamFilter: true });
-  const { data: allInvoices } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
+  const { data: allInvoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
   const { data: existingItems } = useCollection<InvoiceItem>('invoiceItems', isEditing
     ? { where: [{ field: 'invoiceId', operator: '==', value: editInvoice!.id }], skipTeamFilter: true }
     : undefined
@@ -651,9 +684,9 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
   const invoiceItemMutation = useMutation<InvoiceItem>('invoiceItems');
   const accessMutation = useMutation<ClientPortalAccess>('clientPortalAccess');
 
-  // Auto-generate invoice number for new invoices
+  // Auto-generate invoice number for new invoices (wait until data is loaded)
   React.useEffect(() => {
-    if (!isEditing && !invoiceNumber && allInvoices) {
+    if (!isEditing && !invoicesLoading && allInvoices) {
       let maxNum = 0;
       for (const inv of allInvoices) {
         const match = inv.invoiceNumber?.match(/^FAT-(\d+)$/i);
@@ -664,7 +697,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
       }
       setInvoiceNumber(`FAT-${String(maxNum + 1).padStart(3, '0')}`);
     }
-  }, [allInvoices]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [allInvoices, invoicesLoading]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-fill bank defaults from settings when user switches to Bank payment
   React.useEffect(() => {
