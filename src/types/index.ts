@@ -351,6 +351,7 @@ export interface ChatMessage {
   senderId: string;
   receiverId?: string;
   channelId?: string;
+  taskId?: string;
   isRead?: boolean;
   attachmentUrl?: string;
   senderType?: 'staff' | 'client';

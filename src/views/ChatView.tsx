@@ -88,22 +88,21 @@ const ChatView: React.FC = () => {
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
   const { data: userProfiles } = useCollection<UserProfile>('userProfiles');
   const { data: teams } = useCollection<any>('teams');
-  const { data: allMessages } = useCollection<ChatMessage>('messages', { skipTeamFilter: true });
+  const { data: allMessages } = useCollection<ChatMessage>('messages');
 
   const channelMsgQuery = useMemo(() => ({
     where: [{ field: 'channelId', operator: '==', value: activeChannel }],
     orderBy: { field: 'createdAt', direction: 'asc' as const },
-    skipTeamFilter: true,
   }), [activeChannel]);
   const { data: channelMessages, loading: channelPending, error: channelError } = useCollection<ChatMessage>('messages', channelMsgQuery);
 
   const directMsgQuery = useMemo(() => {
     if (!user?.uid || chatMode !== 'direct') return undefined;
-    return { where: [{ field: 'senderId', operator: '==', value: user.uid }], skipTeamFilter: true };
+    return { where: [{ field: 'senderId', operator: '==', value: user.uid }] };
   }, [user?.uid, chatMode]);
   const directMsgReceivedQuery = useMemo(() => {
     if (!user?.uid || chatMode !== 'direct') return undefined;
-    return { where: [{ field: 'receiverId', operator: '==', value: user.uid }], skipTeamFilter: true };
+    return { where: [{ field: 'receiverId', operator: '==', value: user.uid }] };
   }, [user?.uid, chatMode]);
 
   const { data: sentDirectMessages, loading: sentPending } = useCollection<ChatMessage>('messages', directMsgQuery);
@@ -217,6 +216,17 @@ const ChatView: React.FC = () => {
     }, 3000);
   }, [user, chatMode, activeChannel, activeDirectUserId, typingIndicators, typingMutation]);
 
+  // Cleanup typing indicator on channel switch or unmount
+  useEffect(() => {
+    return () => {
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      if (user && typingIndicators) {
+        const myIndicators = typingIndicators.filter((t: any) => t.userId === user.uid);
+        myIndicators.forEach((t: any) => typingMutation.remove(t.id).catch(() => {}));
+      }
+    };
+  }, [chatMode, activeChannel, activeDirectUserId]);
+
   // Auto-scroll
   useEffect(() => {
     const currentCount = filteredMessages?.length || 0;
@@ -288,7 +298,7 @@ const ChatView: React.FC = () => {
       const baseMessage: Partial<ChatMessage> = {
         content: messageText || '📎 Attachment',
         senderId: user.uid,
-        isRead: false,
+        isRead: true,
         attachmentUrl: attachmentUrl.trim() || undefined,
         ...(isClientChannel && chatMode === 'channel' ? { senderType: 'staff' as const } : {}),
         ...(replyingTo ? {
@@ -343,7 +353,7 @@ const ChatView: React.FC = () => {
   };
 
   const handleDeleteMessage = async (msgId: string) => {
-    try { await messageMutation.update(msgId, { deletedAt: new Date(), content: 'Ky mesazh u fshi.' } as any); } catch { /* skip */ }
+    try { await messageMutation.update(msgId, { deletedAt: new Date(), content: 'Ky mesazh u fshi.', attachmentUrl: null } as any); } catch { /* skip */ }
   };
 
   const handleReaction = async (msgId: string, emoji: string) => {
@@ -444,6 +454,11 @@ const ChatView: React.FC = () => {
   }, []);
 
   // Mark as Read
+  useEffect(() => {
+    // Clear read tracking when switching conversations
+    markedAsReadRef.current.clear();
+  }, [activeDirectUserId, activeChannel, chatMode]);
+
   useEffect(() => {
     if (!activeDirectUserId || !user || chatMode !== 'direct') return;
     const unread = allDirectMessages.filter(m => m.senderId === activeDirectUserId && m.receiverId === user.uid && !m.isRead && !markedAsReadRef.current.has(m.id));

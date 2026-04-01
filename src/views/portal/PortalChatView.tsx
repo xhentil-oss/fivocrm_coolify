@@ -54,12 +54,20 @@ const PortalChatView: React.FC = () => {
       });
   }, [rawMessages]);
 
-  // Fetch team members for display names
-  const { data: teamMembers } = useCollection<any>('teamMembers', {
+  // Fetch team members only for the customer's project teams (for display names + notifications)
+  const projectTeamIds = React.useMemo(() => {
+    if (!customerProjects) return [];
+    return [...new Set(customerProjects.map(p => p.teamId).filter(Boolean))];
+  }, [customerProjects]);
+  const { data: allTeamMembers } = useCollection<any>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
   });
+  const teamMembers = React.useMemo(() => {
+    if (!allTeamMembers || projectTeamIds.length === 0) return allTeamMembers || [];
+    return allTeamMembers.filter((m: any) => projectTeamIds.includes(m.teamId));
+  }, [allTeamMembers, projectTeamIds]);
 
-  // Fetch user profiles for display names
+  // Fetch user profiles for display names (only displayName exposed, no sensitive data)
   const { data: userProfiles } = useCollection<any>('userProfiles');
 
   const messageMutation = useMutation<ChatMessage>('messages');
