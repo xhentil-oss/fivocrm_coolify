@@ -2,6 +2,7 @@ import React, { useState, useCallback } from 'react';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCollection, useMutation } from '../../hooks/useFirestore';
+import { getStatusColor } from '../../lib/statusColors';
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -295,10 +296,10 @@ const PortalServicesView: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {myInquiries.map(inquiry => {
               const statusConfig: Record<string, { label: string; color: string }> = {
-                'Draft': { label: 'Draft', color: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300' },
-                'New': { label: 'Dërguar', color: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300' },
-                'Reviewed': { label: 'Në Shqyrtim', color: 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-300' },
-                'Converted': { label: 'Konvertuar', color: 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-300' },
+                'Draft': { label: 'Draft', color: getStatusColor('Draft') },
+                'New': { label: 'Dërguar', color: getStatusColor('New') },
+                'Reviewed': { label: 'Në Shqyrtim', color: getStatusColor('Reviewed') },
+                'Converted': { label: 'Konvertuar', color: getStatusColor('Converted') },
               };
               const status = statusConfig[inquiry.status] || statusConfig['New'];
               const createdDate = inquiry.createdAt instanceof Date

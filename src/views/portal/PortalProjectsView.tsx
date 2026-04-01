@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCollection } from '../../hooks/useFirestore';
+import { getStatusColor } from '../../lib/statusColors';
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { FolderKanban, ArrowRight, CheckCircle2, Clock, Pause } from 'lucide-react';
@@ -62,11 +63,11 @@ const PortalProjectsView: React.FC = () => {
 
   const getStatusConfig = (status: string) => {
     switch (status) {
-      case 'Active': return { color: 'bg-green-100 text-green-800', icon: <Clock className="h-4 w-4" /> };
-      case 'Planning': return { color: 'bg-blue-100 text-blue-800', icon: <FolderKanban className="h-4 w-4" /> };
-      case 'On Hold': return { color: 'bg-yellow-100 text-yellow-800', icon: <Pause className="h-4 w-4" /> };
-      case 'Completed': return { color: 'bg-emerald-100 text-emerald-800', icon: <CheckCircle2 className="h-4 w-4" /> };
-      default: return { color: 'bg-gray-100 text-gray-800', icon: null };
+      case 'Active': return { color: getStatusColor('Active'), icon: <Clock className="h-4 w-4" /> };
+      case 'Planning': return { color: getStatusColor('Planning'), icon: <FolderKanban className="h-4 w-4" /> };
+      case 'On Hold': return { color: getStatusColor('On Hold'), icon: <Pause className="h-4 w-4" /> };
+      case 'Completed': return { color: getStatusColor('Completed'), icon: <CheckCircle2 className="h-4 w-4" /> };
+      default: return { color: getStatusColor(status), icon: null };
     }
   };
 

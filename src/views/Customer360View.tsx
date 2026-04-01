@@ -2,6 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
+import { getStatusColor } from '../lib/statusColors';
 import {
   ArrowLeft, Building2, Mail, Phone, FileText, DollarSign,
   ClipboardList, Calendar, Plus, Clock, Target
@@ -99,14 +100,7 @@ const Customer360View: React.FC = () => {
     return `${Math.floor(seconds / 86400)} ditë`;
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'Paid': case 'Active': case 'Completed': case 'Won': return 'bg-green-100 text-green-800';
-      case 'Pending': case 'In Progress': case 'Planning': return 'bg-yellow-100 text-yellow-800';
-      case 'Overdue': case 'Rejected': case 'Lost': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
+
 
   const handleAddActivity = async () => {
     if (!activityTitle.trim() || !user) return;

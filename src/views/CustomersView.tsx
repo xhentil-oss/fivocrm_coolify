@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
+import { getStatusColor, getPriorityColor } from '../lib/statusColors';
 import { getDocs, query, where, collection, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import {
@@ -27,11 +28,11 @@ import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import type { Customer, ClientPortalAccess, ClientRequest, Team } from '../types';
 
 const STATUS_OPTIONS = [
-  { value: 'Active', label: 'Aktiv', color: 'bg-green-100 text-green-800', icon: CheckCircle2 },
-  { value: 'Inactive', label: 'Joaktiv', color: 'bg-gray-100 text-gray-800', icon: XCircle },
-  { value: 'VIP', label: 'VIP', color: 'bg-purple-100 text-purple-800', icon: Star },
-  { value: 'Pending', label: 'Ne Pritje', color: 'bg-yellow-100 text-yellow-800', icon: AlertCircle },
-  { value: 'Suspended', label: 'Pezulluar', color: 'bg-red-100 text-red-800', icon: XCircle },
+  { value: 'Active', label: 'Aktiv', color: 'bg-success text-success-foreground', icon: CheckCircle2 },
+  { value: 'Inactive', label: 'Joaktiv', color: 'bg-muted text-muted-foreground', icon: XCircle },
+  { value: 'VIP', label: 'VIP', color: 'bg-accent text-accent-foreground', icon: Star },
+  { value: 'Pending', label: 'Ne Pritje', color: 'bg-warning text-warning-foreground', icon: AlertCircle },
+  { value: 'Suspended', label: 'Pezulluar', color: 'bg-error text-error-foreground', icon: XCircle },
 ];
 
 const INDUSTRY_OPTIONS = [
@@ -333,16 +334,7 @@ const CustomersView: React.FC = () => {
     toast({ title: 'Ekipi u caktua' });
   };
 
-  const getReqStatusColor = (status: string) => {
-    switch (status) {
-      case 'New': return 'bg-blue-100 text-blue-800';
-      case 'In Review': return 'bg-purple-100 text-purple-800';
-      case 'In Progress': return 'bg-yellow-100 text-yellow-800';
-      case 'Completed': return 'bg-green-100 text-green-800';
-      case 'Rejected': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
+
   const getReqStatusLabel = (status: string) => {
     switch (status) {
       case 'New': return 'E Re'; case 'In Review': return 'Ne Shqyrtim';
@@ -350,13 +342,7 @@ const CustomersView: React.FC = () => {
       case 'Rejected': return 'Refuzuar'; default: return status;
     }
   };
-  const getPriorityColor = (p: string) => {
-    switch (p) {
-      case 'low': return 'bg-gray-100 text-gray-800'; case 'medium': return 'bg-blue-100 text-blue-800';
-      case 'high': return 'bg-orange-100 text-orange-800'; case 'urgent': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
-    }
-  };
+
   const getPriorityLabel = (p: string) => {
     switch (p) {
       case 'low': return 'E Ulet'; case 'medium': return 'Mesatare';
@@ -653,7 +639,7 @@ const CustomersView: React.FC = () => {
                       )}
                     </div>
                     {portalAcc && (
-                      <Badge variant="secondary" className={portalAcc.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}>
+                      <Badge variant="secondary" className={portalAcc.status === 'Active' ? 'bg-success text-success-foreground' : 'bg-error text-error-foreground'}>
                         <Globe className="w-3 h-3 mr-1" />
                         Portal: {portalAcc.status === 'Active' ? 'Aktiv' : 'Pezulluar'}
                       </Badge>
@@ -939,7 +925,7 @@ const CustomersView: React.FC = () => {
                         <Badge className={getPriorityColor(request.priority)} variant="secondary">
                           {getPriorityLabel(request.priority)}
                         </Badge>
-                        <Badge className={getReqStatusColor(request.status)} variant="secondary">
+                        <Badge className={getStatusColor(request.status)} variant="secondary">
                           {getReqStatusLabel(request.status)}
                         </Badge>
                       </div>
@@ -961,7 +947,7 @@ const CustomersView: React.FC = () => {
           {selectedRequest && (
             <div className="space-y-4">
               <div className="flex flex-wrap gap-2">
-                <Badge className={getReqStatusColor(selectedRequest.status)} variant="secondary">
+                <Badge className={getStatusColor(selectedRequest.status)} variant="secondary">
                   {getReqStatusLabel(selectedRequest.status)}
                 </Badge>
                 <Badge className={getPriorityColor(selectedRequest.priority)} variant="secondary">

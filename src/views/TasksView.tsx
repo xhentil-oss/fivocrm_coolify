@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useSensors, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { getStatusColor, getPriorityColor } from '../lib/statusColors';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -180,35 +181,7 @@ const TasksView: React.FC = () => {
     }
   }, [allTasks, selectedTask]);
 
-  const getPriorityColor = (priority?: string) => {
-    switch (priority) {
-      case 'urgent':
-        return 'bg-error text-error-foreground';
-      case 'high':
-        return 'bg-warning text-warning-foreground';
-      case 'medium':
-        return 'bg-info text-info-foreground';
-      case 'low':
-        return 'bg-success text-success-foreground';
-      default:
-        return 'bg-muted text-muted-foreground';
-    }
-  };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'Todo':
-        return 'bg-gray-200 text-gray-700';
-      case 'In Progress':
-        return 'bg-tertiary text-tertiary-foreground';
-      case 'Review':
-        return 'bg-warning text-warning-foreground';
-      case 'Done':
-        return 'bg-success text-success-foreground';
-      default:
-        return 'bg-muted text-muted-foreground';
-    }
-  };
 
   const handleCreateTask = async (formData: FormData) => {
     const title = formData.get('title') as string;

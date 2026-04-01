@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
+import { getStatusColor } from '../lib/statusColors';
 import { Target, Plus, TrendingUp, AlertCircle, CheckCircle2, Calendar, Users, ChevronRight } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -69,20 +70,7 @@ const GoalsView: React.FC = () => {
     }
   };
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'On Track':
-        return 'bg-success text-success-foreground';
-      case 'At Risk':
-        return 'bg-warning text-warning-foreground';
-      case 'Off Track':
-        return 'bg-error text-error-foreground';
-      case 'Achieved':
-        return 'bg-success text-success-foreground';
-      default:
-        return 'bg-muted text-muted-foreground';
-    }
-  };
+
 
   const handleCreateGoal = async (formData: FormData) => {
     const title = formData.get('title') as string;

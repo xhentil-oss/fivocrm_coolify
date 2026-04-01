@@ -26,19 +26,7 @@ import type { Invoice, Customer, Service, InvoiceItem, Project, ClientPortalAcce
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import { toAll } from '../lib/utils';
 import { toast } from '../hooks/use-toast';
-
-const getStatusColor = (status: string) => {
-  switch (status) {
-    case 'Paid':
-      return 'bg-success text-success-foreground';
-    case 'Pending':
-      return 'bg-warning text-warning-foreground';
-    case 'Overdue':
-      return 'bg-error text-error-foreground';
-    default:
-      return 'bg-muted text-muted-foreground';
-  }
-};
+import { getStatusColor } from '../lib/statusColors';
 
 const InvoicesView: React.FC = () => {
   const permissions = usePermissions();

@@ -3,6 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import { DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useSensors, useDroppable, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
+import { getStatusColor } from '../lib/statusColors';
 import { useCollection, useMutation, useDocument } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { ArrowLeft, Plus, LayoutGrid, List, Calendar as CalendarIcon, Users, Settings, MoreVertical, Upload, Download, Trash2, FileText, MessageSquare, CheckSquare, Filter, Search } from 'lucide-react';
@@ -105,18 +106,7 @@ const ProjectDetailView: React.FC = () => {
   const totalTasks = allTopLevelTasks.length;
   const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'Active': return 'bg-success text-success-foreground';
-      case 'Planning': return 'bg-info text-info-foreground';
-      case 'Completed': return 'bg-gray-500 text-white';
-      case 'On Hold': return 'bg-warning text-warning-foreground';
-      case 'In Review': return 'bg-purple-500 text-white';
-      case 'Archived': return 'bg-slate-500 text-white';
-      case 'Cancelled': return 'bg-destructive text-destructive-foreground';
-      default: return 'bg-muted text-muted-foreground';
-    }
-  };
+
 
   const handleCreateTask = async (formData: FormData) => {
     const title = formData.get('title') as string;

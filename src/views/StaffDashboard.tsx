@@ -4,6 +4,7 @@ import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useToast } from '../hooks/use-toast';
+import { getPriorityColor, getStatusColor } from '../lib/statusColors';
 import {
   CheckCircle2, Clock, AlertTriangle, Flame, Target, TrendingUp,
   ArrowRight, Sparkles, Calendar, Zap, Flag,
@@ -259,15 +260,7 @@ const StaffDashboard: React.FC = () => {
     return projects.find(p => p.id === projectId)?.name || '';
   };
 
-  const getPriorityColor = (priority?: string) => {
-    switch (priority) {
-      case 'urgent': return 'bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-400';
-      case 'high': return 'bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-400';
-      case 'medium': return 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400';
-      case 'low': return 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400';
-      default: return 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400';
-    }
-  };
+
 
   const formatDate = (date?: Date) => {
     if (!date) return '';
@@ -510,11 +503,7 @@ const StaffDashboard: React.FC = () => {
                           )}
                           <Badge
                             variant="secondary"
-                            className={`text-[10px] h-4 ${
-                              task.status === 'In Progress' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/40 dark:text-blue-400' :
-                              task.status === 'Review' ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400' :
-                              'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400'
-                            }`}
+                            className={`text-[10px] h-4 ${getStatusColor(task.status)}`}
                           >
                             {task.status === 'In Progress' ? 'Në progres' : task.status === 'Review' ? 'Rishikim' : 'Për të bërë'}
                           </Badge>

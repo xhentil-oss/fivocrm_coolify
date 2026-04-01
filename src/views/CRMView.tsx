@@ -3,6 +3,7 @@ import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
+import { getStatusColor } from '../lib/statusColors';
 import { useToast } from '../hooks/use-toast';
 import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle } from 'lucide-react';
 import { Card } from '../components/ui/card';
@@ -53,24 +54,7 @@ const CRMView: React.FC = () => {
   const portalAccessMutation = useMutation<ClientPortalAccess>('clientPortalAccess');
   const { getName } = useUserNames(teamMembers || []);
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'New':
-        return 'bg-info text-info-foreground';
-      case 'Contacted':
-        return 'bg-tertiary text-tertiary-foreground';
-      case 'Qualified':
-        return 'bg-success text-success-foreground';
-      case 'Follow-up':
-        return 'bg-warning text-warning-foreground';
-      case 'Converted':
-        return 'bg-accent text-accent-foreground';
-      case 'Lost':
-        return 'bg-error text-error-foreground';
-      default:
-        return 'bg-muted text-muted-foreground';
-    }
-  };
+
 
   const getStatusLabel = (status: string) => {
     switch (status) {

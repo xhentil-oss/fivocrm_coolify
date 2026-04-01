@@ -3,6 +3,7 @@ import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useToast } from '../hooks/use-toast';
+import { getStatusColor } from '../lib/statusColors';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -131,16 +132,8 @@ const ServiceInquiriesView: React.FC = () => {
   };
 
   const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'New':
-        return <Badge className="bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300">E Re</Badge>;
-      case 'Reviewed':
-        return <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300">Shqyrtuar</Badge>;
-      case 'Converted':
-        return <Badge className="bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300">Konvertuar</Badge>;
-      default:
-        return <Badge variant="secondary">{status}</Badge>;
-    }
+    const label = status === 'New' ? 'E Re' : status === 'Reviewed' ? 'Shqyrtuar' : status === 'Converted' ? 'Konvertuar' : status;
+    return <Badge className={getStatusColor(status)}>{label}</Badge>;
   };
 
   const getBudgetBadge = (budget: string) => {
