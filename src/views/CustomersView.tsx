@@ -185,44 +185,19 @@ const CustomersView: React.FC = () => {
     const created = await customerMutation.create(data as any);
     setIsCreateDialogOpen(false);
 
-    // Auto-grant portal access and send welcome email if customer has email
+    // Auto-grant portal access if customer has email
     if (data.email && created?.id) {
       try {
-        // Create portal access
         await accessMutation.create({
           customerId: created.id,
           userId: '',
           email: data.email,
           status: 'Active',
         });
-
-        // Send welcome email
-        const authToken = await user?.getIdToken();
-        const portalUrl = `${window.location.origin}/portal`;
-        const resp = await fetch('/api/send-welcome-email', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
-          },
-          body: JSON.stringify({
-            customerName: data.name,
-            customerEmail: data.email,
-            portalUrl,
-            teamName: permissions.teamName || 'FivoCRM',
-          }),
-        });
-        if (!resp.ok) {
-          const errData = await resp.json().catch(() => ({}));
-          throw new Error(errData.error || 'Email send failed');
-        }
-
-        toast({ title: 'Klienti u krijua!', description: `Email mirëseardhje u dërgua tek ${data.email}` });
-      } catch (err: any) {
-        console.error('Welcome email error:', err);
-        toast({ title: 'Klienti u krijua', description: `Por email-i nuk u dërgua: ${err.message || 'Gabim i panjohur'}`, variant: 'destructive' });
-      }
+      } catch { /* non-blocking */ }
     }
+
+    toast({ title: 'Klienti u krijua me sukses!' });
   };
 
   const handleDeleteCustomer = async (id: string) => {
