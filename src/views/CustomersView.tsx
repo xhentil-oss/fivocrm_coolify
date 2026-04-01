@@ -199,7 +199,7 @@ const CustomersView: React.FC = () => {
         // Send welcome email
         const authToken = await user?.getIdToken();
         const portalUrl = `${window.location.origin}/portal`;
-        await fetch('/api/send-welcome-email', {
+        const resp = await fetch('/api/send-welcome-email', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -212,6 +212,7 @@ const CustomersView: React.FC = () => {
             teamName: permissions.teamName || 'FivoCRM',
           }),
         });
+        if (!resp.ok) throw new Error('Email send failed');
 
         toast({ title: 'Klienti u krijua!', description: `Email mirëseardhje u dërgua tek ${data.email}` });
       } catch (err) {
@@ -291,7 +292,29 @@ const CustomersView: React.FC = () => {
       customerId, userId: '', email: customer.email, status: 'Active',
     });
     setIsGrantDialogOpen(false);
-    toast({ title: 'Akses i dhene', description: `${customer.name} tani ka akses ne portalin e klienteve.` });
+
+    // Send welcome email
+    try {
+      const authToken = await user?.getIdToken();
+      const portalUrl = `${window.location.origin}/portal`;
+      const resp = await fetch('/api/send-welcome-email', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
+        },
+        body: JSON.stringify({
+          customerName: customer.name,
+          customerEmail: customer.email,
+          portalUrl,
+          teamName: permissions.teamName || 'FivoCRM',
+        }),
+      });
+      if (!resp.ok) throw new Error('Email failed');
+      toast({ title: 'Akses i dhene', description: `${customer.name} tani ka akses. Email u dergua.` });
+    } catch {
+      toast({ title: 'Akses i dhene', description: `${customer.name} ka akses, por email nuk u dergua.` });
+    }
   };
 
   const handleToggleAccess = async (access: ClientPortalAccess) => {
