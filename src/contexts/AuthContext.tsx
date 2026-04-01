@@ -41,7 +41,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       await signInWithPopup(auth, googleProvider);
     } catch (error: any) {
       // Fallback to redirect if popup is blocked (COOP policy, mobile browsers, etc.)
-      if (error?.code === 'auth/popup-blocked' || error?.code === 'auth/popup-closed-by-user') {
+      if (error?.code === 'auth/popup-blocked' || error?.code === 'auth/popup-closed-by-user' || error?.code === 'auth/internal-error') {
         await signInWithRedirect(auth, googleProvider);
         return;
       }
