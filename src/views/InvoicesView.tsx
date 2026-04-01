@@ -24,6 +24,7 @@ import {
 } from '../components/ui/dropdown-menu';
 import type { Invoice, Customer, Service, InvoiceItem, Project, ClientPortalAccess } from '../types';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
+import { toAll } from '../lib/utils';
 import { toast } from '../hooks/use-toast';
 
 const getStatusColor = (status: string) => {
