@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { Globe, Plus, DollarSign, Search, Share2, PenTool, Palette, Package, Edit, Trash2, X, Tag } from 'lucide-react';
+import { Globe, Plus, DollarSign, Search, Share2, PenTool, Palette, Package, Edit, Trash2, X } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -34,7 +34,6 @@ const ServicesView: React.FC = () => {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [selectedService, setSelectedService] = useState<Service | null>(null);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
-  const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
 
   const { data: services, loading: servicesLoading } = useCollection<Service>('services', {
     orderBy: { field: 'createdAt', direction: 'desc' },
@@ -156,41 +155,20 @@ const ServicesView: React.FC = () => {
           </p>
         </div>
         {permissions.canEdit && (
-          <div className="flex gap-2 w-full sm:w-auto">
-            <Dialog open={isCategoryDialogOpen} onOpenChange={setIsCategoryDialogOpen}>
-              <DialogTrigger asChild>
-                <Button variant="outline" className="w-full sm:w-auto">
-                  <Tag className="w-4 h-4 mr-2" />
-                  Kategoritë
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-md">
-                <DialogHeader>
-                  <DialogTitle>Menaxho Kategoritë</DialogTitle>
-                </DialogHeader>
-                <CategoryManager
-                  customCategories={customCategories || []}
-                  allCategories={allCategories}
-                  onAdd={handleAddCategory}
-                  onDelete={handleDeleteCategory}
-                />
-              </DialogContent>
-            </Dialog>
-            <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-              <DialogTrigger asChild>
-                <Button className="bg-primary text-primary-foreground w-full sm:w-auto">
-                  <Plus className="w-4 h-4 mr-2" />
-                  Shërbim i Ri
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-                <DialogHeader>
-                  <DialogTitle>Krijo Shërbim të Ri</DialogTitle>
-                </DialogHeader>
-                <ServiceForm onSubmit={handleCreateService} categories={allCategories} />
-              </DialogContent>
-            </Dialog>
-          </div>
+          <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+            <DialogTrigger asChild>
+              <Button className="bg-primary text-primary-foreground w-full sm:w-auto">
+                <Plus className="w-4 h-4 mr-2" />
+                Shërbim i Ri
+              </Button>
+            </DialogTrigger>
+            <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+              <DialogHeader>
+                <DialogTitle>Krijo Shërbim të Ri</DialogTitle>
+              </DialogHeader>
+              <ServiceForm onSubmit={handleCreateService} categories={allCategories} onAddCategory={handleAddCategory} customCategories={customCategories || []} onDeleteCategory={handleDeleteCategory} />
+            </DialogContent>
+          </Dialog>
         )}
       </div>
 
@@ -267,74 +245,9 @@ const ServicesView: React.FC = () => {
             <DialogHeader>
               <DialogTitle>Edit Service</DialogTitle>
             </DialogHeader>
-            <ServiceForm onSubmit={handleUpdateService} initialData={selectedService} categories={allCategories} />
+            <ServiceForm onSubmit={handleUpdateService} initialData={selectedService} categories={allCategories} onAddCategory={handleAddCategory} customCategories={customCategories || []} onDeleteCategory={handleDeleteCategory} />
           </DialogContent>
         </Dialog>
-      )}
-    </div>
-  );
-};
-
-const CategoryManager: React.FC<{
-  customCategories: ServiceCategory[];
-  allCategories: string[];
-  onAdd: (name: string) => void;
-  onDelete: (id: string) => void;
-}> = ({ customCategories, allCategories, onAdd, onDelete }) => {
-  const [newName, setNewName] = useState('');
-
-  const handleAdd = () => {
-    if (newName.trim()) {
-      onAdd(newName.trim());
-      setNewName('');
-    }
-  };
-
-  return (
-    <div className="space-y-4">
-      <div className="flex gap-2">
-        <Input
-          placeholder="Emri i kategorisë së re..."
-          value={newName}
-          onChange={e => setNewName(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAdd(); } }}
-        />
-        <Button type="button" onClick={handleAdd} disabled={!newName.trim() || allCategories.includes(newName.trim())}>
-          <Plus className="w-4 h-4 mr-1" /> Shto
-        </Button>
-      </div>
-
-      {allCategories.includes(newName.trim()) && newName.trim() && (
-        <p className="text-xs text-destructive">Kjo kategori ekziston tashmë</p>
-      )}
-
-      <div>
-        <Label className="text-sm font-medium mb-2 block">Kategoritë Default</Label>
-        <div className="flex flex-wrap gap-1.5">
-          {DEFAULT_CATEGORIES.map(cat => (
-            <Badge key={cat} variant="secondary" className="text-xs">{cat}</Badge>
-          ))}
-        </div>
-      </div>
-
-      {customCategories.length > 0 && (
-        <div>
-          <Label className="text-sm font-medium mb-2 block">Kategoritë e Shtuara</Label>
-          <div className="flex flex-wrap gap-1.5">
-            {customCategories.map(cat => (
-              <Badge key={cat.id} variant="outline" className="text-xs flex items-center gap-1 pr-1">
-                {cat.name}
-                <button
-                  type="button"
-                  onClick={() => onDelete(cat.id)}
-                  className="hover:bg-destructive/10 rounded-full p-0.5"
-                >
-                  <X className="w-3 h-3 text-destructive" />
-                </button>
-              </Badge>
-            ))}
-          </div>
-        </div>
       )}
     </div>
   );
@@ -344,14 +257,30 @@ const ServiceForm: React.FC<{
   onSubmit: (data: FormData) => void;
   initialData?: Service;
   categories: string[];
-}> = ({ onSubmit, initialData, categories }) => {
+  onAddCategory: (name: string) => void;
+  customCategories: ServiceCategory[];
+  onDeleteCategory: (id: string) => void;
+}> = ({ onSubmit, initialData, categories, onAddCategory, customCategories, onDeleteCategory }) => {
   const [htmlContent, setHtmlContent] = useState(initialData?.description || '');
+  const [showNewCategoryInput, setShowNewCategoryInput] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [selectedCategory, setSelectedCategory] = useState(initialData?.category || categories[0] || 'Web Design');
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     formData.set('description', htmlContent);
+    formData.set('category', selectedCategory);
     onSubmit(formData);
+  };
+
+  const handleAddNewCategory = () => {
+    const trimmed = newCategoryName.trim();
+    if (!trimmed || categories.includes(trimmed)) return;
+    onAddCategory(trimmed);
+    setSelectedCategory(trimmed);
+    setNewCategoryName('');
+    setShowNewCategoryInput(false);
   };
 
   return (
@@ -364,16 +293,72 @@ const ServiceForm: React.FC<{
 
         <div>
           <Label htmlFor="category">Category *</Label>
-          <Select name="category" defaultValue={initialData?.category || categories[0] || 'Web Design'}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {categories.map(cat => (
-                <SelectItem key={cat} value={cat}>{cat}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          {showNewCategoryInput ? (
+            <div className="flex gap-1.5">
+              <Input
+                autoFocus
+                placeholder="Emri i kategorisë..."
+                value={newCategoryName}
+                onChange={e => setNewCategoryName(e.target.value)}
+                onKeyDown={e => {
+                  if (e.key === 'Enter') { e.preventDefault(); handleAddNewCategory(); }
+                  if (e.key === 'Escape') { setShowNewCategoryInput(false); setNewCategoryName(''); }
+                }}
+              />
+              <Button type="button" size="sm" className="shrink-0" onClick={handleAddNewCategory} disabled={!newCategoryName.trim() || categories.includes(newCategoryName.trim())}>
+                <Plus className="w-4 h-4" />
+              </Button>
+              <Button type="button" size="sm" variant="ghost" className="shrink-0" onClick={() => { setShowNewCategoryInput(false); setNewCategoryName(''); }}>
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+          ) : (
+            <Select value={selectedCategory} onValueChange={(val) => {
+              if (val === '__add_new__') {
+                setShowNewCategoryInput(true);
+              } else {
+                setSelectedCategory(val);
+              }
+            }}>
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {categories.map(cat => {
+                  const customCat = customCategories.find(c => c.name === cat);
+                  return (
+                    <SelectItem key={cat} value={cat}>
+                      <span className="flex items-center gap-2 w-full">
+                        {cat}
+                        {customCat && (
+                          <button
+                            type="button"
+                            className="ml-auto hover:bg-destructive/10 rounded-full p-0.5"
+                            onClick={(e) => { e.stopPropagation(); onDeleteCategory(customCat.id); }}
+                          >
+                            <X className="w-3 h-3 text-destructive" />
+                          </button>
+                        )}
+                      </span>
+                    </SelectItem>
+                  );
+                })}
+                <div className="border-t mt-1 pt-1 px-2 pb-1">
+                  <button
+                    type="button"
+                    className="flex items-center gap-1.5 w-full px-2 py-1.5 text-sm text-primary hover:bg-muted rounded-sm transition-colors"
+                    onMouseDown={(e) => { e.preventDefault(); setShowNewCategoryInput(true); }}
+                  >
+                    <Plus className="w-4 h-4" />
+                    Shto Kategori
+                  </button>
+                </div>
+              </SelectContent>
+            </Select>
+          )}
+          {categories.includes(newCategoryName.trim()) && newCategoryName.trim() && (
+            <p className="text-xs text-destructive mt-1">Kjo kategori ekziston tashmë</p>
+          )}
         </div>
       </div>
 
