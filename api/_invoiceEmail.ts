@@ -11,12 +11,34 @@ export interface InvoiceEmailData {
   dueDate: Date;
   projectName: string;
   type: 'initial' | 'reminder1' | 'reminder2';
+  currency?: 'ALL' | 'EUR';
+  paymentMethod?: string;
+  bankName?: string;
+  bankIBAN?: string;
+  bankSWIFT?: string;
+  bankAccountHolder?: string;
 }
 
 export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; html: string } {
-  const { customerName, invoiceNumber, amount, dueDate, projectName, type } = data;
-  const amountStr = amount.toLocaleString('sq-AL') + ' L';
+  const { customerName, invoiceNumber, amount, dueDate, projectName, type, currency, paymentMethod, bankName, bankIBAN, bankSWIFT, bankAccountHolder } = data;
+  const currencySymbol = currency === 'EUR' ? '€' : 'L';
+  const currencyLabel = currency === 'EUR' ? 'EUR' : 'ALL';
+  const amountStr = amount.toLocaleString('sq-AL') + ' ' + currencySymbol;
   const dueDateStr = dueDate.toLocaleDateString('sq-AL', { day: '2-digit', month: 'long', year: 'numeric' });
+
+  // Bank details HTML block (reused across email types)
+  const bankDetailsHtml = paymentMethod === 'Bank' && bankIBAN ? `
+            <div style="margin: 16px 0; padding: 16px; background: #f0f9ff; border: 1px solid #bae6fd; border-radius: 6px;">
+              <p style="color: #0369a1; font-weight: bold; margin: 0 0 8px 0; font-size: 14px;">🏦 Detajet Bankare për Pagesë</p>
+              <table style="width: 100%; border-collapse: collapse;">
+                ${bankName ? `<tr><td style="padding: 4px 0; color: #6b7280; font-size: 13px;">Banka</td><td style="padding: 4px 0; color: #111827; font-size: 13px; font-weight: 500;">${escHtml(bankName)}</td></tr>` : ''}
+                ${bankAccountHolder ? `<tr><td style="padding: 4px 0; color: #6b7280; font-size: 13px;">Mbajtësi</td><td style="padding: 4px 0; color: #111827; font-size: 13px; font-weight: 500;">${escHtml(bankAccountHolder)}</td></tr>` : ''}
+                <tr><td style="padding: 4px 0; color: #6b7280; font-size: 13px;">IBAN</td><td style="padding: 4px 0; color: #111827; font-size: 13px; font-family: monospace; font-weight: 500;">${escHtml(bankIBAN)}</td></tr>
+                ${bankSWIFT ? `<tr><td style="padding: 4px 0; color: #6b7280; font-size: 13px;">SWIFT / BIC</td><td style="padding: 4px 0; color: #111827; font-size: 13px; font-family: monospace; font-weight: 500;">${escHtml(bankSWIFT)}</td></tr>` : ''}
+                <tr><td style="padding: 4px 0; color: #6b7280; font-size: 13px;">Monedha</td><td style="padding: 4px 0; color: #111827; font-size: 13px; font-weight: 500;">${currencyLabel}</td></tr>
+              </table>
+              <p style="color: #0369a1; font-size: 12px; margin: 8px 0 0 0;">Ju lutemi përdorni numrin e faturës <strong>#${escHtml(invoiceNumber)}</strong> si referencë pagese.</p>
+            </div>` : '';
 
   if (type === 'initial') {
     return {
@@ -47,6 +69,7 @@ export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; ht
                 <td style="padding: 10px 14px; color: #111827;">${dueDateStr}</td>
               </tr>
             </table>
+            ${bankDetailsHtml}
             <p style="color: #374151;">Ju lutemi kryeni pagesën deri në datën e sipërpërmendur.</p>
             <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
             <p style="color: #9ca3af; font-size: 12px; margin: 0;">FivoCRM — Njoftime automatike &bull; Mos iu përgjigjeni këtij emaili direkt.</p>
@@ -77,6 +100,7 @@ export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; ht
                 <td style="padding: 10px 14px; color: #111827;">${dueDateStr}</td>
               </tr>
             </table>
+            ${bankDetailsHtml}
             <p style="color: #374151;">Ju lutemi kryeni pagesën sa më shpejt për të shmangur kamatat e vonimit.</p>
             <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
             <p style="color: #9ca3af; font-size: 12px; margin: 0;">FivoCRM — Njoftime automatike &bull; Mos iu përgjigjeni këtij emaili direkt.</p>
@@ -107,6 +131,7 @@ export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; ht
               <td style="padding: 10px 14px; color: #111827; font-weight: bold;">${dueDateStr}</td>
             </tr>
           </table>
+          ${bankDetailsHtml}
           <p style="color: #dc2626; font-weight: bold;">Pagesa duhet të kryhet sot. Pas kësaj date fatura do të shënohet si e skalur.</p>
           <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
           <p style="color: #9ca3af; font-size: 12px; margin: 0;">FivoCRM — Njoftime automatike &bull; Mos iu përgjigjeni këtij emaili direkt.</p>

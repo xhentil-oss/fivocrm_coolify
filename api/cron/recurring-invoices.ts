@@ -118,6 +118,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           dueDate,
           projectName: project.name,
           type: 'initial',
+          currency: project.currency || 'ALL',
+          paymentMethod: project.paymentMethod,
+          bankName: project.bankName,
+          bankIBAN: project.bankIBAN,
+          bankSWIFT: project.bankSWIFT,
+          bankAccountHolder: project.bankAccountHolder,
         });
         ops.push(
           transporter.sendMail({

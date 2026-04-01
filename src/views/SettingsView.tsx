@@ -90,6 +90,13 @@ const SettingsView: React.FC = () => {
   const [stripeMode, setStripeMode] = useState<'test' | 'live'>('test');
   const [stripeSaved, setStripeSaved] = useState(false);
 
+  // ── Bank Transfer default settings ──
+  const [defaultBankName, setDefaultBankName] = useState(() => localStorage.getItem('default_bank_name') || '');
+  const [defaultBankIBAN, setDefaultBankIBAN] = useState(() => localStorage.getItem('default_bank_iban') || '');
+  const [defaultBankSWIFT, setDefaultBankSWIFT] = useState(() => localStorage.getItem('default_bank_swift') || '');
+  const [defaultBankAccountHolder, setDefaultBankAccountHolder] = useState(() => localStorage.getItem('default_bank_holder') || '');
+  const [bankSaved, setBankSaved] = useState(false);
+
   // ── Cron / Automation settings (persisted in localStorage) ──
   const [cronSettings, setCronSettings] = useState<Record<string, any>>(() => {
     try { return JSON.parse(localStorage.getItem('cron_settings') || '{}'); } catch { return {}; }
@@ -125,13 +132,19 @@ const SettingsView: React.FC = () => {
   };
 
   const handleSaveStripeSettings = () => {
-    // Në një aplikacion real, këto do të ruheshin në backend
-    // Për tani, thjesht tregojmë sukses
     localStorage.setItem('stripe_publishable_key', stripePublishableKey);
     localStorage.setItem('stripe_mode', stripeMode);
-    // KUJDES: Secret key NUK duhet ruajtur në frontend në prodhim!
     setStripeSaved(true);
     setTimeout(() => setStripeSaved(false), 3000);
+  };
+
+  const handleSaveBankSettings = () => {
+    localStorage.setItem('default_bank_name', defaultBankName);
+    localStorage.setItem('default_bank_iban', defaultBankIBAN);
+    localStorage.setItem('default_bank_swift', defaultBankSWIFT);
+    localStorage.setItem('default_bank_holder', defaultBankAccountHolder);
+    setBankSaved(true);
+    setTimeout(() => setBankSaved(false), 3000);
   };
 
   return (
@@ -527,31 +540,64 @@ const SettingsView: React.FC = () => {
             </div>
           </Card>
 
+          {/* Bank Transfer Settings */}
+          <Card className="p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-blue-50 dark:bg-blue-500/10 rounded-lg">
+                <svg viewBox="0 0 24 24" className="w-6 h-6 text-blue-600" fill="currentColor">
+                  <path d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z"/>
+                </svg>
+              </div>
+              <div>
+                <h3 className="text-h4 text-foreground">Transfertë Bankare</h3>
+                <p className="text-xs text-muted-foreground">Detajet bankare që shfaqen në faturat me pagesë bankare</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <Label>Emri i Bankës</Label>
+                <Input placeholder="p.sh. Raiffeisen Bank" value={defaultBankName} onChange={(e) => setDefaultBankName(e.target.value)} />
+              </div>
+              <div>
+                <Label>Mbajtësi i Llogarisë</Label>
+                <Input placeholder="p.sh. FivoCRM SHPK" value={defaultBankAccountHolder} onChange={(e) => setDefaultBankAccountHolder(e.target.value)} />
+              </div>
+              <div>
+                <Label>IBAN</Label>
+                <Input placeholder="AL00 0000 0000 0000 0000 0000 0000" value={defaultBankIBAN} onChange={(e) => setDefaultBankIBAN(e.target.value)} />
+              </div>
+              <div>
+                <Label>SWIFT / BIC</Label>
+                <Input placeholder="p.sh. SGSBALTX" value={defaultBankSWIFT} onChange={(e) => setDefaultBankSWIFT(e.target.value)} />
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              {bankSaved && (
+                <div className="flex items-center gap-2 text-success">
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span className="text-sm">Cilësimet bankare u ruajtën!</span>
+                </div>
+              )}
+              <div className="ml-auto">
+                <Button onClick={handleSaveBankSettings} disabled={!defaultBankIBAN}>
+                  Ruaj Detajet Bankare
+                </Button>
+              </div>
+            </div>
+          </Card>
+
           {/* Other Integrations Placeholder */}
           <Card className="p-6 space-y-4">
             <h3 className="text-h4 text-foreground">Integrime të Tjera</h3>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-4 border border-dashed border-border rounded-lg flex items-center gap-4 opacity-60">
-                <div className="p-2 bg-muted rounded-lg">
-                  <svg viewBox="0 0 24 24" className="w-6 h-6" fill="currentColor">
-                    <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
-                  </svg>
-                </div>
-                <div>
-                  <p className="font-medium">PayPal</p>
-                  <p className="text-xs text-muted-foreground">Së shpejti...</p>
-                </div>
+            <div className="p-4 border border-dashed border-border rounded-lg flex items-center gap-4 opacity-60">
+              <div className="p-2 bg-muted rounded-lg">
+                <svg viewBox="0 0 24 24" className="w-6 h-6" fill="currentColor">
+                  <path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/>
+                </svg>
               </div>
-              <div className="p-4 border border-dashed border-border rounded-lg flex items-center gap-4 opacity-60">
-                <div className="p-2 bg-muted rounded-lg">
-                  <svg viewBox="0 0 24 24" className="w-6 h-6" fill="currentColor">
-                    <path d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z"/>
-                  </svg>
-                </div>
-                <div>
-                  <p className="font-medium">Transfertë Bankare</p>
-                  <p className="text-xs text-muted-foreground">Së shpejti...</p>
-                </div>
+              <div>
+                <p className="font-medium">PayPal</p>
+                <p className="text-xs text-muted-foreground">Së shpejti...</p>
               </div>
             </div>
           </Card>

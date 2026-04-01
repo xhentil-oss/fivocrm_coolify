@@ -114,6 +114,11 @@ export interface Invoice {
   status: 'Draft' | 'Pending' | 'Paid' | 'Overdue';
   paymentMethod?: string;
   paymentUrl?: string;
+  currency?: 'ALL' | 'EUR';
+  bankName?: string;
+  bankIBAN?: string;
+  bankSWIFT?: string;
+  bankAccountHolder?: string;
   dueDate?: Date;
   paidAt?: Date;
   emailSent?: boolean;

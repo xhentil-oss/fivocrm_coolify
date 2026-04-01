@@ -184,6 +184,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         dueDate,
         projectName,
         type,
+        currency: invoice.currency || 'ALL',
+        paymentMethod: invoice.paymentMethod,
+        bankName: invoice.bankName,
+        bankIBAN: invoice.bankIBAN,
+        bankSWIFT: invoice.bankSWIFT,
+        bankAccountHolder: invoice.bankAccountHolder,
       });
 
       reminderOps.push(

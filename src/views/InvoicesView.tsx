@@ -612,6 +612,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
   const [tax, setTax] = useState<number>((editInvoice as any)?.tax || 0);
   const [invoiceNumber, setInvoiceNumber] = useState(editInvoice?.invoiceNumber || '');
   const [paymentMethod, setPaymentMethod] = useState(editInvoice?.paymentMethod || 'Stripe');
+  const [currency, setCurrency] = useState<'ALL' | 'EUR'>((editInvoice as any)?.currency || 'ALL');
+  const [bankName, setBankName] = useState((editInvoice as any)?.bankName || '');
+  const [bankIBAN, setBankIBAN] = useState((editInvoice as any)?.bankIBAN || '');
+  const [bankSWIFT, setBankSWIFT] = useState((editInvoice as any)?.bankSWIFT || '');
+  const [bankAccountHolder, setBankAccountHolder] = useState((editInvoice as any)?.bankAccountHolder || '');
   const [status, setStatus] = useState(editInvoice?.status || 'Pending');
   const [notes, setNotes] = useState((editInvoice as any)?.notes || '');
   const [paymentUrl, setPaymentUrl] = useState((editInvoice as any)?.paymentUrl || '');
@@ -630,6 +635,16 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
   const invoiceMutation = useMutation<Invoice>('invoices');
   const invoiceItemMutation = useMutation<InvoiceItem>('invoiceItems');
   const accessMutation = useMutation<ClientPortalAccess>('clientPortalAccess');
+
+  // Auto-fill bank defaults from settings when user switches to Bank payment
+  React.useEffect(() => {
+    if (paymentMethod === 'Bank' && !isEditing && !bankIBAN) {
+      setBankName(localStorage.getItem('default_bank_name') || '');
+      setBankIBAN(localStorage.getItem('default_bank_iban') || '');
+      setBankSWIFT(localStorage.getItem('default_bank_swift') || '');
+      setBankAccountHolder(localStorage.getItem('default_bank_holder') || '');
+    }
+  }, [paymentMethod]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load existing line items when editing
   React.useEffect(() => {
@@ -685,6 +700,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
       projectId: selectedProjectId || '',
       invoiceNumber,
       paymentMethod,
+      currency,
+      bankName: paymentMethod === 'Bank' ? bankName : '',
+      bankIBAN: paymentMethod === 'Bank' ? bankIBAN : '',
+      bankSWIFT: paymentMethod === 'Bank' ? bankSWIFT : '',
+      bankAccountHolder: paymentMethod === 'Bank' ? bankAccountHolder : '',
       status,
       dueDate: dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       notes,
@@ -866,7 +886,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
                   />
                 </div>
                 <div className="w-20 sm:w-24 text-right text-sm font-medium">
-                  {((services?.find(s => s.id === item.serviceId)?.price || 0) * item.quantity).toFixed(2)} L
+                  {((services?.find(s => s.id === item.serviceId)?.price || 0) * item.quantity).toFixed(2)} {currency === 'EUR' ? '€' : 'L'}
                 </div>
                 <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(index)}>
                   <Trash2 className="w-4 h-4" />
@@ -877,7 +897,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
         </div>
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div>
           <Label htmlFor="paymentMethod">Mënyra e Pagesës</Label>
           <Select name="paymentMethod" value={paymentMethod} onValueChange={setPaymentMethod}>
@@ -888,6 +908,19 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
               <SelectItem value="Stripe">Stripe</SelectItem>
               <SelectItem value="Cash">Kesh</SelectItem>
               <SelectItem value="Bank">Transfer Bankar</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+
+        <div>
+          <Label htmlFor="currency">Monedha</Label>
+          <Select name="currency" value={currency} onValueChange={(v) => setCurrency(v as 'ALL' | 'EUR')}>
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">Lekë (ALL)</SelectItem>
+              <SelectItem value="EUR">Euro (EUR)</SelectItem>
             </SelectContent>
           </Select>
         </div>
@@ -907,6 +940,34 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
           </Select>
         </div>
       </div>
+
+      {/* Bank Details — shown when payment method is Bank Transfer */}
+      {paymentMethod === 'Bank' && (
+        <div className="space-y-3 p-4 border border-dashed border-border rounded-lg bg-muted/30">
+          <h4 className="text-sm font-semibold flex items-center gap-2">
+            <Building2 className="w-4 h-4" />
+            Detajet Bankare
+          </h4>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <Label htmlFor="bankName">Emri i Bankës</Label>
+              <Input id="bankName" placeholder="p.sh. Raiffeisen Bank" value={bankName} onChange={(e) => setBankName(e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="bankAccountHolder">Mbajtësi i Llogarisë</Label>
+              <Input id="bankAccountHolder" placeholder="p.sh. FivoCRM SHPK" value={bankAccountHolder} onChange={(e) => setBankAccountHolder(e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="bankIBAN">IBAN</Label>
+              <Input id="bankIBAN" placeholder="AL00 0000 0000 0000 0000 0000 0000" value={bankIBAN} onChange={(e) => setBankIBAN(e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="bankSWIFT">SWIFT / BIC</Label>
+              <Input id="bankSWIFT" placeholder="p.sh. SGSBALTX" value={bankSWIFT} onChange={(e) => setBankSWIFT(e.target.value)} />
+            </div>
+          </div>
+        </div>
+      )}
 
       <div>
         <Label>Afati *</Label>
@@ -981,15 +1042,15 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
         <div className="space-y-2 text-right">
           <div className="flex justify-between">
             <span className="text-muted-foreground">Nëntotali:</span>
-            <span className="font-medium">{calculateSubtotal().toFixed(2)} L</span>
+            <span className="font-medium">{calculateSubtotal().toFixed(2)} {currency === 'EUR' ? '€' : 'L'}</span>
           </div>
           <div className="flex justify-between">
             <span className="text-muted-foreground">Taksa:</span>
-            <span className="font-medium">{tax.toFixed(2)} L</span>
+            <span className="font-medium">{tax.toFixed(2)} {currency === 'EUR' ? '€' : 'L'}</span>
           </div>
           <div className="flex justify-between text-lg font-bold">
             <span>Total:</span>
-            <span>{(calculateSubtotal() + tax).toFixed(2)} L</span>
+            <span>{(calculateSubtotal() + tax).toFixed(2)} {currency === 'EUR' ? '€' : 'L'}</span>
           </div>
         </div>
       </div>
@@ -1016,6 +1077,8 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
     return allServices.reduce((acc, s) => ({ ...acc, [s.id]: s }), {} as Record<string, Service>);
   }, [allServices]);
 
+  const cur = (invoice as any).currency === 'EUR' ? '€' : 'L';
+
   return (
     <div className="space-y-6">
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
@@ -1037,10 +1100,27 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             <div><span className="text-muted-foreground">Statusi:</span> <Badge className={getStatusColor(invoice.status)}>{invoice.status}</Badge></div>
             <p><span className="text-muted-foreground">Afati:</span> {invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('sq-AL') : 'Pa afat'}</p>
             <p><span className="text-muted-foreground">Mënyra e Pagesës:</span> {invoice.paymentMethod}</p>
+            <p><span className="text-muted-foreground">Monedha:</span> {(invoice as any).currency === 'EUR' ? 'Euro (EUR)' : 'Lekë (ALL)'}</p>
             {invoice.paidAt && <p><span className="text-muted-foreground">Paguar më:</span> {new Date(invoice.paidAt).toLocaleDateString('sq-AL')}</p>}
           </div>
         </div>
       </div>
+
+      {/* Bank Details */}
+      {invoice.paymentMethod === 'Bank' && (invoice as any).bankIBAN && (
+        <div className="p-4 border border-dashed border-border rounded-lg bg-muted/30">
+          <h3 className="font-semibold mb-2 flex items-center gap-2">
+            <Building2 className="w-4 h-4" />
+            Detajet Bankare për Pagesë
+          </h3>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
+            {(invoice as any).bankName && <p><span className="text-muted-foreground">Banka:</span> {(invoice as any).bankName}</p>}
+            {(invoice as any).bankAccountHolder && <p><span className="text-muted-foreground">Mbajtësi:</span> {(invoice as any).bankAccountHolder}</p>}
+            <p><span className="text-muted-foreground">IBAN:</span> <span className="font-mono">{(invoice as any).bankIBAN}</span></p>
+            {(invoice as any).bankSWIFT && <p><span className="text-muted-foreground">SWIFT:</span> <span className="font-mono">{(invoice as any).bankSWIFT}</span></p>}
+          </div>
+        </div>
+      )}
 
       <div>
         <h3 className="font-semibold mb-2">Artikujt</h3>
@@ -1050,8 +1130,8 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             <div key={item.id} className="p-3 bg-muted/50 rounded-lg">
               <p className="text-sm font-medium">{services[item.serviceId]?.title || 'Duke ngarkuar...'}</p>
               <div className="flex items-center justify-between mt-1.5 text-xs text-muted-foreground">
-                <span>Sasia: {item.quantity} × {(item.unitPrice ?? 0).toFixed(2)} L</span>
-                <span className="font-semibold text-foreground text-sm">{(item.totalPrice ?? 0).toFixed(2)} L</span>
+                <span>Sasia: {item.quantity} × {(item.unitPrice ?? 0).toFixed(2)} {cur}</span>
+                <span className="font-semibold text-foreground text-sm">{(item.totalPrice ?? 0).toFixed(2)} {cur}</span>
               </div>
             </div>
           ))}
@@ -1072,8 +1152,8 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
                 <tr key={item.id}>
                   <td className="px-4 py-2">{services[item.serviceId]?.title || 'Duke ngarkuar...'}</td>
                   <td className="px-4 py-2 text-right">{item.quantity}</td>
-                  <td className="px-4 py-2 text-right">{(item.unitPrice ?? 0).toFixed(2)} L</td>
-                  <td className="px-4 py-2 text-right font-medium">{(item.totalPrice ?? 0).toFixed(2)} L</td>
+                  <td className="px-4 py-2 text-right">{(item.unitPrice ?? 0).toFixed(2)} {cur}</td>
+                  <td className="px-4 py-2 text-right font-medium">{(item.totalPrice ?? 0).toFixed(2)} {cur}</td>
                 </tr>
               ))}
             </tbody>
@@ -1085,17 +1165,17 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
         <div className="space-y-2 text-right">
           <div className="flex justify-between">
             <span className="text-muted-foreground">Nëntotali:</span>
-            <span className="font-medium">{(invoice.subtotal || 0).toFixed(2)} L</span>
+            <span className="font-medium">{(invoice.subtotal || 0).toFixed(2)} {cur}</span>
           </div>
           {invoice.tax && (
             <div className="flex justify-between">
               <span className="text-muted-foreground">Taksa:</span>
-              <span className="font-medium">{invoice.tax.toFixed(2)} L</span>
+              <span className="font-medium">{invoice.tax.toFixed(2)} {cur}</span>
             </div>
           )}
           <div className="flex justify-between text-lg font-bold">
             <span>Totali:</span>
-            <span>{(invoice.total || 0).toFixed(2)} L</span>
+            <span>{(invoice.total || 0).toFixed(2)} {cur}</span>
           </div>
         </div>
       </div>
@@ -1144,7 +1224,7 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
                     invoiceId: invoice.id,
                     invoiceNumber: invoice.invoiceNumber || invoice.id.slice(0, 8),
                     amount,
-                    currency: 'eur',
+                    currency: (invoice as any).currency === 'EUR' ? 'eur' : 'all',
                     customerEmail: customer?.email || undefined,
                     customerName: customer?.name || undefined,
                     successUrl: `${window.location.origin}/app/invoices?payment=success&invoice=${invoice.id}`,
