@@ -251,7 +251,7 @@ export function usePermissions(): UserPermissions {
         canAccessTasks: membership.canAccessTasks === true,
         canAccessCRM: true,
         canAccessInvoices: membership.canAccessInvoices === true,
-        canAccessReports: membership.canAccessReports === true,
+        canAccessReports: true,
         canAccessSettings: false,
         canAccessGoals: membership.canAccessGoals === true,
         canAccessTeams: false,
@@ -315,7 +315,7 @@ export function usePermissions(): UserPermissions {
       canAccessTasks: membership.canAccessTasks === true,
       canAccessCRM: membership.canAccessCRM === true,
       canAccessInvoices: membership.canAccessInvoices === true,
-      canAccessReports: membership.canAccessReports === true,
+      canAccessReports: true,
       canAccessSettings: membership.canAccessSettings === true,
       canAccessGoals: membership.canAccessGoals === true || membership.canAccessTasks === true,
       canAccessTeams: false, // Only admin/owner can manage teams

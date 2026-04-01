@@ -110,6 +110,11 @@ const DailyReportPopup: React.FC = () => {
     setOpen(false);
   };
 
+  // Close without persisting — popup will reappear on next timer tick (1 min)
+  const handleClose = () => {
+    setOpen(false);
+  };
+
   const handleSubmit = async () => {
     if (!user || !permissions.teamId) return;
     if (!completedToday.trim()) {
@@ -177,7 +182,7 @@ const DailyReportPopup: React.FC = () => {
   if (alreadySubmitted) return null;
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { if (!v) handleDismiss(); }}>
+    <Dialog open={open} onOpenChange={(v) => { if (!v) handleClose(); }}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
