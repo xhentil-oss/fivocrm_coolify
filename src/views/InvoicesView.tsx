@@ -628,6 +628,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
   const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
   const { data: portalAccessList } = useCollection<ClientPortalAccess>('clientPortalAccess', { skipTeamFilter: true });
+  const { data: allInvoices } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
   const { data: existingItems } = useCollection<InvoiceItem>('invoiceItems', isEditing
     ? { where: [{ field: 'invoiceId', operator: '==', value: editInvoice!.id }], skipTeamFilter: true }
     : undefined
@@ -635,6 +636,21 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
   const invoiceMutation = useMutation<Invoice>('invoices');
   const invoiceItemMutation = useMutation<InvoiceItem>('invoiceItems');
   const accessMutation = useMutation<ClientPortalAccess>('clientPortalAccess');
+
+  // Auto-generate invoice number for new invoices
+  React.useEffect(() => {
+    if (!isEditing && !invoiceNumber && allInvoices) {
+      let maxNum = 0;
+      for (const inv of allInvoices) {
+        const match = inv.invoiceNumber?.match(/^FAT-(\d+)$/i);
+        if (match) {
+          const n = parseInt(match[1], 10);
+          if (n > maxNum) maxNum = n;
+        }
+      }
+      setInvoiceNumber(`FAT-${String(maxNum + 1).padStart(3, '0')}`);
+    }
+  }, [allInvoices]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-fill bank defaults from settings when user switches to Bank payment
   React.useEffect(() => {
