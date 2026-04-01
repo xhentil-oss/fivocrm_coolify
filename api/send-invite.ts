@@ -2,6 +2,20 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
 import { adminAuth } from './_firebaseAdmin';
 
+// Simple in-memory rate limiter (persists across warm Vercel invocations)
+const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
+function checkRateLimit(uid: string, maxPerHour = 20): boolean {
+  const now = Date.now();
+  const entry = rateLimitMap.get(uid);
+  if (entry && entry.resetAt > now) {
+    if (entry.count >= maxPerHour) return false;
+    entry.count++;
+    return true;
+  }
+  rateLimitMap.set(uid, { count: 1, resetAt: now + 3_600_000 });
+  return true;
+}
+
 function escapeHtml(str: string): string {
   return str
     .replace(/&/g, '&amp;')
@@ -25,10 +39,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!authHeader?.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Missing authorization header' });
   }
+  let decodedToken;
   try {
-    await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
+    decodedToken = await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+
+  // Rate limit: max 20 invites per hour per user
+  if (!checkRateLimit(decodedToken.uid)) {
+    return res.status(429).json({ error: 'Too many invitations. Please try again later.' });
   }
 
   const { to, teamName, inviteLink, senderName, directAdd } = req.body;
@@ -42,11 +62,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'Invalid email address' });
   }
 
-  // Validate inviteLink is a safe URL
+  // Validate inviteLink is a safe URL from an allowed domain
   try {
     const parsed = new URL(inviteLink);
     if (!['http:', 'https:'].includes(parsed.protocol)) {
       return res.status(400).json({ error: 'Invalid invite link' });
+    }
+    const allowedHosts = (process.env.ALLOWED_HOSTS || 'fivoo.net,localhost').split(',').map(h => h.trim());
+    if (!allowedHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h))) {
+      return res.status(400).json({ error: 'Invalid invite link domain' });
     }
   } catch {
     return res.status(400).json({ error: 'Invalid invite link' });

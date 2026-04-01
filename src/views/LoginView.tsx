@@ -10,7 +10,9 @@ import { Loader2 } from 'lucide-react';
 const LoginView: React.FC = () => {
   const navigate = useNavigate();
   const [searchParams] = useSearchParams();
-  const redirectTo = searchParams.get('redirect') || '/';
+  const rawRedirect = searchParams.get('redirect');
+  // Validate redirect is a safe relative path (prevent open redirect)
+  const redirectTo = rawRedirect && rawRedirect.startsWith('/') && !rawRedirect.includes('://') ? rawRedirect : '/';
   const { signInWithGoogle, signInWithEmail, signUpWithEmail } = useAuth();
   const [isSignUp, setIsSignUp] = useState(false);
   const [email, setEmail] = useState('');

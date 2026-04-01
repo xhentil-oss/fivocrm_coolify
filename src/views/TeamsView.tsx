@@ -126,9 +126,10 @@ const TeamsView: React.FC = () => {
     const canAccessReports = formData.get('canAccessReports') === 'on';
     const canAccessSettings = formData.get('canAccessSettings') === 'on';
 
-    // Prevent duplicate pending invite for same email + team
+    // Prevent duplicate pending invite for same email + team (case-insensitive)
+    const normalizedEmail = email.toLowerCase().trim();
     const existingInvite = teamInvites?.find(
-      i => i.email === email && i.teamId === selectedTeam.id && i.status === 'Pending'
+      i => i.email?.toLowerCase() === normalizedEmail && i.teamId === selectedTeam.id && i.status === 'Pending'
     );
     if (existingInvite) {
       toast({ title: 'Ftesë ekzistuese', description: `${email} ka tashmë një ftesë aktive për këtë ekip.`, variant: 'destructive' });
@@ -136,7 +137,7 @@ const TeamsView: React.FC = () => {
     }
 
     // Also check if user is already a member of this team
-    const alreadyMember = teamMembers?.find(m => m.email === email && m.teamId === selectedTeam.id && m.status === 'Active');
+    const alreadyMember = teamMembers?.find(m => m.email?.toLowerCase() === normalizedEmail && m.teamId === selectedTeam.id && m.status === 'Active');
     if (alreadyMember) {
       toast({ title: 'Anëtar ekzistues', description: `${email} është tashmë anëtar i këtij ekipi.`, variant: 'destructive' });
       return;

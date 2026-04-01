@@ -37,7 +37,7 @@ const JoinInviteView: React.FC = () => {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
 
-  // Look up the invite by token — runs immediately, no auth required to VIEW the invite
+  // Look up the invite by token — requires authentication (Firestore rules enforce auth)
   useEffect(() => {
     if (!token) {
       setError('Link i pavlefshëm - mungon tokeni.');
@@ -45,6 +45,14 @@ const JoinInviteView: React.FC = () => {
       return;
     }
 
+    // Wait for auth state to resolve
+    if (authLoading) return;
+    if (!user) {
+      setLoading(false);
+      return;
+    }
+
+    setLoading(true);
     const lookupInvite = async () => {
       try {
         const q = query(
@@ -76,8 +84,10 @@ const JoinInviteView: React.FC = () => {
         }
 
         // Check expiration
-        const expiresAt = data.expiresAt?.toDate ? data.expiresAt.toDate() : new Date(data.expiresAt);
-        if (expiresAt < new Date()) {
+        const expiresAt = data.expiresAt?.toDate
+          ? data.expiresAt.toDate()
+          : (data.expiresAt ? new Date(data.expiresAt) : null);
+        if (!expiresAt || expiresAt < new Date()) {
           setError('Kjo ftesë ka skaduar. Kërko një ftesë të re nga administratori.');
           setLoading(false);
           return;
@@ -97,7 +107,7 @@ const JoinInviteView: React.FC = () => {
     };
 
     lookupInvite();
-  }, [token]);
+  }, [token, user, authLoading]);
 
   const handleAccept = async () => {
     if (!invite || !user) return;
@@ -146,8 +156,8 @@ const JoinInviteView: React.FC = () => {
             createdByUserId: user.uid,
           });
         }
-      } catch {
-        // Non-critical
+      } catch (profileErr) {
+        console.error('Failed to create user profile:', profileErr);
       }
 
       setSuccess(true);
@@ -216,16 +226,9 @@ const JoinInviteView: React.FC = () => {
       <div className="min-h-screen flex items-center justify-center bg-background p-4">
         <Card className="max-w-md w-full p-8 text-center">
           <Users className="h-16 w-16 text-primary mx-auto mb-4" />
-          <h2 className="text-xl font-bold text-foreground mb-2">Ftesë për ekipin</h2>
-          <p className="text-muted-foreground mb-2">
-            Je ftuar të bashkohesh me ekipin <strong>{teamName}</strong>
-          </p>
-          <div className="flex items-center justify-center gap-2 mb-6">
-            <Shield className="w-4 h-4 text-muted-foreground" />
-            <span className="text-sm text-muted-foreground">Roli: {invite?.role}</span>
-          </div>
-          <p className="text-sm text-muted-foreground mb-6">
-            Duhet të hysh ose të regjistrohesh para se të pranosh ftesën.
+          <h2 className="text-xl font-bold text-foreground mb-2">Ke marrë një ftesë!</h2>
+          <p className="text-muted-foreground mb-6">
+            Identifikohu për të parë detajet e ftesës dhe për ta pranuar.
           </p>
           <div className="space-y-3">
             <Link to={`/login?redirect=${encodeURIComponent(currentPath)}`} className="block">

@@ -123,7 +123,8 @@ export function usePermissions(): UserPermissions {
     for (const m of rawTeamMembersByEmail || []) {
       if (m.userId !== user.uid && !linkedRef.current.has(m.id)) {
         linkedRef.current.add(m.id);
-        updateDoc(doc(db, 'teamMembers', m.id), { userId: user.uid }).catch(console.error);
+        console.warn(`[usePermissions] Auto-linking teamMember ${m.id} (email: ${m.email}) to UID ${user.uid}`);
+        updateDoc(doc(db, 'teamMembers', m.id), { userId: user.uid, updatedAt: Timestamp.now() }).catch(console.error);
       }
     }
   }, [user, rawTeamMembersByEmail]);
@@ -204,7 +205,9 @@ export function usePermissions(): UserPermissions {
     }
 
     // Has team membership — use role-based permissions
-    const membership = teamMembers[0];
+    // Sort by role priority for deterministic selection when user has multiple teams
+    const roleOrder: Record<string, number> = { Admin: 0, Manager: 1, Sales: 2, Member: 3, Viewer: 4 };
+    const membership = [...teamMembers].sort((a, b) => (roleOrder[a.role] ?? 99) - (roleOrder[b.role] ?? 99))[0];
     const team = teams?.find((t: any) => t.id === membership.teamId);
     const memberIsAdmin = membership.role === 'Admin';
     const memberIsManager = membership.role === 'Manager';
