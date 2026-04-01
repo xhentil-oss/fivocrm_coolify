@@ -1,7 +1,9 @@
 import React, { useMemo, Suspense, lazy } from 'react';
-import { TrendingUp, TrendingDown, DollarSign, Users, CheckCircle, Clock, Building2, Receipt, Target, FileText, UserPlus, CreditCard, ClipboardList } from 'lucide-react';
+import { TrendingUp, TrendingDown, DollarSign, Users, CheckCircle, Clock, Building2, Receipt, Target, FileText, UserPlus, CreditCard, ClipboardList, FolderKanban, ListChecks } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { useCollection } from '../hooks/useFirestore';
+import { useAuth } from '../contexts/AuthContext';
+import { usePermissions } from '../contexts/PermissionsContext';
 import { Badge } from '../components/ui/badge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import {
@@ -86,6 +88,14 @@ const DonutChart: React.FC<{ segments: { label: string; value: number; color: st
 };
 
 const ReportsView: React.FC = () => {
+  const { user } = useAuth();
+  const permissions = usePermissions();
+  const isManagerOrAbove = permissions.isAdmin || permissions.isOwner || permissions.isManager;
+  // Sales sees revenue/leads/invoices but NOT expenses/profit
+  const isSales = permissions.role === 'Sales';
+  // Member/Viewer sees only personal stats
+  const isPersonalOnly = permissions.role === 'Member' || permissions.role === 'Viewer';
+
   const { data: invoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
   const { data: projects, loading: projectsLoading } = useCollection<Project>('projects', { skipTeamFilter: true });
   const { data: teams } = useCollection<Team>('teams');
@@ -99,6 +109,44 @@ const ReportsView: React.FC = () => {
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
   });
+
+  // ── Personal stats for Member/Viewer ──
+  const myTasks = useMemo(() => {
+    if (!tasks || !user) return [];
+    return tasks.filter(t => t.assignedToUserId === user.uid);
+  }, [tasks, user]);
+
+  const myProjects = useMemo(() => {
+    if (!projects || !tasks || !user) return [];
+    const myProjectIds = new Set(tasks.filter(t => t.assignedToUserId === user.uid).map(t => t.projectId).filter(Boolean));
+    return projects.filter(p => myProjectIds.has(p.id));
+  }, [projects, tasks, user]);
+
+  const myTaskStats = useMemo(() => {
+    const total = myTasks.length;
+    const done = myTasks.filter(t => t.status === 'Done').length;
+    const inProgress = myTasks.filter(t => t.status === 'In Progress').length;
+    const overdue = myTasks.filter(t => {
+      if (t.status === 'Done') return false;
+      if (!t.dueDate) return false;
+      const due = t.dueDate instanceof Date ? t.dueDate : new Date(t.dueDate);
+      return due < new Date();
+    }).length;
+    return { total, done, inProgress, overdue, pct: total > 0 ? Math.round((done / total) * 100) : 0 };
+  }, [myTasks]);
+
+  const myProjectPerformance = useMemo(() => {
+    return myProjects
+      .filter(p => p.status === 'Active' || p.status === 'Planning')
+      .slice(0, 8)
+      .map(p => {
+        const projectTasks = myTasks.filter(t => t.projectId === p.id);
+        const done = projectTasks.filter(t => t.status === 'Done').length;
+        const total = projectTasks.length;
+        const pct = total > 0 ? Math.round((done / total) * 100) : 0;
+        return { name: p.name, progress: pct, done, total };
+      });
+  }, [myProjects, myTasks]);
 
   // ── Monthly salary cost from all active team members ──
   const totalMonthlySalary = useMemo(() => {
@@ -305,10 +353,111 @@ const ReportsView: React.FC = () => {
               ))}
             </div>
           </div>
+        ) : isPersonalOnly ? (
+    /* ── MEMBER / VIEWER: Personal Dashboard ── */
+    <div className="space-y-8">
+      {/* Personal KPI Cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+        <Card className="p-5 space-y-2 border-l-4 border-l-blue-500">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">Detyrat e mia</p>
+            <ListChecks className="w-5 h-5 text-blue-500" />
+          </div>
+          <p className="text-2xl font-bold">{myTaskStats.total}</p>
+          <p className="text-xs text-muted-foreground">{myTaskStats.done} përfunduar · {myTaskStats.inProgress} në progres</p>
+        </Card>
+        <Card className="p-5 space-y-2 border-l-4 border-l-green-500">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">Përfundimi</p>
+            <CheckCircle className="w-5 h-5 text-green-500" />
+          </div>
+          <p className="text-2xl font-bold">{myTaskStats.pct}%</p>
+          <div className="w-full h-2 bg-muted rounded-full overflow-hidden mt-1">
+            <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${myTaskStats.pct}%` }} />
+          </div>
+        </Card>
+        <Card className="p-5 space-y-2 border-l-4 border-l-amber-400">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">Në progres</p>
+            <Clock className="w-5 h-5 text-amber-400" />
+          </div>
+          <p className="text-2xl font-bold text-amber-500">{myTaskStats.inProgress}</p>
+          <p className="text-xs text-muted-foreground">detyra aktive</p>
+        </Card>
+        <Card className="p-5 space-y-2 border-l-4 border-l-red-500">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">Të vonuara</p>
+            <Clock className="w-5 h-5 text-red-500" />
+          </div>
+          <p className="text-2xl font-bold text-red-500">{myTaskStats.overdue}</p>
+          <p className="text-xs text-muted-foreground">kaluan afatin</p>
+        </Card>
+      </div>
+
+      {/* My Projects Performance */}
+      <Card className="p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold">Projektet e Mia</h3>
+          <Badge variant="secondary">{myProjectPerformance.length} projekte</Badge>
+        </div>
+        {myProjectPerformance.length === 0 ? (
+          <p className="text-sm text-muted-foreground py-4 text-center">Nuk ke projekte aktive</p>
+        ) : (
+          <div className="space-y-4">
+            {myProjectPerformance.map(p => (
+              <div key={p.name} className="space-y-1.5">
+                <div className="flex items-center justify-between text-sm">
+                  <span className="font-medium truncate max-w-[60%]">{p.name}</span>
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground">{p.done}/{p.total} detyra</span>
+                    <span className="font-semibold">{p.progress}%</span>
+                  </div>
+                </div>
+                <div className="w-full h-2.5 bg-muted rounded-full overflow-hidden">
+                  <div
+                    className="h-full rounded-full transition-all duration-500"
+                    style={{
+                      width: `${p.progress}%`,
+                      background: p.progress >= 80 ? '#22c55e' : p.progress >= 40 ? '#6366f1' : '#f59e0b'
+                    }}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* My Recent Tasks */}
+      <Card className="p-6 space-y-4">
+        <h3 className="text-lg font-semibold">Detyrat e Fundit</h3>
+        {myTasks.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-4">Nuk ke detyra akoma.</p>
+        ) : (
+          <div className="space-y-2">
+            {myTasks.slice(0, 10).map(task => (
+              <div key={task.id} className="flex items-center justify-between py-2 border-b last:border-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  {task.status === 'Done' ? (
+                    <CheckCircle className="w-4 h-4 text-green-500 flex-shrink-0" />
+                  ) : (
+                    <Clock className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                  )}
+                  <span className={`text-sm truncate ${task.status === 'Done' ? 'line-through text-muted-foreground' : ''}`}>{task.title}</span>
+                </div>
+                <Badge variant={task.status === 'Done' ? 'secondary' : task.status === 'In Progress' ? 'default' : 'outline'} className="text-[10px] flex-shrink-0">
+                  {task.status === 'Done' ? 'Përfunduar' : task.status === 'In Progress' ? 'Në Progres' : task.status === 'Review' ? 'Rishikim' : 'Për tu bërë'}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+    </div>
         ) : (
     <div className="space-y-8">
       {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 lg:gap-6">
+      <div className={`grid grid-cols-1 sm:grid-cols-2 ${isSales ? 'lg:grid-cols-3' : 'lg:grid-cols-5'} gap-4 lg:gap-6`}>
         <Card className="p-5 space-y-2 border-l-4 border-l-green-500">
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">Të Ardhura (Paguar)</p>
@@ -329,6 +478,7 @@ const ReportsView: React.FC = () => {
           <p className="text-2xl font-bold text-amber-500">{projectedRevenue.toLocaleString()} ALL</p>
           <p className="text-xs text-muted-foreground">Fatura Draft + Në Pritje</p>
         </Card>
+        {!isSales && (
         <Card className="p-5 space-y-2 border-l-4 border-l-red-500">
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">Shpenzime (Gjithsej)</p>
@@ -337,6 +487,8 @@ const ReportsView: React.FC = () => {
           <p className="text-2xl font-bold">{totalExpenses.toLocaleString()} ALL</p>
           <p className="text-xs text-muted-foreground">Shpenzime + Rroga ({totalMonthlySalary.toLocaleString()} ALL/muaj)</p>
         </Card>
+        )}
+        {!isSales && (
         <Card className="p-5 space-y-2 border-l-4 border-l-indigo-500">
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">Fitimi Neto</p>
@@ -345,6 +497,7 @@ const ReportsView: React.FC = () => {
           <p className={`text-2xl font-bold ${profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{profit.toLocaleString()} ALL</p>
           <p className="text-xs text-muted-foreground">Paguar - Shpenzime</p>
         </Card>
+        )}
         <Card className="p-5 space-y-2 border-l-4 border-l-blue-500">
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">Konvertim Lead</p>
@@ -359,7 +512,7 @@ const ReportsView: React.FC = () => {
       <Tabs defaultValue="revenue" className="space-y-4">
         <TabsList>
           <TabsTrigger value="revenue">Të Ardhura</TabsTrigger>
-          <TabsTrigger value="expenses">Shpenzime</TabsTrigger>
+          {!isSales && <TabsTrigger value="expenses">Shpenzime</TabsTrigger>}
           <TabsTrigger value="leads">Lead Funnel</TabsTrigger>
           <TabsTrigger value="invoices">Faturat</TabsTrigger>
         </TabsList>
@@ -370,12 +523,14 @@ const ReportsView: React.FC = () => {
             <LineChart data={revenueByMonth} color="#22c55e" />
           </Card>
         </TabsContent>
+        {!isSales && (
         <TabsContent value="expenses">
           <Card className="p-6">
             <h3 className="text-lg font-semibold mb-4">Shpenzimet - 6 Muajt e Fundit</h3>
             <BarChart data={expensesByMonth.map(d => ({ ...d, color: '#ef4444' }))} />
           </Card>
         </TabsContent>
+        )}
         <TabsContent value="leads">
           <Card className="p-6">
             <h3 className="text-lg font-semibold mb-4">Lead Pipeline</h3>
@@ -489,10 +644,12 @@ const ReportsView: React.FC = () => {
                 <span>Totale</span>
                 <span>{totalRevenue.toLocaleString()} ALL</span>
               </div>
+              {!isSales && (
               <div className="flex justify-between text-sm font-semibold">
                 <span>Fitimi Neto</span>
                 <span className={profit >= 0 ? 'text-green-600' : 'text-red-600'}>{profit.toLocaleString()} ALL</span>
               </div>
+              )}
             </div>
           </div>
         )}
