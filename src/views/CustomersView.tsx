@@ -191,10 +191,16 @@ const CustomersView: React.FC = () => {
       getDocs(query(collection(db, 'clientPortalAccess'), where('customerId', '==', id))),
       getDocs(query(collection(db, 'clientRequests'), where('customerId', '==', id))),
     ]);
+    // Collect invoice IDs to also delete their line items
+    const invoiceIds = invoicesSnap.docs.map(d => d.id);
+    const itemSnapshots = await Promise.all(
+      invoiceIds.map(invId => getDocs(query(collection(db, 'invoiceItems'), where('invoiceId', '==', invId))))
+    );
     await Promise.all([
       ...invoicesSnap.docs.map(d => deleteDoc(doc(db, 'invoices', d.id))),
       ...accessSnap.docs.map(d => deleteDoc(doc(db, 'clientPortalAccess', d.id))),
       ...requestsSnap.docs.map(d => deleteDoc(doc(db, 'clientRequests', d.id))),
+      ...itemSnapshots.flatMap(snap => snap.docs.map(d => deleteDoc(doc(db, 'invoiceItems', d.id)))),
     ]);
     toast({ title: 'Klienti u fshi!', description: 'Faturat dhe te dhenat e lidhura u fshin gjithashtu.' });
     setCustomerToDelete(null);

@@ -88,9 +88,14 @@ const InvoicesView: React.FC = () => {
     }
   }, [rawInvoices]);
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
+  const { data: allInvoiceItems } = useCollection<InvoiceItem>('invoiceItems', { skipTeamFilter: true });
   const invoiceMutation = useMutation<Invoice>('invoices');
+  const invoiceItemMutationTop = useMutation<InvoiceItem>('invoiceItems');
 
   const handleDeleteInvoice = async (id: string) => {
+    // Delete associated invoice items first
+    const relatedItems = allInvoiceItems?.filter(item => (item as any).invoiceId === id) || [];
+    await Promise.all(relatedItems.map(item => invoiceItemMutationTop.remove(item.id)));
     await invoiceMutation.remove(id);
     toast({ title: 'Fatura u fshi me sukses!' });
     setInvoiceToDelete(null);
@@ -350,7 +355,7 @@ const InvoicesView: React.FC = () => {
                   <p className="text-xs text-muted-foreground truncate">{customer?.name || 'Unknown'}</p>
                   <div className="flex items-center gap-3 mt-1.5">
                     <span className="text-sm font-semibold">{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} L</span>
-                    <span className="text-[10px] text-muted-foreground">Afati: {new Date(invoice.dueDate).toLocaleDateString()}</span>
+                    <span className="text-[10px] text-muted-foreground">Afati: {invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : 'Pa afat'}</span>
                   </div>
                 </div>
                 <DropdownMenu>
@@ -501,7 +506,7 @@ const InvoicesView: React.FC = () => {
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-3 hidden lg:table-cell">{new Date(invoice.dueDate).toLocaleDateString()}</td>
+                    <td className="px-4 py-3 hidden lg:table-cell">{invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : 'Pa afat'}</td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1.5 flex-wrap">
                         <Button
@@ -681,7 +686,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
       invoiceNumber,
       paymentMethod,
       status,
-      dueDate: dueDate || new Date(),
+      dueDate: dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       notes,
       subtotal: resolvedSubtotal,
       tax,
@@ -690,6 +695,10 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
       paymentUrl,
       isRecurring,
       recurringFrequency: isRecurring ? recurringFrequency : undefined,
+      emailSent: false,
+      reminderSent: false,
+      reminder25Sent: false,
+      reminderLastDaySent: false,
     };
 
     if (isEditing) {
@@ -1026,7 +1035,7 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
           <div className="space-y-1 text-sm">
             <p><span className="text-muted-foreground">Fatura #:</span> {invoice.invoiceNumber || invoice.id.slice(0, 8)}</p>
             <div><span className="text-muted-foreground">Statusi:</span> <Badge className={getStatusColor(invoice.status)}>{invoice.status}</Badge></div>
-            <p><span className="text-muted-foreground">Afati:</span> {new Date(invoice.dueDate).toLocaleDateString('sq-AL')}</p>
+            <p><span className="text-muted-foreground">Afati:</span> {invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('sq-AL') : 'Pa afat'}</p>
             <p><span className="text-muted-foreground">Mënyra e Pagesës:</span> {invoice.paymentMethod}</p>
             {invoice.paidAt && <p><span className="text-muted-foreground">Paguar më:</span> {new Date(invoice.paidAt).toLocaleDateString('sq-AL')}</p>}
           </div>

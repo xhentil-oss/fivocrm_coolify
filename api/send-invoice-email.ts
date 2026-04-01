@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
 import { buildInvoiceEmail } from './_invoiceEmail';
-import { adminDb as db } from './_firebaseAdmin';
+import admin, { adminDb as db } from './_firebaseAdmin';
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && !email.includes('\n') && !email.includes('\r');

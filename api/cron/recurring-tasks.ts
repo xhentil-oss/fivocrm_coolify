@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { adminDb as db } from '../_firebaseAdmin';
+import admin, { adminDb as db } from '../_firebaseAdmin';
 
 function addFrequency(date: Date, frequency: string, dayOfWeek?: number, dayOfMonth?: number, interval: number = 1): Date {
   const d = new Date(date);

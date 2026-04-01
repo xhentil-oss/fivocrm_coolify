@@ -149,6 +149,12 @@ service cloud.firestore {
       allow update, delete: if isAuth();
     }
 
+    match /serviceCategories/{docId} {
+      allow read: if isAuth();
+      allow create: if isAuth();
+      allow update, delete: if isAuth();
+    }
+
     match /projectComments/{docId} {
       allow read: if isAuth();
       allow create: if isAuth();

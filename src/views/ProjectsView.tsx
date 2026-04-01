@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { Search, Plus, List, Users, ChevronDown, MoreVertical, Folder, Trash2 } from 'lucide-react';
+import { Search, Plus, List, Users, ChevronDown, MoreVertical, Folder, Trash2, Edit } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -31,6 +31,7 @@ const ProjectsView: React.FC = () => {
   const permissions = usePermissions();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [projectToEdit, setProjectToEdit] = useState<Project | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   
   // Filters
@@ -298,6 +299,49 @@ const ProjectsView: React.FC = () => {
     await projectMutation.remove(id);
     logActivity('project_deleted', `Projekt i fshiër: ${name}`, { entityType: 'project', entityId: id });
     setProjectToDelete(null);
+  };
+
+  const handleEditProject = async (formData: FormData) => {
+    if (!projectToEdit) return;
+    const name = formData.get('name') as string;
+    const description = formData.get('description') as string;
+    const status = formData.get('status') as string;
+    const teamId = formData.get('teamId') as string;
+    const budgetStr = formData.get('budget') as string;
+    const custId = formData.get('customerId') as string;
+    const responsibleUserId = formData.get('responsibleUserId') as string;
+    const isRecurring = formData.get('isRecurring') === 'true';
+    const recurringFrequency = formData.get('recurringFrequency') as string;
+    const memberUserIdsStr = formData.get('memberUserIds') as string;
+    let memberUserIds: string[] | undefined;
+    if (memberUserIdsStr) {
+      try { memberUserIds = JSON.parse(memberUserIdsStr); } catch { memberUserIds = undefined; }
+    }
+    const selectedServiceIdsStr = formData.get('selectedServiceIds') as string;
+    let selectedServiceIds: string[] | undefined;
+    if (selectedServiceIdsStr) {
+      try { selectedServiceIds = JSON.parse(selectedServiceIdsStr); } catch { selectedServiceIds = undefined; }
+    }
+
+    const budgetRaw = budgetStr ? parseFloat(budgetStr) : undefined;
+    const budget = budgetRaw !== undefined && !isNaN(budgetRaw) ? budgetRaw : undefined;
+
+    await projectMutation.update(projectToEdit.id, {
+      name,
+      description,
+      status,
+      teamId: teamId && teamId !== '__none__' ? teamId : undefined,
+      budget,
+      customerId: custId && custId !== '__none__' ? custId : undefined,
+      responsibleUserId: responsibleUserId && responsibleUserId !== '__none__' ? responsibleUserId : undefined,
+      isRecurring: isRecurring || undefined,
+      recurringFrequency: isRecurring && recurringFrequency ? recurringFrequency as any : undefined,
+      memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
+      serviceIds: selectedServiceIds && selectedServiceIds.length > 0 ? selectedServiceIds : undefined,
+    } as any);
+
+    logActivity('project_updated', `Projekt i përditësuar: ${name}`, { entityType: 'project', entityId: projectToEdit.id });
+    setProjectToEdit(null);
   };
 
   if (projectsLoading) {
@@ -576,6 +620,17 @@ const ProjectsView: React.FC = () => {
                     <Button
                       variant="ghost"
                       size="sm"
+                      className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={(e) => { e.stopPropagation(); setProjectToEdit(project); }}
+                      title="Modifiko projektin"
+                    >
+                      <Edit className="w-3.5 h-3.5" />
+                    </Button>
+                  )}
+                  {permissions.canEdit && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="text-destructive hover:text-destructive h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
                       onClick={(e) => { e.stopPropagation(); setProjectToDelete({ id: project.id, name: project.name }); }}
                       title="Fshi projektin"
@@ -620,6 +675,25 @@ const ProjectsView: React.FC = () => {
             <Button variant="outline" onClick={() => setProjectToDelete(null)}>Anulo</Button>
             <Button variant="destructive" onClick={() => projectToDelete && handleDeleteProject(projectToDelete.id, projectToDelete.name)}>Fshi</Button>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Project Dialog */}
+      <Dialog open={!!projectToEdit} onOpenChange={(open) => { if (!open) setProjectToEdit(null); }}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Modifiko Projektin</DialogTitle>
+          </DialogHeader>
+          {projectToEdit && (
+            <ProjectForm
+              onSubmit={handleEditProject}
+              teams={teams || []}
+              customers={customers || []}
+              teamMembers={teamMembers || []}
+              services={services || []}
+              initialData={projectToEdit}
+            />
+          )}
         </DialogContent>
       </Dialog>
     </div>
@@ -864,12 +938,14 @@ const ProjectForm: React.FC<{
       )}
 
       {/* Project Members */}
-      {teamMembers && teamMembers.length > 0 && (
+      {teamMembers && teamMembers.length > 0 && (() => {
+        const uniqueMembers = teamMembers.filter((m, i, arr) => arr.findIndex(x => x.userId === m.userId) === i);
+        return (
         <div>
           <Label>Anëtarët e Projektit</Label>
           <p className="text-xs text-muted-foreground mb-2">Zgjidh personat që do të marrin pjesë në këtë projekt</p>
           <div className="space-y-2 max-h-48 overflow-y-auto border rounded-md p-2">
-            {teamMembers.map(m => (
+            {uniqueMembers.map(m => (
               <label key={m.id} className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 px-2 py-1 rounded">
                 <input
                   type="checkbox"
@@ -897,7 +973,8 @@ const ProjectForm: React.FC<{
             <p className="text-xs text-primary mt-1">{memberUserIds.length} person{memberUserIds.length !== 1 ? 'a' : ''} të zgjedhur</p>
           )}
         </div>
-      )}
+        );
+      })()}
 
       {/* Recurring Project */}
       <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/40">
