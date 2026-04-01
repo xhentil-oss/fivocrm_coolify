@@ -1,6 +1,7 @@
 ﻿import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { getDocs, query, where, collection, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -40,6 +41,7 @@ const INDUSTRY_OPTIONS = [
 
 const CustomersView: React.FC = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
   const permissions = usePermissions();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('customers');
@@ -176,12 +178,47 @@ const CustomersView: React.FC = () => {
 
     // Duplicate check by email
     if (data.email && customers?.some(c => c.email?.toLowerCase() === data.email.toLowerCase())) {
-      toast({ title: 'Ky email ekziston tashm�!', description: 'Ka nj� klient me k�t� email.', variant: 'destructive' });
+      toast({ title: 'Ky email ekziston tashmë!', description: 'Ka një klient me këtë email.', variant: 'destructive' });
       return;
     }
 
-    await customerMutation.create(data as any);
+    const created = await customerMutation.create(data as any);
     setIsCreateDialogOpen(false);
+
+    // Auto-grant portal access and send welcome email if customer has email
+    if (data.email && created?.id) {
+      try {
+        // Create portal access
+        await accessMutation.create({
+          customerId: created.id,
+          userId: '',
+          email: data.email,
+          status: 'Active',
+        });
+
+        // Send welcome email
+        const authToken = await user?.getIdToken();
+        const portalUrl = `${window.location.origin}/portal`;
+        await fetch('/api/send-welcome-email', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(authToken ? { 'Authorization': `Bearer ${authToken}` } : {}),
+          },
+          body: JSON.stringify({
+            customerName: data.name,
+            customerEmail: data.email,
+            portalUrl,
+            teamName: permissions.teamName || 'FivoCRM',
+          }),
+        });
+
+        toast({ title: 'Klienti u krijua!', description: `Email mirëseardhje u dërgua tek ${data.email}` });
+      } catch (err) {
+        console.error('Welcome email error:', err);
+        toast({ title: 'Klienti u krijua', description: 'Por email-i nuk u dërgua. Mund ta ridërgoni më vonë.' });
+      }
+    }
   };
 
   const handleDeleteCustomer = async (id: string) => {
