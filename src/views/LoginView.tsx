@@ -25,6 +25,7 @@ const LoginView: React.FC = () => {
     setError(null);
     try {
       await signInWithGoogle();
+      try { sessionStorage.removeItem('role_preview'); } catch { /* ignore */ }
       navigate(redirectTo);
     } catch (err: any) {
       setError(err.message || 'Gabim gjatë hyrjes me Google');
@@ -44,6 +45,7 @@ const LoginView: React.FC = () => {
       } else {
         await signInWithEmail(email, password);
       }
+      try { sessionStorage.removeItem('role_preview'); } catch { /* ignore */ }
       navigate(redirectTo);
     } catch (err: any) {
       // Handle Firebase auth errors

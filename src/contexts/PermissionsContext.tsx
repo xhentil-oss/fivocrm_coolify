@@ -88,7 +88,9 @@ export const PermissionsProvider: React.FC<{ children: React.ReactNode }> = ({ c
 
   const [previewRole, setPreviewRoleState] = useState<PreviewRole>(() => {
     try {
-      return (sessionStorage.getItem(SESSION_KEY) as PreviewRole) || null;
+      const stored = sessionStorage.getItem(SESSION_KEY);
+      const validRoles: (string | null)[] = ['Admin', 'Sales', 'Manager', 'Member', 'Viewer'];
+      return validRoles.includes(stored) ? (stored as PreviewRole) : null;
     } catch {
       return null;
     }

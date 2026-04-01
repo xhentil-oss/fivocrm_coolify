@@ -145,8 +145,8 @@ export function usePermissions(): UserPermissions {
   const hasError = !!(membersError || membersByEmailError || teamsError);
 
   const permissions = useMemo((): UserPermissions => {
-    // While loading or on error, return restricted permissions with loading flag (fail-safe)
-    if (!user || isLoading || hasError) {
+    // While loading, return restricted permissions with loading flag
+    if (!user || isLoading) {
       return {
         ...restrictedPermissions,
         role: null,
@@ -160,7 +160,9 @@ export function usePermissions(): UserPermissions {
       };
     }
 
-    // OWNER: User who created a team gets full admin access
+    // OWNER: User who created a team gets full admin access.
+    // Check owner BEFORE hasError so that owners are never locked out
+    // when teamMembers queries fail.
     if (isOwner) {
       // Check if owner also has a team membership (for teamId/teamName)
       const ownerMembership = teamMembers.length > 0 ? teamMembers[0] : null;
@@ -184,6 +186,21 @@ export function usePermissions(): UserPermissions {
         teamName: ownerTeam?.name || null,
         isAdmin: true,
         isOwner: true,
+        isManager: false,
+        isLoading: false,
+      };
+    }
+
+    // On Firestore error (and not owner), fall back to restricted permissions
+    if (hasError) {
+      return {
+        ...restrictedPermissions,
+        role: null,
+        dataScope: 'assigned',
+        teamId: null,
+        teamName: null,
+        isAdmin: false,
+        isOwner: false,
         isManager: false,
         isLoading: false,
       };
