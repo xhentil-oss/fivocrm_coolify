@@ -219,7 +219,9 @@ const CRMView: React.FC = () => {
     }
 
     // Normal status change (not conversion)
-    await leadMutation.update(lead.id, { status: newStatus });
+    const update: Record<string, any> = { status: newStatus };
+    if (newStatus === 'Follow-up') update.lastFollowUpDate = new Date();
+    await leadMutation.update(lead.id, update);
   };
 
   const filteredLeads = React.useMemo(() => {
@@ -463,12 +465,6 @@ const CRMView: React.FC = () => {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleFollowUp(lead.id); }}>
-                            Ndiq
-                          </DropdownMenuItem>
-                          <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setSelectedLead(lead); }}>
-                            Shiko
-                          </DropdownMenuItem>
                           {permissions.canEdit && (
                             <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id); }}>
                               <Trash2 className="w-3.5 h-3.5 mr-2" /> Fshi
@@ -671,26 +667,6 @@ const CRMView: React.FC = () => {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              handleFollowUp(lead.id);
-                            }}
-                          >
-                            Ndiq
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              setSelectedLead(lead);
-                            }}
-                          >
-                            Shiko
-                          </Button>
                           {permissions.canEdit && (
                             <Button
                               variant="outline"
