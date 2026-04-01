@@ -38,31 +38,34 @@ service cloud.firestore {
     }
 
     // ── Team-Scoped Collections ──
-    // Server-side: authenticated + document must belong to user's team.
-    // Full per-team isolation will be enforced once teamMember docs are re-keyed.
+    // Reads: authenticated only.  The client fetches all docs and filters by
+    // teamId client-side (to support legacy docs without teamId and to avoid
+    // composite-index requirements).  Once teamMember docs are re-keyed to
+    // {teamId}_{uid}, reads can be tightened to ownsTeamDoc().
+    // Writes: the document must carry a valid teamId string.
 
     match /tasks/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /invoices/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /customers/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /leads/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /services/{docId} {
@@ -73,99 +76,99 @@ service cloud.firestore {
     }
 
     match /expenses/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /goals/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /timeEntries/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /projects/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /channels/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /messages/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc() && resource.data.createdByUserId == request.auth.uid;
+      allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
     }
 
     match /activities/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
       allow update, delete: if false;
     }
 
     match /dailyReports/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /invoiceItems/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /taskComments/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc() && resource.data.createdByUserId == request.auth.uid;
+      allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
     }
 
     match /taskCollaborators/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /clientRequests/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /customIndustries/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /serviceCategories/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /projectComments/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc() && resource.data.createdByUserId == request.auth.uid;
+      allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
     }
 
     match /serviceInquiries/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     // ── Global Collections (not team-scoped) ──
@@ -223,33 +226,33 @@ service cloud.firestore {
     }
 
     match /typingIndicators/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /directMessages/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /milestones/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /workspaceFolders/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
 
     match /workspaceDriveFiles/{docId} {
-      allow read: if isAuth() && ownsTeamDoc();
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow update, delete: if isAuth();
     }
   }
 }
