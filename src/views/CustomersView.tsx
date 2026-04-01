@@ -617,11 +617,6 @@ const CustomersView: React.FC = () => {
                               <DropdownMenuItem onClick={() => { setSelectedCustomer(customer); setIsEditDialogOpen(true); }}>
                                 Ndrysho
                               </DropdownMenuItem>
-                              {customer.email && !portalAcc && (
-                                <DropdownMenuItem onClick={() => handleGrantAccess(customer.id)}>
-                                  <Globe className="w-3.5 h-3.5 mr-2" /> Jep Akses Portal
-                                </DropdownMenuItem>
-                              )}
                               <DropdownMenuItem className="text-destructive" onClick={() => setCustomerToDelete(customer.id)}>
                                 <Trash2 className="w-3.5 h-3.5 mr-2" /> Fshi
                               </DropdownMenuItem>
@@ -638,12 +633,7 @@ const CustomersView: React.FC = () => {
                         <div className="flex items-center gap-1"><Phone className="w-3 h-3" />{customer.phone}</div>
                       )}
                     </div>
-                    {portalAcc && (
-                      <Badge variant="secondary" className={portalAcc.status === 'Active' ? 'bg-success text-success-foreground' : 'bg-error text-error-foreground'}>
-                        <Globe className="w-3 h-3 mr-1" />
-                        Portal: {portalAcc.status === 'Active' ? 'Aktiv' : 'Pezulluar'}
-                      </Badge>
-                    )}
+
                   </Card>
                 );
               })
@@ -660,14 +650,13 @@ const CustomersView: React.FC = () => {
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-sm font-medium hidden md:table-cell">Kontakti</th>
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-sm font-medium hidden lg:table-cell">Info Kompanie</th>
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-sm font-medium">Statusi</th>
-                    <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-sm font-medium hidden md:table-cell">Portal</th>
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-sm font-medium">Veprime</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {filteredCustomers.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-6 py-12 text-center">
+                      <td colSpan={5} className="px-6 py-12 text-center">
                         <Users className="w-12 h-12 mx-auto text-muted-foreground/50 mb-3" />
                         <p className="text-muted-foreground">
                           {hasActiveFilters ? 'Nuk u gjet asnje klient me keto filtra' : 'Nuk ka kliente ende'}
@@ -715,19 +704,7 @@ const CustomersView: React.FC = () => {
                               {statusOpt?.label || cust.status || 'Aktiv'}
                             </Badge>
                           </td>
-                          <td className="px-3 sm:px-6 py-3 sm:py-4 hidden md:table-cell">
-                            {portalAcc ? (
-                              <Badge
-                                variant="secondary"
-                                className={portalAcc.status === 'Active' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'}
-                              >
-                                <Globe className="w-3 h-3 mr-1" />
-                                {portalAcc.status === 'Active' ? 'Aktiv' : 'Pezulluar'}
-                              </Badge>
-                            ) : (
-                              <span className="text-xs text-muted-foreground">---</span>
-                            )}
-                          </td>
+
                           <td className="px-3 sm:px-6 py-3 sm:py-4">
                             <div className="flex items-center gap-1 sm:gap-2">
                               <Button variant="ghost" size="sm" className="gap-1" onClick={() => navigate(`/app/customers/${customer.id}`)}>
@@ -736,11 +713,6 @@ const CustomersView: React.FC = () => {
                               {permissions.canEdit && (
                                 <Button variant="outline" size="sm" onClick={() => { setSelectedCustomer(customer); setIsEditDialogOpen(true); }}>
                                   Ndrysho
-                                </Button>
-                              )}
-                              {permissions.canEdit && customer.email && !portalAcc && (
-                                <Button variant="ghost" size="sm" className="gap-1" onClick={() => handleGrantAccess(customer.id)}>
-                                  <Globe className="w-3.5 h-3.5" /> Portal
                                 </Button>
                               )}
                               {permissions.canEdit && (
