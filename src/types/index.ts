@@ -95,6 +95,7 @@ export interface Customer {
   company?: string;
   address?: string;
   teamId?: string;
+  leadId?: string;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

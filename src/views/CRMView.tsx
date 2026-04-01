@@ -163,10 +163,7 @@ const CRMView: React.FC = () => {
   };
 
   const handleStatusChange = async (lead: Lead, newStatus: string) => {
-    // Update lead status
-    await leadMutation.update(lead.id, { status: newStatus });
-
-    // If status is "Converted", create a customer + portal access
+    // If status is "Converted", create a customer + portal access, then delete the lead
     if (newStatus === 'Converted') {
       let customerDoc: { id: string } | undefined | null = null;
       try {
@@ -179,6 +176,7 @@ const CRMView: React.FC = () => {
           website: lead.website,
           notes: lead.notes,
           status: 'Active',
+          leadId: lead.id,
         });
 
         // Auto-create client portal access if customer has an email
@@ -195,11 +193,12 @@ const CRMView: React.FC = () => {
         if (customerDoc?.id) {
           await customerMutation.remove(customerDoc.id);
         }
-        // Revert lead status
-        await leadMutation.update(lead.id, { status: lead.status });
         toast({ title: 'Gabim gjatë konvertimit', description: 'Ndodhi një gabim. Statusi nuk u ndryshua.', variant: 'destructive' });
         return;
       }
+
+      // Delete the lead — it now lives as a Customer
+      await leadMutation.remove(lead.id);
 
       // Send notification to Admin + Sales (canAccessCRM) team members (best-effort)
       if (user && teamMembers) {
@@ -215,7 +214,12 @@ const CRMView: React.FC = () => {
       }
 
       logActivity('lead_converted', `Lead u konvertua: ${lead.name}`, { entityType: 'lead', entityId: lead.id });
+      toast({ title: 'Lead u konvertua', description: `${lead.name} tani është klient.` });
+      return;
     }
+
+    // Normal status change (not conversion)
+    await leadMutation.update(lead.id, { status: newStatus });
   };
 
   const filteredLeads = React.useMemo(() => {
