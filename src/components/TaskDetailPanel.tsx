@@ -833,10 +833,13 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0">Përsërit.</span>
                 <div className="flex items-center gap-2">
                   <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-primary/10 text-primary px-2.5 py-1 rounded-full">
-                    🔄 {task.recurringFrequency === 'daily' ? 'Çdo ditë' :
-                         task.recurringFrequency === 'weekly' ? `Çdo ${['Diel','Hënë','Martë','Mërkurë','Enjte','Premte','Shtunë'][(task as any).recurringDayOfWeek ?? 0]}` :
-                         task.recurringFrequency === 'monthly' ? `Çdo muaj, ditën ${(task as any).recurringDayOfMonth ?? 1}` :
-                         'Çdo vit'}
+                    🔄 {task.recurringFrequency === 'daily'
+                         ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' ditë' : 'ditë'}`
+                         : task.recurringFrequency === 'weekly'
+                         ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' javë' : 'javë'}, ${['Diel','Hënë','Martë','Mërkurë','Enjte','Premte','Shtunë'][(task as any).recurringDayOfWeek ?? 0]}`
+                         : task.recurringFrequency === 'monthly'
+                         ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' muaj' : 'muaj'}, ditën ${(task as any).recurringDayOfMonth ?? 1}`
+                         : `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' vite' : 'vit'}`}
                   </span>
                 </div>
               </div>

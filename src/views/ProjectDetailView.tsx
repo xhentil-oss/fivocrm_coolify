@@ -128,8 +128,13 @@ const ProjectDetailView: React.FC = () => {
     const assignedToUserId = formData.get('assignedToUserId') as string || user?.uid || '';
     const priority = formData.get('priority') as string || 'medium';
     const status = formData.get('status') as string || 'Todo';
+    const isRecurring = formData.get('isRecurring') === 'true';
+    const recurringFrequency = formData.get('recurringFrequency') as string || 'weekly';
+    const recurringInterval = parseInt(formData.get('recurringInterval') as string) || 1;
+    const recurringDayOfWeek = formData.get('recurringDayOfWeek') !== null ? parseInt(formData.get('recurringDayOfWeek') as string) : undefined;
+    const recurringDayOfMonth = formData.get('recurringDayOfMonth') !== null ? parseInt(formData.get('recurringDayOfMonth') as string) : undefined;
 
-    const newTask = await taskMutation.create({
+    const taskData: any = {
       title,
       description,
       startDate,
@@ -139,7 +144,22 @@ const ProjectDetailView: React.FC = () => {
       status,
       priority,
       collaboratorIds: [],
-    });
+    };
+
+    if (isRecurring) {
+      taskData.isRecurring = true;
+      taskData.recurringFrequency = recurringFrequency;
+      taskData.recurringInterval = recurringInterval;
+      taskData.nextRecurringDate = endDate;
+      if (recurringFrequency === 'weekly' && recurringDayOfWeek !== undefined && !isNaN(recurringDayOfWeek)) {
+        taskData.recurringDayOfWeek = recurringDayOfWeek;
+      }
+      if (recurringFrequency === 'monthly' && recurringDayOfMonth !== undefined && !isNaN(recurringDayOfMonth)) {
+        taskData.recurringDayOfMonth = recurringDayOfMonth;
+      }
+    }
+
+    const newTask = await taskMutation.create(taskData);
 
     if (assignedToUserId && assignedToUserId !== user?.uid) {
       await notificationMutation.create({
@@ -673,6 +693,9 @@ const TaskForm: React.FC<{
   const [assignedUserId, setAssignedUserId] = useState(initialData?.assignedToUserId || '__none__');
   const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
   const [recurringFrequency, setRecurringFrequency] = useState(initialData?.recurringFrequency || 'weekly');
+  const [recurringInterval, setRecurringInterval] = useState(initialData?.recurringInterval || 1);
+  const [recurringDayOfWeek, setRecurringDayOfWeek] = useState(initialData?.recurringDayOfWeek ?? 1);
+  const [recurringDayOfMonth, setRecurringDayOfMonth] = useState(initialData?.recurringDayOfMonth ?? 1);
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -699,6 +722,13 @@ const TaskForm: React.FC<{
     if (isRecurring) {
       formData.set('isRecurring', 'true');
       formData.set('recurringFrequency', recurringFrequency);
+      formData.set('recurringInterval', String(recurringInterval));
+      if (recurringFrequency === 'weekly') {
+        formData.set('recurringDayOfWeek', String(recurringDayOfWeek));
+      }
+      if (recurringFrequency === 'monthly') {
+        formData.set('recurringDayOfMonth', String(recurringDayOfMonth));
+      }
     }
     
     onSubmit(formData);
@@ -833,18 +863,82 @@ const TaskForm: React.FC<{
         </div>
 
         {isRecurring && (
-          <div>
-            <Label htmlFor="recurringFrequency">Frekuenca</Label>
-            <Select value={recurringFrequency} onValueChange={setRecurringFrequency}>
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="weekly">Çdo javë</SelectItem>
-                <SelectItem value="monthly">Çdo muaj</SelectItem>
-                <SelectItem value="yearly">Çdo vit</SelectItem>
-              </SelectContent>
-            </Select>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label htmlFor="recurringFrequency">Frekuenca</Label>
+                <Select value={recurringFrequency} onValueChange={setRecurringFrequency}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="daily">Çdo ditë</SelectItem>
+                    <SelectItem value="weekly">Çdo javë</SelectItem>
+                    <SelectItem value="monthly">Çdo muaj</SelectItem>
+                    <SelectItem value="yearly">Çdo vit</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+
+              <div>
+                <Label>Çdo sa?</Label>
+                <Select value={String(recurringInterval)} onValueChange={(v) => setRecurringInterval(Number(v))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[1, 2, 3, 4, 6, 8, 12].map(n => (
+                      <SelectItem key={n} value={String(n)}>
+                        {n === 1 ? 'Çdo' : `Çdo ${n}`} {recurringFrequency === 'daily' ? (n === 1 ? 'ditë' : 'ditë') : recurringFrequency === 'weekly' ? (n === 1 ? 'javë' : 'javë') : recurringFrequency === 'monthly' ? (n === 1 ? 'muaj' : 'muaj') : (n === 1 ? 'vit' : 'vite')}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {recurringFrequency === 'weekly' && (
+              <div>
+                <Label>Dita e javës</Label>
+                <Select value={String(recurringDayOfWeek)} onValueChange={(v) => setRecurringDayOfWeek(Number(v))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">E Hënë</SelectItem>
+                    <SelectItem value="2">E Martë</SelectItem>
+                    <SelectItem value="3">E Mërkurë</SelectItem>
+                    <SelectItem value="4">E Enjte</SelectItem>
+                    <SelectItem value="5">E Premte</SelectItem>
+                    <SelectItem value="6">E Shtunë</SelectItem>
+                    <SelectItem value="0">E Diel</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            {recurringFrequency === 'monthly' && (
+              <div>
+                <Label>Dita e muajit</Label>
+                <Select value={String(recurringDayOfMonth)} onValueChange={(v) => setRecurringDayOfMonth(Number(v))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 31 }, (_, i) => i + 1).map(d => (
+                      <SelectItem key={d} value={String(d)}>Dita {d}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+
+            <p className="text-xs text-muted-foreground">
+              {`Përsëritet çdo ${recurringInterval > 1 ? recurringInterval + ' ' : ''}${recurringFrequency === 'daily' ? 'ditë' : recurringFrequency === 'weekly' ? 'javë' : recurringFrequency === 'monthly' ? 'muaj' : 'vit'}${
+                recurringFrequency === 'weekly' ? `, ditën e ${['Diel','Hënë','Martë','Mërkurë','Enjte','Premte','Shtunë'][recurringDayOfWeek]}s` :
+                recurringFrequency === 'monthly' ? `, në ditën ${recurringDayOfMonth}` : ''
+              }`}
+            </p>
           </div>
         )}
       </div>

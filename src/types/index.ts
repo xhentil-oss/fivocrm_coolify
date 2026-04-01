@@ -75,6 +75,7 @@ export interface Task {
   estimatedHours?: number;
   isRecurring?: boolean;
   recurringFrequency?: 'daily' | 'weekly' | 'monthly' | 'yearly';
+  recurringInterval?: number; // e.g. 2 = every 2 weeks/months
   recurringDayOfWeek?: number; // 0=Sunday, 1=Monday, ... 6=Saturday
   recurringDayOfMonth?: number; // 1-31
   nextRecurringDate?: Date;

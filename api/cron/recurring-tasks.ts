@@ -1,31 +1,31 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminDb as db } from '../_firebaseAdmin';
 
-function addFrequency(date: Date, frequency: string, dayOfWeek?: number, dayOfMonth?: number): Date {
+function addFrequency(date: Date, frequency: string, dayOfWeek?: number, dayOfMonth?: number, interval: number = 1): Date {
   const d = new Date(date);
+  const step = Math.max(1, Math.round(interval));
   if (frequency === 'daily') {
-    d.setDate(d.getDate() + 1);
+    d.setDate(d.getDate() + step);
   } else if (frequency === 'weekly') {
-    // Advance to the next occurrence of the specified weekday
+    // Advance by N weeks
+    d.setDate(d.getDate() + 7 * step);
+    // Then align to the specified weekday if given
     if (dayOfWeek !== undefined && dayOfWeek !== null) {
       const currentDay = d.getDay();
-      let daysUntil = dayOfWeek - currentDay;
-      if (daysUntil <= 0) daysUntil += 7;
-      d.setDate(d.getDate() + daysUntil);
-    } else {
-      d.setDate(d.getDate() + 7);
+      let diff = dayOfWeek - currentDay;
+      // If diff is negative or zero and step is 1, move forward; otherwise allow same week alignment
+      if (diff !== 0) {
+        d.setDate(d.getDate() + diff);
+      }
     }
   } else if (frequency === 'monthly') {
-    // Advance to the specified day of the next month
+    d.setMonth(d.getMonth() + step);
     if (dayOfMonth !== undefined && dayOfMonth !== null) {
-      d.setMonth(d.getMonth() + 1);
       const maxDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
       d.setDate(Math.min(dayOfMonth, maxDay));
-    } else {
-      d.setMonth(d.getMonth() + 1);
     }
   } else if (frequency === 'yearly') {
-    d.setFullYear(d.getFullYear() + 1);
+    d.setFullYear(d.getFullYear() + step);
   }
   return d;
 }
@@ -66,9 +66,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       ? task.endDate.toDate()
       : new Date(task.endDate || now);
 
-    const newStartDate = addFrequency(startDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth);
-    const newEndDate = addFrequency(endDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth);
-    const newNextRecurring = addFrequency(nextRecurringDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth);
+    const newStartDate = addFrequency(startDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval);
+    const newEndDate = addFrequency(endDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval);
+    const newNextRecurring = addFrequency(nextRecurringDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval);
 
     // Create the new task copy (reset status and notification flag)
     ops.push(
@@ -83,6 +83,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         endDate: admin.firestore.Timestamp.fromDate(newEndDate),
         isRecurring: true,
         recurringFrequency: task.recurringFrequency,
+        recurringInterval: task.recurringInterval ?? 1,
         recurringDayOfWeek: task.recurringDayOfWeek ?? null,
         recurringDayOfMonth: task.recurringDayOfMonth ?? null,
         nextRecurringDate: admin.firestore.Timestamp.fromDate(newNextRecurring),
