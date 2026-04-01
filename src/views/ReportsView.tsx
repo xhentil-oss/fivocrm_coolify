@@ -93,8 +93,8 @@ const ReportsView: React.FC = () => {
   const isManagerOrAbove = permissions.isAdmin || permissions.isOwner || permissions.isManager;
   // Sales sees revenue/leads/invoices but NOT expenses/profit
   const isSales = permissions.role === 'Sales';
-  // Member/Viewer sees only personal stats
-  const isPersonalOnly = permissions.role === 'Member' || permissions.role === 'Viewer';
+  // Member/Viewer/unknown sees only personal stats (safe default)
+  const isPersonalOnly = !isManagerOrAbove && !isSales;
 
   const { data: invoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
   const { data: projects, loading: projectsLoading } = useCollection<Project>('projects', { skipTeamFilter: true });
