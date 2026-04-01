@@ -536,8 +536,8 @@ const ProjectsView: React.FC = () => {
 
       {/* Projects Table */}
       <div className="border rounded-lg overflow-hidden">
-        {/* Table Header */}
-        <div className="grid grid-cols-12 gap-4 px-4 py-3 bg-muted/50 border-b text-sm font-medium text-muted-foreground">
+        {/* Table Header — hidden on mobile */}
+        <div className="hidden md:grid grid-cols-12 gap-4 px-4 py-3 bg-muted/50 border-b text-sm font-medium text-muted-foreground">
           <div className="col-span-5">Emri</div>
           <div className="col-span-2">Anëtarët</div>
           <div className="col-span-3">Ekipet dhe portfoliot</div>
@@ -554,15 +554,15 @@ const ProjectsView: React.FC = () => {
             return (
               <div
                 key={project.id}
-                className="grid grid-cols-12 gap-4 px-4 py-3 hover:bg-muted/30 cursor-pointer transition-colors items-center group"
+                className="px-4 py-3 hover:bg-muted/30 cursor-pointer transition-colors group md:grid md:grid-cols-12 md:gap-4 md:items-center"
                 onClick={() => navigate(`/app/projects/${project.id}`)}
               >
                 {/* Name Column */}
-                <div className="col-span-5 flex items-center gap-3">
+                <div className="md:col-span-5 flex items-center gap-3">
                   <div className="w-8 h-8 rounded bg-pink-100 flex items-center justify-center flex-shrink-0">
                     <List className="w-4 h-4 text-pink-600" />
                   </div>
-                  <div className="min-w-0">
+                  <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-foreground truncate">{project.name}</span>
                     </div>
@@ -570,10 +570,56 @@ const ProjectsView: React.FC = () => {
                       <span className="text-xs text-success">Joined</span>
                     )}
                   </div>
+                  {/* Mobile-only: action buttons inline */}
+                  <div className="flex items-center gap-1 md:hidden">
+                    {permissions.canEdit && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0"
+                        onClick={(e) => { e.stopPropagation(); setProjectToEdit(project); }}
+                      >
+                        <Edit className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+                    {permissions.canEdit && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="text-destructive hover:text-destructive h-7 w-7 p-0"
+                        onClick={(e) => { e.stopPropagation(); setProjectToDelete({ id: project.id, name: project.name }); }}
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+                  </div>
                 </div>
 
-                {/* Members Column */}
-                <div className="col-span-2">
+                {/* Mobile meta row */}
+                <div className="flex items-center gap-3 mt-2 md:hidden text-xs text-muted-foreground">
+                  {members.length > 0 && (
+                    <div className="flex -space-x-1.5">
+                      {members.slice(0, 3).map((member) => (
+                        <div
+                          key={member.id}
+                          className="w-5 h-5 rounded-full bg-primary/20 border border-background flex items-center justify-center text-[10px] font-medium"
+                        >
+                          {getInitials(member.userId)}
+                        </div>
+                      ))}
+                      {members.length > 3 && <span className="ml-1">+{members.length - 3}</span>}
+                    </div>
+                  )}
+                  {team && (
+                    <Badge variant="secondary" className="text-[10px] font-normal py-0">
+                      {team.name}
+                    </Badge>
+                  )}
+                  <span className="ml-auto">{formatRelativeTime(project.updatedAt)}</span>
+                </div>
+
+                {/* Members Column — desktop only */}
+                <div className="col-span-2 hidden md:block">
                   <div className="flex items-center">
                     <div className="flex -space-x-2">
                       {members.slice(0, 3).map((member, idx) => (
@@ -597,8 +643,8 @@ const ProjectsView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Teams Column */}
-                <div className="col-span-3">
+                {/* Teams Column — desktop only */}
+                <div className="col-span-3 hidden md:block">
                   {team ? (
                     <div className="flex items-center gap-2">
                       <Users className="w-4 h-4 text-muted-foreground" />
@@ -611,8 +657,8 @@ const ProjectsView: React.FC = () => {
                   )}
                 </div>
 
-                {/* Last Modified Column */}
-                <div className="col-span-2 text-right flex items-center justify-end gap-1">
+                {/* Last Modified Column — desktop only */}
+                <div className="col-span-2 text-right hidden md:flex items-center justify-end gap-1">
                   <span className="text-sm text-muted-foreground">
                     {formatRelativeTime(project.updatedAt)}
                   </span>

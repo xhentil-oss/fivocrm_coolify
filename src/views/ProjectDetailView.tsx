@@ -524,12 +524,13 @@ const ProjectDetailView: React.FC = () => {
 
           {viewMode === 'board' && (
             <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-              <div className="grid grid-cols-4 gap-4 p-4 h-full overflow-x-auto">
+              <div className="flex md:grid md:grid-cols-4 gap-4 p-4 h-full overflow-x-auto">
                 {columns.map((column) => {
                   const columnTasks = tasks.filter(task => task.status === column.status);
                   
                   return (
                     <ProjectKanbanColumn key={column.id} id={column.status}>
+                      <div className="min-w-[260px] md:min-w-0 flex flex-col h-full">
                       <div className="flex items-center justify-between mb-3">
                         <h3 className="text-sm font-medium text-muted-foreground">{column.title}</h3>
                         <Badge variant="secondary" className="text-xs">
@@ -571,6 +572,7 @@ const ProjectDetailView: React.FC = () => {
                           ))}
                         </div>
                       </SortableContext>
+                      </div>
                     </ProjectKanbanColumn>
                   );
                 })}
