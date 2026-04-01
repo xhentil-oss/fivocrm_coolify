@@ -356,6 +356,9 @@ const InvoicesView: React.FC = () => {
                   <div className="flex items-center gap-3 mt-1.5">
                     <span className="text-sm font-semibold">{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} L</span>
                     <span className="text-[10px] text-muted-foreground">Afati: {invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : 'Pa afat'}</span>
+                    <Badge variant="outline" className="text-[10px] px-1.5 py-0">
+                      {invoice.paymentMethod === 'Bank' ? 'Transfer' : invoice.paymentMethod === 'Cash' ? 'Kesh' : invoice.paymentMethod || 'Stripe'}
+                    </Badge>
                   </div>
                 </div>
                 <DropdownMenu>
@@ -412,6 +415,7 @@ const InvoicesView: React.FC = () => {
                 <th className="px-4 py-3 text-left text-body-sm font-medium">Totali</th>
                 <th className="px-4 py-3 text-left text-body-sm font-medium">Statusi</th>
                 <th className="px-4 py-3 text-left text-body-sm font-medium hidden lg:table-cell">Afati</th>
+                <th className="px-4 py-3 text-left text-body-sm font-medium hidden md:table-cell">Pagesa</th>
                 <th className="px-4 py-3 text-left text-body-sm font-medium">Veprime</th>
               </tr>
             </thead>
@@ -507,6 +511,11 @@ const InvoicesView: React.FC = () => {
                       )}
                     </td>
                     <td className="px-4 py-3 hidden lg:table-cell">{invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : 'Pa afat'}</td>
+                    <td className="px-4 py-3 hidden md:table-cell">
+                      <Badge variant="outline" className="text-xs">
+                        {invoice.paymentMethod === 'Bank' ? 'Transfer' : invoice.paymentMethod === 'Cash' ? 'Kesh' : invoice.paymentMethod || 'Stripe'}
+                      </Badge>
+                    </td>
                     <td className="px-4 py-3">
                       <div className="flex gap-1.5 flex-wrap">
                         <Button
