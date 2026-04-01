@@ -44,8 +44,8 @@ export function useClientPortal() {
       : undefined
   );
 
-  // Fetch team members to notify admins
-  const { data: allTeamMembers } = useCollection<any>('teamMembers', {
+  // Fetch team members to notify admins and resolve teamId
+  const { data: allTeamMembers, loading: teamMembersLoading } = useCollection<any>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
   });
 
@@ -69,10 +69,18 @@ export function useClientPortal() {
   }, [user, activeByUserId, activeByEmail, byUserIdLoading, byEmailLoading]);
 
   // Direct Firestore create helper (avoids useMutation hook closure issues)
+  // Resolves teamId from the first available team member so portal-created docs
+  // satisfy Firestore rules that require `teamId is string`.
+  const resolveTeamId = useCallback(() => {
+    return allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
+  }, [allTeamMembers]);
+
   const createDoc = useCallback(async (collName: string, data: Record<string, any>) => {
+    const teamId = resolveTeamId();
     const docData = Object.fromEntries(
       Object.entries({
         ...data,
+        ...(teamId ? { teamId } : {}),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
         createdByUserId: user?.uid || null,
@@ -80,11 +88,11 @@ export function useClientPortal() {
     );
     const ref = await addDoc(collection(db, collName), docData);
     return { id: ref.id, ...docData };
-  }, [user?.uid]);
+  }, [user?.uid, resolveTeamId]);
 
   // Auto-create: if no portal access exists, create Customer + Access + Lead
   useEffect(() => {
-    if (!user?.email || authLoading || byUserIdLoading || byEmailLoading || customersLoading) return;
+    if (!user?.email || authLoading || byUserIdLoading || byEmailLoading || customersLoading || teamMembersLoading) return;
     if (autoCreating || didAutoCreate.current) return;
     if (activeByUserId.length > 0) return;
     if (activeByEmail.length > 0) return;
@@ -162,7 +170,7 @@ export function useClientPortal() {
         didAutoCreate.current = false;
       });
     }
-  }, [user, authLoading, activeByUserId, activeByEmail, byUserIdLoading, byEmailLoading, matchingCustomers, customersLoading, autoCreating, createDoc, allTeamMembers]);
+  }, [user, authLoading, activeByUserId, activeByEmail, byUserIdLoading, byEmailLoading, matchingCustomers, customersLoading, teamMembersLoading, autoCreating, createDoc, allTeamMembers]);
 
   const access = activeByUserId[0] || activeByEmail[0] || null;
 
@@ -172,7 +180,7 @@ export function useClientPortal() {
     || null;
 
   // Keep isLoading=true in the gap between "queries done" and "useEffect fires auto-create"
-  const queriesLoaded = !byUserIdLoading && !byEmailLoading && !customersLoading;
+  const queriesLoaded = !byUserIdLoading && !byEmailLoading && !customersLoading && !teamMembersLoading;
   const hasNoAccess = activeByUserId.length === 0 && activeByEmail.length === 0;
   const pendingAutoCreate = !!user?.email && queriesLoaded && hasNoAccess && !autoCreating && !didAutoCreate.current;
 
@@ -180,6 +188,6 @@ export function useClientPortal() {
     isClient: !!access || autoCreating || autoCreated,
     portalAccess: access,
     customerId: resolvedCustomerId,
-    isLoading: authLoading || byUserIdLoading || byEmailLoading || autoCreating || pendingAutoCreate,
+    isLoading: authLoading || byUserIdLoading || byEmailLoading || teamMembersLoading || autoCreating || pendingAutoCreate,
   };
 }
