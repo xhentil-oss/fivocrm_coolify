@@ -9,7 +9,7 @@ import { Input } from '../../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { Separator } from '../../components/ui/separator';
-import { FileText, Search, Eye, DollarSign, Calendar, CreditCard, Check, ExternalLink } from 'lucide-react';
+import { FileText, Search, Eye, DollarSign, Calendar, CreditCard, Check, ExternalLink, Building2 } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
 import type { Invoice, InvoiceItem, Service, Customer } from '../../types';
 
@@ -87,7 +87,7 @@ const PortalInvoicesView: React.FC = () => {
           invoiceId: invoice.id,
           invoiceNumber: invoice.invoiceNumber || invoice.id.slice(0, 8),
           amount,
-          currency: 'eur',
+          currency: (invoice as any).currency === 'EUR' ? 'eur' : 'eur',
           customerEmail: customer?.email || undefined,
           customerName: customer?.name || undefined,
           successUrl: `${window.location.origin}/portal/invoices?payment=success`,
@@ -157,6 +157,7 @@ const PortalInvoicesView: React.FC = () => {
 
   const totalPaid = invoices?.filter(i => i.status === 'Paid').reduce((s, i) => s + (i.total ?? i.amount ?? 0), 0) || 0;
   const totalPending = invoices?.filter(i => i.status === 'Pending' || i.status === 'Overdue').reduce((s, i) => s + (i.total ?? i.amount ?? 0), 0) || 0;
+  const paidCurrencyMixed = invoices?.some(i => i.status === 'Paid' && (i as any).currency === 'EUR') && invoices?.some(i => i.status === 'Paid' && (i as any).currency !== 'EUR');
 
   if (loading) {
     return (
@@ -286,12 +287,17 @@ const PortalInvoicesView: React.FC = () => {
 
                   <div className="flex items-center gap-3">
                     <span className="text-lg font-bold">
-                      {(invoice.total || invoice.amount || 0).toLocaleString()} ALL
+                      {(invoice.total || invoice.amount || 0).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}
                     </span>
                     <Badge className={getStatusColor(invoice.status)} variant="secondary">
                       {getStatusLabel(invoice.status)}
                     </Badge>
-                    {(invoice.status === 'Pending' || invoice.status === 'Overdue') && (
+                    {invoice.paymentMethod && (
+                      <Badge variant="outline" className="text-xs">
+                        {invoice.paymentMethod === 'Bank' ? 'Transfer' : invoice.paymentMethod}
+                      </Badge>
+                    )}
+                    {(invoice.status === 'Pending' || invoice.status === 'Overdue') && invoice.paymentMethod === 'Stripe' && (
                       <Button
                         size="sm"
                         className="bg-[#635BFF] hover:bg-[#5851ea] text-white"
@@ -378,10 +384,10 @@ const PortalInvoicesView: React.FC = () => {
                           <div>
                             <p className="font-medium">{item.description || getServiceName(item.serviceId)}</p>
                             <p className="text-muted-foreground">
-                              {item.quantity} × {item.unitPrice.toLocaleString()} ALL
+                              {item.quantity} × {item.unitPrice.toLocaleString()} {(selectedInvoice as any)?.currency === 'EUR' ? '€' : 'L'}
                             </p>
                           </div>
-                          <p className="font-semibold">{item.totalPrice.toLocaleString()} ALL</p>
+                          <p className="font-semibold">{item.totalPrice.toLocaleString()} {(selectedInvoice as any)?.currency === 'EUR' ? '€' : 'L'}</p>
                         </div>
                       ))}
                     </div>
@@ -392,10 +398,38 @@ const PortalInvoicesView: React.FC = () => {
               <Separator />
               <div className="flex items-center justify-between text-lg font-bold">
                 <span>Totali</span>
-                <span>{(selectedInvoice.total || selectedInvoice.amount || 0).toLocaleString()} ALL</span>
+                <span>{(selectedInvoice.total || selectedInvoice.amount || 0).toLocaleString()} {(selectedInvoice as any).currency === 'EUR' ? '€' : 'L'}</span>
               </div>
 
-              {/* Stripe Payment Section */}
+              {/* Bank Transfer Details */}
+              {selectedInvoice.paymentMethod === 'Bank' && (selectedInvoice as any).bankIBAN && (
+                <div className="p-4 bg-blue-50 border border-blue-200 rounded-lg space-y-2">
+                  <p className="font-semibold text-sm flex items-center gap-2 text-blue-800">
+                    <Building2 className="w-4 h-4" />
+                    Detajet Bankare për Pagesë
+                  </p>
+                  <div className="grid grid-cols-1 gap-1.5 text-sm">
+                    {(selectedInvoice as any).bankName && (
+                      <p><span className="text-muted-foreground">Banka:</span> <span className="font-medium">{(selectedInvoice as any).bankName}</span></p>
+                    )}
+                    {(selectedInvoice as any).bankAccountHolder && (
+                      <p><span className="text-muted-foreground">Mbajtësi:</span> <span className="font-medium">{(selectedInvoice as any).bankAccountHolder}</span></p>
+                    )}
+                    <p><span className="text-muted-foreground">IBAN:</span> <span className="font-mono font-medium">{(selectedInvoice as any).bankIBAN}</span></p>
+                    {(selectedInvoice as any).bankSWIFT && (
+                      <p><span className="text-muted-foreground">SWIFT / BIC:</span> <span className="font-mono font-medium">{(selectedInvoice as any).bankSWIFT}</span></p>
+                    )}
+                    {(selectedInvoice as any).bankCountry && (
+                      <p><span className="text-muted-foreground">Shteti:</span> <span className="font-medium">{(selectedInvoice as any).bankCountry}</span></p>
+                    )}
+                  </div>
+                  <p className="text-xs text-blue-700 mt-2">
+                    Ju lutemi përdorni numrin e faturës <strong>#{selectedInvoice.invoiceNumber || selectedInvoice.id.slice(0, 8)}</strong> si referencë pagese.
+                  </p>
+                </div>
+              )}
+
+              {/* Payment Section */}
               {(selectedInvoice.status === 'Pending' || selectedInvoice.status === 'Overdue') && (
                 <div className="space-y-2 pt-2">
                   {(selectedInvoice as any).paymentUrl && (
@@ -406,13 +440,15 @@ const PortalInvoicesView: React.FC = () => {
                       </a>
                     </Button>
                   )}
-                  <Button
-                    className="w-full bg-[#635BFF] hover:bg-[#5851ea] text-white"
-                    onClick={() => handleStripePayment(selectedInvoice)}
-                  >
-                    <CreditCard className="w-4 h-4 mr-2" />
-                    Paguaj me Stripe
-                  </Button>
+                  {selectedInvoice.paymentMethod === 'Stripe' && (
+                    <Button
+                      className="w-full bg-[#635BFF] hover:bg-[#5851ea] text-white"
+                      onClick={() => handleStripePayment(selectedInvoice)}
+                    >
+                      <CreditCard className="w-4 h-4 mr-2" />
+                      Paguaj me Stripe
+                    </Button>
+                  )}
                 </div>
               )}
 

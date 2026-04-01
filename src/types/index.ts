@@ -520,6 +520,7 @@ export interface DailyReport {
   planTomorrow: string;
   hoursWorked?: number;
   projectIds?: string[];
+  completedTaskIds?: string[];
   mood?: 'great' | 'good' | 'neutral' | 'struggling';
   createdAt: Date;
   updatedAt: Date;

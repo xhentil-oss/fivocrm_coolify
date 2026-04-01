@@ -9,9 +9,9 @@ import { Label } from './ui/label';
 import { Input } from './ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Badge } from './ui/badge';
-import { CheckCircle2, Clock, AlertTriangle, ArrowRight, Smile, Meh, Frown, Sparkles } from 'lucide-react';
+import { CheckCircle2, Clock, AlertTriangle, ArrowRight, Smile, Meh, Frown, Sparkles, Square, CheckSquare } from 'lucide-react';
 import { toast } from '../hooks/use-toast';
-import type { DailyReport, Project } from '../types';
+import type { DailyReport, Project, Task } from '../types';
 
 const POPUP_HOUR = 16;
 const POPUP_MINUTE = 55;
@@ -35,6 +35,7 @@ const DailyReportPopup: React.FC = () => {
   const [hoursWorked, setHoursWorked] = useState<string>('8');
   const [mood, setMood] = useState<'great' | 'good' | 'neutral' | 'struggling'>('good');
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
   const today = getTodayString();
@@ -47,7 +48,29 @@ const DailyReportPopup: React.FC = () => {
   });
 
   const { data: projects } = useCollection<Project>('projects');
+  const { data: myTasks } = useCollection<Task>('tasks', {
+    where: [{ field: 'assignedToUserId', operator: '==', value: user?.uid || '__never__' }],
+  });
   const reportMutation = useMutation<DailyReport>('dailyReports');
+  const taskMutation = useMutation<Task>('tasks');
+
+  // Tasks completed today (status=Done, updatedAt is today)
+  const completedTodayTasks = useMemo(() => {
+    if (!myTasks) return [];
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    return myTasks.filter(t => {
+      if (t.status !== 'Done') return false;
+      const updated = t.updatedAt instanceof Date ? t.updatedAt : new Date(t.updatedAt);
+      return updated >= todayStart;
+    });
+  }, [myTasks]);
+
+  // Pending tasks (not Done)
+  const pendingTasks = useMemo(() => {
+    if (!myTasks) return [];
+    return myTasks.filter(t => t.status !== 'Done');
+  }, [myTasks]);
 
   const alreadySubmitted = useMemo(() => {
     return (todayReports?.length || 0) > 0;
@@ -96,6 +119,15 @@ const DailyReportPopup: React.FC = () => {
 
     setSubmitting(true);
     try {
+      // Mark selected pending tasks as Done
+      const allCompletedIds = [
+        ...completedTodayTasks.map(t => t.id),
+        ...selectedTaskIds,
+      ];
+      for (const taskId of selectedTaskIds) {
+        await taskMutation.update(taskId, { status: 'Done' } as any);
+      }
+
       await reportMutation.create({
         userId: user.uid,
         date: today,
@@ -105,6 +137,7 @@ const DailyReportPopup: React.FC = () => {
         planTomorrow: planTomorrow.trim(),
         hoursWorked: parseFloat(hoursWorked) || 8,
         projectIds: selectedProjectIds,
+        completedTaskIds: allCompletedIds.length > 0 ? allCompletedIds : undefined,
         mood,
       } as any);
 
@@ -119,6 +152,7 @@ const DailyReportPopup: React.FC = () => {
       setHoursWorked('8');
       setMood('good');
       setSelectedProjectIds([]);
+      setSelectedTaskIds([]);
     } catch (err) {
       console.error('Failed to submit daily report:', err);
       toast({ title: 'Gabim!', description: 'Nuk u ruajt raporti. Provo përsëri.', variant: 'destructive' });
@@ -130,6 +164,12 @@ const DailyReportPopup: React.FC = () => {
   const toggleProject = (id: string) => {
     setSelectedProjectIds(prev =>
       prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]
+    );
+  };
+
+  const toggleTask = (id: string) => {
+    setSelectedTaskIds(prev =>
+      prev.includes(id) ? prev.filter(t => t !== id) : [...prev, id]
     );
   };
 
@@ -163,6 +203,59 @@ const DailyReportPopup: React.FC = () => {
               rows={3}
             />
           </div>
+
+          {/* Tasks section */}
+          {(completedTodayTasks.length > 0 || pendingTasks.length > 0) && (
+            <div className="space-y-3">
+              <Label className="flex items-center gap-2">
+                <CheckSquare className="w-4 h-4 text-primary" />
+                Detyrat e sotme
+              </Label>
+
+              {/* Tasks completed today (auto-detected) */}
+              {completedTodayTasks.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground">Të përfunduara sot:</p>
+                  {completedTodayTasks.map(task => (
+                    <div key={task.id} className="flex items-center gap-2 p-2 rounded-lg bg-success/10 text-sm">
+                      <CheckCircle2 className="w-4 h-4 text-success flex-shrink-0" />
+                      <span className="line-through text-muted-foreground truncate">{task.title}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Pending tasks (checkable) */}
+              {pendingTasks.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground">Shëno si të përfunduara:</p>
+                  {pendingTasks.map(task => (
+                    <button
+                      key={task.id}
+                      type="button"
+                      onClick={() => toggleTask(task.id)}
+                      className={`flex items-center gap-2 p-2 rounded-lg text-sm w-full text-left transition-all ${
+                        selectedTaskIds.includes(task.id)
+                          ? 'bg-primary/10 border border-primary/30'
+                          : 'bg-muted/50 hover:bg-muted border border-transparent'
+                      }`}
+                    >
+                      {selectedTaskIds.includes(task.id) ? (
+                        <CheckSquare className="w-4 h-4 text-primary flex-shrink-0" />
+                      ) : (
+                        <Square className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                      )}
+                      <span className={`truncate ${selectedTaskIds.includes(task.id) ? 'line-through text-muted-foreground' : ''}`}>
+                        {task.title}
+                      </span>
+                      {task.priority === 'urgent' && <Badge variant="destructive" className="text-[10px] ml-auto">Urgjent</Badge>}
+                      {task.priority === 'high' && <Badge className="text-[10px] ml-auto bg-orange-500">E lartë</Badge>}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
 
           {/* 2. Open items */}
           <div>

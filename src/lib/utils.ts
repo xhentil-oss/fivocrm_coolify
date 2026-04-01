@@ -78,3 +78,23 @@ export function safeHref(url: string | undefined | null): string {
   if (!trimmed.includes(':')) return trimmed;
   return '#';
 }
+
+// ── EUR → ALL exchange rate ──
+// Stored in localStorage so admins can update it from settings.
+const DEFAULT_EUR_ALL_RATE = 100;
+
+export function getEurToAllRate(): number {
+  try {
+    const stored = localStorage.getItem('eur_all_rate');
+    if (stored) {
+      const rate = parseFloat(stored);
+      if (rate > 0 && isFinite(rate)) return rate;
+    }
+  } catch { /* ignore */ }
+  return DEFAULT_EUR_ALL_RATE;
+}
+
+export function toAll(amount: number, currency?: string): number {
+  if (currency === 'EUR') return amount * getEurToAllRate();
+  return amount;
+}

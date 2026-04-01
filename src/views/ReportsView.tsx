@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, Suspense, lazy } from 'react';
 import { TrendingUp, TrendingDown, DollarSign, Users, CheckCircle, Clock, Building2, Receipt, Target, FileText, UserPlus, CreditCard, ClipboardList } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { useCollection } from '../hooks/useFirestore';
@@ -10,6 +10,9 @@ import {
   PieChart, Pie, Cell, Legend
 } from 'recharts';
 import type { Invoice, Project, Team, Expense, Service, InvoiceItem, Task, Lead, Customer, Activity, TeamMember } from '../types';
+import { toAll } from '../lib/utils';
+
+const DailyReportsView = lazy(() => import('./DailyReportsView'));
 
 // ── Recharts Bar Chart ──
 const BarChart: React.FC<{ data: { label: string; value: number; color?: string }[]; height?: number }> = ({ data, height = 200 }) => {
@@ -119,7 +122,7 @@ const ReportsView: React.FC = () => {
           : (inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt)));
         return paidDate.getMonth() === d.getMonth() && paidDate.getFullYear() === d.getFullYear();
       });
-      months.push({ label, value: monthInvoices.reduce((s, inv) => s + (inv.total ?? inv.amount ?? 0), 0) });
+      months.push({ label, value: monthInvoices.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) });
     }
     return months;
   }, [invoices]);
@@ -184,7 +187,7 @@ const ReportsView: React.FC = () => {
         // Revenue = sum of paid invoices linked to this project
         const revenue = invoices
           ? invoices.filter(inv => inv.projectId === p.id && inv.status === 'Paid')
-              .reduce((s, inv) => s + (inv.total ?? inv.amount ?? 0), 0)
+              .reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0)
           : 0;
         return { name: p.name, progress: pct, done, total, budget: p.budget, spent: p.spent, revenue };
       });
@@ -200,9 +203,9 @@ const ReportsView: React.FC = () => {
         const service = services.find(s => s.id === item.serviceId);
         const dept = service?.category || 'General';
         const current = deptMap.get(dept) || { total: 0, paid: 0, count: 0 };
-        current.total += item.totalPrice;
+        current.total += toAll(item.totalPrice, (invoice as any).currency);
         current.count++;
-        if (invoice.status === 'Paid') current.paid += item.totalPrice;
+        if (invoice.status === 'Paid') current.paid += toAll(item.totalPrice, (invoice as any).currency);
         deptMap.set(dept, current);
       });
     });
@@ -210,9 +213,9 @@ const ReportsView: React.FC = () => {
   }, [invoices, invoiceItems, services]);
 
   // ── KPI Calculations ──
-  const totalRevenue = invoices?.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + (inv.total ?? inv.amount ?? 0), 0) || 0;
+  const totalRevenue = invoices?.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
   const paidRevenue = totalRevenue;
-  const projectedRevenue = invoices?.filter(inv => inv.status === 'Pending' || inv.status === 'Draft').reduce((sum, inv) => sum + (inv.total ?? inv.amount ?? 0), 0) || 0;
+  const projectedRevenue = invoices?.filter(inv => inv.status === 'Pending' || inv.status === 'Draft').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
   const totalExpenses = (expenses?.reduce((sum, exp) => sum + (exp.amount ?? 0), 0) || 0) + totalMonthlySalary;
   const profit = paidRevenue - totalExpenses;
   const activeProjects = projects?.filter(p => p.status === 'Active').length || 0;
@@ -232,7 +235,7 @@ const ReportsView: React.FC = () => {
       const d = inv.paidAt ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt))
         : (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt));
       return d >= lastMonth && d <= lastMonthEnd;
-    }).reduce((s, inv) => s + (inv.total ?? inv.amount ?? 0), 0);
+    }).reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
   }, [invoices]);
 
   const thisMonthRevenue = useMemo(() => {
@@ -244,7 +247,7 @@ const ReportsView: React.FC = () => {
       const d = inv.paidAt ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt))
         : (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt));
       return d >= thisMonth;
-    }).reduce((s, inv) => s + (inv.total ?? inv.amount ?? 0), 0);
+    }).reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
   }, [invoices]);
 
   const revenueChange = lastMonthRevenue > 0 ? Math.round(((thisMonthRevenue - lastMonthRevenue) / lastMonthRevenue) * 100) : 0;
@@ -283,22 +286,26 @@ const ReportsView: React.FC = () => {
 
   const isLoading = invoicesLoading || projectsLoading || expensesLoading;
 
-  if (isLoading) {
-    return (
-      <div className="space-y-8">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-          {[1, 2, 3, 4].map(i => (
-            <div key={i} className="p-6 bg-card rounded-lg border space-y-3">
-              <div className="h-4 w-28 skeleton rounded" />
-              <div className="h-8 w-24 skeleton rounded" />
-            </div>
-          ))}
-        </div>
-      </div>
-    );
-  }
-
   return (
+    <Tabs defaultValue="overview" className="space-y-6">
+      <TabsList>
+        <TabsTrigger value="overview">Pamja e Përgjithshme</TabsTrigger>
+        <TabsTrigger value="daily">Raportet Ditore</TabsTrigger>
+      </TabsList>
+
+      <TabsContent value="overview" className="mt-0">
+        {isLoading ? (
+          <div className="space-y-8">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {[1, 2, 3, 4].map(i => (
+                <div key={i} className="p-6 bg-card rounded-lg border space-y-3">
+                  <div className="h-4 w-28 skeleton rounded" />
+                  <div className="h-8 w-24 skeleton rounded" />
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : (
     <div className="space-y-8">
       {/* KPI Cards */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 lg:gap-6">
@@ -491,6 +498,22 @@ const ReportsView: React.FC = () => {
         )}
       </Card>
     </div>
+        )}
+      </TabsContent>
+
+      <TabsContent value="daily" className="mt-0">
+        <Suspense fallback={
+          <div className="space-y-6">
+            <div className="h-8 w-48 skeleton rounded" />
+            <div className="grid grid-cols-3 gap-4">
+              {[1, 2, 3].map(i => <div key={i} className="h-24 skeleton rounded-lg" />)}
+            </div>
+          </div>
+        }>
+          <DailyReportsView />
+        </Suspense>
+      </TabsContent>
+    </Tabs>
   );
 };
 

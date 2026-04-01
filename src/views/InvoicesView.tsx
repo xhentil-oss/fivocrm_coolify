@@ -211,10 +211,10 @@ const InvoicesView: React.FC = () => {
     cancelEditing();
   };
 
-  const totalRevenue = invoices?.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + (inv.total ?? inv.amount ?? 0), 0) || 0;
+  const totalRevenue = invoices?.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
   const paidInvoices = invoices?.filter(inv => inv.status === 'Paid').length || 0;
-  const pendingAmount = invoices?.filter(inv => inv.status === 'Pending').reduce((sum, inv) => sum + (inv.total ?? inv.amount ?? 0), 0) || 0;
-  const draftAmount = invoices?.filter(inv => inv.status === 'Draft').reduce((sum, inv) => sum + (inv.total ?? inv.amount ?? 0), 0) || 0;
+  const pendingAmount = invoices?.filter(inv => inv.status === 'Pending').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
+  const draftAmount = invoices?.filter(inv => inv.status === 'Draft').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
   const projectedRevenue = pendingAmount + draftAmount;
 
   if (invoicesLoading) {

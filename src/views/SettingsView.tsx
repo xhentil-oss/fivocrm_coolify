@@ -108,6 +108,10 @@ const SettingsView: React.FC = () => {
   });
   const [bankSaved, setBankSaved] = useState(false);
 
+  // ── EUR→ALL exchange rate ──
+  const [eurAllRate, setEurAllRate] = useState(() => localStorage.getItem('eur_all_rate') || '100');
+  const [rateSaved, setRateSaved] = useState(false);
+
   // ── Cron / Automation settings (persisted in localStorage) ──
   const [cronSettings, setCronSettings] = useState<Record<string, any>>(() => {
     try { return JSON.parse(localStorage.getItem('cron_settings') || '{}'); } catch { return {}; }
@@ -639,6 +643,51 @@ const SettingsView: React.FC = () => {
               <div className="ml-auto">
                 <Button onClick={handleSaveBankSettings} disabled={bankAccounts.length === 0 || !bankAccounts.some(b => b.iban)}>
                   Ruaj Detajet Bankare
+                </Button>
+              </div>
+            </div>
+          </Card>
+
+          {/* EUR→ALL Exchange Rate */}
+          <Card className="p-6 space-y-4">
+            <div className="flex items-center gap-3">
+              <div className="p-2 bg-emerald-50 dark:bg-emerald-500/10 rounded-lg">
+                <Globe className="w-6 h-6 text-emerald-600" />
+              </div>
+              <div>
+                <h3 className="text-h4 text-foreground">Kursi i Këmbimit EUR → ALL</h3>
+                <p className="text-xs text-muted-foreground">Përdoret për konvertimin e faturave në EUR te të ardhurat totale në LEK</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-4 max-w-sm">
+              <div className="flex-1">
+                <Label>1 EUR =</Label>
+                <div className="flex items-center gap-2">
+                  <Input type="number" min="1" step="0.1" value={eurAllRate}
+                    onChange={(e) => setEurAllRate(e.target.value)}
+                    className="font-mono"
+                  />
+                  <span className="text-sm text-muted-foreground font-medium whitespace-nowrap">ALL</span>
+                </div>
+              </div>
+            </div>
+            <div className="flex items-center justify-between">
+              {rateSaved && (
+                <div className="flex items-center gap-2 text-success">
+                  <CheckCircle2 className="w-4 h-4" />
+                  <span className="text-sm">Kursi u ruajt!</span>
+                </div>
+              )}
+              <div className="ml-auto">
+                <Button onClick={() => {
+                  const rate = parseFloat(eurAllRate);
+                  if (rate > 0 && isFinite(rate)) {
+                    localStorage.setItem('eur_all_rate', String(rate));
+                    setRateSaved(true);
+                    setTimeout(() => setRateSaved(false), 3000);
+                  }
+                }} disabled={!eurAllRate || parseFloat(eurAllRate) <= 0}>
+                  Ruaj Kursin
                 </Button>
               </div>
             </div>

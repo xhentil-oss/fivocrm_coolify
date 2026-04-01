@@ -16,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Separator } from '../components/ui/separator';
-import { safeHref } from '../lib/utils';
+import { safeHref, toAll } from '../lib/utils';
 import type { Customer, Invoice, Project, ClientRequest, Activity, Task } from '../types';
 
 const Customer360View: React.FC = () => {
@@ -73,9 +73,9 @@ const Customer360View: React.FC = () => {
   }, [activities, customerId]);
 
   // Stats
-  const totalRevenue = customerInvoices.reduce((s, i) => s + (i.total ?? i.amount ?? 0), 0);
-  const paidRevenue = customerInvoices.filter(i => i.status === 'Paid').reduce((s, i) => s + (i.total ?? i.amount ?? 0), 0);
-  const pendingAmount = customerInvoices.filter(i => i.status === 'Pending' || i.status === 'Overdue').reduce((s, i) => s + (i.total ?? i.amount ?? 0), 0);
+  const totalRevenue = customerInvoices.reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
+  const paidRevenue = customerInvoices.filter(i => i.status === 'Paid').reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
+  const pendingAmount = customerInvoices.filter(i => i.status === 'Pending' || i.status === 'Overdue').reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
   const activeProjectCount = customerProjects.filter(p => p.status === 'Active').length;
 
   // Project task progress
@@ -282,7 +282,7 @@ const Customer360View: React.FC = () => {
                           <p className="text-xs text-muted-foreground">{inv.createdAt instanceof Date ? inv.createdAt.toLocaleDateString('sq-AL') : ''}</p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="font-semibold">{(inv.total || inv.amount || 0).toLocaleString()} ALL</span>
+                          <span className="font-semibold">{(inv.total || inv.amount || 0).toLocaleString()} {(inv as any).currency === 'EUR' ? '€' : 'L'}</span>
                           <Badge className={getStatusColor(inv.status)} variant="secondary">{inv.status}</Badge>
                         </div>
                       </div>
@@ -346,7 +346,7 @@ const Customer360View: React.FC = () => {
                           <td className="px-4 py-2.5 font-mono">{inv.invoiceNumber || inv.id.slice(0, 8)}</td>
                           <td className="px-4 py-2.5">{inv.createdAt instanceof Date ? inv.createdAt.toLocaleDateString('sq-AL') : ''}</td>
                           <td className="px-4 py-2.5">{inv.dueDate instanceof Date ? inv.dueDate.toLocaleDateString('sq-AL') : '-'}</td>
-                          <td className="px-4 py-2.5 text-right font-semibold">{(inv.total || inv.amount || 0).toLocaleString()} ALL</td>
+                          <td className="px-4 py-2.5 text-right font-semibold">{(inv.total || inv.amount || 0).toLocaleString()} {(inv as any).currency === 'EUR' ? '€' : 'L'}</td>
                           <td className="px-4 py-2.5"><Badge className={getStatusColor(inv.status)} variant="secondary">{inv.status}</Badge></td>
                           <td className="px-4 py-2.5">{inv.paymentMethod || '-'}</td>
                         </tr>
