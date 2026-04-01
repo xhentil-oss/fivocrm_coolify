@@ -626,6 +626,10 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
   const [bankIBAN, setBankIBAN] = useState((editInvoice as any)?.bankIBAN || '');
   const [bankSWIFT, setBankSWIFT] = useState((editInvoice as any)?.bankSWIFT || '');
   const [bankAccountHolder, setBankAccountHolder] = useState((editInvoice as any)?.bankAccountHolder || '');
+  const [bankCountry, setBankCountry] = useState((editInvoice as any)?.bankCountry || '');
+  const [savedBankAccounts] = useState<Array<{ id: string; bankName: string; accountHolder: string; iban: string; swift: string; country: string }>>(() => {
+    try { return JSON.parse(localStorage.getItem('bank_accounts') || '[]'); } catch { return []; }
+  });
   const [status, setStatus] = useState(editInvoice?.status || 'Pending');
   const [notes, setNotes] = useState((editInvoice as any)?.notes || '');
   const [paymentUrl, setPaymentUrl] = useState((editInvoice as any)?.paymentUrl || '');
@@ -664,10 +668,24 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
   // Auto-fill bank defaults from settings when user switches to Bank payment
   React.useEffect(() => {
     if (paymentMethod === 'Bank' && !isEditing && !bankIBAN) {
+      // Use first saved bank account if available, otherwise fall back to legacy localStorage keys
+      try {
+        const accounts = JSON.parse(localStorage.getItem('bank_accounts') || '[]');
+        if (accounts.length > 0) {
+          const first = accounts[0];
+          setBankName(first.bankName || '');
+          setBankIBAN(first.iban || '');
+          setBankSWIFT(first.swift || '');
+          setBankAccountHolder(first.accountHolder || '');
+          setBankCountry(first.country || '');
+          return;
+        }
+      } catch { /* ignore */ }
       setBankName(localStorage.getItem('default_bank_name') || '');
       setBankIBAN(localStorage.getItem('default_bank_iban') || '');
       setBankSWIFT(localStorage.getItem('default_bank_swift') || '');
       setBankAccountHolder(localStorage.getItem('default_bank_holder') || '');
+      setBankCountry(localStorage.getItem('default_bank_country') || '');
     }
   }, [paymentMethod]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -730,6 +748,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
       bankIBAN: paymentMethod === 'Bank' ? bankIBAN : '',
       bankSWIFT: paymentMethod === 'Bank' ? bankSWIFT : '',
       bankAccountHolder: paymentMethod === 'Bank' ? bankAccountHolder : '',
+      bankCountry: paymentMethod === 'Bank' ? bankCountry : '',
       status,
       dueDate: dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       notes,
@@ -969,10 +988,35 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
       {/* Bank Details — shown when payment method is Bank Transfer */}
       {paymentMethod === 'Bank' && (
         <div className="space-y-3 p-4 border border-dashed border-border rounded-lg bg-muted/30">
-          <h4 className="text-sm font-semibold flex items-center gap-2">
-            <Building2 className="w-4 h-4" />
-            Detajet Bankare
-          </h4>
+          <div className="flex items-center justify-between">
+            <h4 className="text-sm font-semibold flex items-center gap-2">
+              <Building2 className="w-4 h-4" />
+              Detajet Bankare
+            </h4>
+            {savedBankAccounts.length > 1 && (
+              <Select onValueChange={(bankId) => {
+                const bank = savedBankAccounts.find(b => b.id === bankId);
+                if (bank) {
+                  setBankName(bank.bankName);
+                  setBankIBAN(bank.iban);
+                  setBankSWIFT(bank.swift);
+                  setBankAccountHolder(bank.accountHolder);
+                  setBankCountry(bank.country);
+                }
+              }}>
+                <SelectTrigger className="w-[200px]">
+                  <SelectValue placeholder="Zgjidh bankën" />
+                </SelectTrigger>
+                <SelectContent>
+                  {savedBankAccounts.map(b => (
+                    <SelectItem key={b.id} value={b.id}>
+                      {b.bankName || b.iban.slice(0, 12)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+          </div>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label htmlFor="bankName">Emri i Bankës</Label>
@@ -989,6 +1033,10 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
             <div>
               <Label htmlFor="bankSWIFT">SWIFT / BIC</Label>
               <Input id="bankSWIFT" placeholder="p.sh. SGSBALTX" value={bankSWIFT} onChange={(e) => setBankSWIFT(e.target.value)} />
+            </div>
+            <div>
+              <Label htmlFor="bankCountry">Shteti</Label>
+              <Input id="bankCountry" placeholder="p.sh. Shqipëri" value={bankCountry} onChange={(e) => setBankCountry(e.target.value)} />
             </div>
           </div>
         </div>
@@ -1143,6 +1191,7 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             {(invoice as any).bankAccountHolder && <p><span className="text-muted-foreground">Mbajtësi:</span> {(invoice as any).bankAccountHolder}</p>}
             <p><span className="text-muted-foreground">IBAN:</span> <span className="font-mono">{(invoice as any).bankIBAN}</span></p>
             {(invoice as any).bankSWIFT && <p><span className="text-muted-foreground">SWIFT:</span> <span className="font-mono">{(invoice as any).bankSWIFT}</span></p>}
+            {(invoice as any).bankCountry && <p><span className="text-muted-foreground">Shteti:</span> {(invoice as any).bankCountry}</p>}
           </div>
         </div>
       )}

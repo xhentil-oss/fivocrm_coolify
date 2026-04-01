@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown } from 'lucide-react';
+import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2 } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Label } from '../components/ui/label';
@@ -92,11 +92,20 @@ const SettingsView: React.FC = () => {
   const [stripeMode, setStripeMode] = useState<'test' | 'live'>('test');
   const [stripeSaved, setStripeSaved] = useState(false);
 
-  // ── Bank Transfer default settings ──
-  const [defaultBankName, setDefaultBankName] = useState(() => localStorage.getItem('default_bank_name') || '');
-  const [defaultBankIBAN, setDefaultBankIBAN] = useState(() => localStorage.getItem('default_bank_iban') || '');
-  const [defaultBankSWIFT, setDefaultBankSWIFT] = useState(() => localStorage.getItem('default_bank_swift') || '');
-  const [defaultBankAccountHolder, setDefaultBankAccountHolder] = useState(() => localStorage.getItem('default_bank_holder') || '');
+  // ── Bank Transfer default settings (multi-bank) ──
+  const [bankAccounts, setBankAccounts] = useState<Array<{ id: string; bankName: string; accountHolder: string; iban: string; swift: string; country: string }>>(() => {
+    try {
+      const stored = localStorage.getItem('bank_accounts');
+      if (stored) return JSON.parse(stored);
+      // Migrate from old single-bank format
+      const oldName = localStorage.getItem('default_bank_name');
+      const oldIban = localStorage.getItem('default_bank_iban');
+      if (oldIban) {
+        return [{ id: crypto.randomUUID(), bankName: oldName || '', accountHolder: localStorage.getItem('default_bank_holder') || '', iban: oldIban, swift: localStorage.getItem('default_bank_swift') || '', country: '' }];
+      }
+      return [];
+    } catch { return []; }
+  });
   const [bankSaved, setBankSaved] = useState(false);
 
   // ── Cron / Automation settings (persisted in localStorage) ──
@@ -141,12 +150,30 @@ const SettingsView: React.FC = () => {
   };
 
   const handleSaveBankSettings = () => {
-    localStorage.setItem('default_bank_name', defaultBankName);
-    localStorage.setItem('default_bank_iban', defaultBankIBAN);
-    localStorage.setItem('default_bank_swift', defaultBankSWIFT);
-    localStorage.setItem('default_bank_holder', defaultBankAccountHolder);
+    localStorage.setItem('bank_accounts', JSON.stringify(bankAccounts));
+    // Keep backward-compatible keys for first bank (used by invoice auto-fill)
+    const first = bankAccounts[0];
+    if (first) {
+      localStorage.setItem('default_bank_name', first.bankName);
+      localStorage.setItem('default_bank_iban', first.iban);
+      localStorage.setItem('default_bank_swift', first.swift);
+      localStorage.setItem('default_bank_holder', first.accountHolder);
+      localStorage.setItem('default_bank_country', first.country);
+    }
     setBankSaved(true);
     setTimeout(() => setBankSaved(false), 3000);
+  };
+
+  const addBankAccount = () => {
+    setBankAccounts(prev => [...prev, { id: crypto.randomUUID(), bankName: '', accountHolder: '', iban: '', swift: '', country: '' }]);
+  };
+
+  const removeBankAccount = (id: string) => {
+    setBankAccounts(prev => prev.filter(b => b.id !== id));
+  };
+
+  const updateBankAccount = (id: string, field: string, value: string) => {
+    setBankAccounts(prev => prev.map(b => b.id === id ? { ...b, [field]: value } : b));
   };
 
   return (
@@ -544,35 +571,64 @@ const SettingsView: React.FC = () => {
 
           {/* Bank Transfer Settings */}
           <Card className="p-6 space-y-4">
-            <div className="flex items-center gap-3">
-              <div className="p-2 bg-blue-50 dark:bg-blue-500/10 rounded-lg">
-                <svg viewBox="0 0 24 24" className="w-6 h-6 text-blue-600" fill="currentColor">
-                  <path d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z"/>
-                </svg>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-blue-50 dark:bg-blue-500/10 rounded-lg">
+                  <svg viewBox="0 0 24 24" className="w-6 h-6 text-blue-600" fill="currentColor">
+                    <path d="M20 4H4c-1.11 0-1.99.89-1.99 2L2 18c0 1.11.89 2 2 2h16c1.11 0 2-.89 2-2V6c0-1.11-.89-2-2-2zm0 14H4v-6h16v6zm0-10H4V6h16v2z"/>
+                  </svg>
+                </div>
+                <div>
+                  <h3 className="text-h4 text-foreground">Transfertë Bankare</h3>
+                  <p className="text-xs text-muted-foreground">Detajet bankare që shfaqen në faturat me pagesë bankare</p>
+                </div>
               </div>
-              <div>
-                <h3 className="text-h4 text-foreground">Transfertë Bankare</h3>
-                <p className="text-xs text-muted-foreground">Detajet bankare që shfaqen në faturat me pagesë bankare</p>
-              </div>
+              <Button variant="outline" size="sm" onClick={addBankAccount}>
+                <Plus className="w-4 h-4 mr-1" /> Shto Bankë
+              </Button>
             </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <Label>Emri i Bankës</Label>
-                <Input placeholder="p.sh. Raiffeisen Bank" value={defaultBankName} onChange={(e) => setDefaultBankName(e.target.value)} />
+
+            {bankAccounts.length === 0 && (
+              <div className="text-center py-6 text-muted-foreground text-sm border border-dashed rounded-lg">
+                Asnjë llogari bankare e shtuar. Kliko "Shto Bankë" për të filluar.
               </div>
-              <div>
-                <Label>Mbajtësi i Llogarisë</Label>
-                <Input placeholder="p.sh. FivoCRM SHPK" value={defaultBankAccountHolder} onChange={(e) => setDefaultBankAccountHolder(e.target.value)} />
+            )}
+
+            {bankAccounts.map((bank, index) => (
+              <div key={bank.id} className="p-4 border border-border rounded-lg space-y-3">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-foreground">Banka {index + 1}</h4>
+                  {bankAccounts.length > 1 && (
+                    <Button variant="ghost" size="sm" className="text-error hover:text-error" onClick={() => removeBankAccount(bank.id)}>
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
+                  )}
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <div>
+                    <Label>Emri i Bankës</Label>
+                    <Input placeholder="p.sh. Raiffeisen Bank" value={bank.bankName} onChange={(e) => updateBankAccount(bank.id, 'bankName', e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>Mbajtësi i Llogarisë</Label>
+                    <Input placeholder="p.sh. FivoCRM SHPK" value={bank.accountHolder} onChange={(e) => updateBankAccount(bank.id, 'accountHolder', e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>IBAN</Label>
+                    <Input placeholder="AL00 0000 0000 0000 0000 0000 0000" value={bank.iban} onChange={(e) => updateBankAccount(bank.id, 'iban', e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>SWIFT / BIC</Label>
+                    <Input placeholder="p.sh. SGSBALTX" value={bank.swift} onChange={(e) => updateBankAccount(bank.id, 'swift', e.target.value)} />
+                  </div>
+                  <div>
+                    <Label>Shteti</Label>
+                    <Input placeholder="p.sh. Shqipëri" value={bank.country} onChange={(e) => updateBankAccount(bank.id, 'country', e.target.value)} />
+                  </div>
+                </div>
               </div>
-              <div>
-                <Label>IBAN</Label>
-                <Input placeholder="AL00 0000 0000 0000 0000 0000 0000" value={defaultBankIBAN} onChange={(e) => setDefaultBankIBAN(e.target.value)} />
-              </div>
-              <div>
-                <Label>SWIFT / BIC</Label>
-                <Input placeholder="p.sh. SGSBALTX" value={defaultBankSWIFT} onChange={(e) => setDefaultBankSWIFT(e.target.value)} />
-              </div>
-            </div>
+            ))}
+
             <div className="flex items-center justify-between">
               {bankSaved && (
                 <div className="flex items-center gap-2 text-success">
@@ -581,7 +637,7 @@ const SettingsView: React.FC = () => {
                 </div>
               )}
               <div className="ml-auto">
-                <Button onClick={handleSaveBankSettings} disabled={!defaultBankIBAN}>
+                <Button onClick={handleSaveBankSettings} disabled={bankAccounts.length === 0 || !bankAccounts.some(b => b.iban)}>
                   Ruaj Detajet Bankare
                 </Button>
               </div>

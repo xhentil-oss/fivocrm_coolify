@@ -114,6 +114,12 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    match /dailyReports/{docId} {
+      allow read: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && ownsTeamDoc();
+    }
+
     match /invoiceItems/{docId} {
       allow read: if isAuth() && ownsTeamDoc();
       allow create: if canCreateForTeam();

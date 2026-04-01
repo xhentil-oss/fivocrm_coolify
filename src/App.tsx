@@ -8,6 +8,7 @@ import Sidebar from './components/Sidebar';
 import LoginView from './views/LoginView';
 import RegisterView from './views/RegisterView';
 import FloatingActionButton from './components/FloatingActionButton';
+import DailyReportPopup from './components/DailyReportPopup';
 import CommandPalette from './components/CommandPalette';
 import PermissionGate from './components/PermissionGate';
 import PendingInvitesBanner from './components/PendingInvitesBanner';
@@ -54,6 +55,7 @@ const ExpensesView = lazyRetry(() => import('./views/ExpensesView'));
 const TimeTrackingView = lazyRetry(() => import('./views/TimeTrackingView'));
 const WorkspaceView = lazyRetry(() => import('./views/WorkspaceView'));
 const StaffDashboard = lazyRetry(() => import('./views/StaffDashboard'));
+const DailyReportsView = lazyRetry(() => import('./views/DailyReportsView'));
 const JoinInviteView = lazyRetry(() => import('./views/JoinInviteView'));
 const Customer360View = React.lazy(() => import('./views/Customer360View'));
 const PortalLayout = React.lazy(() => import('./views/portal/PortalLayout'));
@@ -218,6 +220,7 @@ function AppContent() {
                       <Route path="/app/time-tracking" element={<PermissionGate permissionKey="canAccessTimeTracking"><TimeTrackingView /></PermissionGate>} />
                       <Route path="/app/workspace" element={<PermissionGate permissionKey="canAccessProjects"><WorkspaceView /></PermissionGate>} />
                       <Route path="/app/settings" element={<PermissionGate permissionKey="canAccessSettings"><SettingsView /></PermissionGate>} />
+                      <Route path="/app/daily-reports" element={<PermissionGate permissionKey="canAccessReports"><DailyReportsView /></PermissionGate>} />
                       <Route path="*" element={
                       <div className="text-center py-20">
                         <h1 className="text-4xl font-bold text-foreground mb-4">404</h1>
@@ -235,6 +238,7 @@ function AppContent() {
             </div>
 
             <FloatingActionButton />
+            <DailyReportPopup />
             <CommandPalette 
               open={commandPaletteOpen} 
               onOpenChange={setCommandPaletteOpen} 

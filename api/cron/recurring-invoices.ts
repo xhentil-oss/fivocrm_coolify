@@ -124,6 +124,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           bankIBAN: project.bankIBAN,
           bankSWIFT: project.bankSWIFT,
           bankAccountHolder: project.bankAccountHolder,
+          bankCountry: project.bankCountry,
         });
         ops.push(
           transporter.sendMail({

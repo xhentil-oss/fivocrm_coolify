@@ -100,6 +100,15 @@ export interface Customer {
   createdByUserId: string | null;
 }
 
+export interface BankAccount {
+  id: string;
+  bankName: string;
+  accountHolder: string;
+  iban: string;
+  swift?: string;
+  country?: string;
+}
+
 export interface Invoice {
   id: string;
   invoiceNumber?: string;
@@ -119,6 +128,7 @@ export interface Invoice {
   bankIBAN?: string;
   bankSWIFT?: string;
   bankAccountHolder?: string;
+  bankCountry?: string;
   dueDate?: Date;
   paidAt?: Date;
   emailSent?: boolean;
@@ -495,4 +505,22 @@ export interface ClientRequest {
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
+}
+
+// ── Daily Reports ──
+
+export interface DailyReport {
+  id: string;
+  userId: string;
+  teamId?: string;
+  date: string; // YYYY-MM-DD
+  completedToday: string;
+  openItems: string;
+  blockers: string;
+  planTomorrow: string;
+  hoursWorked?: number;
+  projectIds?: string[];
+  mood?: 'great' | 'good' | 'neutral' | 'struggling';
+  createdAt: Date;
+  updatedAt: Date;
 }

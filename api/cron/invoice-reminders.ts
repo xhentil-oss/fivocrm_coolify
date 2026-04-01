@@ -190,6 +190,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         bankIBAN: invoice.bankIBAN,
         bankSWIFT: invoice.bankSWIFT,
         bankAccountHolder: invoice.bankAccountHolder,
+        bankCountry: invoice.bankCountry,
       });
 
       reminderOps.push(

@@ -17,10 +17,11 @@ export interface InvoiceEmailData {
   bankIBAN?: string;
   bankSWIFT?: string;
   bankAccountHolder?: string;
+  bankCountry?: string;
 }
 
 export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; html: string } {
-  const { customerName, invoiceNumber, amount, dueDate, projectName, type, currency, paymentMethod, bankName, bankIBAN, bankSWIFT, bankAccountHolder } = data;
+  const { customerName, invoiceNumber, amount, dueDate, projectName, type, currency, paymentMethod, bankName, bankIBAN, bankSWIFT, bankAccountHolder, bankCountry } = data;
   const currencySymbol = currency === 'EUR' ? '€' : 'L';
   const currencyLabel = currency === 'EUR' ? 'EUR' : 'ALL';
   const amountStr = amount.toLocaleString('sq-AL') + ' ' + currencySymbol;
@@ -35,6 +36,7 @@ export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; ht
                 ${bankAccountHolder ? `<tr><td style="padding: 4px 0; color: #6b7280; font-size: 13px;">Mbajtësi</td><td style="padding: 4px 0; color: #111827; font-size: 13px; font-weight: 500;">${escHtml(bankAccountHolder)}</td></tr>` : ''}
                 <tr><td style="padding: 4px 0; color: #6b7280; font-size: 13px;">IBAN</td><td style="padding: 4px 0; color: #111827; font-size: 13px; font-family: monospace; font-weight: 500;">${escHtml(bankIBAN)}</td></tr>
                 ${bankSWIFT ? `<tr><td style="padding: 4px 0; color: #6b7280; font-size: 13px;">SWIFT / BIC</td><td style="padding: 4px 0; color: #111827; font-size: 13px; font-family: monospace; font-weight: 500;">${escHtml(bankSWIFT)}</td></tr>` : ''}
+                ${bankCountry ? `<tr><td style="padding: 4px 0; color: #6b7280; font-size: 13px;">Shteti</td><td style="padding: 4px 0; color: #111827; font-size: 13px; font-weight: 500;">${escHtml(bankCountry)}</td></tr>` : ''}
                 <tr><td style="padding: 4px 0; color: #6b7280; font-size: 13px;">Monedha</td><td style="padding: 4px 0; color: #111827; font-size: 13px; font-weight: 500;">${currencyLabel}</td></tr>
               </table>
               <p style="color: #0369a1; font-size: 12px; margin: 8px 0 0 0;">Ju lutemi përdorni numrin e faturës <strong>#${escHtml(invoiceNumber)}</strong> si referencë pagese.</p>
