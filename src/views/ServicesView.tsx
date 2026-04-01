@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { Globe, Plus, DollarSign, Search, Share2, PenTool, Palette, Package, Edit, Trash2 } from 'lucide-react';
+import { Globe, Plus, DollarSign, Search, Share2, PenTool, Palette, Package, Edit, Trash2, X, Tag } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -13,17 +13,55 @@ import RichTextEditor from '../components/RichTextEditor';
 import { sanitizeHtml } from '../lib/utils';
 import type { Service } from '../types';
 
+interface ServiceCategory {
+  id: string;
+  name: string;
+  teamId?: string;
+  createdAt: Date;
+}
+
+const DEFAULT_CATEGORIES = [
+  'Web Design',
+  'SEO',
+  'Social Media Marketing',
+  'Content Writing',
+  'Branding',
+  'Other',
+];
+
 const ServicesView: React.FC = () => {
   const permissions = usePermissions();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [selectedService, setSelectedService] = useState<Service | null>(null);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  const [isCategoryDialogOpen, setIsCategoryDialogOpen] = useState(false);
 
   const { data: services, loading: servicesLoading } = useCollection<Service>('services', {
     orderBy: { field: 'createdAt', direction: 'desc' },
     skipTeamFilter: true,
   });
   const serviceMutation = useMutation<Service>('services');
+
+  const { data: customCategories } = useCollection<ServiceCategory>('serviceCategories', {
+    orderBy: { field: 'name', direction: 'asc' },
+  });
+  const categoryMutation = useMutation<ServiceCategory>('serviceCategories');
+
+  const allCategories = useMemo(() => {
+    const custom = customCategories?.map(c => c.name) || [];
+    const combined = [...DEFAULT_CATEGORIES, ...custom.filter(c => !DEFAULT_CATEGORIES.includes(c))];
+    return combined;
+  }, [customCategories]);
+
+  const handleAddCategory = async (name: string) => {
+    const trimmed = name.trim();
+    if (!trimmed || allCategories.includes(trimmed)) return;
+    await categoryMutation.create({ name: trimmed });
+  };
+
+  const handleDeleteCategory = async (id: string) => {
+    await categoryMutation.remove(id);
+  };
 
   const handleCreateService = async (formData: FormData) => {
     const title = formData.get('title') as string;
@@ -118,20 +156,41 @@ const ServicesView: React.FC = () => {
           </p>
         </div>
         {permissions.canEdit && (
-          <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
-            <DialogTrigger asChild>
-              <Button className="bg-primary text-primary-foreground w-full sm:w-auto">
-                <Plus className="w-4 h-4 mr-2" />
-                Shërbim i Ri
-              </Button>
-            </DialogTrigger>
-            <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
-              <DialogHeader>
-                <DialogTitle>Krijo Shërbim të Ri</DialogTitle>
-              </DialogHeader>
-              <ServiceForm onSubmit={handleCreateService} />
-            </DialogContent>
-          </Dialog>
+          <div className="flex gap-2 w-full sm:w-auto">
+            <Dialog open={isCategoryDialogOpen} onOpenChange={setIsCategoryDialogOpen}>
+              <DialogTrigger asChild>
+                <Button variant="outline" className="w-full sm:w-auto">
+                  <Tag className="w-4 h-4 mr-2" />
+                  Kategoritë
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-md">
+                <DialogHeader>
+                  <DialogTitle>Menaxho Kategoritë</DialogTitle>
+                </DialogHeader>
+                <CategoryManager
+                  customCategories={customCategories || []}
+                  allCategories={allCategories}
+                  onAdd={handleAddCategory}
+                  onDelete={handleDeleteCategory}
+                />
+              </DialogContent>
+            </Dialog>
+            <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+              <DialogTrigger asChild>
+                <Button className="bg-primary text-primary-foreground w-full sm:w-auto">
+                  <Plus className="w-4 h-4 mr-2" />
+                  Shërbim i Ri
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Krijo Shërbim të Ri</DialogTitle>
+                </DialogHeader>
+                <ServiceForm onSubmit={handleCreateService} categories={allCategories} />
+              </DialogContent>
+            </Dialog>
+          </div>
         )}
       </div>
 
@@ -208,9 +267,74 @@ const ServicesView: React.FC = () => {
             <DialogHeader>
               <DialogTitle>Edit Service</DialogTitle>
             </DialogHeader>
-            <ServiceForm onSubmit={handleUpdateService} initialData={selectedService} />
+            <ServiceForm onSubmit={handleUpdateService} initialData={selectedService} categories={allCategories} />
           </DialogContent>
         </Dialog>
+      )}
+    </div>
+  );
+};
+
+const CategoryManager: React.FC<{
+  customCategories: ServiceCategory[];
+  allCategories: string[];
+  onAdd: (name: string) => void;
+  onDelete: (id: string) => void;
+}> = ({ customCategories, allCategories, onAdd, onDelete }) => {
+  const [newName, setNewName] = useState('');
+
+  const handleAdd = () => {
+    if (newName.trim()) {
+      onAdd(newName.trim());
+      setNewName('');
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="flex gap-2">
+        <Input
+          placeholder="Emri i kategorisë së re..."
+          value={newName}
+          onChange={e => setNewName(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); handleAdd(); } }}
+        />
+        <Button type="button" onClick={handleAdd} disabled={!newName.trim() || allCategories.includes(newName.trim())}>
+          <Plus className="w-4 h-4 mr-1" /> Shto
+        </Button>
+      </div>
+
+      {allCategories.includes(newName.trim()) && newName.trim() && (
+        <p className="text-xs text-destructive">Kjo kategori ekziston tashmë</p>
+      )}
+
+      <div>
+        <Label className="text-sm font-medium mb-2 block">Kategoritë Default</Label>
+        <div className="flex flex-wrap gap-1.5">
+          {DEFAULT_CATEGORIES.map(cat => (
+            <Badge key={cat} variant="secondary" className="text-xs">{cat}</Badge>
+          ))}
+        </div>
+      </div>
+
+      {customCategories.length > 0 && (
+        <div>
+          <Label className="text-sm font-medium mb-2 block">Kategoritë e Shtuara</Label>
+          <div className="flex flex-wrap gap-1.5">
+            {customCategories.map(cat => (
+              <Badge key={cat.id} variant="outline" className="text-xs flex items-center gap-1 pr-1">
+                {cat.name}
+                <button
+                  type="button"
+                  onClick={() => onDelete(cat.id)}
+                  className="hover:bg-destructive/10 rounded-full p-0.5"
+                >
+                  <X className="w-3 h-3 text-destructive" />
+                </button>
+              </Badge>
+            ))}
+          </div>
+        </div>
       )}
     </div>
   );
@@ -219,7 +343,8 @@ const ServicesView: React.FC = () => {
 const ServiceForm: React.FC<{
   onSubmit: (data: FormData) => void;
   initialData?: Service;
-}> = ({ onSubmit, initialData }) => {
+  categories: string[];
+}> = ({ onSubmit, initialData, categories }) => {
   const [htmlContent, setHtmlContent] = useState(initialData?.description || '');
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
@@ -239,17 +364,14 @@ const ServiceForm: React.FC<{
 
         <div>
           <Label htmlFor="category">Category *</Label>
-          <Select name="category" defaultValue={initialData?.category || 'Web Design'}>
+          <Select name="category" defaultValue={initialData?.category || categories[0] || 'Web Design'}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="Web Design">Web Design</SelectItem>
-              <SelectItem value="SEO">SEO</SelectItem>
-              <SelectItem value="Social Media Marketing">Social Media Marketing</SelectItem>
-              <SelectItem value="Content Writing">Content Writing</SelectItem>
-              <SelectItem value="Branding">Branding</SelectItem>
-              <SelectItem value="Other">Other</SelectItem>
+              {categories.map(cat => (
+                <SelectItem key={cat} value={cat}>{cat}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>
