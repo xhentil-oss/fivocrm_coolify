@@ -51,20 +51,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (!task.nextRecurringDate || !task.recurringFrequency) continue;
 
-    const nextRecurringDate: Date = task.nextRecurringDate.toDate
+    const nextRecurringDate: Date = task.nextRecurringDate?.toDate
       ? task.nextRecurringDate.toDate()
       : new Date(task.nextRecurringDate);
+
+    if (isNaN(nextRecurringDate.getTime())) continue;
 
     // Only process tasks whose recurrence date has passed
     if (nextRecurringDate > now) continue;
 
+    if (!task.startDate || !task.endDate) continue;
+
     const startDate: Date = task.startDate?.toDate
       ? task.startDate.toDate()
-      : new Date(task.startDate || now);
+      : new Date(task.startDate);
 
     const endDate: Date = task.endDate?.toDate
       ? task.endDate.toDate()
-      : new Date(task.endDate || now);
+      : new Date(task.endDate);
+
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) continue;
 
     const newStartDate = addFrequency(startDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval);
     const newEndDate = addFrequency(endDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval);
@@ -75,7 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       db.collection('tasks').add({
         title: task.title,
         description: task.description ?? null,
-        status: 'To Do',
+        status: 'Todo',
         priority: task.priority ?? null,
         projectId: task.projectId ?? null,
         assignedToUserId: task.assignedToUserId ?? null,
@@ -125,7 +131,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     created++;
   }
 
-  await Promise.allSettled(ops);
+  const results = await Promise.allSettled(ops);
+  const failures = results.filter(r => r.status === 'rejected');
+  if (failures.length > 0) {
+    console.error('Some recurring task operations failed:', failures);
+  }
 
   return res.status(200).json({
     success: true,

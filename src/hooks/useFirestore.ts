@@ -144,12 +144,11 @@ export function useCollection<T = DocumentData>(
           ...convertTimestamps(doc.data())
         })) as (T & { id: string })[];
 
-        // Client-side teamId filtering: include docs belonging to this team
-        // OR legacy docs without teamId (created before data-isolation)
+        // Client-side teamId filtering: only include docs belonging to this team
         if (isTeamScoped && globalTeamId) {
           items = items.filter(item => {
             const docTeamId = (item as any).teamId;
-            return docTeamId === globalTeamId || !docTeamId;
+            return docTeamId === globalTeamId;
           });
         }
 
@@ -272,6 +271,9 @@ export function useMutation<T = DocumentData>(collectionName: string) {
     setError(null);
     try {
       const teamId = getGlobalTeamId();
+      if (teamScopedCollections.has(collectionName) && !teamId) {
+        throw new Error(`Cannot create ${collectionName} document without an active team`);
+      }
       const autoTeamId = teamScopedCollections.has(collectionName) && teamId
         ? { teamId }
         : {};

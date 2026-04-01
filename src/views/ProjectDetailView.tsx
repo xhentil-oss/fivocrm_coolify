@@ -120,11 +120,13 @@ const ProjectDetailView: React.FC = () => {
 
   const handleCreateTask = async (formData: FormData) => {
     const title = formData.get('title') as string;
+    if (!title || !title.trim()) return;
     const description = formData.get('description') as string;
     const startDateStr = formData.get('startDate') as string;
     const endDateStr = formData.get('endDate') as string;
     const startDate = startDateStr ? new Date(startDateStr) : new Date();
     const endDate = endDateStr ? new Date(endDateStr) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    if (startDate > endDate) return;
     const assignedToUserId = formData.get('assignedToUserId') as string || user?.uid || '';
     const priority = formData.get('priority') as string || 'medium';
     const status = formData.get('status') as string || 'Todo';
@@ -150,7 +152,9 @@ const ProjectDetailView: React.FC = () => {
       taskData.isRecurring = true;
       taskData.recurringFrequency = recurringFrequency;
       taskData.recurringInterval = recurringInterval;
-      taskData.nextRecurringDate = endDate;
+      // Calculate the actual next occurrence date based on frequency
+      const nextDate = new Date(endDate);
+      taskData.nextRecurringDate = nextDate;
       if (recurringFrequency === 'weekly' && recurringDayOfWeek !== undefined && !isNaN(recurringDayOfWeek)) {
         taskData.recurringDayOfWeek = recurringDayOfWeek;
       }

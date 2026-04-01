@@ -157,7 +157,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     if (!task.attachments) return [];
     try {
       return JSON.parse(task.attachments);
-    } catch {
+    } catch (e) {
+      console.error('Corrupted attachments JSON for task', task.id, e);
       return [];
     }
   }, [task.attachments]);
@@ -404,7 +405,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     if (commentText.trim()) {
       // Extract userIds from both new @[Name](uid) format and legacy @uid format
       const newFormatRegex = /@\[[^\]]+\]\(([^)]+)\)/g;
-      const legacyFormatRegex = /@([A-Za-z0-9_-]{20,})/g;
+      const legacyFormatRegex = /@([A-Za-z0-9_-]{10,})/g;
       const mentionedUids = new Set<string>();
       let m: RegExpExecArray | null;
       while ((m = newFormatRegex.exec(commentText)) !== null) mentionedUids.add(m[1]);
@@ -536,6 +537,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       setChatMessageText('');
     } catch (err) {
       console.error('Failed to send message:', err);
+      // Message stays in input so user can retry
     }
   };
 

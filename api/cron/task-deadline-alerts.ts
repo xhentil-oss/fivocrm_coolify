@@ -41,9 +41,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!task.endDate || !task.assignedToUserId) continue;
     if (task.status === 'Done') continue;
 
-    const endDate: Date = task.endDate.toDate
+    const endDate: Date = task.endDate?.toDate
       ? task.endDate.toDate()
       : new Date(task.endDate);
+
+    if (isNaN(endDate.getTime())) continue;
 
     const isOverdue = endDate < now;
     const isDueSoon = endDate <= alertThreshold;
@@ -106,7 +108,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     notified++;
   }
 
-  await Promise.allSettled(ops);
+  const results = await Promise.allSettled(ops);
+  const failures = results.filter(r => r.status === 'rejected');
+  if (failures.length > 0) {
+    console.error('Some deadline alert operations failed:', failures);
+  }
 
   return res.status(200).json({
     success: true,
