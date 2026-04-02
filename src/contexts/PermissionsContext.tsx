@@ -43,7 +43,7 @@ function simulateRole(role: PreviewRole, base: UserPermissions): UserPermissions
       return {
         ...base,
         canAccessProjects: false, canAccessTasks: true, canAccessCRM: true,
-        canAccessInvoices: false, canAccessReports: false, canAccessSettings: false,
+        canAccessInvoices: true, canAccessReports: false, canAccessSettings: false,
         canAccessGoals: false, canAccessTeams: false, canAccessChat: true,
         canAccessCustomers: true, canAccessServices: true, canAccessExpenses: false,
         canAccessProfile: true, canAccessTimeTracking: true,

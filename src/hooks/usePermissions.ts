@@ -306,6 +306,37 @@ export function usePermissions(): UserPermissions {
       };
     }
 
+    // SalesAgent: access to CRM, Customers, Invoices, Services — only own data
+    if (membership.role === 'SalesAgent') {
+      return {
+        canAccessProjects: false,
+        canAccessTasks: true,
+        canAccessCRM: true,
+        canAccessInvoices: true,
+        canAccessReports: false,
+        canAccessSettings: false,
+        canAccessGoals: false,
+        canAccessTeams: false,
+        canAccessChat: true,
+        canAccessCustomers: true,
+        canAccessServices: true,
+        canAccessExpenses: false,
+        canAccessProfile: true,
+        canAccessTimeTracking: true,
+        canEdit: true,
+        canAssignTasks: false,
+        canManageMembers: false,
+        role: membership.role,
+        dataScope: 'assigned',
+        teamId: membership.teamId,
+        teamName: team?.name || null,
+        isAdmin: false,
+        isOwner: false,
+        isManager: false,
+        isLoading: false,
+      };
+    }
+
     // Viewer role: read-only access to assigned items only
     // Member role: access to assigned items with edit rights
     const isViewer = membership.role === 'Viewer';

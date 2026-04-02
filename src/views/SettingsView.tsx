@@ -829,7 +829,7 @@ const ROLE_DESCRIPTIONS: Record<string, { color: string; label: string; descript
   SalesAgent: {
     color: 'bg-cyan-100 text-cyan-800',
     label: 'Agjent Shitje',
-    description: 'Agjent shitjesh. Akses tek CRM, klientët dhe shërbimet.',
+    description: 'Agjent shitjesh. Akses tek CRM, faturat, klientët dhe shërbimet (vetëm të vetat).',
   },
   Manager: {
     color: 'bg-blue-100 text-blue-800',
@@ -860,7 +860,7 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
   },
   SalesAgent: {
     canAccessProjects: false, canAccessTasks: true, canAccessGoals: false,
-    canAccessCRM: true, canAccessCustomers: true, canAccessInvoices: false,
+    canAccessCRM: true, canAccessCustomers: true, canAccessInvoices: true,
     canAccessServices: true, canAccessExpenses: false, canAccessReports: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessSettings: false,
   },
