@@ -965,6 +965,21 @@ const LeadForm: React.FC<{
   teamMembers?: TeamMember[];
   getName?: (userId: string | null | undefined, fallback?: string) => string;
 }> = ({ onSubmit, initialData, disabled, teamMembers = [], getName }) => {
+  // Split existing phoneNumber into prefix + local
+  const PHONE_PREFIXES = ['+355','+383','+389','+381','+382','+385','+387','+386','+49','+43','+41','+39','+44','+1','+33','+34','+30','+90'];
+  const parsePhone = (phone?: string) => {
+    if (!phone) return { prefix: '+355', local: '' };
+    for (const p of PHONE_PREFIXES) {
+      if (phone.startsWith(p)) return { prefix: p, local: phone.slice(p.length).trim() };
+    }
+    // Try generic +XX or +XXX
+    const m = phone.match(/^(\+\d{1,3})\s*(.*)/);
+    if (m) return { prefix: m[1], local: m[2] };
+    return { prefix: '+355', local: phone };
+  };
+  const parsed = parsePhone(initialData?.phoneNumber);
+  const [phonePrefix, setPhonePrefix] = useState(parsed.prefix);
+
   const [lastFollowUpDate, setLastFollowUpDate] = useState<Date | undefined>(
     initialData?.lastFollowUpDate ? new Date(initialData.lastFollowUpDate) : undefined
   );
@@ -975,6 +990,10 @@ const LeadForm: React.FC<{
     if (lastFollowUpDate) {
       formData.set('lastFollowUpDate', lastFollowUpDate.toISOString());
     }
+    // Combine prefix + local phone number
+    const localPhone = (formData.get('phoneLocal') as string || '').trim();
+    formData.delete('phoneLocal');
+    formData.set('phoneNumber', localPhone ? `${phonePrefix} ${localPhone}` : '');
     onSubmit(formData);
   };
 
@@ -994,8 +1013,20 @@ const LeadForm: React.FC<{
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <Label htmlFor="phoneNumber">Numri i Telefonit</Label>
-          <Input id="phoneNumber" name="phoneNumber" type="tel" defaultValue={initialData?.phoneNumber} />
+          <Label htmlFor="phoneLocal">Numri i Telefonit</Label>
+          <div className="flex gap-1">
+            <Select value={phonePrefix} onValueChange={setPhonePrefix}>
+              <SelectTrigger className="w-[100px] shrink-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {PHONE_PREFIXES.map(p => (
+                  <SelectItem key={p} value={p}>{p}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Input id="phoneLocal" name="phoneLocal" type="tel" placeholder="69 123 4567" className="flex-1" defaultValue={parsed.local} />
+          </div>
         </div>
 
         <div>
