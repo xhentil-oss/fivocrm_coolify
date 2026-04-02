@@ -19,8 +19,9 @@ export function useUserNames(teamMembers?: TeamMember[]) {
   const profileMap = useMemo(() => {
     const map = new Map<string, string>();
     for (const p of profiles || []) {
-      if (p.userId && p.displayName) {
-        map.set(p.userId, p.displayName);
+      if (p.userId) {
+        const name = p.displayName || ((p as any).email ? (p as any).email.split('@')[0] : null);
+        if (name) map.set(p.userId, name);
       }
     }
     return map;

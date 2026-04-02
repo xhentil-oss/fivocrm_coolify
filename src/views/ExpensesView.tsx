@@ -403,7 +403,7 @@ const ExpenseForm: React.FC<{
   const [projectSearch, setProjectSearch] = useState('');
 
   // Custom categories stored in Firestore
-  const { data: customCategoryDocs } = useCollection<{ id: string; label: string }>('expenseCategories', { skipTeamFilter: true });
+  const { data: customCategoryDocs } = useCollection<{ id: string; label: string }>('expenseCategories');
   const categoryMutation = useMutation<{ label: string }>('expenseCategories');
   const [selectedCategory, setSelectedCategory] = useState(initialData?.category || 'Office');
   const [newCategoryInput, setNewCategoryInput] = useState('');

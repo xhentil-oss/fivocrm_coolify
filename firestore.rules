@@ -153,6 +153,12 @@ service cloud.firestore {
       allow update, delete: if isAuth();
     }
 
+    match /expenseCategories/{docId} {
+      allow read: if isAuth();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth();
+    }
+
     match /serviceCategories/{docId} {
       allow read: if isAuth();
       allow create: if canCreateForTeam();
