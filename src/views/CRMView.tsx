@@ -5,7 +5,7 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { getStatusColor } from '../lib/statusColors';
 import { useToast } from '../hooks/use-toast';
-import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle, Edit2, Percent } from 'lucide-react';
+import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle, Edit2, Percent, MessageSquare, ExternalLink } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -847,6 +847,58 @@ const CRMView: React.FC = () => {
         onSaveNotes={selectedLead ? async (notes) => {
           await leadMutation.update(selectedLead.id, { notes });
         } : undefined}
+        actions={selectedLead ? (
+          <div className="space-y-3">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Kontakto</p>
+            <div className="flex flex-wrap gap-2">
+              {selectedLead.email && (
+                <Button variant="outline" size="sm" asChild>
+                  <a href={`mailto:${selectedLead.email}`}>
+                    <Mail className="w-4 h-4 mr-1.5" />
+                    Email
+                  </a>
+                </Button>
+              )}
+              {selectedLead.phoneNumber && (
+                <Button variant="outline" size="sm" asChild>
+                  <a href={`tel:${selectedLead.phoneNumber}`}>
+                    <Phone className="w-4 h-4 mr-1.5" />
+                    Thirr
+                  </a>
+                </Button>
+              )}
+              {selectedLead.phoneNumber && (
+                <Button variant="outline" size="sm" className="text-green-600 border-green-200 hover:bg-green-50" asChild>
+                  <a href={`https://wa.me/${selectedLead.phoneNumber.replace(/[^0-9+]/g, '')}`} target="_blank" rel="noopener noreferrer">
+                    <MessageSquare className="w-4 h-4 mr-1.5" />
+                    WhatsApp
+                  </a>
+                </Button>
+              )}
+              {selectedLead.phoneNumber && (
+                <Button variant="outline" size="sm" asChild>
+                  <a href={`sms:${selectedLead.phoneNumber}`}>
+                    <MessageSquare className="w-4 h-4 mr-1.5" />
+                    SMS
+                  </a>
+                </Button>
+              )}
+              {selectedLead.website && (
+                <Button variant="outline" size="sm" asChild>
+                  <a href={safeHref(selectedLead.website)} target="_blank" rel="noopener noreferrer">
+                    <ExternalLink className="w-4 h-4 mr-1.5" />
+                    Website
+                  </a>
+                </Button>
+              )}
+            </div>
+            {selectedLead.status === 'Lost' && selectedLead.lostReason && (
+              <div className="mt-2 p-2 bg-destructive/10 border border-destructive/20 rounded-md">
+                <p className="text-xs text-destructive font-medium">Arsyeja e humbjes: {selectedLead.lostReason}</p>
+              </div>
+            )}
+          </div>
+        ) : undefined}
       />
 
       {/* Delete Lead Confirmation */}

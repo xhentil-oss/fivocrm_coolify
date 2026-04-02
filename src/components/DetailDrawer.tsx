@@ -10,9 +10,10 @@ interface DetailDrawerProps {
   title: string;
   data: any;
   onSaveNotes?: (notes: string) => void;
+  actions?: React.ReactNode;
 }
 
-const DetailDrawer: React.FC<DetailDrawerProps> = ({ open, onClose, title, data, onSaveNotes }) => {
+const DetailDrawer: React.FC<DetailDrawerProps> = ({ open, onClose, title, data, onSaveNotes, actions }) => {
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -47,6 +48,12 @@ const DetailDrawer: React.FC<DetailDrawerProps> = ({ open, onClose, title, data,
               <X className="w-5 h-5" />
             </Button>
           </div>
+
+          {actions && (
+            <div className="px-6 py-3 border-b border-border">
+              {actions}
+            </div>
+          )}
 
           <ScrollArea className="flex-1">
             <Tabs defaultValue="overview" className="p-6">
