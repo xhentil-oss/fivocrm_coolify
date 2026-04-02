@@ -436,6 +436,7 @@ const InvoicesView: React.FC = () => {
                 <th className="px-4 py-3 text-left text-body-sm font-medium hidden md:table-cell">Klienti</th>
                 <th className="px-4 py-3 text-left text-body-sm font-medium">Totali</th>
                 <th className="px-4 py-3 text-left text-body-sm font-medium">Statusi</th>
+                <th className="px-4 py-3 text-left text-body-sm font-medium hidden lg:table-cell">Data</th>
                 <th className="px-4 py-3 text-left text-body-sm font-medium hidden lg:table-cell">Afati</th>
                 <th className="px-4 py-3 text-left text-body-sm font-medium hidden md:table-cell">Pagesa</th>
                 <th className="px-4 py-3 text-left text-body-sm font-medium">Veprime</th>
@@ -532,6 +533,7 @@ const InvoicesView: React.FC = () => {
                         </div>
                       )}
                     </td>
+                    <td className="px-4 py-3 hidden lg:table-cell">{invoice.invoiceDate ? new Date(invoice.invoiceDate).toLocaleDateString() : new Date(invoice.createdAt).toLocaleDateString()}</td>
                     <td className="px-4 py-3 hidden lg:table-cell">{invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : 'Pa afat'}</td>
                     <td className="px-4 py-3 hidden md:table-cell">
                       <Badge variant="outline" className="text-xs">
@@ -636,6 +638,7 @@ const InvoicesView: React.FC = () => {
 const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null }> = ({ onClose, editInvoice }) => {
   const isEditing = !!editInvoice;
   const logActivity = useActivityLogger();
+  const [invoiceDate, setInvoiceDate] = useState<Date | undefined>(editInvoice?.invoiceDate ? new Date(editInvoice.invoiceDate) : new Date());
   const [dueDate, setDueDate] = useState<Date | undefined>(editInvoice?.dueDate ? new Date(editInvoice.dueDate) : undefined);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>(editInvoice?.customerId || '');
   const [selectedProjectId, setSelectedProjectId] = useState<string>(editInvoice?.projectId || '');
@@ -772,6 +775,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
       bankAccountHolder: paymentMethod === 'Bank' ? bankAccountHolder : '',
       bankCountry: paymentMethod === 'Bank' ? bankCountry : '',
       status,
+      invoiceDate: invoiceDate || new Date(),
       dueDate: dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       notes,
       subtotal: resolvedSubtotal,
@@ -1064,19 +1068,35 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
         </div>
       )}
 
-      <div>
-        <Label>Afati *</Label>
-        <Popover>
-          <PopoverTrigger asChild>
-            <Button variant="outline" className="w-full justify-start">
-              <CalendarIcon className="mr-2 h-4 w-4" />
-              {dueDate ? dueDate.toLocaleDateString() : "Zgjidh datën"}
-            </Button>
-          </PopoverTrigger>
-          <PopoverContent className="w-auto p-0">
-            <Calendar mode="single" selected={dueDate} onSelect={setDueDate} />
-          </PopoverContent>
-        </Popover>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <Label>Data e Faturës *</Label>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="w-full justify-start">
+                <CalendarIcon className="mr-2 h-4 w-4" />
+                {invoiceDate ? invoiceDate.toLocaleDateString() : "Zgjidh datën"}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0">
+              <Calendar mode="single" selected={invoiceDate} onSelect={setInvoiceDate} />
+            </PopoverContent>
+          </Popover>
+        </div>
+        <div>
+          <Label>Afati *</Label>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="outline" className="w-full justify-start">
+                <CalendarIcon className="mr-2 h-4 w-4" />
+                {dueDate ? dueDate.toLocaleDateString() : "Zgjidh datën"}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0">
+              <Calendar mode="single" selected={dueDate} onSelect={setDueDate} />
+            </PopoverContent>
+          </Popover>
+        </div>
       </div>
 
       {/* Recurring Invoice */}
@@ -1193,6 +1213,7 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
           <div className="space-y-1 text-sm">
             <p><span className="text-muted-foreground">Fatura #:</span> {invoice.invoiceNumber || invoice.id.slice(0, 8)}</p>
             <div><span className="text-muted-foreground">Statusi:</span> <Badge className={getStatusColor(invoice.status)}>{invoice.status}</Badge></div>
+            <p><span className="text-muted-foreground">Data e Faturës:</span> {invoice.invoiceDate ? new Date(invoice.invoiceDate).toLocaleDateString('sq-AL') : new Date(invoice.createdAt).toLocaleDateString('sq-AL')}</p>
             <p><span className="text-muted-foreground">Afati:</span> {invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('sq-AL') : 'Pa afat'}</p>
             <p><span className="text-muted-foreground">Mënyra e Pagesës:</span> {invoice.paymentMethod}</p>
             <p><span className="text-muted-foreground">Monedha:</span> {(invoice as any).currency === 'EUR' ? 'Euro (EUR)' : 'Lekë (ALL)'}</p>

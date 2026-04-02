@@ -130,6 +130,7 @@ export interface Invoice {
   bankSWIFT?: string;
   bankAccountHolder?: string;
   bankCountry?: string;
+  invoiceDate?: Date;
   dueDate?: Date;
   paidAt?: Date;
   emailSent?: boolean;
