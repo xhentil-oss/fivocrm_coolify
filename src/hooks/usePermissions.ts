@@ -223,7 +223,7 @@ export function usePermissions(): UserPermissions {
 
     // Has team membership — use role-based permissions
     // Sort by role priority for deterministic selection when user has multiple teams
-    const roleOrder: Record<string, number> = { Admin: 0, Manager: 1, Sales: 2, Member: 3, Viewer: 4 };
+    const roleOrder: Record<string, number> = { Admin: 0, Manager: 1, Sales: 2, SalesAgent: 3, Member: 4, Viewer: 5 };
     const membership = [...teamMembers].sort((a, b) => (roleOrder[a.role] ?? 99) - (roleOrder[b.role] ?? 99))[0];
     const team = teams?.find((t: any) => t.id === membership.teamId);
     const memberIsAdmin = membership.role === 'Admin';

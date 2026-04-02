@@ -826,6 +826,11 @@ const ROLE_DESCRIPTIONS: Record<string, { color: string; label: string; descript
     label: 'Shitje',
     description: 'Ekipi i shitjes. Akses i plotë tek klientët, CRM dhe shërbimet.',
   },
+  SalesAgent: {
+    color: 'bg-cyan-100 text-cyan-800',
+    label: 'Agjent Shitje',
+    description: 'Agjent shitjesh. Akses tek CRM, klientët dhe shërbimet.',
+  },
   Manager: {
     color: 'bg-blue-100 text-blue-800',
     label: 'Menaxher',
@@ -843,7 +848,7 @@ const ROLE_DESCRIPTIONS: Record<string, { color: string; label: string; descript
   },
 };
 
-type RoleKey = 'Sales' | 'Manager' | 'Member' | 'Viewer';
+type RoleKey = 'Sales' | 'SalesAgent' | 'Manager' | 'Member' | 'Viewer';
 type TemplateMap = Record<string, boolean>;
 
 const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
@@ -851,6 +856,12 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
     canAccessProjects: false, canAccessTasks: false, canAccessGoals: false,
     canAccessCRM: true, canAccessCustomers: true, canAccessInvoices: true,
     canAccessServices: true, canAccessExpenses: false, canAccessReports: true,
+    canAccessTimeTracking: true, canAccessChat: true, canAccessSettings: false,
+  },
+  SalesAgent: {
+    canAccessProjects: false, canAccessTasks: true, canAccessGoals: false,
+    canAccessCRM: true, canAccessCustomers: true, canAccessInvoices: false,
+    canAccessServices: true, canAccessExpenses: false, canAccessReports: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessSettings: false,
   },
   Manager: {
@@ -884,7 +895,7 @@ const RoleTemplatesSection: React.FC = () => {
 
   // Local state: one TemplateMap per role
   const [templates, setTemplates] = useState<Record<RoleKey, TemplateMap>>({ ...DEFAULT_TEMPLATES });
-  const [applying, setApplying] = useState<Record<RoleKey, boolean>>({ Sales: false, Manager: false, Member: false, Viewer: false });
+  const [applying, setApplying] = useState<Record<RoleKey, boolean>>({ Sales: false, SalesAgent: false, Manager: false, Member: false, Viewer: false });
   const [templateIds, setTemplateIds] = useState<Record<string, string>>({});
 
   // Hydrate from Firestore once loaded

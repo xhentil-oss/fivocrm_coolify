@@ -919,6 +919,7 @@ const InviteMemberForm: React.FC<{
               </div>
             </SelectItem>
             <SelectItem value="Sales">Sales - Ekipi i shitjes (Klientë & CRM)</SelectItem>
+            <SelectItem value="SalesAgent">Agjent Shitje - CRM & Klientë</SelectItem>
             <SelectItem value="Manager">Manager - Menaxhon ekipin dhe projektet</SelectItem>
             <SelectItem value="Member">Member - Akses standard</SelectItem>
             <SelectItem value="Viewer">Viewer - Vetëm lexim</SelectItem>
@@ -1069,6 +1070,7 @@ const EditMemberForm: React.FC<{
                 </div>
               </SelectItem>
               <SelectItem value="Sales">Sales</SelectItem>
+              <SelectItem value="SalesAgent">Agjent Shitje</SelectItem>
               <SelectItem value="Manager">Manager</SelectItem>
               <SelectItem value="Member">Member</SelectItem>
               <SelectItem value="Viewer">Viewer</SelectItem>

@@ -3,7 +3,7 @@ import { usePermissions as usePermissionsBase, UserPermissions } from '../hooks/
 
 export type { UserPermissions };
 
-export type PreviewRole = 'Admin' | 'Sales' | 'Manager' | 'Member' | 'Viewer' | null;
+export type PreviewRole = 'Admin' | 'Sales' | 'SalesAgent' | 'Manager' | 'Member' | 'Viewer' | null;
 
 export interface PermissionsContextValue extends UserPermissions {
   previewRole: PreviewRole;
@@ -38,6 +38,17 @@ function simulateRole(role: PreviewRole, base: UserPermissions): UserPermissions
         canAccessProfile: true, canAccessTimeTracking: true,
         canEdit: true, canAssignTasks: false, canManageMembers: false,
         role: 'Sales', dataScope: 'team', isAdmin: false, isOwner: false, isManager: false,
+      };
+    case 'SalesAgent':
+      return {
+        ...base,
+        canAccessProjects: false, canAccessTasks: true, canAccessCRM: true,
+        canAccessInvoices: false, canAccessReports: false, canAccessSettings: false,
+        canAccessGoals: false, canAccessTeams: false, canAccessChat: true,
+        canAccessCustomers: true, canAccessServices: true, canAccessExpenses: false,
+        canAccessProfile: true, canAccessTimeTracking: true,
+        canEdit: true, canAssignTasks: false, canManageMembers: false,
+        role: 'SalesAgent', dataScope: 'assigned', isAdmin: false, isOwner: false, isManager: false,
       };
     case 'Manager':
       return {
@@ -89,7 +100,7 @@ export const PermissionsProvider: React.FC<{ children: React.ReactNode }> = ({ c
   const [previewRole, setPreviewRoleState] = useState<PreviewRole>(() => {
     try {
       const stored = sessionStorage.getItem(SESSION_KEY);
-      const validRoles: (string | null)[] = ['Admin', 'Sales', 'Manager', 'Member', 'Viewer'];
+      const validRoles: (string | null)[] = ['Admin', 'Sales', 'SalesAgent', 'Manager', 'Member', 'Viewer'];
       return validRoles.includes(stored) ? (stored as PreviewRole) : null;
     } catch {
       return null;
