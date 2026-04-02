@@ -216,6 +216,7 @@ export interface Lead {
   probability?: number;
   estimatedValue?: number;
   lostReason?: string;
+  businessCategory?: string;
   notes?: string;
   lastFollowUpDate?: Date;
   tags?: string[];

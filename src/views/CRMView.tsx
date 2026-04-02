@@ -107,6 +107,7 @@ const CRMView: React.FC = () => {
     const jobTitle = formData.get('jobTitle') as string;
     const website = formData.get('website') as string;
     const source = formData.get('source') as string;
+    const businessCategory = formData.get('businessCategory') as string;
     const notes = formData.get('notes') as string;
     const estimatedValue = formData.get('estimatedValue') as string;
     const assignedToUserId = formData.get('assignedToUserId') as string;
@@ -123,6 +124,7 @@ const CRMView: React.FC = () => {
       jobTitle: jobTitle || undefined,
       website: website || undefined,
       source: source || undefined,
+      businessCategory,
       notes: notes || undefined,
       estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined,
       probability: STAGE_PROBABILITY[status] ?? 10,
@@ -161,6 +163,7 @@ const CRMView: React.FC = () => {
       const jobTitle = formData.get('jobTitle') as string;
       const website = formData.get('website') as string;
       const source = formData.get('source') as string;
+      const businessCategory = formData.get('businessCategory') as string;
       const notes = formData.get('notes') as string;
       const estimatedValue = formData.get('estimatedValue') as string;
       const assignedToUserId = formData.get('assignedToUserId') as string;
@@ -177,6 +180,7 @@ const CRMView: React.FC = () => {
         jobTitle: jobTitle || undefined,
         website: website || undefined,
         source: source || undefined,
+        businessCategory,
         notes: notes || undefined,
         estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined,
         probability: STAGE_PROBABILITY[status] ?? editLead.probability,
@@ -1045,6 +1049,32 @@ const LeadForm: React.FC<{
           <Label htmlFor="website">Faqja e Internetit</Label>
           <Input id="website" name="website" type="url" defaultValue={initialData?.website} />
         </div>
+      </div>
+
+      <div>
+        <Label htmlFor="businessCategory">Kategoria e Biznesit *</Label>
+        <Select name="businessCategory" required defaultValue={initialData?.businessCategory || ''}>
+          <SelectTrigger>
+            <SelectValue placeholder="Zgjidh kategorinë" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="Teknologji">Teknologji</SelectItem>
+            <SelectItem value="Tregti">Tregti</SelectItem>
+            <SelectItem value="Shërbime">Shërbime</SelectItem>
+            <SelectItem value="Prodhim">Prodhim</SelectItem>
+            <SelectItem value="Ndërtim">Ndërtim</SelectItem>
+            <SelectItem value="Arsim">Arsim</SelectItem>
+            <SelectItem value="Shëndetësi">Shëndetësi</SelectItem>
+            <SelectItem value="Transport">Transport</SelectItem>
+            <SelectItem value="Hoteleri & Turizëm">Hoteleri & Turizëm</SelectItem>
+            <SelectItem value="Bujqësi">Bujqësi</SelectItem>
+            <SelectItem value="Financa & Sigurime">Financa & Sigurime</SelectItem>
+            <SelectItem value="Pasuri të Paluajtshme">Pasuri të Paluajtshme</SelectItem>
+            <SelectItem value="Marketing & Media">Marketing & Media</SelectItem>
+            <SelectItem value="Ushqim & Pije">Ushqim & Pije</SelectItem>
+            <SelectItem value="Tjetër">Tjetër</SelectItem>
+          </SelectContent>
+        </Select>
       </div>
 
       <div>
