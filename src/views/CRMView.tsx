@@ -5,7 +5,7 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { getStatusColor } from '../lib/statusColors';
 import { useToast } from '../hooks/use-toast';
-import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle } from 'lucide-react';
+import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle, Edit2, Percent } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -27,6 +27,9 @@ import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember } fro
 const CRMView: React.FC = () => {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [editLead, setEditLead] = useState<Lead | null>(null);
+  const [lostReasonLead, setLostReasonLead] = useState<Lead | null>(null);
+  const [lostReason, setLostReason] = useState('');
   const [activeTab, setActiveTab] = useState('all');
   const [saving, setSaving] = useState(false);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
@@ -53,6 +56,28 @@ const CRMView: React.FC = () => {
   const notificationMutation = useMutation<Notification>('notifications');
   const portalAccessMutation = useMutation<ClientPortalAccess>('clientPortalAccess');
   const { getName } = useUserNames(teamMembers || []);
+
+  const STAGE_PROBABILITY: Record<string, number> = {
+    'New': 10,
+    'Contacted': 20,
+    'Qualified': 40,
+    'Follow-up': 30,
+    'Proposal': 70,
+    'Won': 100,
+    'Converted': 100,
+    'Lost': 0,
+  };
+
+  const LOST_REASONS = [
+    'Çmimi i lartë',
+    'Koha e gjatë',
+    'Konkurrenca',
+    'Nuk përgjigjet',
+    'Nuk ka buxhet',
+    'Zgjodhi tjetër',
+    'Nuk ka nevojë më',
+    'Tjetër',
+  ];
 
 
 
@@ -100,6 +125,7 @@ const CRMView: React.FC = () => {
       source: source || undefined,
       notes: notes || undefined,
       estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined,
+      probability: STAGE_PROBABILITY[status] ?? 10,
       score: calculateLeadScore({ name, email, phoneNumber, company, estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined }),
       assignedToUserId: resolvedAssigned,
     });
@@ -116,6 +142,50 @@ const CRMView: React.FC = () => {
 
     logActivity('lead_created', `Lead i ri: ${name}`, { entityType: 'lead', description: company || email || '' });
     setIsCreateDialogOpen(false);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleEditLead = async (formData: FormData) => {
+    if (saving || !editLead) return;
+    setSaving(true);
+    try {
+      const name = formData.get('name') as string;
+      const email = formData.get('email') as string;
+      const status = formData.get('status') as string;
+      const lastFollowUpDate = formData.get('lastFollowUpDate') as string;
+      const phoneNumber = formData.get('phoneNumber') as string;
+      const address = formData.get('address') as string;
+      const company = formData.get('company') as string;
+      const jobTitle = formData.get('jobTitle') as string;
+      const website = formData.get('website') as string;
+      const source = formData.get('source') as string;
+      const notes = formData.get('notes') as string;
+      const estimatedValue = formData.get('estimatedValue') as string;
+      const assignedToUserId = formData.get('assignedToUserId') as string;
+      const resolvedAssigned = assignedToUserId && assignedToUserId !== 'unassigned' ? assignedToUserId : undefined;
+
+      await leadMutation.update(editLead.id, {
+        name,
+        email: email || undefined,
+        status,
+        lastFollowUpDate: lastFollowUpDate ? new Date(lastFollowUpDate) : undefined,
+        phoneNumber: phoneNumber || undefined,
+        address: address || undefined,
+        company: company || undefined,
+        jobTitle: jobTitle || undefined,
+        website: website || undefined,
+        source: source || undefined,
+        notes: notes || undefined,
+        estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined,
+        probability: STAGE_PROBABILITY[status] ?? editLead.probability,
+        score: calculateLeadScore({ name, email, phoneNumber, company, estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined }),
+        assignedToUserId: resolvedAssigned,
+      });
+
+      toast({ title: 'Lead u përditësua', description: `${name} u përditësua me sukses.` });
+      setEditLead(null);
     } finally {
       setSaving(false);
     }
@@ -163,6 +233,13 @@ const CRMView: React.FC = () => {
   };
 
   const handleStatusChange = async (lead: Lead, newStatus: string) => {
+    // If status is "Lost", prompt for reason before proceeding
+    if (newStatus === 'Lost') {
+      setLostReasonLead(lead);
+      setLostReason('');
+      return;
+    }
+
     // If status is "Converted", create a customer + portal access, then delete the lead
     if (newStatus === 'Converted') {
       let customerDoc: { id: string } | undefined | null = null;
@@ -219,9 +296,21 @@ const CRMView: React.FC = () => {
     }
 
     // Normal status change (not conversion)
-    const update: Record<string, any> = { status: newStatus };
+    const update: Record<string, any> = { status: newStatus, probability: STAGE_PROBABILITY[newStatus] ?? undefined };
     if (newStatus === 'Follow-up') update.lastFollowUpDate = new Date();
     await leadMutation.update(lead.id, update);
+  };
+
+  const handleConfirmLost = async () => {
+    if (!lostReasonLead) return;
+    await leadMutation.update(lostReasonLead.id, {
+      status: 'Lost',
+      probability: 0,
+      lostReason: lostReason || undefined,
+    });
+    toast({ title: 'Lead u shënja si i humbur', description: lostReason ? `Arsyeja: ${lostReason}` : undefined });
+    setLostReasonLead(null);
+    setLostReason('');
   };
 
   const filteredLeads = React.useMemo(() => {
@@ -373,7 +462,7 @@ const CRMView: React.FC = () => {
         </Select>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-6 stagger-children">
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-6 stagger-children">
         <Card className="p-3 sm:p-6 space-y-1 sm:space-y-2 card-hover metric-card-primary border-l-4 border-l-primary">
           <div className="flex items-center justify-between">
             <p className="text-xs sm:text-body-sm text-muted-foreground">Lead Totale</p>
@@ -425,6 +514,27 @@ const CRMView: React.FC = () => {
           </p>
           <p className="text-xs text-warning hidden sm:block">Kërkojnë ndjekje</p>
         </Card>
+
+        <Card className="p-3 sm:p-6 space-y-1 sm:space-y-2 card-hover border-l-4 border-l-tertiary">
+          <div className="flex items-center justify-between">
+            <p className="text-xs sm:text-body-sm text-muted-foreground">Forecast</p>
+            <div className="p-1.5 sm:p-2 bg-tertiary/10 rounded-lg">
+              <Percent className="w-4 h-4 sm:w-5 sm:h-5 text-tertiary" />
+            </div>
+          </div>
+          <p className="text-lg sm:text-h2 text-foreground font-medium animate-count-up">
+            {(() => {
+              const val = (leads || [])
+                .filter(l => l.status !== 'Lost' && l.status !== 'Converted')
+                .reduce((sum, l) => {
+                  const prob = (l.probability ?? STAGE_PROBABILITY[l.status] ?? 0) / 100;
+                  return sum + (l.estimatedValue || 0) * prob;
+                }, 0);
+              return `${Math.round(val).toLocaleString()} L`;
+            })()}
+          </p>
+          <p className="text-xs text-tertiary hidden sm:block">Vlera e ponderuar</p>
+        </Card>
       </div>
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -436,6 +546,7 @@ const CRMView: React.FC = () => {
             <TabsTrigger value="Qualified" className="text-xs sm:text-sm">Kualifikuara</TabsTrigger>
             <TabsTrigger value="Follow-up" className="text-xs sm:text-sm">Në ndjekje</TabsTrigger>
             <TabsTrigger value="Converted" className="text-xs sm:text-sm">Konvertuara</TabsTrigger>
+            <TabsTrigger value="Lost" className="text-xs sm:text-sm">Humbura</TabsTrigger>
           </TabsList>
         </div>
 
@@ -466,7 +577,12 @@ const CRMView: React.FC = () => {
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
                           {permissions.canEdit && (
-                            <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); handleDeleteLead(lead.id); }}>
+                            <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setEditLead(lead); }}>
+                              <Edit2 className="w-3.5 h-3.5 mr-2" /> Ndrysho
+                            </DropdownMenuItem>
+                          )}
+                          {permissions.canEdit && (
+                            <DropdownMenuItem className="text-destructive" onClick={(e) => { e.stopPropagation(); setLeadToDelete(lead); }}>
                               <Trash2 className="w-3.5 h-3.5 mr-2" /> Fshi
                             </DropdownMenuItem>
                           )}
@@ -478,11 +594,18 @@ const CRMView: React.FC = () => {
                     <Badge className={getStatusColor(lead.status)}>
                       {getStatusLabel(lead.status)}
                     </Badge>
+                    <Badge variant="outline" className="text-xs">
+                      <Percent className="w-3 h-3 mr-0.5" />
+                      {lead.probability ?? STAGE_PROBABILITY[lead.status] ?? 0}%
+                    </Badge>
                     {lead.source && <Badge variant="outline" className="text-xs">{lead.source}</Badge>}
                     {lead.estimatedValue ? (
                       <span className="text-xs font-medium text-foreground">{lead.estimatedValue.toLocaleString()} L</span>
                     ) : null}
                   </div>
+                  {lead.status === 'Lost' && lead.lostReason && (
+                    <p className="text-xs text-destructive">Arsyeja: {lead.lostReason}</p>
+                  )}
                   <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
                     {lead.email && (
                       <div className="flex items-center gap-1"><Mail className="w-3 h-3" />{lead.email}</div>
@@ -531,6 +654,9 @@ const CRMView: React.FC = () => {
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
                       Pikët
+                    </th>
+                    <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
+                      Prob.
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
                       Ndjekja e fundit
@@ -660,6 +786,15 @@ const CRMView: React.FC = () => {
                           );
                         })()}
                       </td>
+                      <td className="px-6 py-4">
+                        {(() => {
+                          const prob = lead.probability ?? STAGE_PROBABILITY[lead.status] ?? 0;
+                          const color = prob >= 60 ? 'text-green-600' : prob >= 30 ? 'text-yellow-600' : 'text-red-500';
+                          return (
+                            <span className={`font-semibold ${color}`}>{prob}%</span>
+                          );
+                        })()}
+                      </td>
                       <td className="px-6 py-4 text-body text-foreground">
                         {lead.lastFollowUpDate 
                           ? new Date(lead.lastFollowUpDate).toLocaleDateString()
@@ -667,6 +802,19 @@ const CRMView: React.FC = () => {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex gap-2">
+                          {permissions.canEdit && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                setEditLead(lead);
+                              }}
+                              title="Ndrysho"
+                            >
+                              <Edit2 className="w-4 h-4" />
+                            </Button>
+                          )}
                           {permissions.canEdit && (
                             <Button
                               variant="outline"
@@ -705,10 +853,52 @@ const CRMView: React.FC = () => {
       <Dialog open={!!leadToDelete} onOpenChange={(open) => { if (!open) setLeadToDelete(null); }}>
         <DialogContent className="max-w-sm">
           <DialogHeader><DialogTitle>Fshi Lead</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">Je i sigurt q\u00eb d\u00ebshiron t\u00eb fshish <span className="font-semibold text-foreground">{leadToDelete?.name}</span>?</p>
+          <p className="text-sm text-muted-foreground">Je i sigurt që dëshiron të fshish <span className="font-semibold text-foreground">{leadToDelete?.name}</span>?</p>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => setLeadToDelete(null)}>Anulo</Button>
             <Button variant="destructive" onClick={() => leadToDelete && handleDeleteLead(leadToDelete.id)}>Fshi</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit Lead Dialog */}
+      <Dialog open={!!editLead} onOpenChange={(open) => { if (!open) setEditLead(null); }}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Ndrysho Lead</DialogTitle>
+          </DialogHeader>
+          {editLead && (
+            <LeadForm
+              onSubmit={handleEditLead}
+              initialData={editLead}
+              disabled={saving}
+              teamMembers={teamMembers || []}
+              getName={getName}
+            />
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Lost Reason Dialog */}
+      <Dialog open={!!lostReasonLead} onOpenChange={(open) => { if (!open) { setLostReasonLead(null); setLostReason(''); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Arsyeja e Humbjes</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">Pse u humb lead-i <span className="font-semibold text-foreground">{lostReasonLead?.name}</span>?</p>
+          <Select value={lostReason} onValueChange={setLostReason}>
+            <SelectTrigger>
+              <SelectValue placeholder="Zgjidh arsyen..." />
+            </SelectTrigger>
+            <SelectContent>
+              {LOST_REASONS.map(r => (
+                <SelectItem key={r} value={r}>{r}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => { setLostReasonLead(null); setLostReason(''); }}>Anulo</Button>
+            <Button variant="destructive" onClick={handleConfirmLost}>Shëno si të Humbur</Button>
           </div>
         </DialogContent>
       </Dialog>

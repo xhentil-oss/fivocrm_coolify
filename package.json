@@ -76,6 +76,7 @@
     "firebase": "^12.11.0",
     "firebase-admin": "^12.7.0",
     "framer-motion": "10.16.4",
+    "jspdf": "^4.2.1",
     "lucide-react": "^0.544.0",
     "nodemailer": "^6.9.12",
     "openai": "^6.33.0",

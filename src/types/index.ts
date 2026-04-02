@@ -213,7 +213,9 @@ export interface Lead {
   source?: string;
   value?: number;
   score?: number;
+  probability?: number;
   estimatedValue?: number;
+  lostReason?: string;
   notes?: string;
   lastFollowUpDate?: Date;
   tags?: string[];

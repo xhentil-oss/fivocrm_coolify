@@ -3,7 +3,7 @@ import { useCollection, useMutation } from '../hooks/useFirestore';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useAuth } from '../contexts/AuthContext';
-import { DollarSign, Plus, Calendar as CalendarIcon, CreditCard, Mail, Send, Building2, ShoppingCart, Trash2, Eye, Edit2, Check, X, ExternalLink, Loader2, MoreVertical } from 'lucide-react';
+import { DollarSign, Plus, Calendar as CalendarIcon, CreditCard, Mail, Send, Building2, ShoppingCart, Trash2, Eye, Edit2, Check, X, ExternalLink, Loader2, MoreVertical, Download } from 'lucide-react';
 import ExportButton from '../components/ExportButton';
 import { loadStripe } from '@stripe/stripe-js';
 import { Card } from '../components/ui/card';
@@ -1380,6 +1380,136 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             <span className="font-medium">Fatura është e paguar</span>
           </div>
         )}
+
+        <Button
+          variant="outline"
+          className="w-full"
+          onClick={async () => {
+            const { default: jsPDF } = await import('jspdf');
+            const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+            const w = doc.internal.pageSize.getWidth();
+            const margin = 20;
+            let y = 20;
+            const cur = (invoice as any).currency === 'EUR' ? '€' : 'L';
+
+            // Header
+            doc.setFontSize(22);
+            doc.setFont('helvetica', 'bold');
+            doc.text('FATURË', margin, y);
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            doc.text(`# ${invoice.invoiceNumber || invoice.id.slice(0, 8)}`, w - margin, y, { align: 'right' });
+            y += 6;
+            doc.text(`Data: ${invoice.invoiceDate ? new Date(invoice.invoiceDate).toLocaleDateString('sq-AL') : new Date(invoice.createdAt).toLocaleDateString('sq-AL')}`, w - margin, y, { align: 'right' });
+            y += 5;
+            doc.text(`Afati: ${invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('sq-AL') : 'Pa afat'}`, w - margin, y, { align: 'right' });
+            y += 5;
+            doc.text(`Statusi: ${invoice.status}`, w - margin, y, { align: 'right' });
+
+            // Divider
+            y += 8;
+            doc.setDrawColor(200);
+            doc.line(margin, y, w - margin, y);
+            y += 10;
+
+            // Customer info
+            doc.setFontSize(11);
+            doc.setFont('helvetica', 'bold');
+            doc.text('Klienti', margin, y);
+            y += 6;
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'normal');
+            if (customer?.name) { doc.text(customer.name, margin, y); y += 5; }
+            if (customer?.company) { doc.text(customer.company, margin, y); y += 5; }
+            if (customer?.email) { doc.text(customer.email, margin, y); y += 5; }
+            if (customer?.phone) { doc.text(customer.phone, margin, y); y += 5; }
+            if (customer?.address) { doc.text(customer.address, margin, y); y += 5; }
+
+            // Bank info (right side)
+            if (invoice.paymentMethod === 'Bank' && (invoice as any).bankIBAN) {
+              let by = 58;
+              const bx = w / 2 + 10;
+              doc.setFont('helvetica', 'bold');
+              doc.text('Detajet Bankare', bx, by); by += 6;
+              doc.setFont('helvetica', 'normal');
+              if ((invoice as any).bankName) { doc.text(`Banka: ${(invoice as any).bankName}`, bx, by); by += 5; }
+              if ((invoice as any).bankAccountHolder) { doc.text(`Mbajtësi: ${(invoice as any).bankAccountHolder}`, bx, by); by += 5; }
+              doc.text(`IBAN: ${(invoice as any).bankIBAN}`, bx, by); by += 5;
+              if ((invoice as any).bankSWIFT) { doc.text(`SWIFT: ${(invoice as any).bankSWIFT}`, bx, by); by += 5; }
+            }
+
+            y = Math.max(y, 100);
+
+            // Items table header
+            doc.setFillColor(245, 245, 245);
+            doc.rect(margin, y, w - margin * 2, 8, 'F');
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(9);
+            doc.text('Shërbimi', margin + 2, y + 5.5);
+            doc.text('Sasia', w - margin - 60, y + 5.5, { align: 'right' });
+            doc.text('Çmimi', w - margin - 30, y + 5.5, { align: 'right' });
+            doc.text('Totali', w - margin - 2, y + 5.5, { align: 'right' });
+            y += 10;
+
+            // Items
+            doc.setFont('helvetica', 'normal');
+            for (const item of invoiceItems || []) {
+              const svc = services[item.serviceId];
+              doc.text(svc?.title || 'Shërbim', margin + 2, y + 4);
+              doc.text(String(item.quantity), w - margin - 60, y + 4, { align: 'right' });
+              doc.text(`${(item.unitPrice ?? 0).toFixed(2)} ${cur}`, w - margin - 30, y + 4, { align: 'right' });
+              doc.text(`${(item.totalPrice ?? 0).toFixed(2)} ${cur}`, w - margin - 2, y + 4, { align: 'right' });
+              doc.setDrawColor(230);
+              doc.line(margin, y + 7, w - margin, y + 7);
+              y += 9;
+            }
+
+            // Totals
+            y += 5;
+            doc.setDrawColor(200);
+            doc.line(w - margin - 70, y, w - margin, y);
+            y += 7;
+            doc.text('Nëntotali:', w - margin - 40, y, { align: 'right' });
+            doc.text(`${(invoice.subtotal || 0).toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' });
+            y += 6;
+            if (invoice.tax) {
+              doc.text('Taksa:', w - margin - 40, y, { align: 'right' });
+              doc.text(`${invoice.tax.toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' });
+              y += 6;
+            }
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(12);
+            doc.text('TOTALI:', w - margin - 40, y, { align: 'right' });
+            doc.text(`${(invoice.total || 0).toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' });
+
+            // Notes
+            if (invoice.notes) {
+              y += 15;
+              doc.setFontSize(9);
+              doc.setFont('helvetica', 'bold');
+              doc.text('Shënime:', margin, y);
+              y += 5;
+              doc.setFont('helvetica', 'normal');
+              const lines = doc.splitTextToSize(invoice.notes, w - margin * 2);
+              doc.text(lines, margin, y);
+            }
+
+            // Payment info
+            if (invoice.paymentMethod) {
+              y += 15;
+              doc.setFontSize(8);
+              doc.setTextColor(130);
+              doc.text(`Mënyra e pagesës: ${invoice.paymentMethod === 'Bank' ? 'Transfer Bankar' : invoice.paymentMethod === 'Cash' ? 'Kesh' : invoice.paymentMethod}`, margin, y);
+              doc.setTextColor(0);
+            }
+
+            doc.save(`Fatura-${invoice.invoiceNumber || invoice.id.slice(0, 8)}.pdf`);
+            toast({ title: 'PDF u shkarkua' });
+          }}
+        >
+          <Download className="w-4 h-4 mr-2" />
+          Shkarko PDF
+        </Button>
       </div>
     </div>
   );
