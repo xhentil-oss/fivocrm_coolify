@@ -306,13 +306,23 @@ const ChatView: React.FC = () => {
         map.set(msg.phone, {
           phone: msg.phone,
           leadName: msg.leadName || msg.phone,
-          leadId: msg.leadId,
+          leadId: msg.leadId || null,
           lastMessage: msg.message,
           lastDate: msg.createdAt,
           unread: msg.direction === 'inbound' ? 1 : 0,
         });
-      } else if (msg.direction === 'inbound') {
-        map.get(msg.phone)!.unread++;
+      } else {
+        const existing = map.get(msg.phone)!;
+        // Prefer a real name over a phone number fallback
+        if (msg.leadName && existing.leadName === existing.phone) {
+          existing.leadName = msg.leadName;
+        }
+        if (msg.leadId && !existing.leadId) {
+          existing.leadId = msg.leadId;
+        }
+        if (msg.direction === 'inbound') {
+          existing.unread++;
+        }
       }
     }
     return Array.from(map.values());
