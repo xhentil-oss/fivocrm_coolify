@@ -1,4 +1,4 @@
-import * as admin from 'firebase-admin';
+import admin from 'firebase-admin';
 
 if (!admin.apps.length) {
   const projectId = process.env.FIREBASE_PROJECT_ID;
