@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
@@ -541,7 +541,7 @@ const ChatView: React.FC = () => {
       const res = await fetch('/api/send-whatsapp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ to: activeWaPhone, message: body, leadName: activeWaLeadName, teamId: (await import('../hooks/useFirestore')).getGlobalTeamId() }),
+        body: JSON.stringify({ to: activeWaPhone, message: body, leadName: activeWaLeadName, teamId: getGlobalTeamId() }),
       });
       const data = await res.json();
       if (!res.ok) {
