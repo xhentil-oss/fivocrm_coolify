@@ -97,6 +97,7 @@ const ChatView: React.FC = () => {
   const { data: allMessages } = useCollection<ChatMessage>('messages');
   const { data: allWaMessages } = useCollection<WhatsAppMessage>('whatsappMessages', {
     orderBy: { field: 'createdAt', direction: 'desc' as const },
+    skipTeamFilter: true,
   });
 
   const channelMsgQuery = useMemo(() => ({
@@ -782,43 +783,53 @@ const ChatView: React.FC = () => {
           )}
 
           {/* WhatsApp Conversations */}
-          {waConversations.length > 0 && (
-            <>
-              <div className="h-px bg-border/50 mx-2 my-2" />
-              <p className="px-2 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60 flex items-center gap-1.5">
+          <>
+            <div className="h-px bg-border/50 mx-2 my-2" />
+            <button
+              onClick={() => {
+                setChatMode('whatsapp');
+                setActiveWaPhone(null);
+                setShowSidebar(false);
+              }}
+              className="w-full px-2 pt-1 pb-1 flex items-center gap-1.5 text-left hover:bg-accent/30 rounded-lg"
+            >
+              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60 flex items-center gap-1.5 flex-1">
                 <Smartphone className="h-3 w-3 text-[#25D366]" />
                 WhatsApp
-                {waTotalUnread > 0 && (
-                  <span className="h-4 min-w-4 px-1 flex items-center justify-center rounded-full bg-[#25D366] text-white text-[9px] font-bold ml-auto">{waTotalUnread}</span>
-                )}
               </p>
-              {waConversations.map(conv => {
-                const isWaActive = chatMode === 'whatsapp' && activeWaPhone === conv.phone;
-                return (
-                  <button
-                    key={conv.phone}
-                    onClick={() => handleSelectWhatsApp(conv.phone, conv.leadName)}
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-left ${
-                      isWaActive
-                        ? 'bg-[#25D366]/10 border border-[#25D366]/20 shadow-sm'
-                        : 'hover:bg-accent/50 text-foreground/70'
-                    }`}
-                  >
-                    <div className="h-8 w-8 rounded-lg bg-[#25D366]/15 flex items-center justify-center flex-shrink-0">
-                      <Smartphone className="h-4 w-4 text-[#25D366]" />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <span className={`truncate block text-sm ${isWaActive ? 'text-[#25D366] font-medium' : ''}`}>{conv.leadName}</span>
-                      <span className="text-[10px] text-muted-foreground/60 truncate block">{(conv.lastMessage || '').slice(0, 32)}</span>
-                    </div>
-                    {conv.unread > 0 && !isWaActive && (
-                      <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-[#25D366] text-white text-[10px] font-bold">{conv.unread}</span>
-                    )}
-                  </button>
-                );
-              })}
-            </>
-          )}
+              {waTotalUnread > 0 && (
+                <span className="h-4 min-w-4 px-1 flex items-center justify-center rounded-full bg-[#25D366] text-white text-[9px] font-bold">{waTotalUnread}</span>
+              )}
+            </button>
+            {waConversations.length === 0 && (
+              <p className="px-3 py-1.5 text-[11px] text-muted-foreground/40 italic">Nuk ka biseda ende</p>
+            )}
+            {waConversations.map(conv => {
+              const isWaActive = chatMode === 'whatsapp' && activeWaPhone === conv.phone;
+              return (
+                <button
+                  key={conv.phone}
+                  onClick={() => handleSelectWhatsApp(conv.phone, conv.leadName)}
+                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-left ${
+                    isWaActive
+                      ? 'bg-[#25D366]/10 border border-[#25D366]/20 shadow-sm'
+                      : 'hover:bg-accent/50 text-foreground/70'
+                  }`}
+                >
+                  <div className="h-8 w-8 rounded-lg bg-[#25D366]/15 flex items-center justify-center flex-shrink-0">
+                    <Smartphone className="h-4 w-4 text-[#25D366]" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <span className={`truncate block text-sm ${isWaActive ? 'text-[#25D366] font-medium' : ''}`}>{conv.leadName}</span>
+                    <span className="text-[10px] text-muted-foreground/60 truncate block">{(conv.lastMessage || '').slice(0, 32)}</span>
+                  </div>
+                  {conv.unread > 0 && !isWaActive && (
+                    <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-[#25D366] text-white text-[10px] font-bold">{conv.unread}</span>
+                  )}
+                </button>
+              );
+            })}
+          </>
         </div>
       </aside>
 
