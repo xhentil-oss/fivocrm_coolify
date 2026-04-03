@@ -22,8 +22,8 @@ import { Loader2 } from 'lucide-react';
 function lazyRetry(factory: () => Promise<any>): React.LazyExoticComponent<any> {
   return React.lazy(() =>
     factory().catch((err: any) => {
-      // Only reload once to avoid infinite loops
-      const key = 'chunk_reload';
+      // Use a per-factory key so multiple chunks can each trigger one reload
+      const key = `chunk_reload_${factory.toString().slice(0, 60)}`;
       if (!sessionStorage.getItem(key)) {
         sessionStorage.setItem(key, '1');
         window.location.reload();
