@@ -1,11 +1,11 @@
 {
   "crons": [
-    { "path": "/api/cron/task-deadline-alerts",       "schedule": "0 8 * * *" },
-    { "path": "/api/cron/invoice-reminders",           "schedule": "0 9 * * *" },
-    { "path": "/api/cron/recurring-tasks",             "schedule": "0 0 * * *" },
-    { "path": "/api/cron/recurring-invoices",          "schedule": "0 8 1 * *" },
-    { "path": "/api/cron/project-completion-reminder", "schedule": "0 8 * * 1" },
-    { "path": "/api/cron/recurring-project-reset",     "schedule": "0 1 * * *" }
+    { "path": "/api/cron/run?job=task-deadline-alerts",       "schedule": "0 8 * * *" },
+    { "path": "/api/cron/run?job=invoice-reminders",          "schedule": "0 9 * * *" },
+    { "path": "/api/cron/run?job=recurring-tasks",            "schedule": "0 0 * * *" },
+    { "path": "/api/cron/run?job=recurring-invoices",         "schedule": "0 8 1 * *" },
+    { "path": "/api/cron/run?job=project-completion-reminder","schedule": "0 8 * * 1" },
+    { "path": "/api/cron/run?job=recurring-project-reset",    "schedule": "0 1 * * *" }
   ],
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },

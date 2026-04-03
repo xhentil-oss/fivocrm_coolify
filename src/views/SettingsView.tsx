@@ -838,7 +838,7 @@ const SettingsView: React.FC = () => {
             enabled={cronSettings['task_alerts']?.enabled ?? true}
             onToggle={(v) => handleToggleCron('task_alerts', v)}
             status={cronRunStatus['task_alerts']}
-            onRun={() => handleRunCron('/api/cron/task-deadline-alerts', 'task_alerts')}
+            onRun={() => handleRunCron('/api/cron/run?job=task-deadline-alerts', 'task_alerts')}
             lastRun={getLastRun('task_alerts')}
           />
 
@@ -851,7 +851,7 @@ const SettingsView: React.FC = () => {
             enabled={cronSettings['invoice_reminders']?.enabled ?? true}
             onToggle={(v) => handleToggleCron('invoice_reminders', v)}
             status={cronRunStatus['invoice_reminders']}
-            onRun={() => handleRunCron('/api/cron/invoice-reminders', 'invoice_reminders')}
+            onRun={() => handleRunCron('/api/cron/run?job=invoice-reminders', 'invoice_reminders')}
             lastRun={getLastRun('invoice_reminders')}
           />
 
@@ -864,7 +864,7 @@ const SettingsView: React.FC = () => {
             enabled={cronSettings['recurring_tasks']?.enabled ?? true}
             onToggle={(v) => handleToggleCron('recurring_tasks', v)}
             status={cronRunStatus['recurring_tasks']}
-            onRun={() => handleRunCron('/api/cron/recurring-tasks', 'recurring_tasks')}
+            onRun={() => handleRunCron('/api/cron/run?job=recurring-tasks', 'recurring_tasks')}
             lastRun={getLastRun('recurring_tasks')}
           />
 
