@@ -53,6 +53,28 @@ export function getGlobalTeamId(): string | null {
   return _globalTeamId;
 }
 
+// ---- Reactive WhatsApp enabled flag ----
+let _waEnabled: boolean = localStorage.getItem('whatsapp_enabled') === 'true';
+let _waEnabledListeners: (() => void)[] = [];
+
+function _subscribeWaEnabled(listener: () => void) {
+  _waEnabledListeners = [..._waEnabledListeners, listener];
+  return () => { _waEnabledListeners = _waEnabledListeners.filter(l => l !== listener); };
+}
+
+function _getWaEnabledSnapshot() { return _waEnabled; }
+
+export function setGlobalWaEnabled(val: boolean) {
+  if (_waEnabled !== val) {
+    _waEnabled = val;
+    for (const l of _waEnabledListeners) l();
+  }
+}
+
+export function useWhatsappEnabled(): boolean {
+  return useSyncExternalStore(_subscribeWaEnabled, _getWaEnabledSnapshot);
+}
+
 /** React hook to reactively read global teamId (triggers re-render on change) */
 export function useGlobalTeamId(): string | null {
   return useSyncExternalStore(_subscribeTeamId, _getTeamIdSnapshot);

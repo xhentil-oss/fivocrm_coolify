@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { useCollection, useMutation, getGlobalTeamId, useGlobalTeamId } from '../hooks/useFirestore';
+import { useCollection, useMutation, getGlobalTeamId, useGlobalTeamId, useWhatsappEnabled } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
@@ -97,6 +97,16 @@ const ChatView: React.FC = () => {
   const { data: teams } = useCollection<any>('teams');
   const { data: allMessages } = useCollection<ChatMessage>('messages');
   const waTeamId = useGlobalTeamId();
+  const waEnabled = useWhatsappEnabled();
+
+  // If WhatsApp gets disabled while in whatsapp mode, switch back to channel
+  useEffect(() => {
+    if (!waEnabled && chatMode === 'whatsapp') {
+      setChatMode('channel');
+      setActiveWaPhone(null);
+      setActiveWaJid(null);
+    }
+  }, [waEnabled]);
   const waQuery = useMemo(() => ({
     where: waTeamId ? [{ field: 'teamId', operator: '==' as const, value: waTeamId }] : undefined,
     orderBy: { field: 'createdAt', direction: 'desc' as const },
@@ -820,6 +830,7 @@ const ChatView: React.FC = () => {
           )}
 
           {/* WhatsApp Conversations */}
+          {waEnabled && (
           <>
             <div className="h-px bg-border/50 mx-2 my-2" />
             <button
@@ -867,6 +878,7 @@ const ChatView: React.FC = () => {
               );
             })}
           </>
+          )}
         </div>
       </aside>
 

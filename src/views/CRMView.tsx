@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useCollection, useMutation, useGlobalTeamId } from '../hooks/useFirestore';
+import { useCollection, useMutation, useGlobalTeamId, useWhatsappEnabled } from '../hooks/useFirestore';
 import type { WhatsAppMessage } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -57,6 +57,7 @@ const CRMView: React.FC = () => {
   const leadMutation = useMutation<Lead>('leads');
   const customerMutation = useMutation<Customer>('customers');
   const waTeamId = useGlobalTeamId();
+  const waEnabled = useWhatsappEnabled();
   const waQuery = useMemo(() => ({
     where: waTeamId ? [{ field: 'teamId', operator: '==' as const, value: waTeamId }] : undefined,
     skipTeamFilter: true,
@@ -595,7 +596,7 @@ const CRMView: React.FC = () => {
                       {lead.jobTitle && <p className="text-xs text-muted-foreground">{lead.jobTitle}</p>}
                     </div>
                     <div className="flex items-center gap-2 shrink-0 ml-2">
-                      {waUnread > 0 && (
+                      {waUnread > 0 && waEnabled && (
                         <button
                           onClick={(e) => { e.stopPropagation(); setWhatsappLead(lead); }}
                           className="flex items-center gap-1 bg-[#25D366] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full hover:bg-[#1da851] transition-colors"
@@ -846,7 +847,7 @@ const CRMView: React.FC = () => {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex gap-2">
-                          {lead.phoneNumber && (
+                          {lead.phoneNumber && waEnabled && (
                             <Button
                               variant="outline"
                               size="sm"
@@ -922,7 +923,7 @@ const CRMView: React.FC = () => {
                   </a>
                 </Button>
               )}
-              {selectedLead.phoneNumber && (
+              {selectedLead.phoneNumber && waEnabled && (
                 <Button
                   variant="outline"
                   size="sm"
@@ -1012,7 +1013,7 @@ const CRMView: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
-      {whatsappLead && (
+      {whatsappLead && waEnabled && (
         <WhatsAppChatPanel
           phone={whatsappLead.phoneNumber || whatsappLead.phone || ''}
           leadName={whatsappLead.name}

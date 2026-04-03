@@ -9,7 +9,7 @@ import { Separator } from '../components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Checkbox } from '../components/ui/checkbox';
 import { Badge } from '../components/ui/badge';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, useMutation, setGlobalWaEnabled } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { getDocs, query, where, collection, writeBatch, doc, Timestamp } from 'firebase/firestore';
@@ -177,6 +177,7 @@ const SettingsView: React.FC = () => {
   const handleToggleWhatsapp = (val: boolean) => {
     setWhatsappEnabled(val);
     localStorage.setItem('whatsapp_enabled', String(val));
+    setGlobalWaEnabled(val);
   };
 
   const handleSaveWhatsappSettings = () => {
