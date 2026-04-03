@@ -26,7 +26,7 @@ import { Separator } from '../components/ui/separator';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
 import { useToast } from '../hooks/use-toast';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
-import type { Customer, ClientPortalAccess, ClientRequest, Team } from '../types';
+import type { Customer, ClientPortalAccess, ClientRequest, Team, Lead } from '../types';
 
 const STATUS_OPTIONS = [
   { value: 'Active', label: 'Aktiv', color: 'bg-success text-success-foreground', icon: CheckCircle2 },
@@ -74,6 +74,7 @@ const CustomersView: React.FC = () => {
   });
   // Role-based filtering: Member/Viewer see only customers they created
   const customers = useFilteredByOwner(rawCustomers);
+  const { data: leads } = useCollection<Lead>('leads', { skipTeamFilter: true });
   const { data: portalAccess } = useCollection<ClientPortalAccess>('clientPortalAccess', {
     skipTeamFilter: true,
   });
@@ -178,10 +179,28 @@ const CustomersView: React.FC = () => {
     const creditLimit = formData.get('creditLimit') as string;
     if (creditLimit) data.creditLimit = parseFloat(creditLimit);
 
-    // Duplicate check by email
-    if (data.email && customers?.some(c => c.email?.toLowerCase() === data.email.toLowerCase())) {
-      toast({ title: 'Ky email ekziston tashmë!', description: 'Ka një klient me këtë email.', variant: 'destructive' });
-      return;
+    // Duplicate check: email vs existing customers + leads
+    const normEmail = data.email?.toLowerCase().trim();
+    const normPhone = (data.phone as string | undefined)?.replace(/\D/g, '');
+    if (normEmail) {
+      if (customers?.some(c => c.email?.toLowerCase().trim() === normEmail)) {
+        toast({ title: 'Ky email ekziston tek Klientët!', description: 'Ka një klient me këtë email.', variant: 'destructive' });
+        return;
+      }
+      if (leads?.some((l: any) => l.email?.toLowerCase().trim() === normEmail)) {
+        toast({ title: 'Ky email ekziston tek Leads!', description: 'Ka një lead me këtë email.', variant: 'destructive' });
+        return;
+      }
+    }
+    if (normPhone && normPhone.length >= 7) {
+      if (customers?.some(c => c.phone?.replace(/\D/g, '') === normPhone)) {
+        toast({ title: 'Ky numër ekziston tek Klientët!', description: 'Ka një klient me këtë numër telefoni.', variant: 'destructive' });
+        return;
+      }
+      if (leads?.some((l: any) => l.phoneNumber?.replace(/\D/g, '') === normPhone)) {
+        toast({ title: 'Ky numër ekziston tek Leads!', description: 'Ka një lead me këtë numër telefoni.', variant: 'destructive' });
+        return;
+      }
     }
 
     const created = await customerMutation.create(data as any);
