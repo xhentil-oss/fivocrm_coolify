@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
+import type { WhatsAppMessage } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
@@ -55,6 +56,22 @@ const CRMView: React.FC = () => {
   });
   const leadMutation = useMutation<Lead>('leads');
   const customerMutation = useMutation<Customer>('customers');
+  const { data: allWaMessages } = useCollection<WhatsAppMessage>('whatsappMessages', { skipTeamFilter: true });
+
+  // Unread WA count per lead phone
+  const waUnreadByPhone = useMemo(() => {
+    const map = new Map<string, number>();
+    if (!allWaMessages) return map;
+    // Count inbound messages that were not generated from platform (status=received)
+    // Treat all inbound as unread for now — future: track read state per leadId
+    allWaMessages.forEach(m => {
+      if (m.direction === 'inbound') {
+        const key = m.phone.replace(/[^\d]/g, '');
+        map.set(key, (map.get(key) || 0) + 1);
+      }
+    });
+    return map;
+  }, [allWaMessages]);
   const notificationMutation = useMutation<Notification>('notifications');
   const portalAccessMutation = useMutation<ClientPortalAccess>('clientPortalAccess');
   const { getName } = useUserNames(teamMembers || []);
@@ -562,6 +579,8 @@ const CRMView: React.FC = () => {
             {filteredLeads.map((lead) => {
               const s = (lead as any).score ?? calculateLeadScore(lead);
               const scoreColor = s >= 70 ? 'text-green-600' : s >= 40 ? 'text-yellow-600' : 'text-red-500';
+              const leadPhone = (lead.phoneNumber || lead.phone || '').replace(/[^\d]/g, '');
+              const waUnread = leadPhone ? (waUnreadByPhone.get(leadPhone) || 0) : 0;
               return (
                 <Card key={lead.id} className="p-4 space-y-3" onClick={() => setSelectedLead(lead)}>
                   <div className="flex items-start justify-between">
@@ -571,6 +590,15 @@ const CRMView: React.FC = () => {
                       {lead.jobTitle && <p className="text-xs text-muted-foreground">{lead.jobTitle}</p>}
                     </div>
                     <div className="flex items-center gap-2 shrink-0 ml-2">
+                      {waUnread > 0 && (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setWhatsappLead(lead); }}
+                          className="flex items-center gap-1 bg-[#25D366] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full hover:bg-[#1da851] transition-colors"
+                        >
+                          <MessageSquare className="w-3 h-3" />
+                          {waUnread}
+                        </button>
+                      )}
                       <div className="flex items-center gap-0.5">
                         <Zap className={`w-3 h-3 ${scoreColor}`} />
                         <span className={`text-xs font-semibold ${scoreColor}`}>{s}</span>

@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useCollection } from '../hooks/useFirestore';
+import { useCollection, getGlobalTeamId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
 import { X, Send, MessageSquare, Loader2, Phone } from 'lucide-react';
@@ -25,6 +25,7 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, leadName, leadId, onClose }
   const { data: messages, loading } = useCollection<WhatsAppMessage>('whatsappMessages', {
     where: [{ field: 'phone', operator: '==', value: normalizedPhone }],
     orderBy: { field: 'createdAt', direction: 'asc' },
+    skipTeamFilter: true,
   });
 
   // Auto-scroll to bottom on new messages
@@ -52,6 +53,7 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, leadName, leadId, onClose }
           message: body,
           leadId: leadId || null,
           leadName,
+          teamId: getGlobalTeamId(),
         }),
       });
       const data = await res.json();

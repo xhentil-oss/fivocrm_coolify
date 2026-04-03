@@ -142,14 +142,42 @@ async function connectWhatsApp(): Promise<void> {
         if (existing.exists) continue;
       }
 
+      // Try to find the lead by phone for auto-linking
+      let autoLeadId: string | null = null;
+      let autoLeadName: string | null = null;
+      try {
+        const leadsSnap = await db.collection('leads')
+          .where('teamId', '==', TEAM_ID)
+          .where('phoneNumber', '==', phone)
+          .limit(1)
+          .get();
+        if (!leadsSnap.empty) {
+          const leadDoc = leadsSnap.docs[0];
+          autoLeadId = leadDoc.id;
+          autoLeadName = leadDoc.data().name || null;
+        }
+        // fallback: check 'phone' field
+        if (!autoLeadId) {
+          const snap2 = await db.collection('leads')
+            .where('teamId', '==', TEAM_ID)
+            .where('phone', '==', phone)
+            .limit(1)
+            .get();
+          if (!snap2.empty) {
+            autoLeadId = snap2.docs[0].id;
+            autoLeadName = snap2.docs[0].data().name || null;
+          }
+        }
+      } catch { /* non-critical */ }
+
       try {
         await db.collection('whatsappMessages').doc(docId).set({
           phone,
           direction: isFromMe ? 'outbound' : 'inbound',
           message: body,
           waMessageId,
-          leadId: null,
-          leadName: null,
+          leadId: autoLeadId,
+          leadName: autoLeadName,
           teamId: TEAM_ID,
           status: isFromMe ? 'sent' : 'received',
           createdAt: admin.firestore.Timestamp.fromDate(ts),
