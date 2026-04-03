@@ -1,6 +1,7 @@
 ﻿import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { phoneKeyDown } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -19,6 +20,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../components/ui/alert-dialog';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
@@ -47,6 +49,7 @@ const CustomersView: React.FC = () => {
   const permissions = usePermissions();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('customers');
+  const { setDirty, isDirtyRef, discardOpen, requestClose, confirmDiscard, cancelDiscard } = useUnsavedChanges();
 
   // Customers State
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -391,18 +394,35 @@ const CustomersView: React.FC = () => {
           </p>
         </div>
         {permissions.canEdit && activeTab === 'customers' && (
-          <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+          <Dialog open={isCreateDialogOpen} onOpenChange={(open) => {
+            if (open) { setDirty(false); setIsCreateDialogOpen(true); }
+            else requestClose(() => setIsCreateDialogOpen(false));
+          }}>
             <DialogTrigger asChild>
               <Button className="gap-2 w-full sm:w-auto">
                 <Plus className="w-4 h-4" />
                 Klient i Ri
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-2xl">
+            <DialogContent
+              className="max-w-2xl"
+              onInteractOutside={(e) => {
+                if (isDirtyRef.current) {
+                  e.preventDefault();
+                  requestClose(() => setIsCreateDialogOpen(false));
+                }
+              }}
+              onEscapeKeyDown={(e) => {
+                if (isDirtyRef.current) {
+                  e.preventDefault();
+                  requestClose(() => setIsCreateDialogOpen(false));
+                }
+              }}
+            >
               <DialogHeader>
                 <DialogTitle>Krijo Klient te Ri</DialogTitle>
               </DialogHeader>
-              <CustomerForm onSubmit={handleCreateCustomer} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} />
+              <CustomerForm onSubmit={(data) => { setDirty(false); handleCreateCustomer(data); }} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} onDirtyChange={setDirty} />
             </DialogContent>
           </Dialog>
         )}
@@ -753,12 +773,29 @@ const CustomersView: React.FC = () => {
 
           {/* Edit Dialog */}
           {selectedCustomer && (
-            <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
-              <DialogContent className="max-w-2xl">
+            <Dialog open={isEditDialogOpen} onOpenChange={(open) => {
+              if (open) { setDirty(false); setIsEditDialogOpen(true); }
+              else requestClose(() => setIsEditDialogOpen(false));
+            }}>
+              <DialogContent
+                className="max-w-2xl"
+                onInteractOutside={(e) => {
+                  if (isDirtyRef.current) {
+                    e.preventDefault();
+                    requestClose(() => setIsEditDialogOpen(false));
+                  }
+                }}
+                onEscapeKeyDown={(e) => {
+                  if (isDirtyRef.current) {
+                    e.preventDefault();
+                    requestClose(() => setIsEditDialogOpen(false));
+                  }
+                }}
+              >
                 <DialogHeader>
                   <DialogTitle>Ndrysho Klientin</DialogTitle>
                 </DialogHeader>
-                <CustomerForm onSubmit={handleUpdateCustomer} initialData={selectedCustomer} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} />
+                <CustomerForm onSubmit={(data) => { setDirty(false); handleUpdateCustomer(data); }} initialData={selectedCustomer} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} onDirtyChange={setDirty} />
               </DialogContent>
             </Dialog>
           )}
@@ -1073,6 +1110,24 @@ const CustomersView: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Unsaved Changes Confirmation */}
+      <AlertDialog open={discardOpen} onOpenChange={(open) => { if (!open) cancelDiscard(); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Të dhënat nuk u ruajtën</AlertDialogTitle>
+            <AlertDialogDescription>
+              Ke ndryshime të paruajtura. A je i sigurt që dëshiron të mbyllësh pa ruajtur?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={cancelDiscard}>Kthehu</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDiscard} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Hiq Ndryshimet
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
@@ -1082,7 +1137,8 @@ const CustomerForm: React.FC<{
   initialData?: Customer;
   industries?: string[];
   onAddIndustry?: () => void;
-}> = ({ onSubmit, initialData, industries = INDUSTRY_OPTIONS, onAddIndustry }) => {
+  onDirtyChange?: (dirty: boolean) => void;
+}> = ({ onSubmit, initialData, industries = INDUSTRY_OPTIONS, onAddIndustry, onDirtyChange }) => {
   const init = initialData as any;
   const [status, setStatus] = useState(init?.status || 'Active');
   const [industry, setIndustry] = useState(init?.industry || '');
@@ -1096,7 +1152,7 @@ const CustomerForm: React.FC<{
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4 max-h-[70vh] overflow-y-auto px-1">
+    <form onSubmit={handleSubmit} className="space-y-4 max-h-[70vh] overflow-y-auto px-1" onInput={() => onDirtyChange?.(true)}>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label htmlFor="name">Emri *</Label>
@@ -1138,7 +1194,7 @@ const CustomerForm: React.FC<{
         <div>
           <Label>Industria</Label>
           <div className="flex gap-2">
-            <Select value={industry} onValueChange={setIndustry}>
+            <Select value={industry} onValueChange={(v) => { setIndustry(v); onDirtyChange?.(true); }}>
               <SelectTrigger><SelectValue placeholder="Zgjidh industrine" /></SelectTrigger>
               <SelectContent>
                 <SelectItem value="__none__">Pa industri</SelectItem>
@@ -1161,7 +1217,7 @@ const CustomerForm: React.FC<{
         </div>
         <div>
           <Label>Statusi</Label>
-          <Select value={status} onValueChange={setStatus}>
+          <Select value={status} onValueChange={(v) => { setStatus(v); onDirtyChange?.(true); }}>
             <SelectTrigger><SelectValue /></SelectTrigger>
             <SelectContent>
               {STATUS_OPTIONS.map(opt => (

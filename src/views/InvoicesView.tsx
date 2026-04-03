@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, useMutation, useGlobalTeamId } from '../hooks/useFirestore';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useAuth } from '../contexts/AuthContext';
@@ -16,6 +17,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popove
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '../components/ui/command';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../components/ui/alert-dialog';
 import { Textarea } from '../components/ui/textarea';
 import {
   DropdownMenu,
@@ -35,6 +37,7 @@ const InvoicesView: React.FC = () => {
   const { user } = useAuth();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [editInvoice, setEditInvoice] = useState<Invoice | null>(null);
+  const { setDirty, isDirtyRef, discardOpen, requestClose, confirmDiscard, cancelDiscard } = useUnsavedChanges();
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
   const [editingField, setEditingField] = useState<string | null>(null);
@@ -290,18 +293,35 @@ const InvoicesView: React.FC = () => {
             columns={['invoiceNumber', 'customerId', 'total', 'status', 'dueDate', 'paymentMethod']}
           />
           {permissions.canEdit && (
-            <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+            <Dialog open={isCreateDialogOpen} onOpenChange={(open) => {
+              if (open) { setDirty(false); setIsCreateDialogOpen(true); }
+              else requestClose(() => setIsCreateDialogOpen(false));
+            }}>
               <DialogTrigger asChild>
                 <Button size="sm" className="bg-primary text-primary-foreground">
                   <Plus className="w-4 h-4 sm:mr-2" />
                   <span className="hidden sm:inline">Faturë e Re</span>
                 </Button>
               </DialogTrigger>
-              <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+              <DialogContent
+                className="max-w-4xl max-h-[90vh] overflow-y-auto"
+                onInteractOutside={(e) => {
+                  if (isDirtyRef.current) {
+                    e.preventDefault();
+                    requestClose(() => setIsCreateDialogOpen(false));
+                  }
+                }}
+                onEscapeKeyDown={(e) => {
+                  if (isDirtyRef.current) {
+                    e.preventDefault();
+                    requestClose(() => setIsCreateDialogOpen(false));
+                  }
+                }}
+              >
                 <DialogHeader>
                   <DialogTitle>Krijo Faturë të Re</DialogTitle>
                 </DialogHeader>
-                <InvoiceForm onClose={() => setIsCreateDialogOpen(false)} />
+                <InvoiceForm onClose={() => { setDirty(false); setIsCreateDialogOpen(false); }} onDirtyChange={setDirty} />
               </DialogContent>
             </Dialog>
           )}
@@ -310,12 +330,29 @@ const InvoicesView: React.FC = () => {
 
       {/* Edit Invoice Dialog */}
       {editInvoice && (
-        <Dialog open={!!editInvoice} onOpenChange={() => setEditInvoice(null)}>
-          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <Dialog open={!!editInvoice} onOpenChange={(open) => {
+          if (open) { setDirty(false); }
+          else requestClose(() => setEditInvoice(null));
+        }}>
+          <DialogContent
+            className="max-w-4xl max-h-[90vh] overflow-y-auto"
+            onInteractOutside={(e) => {
+              if (isDirtyRef.current) {
+                e.preventDefault();
+                requestClose(() => setEditInvoice(null));
+              }
+            }}
+            onEscapeKeyDown={(e) => {
+              if (isDirtyRef.current) {
+                e.preventDefault();
+                requestClose(() => setEditInvoice(null));
+              }
+            }}
+          >
             <DialogHeader>
               <DialogTitle>Ndrysho Faturën — {editInvoice.invoiceNumber || editInvoice.id.slice(0, 8)}</DialogTitle>
             </DialogHeader>
-            <InvoiceForm onClose={() => setEditInvoice(null)} editInvoice={editInvoice} />
+            <InvoiceForm onClose={() => { setDirty(false); setEditInvoice(null); }} editInvoice={editInvoice} onDirtyChange={setDirty} />
           </DialogContent>
         </Dialog>
       )}
@@ -632,11 +669,29 @@ const InvoicesView: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Unsaved Changes Confirmation */}
+      <AlertDialog open={discardOpen} onOpenChange={(open) => { if (!open) cancelDiscard(); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>T\u00eb dh\u00ebnat nuk u ruajt\u00ebn</AlertDialogTitle>
+            <AlertDialogDescription>
+              Ke ndryshime t\u00eb paruajtura. A je i sigurt q\u00eb d\u00ebshiron t\u00eb mbyll\u00ebsh pa ruajtur?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={cancelDiscard}>Kthehu</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDiscard} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Hiq Ndryshimet
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
 
-const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null }> = ({ onClose, editInvoice }) => {
+const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null; onDirtyChange?: (dirty: boolean) => void }> = ({ onClose, editInvoice, onDirtyChange }) => {
   const isEditing = !!editInvoice;
   const logActivity = useActivityLogger();
   const [invoiceDate, setInvoiceDate] = useState<Date | undefined>(editInvoice?.invoiceDate ? new Date(editInvoice.invoiceDate) : new Date());
@@ -665,6 +720,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
   const [recurringFrequency, setRecurringFrequency] = useState((editInvoice as any)?.recurringFrequency || 'monthly');
   const [loadedExistingItems, setLoadedExistingItems] = useState(false);
 
+  const teamId = useGlobalTeamId();
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
@@ -678,11 +734,12 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
   const invoiceItemMutation = useMutation<InvoiceItem>('invoiceItems');
   const accessMutation = useMutation<ClientPortalAccess>('clientPortalAccess');
 
-  // Auto-generate invoice number for new invoices (wait until data is loaded)
+  // Auto-generate invoice number for new invoices (team-scoped to avoid cross-team inflation)
   React.useEffect(() => {
     if (!isEditing && !invoicesLoading && allInvoices) {
       let maxNum = 0;
-      for (const inv of allInvoices) {
+      const teamInvoices = teamId ? allInvoices.filter(inv => (inv as any).teamId === teamId) : allInvoices;
+      for (const inv of teamInvoices) {
         const match = inv.invoiceNumber?.match(/^FAT-(\d+)$/i);
         if (match) {
           const n = parseInt(match[1], 10);
@@ -691,7 +748,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
       }
       setInvoiceNumber(`FAT-${String(maxNum + 1).padStart(3, '0')}`);
     }
-  }, [allInvoices, invoicesLoading]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [allInvoices, invoicesLoading, teamId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-fill bank defaults from settings when user switches to Bank payment
   React.useEffect(() => {
@@ -730,16 +787,19 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
 
   const addLineItem = () => {
     setLineItems([...lineItems, { serviceId: '', quantity: 1 }]);
+    onDirtyChange?.(true);
   };
 
   const removeLineItem = (index: number) => {
     setLineItems(lineItems.filter((_, i) => i !== index));
+    onDirtyChange?.(true);
   };
 
   const updateLineItem = (index: number, field: 'serviceId' | 'quantity', value: string | number) => {
     const updated = [...lineItems];
     updated[index] = { ...updated[index], [field]: value };
     setLineItems(updated);
+    onDirtyChange?.(true);
   };
 
   const calculateSubtotal = () => {
@@ -865,11 +925,12 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
       }
     }
 
+    onDirtyChange?.(false);
     onClose();
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
+    <form onSubmit={handleSubmit} className="space-y-6" onInput={() => onDirtyChange?.(true)}>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label htmlFor="invoiceNumber">Numri i Faturës</Label>
@@ -916,6 +977,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
                             setSelectedProjectId('');
                             setCustomerSearch('');
                             setCustomerSearchOpen(false);
+                            onDirtyChange?.(true);
                           }}
                         >
                           <Check className={`mr-2 h-4 w-4 ${selectedCustomerId === customer.id ? 'opacity-100' : 'opacity-0'}`} />
@@ -1120,7 +1182,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0">
-              <Calendar mode="single" selected={invoiceDate} onSelect={setInvoiceDate} />
+              <Calendar mode="single" selected={invoiceDate} onSelect={(d) => { setInvoiceDate(d); onDirtyChange?.(true); }} />
             </PopoverContent>
           </Popover>
         </div>
@@ -1134,7 +1196,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0">
-              <Calendar mode="single" selected={dueDate} onSelect={setDueDate} />
+              <Calendar mode="single" selected={dueDate} onSelect={(d) => { setDueDate(d); onDirtyChange?.(true); }} />
             </PopoverContent>
           </Popover>
         </div>

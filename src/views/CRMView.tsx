@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useCollection, useMutation, useGlobalTeamId, useWhatsappEnabled } from '../hooks/useFirestore';
+import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import type { WhatsAppMessage } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -16,6 +17,7 @@ import { Calendar } from '../components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
+import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../components/ui/alert-dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Textarea } from '../components/ui/textarea';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
@@ -31,6 +33,7 @@ const CRMView: React.FC = () => {
   const [whatsappLead, setWhatsappLead] = useState<Lead | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [editLead, setEditLead] = useState<Lead | null>(null);
+  const { setDirty, isDirtyRef, discardOpen, requestClose, confirmDiscard, cancelDiscard } = useUnsavedChanges();
   const [lostReasonLead, setLostReasonLead] = useState<Lead | null>(null);
   const [lostReason, setLostReason] = useState('');
   const [activeTab, setActiveTab] = useState('all');
@@ -449,18 +452,35 @@ const CRMView: React.FC = () => {
           </p>
         </div>
         {permissions.canEdit && (
-          <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+          <Dialog open={isCreateDialogOpen} onOpenChange={(open) => {
+            if (open) { setDirty(false); setIsCreateDialogOpen(true); }
+            else requestClose(() => setIsCreateDialogOpen(false));
+          }}>
             <DialogTrigger asChild>
               <Button className="bg-primary text-primary-foreground w-full sm:w-auto">
                 <Plus className="w-4 h-4 mr-2" />
                 Lead i Ri
               </Button>
             </DialogTrigger>
-            <DialogContent className="max-w-2xl">
+            <DialogContent
+              className="max-w-2xl"
+              onInteractOutside={(e) => {
+                if (isDirtyRef.current) {
+                  e.preventDefault();
+                  requestClose(() => setIsCreateDialogOpen(false));
+                }
+              }}
+              onEscapeKeyDown={(e) => {
+                if (isDirtyRef.current) {
+                  e.preventDefault();
+                  requestClose(() => setIsCreateDialogOpen(false));
+                }
+              }}
+            >
               <DialogHeader>
                 <DialogTitle>Krijo Lead të Ri</DialogTitle>
               </DialogHeader>
-              <LeadForm onSubmit={handleCreateLead} disabled={saving} teamMembers={teamMembers || []} getName={getName} />
+              <LeadForm onSubmit={(data) => { setDirty(false); handleCreateLead(data); }} disabled={saving} teamMembers={teamMembers || []} getName={getName} onDirtyChange={setDirty} />
             </DialogContent>
           </Dialog>
         )}
@@ -1002,18 +1022,36 @@ const CRMView: React.FC = () => {
       </Dialog>
 
       {/* Edit Lead Dialog */}
-      <Dialog open={!!editLead} onOpenChange={(open) => { if (!open) setEditLead(null); }}>
-        <DialogContent className="max-w-2xl">
+      <Dialog open={!!editLead} onOpenChange={(open) => {
+        if (open) { setDirty(false); }
+        else requestClose(() => setEditLead(null));
+      }}>
+        <DialogContent
+          className="max-w-2xl"
+          onInteractOutside={(e) => {
+            if (isDirtyRef.current) {
+              e.preventDefault();
+              requestClose(() => setEditLead(null));
+            }
+          }}
+          onEscapeKeyDown={(e) => {
+            if (isDirtyRef.current) {
+              e.preventDefault();
+              requestClose(() => setEditLead(null));
+            }
+          }}
+        >
           <DialogHeader>
             <DialogTitle>Ndrysho Lead</DialogTitle>
           </DialogHeader>
           {editLead && (
             <LeadForm
-              onSubmit={handleEditLead}
+              onSubmit={(data) => { setDirty(false); handleEditLead(data); }}
               initialData={editLead}
               disabled={saving}
               teamMembers={teamMembers || []}
               getName={getName}
+              onDirtyChange={setDirty}
             />
           )}
         </DialogContent>
@@ -1050,6 +1088,24 @@ const CRMView: React.FC = () => {
           onClose={() => setWhatsappLead(null)}
         />
       )}
+
+      {/* Unsaved Changes Confirmation */}
+      <AlertDialog open={discardOpen} onOpenChange={(open) => { if (!open) cancelDiscard(); }}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Të dhënat nuk u ruajtën</AlertDialogTitle>
+            <AlertDialogDescription>
+              Ke ndryshime të paruajtura. A je i sigurt që dëshiron të mbyllësh pa ruajtur?
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel onClick={cancelDiscard}>Kthehu</AlertDialogCancel>
+            <AlertDialogAction onClick={confirmDiscard} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+              Hiq Ndryshimet
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 };
@@ -1060,7 +1116,8 @@ const LeadForm: React.FC<{
   disabled?: boolean;
   teamMembers?: TeamMember[];
   getName?: (userId: string | null | undefined, fallback?: string) => string;
-}> = ({ onSubmit, initialData, disabled, teamMembers = [], getName }) => {
+  onDirtyChange?: (dirty: boolean) => void;
+}> = ({ onSubmit, initialData, disabled, teamMembers = [], getName, onDirtyChange }) => {
   // Split existing phoneNumber into prefix + local
   const PHONE_PREFIXES = ['+355','+383','+389','+381','+382','+385','+387','+386','+49','+43','+41','+39','+44','+1','+33','+34','+30','+90'];
   const parsePhone = (phone?: string) => {
@@ -1094,7 +1151,7 @@ const LeadForm: React.FC<{
   };
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4 max-h-[70vh] overflow-y-auto px-1">
+    <form onSubmit={handleSubmit} className="space-y-4 max-h-[70vh] overflow-y-auto px-1" onInput={() => onDirtyChange?.(true)}>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label htmlFor="name">Emri *</Label>
@@ -1111,7 +1168,7 @@ const LeadForm: React.FC<{
         <div>
           <Label htmlFor="phoneLocal">Numri i Telefonit</Label>
           <div className="flex gap-1">
-            <Select value={phonePrefix} onValueChange={setPhonePrefix}>
+            <Select value={phonePrefix} onValueChange={(v) => { setPhonePrefix(v); onDirtyChange?.(true); }}>
               <SelectTrigger className="w-[100px] shrink-0">
                 <SelectValue />
               </SelectTrigger>
@@ -1234,7 +1291,7 @@ const LeadForm: React.FC<{
               </Button>
             </PopoverTrigger>
             <PopoverContent className="w-auto p-0">
-              <Calendar mode="single" selected={lastFollowUpDate} onSelect={setLastFollowUpDate} />
+              <Calendar mode="single" selected={lastFollowUpDate} onSelect={(d) => { setLastFollowUpDate(d); onDirtyChange?.(true); }} />
             </PopoverContent>
           </Popover>
         </div>
