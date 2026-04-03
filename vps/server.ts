@@ -60,6 +60,9 @@ let qrDataUrl: string | null = null;
 let connectionStatus: ConnectionStatus = 'disconnected';
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 
+/** Maps LID JID (e.g. "123456789@lid") → phone JID (e.g. "355691234567@s.whatsapp.net") */
+const lidToPhoneMap = new Map<string, string>();
+
 // ── Connect WhatsApp ──────────────────────────────────────────────────────────
 async function connectWhatsApp(): Promise<void> {
   if (reconnectTimer) {
@@ -110,6 +113,25 @@ async function connectWhatsApp(): Promise<void> {
     }
   });
 
+  // ── Build LID → phone map from contacts ─────────────────────────────────────
+  sock.ev.on('contacts.upsert', (contacts) => {
+    for (const contact of contacts) {
+      const lid = (contact as any).lid as string | undefined;
+      if (lid && contact.id) {
+        lidToPhoneMap.set(lid, contact.id);
+      }
+    }
+  });
+
+  sock.ev.on('contacts.update', (updates) => {
+    for (const update of updates) {
+      const lid = (update as any).lid as string | undefined;
+      if (lid && update.id) {
+        lidToPhoneMap.set(lid, update.id);
+      }
+    }
+  });
+
   // ── Incoming messages → save to Firestore ──────────────────────────────────
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     if (type !== 'notify') return;
@@ -120,7 +142,19 @@ async function connectWhatsApp(): Promise<void> {
       const rawJid = msg.key.remoteJid || '';
       if (rawJid.endsWith('@g.us')) continue; // skip group messages
 
-      const phone = normalizePhone(rawJid.split('@')[0]);
+      // Resolve LID to real phone JID if we have the mapping
+      let resolvedJid = rawJid;
+      if (rawJid.endsWith('@lid')) {
+        const phoneJid = lidToPhoneMap.get(rawJid);
+        if (phoneJid) {
+          resolvedJid = phoneJid;
+          console.log(`[WA] LID resolved: ${rawJid} → ${phoneJid}`);
+        } else {
+          console.log(`[WA] LID not in contacts map yet: ${rawJid}`);
+        }
+      }
+
+      const phone = normalizePhone(resolvedJid.split('@')[0]);
       if (!phone) continue;
 
       const body =
@@ -173,6 +207,7 @@ async function connectWhatsApp(): Promise<void> {
       try {
         await db.collection('whatsappMessages').doc(docId).set({
           phone,
+          jid: resolvedJid,
           direction: isFromMe ? 'outbound' : 'inbound',
           message: body,
           waMessageId,
@@ -242,12 +277,13 @@ app.post('/send', requireApiKey, async (req, res) => {
     return;
   }
 
-  const { to, message, leadId, leadName, teamId } = req.body as {
+  const { to, message, leadId, leadName, teamId, jid: rawJidFromBody } = req.body as {
     to: string;
     message: string;
     leadId?: string;
     leadName?: string;
     teamId?: string;
+    jid?: string;
   };
 
   if (!to || !message) {
@@ -256,12 +292,16 @@ app.post('/send', requireApiKey, async (req, res) => {
   }
 
   const cleanPhone = normalizePhone(String(to));
-  if (cleanPhone.length < 7 || cleanPhone.length > 15) {
+
+  // Use the provided jid directly (handles LID contacts), or construct from phone
+  const isValidJid = rawJidFromBody &&
+    (rawJidFromBody.endsWith('@s.whatsapp.net') || rawJidFromBody.endsWith('@lid'));
+  const jid = isValidJid ? rawJidFromBody : `${cleanPhone}@s.whatsapp.net`;
+
+  if (!isValidJid && (cleanPhone.length < 7 || cleanPhone.length > 15)) {
     res.status(400).json({ error: 'Numri i telefonit është i pavlefshëm' });
     return;
   }
-
-  const jid = `${cleanPhone}@s.whatsapp.net`;
 
   try {
     const sent = await sock.sendMessage(jid, { text: message });
@@ -272,6 +312,7 @@ app.post('/send', requireApiKey, async (req, res) => {
     const docRef = db.collection('whatsappMessages').doc(docId);
     await docRef.set({
       phone: cleanPhone,
+      jid,
       direction: 'outbound',
       message,
       leadId: leadId || null,
