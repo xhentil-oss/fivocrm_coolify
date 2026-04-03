@@ -117,6 +117,14 @@
         { "fieldPath": "teamId", "order": "ASCENDING" },
         { "fieldPath": "status", "order": "ASCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "serviceInquiries",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "clientUserId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []
