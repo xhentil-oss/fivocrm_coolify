@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import Stripe from 'stripe';
-import { adminAuth } from './_firebaseAdmin.js';
+import { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2026-02-25.clover',
@@ -58,6 +58,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     } catch {
       return res.status(400).json({ error: 'Invalid redirect URLs' });
+    }
+
+    // Verify the caller belongs to the invoice's team
+    const invoiceDoc = await db.collection('invoices').doc(invoiceId).get();
+    if (!invoiceDoc.exists) {
+      return res.status(404).json({ error: 'Invoice not found' });
+    }
+    const invoiceTeamId = invoiceDoc.data()?.teamId;
+    if (invoiceTeamId) {
+      const memberSnap = await db.collection('teamMembers')
+        .where('teamId', '==', invoiceTeamId)
+        .where('userId', '==', uid)
+        .limit(1)
+        .get();
+      if (memberSnap.empty) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
     }
 
     const sessionParams: Stripe.Checkout.SessionCreateParams = {

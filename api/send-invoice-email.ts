@@ -25,8 +25,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!authHeader?.startsWith('Bearer ')) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  let decodedToken: admin.auth.DecodedIdToken;
   try {
-    await admin.auth().verifyIdToken(authHeader.slice(7));
+    decodedToken = await admin.auth().verifyIdToken(authHeader.slice(7));
   } catch {
     return res.status(401).json({ error: 'Invalid token' });
   }
@@ -47,6 +48,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(404).json({ error: 'Invoice not found' });
   }
   const invoice = invoiceDoc.data()!;
+
+  // Verify the caller belongs to the same team as the invoice
+  if (invoice.teamId) {
+    const memberSnap = await db.collection('teamMembers')
+      .where('teamId', '==', invoice.teamId)
+      .where('userId', '==', decodedToken.uid)
+      .limit(1)
+      .get();
+    if (memberSnap.empty) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+  }
 
   // Fetch customer
   if (!invoice.customerId) {

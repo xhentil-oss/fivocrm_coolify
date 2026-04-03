@@ -69,8 +69,8 @@ service cloud.firestore {
     }
 
     match /services/{docId} {
-      // Public read: services are a catalogue shown on the public registration page.
-      allow read: if true;
+      // Authenticated read only — services contain team-specific pricing/data.
+      allow read: if isAuth();
       allow create: if canCreateForTeam();
       allow update, delete: if isAuth() && ownsTeamDoc();
     }
@@ -223,10 +223,15 @@ service cloud.firestore {
     match /clientPortalAccess/{docId} {
       allow read: if isAuth();
       allow create: if isAuth();
-      // Only the portal user themselves or a team admin can update
+      // Team admin (owns the doc) can update any field.
+      // Portal user can only update their own safe fields — NOT accessLevel/role.
       allow update: if isAuth() && (
         resource.data.userId == request.auth.uid ||
-        resource.data.email == request.auth.token.email
+        (
+          resource.data.email == request.auth.token.email &&
+          !request.resource.data.diff(resource.data).affectedKeys()
+            .hasAny(['accessLevel', 'role', 'teamId', 'customerId', 'userId'])
+        )
       );
       allow delete: if isAuth();
     }
