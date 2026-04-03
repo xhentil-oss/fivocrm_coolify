@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2 } from 'lucide-react';
+import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Label } from '../components/ui/label';
@@ -112,6 +112,12 @@ const SettingsView: React.FC = () => {
   const [eurAllRate, setEurAllRate] = useState(() => localStorage.getItem('eur_all_rate') || '100');
   const [rateSaved, setRateSaved] = useState(false);
 
+  // ── WhatsApp integration settings ──
+  const [whatsappEnabled, setWhatsappEnabled] = useState(() => localStorage.getItem('whatsapp_enabled') === 'true');
+  const [whatsappVpsUrl, setWhatsappVpsUrl] = useState(() => localStorage.getItem('whatsapp_vps_url') || '');
+  const [whatsappVpsSecret, setWhatsappVpsSecret] = useState(() => localStorage.getItem('whatsapp_vps_secret') || '');
+  const [whatsappSaved, setWhatsappSaved] = useState(false);
+
   // ── Cron / Automation settings (persisted in localStorage) ──
   const [cronSettings, setCronSettings] = useState<Record<string, any>>(() => {
     try { return JSON.parse(localStorage.getItem('cron_settings') || '{}'); } catch { return {}; }
@@ -166,6 +172,19 @@ const SettingsView: React.FC = () => {
     }
     setBankSaved(true);
     setTimeout(() => setBankSaved(false), 3000);
+  };
+
+  const handleToggleWhatsapp = (val: boolean) => {
+    setWhatsappEnabled(val);
+    localStorage.setItem('whatsapp_enabled', String(val));
+  };
+
+  const handleSaveWhatsappSettings = () => {
+    localStorage.setItem('whatsapp_enabled', String(whatsappEnabled));
+    localStorage.setItem('whatsapp_vps_url', whatsappVpsUrl);
+    localStorage.setItem('whatsapp_vps_secret', whatsappVpsSecret);
+    setWhatsappSaved(true);
+    setTimeout(() => setWhatsappSaved(false), 3000);
   };
 
   const addBankAccount = () => {
@@ -691,6 +710,93 @@ const SettingsView: React.FC = () => {
                 </Button>
               </div>
             </div>
+          </Card>
+
+          {/* WhatsApp Integration */}
+          <Card className="p-6 space-y-6">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-[#25D366]/10 rounded-lg">
+                  <MessageSquare className="w-6 h-6 text-[#25D366]" />
+                </div>
+                <div>
+                  <h3 className="text-h4 text-foreground">WhatsApp Business</h3>
+                  <p className="text-body-sm text-muted-foreground">
+                    Dërgo njoftime zyrtare WhatsApp për fatura, kujtesa dhe ftesa
+                  </p>
+                </div>
+              </div>
+              <Switch checked={whatsappEnabled} onCheckedChange={handleToggleWhatsapp} />
+            </div>
+
+            {whatsappEnabled && (
+              <>
+                <Separator />
+                <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-lg">
+                  <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    Kërkon një VPS të dedikuar me serverin Baileys aktiv. Vercel nuk e mbështet këtë integrim direkt.
+                  </p>
+                </div>
+                <div className="space-y-4">
+                  <div className="space-y-2">
+                    <label className="text-body-sm text-foreground font-medium flex items-center gap-2">
+                      <Globe className="w-4 h-4" />
+                      URL e VPS (Baileys Server)
+                    </label>
+                    <input
+                      type="url"
+                      value={whatsappVpsUrl}
+                      onChange={(e) => setWhatsappVpsUrl(e.target.value)}
+                      placeholder="https://your-vps-ip:3001"
+                      className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono text-sm"
+                    />
+                    <p className="text-xs text-muted-foreground">Adresa HTTP/HTTPS e serverit tuaj Baileys në VPS</p>
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-body-sm text-foreground font-medium flex items-center gap-2">
+                      <Key className="w-4 h-4" />
+                      API Secret Key
+                    </label>
+                    <input
+                      type="password"
+                      value={whatsappVpsSecret}
+                      onChange={(e) => setWhatsappVpsSecret(e.target.value)}
+                      placeholder="Çelësi sekret i serverit tuaj"
+                      className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono text-sm"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      I njëjtë me <code className="bg-muted px-1 rounded text-xs">WHATSAPP_VPS_SECRET</code> në env variables të serverit VPS
+                    </p>
+                  </div>
+                </div>
+                <Separator />
+                <div className="flex items-center justify-between">
+                  {whatsappSaved && (
+                    <div className="flex items-center gap-2 text-success">
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span className="text-sm">Cilësimet u ruajtën!</span>
+                    </div>
+                  )}
+                  <div className="ml-auto flex gap-3">
+                    <Button
+                      variant="outline"
+                      className="bg-background text-foreground border-border hover:bg-muted"
+                      onClick={() => { setWhatsappVpsUrl(''); setWhatsappVpsSecret(''); }}
+                    >
+                      Pastro
+                    </Button>
+                    <Button
+                      className="bg-[#25D366] text-white hover:bg-[#1da851]"
+                      onClick={handleSaveWhatsappSettings}
+                      disabled={!whatsappVpsUrl || !whatsappVpsSecret}
+                    >
+                      Ruaj Cilësimet WhatsApp
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )}
           </Card>
 
           {/* Other Integrations Placeholder */}
