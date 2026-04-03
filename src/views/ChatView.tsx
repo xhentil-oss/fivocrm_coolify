@@ -72,6 +72,7 @@ const ChatView: React.FC = () => {
   const [clientSearch, setClientSearch] = useState('');
   // WhatsApp state
   const [activeWaPhone, setActiveWaPhone] = useState<string | null>(null);
+  const [activeWaJid, setActiveWaJid] = useState<string | null>(null);
   const [activeWaLeadName, setActiveWaLeadName] = useState('');
   const [waText, setWaText] = useState('');
   const [waSending, setWaSending] = useState(false);
@@ -301,11 +302,12 @@ const ChatView: React.FC = () => {
 
   const waConversations = useMemo(() => {
     if (!allWaMessages) return [];
-    const map = new Map<string, { phone: string; leadName: string; leadId?: string | null; lastMessage: string; lastDate: any; unread: number }>();
+    const map = new Map<string, { phone: string; jid: string | null; leadName: string; leadId?: string | null; lastMessage: string; lastDate: any; unread: number }>();
     for (const msg of allWaMessages) {
       if (!map.has(msg.phone)) {
         map.set(msg.phone, {
           phone: msg.phone,
+          jid: msg.jid || null,
           leadName: msg.leadName || msg.phone,
           leadId: msg.leadId || null,
           lastMessage: msg.message,
@@ -320,6 +322,9 @@ const ChatView: React.FC = () => {
         }
         if (msg.leadId && !existing.leadId) {
           existing.leadId = msg.leadId;
+        }
+        if (msg.jid && !existing.jid) {
+          existing.jid = msg.jid;
         }
         if (msg.direction === 'inbound' && msg.status === 'received') {
           existing.unread++;
@@ -522,9 +527,10 @@ const ChatView: React.FC = () => {
     setReplyingTo(null);
   }, []);
 
-  const handleSelectWhatsApp = useCallback((phone: string, leadName: string) => {
+  const handleSelectWhatsApp = useCallback((phone: string, leadName: string, jid?: string | null) => {
     setChatMode('whatsapp');
     setActiveWaPhone(phone);
+    setActiveWaJid(jid || null);
     setActiveWaLeadName(leadName);
     setShowSidebar(false);
     setShowSearch(false);
@@ -541,7 +547,7 @@ const ChatView: React.FC = () => {
       const res = await fetch('/api/send-whatsapp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ to: activeWaPhone, message: body, leadName: activeWaLeadName, teamId: getGlobalTeamId() }),
+        body: JSON.stringify({ to: activeWaPhone, message: body, leadName: activeWaLeadName, teamId: getGlobalTeamId(), jid: activeWaJid || undefined }),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -831,7 +837,7 @@ const ChatView: React.FC = () => {
               return (
                 <button
                   key={conv.phone}
-                  onClick={() => handleSelectWhatsApp(conv.phone, conv.leadName)}
+                  onClick={() => handleSelectWhatsApp(conv.phone, conv.leadName, conv.jid)}
                   className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-left ${
                     isWaActive
                       ? 'bg-[#25D366]/10 border border-[#25D366]/20 shadow-sm'

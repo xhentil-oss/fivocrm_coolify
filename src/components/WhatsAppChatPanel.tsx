@@ -8,12 +8,13 @@ import type { WhatsAppMessage } from '../types';
 
 interface Props {
   phone: string;
+  jid?: string | null;
   leadName: string;
   leadId?: string;
   onClose: () => void;
 }
 
-const WhatsAppChatPanel: React.FC<Props> = ({ phone, leadName, leadId, onClose }) => {
+const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, leadId, onClose }) => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [text, setText] = useState('');
@@ -28,6 +29,9 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, leadName, leadId, onClose }
     orderBy: { field: 'createdAt', direction: 'asc' },
     skipTeamFilter: true,
   });
+
+  // Derive jid from messages if not passed as prop (handles LID contacts in CRM panel)
+  const jid = jidProp || messages?.find(m => m.jid)?.jid || null;
 
   // Auto-scroll to bottom on new messages
   useEffect(() => {
@@ -63,6 +67,7 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, leadName, leadId, onClose }
           leadId: leadId || null,
           leadName,
           teamId: getGlobalTeamId(),
+          jid: jid || undefined,
         }),
       });
       const data = await res.json();

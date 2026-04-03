@@ -16,7 +16,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Missing authorization header' });
   }
 
-  const { to, message, leadId, leadName, teamId } = req.body || {};
+  const { to, message, leadId, leadName, teamId, jid } = req.body || {};
 
   if (!to || typeof to !== 'string') {
     return res.status(400).json({ error: 'Fusha "to" (numri i telefonit) është e detyrueshme' });
@@ -24,7 +24,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!message || typeof message !== 'string' || !message.trim()) {
     return res.status(400).json({ error: 'Fusha "message" është e detyrueshme' });
   }
-  if (!isValidPhone(to)) {
+
+  const hasValidJid = typeof jid === 'string' &&
+    (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid'));
+
+  if (!hasValidJid && !isValidPhone(to)) {
     return res.status(400).json({ error: 'Numri i telefonit është i pavlefshëm' });
   }
 
@@ -51,6 +55,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         leadId: leadId || null,
         leadName: leadName || null,
         teamId: teamId || null,
+        jid: hasValidJid ? jid : undefined,
       }),
       signal: controller.signal,
     });

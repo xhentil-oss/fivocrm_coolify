@@ -3,6 +3,7 @@
 export interface WhatsAppMessage {
   id: string;
   phone: string;
+  jid?: string | null;
   direction: 'inbound' | 'outbound';
   message: string;
   leadId?: string | null;
