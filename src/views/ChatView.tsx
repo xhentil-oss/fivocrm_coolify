@@ -9,13 +9,13 @@ import {
   Send, MessageSquare, Users, Hash, Paperclip, X, FileIcon,
   FolderOpen, ArrowLeft, Search, Pencil, Trash2, Reply,
   SmilePlus, Check, Plus, Link2,
-  Bot, Sparkles, Loader2, Copy, RefreshCw,
+  Bot, Sparkles, Loader2, Copy, RefreshCw, Phone, Smartphone,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { auth } from '../lib/firebase';
-import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember } from '../types';
+import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, WhatsAppMessage } from '../types';
 
-type ChatMode = 'channel' | 'direct' | 'ai';
+type ChatMode = 'channel' | 'direct' | 'ai' | 'whatsapp';
 
 // AI Quick Actions
 const AI_QUICK_ACTIONS = [
@@ -70,6 +70,12 @@ const ChatView: React.FC = () => {
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null);
   const [clientSearch, setClientSearch] = useState('');
+  // WhatsApp state
+  const [activeWaPhone, setActiveWaPhone] = useState<string | null>(null);
+  const [activeWaLeadName, setActiveWaLeadName] = useState('');
+  const [waText, setWaText] = useState('');
+  const [waSending, setWaSending] = useState(false);
+  const waScrollRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevMessageCountRef = useRef(0);
   const markedAsReadRef = useRef<Set<string>>(new Set());
@@ -89,6 +95,9 @@ const ChatView: React.FC = () => {
   const { data: userProfiles } = useCollection<UserProfile>('userProfiles');
   const { data: teams } = useCollection<any>('teams');
   const { data: allMessages } = useCollection<ChatMessage>('messages');
+  const { data: allWaMessages } = useCollection<WhatsAppMessage>('whatsappMessages', {
+    orderBy: { field: 'createdAt', direction: 'desc' as const },
+  });
 
   const channelMsgQuery = useMemo(() => ({
     where: [{ field: 'channelId', operator: '==', value: activeChannel }],
@@ -288,6 +297,43 @@ const ChatView: React.FC = () => {
     return count;
   }, [channelUnreadMap, directUnreadMap, directConversations]);
 
+  const waConversations = useMemo(() => {
+    if (!allWaMessages) return [];
+    const map = new Map<string, { phone: string; leadName: string; leadId?: string | null; lastMessage: string; lastDate: any; unread: number }>();
+    for (const msg of allWaMessages) {
+      if (!map.has(msg.phone)) {
+        map.set(msg.phone, {
+          phone: msg.phone,
+          leadName: msg.leadName || msg.phone,
+          leadId: msg.leadId,
+          lastMessage: msg.message,
+          lastDate: msg.createdAt,
+          unread: msg.direction === 'inbound' ? 1 : 0,
+        });
+      } else if (msg.direction === 'inbound') {
+        map.get(msg.phone)!.unread++;
+      }
+    }
+    return Array.from(map.values());
+  }, [allWaMessages]);
+
+  const waActiveMessages = useMemo(() => {
+    if (!allWaMessages || !activeWaPhone) return [];
+    return [...allWaMessages].filter(m => m.phone === activeWaPhone).reverse();
+  }, [allWaMessages, activeWaPhone]);
+
+  const waTotalUnread = useMemo(
+    () => waConversations.reduce((s, c) => s + c.unread, 0),
+    [waConversations]
+  );
+
+  // WA auto-scroll
+  useEffect(() => {
+    if (waScrollRef.current) {
+      waScrollRef.current.scrollTop = waScrollRef.current.scrollHeight;
+    }
+  }, [waActiveMessages.length]);
+
   // Message Handlers
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -453,6 +499,39 @@ const ChatView: React.FC = () => {
     setReplyingTo(null);
   }, []);
 
+  const handleSelectWhatsApp = useCallback((phone: string, leadName: string) => {
+    setChatMode('whatsapp');
+    setActiveWaPhone(phone);
+    setActiveWaLeadName(leadName);
+    setShowSidebar(false);
+    setShowSearch(false);
+    setSearchQuery('');
+  }, []);
+
+  const handleSendWa = async () => {
+    if (!waText.trim() || waSending || !user || !activeWaPhone) return;
+    setWaSending(true);
+    const body = waText.trim();
+    setWaText('');
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch('/api/send-whatsapp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ to: activeWaPhone, message: body, leadName: activeWaLeadName }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setWaText(body);
+        throw new Error(data.error || 'Dërgimi dështoi');
+      }
+    } catch (err: unknown) {
+      toast({ title: 'Gabim WhatsApp', description: err instanceof Error ? err.message : 'Dërgimi dështoi', variant: 'destructive' });
+    } finally {
+      setWaSending(false);
+    }
+  };
+
   // Mark as Read
   useEffect(() => {
     // Clear read tracking when switching conversations
@@ -480,7 +559,7 @@ const ChatView: React.FC = () => {
   };
 
   // Loading / Error
-  if (chatMode !== 'ai' && isPending) {
+  if (chatMode !== 'ai' && chatMode !== 'whatsapp' && isPending) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center space-y-3">
@@ -701,6 +780,45 @@ const ChatView: React.FC = () => {
               })}
             </>
           )}
+
+          {/* WhatsApp Conversations */}
+          {waConversations.length > 0 && (
+            <>
+              <div className="h-px bg-border/50 mx-2 my-2" />
+              <p className="px-2 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60 flex items-center gap-1.5">
+                <Smartphone className="h-3 w-3 text-[#25D366]" />
+                WhatsApp
+                {waTotalUnread > 0 && (
+                  <span className="h-4 min-w-4 px-1 flex items-center justify-center rounded-full bg-[#25D366] text-white text-[9px] font-bold ml-auto">{waTotalUnread}</span>
+                )}
+              </p>
+              {waConversations.map(conv => {
+                const isWaActive = chatMode === 'whatsapp' && activeWaPhone === conv.phone;
+                return (
+                  <button
+                    key={conv.phone}
+                    onClick={() => handleSelectWhatsApp(conv.phone, conv.leadName)}
+                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-left ${
+                      isWaActive
+                        ? 'bg-[#25D366]/10 border border-[#25D366]/20 shadow-sm'
+                        : 'hover:bg-accent/50 text-foreground/70'
+                    }`}
+                  >
+                    <div className="h-8 w-8 rounded-lg bg-[#25D366]/15 flex items-center justify-center flex-shrink-0">
+                      <Smartphone className="h-4 w-4 text-[#25D366]" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className={`truncate block text-sm ${isWaActive ? 'text-[#25D366] font-medium' : ''}`}>{conv.leadName}</span>
+                      <span className="text-[10px] text-muted-foreground/60 truncate block">{(conv.lastMessage || '').slice(0, 32)}</span>
+                    </div>
+                    {conv.unread > 0 && !isWaActive && (
+                      <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-[#25D366] text-white text-[10px] font-bold">{conv.unread}</span>
+                    )}
+                  </button>
+                );
+              })}
+            </>
+          )}
         </div>
       </aside>
 
@@ -755,6 +873,18 @@ const ChatView: React.FC = () => {
                 </>
               )}
             </div>
+          ) : chatMode === 'whatsapp' ? (
+            <div className="flex items-center gap-3 flex-1 min-w-0">
+              <div className="h-9 w-9 rounded-xl bg-[#25D366]/15 flex items-center justify-center flex-shrink-0">
+                <Smartphone className="h-4 w-4 text-[#25D366]" />
+              </div>
+              <div className="min-w-0">
+                <p className="font-semibold text-sm truncate">{activeWaLeadName || activeWaPhone}</p>
+                <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+                  <Phone className="h-3 w-3" /> {activeWaPhone}
+                </p>
+              </div>
+            </div>
           ) : (
             <div className="flex items-center gap-3 flex-1 min-w-0">
               {activeDirectUserId ? (
@@ -777,7 +907,7 @@ const ChatView: React.FC = () => {
                 <RefreshCw className="h-4 w-4" />
               </Button>
             )}
-            {chatMode !== 'ai' && (
+            {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setShowSearch(!showSearch); setSearchQuery(''); }}>
                 <Search className="h-4 w-4" />
               </Button>
@@ -786,7 +916,7 @@ const ChatView: React.FC = () => {
         </header>
 
         {/* Search bar */}
-        {showSearch && chatMode !== 'ai' && (
+        {showSearch && chatMode !== 'ai' && chatMode !== 'whatsapp' && (
           <div className="flex items-center gap-2 px-5 py-2 border-b bg-muted/20">
             <Search className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
             <Input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Kërko në mesazhe..." className="h-7 text-sm border-0 bg-transparent focus-visible:ring-0 shadow-none" autoFocus />
@@ -893,6 +1023,86 @@ const ChatView: React.FC = () => {
               </div>
               <p className="text-[10px] text-muted-foreground/50 text-center mt-1.5">FivoAI mund të bëjë gabime. Verificoni informacionin e rëndësishëm.</p>
             </div>
+          </>
+        ) : chatMode === 'whatsapp' ? (
+          /* WhatsApp Chat Area */
+          <>
+            <div
+              ref={waScrollRef}
+              className="flex-1 overflow-y-auto p-4"
+              style={{ background: 'var(--wa-bg, #efeae2)' }}
+            >
+              {!activeWaPhone ? (
+                <div className="flex flex-col items-center justify-center h-full gap-3 text-center py-16">
+                  <div className="p-4 bg-[#25D366]/10 rounded-full">
+                    <Smartphone className="w-8 h-8 text-[#25D366]/60" />
+                  </div>
+                  <p className="text-sm font-medium text-foreground/60">Zgjidh një bisedë nga lista</p>
+                </div>
+              ) : waActiveMessages.length === 0 ? (
+                <div className="flex flex-col items-center justify-center h-full gap-3 text-center py-16">
+                  <div className="p-4 bg-[#25D366]/10 rounded-full">
+                    <Smartphone className="w-8 h-8 text-[#25D366]/60" />
+                  </div>
+                  <p className="text-sm font-medium">Asnjë mesazh ende</p>
+                  <p className="text-xs text-muted-foreground">Dërgo mesazhin e parë te {activeWaLeadName}</p>
+                </div>
+              ) : (
+                <div className="space-y-2.5">
+                  {waActiveMessages.map((msg) => {
+                    const isOut = msg.direction === 'outbound';
+                    const timeStr = (() => {
+                      const d = msg.createdAt instanceof Date ? msg.createdAt : (msg.createdAt as any)?.toDate?.();
+                      return d ? d.toLocaleTimeString('sq-AL', { hour: '2-digit', minute: '2-digit' }) : '';
+                    })();
+                    return (
+                      <div key={msg.id} className={`flex ${isOut ? 'justify-end' : 'justify-start'}`}>
+                        <div className={`max-w-[70%] px-3.5 py-2 rounded-2xl shadow-sm text-sm leading-relaxed ${
+                          isOut
+                            ? 'bg-[#d9fdd3] dark:bg-[#25D366]/25 text-foreground rounded-tr-none'
+                            : 'bg-white dark:bg-card text-foreground rounded-tl-none'
+                        }`}>
+                          <p style={{ wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{msg.message}</p>
+                          <div className={`flex items-center gap-1 mt-1 ${isOut ? 'justify-end' : 'justify-start'}`}>
+                            <span className="text-[10px] text-muted-foreground/60">{timeStr}</span>
+                            {isOut && <span className="text-[10px] text-[#25D366]">{msg.status === 'read' ? '\u2713\u2713' : '\u2713'}</span>}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+
+            {activeWaPhone && (
+              <div className="px-4 pt-2 pb-3 border-t bg-background">
+                <div className="flex items-end gap-2">
+                  <textarea
+                    value={waText}
+                    onChange={(e) => {
+                      setWaText(e.target.value);
+                      e.target.style.height = 'auto';
+                      e.target.style.height = Math.min(e.target.scrollHeight, 112) + 'px';
+                    }}
+                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendWa(); } }}
+                    placeholder="Shkruaj mesazhin..."
+                    rows={1}
+                    className="flex-1 resize-none px-3 py-2.5 bg-muted rounded-2xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[#25D366]/40 overflow-y-auto"
+                    style={{ minHeight: '42px', maxHeight: '112px' }}
+                  />
+                  <Button
+                    size="sm"
+                    className="bg-[#25D366] hover:bg-[#1da851] text-white h-[42px] w-[42px] p-0 rounded-full shrink-0"
+                    onClick={handleSendWa}
+                    disabled={!waText.trim() || waSending}
+                  >
+                    {waSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                  </Button>
+                </div>
+                <p className="text-[10px] text-muted-foreground mt-1.5 px-1">Enter = dërgo · Shift+Enter = rresht i ri</p>
+              </div>
+            )}
           </>
         ) : (
           /* Regular Chat Area */
