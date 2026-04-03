@@ -5,13 +5,42 @@ import { useCollection } from '../../hooks/useFirestore';
 import { getStatusColor } from '../../lib/statusColors';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
-import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2 } from 'lucide-react';
+import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2, Sparkles } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import type { Invoice, InvoiceItem, Service, ClientRequest, Project, Task } from '../../types';
+
+const QUOTES = [
+  'Suksesi nuk është çelësi i lumturisë. Lumturia është çelësi i suksesit.',
+  'Çdo ditë është një mundësi e re për të arritur qëllimet tuaja.',
+  'Rruga drejt suksesit fillon me një hap të vetëm.',
+  'Investimi më i mirë që mund të bëni është investimi në veten tuaj.',
+  'Bashkëpunimi ndërton ura; besimi i forcon ato.',
+  'Cilësia kurrë nuk është rastësi — është gjithmonë rezultat i përpjekjes.',
+  'Klienti i kënaqur është reklama më e mirë.',
+  'Rritja fillon atje ku zona e rehatisë mbaron.',
+  'Koha është malli juaj më i çmuar — shpenzojeni me mençuri.',
+  'Sfidat e sotme janë arritjet e nesërme.',
+];
 
 const PortalDashboard: React.FC = () => {
   const { customerId } = useClientPortal();
   const { user } = useAuth();
+
+  // Greeting based on time of day
+  const greeting = React.useMemo(() => {
+    const hour = new Date().getHours();
+    if (hour < 12) return 'Mirëmëngjes';
+    if (hour < 18) return 'Mirëdita';
+    return 'Mirëmbrëma';
+  }, []);
+
+  // Stable daily quote
+  const quote = React.useMemo(() => {
+    const dayIndex = new Date().getDate() % QUOTES.length;
+    return QUOTES[dayIndex];
+  }, []);
+
+  const displayName = user?.displayName || user?.email?.split('@')[0] || 'klient';
 
   const { data: rawInvoices } = useCollection<Invoice>('invoices', {
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
@@ -107,11 +136,19 @@ const PortalDashboard: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Dashboard</h1>
-        <p className="text-muted-foreground mt-1">
-          Mirë se vini në portalin tuaj të klientit
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">
+            {greeting}, {displayName}! 👋
+          </h1>
+          <p className="text-muted-foreground mt-1">
+            Mirë se vini në portalin tuaj të klientit
+          </p>
+        </div>
+        <div className="flex items-start gap-2 max-w-xs sm:max-w-sm bg-muted/50 rounded-lg px-4 py-3">
+          <Sparkles className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+          <p className="text-sm text-muted-foreground italic leading-snug">{quote}</p>
+        </div>
       </div>
 
       {/* Stats Grid */}

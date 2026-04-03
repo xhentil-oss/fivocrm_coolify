@@ -3,7 +3,7 @@ import { useCollection, useMutation } from '../hooks/useFirestore';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useAuth } from '../contexts/AuthContext';
-import { DollarSign, Plus, Calendar as CalendarIcon, CreditCard, Mail, Send, Building2, ShoppingCart, Trash2, Eye, Edit2, Check, X, ExternalLink, Loader2, MoreVertical, Download } from 'lucide-react';
+import { DollarSign, Plus, Calendar as CalendarIcon, CreditCard, Mail, Send, Building2, ShoppingCart, Trash2, Eye, Edit2, Check, X, ExternalLink, Loader2, MoreVertical, Download, ChevronsUpDown } from 'lucide-react';
 import ExportButton from '../components/ExportButton';
 import { loadStripe } from '@stripe/stripe-js';
 import { Card } from '../components/ui/card';
@@ -14,6 +14,7 @@ import { Label } from '../components/ui/label';
 import { Calendar } from '../components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '../components/ui/command';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
 import { Textarea } from '../components/ui/textarea';
 import {
@@ -642,6 +643,8 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
   const [dueDate, setDueDate] = useState<Date | undefined>(editInvoice?.dueDate ? new Date(editInvoice.dueDate) : undefined);
   const [selectedCustomerId, setSelectedCustomerId] = useState<string>(editInvoice?.customerId || '');
   const [selectedProjectId, setSelectedProjectId] = useState<string>(editInvoice?.projectId || '');
+  const [customerSearchOpen, setCustomerSearchOpen] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState('');
   const [lineItems, setLineItems] = useState<Array<{ serviceId: string; quantity: number }>>([]);
   const [tax, setTax] = useState<number>((editInvoice as any)?.tax || 0);
   const [invoiceNumber, setInvoiceNumber] = useState(editInvoice?.invoiceNumber || '');
@@ -874,19 +877,56 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
         </div>
 
         <div>
-          <Label htmlFor="customerId">Klienti *</Label>
-          <Select name="customerId" value={selectedCustomerId} onValueChange={(val) => { setSelectedCustomerId(val); setSelectedProjectId(''); }} required>
-            <SelectTrigger>
-              <SelectValue placeholder="Zgjidh klientin" />
-            </SelectTrigger>
-            <SelectContent>
-              {customers?.map(customer => (
-                <SelectItem key={customer.id} value={customer.id}>
-                  {customer.name} {customer.company && `(${customer.company})`}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+          <Label>Klienti *</Label>
+          <Popover open={customerSearchOpen} onOpenChange={setCustomerSearchOpen}>
+            <PopoverTrigger asChild>
+              <Button
+                type="button"
+                variant="outline"
+                role="combobox"
+                className="w-full justify-between font-normal"
+              >
+                {selectedCustomerId
+                  ? (() => { const c = customers?.find(x => x.id === selectedCustomerId); return c ? `${c.name}${c.company ? ` (${c.company})` : ''}` : 'Zgjidh klientin'; })()
+                  : 'Zgjidh klientin'}
+                <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
+              <Command>
+                <CommandInput
+                  placeholder="Kërko klient..."
+                  value={customerSearch}
+                  onValueChange={setCustomerSearch}
+                />
+                <CommandList>
+                  <CommandEmpty>Nuk u gjet asnjë klient.</CommandEmpty>
+                  <CommandGroup>
+                    {customers
+                      ?.filter(c =>
+                        c.name?.toLowerCase().includes(customerSearch.toLowerCase()) ||
+                        c.company?.toLowerCase().includes(customerSearch.toLowerCase())
+                      )
+                      .map(customer => (
+                        <CommandItem
+                          key={customer.id}
+                          value={customer.id}
+                          onSelect={(val) => {
+                            setSelectedCustomerId(val);
+                            setSelectedProjectId('');
+                            setCustomerSearch('');
+                            setCustomerSearchOpen(false);
+                          }}
+                        >
+                          <Check className={`mr-2 h-4 w-4 ${selectedCustomerId === customer.id ? 'opacity-100' : 'opacity-0'}`} />
+                          {customer.name}{customer.company ? ` (${customer.company})` : ''}
+                        </CommandItem>
+                      ))}
+                  </CommandGroup>
+                </CommandList>
+              </Command>
+            </PopoverContent>
+          </Popover>
         </div>
       </div>
 
