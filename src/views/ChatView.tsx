@@ -325,8 +325,12 @@ const ChatView: React.FC = () => {
         }
       }
     }
-    return Array.from(map.values());
-  }, [allWaMessages]);
+    // Zero out unread for the currently open conversation
+    return Array.from(map.values()).map(c => ({
+      ...c,
+      unread: (chatMode === 'whatsapp' && c.phone === activeWaPhone) ? 0 : c.unread,
+    }));
+  }, [allWaMessages, activeWaPhone, chatMode]);
 
   const waActiveMessages = useMemo(() => {
     if (!allWaMessages || !activeWaPhone) return [];
@@ -529,7 +533,7 @@ const ChatView: React.FC = () => {
       const res = await fetch('/api/send-whatsapp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ to: activeWaPhone, message: body, leadName: activeWaLeadName }),
+        body: JSON.stringify({ to: activeWaPhone, message: body, leadName: activeWaLeadName, teamId: (await import('../hooks/useFirestore')).getGlobalTeamId() }),
       });
       const data = await res.json();
       if (!res.ok) {

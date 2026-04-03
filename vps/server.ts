@@ -115,7 +115,7 @@ async function connectWhatsApp(): Promise<void> {
     if (type !== 'notify') return;
 
     for (const msg of messages) {
-      if (!msg.message || msg.key.fromMe) continue;
+      if (!msg.message) continue;
 
       const rawJid = msg.key.remoteJid || '';
       if (rawJid.endsWith('@g.us')) continue; // skip group messages
@@ -129,23 +129,35 @@ async function connectWhatsApp(): Promise<void> {
         '[Media]';
 
       const ts = new Date(Number(msg.messageTimestamp) * 1000);
+      const waMessageId = msg.key.id || null;
+      const isFromMe = !!msg.key.fromMe;
+
+      // Use waMessageId as doc ID to prevent duplicates
+      const docId = waMessageId || db.collection('whatsappMessages').doc().id;
+
+      // Skip fromMe messages that were already saved via /send route
+      // (identify by checking if doc already exists)
+      if (isFromMe && waMessageId) {
+        const existing = await db.collection('whatsappMessages').doc(docId).get();
+        if (existing.exists) continue;
+      }
 
       try {
-        await db.collection('whatsappMessages').add({
+        await db.collection('whatsappMessages').doc(docId).set({
           phone,
-          direction: 'inbound',
+          direction: isFromMe ? 'outbound' : 'inbound',
           message: body,
-          waMessageId: msg.key.id || null,
+          waMessageId,
           leadId: null,
           leadName: null,
           teamId: TEAM_ID,
-          status: 'received',
+          status: isFromMe ? 'sent' : 'received',
           createdAt: admin.firestore.Timestamp.fromDate(ts),
           updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
-        });
-        console.log(`[WA] ← ${phone}: ${body.slice(0, 80)}`);
+        }, { merge: true });
+        console.log(`[WA] ${isFromMe ? '→ (telefon)' : '←'} ${phone}: ${body.slice(0, 80)}`);
       } catch (e) {
-        console.error('[WA] Gabim gjatë ruajtjes së mesazhit hyrës:', e);
+        console.error('[WA] Gabim gjatë ruajtjes së mesazhit:', e);
       }
     }
   });
@@ -226,14 +238,17 @@ app.post('/send', requireApiKey, async (req, res) => {
   try {
     const sent = await sock.sendMessage(jid, { text: message });
     const resolvedTeamId = teamId || TEAM_ID;
+    const waMessageId = sent?.key?.id || null;
+    const docId = waMessageId || db.collection('whatsappMessages').doc().id;
 
-    const docRef = await db.collection('whatsappMessages').add({
+    const docRef = db.collection('whatsappMessages').doc(docId);
+    await docRef.set({
       phone: cleanPhone,
       direction: 'outbound',
       message,
       leadId: leadId || null,
       leadName: leadName || null,
-      waMessageId: sent?.key?.id || null,
+      waMessageId,
       teamId: resolvedTeamId,
       status: 'sent',
       createdAt: admin.firestore.Timestamp.fromDate(new Date()),
