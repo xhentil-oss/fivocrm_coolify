@@ -54,7 +54,7 @@ export function getGlobalTeamId(): string | null {
 }
 
 /** React hook to reactively read global teamId (triggers re-render on change) */
-function useGlobalTeamId(): string | null {
+export function useGlobalTeamId(): string | null {
   return useSyncExternalStore(_subscribeTeamId, _getTeamIdSnapshot);
 }
 

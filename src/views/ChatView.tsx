@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
+import { useCollection, useMutation, getGlobalTeamId, useGlobalTeamId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
@@ -96,10 +96,13 @@ const ChatView: React.FC = () => {
   const { data: userProfiles } = useCollection<UserProfile>('userProfiles');
   const { data: teams } = useCollection<any>('teams');
   const { data: allMessages } = useCollection<ChatMessage>('messages');
-  const { data: allWaMessages } = useCollection<WhatsAppMessage>('whatsappMessages', {
+  const waTeamId = useGlobalTeamId();
+  const waQuery = useMemo(() => ({
+    where: waTeamId ? [{ field: 'teamId', operator: '==' as const, value: waTeamId }] : undefined,
     orderBy: { field: 'createdAt', direction: 'desc' as const },
     skipTeamFilter: true,
-  });
+  }), [waTeamId]);
+  const { data: allWaMessages } = useCollection<WhatsAppMessage>('whatsappMessages', waQuery);
 
   const channelMsgQuery = useMemo(() => ({
     where: [{ field: 'channelId', operator: '==', value: activeChannel }],
@@ -302,33 +305,31 @@ const ChatView: React.FC = () => {
 
   const waConversations = useMemo(() => {
     if (!allWaMessages) return [];
+    // Derive canonical phone: prefer jid-based (stable WhatsApp international format)
+    const phoneKey = (msg: WhatsAppMessage) => {
+      if (msg.jid?.endsWith('@s.whatsapp.net')) return msg.jid.split('@')[0].replace(/[^\d]/g, '');
+      return (msg.phone || '').replace(/[^\d]/g, '');
+    };
     const map = new Map<string, { phone: string; jid: string | null; leadName: string; leadId?: string | null; lastMessage: string; lastDate: any; unread: number }>();
     for (const msg of allWaMessages) {
-      if (!map.has(msg.phone)) {
-        map.set(msg.phone, {
-          phone: msg.phone,
+      const key = phoneKey(msg);
+      if (!key) continue;
+      if (!map.has(key)) {
+        map.set(key, {
+          phone: key,
           jid: msg.jid || null,
-          leadName: msg.leadName || msg.phone,
+          leadName: msg.leadName || key,
           leadId: msg.leadId || null,
           lastMessage: msg.message,
           lastDate: msg.createdAt,
           unread: (msg.direction === 'inbound' && msg.status === 'received') ? 1 : 0,
         });
       } else {
-        const existing = map.get(msg.phone)!;
-        // Prefer a real name over a phone number fallback
-        if (msg.leadName && existing.leadName === existing.phone) {
-          existing.leadName = msg.leadName;
-        }
-        if (msg.leadId && !existing.leadId) {
-          existing.leadId = msg.leadId;
-        }
-        if (msg.jid && !existing.jid) {
-          existing.jid = msg.jid;
-        }
-        if (msg.direction === 'inbound' && msg.status === 'received') {
-          existing.unread++;
-        }
+        const existing = map.get(key)!;
+        if (msg.leadName && existing.leadName === existing.phone) existing.leadName = msg.leadName;
+        if (msg.leadId && !existing.leadId) existing.leadId = msg.leadId;
+        if (msg.jid?.endsWith('@s.whatsapp.net') && !existing.jid?.endsWith('@s.whatsapp.net')) existing.jid = msg.jid;
+        if (msg.direction === 'inbound' && msg.status === 'received') existing.unread++;
       }
     }
     return Array.from(map.values());
@@ -336,7 +337,12 @@ const ChatView: React.FC = () => {
 
   const waActiveMessages = useMemo(() => {
     if (!allWaMessages || !activeWaPhone) return [];
-    return [...allWaMessages].filter(m => m.phone === activeWaPhone).reverse();
+    return [...allWaMessages].filter(m => {
+      const key = m.jid?.endsWith('@s.whatsapp.net')
+        ? m.jid.split('@')[0].replace(/[^\d]/g, '')
+        : (m.phone || '').replace(/[^\d]/g, '');
+      return key === activeWaPhone;
+    }).reverse();
   }, [allWaMessages, activeWaPhone]);
 
   const waTotalUnread = useMemo(
@@ -354,9 +360,12 @@ const ChatView: React.FC = () => {
   // Mark WA messages as read when conversation opens
   useEffect(() => {
     if (!activeWaPhone || !allWaMessages) return;
-    const unread = allWaMessages.filter(
-      m => m.phone === activeWaPhone && m.direction === 'inbound' && m.status === 'received'
-    );
+    const unread = allWaMessages.filter(m => {
+      const key = m.jid?.endsWith('@s.whatsapp.net')
+        ? m.jid.split('@')[0].replace(/[^\d]/g, '')
+        : (m.phone || '').replace(/[^\d]/g, '');
+      return key === activeWaPhone && m.direction === 'inbound' && m.status === 'received';
+    });
     unread.forEach(m => {
       waMutation.update(m.id, { status: 'read' } as any).catch(() => {});
     });

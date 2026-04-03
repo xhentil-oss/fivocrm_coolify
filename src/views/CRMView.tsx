@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, useMutation, useGlobalTeamId } from '../hooks/useFirestore';
 import type { WhatsAppMessage } from '../types';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -56,18 +56,23 @@ const CRMView: React.FC = () => {
   });
   const leadMutation = useMutation<Lead>('leads');
   const customerMutation = useMutation<Customer>('customers');
-  const { data: allWaMessages } = useCollection<WhatsAppMessage>('whatsappMessages', { skipTeamFilter: true });
+  const waTeamId = useGlobalTeamId();
+  const waQuery = useMemo(() => ({
+    where: waTeamId ? [{ field: 'teamId', operator: '==' as const, value: waTeamId }] : undefined,
+    skipTeamFilter: true,
+  }), [waTeamId]);
+  const { data: allWaMessages } = useCollection<WhatsAppMessage>('whatsappMessages', waQuery);
 
-  // Unread WA count per lead phone
+  // Unread WA count per canonical phone
   const waUnreadByPhone = useMemo(() => {
     const map = new Map<string, number>();
     if (!allWaMessages) return map;
-    // Count inbound messages that were not generated from platform (status=received)
-    // Treat all inbound as unread for now — future: track read state per leadId
     allWaMessages.forEach(m => {
       if (m.direction === 'inbound' && m.status === 'received') {
-        const key = m.phone.replace(/[^\d]/g, '');
-        map.set(key, (map.get(key) || 0) + 1);
+        const key = m.jid?.endsWith('@s.whatsapp.net')
+          ? m.jid.split('@')[0].replace(/[^\d]/g, '')
+          : (m.phone || '').replace(/[^\d]/g, '');
+        if (key) map.set(key, (map.get(key) || 0) + 1);
       }
     });
     return map;
