@@ -737,6 +737,7 @@ const TimeEntryForm: React.FC<{
             name="hourlyRate"
             type="number"
             step="0.01"
+            min="0"
             defaultValue={initialData?.hourlyRate}
             placeholder="Enter hourly rate"
           />

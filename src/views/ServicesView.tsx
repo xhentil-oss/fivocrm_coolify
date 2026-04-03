@@ -370,6 +370,7 @@ const ServiceForm: React.FC<{
             name="price"
             type="number"
             step="0.01"
+            min="0"
             required
             defaultValue={initialData?.price}
           />

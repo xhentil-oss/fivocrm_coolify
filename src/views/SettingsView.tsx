@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare } from 'lucide-react';
+import { swiftKeyDown, ibanChange } from '../lib/utils';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Label } from '../components/ui/label';
@@ -639,11 +640,22 @@ const SettingsView: React.FC = () => {
                   </div>
                   <div>
                     <Label>IBAN</Label>
-                    <Input placeholder="AL00 0000 0000 0000 0000 0000 0000" value={bank.iban} onChange={(e) => updateBankAccount(bank.id, 'iban', e.target.value)} />
+                    <Input
+                      placeholder="AL00 0000 0000 0000 0000 0000 0000"
+                      value={bank.iban}
+                      maxLength={34}
+                      onChange={(e) => ibanChange(e.target.value, (v) => updateBankAccount(bank.id, 'iban', v))}
+                    />
                   </div>
                   <div>
                     <Label>SWIFT / BIC</Label>
-                    <Input placeholder="p.sh. SGSBALTX" value={bank.swift} onChange={(e) => updateBankAccount(bank.id, 'swift', e.target.value)} />
+                    <Input
+                      placeholder="p.sh. SGSBALTX"
+                      value={bank.swift}
+                      maxLength={11}
+                      onKeyDown={swiftKeyDown}
+                      onChange={(e) => updateBankAccount(bank.id, 'swift', e.target.value.toUpperCase())}
+                    />
                   </div>
                   <div>
                     <Label>Shteti</Label>

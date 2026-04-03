@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
+import { phoneKeyDown } from '../lib/utils';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Label } from './ui/label';
@@ -504,7 +505,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
         </div>
         <div>
           <Label className="text-sm font-medium">Numri i Telefonit *</Label>
-          <Input value={form.phoneNumber} onChange={e => set('phoneNumber', e.target.value)} placeholder="+355 69 xxx xxxx" className="mt-1" />
+          <Input type="tel" inputMode="numeric" maxLength={20} onKeyDown={phoneKeyDown} value={form.phoneNumber} onChange={e => set('phoneNumber', e.target.value)} placeholder="+355 69 xxx xxxx" className="mt-1" />
           <FieldError field="phoneNumber" />
         </div>
       </div>

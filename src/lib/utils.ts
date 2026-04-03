@@ -98,3 +98,34 @@ export function toAll(amount: number, currency?: string): number {
   if (currency === 'EUR') return amount * getEurToAllRate();
   return amount;
 }
+
+/**
+ * onKeyDown handler for phone/tel inputs.
+ * Allows: digits, +, -, (, ), space, and control keys.
+ */
+export function phoneKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+  if (e.key.length === 1 && !/[\d\s+\-()#*]/.test(e.key)) {
+    e.preventDefault();
+  }
+}
+
+/**
+ * onKeyDown handler for SWIFT/BIC inputs.
+ * Allows only alphanumeric characters (A-Z, 0-9).
+ */
+export function swiftKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+  if (e.key.length === 1 && !/[a-zA-Z0-9]/.test(e.key)) {
+    e.preventDefault();
+  }
+}
+
+/**
+ * onChange handler that converts IBAN input to uppercase and removes
+ * characters that are not letters, digits, or spaces.
+ */
+export function ibanChange(
+  value: string,
+  setter: (v: string) => void
+) {
+  setter(value.toUpperCase().replace(/[^A-Z0-9\s]/g, ''));
+}

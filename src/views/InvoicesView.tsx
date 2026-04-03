@@ -990,8 +990,9 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
                   <Input
                     type="number"
                     min="1"
+                    step="1"
                     value={item.quantity}
-                    onChange={(e) => updateLineItem(index, 'quantity', parseInt(e.target.value))}
+                    onChange={(e) => updateLineItem(index, 'quantity', Math.max(1, parseInt(e.target.value) || 1))}
                     placeholder="Sasia"
                   />
                 </div>
@@ -1171,8 +1172,9 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null 
           name="tax"
           type="number"
           step="0.01"
+          min="0"
           value={tax}
-          onChange={(e) => setTax(parseFloat(e.target.value) || 0)}
+          onChange={(e) => setTax(Math.max(0, parseFloat(e.target.value) || 0))}
         />
       </div>
 

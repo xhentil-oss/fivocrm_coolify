@@ -505,6 +505,7 @@ const ExpenseForm: React.FC<{
             name="amount"
             type="number"
             step="0.01"
+            min="0"
             required
             defaultValue={initialData?.amount}
           />

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { User, Briefcase, MapPin, Phone, Mail, Award, Edit, Save, X, Users, ChevronDown, Check, FlaskConical, Camera } from 'lucide-react';
+import { phoneKeyDown } from '../lib/utils';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -500,7 +501,7 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
 
               <div>
                 <Label htmlFor="phoneNumber">Phone Number</Label>
-                <Input id="phoneNumber" name="phoneNumber" defaultValue={profile?.phoneNumber} />
+                <Input id="phoneNumber" name="phoneNumber" type="tel" inputMode="numeric" maxLength={20} onKeyDown={phoneKeyDown} defaultValue={profile?.phoneNumber} />
               </div>
 
               <div>

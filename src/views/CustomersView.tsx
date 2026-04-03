@@ -1,6 +1,7 @@
 ﻿import React, { useState, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
+import { phoneKeyDown } from '../lib/utils';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { getStatusColor, getPriorityColor } from '../lib/statusColors';
@@ -1095,7 +1096,7 @@ const CustomerForm: React.FC<{
         </div>
         <div>
           <Label htmlFor="phone">Telefon</Label>
-          <Input id="phone" name="phone" type="tel" defaultValue={init?.phone} />
+          <Input id="phone" name="phone" type="tel" inputMode="numeric" maxLength={20} onKeyDown={phoneKeyDown} defaultValue={init?.phone} />
         </div>
       </div>
 
@@ -1106,7 +1107,7 @@ const CustomerForm: React.FC<{
         </div>
         <div>
           <Label htmlFor="contactPhone">Telefoni i Kontaktit</Label>
-          <Input id="contactPhone" name="contactPhone" type="tel" defaultValue={init?.contactPhone} />
+          <Input id="contactPhone" name="contactPhone" type="tel" inputMode="numeric" maxLength={20} onKeyDown={phoneKeyDown} defaultValue={init?.contactPhone} />
         </div>
       </div>
 
@@ -1172,7 +1173,7 @@ const CustomerForm: React.FC<{
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label htmlFor="creditLimit">Limiti i Kredise (ALL)</Label>
-          <Input id="creditLimit" name="creditLimit" type="number" step="0.01" defaultValue={init?.creditLimit} />
+          <Input id="creditLimit" name="creditLimit" type="number" step="0.01" min="0" defaultValue={init?.creditLimit} />
         </div>
         <div>
           <Label htmlFor="paymentTerms">Kushtet e Pageses</Label>

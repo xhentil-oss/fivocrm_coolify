@@ -23,7 +23,7 @@ import DetailDrawer from '../components/DetailDrawer';
 import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
-import { safeHref } from '../lib/utils';
+import { safeHref, phoneKeyDown } from '../lib/utils';
 import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember } from '../types';
 
 const CRMView: React.FC = () => {
@@ -1092,7 +1092,7 @@ const LeadForm: React.FC<{
                 ))}
               </SelectContent>
             </Select>
-            <Input id="phoneLocal" name="phoneLocal" type="tel" placeholder="69 123 4567" className="flex-1" defaultValue={parsed.local} />
+            <Input id="phoneLocal" name="phoneLocal" type="tel" inputMode="numeric" maxLength={20} onKeyDown={phoneKeyDown} placeholder="69 123 4567" className="flex-1" defaultValue={parsed.local} />
           </div>
         </div>
 
@@ -1190,6 +1190,7 @@ const LeadForm: React.FC<{
             name="estimatedValue" 
             type="number" 
             step="0.01"
+            min="0"
             defaultValue={initialData?.estimatedValue} 
           />
         </div>

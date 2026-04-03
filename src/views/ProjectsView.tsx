@@ -950,6 +950,7 @@ const ProjectForm: React.FC<{
           name="budget"
           type="number"
           step="0.01"
+          min="0"
           value={serviceBudget !== null ? String(serviceBudget) : undefined}
           defaultValue={serviceBudget !== null ? undefined : ((initialData as any)?.budget || '')}
           onChange={() => {}}
