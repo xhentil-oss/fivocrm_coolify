@@ -21,6 +21,7 @@ export const auth = getAuth(app);
 // Firestore with offline persistence (multi-tab safe)
 export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+  experimentalAutoDetectLongPolling: true,
 });
 
 export const storage = getStorage(app);
