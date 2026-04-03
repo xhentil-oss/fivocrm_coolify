@@ -1,0 +1,26 @@
+{
+  "name": "whatsapp-vps-server",
+  "version": "1.0.0",
+  "description": "Baileys WhatsApp server for Business CRM",
+  "type": "module",
+  "scripts": {
+    "start": "node --loader ts-node/esm server.ts",
+    "build": "tsc",
+    "prod": "node dist/server.js"
+  },
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "baileys": "^6.7.18",
+    "express": "^4.19.2",
+    "firebase-admin": "^12.3.0",
+    "pino": "^9.3.2",
+    "qrcode": "^1.5.4"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.14.0",
+    "@types/qrcode": "^1.5.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.3"
+  }
+}

@@ -1,5 +1,19 @@
 // Firebase/Firestore type definitions for the application
 
+export interface WhatsAppMessage {
+  id: string;
+  phone: string;
+  direction: 'inbound' | 'outbound';
+  message: string;
+  leadId?: string | null;
+  leadName?: string | null;
+  waMessageId?: string | null;
+  teamId?: string;
+  status: 'sent' | 'delivered' | 'read' | 'received' | 'failed';
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface Project {
   id: string;
   name: string;

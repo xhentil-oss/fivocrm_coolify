@@ -19,6 +19,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Textarea } from '../components/ui/textarea';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
 import DetailDrawer from '../components/DetailDrawer';
+import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
 import { safeHref } from '../lib/utils';
@@ -26,6 +27,7 @@ import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember } fro
 
 const CRMView: React.FC = () => {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
+  const [whatsappLead, setWhatsappLead] = useState<Lead | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [editLead, setEditLead] = useState<Lead | null>(null);
   const [lostReasonLead, setLostReasonLead] = useState<Lead | null>(null);
@@ -580,6 +582,11 @@ const CRMView: React.FC = () => {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
+                          {lead.phoneNumber && (
+                            <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setWhatsappLead(lead); }} className="text-[#25D366]">
+                              <MessageSquare className="w-3.5 h-3.5 mr-2" /> WhatsApp
+                            </DropdownMenuItem>
+                          )}
                           {permissions.canEdit && (
                             <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setEditLead(lead); }}>
                               <Edit2 className="w-3.5 h-3.5 mr-2" /> Ndrysho
@@ -806,6 +813,17 @@ const CRMView: React.FC = () => {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex gap-2">
+                          {lead.phoneNumber && (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="text-[#25D366] border-[#25D366]/30 hover:bg-[#25D366]/10"
+                              onClick={(e) => { e.stopPropagation(); setWhatsappLead(lead); }}
+                              title="WhatsApp"
+                            >
+                              <MessageSquare className="w-4 h-4" />
+                            </Button>
+                          )}
                           {permissions.canEdit && (
                             <Button
                               variant="outline"
@@ -872,11 +890,14 @@ const CRMView: React.FC = () => {
                 </Button>
               )}
               {selectedLead.phoneNumber && (
-                <Button variant="outline" size="sm" className="text-green-600 border-green-200 hover:bg-green-50" asChild>
-                  <a href={`https://wa.me/${selectedLead.phoneNumber.replace(/[^0-9+]/g, '')}`} target="_blank" rel="noopener noreferrer">
-                    <MessageSquare className="w-4 h-4 mr-1.5" />
-                    WhatsApp
-                  </a>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-[#25D366] border-[#25D366]/30 hover:bg-[#25D366]/10"
+                  onClick={() => { setSelectedLead(null); setWhatsappLead(selectedLead); }}
+                >
+                  <MessageSquare className="w-4 h-4 mr-1.5" />
+                  WhatsApp Chat
                 </Button>
               )}
               {selectedLead.phoneNumber && (
@@ -958,6 +979,14 @@ const CRMView: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+      {whatsappLead && (
+        <WhatsAppChatPanel
+          phone={whatsappLead.phoneNumber || whatsappLead.phone || ''}
+          leadName={whatsappLead.name}
+          leadId={whatsappLead.id}
+          onClose={() => setWhatsappLead(null)}
+        />
+      )}
     </div>
   );
 };
