@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { useCollection, getGlobalTeamId } from '../hooks/useFirestore';
+import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
 import { X, Send, MessageSquare, Loader2, Phone } from 'lucide-react';
@@ -19,6 +19,7 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, leadName, leadId, onClose }
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const waMutation = useMutation<WhatsAppMessage>('whatsappMessages');
 
   const normalizedPhone = phone.replace(/[^\d]/g, '');
 
@@ -33,6 +34,14 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, leadName, leadId, onClose }
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
+  }, [messages?.length]);
+
+  // Mark inbound messages as read when panel opens or new messages arrive
+  useEffect(() => {
+    if (!messages) return;
+    messages
+      .filter(m => m.direction === 'inbound' && m.status === 'received')
+      .forEach(m => waMutation.update(m.id, { status: 'read' } as any).catch(() => {}));
   }, [messages?.length]);
 
   const handleSend = async () => {

@@ -65,7 +65,7 @@ const CRMView: React.FC = () => {
     // Count inbound messages that were not generated from platform (status=received)
     // Treat all inbound as unread for now — future: track read state per leadId
     allWaMessages.forEach(m => {
-      if (m.direction === 'inbound') {
+      if (m.direction === 'inbound' && m.status === 'received') {
         const key = m.phone.replace(/[^\d]/g, '');
         map.set(key, (map.get(key) || 0) + 1);
       }

@@ -193,6 +193,7 @@ const ChatView: React.FC = () => {
 
   const messageMutation = useMutation<ChatMessage>('messages');
   const notificationMutation = useMutation<any>('notifications');
+  const waMutation = useMutation<WhatsAppMessage>('whatsappMessages');
   const isSending = messageMutation.loading;
 
   // Typing indicators
@@ -309,7 +310,7 @@ const ChatView: React.FC = () => {
           leadId: msg.leadId || null,
           lastMessage: msg.message,
           lastDate: msg.createdAt,
-          unread: msg.direction === 'inbound' ? 1 : 0,
+          unread: (msg.direction === 'inbound' && msg.status === 'received') ? 1 : 0,
         });
       } else {
         const existing = map.get(msg.phone)!;
@@ -320,17 +321,13 @@ const ChatView: React.FC = () => {
         if (msg.leadId && !existing.leadId) {
           existing.leadId = msg.leadId;
         }
-        if (msg.direction === 'inbound') {
+        if (msg.direction === 'inbound' && msg.status === 'received') {
           existing.unread++;
         }
       }
     }
-    // Zero out unread for the currently open conversation
-    return Array.from(map.values()).map(c => ({
-      ...c,
-      unread: (chatMode === 'whatsapp' && c.phone === activeWaPhone) ? 0 : c.unread,
-    }));
-  }, [allWaMessages, activeWaPhone, chatMode]);
+    return Array.from(map.values());
+  }, [allWaMessages]);
 
   const waActiveMessages = useMemo(() => {
     if (!allWaMessages || !activeWaPhone) return [];
@@ -348,6 +345,17 @@ const ChatView: React.FC = () => {
       waScrollRef.current.scrollTop = waScrollRef.current.scrollHeight;
     }
   }, [waActiveMessages.length]);
+
+  // Mark WA messages as read when conversation opens
+  useEffect(() => {
+    if (!activeWaPhone || !allWaMessages) return;
+    const unread = allWaMessages.filter(
+      m => m.phone === activeWaPhone && m.direction === 'inbound' && m.status === 'received'
+    );
+    unread.forEach(m => {
+      waMutation.update(m.id, { status: 'read' } as any).catch(() => {});
+    });
+  }, [activeWaPhone]);
 
   // Message Handlers
   const handleSendMessage = async (e: React.FormEvent) => {
