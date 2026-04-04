@@ -972,8 +972,8 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
                         <CommandItem
                           key={customer.id}
                           value={customer.id}
-                          onSelect={(val) => {
-                            setSelectedCustomerId(val);
+                          onSelect={() => {
+                            setSelectedCustomerId(customer.id);
                             setSelectedProjectId('');
                             setCustomerSearch('');
                             setCustomerSearchOpen(false);

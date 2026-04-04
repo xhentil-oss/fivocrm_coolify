@@ -53,6 +53,28 @@ export function getGlobalTeamId(): string | null {
   return _globalTeamId;
 }
 
+// ---- Reactive super-admin flag — bypasses all team filters ----
+let _isSuperAdmin: boolean = false;
+let _superAdminListeners: (() => void)[] = [];
+
+function _subscribeSuperAdmin(l: () => void) {
+  _superAdminListeners = [..._superAdminListeners, l];
+  return () => { _superAdminListeners = _superAdminListeners.filter(x => x !== l); };
+}
+
+function _getSuperAdminSnapshot() { return _isSuperAdmin; }
+
+export function setSuperAdmin(val: boolean) {
+  if (_isSuperAdmin !== val) {
+    _isSuperAdmin = val;
+    for (const l of _superAdminListeners) l();
+  }
+}
+
+export function useIsSuperAdmin(): boolean {
+  return useSyncExternalStore(_subscribeSuperAdmin, _getSuperAdminSnapshot);
+}
+
 // ---- Reactive WhatsApp enabled flag ----
 let _waEnabled: boolean = localStorage.getItem('whatsapp_enabled') === 'true';
 let _waEnabledListeners: (() => void)[] = [];
@@ -113,7 +135,9 @@ export function useCollection<T = DocumentData>(
   const [error, setError] = useState<Error | null>(null);
 
   const reactiveTeamId = useGlobalTeamId();
-  const isTeamScoped = teamScopedCollections.has(collectionName) && !options?.skipTeamFilter;
+  const superAdmin = useIsSuperAdmin();
+  // Super admin bypasses all team filters — treat every collection as non-team-scoped
+  const isTeamScoped = teamScopedCollections.has(collectionName) && !options?.skipTeamFilter && !superAdmin;
 
   // For non-team-scoped collections (teamMembers, teams, notifications, etc.) use a stable
   // null sentinel so that changes to globalTeamId don't cause their effects to re-run and
@@ -226,7 +250,7 @@ export function useCollection<T = DocumentData>(
     );
 
     return () => unsubscribe();
-  }, [collectionName, whereKey, orderKey, skipTeamFilter, globalTeamId]);
+  }, [collectionName, whereKey, orderKey, skipTeamFilter, globalTeamId, superAdmin]);
 
   return { data, loading, error };
 }

@@ -1,4 +1,4 @@
-import { useCollection, setGlobalTeamId } from './useFirestore';
+import { useCollection, setGlobalTeamId, setSuperAdmin } from './useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useMemo, useEffect, useRef } from 'react';
 import { doc, updateDoc, Timestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
@@ -36,6 +36,7 @@ export type UserPermissions = {
   isAdmin: boolean;
   isOwner: boolean;
   isManager: boolean;
+  isSuperAdmin: boolean;
   isLoading: boolean;
 };
 
@@ -144,7 +145,30 @@ export function usePermissions(): UserPermissions {
   const isLoading = userLoading || ((membersLoading || membersByEmailLoading) && !membersError && !membersByEmailError) || (teamsLoading && !teamsError);
   const hasError = !!(membersError || membersByEmailError || teamsError);
 
+  // Super admin: full cross-team access for emails listed in VITE_SUPER_ADMIN_EMAILS
+  const isSuperAdmin = useMemo(() => {
+    if (!user?.email) return false;
+    const raw = (import.meta.env.VITE_SUPER_ADMIN_EMAILS as string) || '';
+    return raw.split(',').map(e => e.trim().toLowerCase()).filter(Boolean).includes(user.email.toLowerCase());
+  }, [user]);
+
   const permissions = useMemo((): UserPermissions => {
+    // Super admin: bypass all team scoping, full access to every team's data
+    if (isSuperAdmin && user) {
+      return {
+        ...fullAccessPermissions,
+        role: 'SuperAdmin',
+        dataScope: 'all',
+        teamId: null,
+        teamName: 'Të gjitha ekipet',
+        isAdmin: true,
+        isOwner: false,
+        isManager: false,
+        isSuperAdmin: true,
+        isLoading: false,
+      };
+    }
+
     // While loading, return restricted permissions with loading flag
     if (!user || isLoading) {
       return {
@@ -156,6 +180,7 @@ export function usePermissions(): UserPermissions {
         isAdmin: false,
         isOwner: false,
         isManager: false,
+        isSuperAdmin: false,
         isLoading: isLoading,
       };
     }
@@ -187,6 +212,7 @@ export function usePermissions(): UserPermissions {
         isAdmin: true,
         isOwner: true,
         isManager: false,
+        isSuperAdmin: false,
         isLoading: false,
       };
     }
@@ -202,6 +228,7 @@ export function usePermissions(): UserPermissions {
         isAdmin: false,
         isOwner: false,
         isManager: false,
+        isSuperAdmin: false,
         isLoading: false,
       };
     }
@@ -217,6 +244,7 @@ export function usePermissions(): UserPermissions {
         isAdmin: false,
         isOwner: false,
         isManager: false,
+        isSuperAdmin: false,
         isLoading: false,
       };
     }
@@ -240,6 +268,7 @@ export function usePermissions(): UserPermissions {
         isAdmin: true,
         isOwner: false,
         isManager: false,
+        isSuperAdmin: false,
         isLoading: false,
       };
     }
@@ -271,6 +300,7 @@ export function usePermissions(): UserPermissions {
         isAdmin: false,
         isOwner: false,
         isManager: false,
+        isSuperAdmin: false,
         isLoading: false,
       };
     }
@@ -302,6 +332,7 @@ export function usePermissions(): UserPermissions {
         isAdmin: false,
         isOwner: false,
         isManager: true,
+        isSuperAdmin: false,
         isLoading: false,
       };
     }
@@ -333,6 +364,7 @@ export function usePermissions(): UserPermissions {
         isAdmin: false,
         isOwner: false,
         isManager: false,
+        isSuperAdmin: false,
         isLoading: false,
       };
     }
@@ -366,9 +398,10 @@ export function usePermissions(): UserPermissions {
       isAdmin: false,
       isOwner: false,
       isManager: false,
+      isSuperAdmin: false,
       isLoading: false,
     };
-  }, [user, teamMembers, teams, isOwner, isLoading]);
+  }, [user, teamMembers, teams, isOwner, isLoading, isSuperAdmin]);
 
   // One-time normalization: if teamMember.userId is stored as email instead of UID,
   // update it and reassign any tasks/records that reference the old email-based userId.
@@ -412,10 +445,11 @@ export function usePermissions(): UserPermissions {
   //   with teamId=null (e.g. a non-member component that loaded before its data arrived)
   //   must NOT reset globalTeamId back to null and wipe out team-scoped collection data.
   useEffect(() => {
+    setSuperAdmin(isSuperAdmin);
     if (!permissions.isLoading && permissions.teamId !== null) {
       setGlobalTeamId(permissions.teamId);
     }
-  }, [permissions.isLoading, permissions.teamId]);
+  }, [isSuperAdmin, permissions.isLoading, permissions.teamId]);
 
   return permissions;
 }
