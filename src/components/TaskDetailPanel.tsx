@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useGoogleApi, DriveFile } from '../contexts/GoogleApiContext';
-import { Calendar as CalendarIcon, MessageSquare, Users, ChevronRight, ChevronDown, Clock, Play, Pause, Square, Paperclip, Upload, X, AtSign, Eye, Plus, Trash2, Edit2, Send, Hash, Check, Cloud } from 'lucide-react';
+import { Calendar as CalendarIcon, MessageSquare, Users, ChevronRight, ChevronDown, Clock, Play, Pause, Square, Paperclip, Upload, X, AtSign, Eye, Plus, Trash2, Edit2, Send, Hash, Check, Cloud, Maximize2, Minimize2 } from 'lucide-react';
 import GoogleDrivePicker from './GoogleDrivePicker';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -17,11 +17,14 @@ import { Checkbox } from './ui/checkbox';
 import { ScrollArea } from './ui/scroll-area';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import RichTextEditor, { RichTextDisplay } from './RichTextEditor';
+import { toast } from '../hooks/use-toast';
 import type { Task, TaskComment } from '../types';
 
 interface TaskDetailPanelProps {
   task: Task;
   onClose: () => void;
+  onExpand?: () => void;
+  isExpanded?: boolean;
   comments: TaskComment[];
   onAddComment: (taskId: string, content: string) => void;
   onUpdate: (id: string, data: any) => Promise<any>;
@@ -32,7 +35,9 @@ interface TaskDetailPanelProps {
 
 const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ 
   task, 
-  onClose, 
+  onClose,
+  onExpand,
+  isExpanded,
   comments, 
   onAddComment, 
   onUpdate, 
@@ -578,19 +583,41 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       {/* Header with Status Badge and Close */}
       <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b bg-muted/30">
         <Badge 
-          className={`${task.status === 'Done' ? 'bg-success text-success-foreground' : 'bg-muted text-muted-foreground'}`}
+          className={`
+            transition-all duration-300
+            ${task.status === 'Done' ? 'bg-emerald-500 text-white'
+              : task.status === 'In Progress' ? 'bg-blue-500 text-white'
+              : task.status === 'Review' ? 'bg-amber-500 text-white'
+              : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'}
+          `}
         >
           {task.status === 'Done' && <Check className="w-3 h-3 mr-1" />}
-          {task.status}
+          {task.status === 'Todo' ? 'Për të bërë'
+            : task.status === 'In Progress' ? 'Në progres'
+            : task.status === 'Review' ? 'Rishikim'
+            : 'Përfunduar'}
         </Badge>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-1">
           {activeWorkers.length > 0 && (
             <div className="flex items-center gap-1 text-xs text-success">
               <Eye className="w-3 h-3 animate-pulse" />
               <span>{activeWorkers.length} duke punuar</span>
             </div>
           )}
-          <Button variant="ghost" size="sm" onClick={onClose}>
+          {/* Expand / shrink panel */}
+          {onExpand && (
+            <Button variant="ghost" size="sm" onClick={onExpand} title={isExpanded ? 'Palos' : 'Zgjero'}>
+              {isExpanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+            </Button>
+          )}
+          {/* Close button — clearly visible */}
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={onClose}
+            className="h-8 w-8 p-0 rounded-md hover:bg-destructive/10 hover:text-destructive"
+            title="Mbyll"
+          >
             <X className="w-4 h-4" />
           </Button>
         </div>
@@ -940,6 +967,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 value={task.status} 
                 onValueChange={async (newStatus) => {
                   await onUpdate(task.id, { status: newStatus });
+                  const labels: Record<string, string> = { Todo: 'Për të bërë', 'In Progress': 'Në progres', Review: 'Rishikim', Done: 'Përfunduar' };
+                  toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${labels[newStatus] ?? newStatus}` });
                 }}
               >
                 <SelectTrigger className="w-32 h-8 text-sm">
@@ -1048,19 +1077,20 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             </div>
           )}
 
-          {/* Time Tracking - Compact */}
+          {/* Time Tracking - with live timer + entry log */}
           <div className="pt-4 border-t">
             <div className="flex items-center justify-between mb-3">
               <h4 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                 <Clock className="w-4 h-4" />
                 Koha
               </h4>
-              <span className="text-xs text-muted-foreground">
+              <span className="text-xs font-medium text-foreground">
                 Total: {formatDuration(totalMinutes)}
               </span>
             </div>
-            <div className="flex items-center gap-3">
-              <div className="text-xl font-mono font-bold">
+            {/* Timer controls */}
+            <div className="flex items-center gap-3 mb-3">
+              <div className="text-xl font-mono font-bold tabular-nums">
                 {formatTime(elapsedSeconds)}
               </div>
               {runningEntry ? (
@@ -1075,6 +1105,32 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 </Button>
               )}
             </div>
+            {/* Entry log */}
+            {timeEntries && timeEntries.filter((e: any) => e.endTime).length > 0 && (
+              <div className="space-y-1">
+                <p className="text-xs text-muted-foreground font-medium mb-1">Log</p>
+                <div className="max-h-40 overflow-y-auto space-y-1">
+                  {timeEntries
+                    .filter((e: any) => e.endTime)
+                    .map((entry: any) => {
+                      const start = new Date(entry.startTime?.toDate ? entry.startTime.toDate() : entry.startTime);
+                      const end = new Date(entry.endTime?.toDate ? entry.endTime.toDate() : entry.endTime);
+                      const dur = entry.duration || Math.floor((end.getTime() - start.getTime()) / 60000);
+                      return (
+                        <div key={entry.id} className="flex items-center justify-between text-xs text-muted-foreground bg-muted/40 rounded px-2 py-1">
+                          <span>{start.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}</span>
+                          <span className="tabular-nums">
+                            {start.toLocaleTimeString('sq-AL', { hour: '2-digit', minute: '2-digit' })}
+                            {' → '}
+                            {end.toLocaleTimeString('sq-AL', { hour: '2-digit', minute: '2-digit' })}
+                          </span>
+                          <span className="font-medium text-foreground">{formatDuration(dur)}</span>
+                        </div>
+                      );
+                    })}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* Subtasks */}

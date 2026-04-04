@@ -1,13 +1,13 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useSensors, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
-import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
+import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { getStatusColor, getPriorityColor } from '../lib/statusColors';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { Calendar as CalendarIcon, User, Flag, MoreVertical, Plus, MessageSquare, CalendarDays, Filter, List, LayoutGrid, Users, ChevronRight, ChevronDown, Target, Clock, Play, Pause, Square, Check, X, AlertCircle, CheckCircle2, CircleDot, ListChecks } from 'lucide-react';
+import { Calendar as CalendarIcon, User, Flag, MoreVertical, Plus, MessageSquare, CalendarDays, Filter, List, LayoutGrid, Users, ChevronRight, ChevronDown, Target, Clock, Play, Pause, Square, Check, X, AlertCircle, CheckCircle2, CircleDot, ListChecks, Maximize2, Minimize2, Edit2, Trash2, AlertTriangle, GripVertical } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Checkbox } from '../components/ui/checkbox';
@@ -25,13 +25,23 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../components/ui/dropdown-menu';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useFilteredTasks } from '../hooks/useRoleFilteredData';
+import { toast } from '../hooks/use-toast';
 import type { Task, TaskComment, Project, Notification, TaskCollaborator, UserProfile, TimeEntry, Customer, Invoice } from '../types';
 import TaskDetailPanel from '../components/TaskDetailPanel';
 import SmartSuggestions from '../components/SmartSuggestions';
+
+/** Generate a deterministic HSL background colour from a name string */
+function hashColor(name: string): string {
+  let hash = 0;
+  for (let i = 0; i < name.length; i++) hash = name.charCodeAt(i) + ((hash << 5) - hash);
+  const h = Math.abs(hash) % 360;
+  return `hsl(${h}, 55%, 42%)`;
+}
 
 const TasksView: React.FC = () => {
   const { user } = useAuth();
@@ -42,6 +52,11 @@ const TasksView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  const [panelExpanded, setPanelExpanded] = useState(false);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [listOrder, setListOrder] = useState<string[]>(() => {
+    try { return JSON.parse(localStorage.getItem('tasks_list_order') || '[]'); } catch { return []; }
+  });
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Fetch data — skipTeamFilter to avoid dependency on globalTeamId timing.
@@ -342,8 +357,22 @@ const TasksView: React.FC = () => {
     const { active, over } = event;
     if (!over) return;
     const taskId = String(active.id);
-    // "over" can be a column id (status string) or another task card
     const overId = String(over.id);
+
+    if (viewMode === 'list') {
+      // Reorder within the list
+      const currentOrder = orderedTasks.map(t => t.id);
+      const oldIndex = currentOrder.indexOf(taskId);
+      const newIndex = currentOrder.indexOf(overId);
+      if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
+        const reordered = arrayMove(currentOrder, oldIndex, newIndex);
+        setListOrder(reordered);
+        localStorage.setItem('tasks_list_order', JSON.stringify(reordered));
+      }
+      return;
+    }
+
+    // Board: move to target column
     const targetStatus = columns.find(c => c.status === overId)?.status
       || columns.find(c => tasks.filter(t => t.status === c.status).some(t => t.id === overId))?.status;
     if (targetStatus) {
@@ -361,27 +390,31 @@ const TasksView: React.FC = () => {
     { id: 'Done', title: 'Përfunduar', status: 'Done' },
   ];
 
-  // Format date compactly
+  // Apply saved manual order for the list view
+  const orderedTasks = useMemo(() => {
+    if (!listOrder.length) return tasks;
+    const orderMap = new Map(listOrder.map((id, i) => [id, i]));
+    return [...tasks].sort((a, b) => {
+      const ai = orderMap.has(a.id) ? orderMap.get(a.id)! : 99999;
+      const bi = orderMap.has(b.id) ? orderMap.get(b.id)! : 99999;
+      return ai - bi;
+    });
+  }, [tasks, listOrder]);
+
+  // Format date compactly — always show actual date; flag overdue with ⚠️
   const formatDateCompact = (date: Date) => {
     if (!date || isNaN(new Date(date).getTime())) {
-      return { text: 'Pa afat', className: 'text-muted-foreground' };
+      return { text: 'Pa afat', overdue: false, className: 'text-muted-foreground' };
     }
     const now = new Date();
     const taskDate = new Date(date);
-    const diffDays = Math.ceil((taskDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-    
-    if (diffDays < 0) {
-      return { text: `${Math.abs(diffDays)} ditë më parë`, className: 'text-error' };
-    }
-    if (diffDays === 0) {
-      return { text: 'Sot', className: 'text-warning font-medium' };
-    }
-    if (diffDays === 1) {
-      return { text: 'Nesër', className: 'text-warning' };
-    }
-    
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return { text: `${months[taskDate.getMonth()]} ${taskDate.getDate()}`, className: 'text-muted-foreground' };
+    const dateStr = `${months[taskDate.getMonth()]} ${taskDate.getDate()}`;
+    const diffDays = Math.ceil((taskDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays < 0) return { text: dateStr, overdue: true, className: 'text-destructive font-medium' };
+    if (diffDays === 0) return { text: 'Sot · ' + dateStr, overdue: false, className: 'text-warning font-medium' };
+    if (diffDays === 1) return { text: 'Nesër · ' + dateStr, overdue: false, className: 'text-warning' };
+    return { text: dateStr, overdue: false, className: 'text-muted-foreground' };
   };
 
   if (tasksLoading) {
@@ -426,7 +459,11 @@ const TasksView: React.FC = () => {
   return (
     <div className="h-[calc(100vh-120px)] flex flex-col lg:flex-row">
       {/* Left Side - Task List */}
-      <div className={`${selectedTask ? 'hidden lg:flex lg:flex-col lg:w-1/2 lg:border-r' : 'flex flex-col w-full'} transition-all duration-300`}>
+      <div className={`${
+        selectedTask
+          ? `hidden lg:flex lg:flex-col lg:border-r ${panelExpanded ? 'lg:w-1/3 lg:min-w-[400px]' : 'lg:w-1/2'}`
+          : 'flex flex-col w-full'
+      } transition-all duration-300`}>
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 border-b gap-3">
           <div>
@@ -463,67 +500,57 @@ const TasksView: React.FC = () => {
           </div>
         </div>
 
-        {/* Stats Bar */}
-        <div className="px-4 py-2 border-b bg-muted/20 flex items-center gap-2 overflow-x-auto">
-          <button
-            onClick={() => setFilterStatus('all')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
-              filterStatus === 'all' ? 'bg-primary text-primary-foreground' : 'bg-muted hover:bg-muted/80 text-muted-foreground'
-            }`}
-          >
-            Të gjitha
-            <span className="ml-0.5 tabular-nums">{baseTasksForStats.length}</span>
-          </button>
-          <button
-            onClick={() => setFilterStatus('Todo')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
-              filterStatus === 'Todo' ? 'bg-gray-500 text-white' : 'bg-gray-100 hover:bg-gray-200 text-gray-600 dark:bg-gray-800 dark:hover:bg-gray-700 dark:text-gray-300'
-            }`}
-          >
-            <CircleDot className="w-3 h-3" />
-            Për të bërë
-            <span className="ml-0.5 tabular-nums">{taskStats.todo}</span>
-          </button>
-          <button
-            onClick={() => setFilterStatus('In Progress')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
-              filterStatus === 'In Progress' ? 'bg-blue-500 text-white' : 'bg-blue-50 hover:bg-blue-100 text-blue-600 dark:bg-blue-950 dark:hover:bg-blue-900 dark:text-blue-300'
-            }`}
-          >
-            <Play className="w-3 h-3" />
-            Në progres
-            <span className="ml-0.5 tabular-nums">{taskStats.inProgress}</span>
-          </button>
-          <button
-            onClick={() => setFilterStatus('Review')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
-              filterStatus === 'Review' ? 'bg-amber-500 text-white' : 'bg-amber-50 hover:bg-amber-100 text-amber-600 dark:bg-amber-950 dark:hover:bg-amber-900 dark:text-amber-300'
-            }`}
-          >
-            <Clock className="w-3 h-3" />
-            Rishikim
-            <span className="ml-0.5 tabular-nums">{taskStats.review}</span>
-          </button>
-          <button
-            onClick={() => setFilterStatus('Done')}
-            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors whitespace-nowrap ${
-              filterStatus === 'Done' ? 'bg-emerald-500 text-white' : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:hover:bg-emerald-900 dark:text-emerald-300'
-            }`}
-          >
-            <CheckCircle2 className="w-3 h-3" />
-            Përfunduar
-            <span className="ml-0.5 tabular-nums">{taskStats.done}</span>
-          </button>
-          {taskStats.overdue > 0 && (
-            <button
-              onClick={() => setFilterStatus('all')}
-              className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-600 dark:bg-red-950 dark:text-red-300 whitespace-nowrap"
-            >
-              <AlertCircle className="w-3 h-3" />
-              Vonuar
-              <span className="ml-0.5 tabular-nums">{taskStats.overdue}</span>
+        {/* Stats Bar — pill filters on ≥sm, dropdown on mobile */}
+        <div className="px-4 py-2 border-b bg-muted/20">
+          {/* Mobile: single Select dropdown */}
+          <div className="sm:hidden">
+            <Select value={filterStatus} onValueChange={setFilterStatus}>
+              <SelectTrigger className="h-8 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Të gjitha ({baseTasksForStats.length})</SelectItem>
+                <SelectItem value="Todo">Për të bërë ({taskStats.todo})</SelectItem>
+                <SelectItem value="In Progress">Në progres ({taskStats.inProgress})</SelectItem>
+                <SelectItem value="Review">Rishikim ({taskStats.review})</SelectItem>
+                <SelectItem value="Done">Përfunduar ({taskStats.done})</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+          {/* Desktop: pill buttons */}
+          <div className="hidden sm:flex items-center gap-2 flex-wrap">
+            <button onClick={() => setFilterStatus('all')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                filterStatus === 'all' ? 'bg-slate-500 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-600 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300'}`}>
+              Të gjitha <span className="tabular-nums">{baseTasksForStats.length}</span>
             </button>
-          )}
+            <button onClick={() => setFilterStatus('Todo')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                filterStatus === 'Todo' ? 'bg-slate-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>
+              <CircleDot className="w-3 h-3" />Për të bërë <span className="tabular-nums">{taskStats.todo}</span>
+            </button>
+            <button onClick={() => setFilterStatus('In Progress')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                filterStatus === 'In Progress' ? 'bg-blue-500 text-white' : 'bg-blue-50 hover:bg-blue-100 text-blue-600 dark:bg-blue-950 dark:text-blue-300'}`}>
+              <Play className="w-3 h-3" />Në progres <span className="tabular-nums">{taskStats.inProgress}</span>
+            </button>
+            <button onClick={() => setFilterStatus('Review')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                filterStatus === 'Review' ? 'bg-amber-500 text-white' : 'bg-amber-50 hover:bg-amber-100 text-amber-600 dark:bg-amber-950 dark:text-amber-300'}`}>
+              <Clock className="w-3 h-3" />Rishikim <span className="tabular-nums">{taskStats.review}</span>
+            </button>
+            <button onClick={() => setFilterStatus('Done')}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                filterStatus === 'Done' ? 'bg-emerald-500 text-white' : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-300'}`}>
+              <CheckCircle2 className="w-3 h-3" />Përfunduar <span className="tabular-nums">{taskStats.done}</span>
+            </button>
+            {taskStats.overdue > 0 && (
+              <button onClick={() => setFilterStatus('all')}
+                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-600 dark:bg-red-950 dark:text-red-300">
+                <AlertTriangle className="w-3 h-3" />Vonuar <span className="tabular-nums">{taskStats.overdue}</span>
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Smart Suggestions Panel */}
@@ -563,108 +590,193 @@ const TasksView: React.FC = () => {
         {/* Task List Content */}
         <div className="flex-1 overflow-y-auto">
           {viewMode === 'list' && (
-            <div className="divide-y">
-              {tasks.map((task) => {
-                const dateInfo = formatDateCompact(new Date(task.endDate));
-                const isSelected = selectedTask?.id === task.id;
-                const isOverdue = new Date(task.endDate) < new Date() && task.status !== 'Done';
-                const projectName = getProjectName(task.projectId);
-                const subtaskInfo = subtaskCounts[task.id];
-                const isBeingWorkedOn = tasksBeingWorkedOn.has(task.id);
-                const commentCount = comments?.filter(c => c.taskId === task.id).length || 0;
-                
-                return (
-                  <div
-                    key={task.id}
-                    className={`group flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-muted/50 transition-colors ${
-                      isSelected ? 'bg-primary/5 border-l-2 border-l-primary' : ''
-                    } ${isOverdue ? 'bg-error/5' : ''}`}
-                    onClick={() => setSelectedTask(task)}
-                  >
-                    <Checkbox 
-                      checked={task.status === 'Done'}
-                      onCheckedChange={async (checked) => {
-                        await taskMutation.update(task.id, { 
-                          status: checked ? 'Done' : 'Todo' 
-                        });
-                        if (checked) {
-                          logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
-                        }
-                      }}
-                      onClick={(e) => e.stopPropagation()}
-                      className={`mt-1 ${task.status === 'Done' ? 'bg-success border-success' : ''}`}
-                    />
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
-                        <span className={`text-sm font-medium ${task.status === 'Done' ? 'line-through text-muted-foreground' : ''}`}>
-                          {task.title}
-                        </span>
-                        {isBeingWorkedOn && (
-                          <span className="flex items-center gap-0.5 text-[10px] text-success bg-success/10 px-1.5 py-0.5 rounded-full">
-                            <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
-                            Duke punuar
-                          </span>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 mt-1 flex-wrap">
-                        {/* Priority badge */}
-                        {task.priority && (
-                          <Badge className={`text-[10px] px-1.5 py-0 h-4 ${getPriorityColor(task.priority)}`}>
-                            {task.priority === 'urgent' ? 'Urgjent' : task.priority === 'high' ? 'Lartë' : task.priority === 'medium' ? 'Mesatar' : 'Ulët'}
-                          </Badge>
-                        )}
-                        {/* Project name */}
-                        {projectName && (
-                          <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded flex items-center gap-1">
-                            <Target className="w-2.5 h-2.5" />
-                            {projectName}
-                          </span>
-                        )}
-                        {/* Subtask count */}
-                        {subtaskInfo && (
-                          <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-                            <ListChecks className="w-2.5 h-2.5" />
-                            {subtaskInfo.done}/{subtaskInfo.total}
-                          </span>
-                        )}
-                        {/* Comment count */}
-                        {commentCount > 0 && (
-                          <span className="text-[10px] text-muted-foreground flex items-center gap-1">
-                            <MessageSquare className="w-2.5 h-2.5" />
-                            {commentCount}
-                          </span>
-                        )}
-                      </div>
+            <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+              <SortableContext items={orderedTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
+                <div className="divide-y">
+                  {orderedTasks.map((task) => {
+                    const dateInfo = formatDateCompact(new Date(task.endDate));
+                    const isSelected = selectedTask?.id === task.id;
+                    const isOverdue = new Date(task.endDate) < new Date() && task.status !== 'Done';
+                    const projectName = getProjectName(task.projectId);
+                    const subtaskInfo = subtaskCounts[task.id];
+                    const isBeingWorkedOn = tasksBeingWorkedOn.has(task.id);
+                    const commentCount = comments?.filter(c => c.taskId === task.id).length || 0;
+                    const assigneeName = getUserName(task.assignedToUserId);
+                    const initials = assigneeName.slice(0, 2).toUpperCase();
+                    const initialsColor = hashColor(assigneeName);
+                    const priorityFlagColor = task.priority === 'urgent' || task.priority === 'high'
+                      ? '#EF4444' : task.priority === 'medium' ? '#F97316' : '#9CA3AF';
+
+                    return (
+                      <SortableListItem key={task.id} id={task.id}>
+                        <div
+                          className={`group relative flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-muted/50 transition-colors ${
+                            isSelected ? 'bg-primary/5 border-l-2 border-l-primary' : ''
+                          } ${isOverdue ? 'bg-destructive/5' : ''}`}
+                          onClick={() => setSelectedTask(task)}
+                        >
+                          {/* Drag handle */}
+                          <div className="mt-1.5 cursor-grab opacity-0 group-hover:opacity-30 hover:!opacity-70 text-muted-foreground flex-shrink-0 hidden sm:block">
+                            <GripVertical className="w-3.5 h-3.5" />
+                          </div>
+                          <Checkbox
+                            checked={task.status === 'Done'}
+                            onCheckedChange={async (checked) => {
+                              const newStatus = checked ? 'Done' : 'Todo';
+                              await taskMutation.update(task.id, { status: newStatus });
+                              toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${checked ? 'Përfunduar' : 'Për të bërë'}` });
+                              if (checked) logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
+                            }}
+                            onClick={(e) => e.stopPropagation()}
+                            className={`mt-1 flex-shrink-0 ${task.status === 'Done' ? 'bg-success border-success' : ''}`}
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              {/* Priority flag icon */}
+                              {task.priority && (
+                                <Flag className="w-3 h-3 flex-shrink-0" style={{ color: priorityFlagColor }} />
+                              )}
+                              <span className={`text-sm font-medium ${task.status === 'Done' ? 'line-through text-muted-foreground' : ''}`}>
+                                {task.title}
+                              </span>
+                              {isBeingWorkedOn && (
+                                <span className="flex items-center gap-0.5 text-[10px] text-success bg-success/10 px-1.5 py-0.5 rounded-full">
+                                  <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
+                                  Duke punuar
+                                </span>
+                              )}
+                            </div>
+                            <div className="flex items-center gap-2 mt-1 flex-wrap">
+                              {/* Status badge */}
+                              <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+                                task.status === 'Done' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                                : task.status === 'In Progress' ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+                                : task.status === 'Review' ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+                                : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+                              }`}>
+                                {task.status === 'Todo' ? 'Për të bërë' : task.status === 'In Progress' ? 'Në progres' : task.status === 'Review' ? 'Rishikim' : 'Përfunduar'}
+                              </span>
+                              {/* Project name */}
+                              {projectName && (
+                                <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded flex items-center gap-1">
+                                  <Target className="w-2.5 h-2.5" />{projectName}
+                                </span>
+                              )}
+                              {/* Comment count */}
+                              {commentCount > 0 && (
+                                <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                                  <MessageSquare className="w-2.5 h-2.5" />{commentCount}
+                                </span>
+                              )}
+                            </div>
+                            {/* Subtask progress bar */}
+                            {subtaskInfo && (
+                              <div className="mt-1.5">
+                                <div className="flex items-center gap-1.5 mb-0.5">
+                                  <ListChecks className="w-2.5 h-2.5 text-muted-foreground" />
+                                  <span className="text-[10px] text-muted-foreground">{subtaskInfo.done}/{subtaskInfo.total}</span>
+                                </div>
+                                <div className="h-1 bg-muted rounded-full overflow-hidden w-24">
+                                  <div className="h-full bg-primary rounded-full transition-all"
+                                    style={{ width: `${subtaskInfo.total > 0 ? (subtaskInfo.done / subtaskInfo.total) * 100 : 0}%` }} />
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          {/* Assignee initials — 28px, hash color, tooltip */}
+                          <div
+                            className="hidden sm:flex items-center gap-1.5 flex-shrink-0"
+                            title={assigneeName}
+                          >
+                            <div
+                              className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0"
+                              style={{ backgroundColor: initialsColor }}
+                            >
+                              {initials}
+                            </div>
+                          </div>
+                          {/* Date */}
+                          <div className={`flex items-center gap-1 text-xs whitespace-nowrap flex-shrink-0 mt-0.5 ${dateInfo.className}`}>
+                            {dateInfo.overdue && <AlertTriangle className="w-3 h-3" />}
+                            {dateInfo.text}
+                          </div>
+                          {/* Hover quick actions */}
+                          <div
+                            className="absolute right-4 top-2.5 hidden group-hover:flex items-center gap-0.5 bg-background border border-border rounded-md shadow-sm px-0.5 py-0.5 z-10"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {/* Mark Done */}
+                            <button
+                              title="Shëno si Përfunduar"
+                              className="px-1.5 py-1 rounded text-xs hover:bg-muted text-emerald-600"
+                              onClick={async (e) => {
+                                e.stopPropagation();
+                                if (task.status !== 'Done') {
+                                  await taskMutation.update(task.id, { status: 'Done' });
+                                  toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
+                                  logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
+                                }
+                              }}
+                            >
+                              <Check className="w-3.5 h-3.5" />
+                            </button>
+                            {/* Edit */}
+                            <button
+                              title="Edito"
+                              className="px-1.5 py-1 rounded text-xs hover:bg-muted text-foreground"
+                              onClick={(e) => { e.stopPropagation(); setSelectedTask(task); }}
+                            >
+                              <Edit2 className="w-3.5 h-3.5" />
+                            </button>
+                            {/* More */}
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <button className="px-1.5 py-1 rounded text-xs hover:bg-muted text-foreground">
+                                  <MoreVertical className="w-3.5 h-3.5" />
+                                </button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end" className="text-sm">
+                                <DropdownMenuItem onClick={async () => {
+                                  const { id, ...rest } = task;
+                                  await taskMutation.create({ ...rest, title: rest.title + ' (kopje)' });
+                                  toast({ title: 'Detyrë u kopjua' });
+                                }}>
+                                  Kopjo
+                                </DropdownMenuItem>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  className="text-destructive"
+                                  onClick={() => setDeleteConfirmId(task.id)}
+                                >
+                                  Fshi
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </div>
+                        </div>
+                      </SortableListItem>
+                    );
+                  })}
+
+                  {tasks.length === 0 && (
+                    <div className="text-center py-12 text-muted-foreground">
+                      <p>Asnjë detyrë</p>
+                      <Button variant="link" className="mt-2" onClick={() => setIsCreateDialogOpen(true)}>
+                        Krijo detyrën e parë
+                      </Button>
                     </div>
-                    {/* Assignee */}
-                    <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground flex-shrink-0">
-                      <div className="w-6 h-6 rounded-full bg-primary/10 flex items-center justify-center text-[10px] font-semibold text-primary">
-                        {getUserName(task.assignedToUserId).slice(0, 2).toUpperCase()}
-                      </div>
-                      <span className="max-w-[80px] truncate">
-                        {getUserName(task.assignedToUserId)}
-                      </span>
-                    </div>
-                    <span className={`text-xs whitespace-nowrap flex-shrink-0 mt-0.5 ${dateInfo.className}`}>
-                      {dateInfo.text}
-                    </span>
-                  </div>
-                );
-              })}
-              
-              {tasks.length === 0 && (
-                <div className="text-center py-12 text-muted-foreground">
-                  <p>Asnjë detyrë</p>
-                  <Button 
-                    variant="link" 
-                    className="mt-2"
-                    onClick={() => setIsCreateDialogOpen(true)}
-                  >
-                    Krijo detyrën e parë
-                  </Button>
+                  )}
                 </div>
-              )}
-            </div>
+              </SortableContext>
+              <DragOverlay>
+                {activeTaskId && viewMode === 'list' ? (
+                  <div className="flex items-center gap-3 px-4 py-3 bg-background border shadow-xl rounded-md opacity-95">
+                    <div className="w-4 h-4 rounded-full bg-muted-foreground/20" />
+                    <span className="text-sm font-medium">{tasks.find(t => t.id === activeTaskId)?.title}</span>
+                  </div>
+                ) : null}
+              </DragOverlay>
+            </DndContext>
           )}
 
           {viewMode === 'board' && (
@@ -781,10 +893,21 @@ const TasksView: React.FC = () => {
 
       {/* Right Side - Task Detail Panel */}
       {selectedTask && (
-        <div className="fixed inset-0 z-50 bg-background lg:relative lg:inset-auto lg:z-auto lg:w-1/2 h-full max-h-[100dvh] overflow-y-auto pt-[72px] lg:pt-0">
+        <div className={`
+          fixed bottom-0 left-0 right-0 z-50 rounded-t-2xl
+          sm:fixed sm:inset-0 sm:rounded-none sm:pt-[72px]
+          lg:relative lg:inset-auto lg:z-auto lg:rounded-none lg:pt-0
+          bg-background
+          ${panelExpanded ? 'lg:flex-1' : 'lg:w-1/2'}
+          h-[80dvh] sm:h-full
+          max-h-[100dvh] overflow-y-auto flex flex-col
+          shadow-2xl lg:shadow-none border-t lg:border-t-0 lg:border-l
+        `}>
           <TaskDetailPanel
             task={selectedTask}
-            onClose={() => setSelectedTask(null)}
+            onClose={() => { setSelectedTask(null); setPanelExpanded(false); }}
+            onExpand={() => setPanelExpanded(p => !p)}
+            isExpanded={panelExpanded}
             comments={comments?.filter(c => c.taskId === selectedTask.id) || []}
             onAddComment={handleAddComment}
             onUpdate={taskMutation.update}
@@ -794,6 +917,27 @@ const TasksView: React.FC = () => {
           />
         </div>
       )}
+
+      {/* Delete confirmation modal */}
+      <Dialog open={!!deleteConfirmId} onOpenChange={(open) => { if (!open) setDeleteConfirmId(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Fshi Detyrën</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            A jeni i sigurt që doni të fshini këtë detyrë? Ky veprim nuk mund të zhbëhet.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setDeleteConfirmId(null)}>Anulo</Button>
+            <Button variant="destructive" onClick={async () => {
+              if (deleteConfirmId) {
+                await taskMutation.remove(deleteConfirmId);
+                if (selectedTask?.id === deleteConfirmId) setSelectedTask(null);
+                toast({ title: 'Detyra u fshi' });
+              }
+              setDeleteConfirmId(null);
+            }}>Fshi, jam i sigurt</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
@@ -1244,11 +1388,13 @@ function KanbanColumn({ id, children }: { id: string; children: React.ReactNode 
 
 function SortableTaskCard({ id, children }: { id: string; children: React.ReactNode }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
-  const style = {
-    transform: CSS.Transform.toString(transform),
-    transition,
-    opacity: isDragging ? 0.4 : 1,
-  };
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 };
+  return <div ref={setNodeRef} style={style} {...attributes} {...listeners}>{children}</div>;
+}
+
+function SortableListItem({ id, children }: { id: string; children: React.ReactNode }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = { transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.5 : 1, zIndex: isDragging ? 50 : undefined };
   return (
     <div ref={setNodeRef} style={style} {...attributes} {...listeners}>
       {children}
