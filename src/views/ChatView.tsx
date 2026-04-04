@@ -1,21 +1,28 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useCollection, useMutation, getGlobalTeamId, useGlobalTeamId, useWhatsappEnabled } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
+import { usePermissions } from '../contexts/PermissionsContext';
 import { Input } from '../components/ui/input';
 import { Button } from '../components/ui/button';
 import { ScrollArea } from '../components/ui/scroll-area';
 import { Badge } from '../components/ui/badge';
+import { Textarea } from '../components/ui/textarea';
+import { Label } from '../components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Separator } from '../components/ui/separator';
 import {
   Send, MessageSquare, Users, Hash, Paperclip, X, FileIcon,
   FolderOpen, ArrowLeft, Search, Pencil, Trash2, Reply,
   SmilePlus, Check, Plus, Link2,
   Bot, Sparkles, Loader2, Copy, RefreshCw, Phone, Smartphone,
+  ClipboardList, ExternalLink,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { auth } from '../lib/firebase';
-import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, WhatsAppMessage } from '../types';
+import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, WhatsAppMessage, ClientRequest, Team } from '../types';
 
-type ChatMode = 'channel' | 'direct' | 'ai' | 'whatsapp';
+type ChatMode = 'channel' | 'direct' | 'ai' | 'whatsapp' | 'requests';
 
 // AI Quick Actions
 const AI_QUICK_ACTIONS = [
@@ -94,8 +101,55 @@ const ChatView: React.FC = () => {
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
   const { data: userProfiles } = useCollection<UserProfile>('userProfiles');
-  const { data: teams } = useCollection<any>('teams');
+  const { data: teams } = useCollection<Team>('teams');
   const { data: allMessages } = useCollection<ChatMessage>('messages');
+  const { data: requests, } = useCollection<ClientRequest>('clientRequests', {
+    orderBy: { field: 'createdAt', direction: 'desc' },
+    skipTeamFilter: true,
+  });
+  const requestMutation = useMutation<ClientRequest>('clientRequests');
+  const permissions = usePermissions();
+
+  // Requests state
+  const [selectedRequest, setSelectedRequest] = useState<ClientRequest | null>(null);
+  const [requestStatusFilter, setRequestStatusFilter] = useState<string>('__all__');
+
+  const filteredRequests = useMemo(() => {
+    if (!requests) return [];
+    if (requestStatusFilter === '__all__') return requests;
+    return requests.filter(r => r.status === requestStatusFilter);
+  }, [requests, requestStatusFilter]);
+
+  const newRequestsCount = requests?.filter(r => r.status === 'New').length || 0;
+
+  const getReqStatusLabel = (s: string) => {
+    const map: Record<string, string> = { New: 'E Re', 'In Review': 'Ne Shqyrtim', 'In Progress': 'Ne Progres', Completed: 'Perfunduar', Rejected: 'Refuzuar' };
+    return map[s] ?? s;
+  };
+  const getReqStatusColor = (s: string) => {
+    const map: Record<string, string> = { New: 'bg-blue-100 text-blue-700', 'In Review': 'bg-yellow-100 text-yellow-700', 'In Progress': 'bg-purple-100 text-purple-700', Completed: 'bg-green-100 text-green-700', Rejected: 'bg-red-100 text-red-700' };
+    return map[s] ?? 'bg-muted text-muted-foreground';
+  };
+  const getPriorityColor = (p: string) => {
+    const map: Record<string, string> = { low: 'bg-gray-100 text-gray-600', medium: 'bg-amber-100 text-amber-700', high: 'bg-orange-100 text-orange-700', urgent: 'bg-red-100 text-red-700' };
+    return map[p] ?? 'bg-muted text-muted-foreground';
+  };
+  const getPriorityLabel = (p: string) => ({ low: 'E Ulet', medium: 'Mesatare', high: 'E Larte', urgent: 'Urgjente' })[p] ?? p;
+
+  const handleUpdateRequestStatus = async (requestId: string, newStatus: string, adminNotes?: string) => {
+    const update: Record<string, any> = { status: newStatus };
+    if (adminNotes !== undefined) update.adminNotes = adminNotes;
+    await requestMutation.update(requestId, update);
+    // Reflect update in selectedRequest without re-opening
+    setSelectedRequest(prev => prev?.id === requestId ? { ...prev, status: newStatus as ClientRequest['status'], ...(adminNotes !== undefined ? { adminNotes } : {}) } : prev);
+    toast({ title: 'Statusi u perditesua' });
+  };
+
+  const handleAssignTeam = async (requestId: string, teamId: string) => {
+    await requestMutation.update(requestId, { assignedTeamId: teamId });
+    setSelectedRequest(prev => prev?.id === requestId ? { ...prev, assignedTeamId: teamId } : prev);
+    toast({ title: 'Ekipi u caktua' });
+  };
   const waTeamId = useGlobalTeamId();
   const waEnabled = useWhatsappEnabled();
 
@@ -775,6 +829,28 @@ const ChatView: React.FC = () => {
             </>
           )}
 
+          {/* Client Requests */}
+          <div className="h-px bg-border/50 mx-2 my-2" />
+          <button
+            onClick={() => { setChatMode('requests'); setShowSidebar(false); }}
+            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-left ${
+              chatMode === 'requests'
+                ? 'bg-amber-500/10 border border-amber-300/30 dark:border-amber-700/30 shadow-sm'
+                : 'hover:bg-accent/50'
+            }`}
+          >
+            <div className={`h-9 w-9 rounded-xl flex items-center justify-center flex-shrink-0 ${chatMode === 'requests' ? 'bg-amber-500' : 'bg-amber-100 dark:bg-amber-900/30'}`}>
+              <ClipboardList className={`h-4 w-4 ${chatMode === 'requests' ? 'text-white' : 'text-amber-600 dark:text-amber-400'}`} />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className={`text-sm font-medium ${chatMode === 'requests' ? 'text-amber-700 dark:text-amber-300' : ''}`}>Kërkesat</p>
+              <p className="text-[11px] text-muted-foreground truncate">Kërkesat e klientëve</p>
+            </div>
+            {newRequestsCount > 0 && (
+              <Badge className="bg-amber-500 text-white text-[10px] border-0">{newRequestsCount}</Badge>
+            )}
+          </button>
+
           {/* Direct Messages */}
           <div className="h-px bg-border/50 mx-2 my-2" />
           <p className="px-2 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Mesazhe Direkte</p>
@@ -1412,7 +1488,187 @@ const ChatView: React.FC = () => {
             </div>
           </>
         )}
+
+        {/* ── REQUESTS PANEL ── */}
+        {chatMode === 'requests' && (
+          <div className="flex-1 flex flex-col min-h-0">
+            {/* Panel header */}
+            <div className="px-5 py-3 border-b flex items-center gap-2">
+              <ClipboardList className="h-5 w-5 text-amber-500" />
+              <h2 className="font-semibold text-sm">Kërkesat e Klientëve</h2>
+              {newRequestsCount > 0 && (
+                <Badge className="bg-amber-500 text-white border-0 text-[10px] ml-1">{newRequestsCount} të reja</Badge>
+              )}
+            </div>
+
+            {/* Status filter */}
+            <div className="px-4 py-3 border-b flex gap-2 flex-wrap bg-muted/5">
+              {(['__all__', 'New', 'In Review', 'In Progress', 'Completed', 'Rejected'] as const).map(status => (
+                <Button
+                  key={status}
+                  variant={requestStatusFilter === status ? 'default' : 'outline'}
+                  size="sm"
+                  className="h-7 text-xs px-3"
+                  onClick={() => setRequestStatusFilter(status)}
+                >
+                  {status === '__all__' ? 'Të gjitha' : getReqStatusLabel(status)}
+                  {status !== '__all__' && requests && (
+                    <span className="ml-1 opacity-60">({requests.filter(r => r.status === status).length})</span>
+                  )}
+                </Button>
+              ))}
+            </div>
+
+            {/* List */}
+            <ScrollArea className="flex-1">
+              <div className="p-4 space-y-3">
+                {filteredRequests.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center py-24 text-center">
+                    <ClipboardList className="h-12 w-12 text-muted-foreground/30 mb-4" />
+                    <p className="text-sm text-muted-foreground">Nuk ka kërkesa</p>
+                  </div>
+                ) : (
+                  filteredRequests.map(request => {
+                    const customer = customers?.find(c => c.id === request.customerId);
+                    return (
+                      <div
+                        key={request.id}
+                        onClick={() => setSelectedRequest(request)}
+                        className="p-4 rounded-xl border bg-card hover:shadow-md hover:border-amber-300/40 cursor-pointer transition-all"
+                      >
+                        <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+                          <div className="flex-1 min-w-0">
+                            <p className="font-semibold truncate text-sm">{request.title}</p>
+                            <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground mt-1">
+                              <span>{customer?.name || 'Pa emer'}</span>
+                              <span>·</span>
+                              <span>{request.category}</span>
+                              <span>·</span>
+                              <span>{request.createdAt instanceof Date ? request.createdAt.toLocaleDateString('sq-AL') : ''}</span>
+                            </div>
+                          </div>
+                          <div className="flex items-center gap-2 flex-shrink-0">
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${getPriorityColor(request.priority)}`}>
+                              {getPriorityLabel(request.priority)}
+                            </span>
+                            <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${getReqStatusColor(request.status)}`}>
+                              {getReqStatusLabel(request.status)}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+              </div>
+            </ScrollArea>
+          </div>
+        )}
+
       </main>
+
+      {/* Request Detail Dialog */}
+      <Dialog open={!!selectedRequest} onOpenChange={(open) => { if (!open) setSelectedRequest(null); }}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{selectedRequest?.title}</DialogTitle>
+          </DialogHeader>
+          {selectedRequest && (
+            <div className="space-y-4">
+              <div className="flex flex-wrap gap-2">
+                <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${getReqStatusColor(selectedRequest.status)}`}>
+                  {getReqStatusLabel(selectedRequest.status)}
+                </span>
+                <span className={`text-xs px-2.5 py-1 rounded-full font-medium ${getPriorityColor(selectedRequest.priority)}`}>
+                  {getPriorityLabel(selectedRequest.priority)}
+                </span>
+                <span className="text-xs px-2.5 py-1 rounded-full bg-muted text-muted-foreground">{selectedRequest.category}</span>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3 text-sm">
+                <div>
+                  <p className="text-muted-foreground text-xs mb-0.5">Klienti</p>
+                  <p className="font-medium">{customers?.find(c => c.id === selectedRequest.customerId)?.name || 'Pa emer'}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs mb-0.5">Data</p>
+                  <p className="font-medium">{selectedRequest.createdAt instanceof Date ? selectedRequest.createdAt.toLocaleString('sq-AL') : '-'}</p>
+                </div>
+              </div>
+
+              <Separator />
+
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-1">Përshkrimi</p>
+                <p className="text-sm whitespace-pre-wrap">{selectedRequest.description}</p>
+              </div>
+
+              {selectedRequest.attachmentUrl && (
+                <div>
+                  <p className="text-xs font-medium text-muted-foreground mb-1">Bashkëngjitje</p>
+                  <a href={selectedRequest.attachmentUrl} target="_blank" rel="noopener noreferrer" className="text-sm text-primary underline flex items-center gap-1">
+                    <ExternalLink className="h-3 w-3" /> Hap bashkëngjitjen
+                  </a>
+                </div>
+              )}
+
+              {selectedRequest.adminNotes && (
+                <>
+                  <Separator />
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-1">Përgjigja e Ekipit</p>
+                    <p className="text-sm whitespace-pre-wrap bg-muted p-3 rounded-lg">{selectedRequest.adminNotes}</p>
+                  </div>
+                </>
+              )}
+
+              {permissions.canEdit && (
+                <>
+                  <Separator />
+                  <div className="space-y-3">
+                    <div>
+                      <Label className="text-xs">Ndrysho Statusin</Label>
+                      <Select value={selectedRequest.status} onValueChange={(val) => handleUpdateRequestStatus(selectedRequest.id, val)}>
+                        <SelectTrigger className="h-8 text-sm mt-1"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {(['New', 'In Review', 'In Progress', 'Completed', 'Rejected'] as const).map(s => (
+                            <SelectItem key={s} value={s}>{getReqStatusLabel(s)}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Cakto Ekipin</Label>
+                      <Select value={selectedRequest.assignedTeamId || ''} onValueChange={(val) => handleAssignTeam(selectedRequest.id, val)}>
+                        <SelectTrigger className="h-8 text-sm mt-1"><SelectValue placeholder="Zgjidhni ekipin" /></SelectTrigger>
+                        <SelectContent>
+                          {teams?.map((team: any) => (
+                            <SelectItem key={team.id} value={team.id}>{team.name}{team.department ? ` (${team.department})` : ''}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div>
+                      <Label className="text-xs">Shënim Administrativ</Label>
+                      <form
+                        onSubmit={(e) => {
+                          e.preventDefault();
+                          const fd = new FormData(e.currentTarget);
+                          handleUpdateRequestStatus(selectedRequest.id, selectedRequest.status, fd.get('adminNotes') as string);
+                        }}
+                        className="flex gap-2 mt-1"
+                      >
+                        <Textarea name="adminNotes" defaultValue={selectedRequest.adminNotes || ''} placeholder="Shkruani përgjigjen ose shënimin..." rows={3} className="text-sm" />
+                        <Button type="submit" size="sm" className="self-end">Ruaj</Button>
+                      </form>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

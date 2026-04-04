@@ -429,7 +429,7 @@ const CustomersView: React.FC = () => {
       </div>
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
         <Card className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => setActiveTab('customers')}>
           <CardContent className="pt-6 flex items-center gap-3">
             <div className="p-2 bg-blue-100 rounded-lg">
@@ -438,17 +438,6 @@ const CustomersView: React.FC = () => {
             <div>
               <p className="text-sm text-muted-foreground">Kliente Totale</p>
               <p className="text-xl font-bold">{customers?.length || 0}</p>
-            </div>
-          </CardContent>
-        </Card>
-        <Card className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => setActiveTab('portal')}>
-          <CardContent className="pt-6 flex items-center gap-3">
-            <div className="p-2 bg-green-100 rounded-lg">
-              <Globe className="h-5 w-5 text-green-600" />
-            </div>
-            <div>
-              <p className="text-sm text-muted-foreground">Portal Aktiv</p>
-              <p className="text-xl font-bold">{portalActiveCount}</p>
             </div>
           </CardContent>
         </Card>
