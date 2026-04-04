@@ -8,6 +8,7 @@ import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { ShoppingBag, Tag, DollarSign, FileText, CheckCircle2, Clock, Eye, Edit3, Send } from 'lucide-react';
+import { sanitizeHtml } from '../../lib/utils';
 import { useToast } from '../../hooks/use-toast';
 import ServiceQuestionnaireForm from '../../components/ServiceQuestionnaireForm';
 import type { Invoice, InvoiceItem, Service, ServiceInquiry, Lead, Customer, Task, Notification } from '../../types';
@@ -378,9 +379,9 @@ const PortalServicesView: React.FC = () => {
                     <div className="flex-1 min-w-0">
                       <h3 className="font-semibold truncate">{service.title || service.name}</h3>
                       {service.description && (
-                        <p className="text-sm text-muted-foreground mt-1 line-clamp-2">
-                          {service.description}
-                        </p>
+                        <div className="text-sm text-muted-foreground mt-1 line-clamp-2 prose prose-sm dark:prose-invert max-w-none"
+                          dangerouslySetInnerHTML={{ __html: sanitizeHtml(service.description) }}
+                        />
                       )}
                       <div className="flex flex-wrap gap-2 mt-3">
                         {service.category && (
@@ -434,9 +435,9 @@ const PortalServicesView: React.FC = () => {
                           )}
                         </div>
                         {service.description && (
-                          <p className="text-sm text-muted-foreground mt-1 line-clamp-3">
-                            {service.description}
-                          </p>
+                          <div className="text-sm text-muted-foreground mt-1 line-clamp-3 prose prose-sm dark:prose-invert max-w-none"
+                            dangerouslySetInnerHTML={{ __html: sanitizeHtml(service.description) }}
+                          />
                         )}
                       </div>
                     </div>
