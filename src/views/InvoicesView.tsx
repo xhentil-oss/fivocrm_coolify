@@ -44,6 +44,9 @@ const InvoicesView: React.FC = () => {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
   const [invoiceToDelete, setInvoiceToDelete] = useState<string | null>(null);
+  const [statusFilter, setStatusFilter] = useState<string>('__all__');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc'>('date_desc');
 
   const { data: rawInvoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', {
     orderBy: { field: 'createdAt', direction: 'desc' },
@@ -244,6 +247,31 @@ const InvoicesView: React.FC = () => {
   const draftAmount = invoices?.filter(inv => inv.status === 'Draft').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
   const projectedRevenue = pendingAmount + draftAmount;
 
+  // Filtered + sorted list used by both mobile cards and desktop table
+  const filteredInvoices = React.useMemo(() => {
+    let list = invoices ? [...invoices] : [];
+    if (statusFilter !== '__all__') list = list.filter(inv => inv.status === statusFilter);
+    if (searchQuery.trim()) {
+      const q = searchQuery.toLowerCase();
+      list = list.filter(inv => {
+        const customer = customers?.find(c => c.id === inv.customerId);
+        return (
+          inv.invoiceNumber?.toLowerCase().includes(q) ||
+          customer?.name?.toLowerCase().includes(q) ||
+          customer?.company?.toLowerCase().includes(q)
+        );
+      });
+    }
+    list.sort((a, b) => {
+      if (sortBy === 'date_desc') return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+      if (sortBy === 'date_asc') return new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime();
+      if (sortBy === 'amount_desc') return (b.total ?? b.amount ?? 0) - (a.total ?? a.amount ?? 0);
+      if (sortBy === 'amount_asc') return (a.total ?? a.amount ?? 0) - (b.total ?? b.amount ?? 0);
+      return 0;
+    });
+    return list;
+  }, [invoices, statusFilter, searchQuery, sortBy, customers]);
+
   if (invoicesLoading) {
     return (
       <div className="space-y-8">
@@ -284,7 +312,9 @@ const InvoicesView: React.FC = () => {
         <div>
           <h1 className="text-lg sm:text-h2 text-foreground">Faturat</h1>
           <p className="text-xs sm:text-body text-muted-foreground mt-0.5 sm:mt-1">
-            {invoices?.length || 0} fatura gjithsej
+            {filteredInvoices.length !== (invoices?.length ?? 0)
+              ? `${filteredInvoices.length} nga ${invoices?.length || 0} fatura`
+              : `${invoices?.length || 0} fatura gjithsej`}
           </p>
         </div>
         <div className="flex gap-2">
@@ -401,9 +431,51 @@ const InvoicesView: React.FC = () => {
         </Card>
       </div>
 
+      {/* Filter + Search Bar */}
+      <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+        <input
+          type="text"
+          placeholder="Kërko faturë ose klient..."
+          value={searchQuery}
+          onChange={e => setSearchQuery(e.target.value)}
+          className="h-9 rounded-md border border-input bg-background px-3 text-sm flex-1 min-w-0 focus:outline-none focus:ring-2 focus:ring-ring"
+        />
+        <div className="flex gap-2 flex-wrap">
+          {(['__all__', 'Draft', 'Pending', 'Paid', 'Overdue'] as const).map(s => (
+            <button
+              key={s}
+              onClick={() => setStatusFilter(s)}
+              className={`h-8 px-3 text-xs rounded-full border font-medium transition-colors ${
+                statusFilter === s
+                  ? 'bg-primary text-primary-foreground border-primary'
+                  : 'bg-background border-input text-muted-foreground hover:bg-muted'
+              }`}
+            >
+              {s === '__all__' ? 'Të gjitha' : s === 'Draft' ? 'Draft' : s === 'Pending' ? 'Pritje' : s === 'Paid' ? 'Paguar' : 'Vonuar'}
+              {s !== '__all__' && invoices && (
+                <span className="ml-1 opacity-60">({invoices.filter(i => i.status === s).length})</span>
+              )}
+            </button>
+          ))}
+          <select
+            value={sortBy}
+            onChange={e => setSortBy(e.target.value as any)}
+            className="h-8 px-2 text-xs rounded-md border border-input bg-background text-muted-foreground focus:outline-none"
+          >
+            <option value="date_desc">Data ↓</option>
+            <option value="date_asc">Data ↑</option>
+            <option value="amount_desc">Shuma ↓</option>
+            <option value="amount_asc">Shuma ↑</option>
+          </select>
+        </div>
+      </div>
+      {filteredInvoices.length === 0 && !invoicesLoading && (
+        <p className="text-sm text-muted-foreground text-center py-6">Nuk u gjetën fatura.</p>
+      )}
+
       {/* Mobile Card Layout */}
       <div className="sm:hidden space-y-3">
-        {invoices?.map((invoice) => {
+        {filteredInvoices.map((invoice) => {
           const customer = customers?.find(c => c.id === invoice.customerId);
           return (
             <Card key={invoice.id} className="p-3" onClick={() => setSelectedInvoice(invoice)}>
@@ -482,7 +554,7 @@ const InvoicesView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {invoices?.map((invoice) => {
+              {filteredInvoices.map((invoice) => {
                 const customer = customers?.find(c => c.id === invoice.customerId);
                 return (
                   <tr key={invoice.id} className="hover:bg-muted/50">

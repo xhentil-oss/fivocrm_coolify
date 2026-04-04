@@ -58,6 +58,23 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const [editingSubtask, setEditingSubtask] = useState<string | null>(null);
   const [showDrivePicker, setShowDrivePicker] = useState(false);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
+  // Recurring edit state
+  const [editingRecurring, setEditingRecurring] = useState(false);
+  const [recurringDayOfWeek, setRecurringDayOfWeek] = useState<number>((task as any).recurringDayOfWeek ?? 1);
+  const [recurringDaysOfWeek, setRecurringDaysOfWeek] = useState<number[]>((task as any).recurringDaysOfWeek ?? [1,2,3,4,5]);
+  const toggleRecurringDay = (day: number) => {
+    setRecurringDaysOfWeek(prev =>
+      prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day].sort((a, b) => a - b)
+    );
+  };
+  const saveRecurring = async () => {
+    if (task.recurringFrequency === 'weekly') {
+      await onUpdate(task.id, { recurringDayOfWeek });
+    } else if (task.recurringFrequency === 'daily') {
+      await onUpdate(task.id, { recurringDaysOfWeek });
+    }
+    setEditingRecurring(false);
+  };
   const fileInputRef = useRef<HTMLInputElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
   
@@ -831,18 +848,79 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
             {/* Recurring Info */}
             {task.isRecurring && (
-              <div className="flex items-center gap-3 sm:gap-4">
-                <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0">Përsërit.</span>
-                <div className="flex items-center gap-2">
-                  <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-primary/10 text-primary px-2.5 py-1 rounded-full">
-                    🔄 {task.recurringFrequency === 'daily'
-                         ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' ditë' : 'ditë'}`
-                         : task.recurringFrequency === 'weekly'
-                         ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' javë' : 'javë'}, ${['Diel','Hënë','Martë','Mërkurë','Enjte','Premte','Shtunë'][(task as any).recurringDayOfWeek ?? 0]}`
-                         : task.recurringFrequency === 'monthly'
-                         ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' muaj' : 'muaj'}, ditën ${(task as any).recurringDayOfMonth ?? 1}`
-                         : `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' vite' : 'vit'}`}
-                  </span>
+              <div className="flex items-start gap-3 sm:gap-4">
+                <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0 pt-0.5">Përsërit.</span>
+                <div className="flex-1">
+                  {!editingRecurring ? (
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-primary/10 text-primary px-2.5 py-1 rounded-full">
+                        🔄 {task.recurringFrequency === 'daily'
+                             ? (() => {
+                                 const days = (task as any).recurringDaysOfWeek as number[] | undefined;
+                                 const names = ['Die','Hën','Mar','Mër','Enj','Pre','Sht'];
+                                 return days && days.length > 0
+                                   ? `Çdo ${days.map(d => names[d]).join(', ')}`
+                                   : `Çdo ditë`;
+                               })()
+                             : task.recurringFrequency === 'weekly'
+                             ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' javë' : 'javë'}, ${['Diel','Hënë','Martë','Mërkurë','Enjte','Premte','Shtunë'][(task as any).recurringDayOfWeek ?? 0]}`
+                             : task.recurringFrequency === 'monthly'
+                             ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' muaj' : 'muaj'}, ditën ${(task as any).recurringDayOfMonth ?? 1}`
+                             : `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' vite' : 'vit'}`}
+                      </span>
+                      {permissions.canEdit && (task.recurringFrequency === 'weekly' || task.recurringFrequency === 'daily') && (
+                        <button
+                          onClick={() => setEditingRecurring(true)}
+                          className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                        >
+                          Ndrysho
+                        </button>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      {task.recurringFrequency === 'weekly' && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {[{v:1,l:'Hën'},{v:2,l:'Mar'},{v:3,l:'Mër'},{v:4,l:'Enj'},{v:5,l:'Pre'},{v:6,l:'Sht'},{v:0,l:'Die'}].map(day => (
+                            <button
+                              key={day.v}
+                              type="button"
+                              onClick={() => setRecurringDayOfWeek(day.v)}
+                              className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                                recurringDayOfWeek === day.v
+                                  ? 'bg-primary text-primary-foreground border-primary'
+                                  : 'bg-background text-foreground border-border hover:bg-muted'
+                              }`}
+                            >
+                              {day.l}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {task.recurringFrequency === 'daily' && (
+                        <div className="flex flex-wrap gap-1.5">
+                          {[{v:1,l:'Hën'},{v:2,l:'Mar'},{v:3,l:'Mër'},{v:4,l:'Enj'},{v:5,l:'Pre'},{v:6,l:'Sht'},{v:0,l:'Die'}].map(day => (
+                            <button
+                              key={day.v}
+                              type="button"
+                              onClick={() => toggleRecurringDay(day.v)}
+                              className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                                recurringDaysOfWeek.includes(day.v)
+                                  ? 'bg-primary text-primary-foreground border-primary'
+                                  : 'bg-background text-foreground border-border hover:bg-muted'
+                              }`}
+                            >
+                              {day.l}
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        <Button size="sm" className="h-7 text-xs" onClick={saveRecurring}>Ruaj</Button>
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setEditingRecurring(false)}>Anulo</Button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               </div>
             )}
