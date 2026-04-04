@@ -11,6 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Checkbox } from '../components/ui/checkbox';
 import { Badge } from '../components/ui/badge';
 import { useCollection, useMutation, setGlobalWaEnabled } from '../hooks/useFirestore';
+import { saveTeamSettings } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { getDocs, query, where, collection, writeBatch, doc, Timestamp } from 'firebase/firestore';
@@ -88,6 +89,7 @@ const CronJobCard: React.FC<CronJobCardProps> = ({
 
 // ─── SettingsView ──────────────────────────────────────────────────────────────
 const SettingsView: React.FC = () => {
+  const { teamId } = usePermissions();
   const [stripePublishableKey, setStripePublishableKey] = useState('');
   const [stripeWebhookSecret, setStripeWebhookSecret] = useState('');
   const [stripeMode, setStripeMode] = useState<'test' | 'live'>('test');
@@ -137,7 +139,9 @@ const SettingsView: React.FC = () => {
       if (response.ok) {
         setCronRunStatus(prev => ({ ...prev, [key]: 'success' }));
         const runs = JSON.parse(localStorage.getItem('cron_last_runs') || '{}');
-        localStorage.setItem('cron_last_runs', JSON.stringify({ ...runs, [key]: { time: new Date().toISOString(), result: data } }));
+        const updatedRuns = { ...runs, [key]: { time: new Date().toISOString(), result: data } };
+        localStorage.setItem('cron_last_runs', JSON.stringify(updatedRuns));
+        if (teamId) saveTeamSettings(teamId, { cronLastRuns: updatedRuns });
       } else {
         setCronRunStatus(prev => ({ ...prev, [key]: 'error' }));
       }
@@ -151,6 +155,7 @@ const SettingsView: React.FC = () => {
     const updated = { ...cronSettings, [key]: { ...(cronSettings[key] || {}), enabled: value } };
     setCronSettings(updated);
     localStorage.setItem('cron_settings', JSON.stringify(updated));
+    if (teamId) saveTeamSettings(teamId, { cronSettings: updated });
   };
 
   const handleSaveStripeSettings = () => {
@@ -171,6 +176,7 @@ const SettingsView: React.FC = () => {
       localStorage.setItem('default_bank_holder', first.accountHolder);
       localStorage.setItem('default_bank_country', first.country);
     }
+    if (teamId) saveTeamSettings(teamId, { bankAccounts });
     setBankSaved(true);
     setTimeout(() => setBankSaved(false), 3000);
   };
@@ -179,12 +185,14 @@ const SettingsView: React.FC = () => {
     setWhatsappEnabled(val);
     localStorage.setItem('whatsapp_enabled', String(val));
     setGlobalWaEnabled(val);
+    if (teamId) saveTeamSettings(teamId, { whatsappEnabled: val });
   };
 
   const handleSaveWhatsappSettings = () => {
     localStorage.setItem('whatsapp_enabled', String(whatsappEnabled));
     localStorage.setItem('whatsapp_vps_url', whatsappVpsUrl);
     localStorage.setItem('whatsapp_vps_secret', whatsappVpsSecret);
+    if (teamId) saveTeamSettings(teamId, { whatsappEnabled, whatsappVpsUrl, whatsappVpsSecret });
     setWhatsappSaved(true);
     setTimeout(() => setWhatsappSaved(false), 3000);
   };
@@ -715,6 +723,7 @@ const SettingsView: React.FC = () => {
                   const rate = parseFloat(eurAllRate);
                   if (rate > 0 && isFinite(rate)) {
                     localStorage.setItem('eur_all_rate', String(rate));
+                    if (teamId) saveTeamSettings(teamId, { eurAllRate: String(rate) });
                     setRateSaved(true);
                     setTimeout(() => setRateSaved(false), 3000);
                   }

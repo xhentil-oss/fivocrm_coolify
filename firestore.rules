@@ -277,5 +277,19 @@ service cloud.firestore {
       allow create: if isAuth();
       allow update, delete: if isAuth();
     }
+
+    // ── teamSettings: one doc per team, keyed by teamId ──
+    // Stores bank accounts, EUR rate, WhatsApp config, cron settings.
+    match /teamSettings/{teamId} {
+      allow read: if isAuth();
+      allow write: if isAuth();
+    }
+
+    // ── users: per-user preferences and flags ──
+    // Stores onboardingCompleted and other per-user state.
+    match /users/{userId} {
+      allow read: if isAuth() && request.auth.uid == userId;
+      allow write: if isAuth() && request.auth.uid == userId;
+    }
   }
 }
