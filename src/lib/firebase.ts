@@ -1,6 +1,6 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager } from 'firebase/firestore';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, runTransaction, doc, Timestamp } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 
 const firebaseConfig = {
@@ -26,5 +26,24 @@ export const db = initializeFirestore(app, {
 
 export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
+
+/**
+ * Atomically generates the next sequential invoice number stored in Firebase.
+ * Counter document: counters/invoices_{teamId} → { last: N }
+ *
+ * @param teamId      - The team the invoice belongs to.
+ * @param fallbackMax - Seed value used ONLY when the counter document does not yet exist
+ *                      (pass the highest existing FAT-XXX number so the sequence continues).
+ */
+export async function getNextInvoiceNumber(teamId: string, fallbackMax = 0): Promise<string> {
+  const counterRef = doc(db, 'counters', `invoices_${teamId}`);
+  const next = await runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(counterRef);
+    const newLast = snap.exists() ? (snap.data().last as number) + 1 : fallbackMax + 1;
+    transaction.set(counterRef, { last: newLast, updatedAt: Timestamp.now() });
+    return newLast;
+  });
+  return `FAT-${String(next).padStart(3, '0')}`;
+}
 
 export default app;

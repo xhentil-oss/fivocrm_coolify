@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useCollection, useMutation, useGlobalTeamId } from '../hooks/useFirestore';
+import { getNextInvoiceNumber } from '../lib/firebase';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
@@ -736,11 +737,15 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
   const invoiceItemMutation = useMutation<InvoiceItem>('invoiceItems');
   const accessMutation = useMutation<ClientPortalAccess>('clientPortalAccess');
 
-  // Auto-generate invoice number for new invoices (team-scoped to avoid cross-team inflation)
+  // Auto-generate invoice number for new invoices using a Firebase atomic counter.
+  // The counter doc (counters/invoices_{teamId}) is incremented transactionally to avoid duplicates.
+  // On first use the current max FAT-XXX number from existing invoices is passed as the seed.
+  const numberGenerated = React.useRef(false);
   React.useEffect(() => {
-    if (!isEditing && !invoicesLoading && allInvoices) {
+    if (!isEditing && !invoicesLoading && allInvoices && !numberGenerated.current && teamId) {
+      numberGenerated.current = true;
       let maxNum = 0;
-      const teamInvoices = teamId ? allInvoices.filter(inv => (inv as any).teamId === teamId) : allInvoices;
+      const teamInvoices = allInvoices.filter(inv => (inv as any).teamId === teamId);
       for (const inv of teamInvoices) {
         const match = inv.invoiceNumber?.match(/^FAT-(\d+)$/i);
         if (match) {
@@ -748,7 +753,12 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
           if (n > maxNum) maxNum = n;
         }
       }
-      setInvoiceNumber(`FAT-${String(maxNum + 1).padStart(3, '0')}`);
+      getNextInvoiceNumber(teamId, maxNum)
+        .then(setInvoiceNumber)
+        .catch(() => {
+          // Fallback to client-side if transaction fails
+          setInvoiceNumber(`FAT-${String(maxNum + 1).padStart(3, '0')}`);
+        });
     }
   }, [allInvoices, invoicesLoading, teamId]); // eslint-disable-line react-hooks/exhaustive-deps
 

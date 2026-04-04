@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
+import { getNextInvoiceNumber } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { Search, Plus, List, Users, ChevronDown, MoreVertical, Folder, Trash2, Edit } from 'lucide-react';
@@ -54,6 +55,7 @@ const ProjectsView: React.FC = () => {
   });
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
+  const { data: allInvoices } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
   
   const projectMutation = useMutation<Project>('projects');
   const taskMutation = useMutation<Task>('tasks');
@@ -199,8 +201,19 @@ const ProjectsView: React.FC = () => {
     const now = new Date();
     const dueDate = new Date(now.getFullYear(), now.getMonth() + 1, 0); // last day of month
 
+    // Compute seed from existing invoices so the Firebase counter starts correctly
+    let maxInvNum = 0;
+    if (allInvoices && resolvedTeamId) {
+      for (const inv of allInvoices.filter(i => (i as any).teamId === resolvedTeamId)) {
+        const m = inv.invoiceNumber?.match(/^FAT-(\d+)$/i);
+        if (m) { const n = parseInt(m[1], 10); if (n > maxInvNum) maxInvNum = n; }
+      }
+    }
+
     if (isRecurring) {
-      const invoiceLabel = `AUTO-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${newProject.id.slice(0, 6).toUpperCase()}`;
+      const invoiceLabel = resolvedTeamId
+        ? await getNextInvoiceNumber(resolvedTeamId, maxInvNum)
+        : `AUTO-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${newProject.id.slice(0, 6).toUpperCase()}`;
       const newInvoice = await invoiceMutation.create({
         invoiceNumber: invoiceLabel,
         projectId: newProject.id,
@@ -256,7 +269,9 @@ const ProjectsView: React.FC = () => {
       }
     } else {
       // Non-recurring project: create a plain Draft invoice
-      const invoiceLabel = `DRAFT-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${newProject.id.slice(0, 6).toUpperCase()}`;
+      const invoiceLabel = resolvedTeamId
+        ? await getNextInvoiceNumber(resolvedTeamId, maxInvNum)
+        : `DRAFT-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${newProject.id.slice(0, 6).toUpperCase()}`;
       const newInvoice = await invoiceMutation.create({
         invoiceNumber: invoiceLabel,
         projectId: newProject.id,
