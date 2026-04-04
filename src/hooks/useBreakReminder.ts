@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useToast } from './use-toast';
 
 // Synthesise a bird chirp using Web Audio API — no audio files needed
@@ -86,18 +86,47 @@ function fireBreakNotification(showToast: (opts: any) => void) {
   }
 }
 
+const STORAGE_KEY = 'break_reminder_enabled';
+
+/** Returns true if the break reminder is enabled (default: true). */
+export function isBreakReminderEnabled(): boolean {
+  return localStorage.getItem(STORAGE_KEY) !== 'false';
+}
+
+/** Persist the break reminder preference. */
+export function setBreakReminderEnabled(enabled: boolean): void {
+  localStorage.setItem(STORAGE_KEY, enabled ? 'true' : 'false');
+  // Notify same-tab listeners via storage event (cross-tab already fires natively)
+  window.dispatchEvent(new StorageEvent('storage', { key: STORAGE_KEY, newValue: String(enabled) }));
+}
+
 /**
  * Fires a "get up and move" reminder (with bird sounds) at 08:00, 10:00,
  * 12:00, 14:00, 16:00, and 18:00 — every 2 hours from the start of the
  * work day. Uses precise setTimeout scheduling so it fires exactly on the
  * hour rather than drifting with an interval.
+ *
+ * Respects the `break_reminder_enabled` localStorage flag (default: true).
+ * Call `setBreakReminderEnabled(false)` to silence it.
  */
 export function useBreakReminder() {
   const { toast } = useToast();
   const toastRef = useRef(toast);
   toastRef.current = toast;
+  const [enabled, setEnabled] = useState(isBreakReminderEnabled);
+
+  // Keep in sync with localStorage changes (from SettingsView or other tabs)
+  useEffect(() => {
+    const onStorage = (e: StorageEvent) => {
+      if (e.key === STORAGE_KEY) setEnabled(e.newValue !== 'false');
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, []);
 
   useEffect(() => {
+    if (!enabled) return;
+
     let timeoutId: ReturnType<typeof setTimeout>;
 
     const schedule = () => {
@@ -110,5 +139,5 @@ export function useBreakReminder() {
 
     schedule();
     return () => clearTimeout(timeoutId);
-  }, []);
+  }, [enabled]);
 }

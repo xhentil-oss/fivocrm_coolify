@@ -23,25 +23,29 @@ export function useClientPortal() {
   // Query portal access by userId only (single where = no composite index needed)
   const { data: byUserId, loading: byUserIdLoading } = useCollection<ClientPortalAccess>(
     'clientPortalAccess',
-    user
-      ? { where: [{ field: 'userId', operator: '==', value: user.uid }] }
-      : undefined
+    {
+      skip: !user,
+      where: user ? [{ field: 'userId', operator: '==', value: user.uid }] : undefined,
+    }
   );
 
   // Query portal access by email (for unlinked records)
   const { data: byEmail, loading: byEmailLoading } = useCollection<ClientPortalAccess>(
     'clientPortalAccess',
-    user?.email
-      ? { where: [{ field: 'email', operator: '==', value: user.email }] }
-      : undefined
+    {
+      skip: !user?.email,
+      where: user?.email ? [{ field: 'email', operator: '==', value: user.email }] : undefined,
+    }
   );
 
   // Check for matching customer by email
   const { data: matchingCustomers, loading: customersLoading } = useCollection<Customer>(
     'customers',
-    user?.email
-      ? { where: [{ field: 'email', operator: '==', value: user.email }], skipTeamFilter: true }
-      : undefined
+    {
+      skip: !user?.email,
+      where: user?.email ? [{ field: 'email', operator: '==', value: user.email }] : undefined,
+      skipTeamFilter: true,
+    }
   );
 
   // Fetch team members to notify admins and resolve teamId

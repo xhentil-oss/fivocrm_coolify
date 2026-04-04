@@ -37,6 +37,7 @@ const TimeTrackingView: React.FC = () => {
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const { data: timeEntries, loading: entriesLoading } = useCollection<TimeEntry>('timeEntries', {
+    skip: !user,
     where: user ? [{ field: 'userId', operator: '==', value: user.uid }] : undefined,
     orderBy: { field: 'startTime', direction: 'desc' }
   });

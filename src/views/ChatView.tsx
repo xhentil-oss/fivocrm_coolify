@@ -102,7 +102,10 @@ const ChatView: React.FC = () => {
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
   const { data: userProfiles } = useCollection<UserProfile>('userProfiles');
   const { data: teams } = useCollection<Team>('teams');
-  const { data: allMessages } = useCollection<ChatMessage>('messages');
+  const { data: allMessages } = useCollection<ChatMessage>('messages', {
+    orderBy: { field: 'createdAt', direction: 'desc' as const },
+    limit: 500,
+  });
   const { data: requests, } = useCollection<ClientRequest>('clientRequests', {
     orderBy: { field: 'createdAt', direction: 'desc' },
     skipTeamFilter: true,
@@ -164,6 +167,7 @@ const ChatView: React.FC = () => {
   const waQuery = useMemo(() => ({
     where: waTeamId ? [{ field: 'teamId', operator: '==' as const, value: waTeamId }] : undefined,
     orderBy: { field: 'createdAt', direction: 'desc' as const },
+    limit: 200,
     skipTeamFilter: true,
   }), [waTeamId]);
   const { data: allWaMessages } = useCollection<WhatsAppMessage>('whatsappMessages', waQuery);
@@ -171,6 +175,7 @@ const ChatView: React.FC = () => {
   const channelMsgQuery = useMemo(() => ({
     where: [{ field: 'channelId', operator: '==', value: activeChannel }],
     orderBy: { field: 'createdAt', direction: 'asc' as const },
+    limit: 100,
   }), [activeChannel]);
   const { data: channelMessages, loading: channelPending, error: channelError } = useCollection<ChatMessage>('messages', channelMsgQuery);
 

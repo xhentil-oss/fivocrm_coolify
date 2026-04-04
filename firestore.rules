@@ -285,6 +285,12 @@ service cloud.firestore {
       allow write: if isAuth();
     }
 
+    // ── counters: atomic invoice number sequences ──
+    // Read/write by any authenticated user (transaction-safe via Firestore SDK).
+    match /counters/{docId} {
+      allow read, write: if isAuth();
+    }
+
     // ── users: per-user preferences and flags ──
     // Stores onboardingCompleted and other per-user state.
     match /users/{userId} {

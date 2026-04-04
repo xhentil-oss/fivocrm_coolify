@@ -64,6 +64,8 @@ const CRMView: React.FC = () => {
   const waEnabled = useWhatsappEnabled();
   const waQuery = useMemo(() => ({
     where: waTeamId ? [{ field: 'teamId', operator: '==' as const, value: waTeamId }] : undefined,
+    orderBy: { field: 'createdAt', direction: 'desc' as const },
+    limit: 200,
     skipTeamFilter: true,
   }), [waTeamId]);
   const { data: allWaMessages } = useCollection<WhatsAppMessage>('whatsappMessages', waQuery);

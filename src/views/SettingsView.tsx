@@ -12,6 +12,7 @@ import { Checkbox } from '../components/ui/checkbox';
 import { Badge } from '../components/ui/badge';
 import { useCollection, useMutation, setGlobalWaEnabled } from '../hooks/useFirestore';
 import { saveTeamSettings } from '../hooks/useTeamSettings';
+import { isBreakReminderEnabled, setBreakReminderEnabled } from '../hooks/useBreakReminder';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { getDocs, query, where, collection, writeBatch, doc, Timestamp } from 'firebase/firestore';
@@ -90,6 +91,7 @@ const CronJobCard: React.FC<CronJobCardProps> = ({
 // ─── SettingsView ──────────────────────────────────────────────────────────────
 const SettingsView: React.FC = () => {
   const { teamId } = usePermissions();
+  const [breakReminderOn, setBreakReminderOn] = useState(isBreakReminderEnabled);
   const [stripePublishableKey, setStripePublishableKey] = useState('');
   const [stripeWebhookSecret, setStripeWebhookSecret] = useState('');
   const [stripeMode, setStripeMode] = useState<'test' | 'live'>('test');
@@ -346,6 +348,19 @@ const SettingsView: React.FC = () => {
                     </p>
                   </div>
                   <Switch />
+                </div>
+                <Separator />
+                <div className="flex items-center justify-between py-3">
+                  <div className="space-y-1">
+                    <p className="text-body text-foreground font-normal">🐦 Kujtesa e Pushimit</p>
+                    <p className="text-body-sm text-muted-foreground">
+                      Dëgjo cicërim zogu çdo 2 orë (08:00–18:00) — ngriu e leviz!
+                    </p>
+                  </div>
+                  <Switch
+                    checked={breakReminderOn}
+                    onCheckedChange={(v) => { setBreakReminderOn(v); setBreakReminderEnabled(v); }}
+                  />
                 </div>
               </div>
             </div>
