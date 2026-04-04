@@ -134,6 +134,8 @@ export interface Invoice {
   amount: number;
   total?: number;
   subtotal?: number;
+  discount?: number;
+  discountType?: 'fixed' | 'percent';
   tax?: number;
   notes?: string;
   status: 'Draft' | 'Pending' | 'Paid' | 'Overdue';

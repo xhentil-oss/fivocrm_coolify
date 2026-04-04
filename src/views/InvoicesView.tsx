@@ -702,6 +702,8 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
   const [customerSearch, setCustomerSearch] = useState('');
   const [lineItems, setLineItems] = useState<Array<{ serviceId: string; quantity: number }>>([]);
   const [tax, setTax] = useState<number>((editInvoice as any)?.tax || 0);
+  const [discount, setDiscount] = useState<number>((editInvoice as any)?.discount || 0);
+  const [discountType, setDiscountType] = useState<'fixed' | 'percent'>((editInvoice as any)?.discountType || 'fixed');
   const [invoiceNumber, setInvoiceNumber] = useState(editInvoice?.invoiceNumber || '');
   const [paymentMethod, setPaymentMethod] = useState(editInvoice?.paymentMethod || 'Stripe');
   const [currency, setCurrency] = useState<'ALL' | 'EUR'>((editInvoice as any)?.currency || 'ALL');
@@ -809,6 +811,12 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     }, 0);
   };
 
+  const calculateDiscountAmount = (subtotal: number) => {
+    if (!discount || discount <= 0) return 0;
+    if (discountType === 'percent') return subtotal * (Math.min(discount, 100) / 100);
+    return Math.min(discount, subtotal);
+  };
+
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
@@ -824,7 +832,8 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     const resolvedSubtotal = (isEditing && subtotal === 0)
       ? (editInvoice?.total || editInvoice?.subtotal || editInvoice?.amount || 0)
       : subtotal;
-    const total = resolvedSubtotal + tax;
+    const discountAmount = calculateDiscountAmount(resolvedSubtotal);
+    const total = resolvedSubtotal - discountAmount + tax;
 
     const invoiceData: any = {
       customerId: selectedCustomerId,
@@ -842,6 +851,8 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       dueDate: dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
       notes,
       subtotal: resolvedSubtotal,
+      discount,
+      discountType,
       tax,
       total,
       amount: total,
@@ -1228,6 +1239,37 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       </div>
 
       <div>
+        <Label>Zbritje</Label>
+        <div className="flex gap-2">
+          <div className="flex rounded-md border overflow-hidden text-sm">
+            <button
+              type="button"
+              onClick={() => setDiscountType('fixed')}
+              className={`px-3 py-2 transition-colors ${discountType === 'fixed' ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted'}`}
+            >
+              {currency === 'EUR' ? '€' : 'L'}
+            </button>
+            <button
+              type="button"
+              onClick={() => setDiscountType('percent')}
+              className={`px-3 py-2 transition-colors ${discountType === 'percent' ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted'}`}
+            >
+              %
+            </button>
+          </div>
+          <Input
+            type="number"
+            step="0.01"
+            min="0"
+            max={discountType === 'percent' ? 100 : undefined}
+            placeholder="0"
+            value={discount || ''}
+            onChange={(e) => setDiscount(Math.max(0, parseFloat(e.target.value) || 0))}
+          />
+        </div>
+      </div>
+
+      <div>
         <Label htmlFor="tax">Taksa</Label>
         <Input
           id="tax"
@@ -1263,13 +1305,19 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
             <span className="text-muted-foreground">Nëntotali:</span>
             <span className="font-medium">{calculateSubtotal().toFixed(2)} {currency === 'EUR' ? '€' : 'L'}</span>
           </div>
+          {discount > 0 && (
+            <div className="flex justify-between text-red-500">
+              <span>Zbritje {discountType === 'percent' ? `(${discount}%)` : ''}:</span>
+              <span>−{calculateDiscountAmount(calculateSubtotal()).toFixed(2)} {currency === 'EUR' ? '€' : 'L'}</span>
+            </div>
+          )}
           <div className="flex justify-between">
             <span className="text-muted-foreground">Taksa:</span>
             <span className="font-medium">{tax.toFixed(2)} {currency === 'EUR' ? '€' : 'L'}</span>
           </div>
           <div className="flex justify-between text-lg font-bold">
             <span>Total:</span>
-            <span>{(calculateSubtotal() + tax).toFixed(2)} {currency === 'EUR' ? '€' : 'L'}</span>
+            <span>{(calculateSubtotal() - calculateDiscountAmount(calculateSubtotal()) + tax).toFixed(2)} {currency === 'EUR' ? '€' : 'L'}</span>
           </div>
         </div>
       </div>
@@ -1388,6 +1436,14 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             <span className="text-muted-foreground">Nëntotali:</span>
             <span className="font-medium">{(invoice.subtotal || 0).toFixed(2)} {cur}</span>
           </div>
+          {invoice.discount != null && invoice.discount > 0 && (
+            <div className="flex justify-between text-red-500">
+              <span>Zbritje {invoice.discountType === 'percent' ? `(${invoice.discount}%)` : ''}:</span>
+              <span>−{(invoice.discountType === 'percent'
+                ? (invoice.subtotal || 0) * (invoice.discount / 100)
+                : invoice.discount).toFixed(2)} {cur}</span>
+            </div>
+          )}
           {invoice.tax && (
             <div className="flex justify-between">
               <span className="text-muted-foreground">Taksa:</span>
@@ -1576,6 +1632,17 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             doc.text('Nëntotali:', w - margin - 40, y, { align: 'right' });
             doc.text(`${(invoice.subtotal || 0).toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' });
             y += 6;
+            if (invoice.discount != null && invoice.discount > 0) {
+              const discAmt = invoice.discountType === 'percent'
+                ? (invoice.subtotal || 0) * (invoice.discount / 100)
+                : invoice.discount;
+              const discLabel = invoice.discountType === 'percent' ? `Zbritje (${invoice.discount}%):` : 'Zbritje:';
+              doc.setTextColor(220, 50, 50);
+              doc.text(discLabel, w - margin - 40, y, { align: 'right' });
+              doc.text(`-${discAmt.toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' });
+              doc.setTextColor(0);
+              y += 6;
+            }
             if (invoice.tax) {
               doc.text('Taksa:', w - margin - 40, y, { align: 'right' });
               doc.text(`${invoice.tax.toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' });
