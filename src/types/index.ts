@@ -92,6 +92,7 @@ export interface Task {
   recurringFrequency?: 'daily' | 'weekly' | 'monthly' | 'yearly';
   recurringInterval?: number; // e.g. 2 = every 2 weeks/months
   recurringDayOfWeek?: number; // 0=Sunday, 1=Monday, ... 6=Saturday
+  recurringDaysOfWeek?: number[]; // for daily: which weekdays to include (e.g. [1,2,3,4,5] = Mon-Fri)
   recurringDayOfMonth?: number; // 1-31
   nextRecurringDate?: Date;
   dueNotificationSent?: boolean;

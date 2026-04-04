@@ -125,6 +125,10 @@ const ProjectDetailView: React.FC = () => {
     const recurringInterval = parseInt(formData.get('recurringInterval') as string) || 1;
     const recurringDayOfWeek = formData.get('recurringDayOfWeek') !== null ? parseInt(formData.get('recurringDayOfWeek') as string) : undefined;
     const recurringDayOfMonth = formData.get('recurringDayOfMonth') !== null ? parseInt(formData.get('recurringDayOfMonth') as string) : undefined;
+    const recurringDaysOfWeekRaw = formData.get('recurringDaysOfWeek') as string;
+    const recurringDaysOfWeekParsed: number[] | undefined = recurringDaysOfWeekRaw
+      ? (() => { try { return JSON.parse(recurringDaysOfWeekRaw); } catch { return [1,2,3,4,5]; } })()
+      : undefined;
 
     const taskData: any = {
       title,
@@ -142,14 +146,40 @@ const ProjectDetailView: React.FC = () => {
       taskData.isRecurring = true;
       taskData.recurringFrequency = recurringFrequency;
       taskData.recurringInterval = recurringInterval;
-      // Calculate the actual next occurrence date based on frequency
-      const nextDate = new Date(endDate);
-      taskData.nextRecurringDate = nextDate;
+
+      // Calculate nextRecurringDate from the selected day-of-week / days-of-week
+      const now = new Date();
       if (recurringFrequency === 'weekly' && recurringDayOfWeek !== undefined && !isNaN(recurringDayOfWeek)) {
         taskData.recurringDayOfWeek = recurringDayOfWeek;
-      }
-      if (recurringFrequency === 'monthly' && recurringDayOfMonth !== undefined && !isNaN(recurringDayOfMonth)) {
+        // Compute next occurrence of the selected weekday
+        const next = new Date(now);
+        const currentDay = now.getDay();
+        let daysUntil = recurringDayOfWeek - currentDay;
+        if (daysUntil <= 0) daysUntil += 7;
+        next.setDate(next.getDate() + daysUntil);
+        next.setHours(9, 0, 0, 0);
+        taskData.nextRecurringDate = next;
+      } else if (recurringFrequency === 'daily') {
+        const activeDays = recurringDaysOfWeekParsed ?? [1,2,3,4,5];
+        taskData.recurringDaysOfWeek = activeDays;
+        // Compute next weekday in the active list
+        const next = new Date(now);
+        next.setDate(next.getDate() + 1);
+        next.setHours(9, 0, 0, 0);
+        let tries = 0;
+        while (activeDays.length > 0 && !activeDays.includes(next.getDay()) && tries < 7) {
+          next.setDate(next.getDate() + 1);
+          tries++;
+        }
+        taskData.nextRecurringDate = next;
+      } else if (recurringFrequency === 'monthly' && recurringDayOfMonth !== undefined && !isNaN(recurringDayOfMonth)) {
         taskData.recurringDayOfMonth = recurringDayOfMonth;
+        let next = new Date(now.getFullYear(), now.getMonth(), recurringDayOfMonth, 9, 0, 0);
+        if (next <= now) next = new Date(now.getFullYear(), now.getMonth() + 1, recurringDayOfMonth, 9, 0, 0);
+        taskData.nextRecurringDate = next;
+      } else {
+        // yearly or fallback: use endDate
+        taskData.nextRecurringDate = new Date(endDate);
       }
     }
 
@@ -692,6 +722,15 @@ const TaskForm: React.FC<{
   const [recurringInterval, setRecurringInterval] = useState(initialData?.recurringInterval || 1);
   const [recurringDayOfWeek, setRecurringDayOfWeek] = useState(initialData?.recurringDayOfWeek ?? 1);
   const [recurringDayOfMonth, setRecurringDayOfMonth] = useState(initialData?.recurringDayOfMonth ?? 1);
+  // For daily recurrence: which weekdays (default Mon-Fri)
+  const [recurringDaysOfWeek, setRecurringDaysOfWeek] = useState<number[]>(
+    (initialData as any)?.recurringDaysOfWeek ?? [1, 2, 3, 4, 5]
+  );
+  const toggleDayOfWeek = (day: number) => {
+    setRecurringDaysOfWeek(prev =>
+      prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day].sort((a, b) => a - b)
+    );
+  };
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -721,6 +760,9 @@ const TaskForm: React.FC<{
       formData.set('recurringInterval', String(recurringInterval));
       if (recurringFrequency === 'weekly') {
         formData.set('recurringDayOfWeek', String(recurringDayOfWeek));
+      }
+      if (recurringFrequency === 'daily') {
+        formData.set('recurringDaysOfWeek', JSON.stringify(recurringDaysOfWeek));
       }
       if (recurringFrequency === 'monthly') {
         formData.set('recurringDayOfMonth', String(recurringDayOfMonth));
@@ -893,23 +935,66 @@ const TaskForm: React.FC<{
               </div>
             </div>
 
+            {recurringFrequency === 'daily' && (
+              <div>
+                <Label>Ditët e javës</Label>
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {[
+                    { value: 1, label: 'Hën' },
+                    { value: 2, label: 'Mar' },
+                    { value: 3, label: 'Mër' },
+                    { value: 4, label: 'Enj' },
+                    { value: 5, label: 'Pre' },
+                    { value: 6, label: 'Sht' },
+                    { value: 0, label: 'Die' },
+                  ].map(day => (
+                    <button
+                      key={day.value}
+                      type="button"
+                      onClick={() => toggleDayOfWeek(day.value)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                        recurringDaysOfWeek.includes(day.value)
+                          ? 'bg-primary text-primary-foreground border-primary'
+                          : 'bg-background text-foreground border-border hover:bg-muted'
+                      }`}
+                    >
+                      {day.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1.5">
+                  {recurringDaysOfWeek.length === 0 ? 'Zgjidh të paktën një ditë' : `${recurringDaysOfWeek.length} ditë të zgjedhura`}
+                </p>
+              </div>
+            )}
+
             {recurringFrequency === 'weekly' && (
               <div>
                 <Label>Dita e javës</Label>
-                <Select value={String(recurringDayOfWeek)} onValueChange={(v) => setRecurringDayOfWeek(Number(v))}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="1">E Hënë</SelectItem>
-                    <SelectItem value="2">E Martë</SelectItem>
-                    <SelectItem value="3">E Mërkurë</SelectItem>
-                    <SelectItem value="4">E Enjte</SelectItem>
-                    <SelectItem value="5">E Premte</SelectItem>
-                    <SelectItem value="6">E Shtunë</SelectItem>
-                    <SelectItem value="0">E Diel</SelectItem>
-                  </SelectContent>
-                </Select>
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {[
+                    { value: 1, label: 'Hën' },
+                    { value: 2, label: 'Mar' },
+                    { value: 3, label: 'Mër' },
+                    { value: 4, label: 'Enj' },
+                    { value: 5, label: 'Pre' },
+                    { value: 6, label: 'Sht' },
+                    { value: 0, label: 'Die' },
+                  ].map(day => (
+                    <button
+                      key={day.value}
+                      type="button"
+                      onClick={() => setRecurringDayOfWeek(day.value)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                        recurringDayOfWeek === day.value
+                          ? 'bg-primary text-primary-foreground border-primary'
+                          : 'bg-background text-foreground border-border hover:bg-muted'
+                      }`}
+                    >
+                      {day.label}
+                    </button>
+                  ))}
+                </div>
               </div>
             )}
 
@@ -930,10 +1015,16 @@ const TaskForm: React.FC<{
             )}
 
             <p className="text-xs text-muted-foreground">
-              {`Përsëritet çdo ${recurringInterval > 1 ? recurringInterval + ' ' : ''}${recurringFrequency === 'daily' ? 'ditë' : recurringFrequency === 'weekly' ? 'javë' : recurringFrequency === 'monthly' ? 'muaj' : 'vit'}${
-                recurringFrequency === 'weekly' ? `, ditën e ${['Diel','Hënë','Martë','Mërkurë','Enjte','Premte','Shtunë'][recurringDayOfWeek]}s` :
-                recurringFrequency === 'monthly' ? `, në ditën ${recurringDayOfMonth}` : ''
-              }`}
+              {recurringFrequency === 'daily'
+                ? `Çdo ${recurringInterval > 1 ? recurringInterval + ' ditë' : 'ditë'}: ${
+                    recurringDaysOfWeek.length === 0 ? 'asnjë ditë' :
+                    recurringDaysOfWeek.map(d => ['Die','Hën','Mar','Mër','Enj','Pre','Sht'][d]).join(', ')
+                  }`
+                : `Përsëritet çdo ${recurringInterval > 1 ? recurringInterval + ' ' : ''}${recurringFrequency === 'weekly' ? 'javë' : recurringFrequency === 'monthly' ? 'muaj' : 'vit'}${
+                    recurringFrequency === 'weekly' ? `, ditën e ${['Diel','Hënë','Martë','Mërkurë','Enjte','Premte','Shtunë'][recurringDayOfWeek]}s` :
+                    recurringFrequency === 'monthly' ? `, në ditën ${recurringDayOfMonth}` : ''
+                  }`
+              }
             </p>
           </div>
         )}

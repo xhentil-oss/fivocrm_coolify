@@ -199,6 +199,7 @@ const TasksView: React.FC = () => {
     const recurringFrequency = formData.get('recurringFrequency') as string;
     const recurringDayOfWeekRaw = formData.get('recurringDayOfWeek') as string;
     const recurringDayOfMonthRaw = formData.get('recurringDayOfMonth') as string;
+    const recurringDaysOfWeekRaw = formData.get('recurringDaysOfWeek') as string;
     const estimatedHoursRaw = formData.get('estimatedHours') as string;
     const dependsOnRaw = formData.get('dependsOn') as string;
 
@@ -214,10 +215,18 @@ const TasksView: React.FC = () => {
     if (isRecurring && recurringFrequency) {
       const now = new Date();
       if (recurringFrequency === 'daily') {
-        // Next day
+        // Next day that is in the selected days-of-week list (default Mon-Fri)
+        const activeDays = recurringDaysOfWeekRaw ? JSON.parse(recurringDaysOfWeekRaw) as number[] : [1,2,3,4,5];
         nextRecurringDate = new Date(now);
         nextRecurringDate.setDate(nextRecurringDate.getDate() + 1);
         nextRecurringDate.setHours(9, 0, 0, 0);
+        if (activeDays.length > 0) {
+          let tries = 0;
+          while (!activeDays.includes(nextRecurringDate.getDay()) && tries < 7) {
+            nextRecurringDate.setDate(nextRecurringDate.getDate() + 1);
+            tries++;
+          }
+        }
       } else if (recurringFrequency === 'weekly' && recurringDayOfWeek !== undefined) {
         // Next occurrence of selected weekday
         nextRecurringDate = new Date(now);
@@ -254,6 +263,9 @@ const TasksView: React.FC = () => {
       recurringFrequency: isRecurring ? recurringFrequency : undefined,
       recurringDayOfWeek: isRecurring && recurringFrequency === 'weekly' ? recurringDayOfWeek : undefined,
       recurringDayOfMonth: isRecurring && recurringFrequency === 'monthly' ? recurringDayOfMonth : undefined,
+      recurringDaysOfWeek: isRecurring && recurringFrequency === 'daily' && recurringDaysOfWeekRaw
+        ? (() => { try { return JSON.parse(recurringDaysOfWeekRaw); } catch { return [1,2,3,4,5]; } })()
+        : undefined,
       nextRecurringDate,
       estimatedHours: estimatedHoursRaw ? (v => !isNaN(v) ? v : undefined)(parseFloat(estimatedHoursRaw)) : undefined,
       dependsOn: dependsOn.length > 0 ? dependsOn : undefined,
@@ -811,6 +823,15 @@ const TaskForm: React.FC<{
   const [recurringDayOfMonth, setRecurringDayOfMonth] = useState<number>(
     (initialData as any)?.recurringDayOfMonth ?? 1
   );
+  // For daily recurrence: which days of the week (default Mon-Fri)
+  const [recurringDaysOfWeek, setRecurringDaysOfWeek] = useState<number[]>(
+    (initialData as any)?.recurringDaysOfWeek ?? [1, 2, 3, 4, 5]
+  );
+  const toggleDayOfWeek = (day: number) => {
+    setRecurringDaysOfWeek(prev =>
+      prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day].sort((a, b) => a - b)
+    );
+  };
   const [dependsOn, setDependsOn] = useState<string[]>(initialData?.dependsOn || []);
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
@@ -994,6 +1015,39 @@ const TaskForm: React.FC<{
               </Select>
             </div>
 
+            {recurringFrequency === 'daily' && (
+              <div>
+                <Label>Ditët e javës</Label>
+                <div className="flex flex-wrap gap-1.5 mt-1.5">
+                  {[
+                    { value: 1, label: 'Hën' },
+                    { value: 2, label: 'Mar' },
+                    { value: 3, label: 'Mër' },
+                    { value: 4, label: 'Enj' },
+                    { value: 5, label: 'Pre' },
+                    { value: 6, label: 'Sht' },
+                    { value: 0, label: 'Die' },
+                  ].map(day => (
+                    <button
+                      key={day.value}
+                      type="button"
+                      onClick={() => toggleDayOfWeek(day.value)}
+                      className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
+                        recurringDaysOfWeek.includes(day.value)
+                          ? 'bg-primary text-primary-foreground border-primary'
+                          : 'bg-background text-foreground border-border hover:bg-muted'
+                      }`}
+                    >
+                      {day.label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground mt-1.5">
+                  {recurringDaysOfWeek.length === 0 ? 'Zgjidh të paktën një ditë' : `${recurringDaysOfWeek.length} ditë të zgjedhura`}
+                </p>
+              </div>
+            )}
+
             {recurringFrequency === 'weekly' && (
               <div>
                 <Label>Dita e javës</Label>
@@ -1046,6 +1100,9 @@ const TaskForm: React.FC<{
             <input type="hidden" name="recurringFrequency" value={recurringFrequency} />
             <input type="hidden" name="recurringDayOfWeek" value={String(recurringDayOfWeek)} />
             <input type="hidden" name="recurringDayOfMonth" value={String(recurringDayOfMonth)} />
+            {recurringFrequency === 'daily' && (
+              <input type="hidden" name="recurringDaysOfWeek" value={JSON.stringify(recurringDaysOfWeek)} />
+            )}
           </div>
         )}
       </div>
