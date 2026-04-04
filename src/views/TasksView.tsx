@@ -73,7 +73,7 @@ const TasksView: React.FC = () => {
       return rawTasks.filter(t => (t as any).teamId === permissions.teamId || !(t as any).teamId);
     }, [rawTasks, permissions.teamId])
   );
-  const { data: projects } = useCollection<Project>('projects');
+  const { data: projects, loading: projectsLoading } = useCollection<Project>('projects');
   const { data: customers } = useCollection<Customer>('customers');
   const { data: invoices } = useCollection<Invoice>('invoices');
   const { data: comments } = useCollection<TaskComment>('taskComments');
@@ -913,6 +913,7 @@ const TasksView: React.FC = () => {
             onUpdate={taskMutation.update}
             onDelete={taskMutation.remove}
             projects={projects}
+            projectsLoading={projectsLoading}
             onSelectSubtask={(subtask) => setSelectedTask(subtask)}
           />
         </div>
