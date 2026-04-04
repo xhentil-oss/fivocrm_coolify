@@ -1,6 +1,8 @@
-import React, { useState, Suspense } from 'react';
+import React, { useState, Suspense, useEffect } from 'react';
 import { BrowserRouter, HashRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
 import { Capacitor } from '@capacitor/core';
+import { getDoc, setDoc, doc } from 'firebase/firestore';
+import { db } from './lib/firebase';
 import { useAuth } from './contexts/AuthContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import TopNavBar from './components/TopNavBar';
@@ -15,6 +17,8 @@ import PendingInvitesBanner from './components/PendingInvitesBanner';
 import { GoogleApiProvider } from './contexts/GoogleApiContext';
 import { PermissionsProvider, usePermissions } from './contexts/PermissionsContext';
 import { useTeamDataMigration } from './hooks/useTeamDataMigration';
+import { useTeamSettingsSync } from './hooks/useTeamSettings';
+import { useBreakReminder } from './hooks/useBreakReminder';
 import { Toaster } from './components/ui/toaster';
 import { Loader2 } from 'lucide-react';
 
@@ -124,6 +128,23 @@ function AppContent() {
     return !localStorage.getItem('fivocrm_onboarding_done');
   });
 
+  // Sync team settings from Firestore → localStorage on every change
+  useTeamSettingsSync();
+
+  // "Ciu ciu" — get-up-and-move reminder every 2 hours from 8:00
+  useBreakReminder();
+
+  // Cross-device onboarding check: if Firestore says completed, skip wizard
+  useEffect(() => {
+    if (!user || !showOnboarding) return;
+    getDoc(doc(db, 'users', user.uid)).then((snap) => {
+      if (snap.exists() && snap.data()?.onboardingCompleted) {
+        localStorage.setItem('fivocrm_onboarding_done', '1');
+        setShowOnboarding(false);
+      }
+    }).catch(() => { /* non-blocking */ });
+  }, [user, showOnboarding]);
+
   // One-time migration: stamp teamId on pre-isolation documents
   useTeamDataMigration();
 
@@ -166,6 +187,9 @@ function AppContent() {
                 userName={user.displayName?.split(' ')[0]}
                 onComplete={() => {
                   localStorage.setItem('fivocrm_onboarding_done', '1');
+                  if (user) {
+                    setDoc(doc(db, 'users', user.uid), { onboardingCompleted: true }, { merge: true }).catch(() => {});
+                  }
                   setShowOnboarding(false);
                 }}
               />
