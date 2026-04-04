@@ -11,6 +11,7 @@ import LoginView from './views/LoginView';
 import RegisterView from './views/RegisterView';
 import FloatingActionButton from './components/FloatingActionButton';
 import DailyReportPopup from './components/DailyReportPopup';
+import StandupPopup from './components/StandupPopup';
 import CommandPalette from './components/CommandPalette';
 import PermissionGate from './components/PermissionGate';
 import PendingInvitesBanner from './components/PendingInvitesBanner';
@@ -59,6 +60,7 @@ const ExpensesView = lazyRetry(() => import('./views/ExpensesView'));
 const TimeTrackingView = lazyRetry(() => import('./views/TimeTrackingView'));
 const WorkspaceView = lazyRetry(() => import('./views/WorkspaceView'));
 const StaffDashboard = lazyRetry(() => import('./views/StaffDashboard'));
+const WorkloadView = lazyRetry(() => import('./views/WorkloadView'));
 const JoinInviteView = lazyRetry(() => import('./views/JoinInviteView'));
 const Customer360View = React.lazy(() => import('./views/Customer360View'));
 const PortalLayout = React.lazy(() => import('./views/portal/PortalLayout'));
@@ -242,6 +244,7 @@ function AppContent() {
                       <Route path="/app/expenses" element={<PermissionGate permissionKey="canAccessExpenses"><ExpensesView /></PermissionGate>} />
                       <Route path="/app/time-tracking" element={<PermissionGate permissionKey="canAccessTimeTracking"><TimeTrackingView /></PermissionGate>} />
                       <Route path="/app/workspace" element={<PermissionGate permissionKey="canAccessProjects"><WorkspaceView /></PermissionGate>} />
+                      <Route path="/app/workload" element={<PermissionGate permissionKey="canAccessReports"><WorkloadView /></PermissionGate>} />
                       <Route path="/app/settings" element={<PermissionGate permissionKey="canAccessSettings"><SettingsView /></PermissionGate>} />
                       <Route path="*" element={
                       <div className="text-center py-20">
@@ -261,6 +264,7 @@ function AppContent() {
 
             <FloatingActionButton />
             <DailyReportPopup />
+            <StandupPopup />
             <CommandPalette 
               open={commandPaletteOpen} 
               onOpenChange={setCommandPaletteOpen} 

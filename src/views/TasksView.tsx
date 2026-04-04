@@ -121,6 +121,23 @@ const TasksView: React.FC = () => {
     return counts;
   }, [allTasks]);
 
+  // Compute which tasks are blocked (have unfinished dependsOn)
+  const blockedTaskIds = useMemo(() => {
+    if (!allTasks) return new Set<string>();
+    const blocked = new Set<string>();
+    const taskMap = new Map(allTasks.map(t => [t.id, t]));
+    for (const t of allTasks) {
+      if (t.dependsOn?.length && t.status !== 'Done') {
+        const hasUnfinished = t.dependsOn.some(depId => {
+          const dep = taskMap.get(depId);
+          return dep && dep.status !== 'Done';
+        });
+        if (hasUnfinished) blocked.add(t.id);
+      }
+    }
+    return blocked;
+  }, [allTasks]);
+
   // Helper: get project name
   const getProjectName = React.useCallback((projectId?: string) => {
     if (!projectId || !projects) return null;
@@ -597,6 +614,7 @@ const TasksView: React.FC = () => {
                     const dateInfo = formatDateCompact(new Date(task.endDate));
                     const isSelected = selectedTask?.id === task.id;
                     const isOverdue = new Date(task.endDate) < new Date() && task.status !== 'Done';
+                    const isBlocked = blockedTaskIds.has(task.id);
                     const projectName = getProjectName(task.projectId);
                     const subtaskInfo = subtaskCounts[task.id];
                     const isBeingWorkedOn = tasksBeingWorkedOn.has(task.id);
@@ -645,9 +663,14 @@ const TasksView: React.FC = () => {
                                   Duke punuar
                                 </span>
                               )}
+                              {isBlocked && (
+                                <span className="flex items-center gap-0.5 text-[10px] text-orange-600 bg-orange-50 dark:bg-orange-950 dark:text-orange-300 px-1.5 py-0.5 rounded-full border border-orange-200 dark:border-orange-800">
+                                  🔒 Bllokuar
+                                </span>
+                              )}
                             </div>
                             <div className="flex items-center gap-2 mt-1 flex-wrap">
-                              {/* Status badge */}
+                              {/* Status badge */
                               <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
                                 task.status === 'Done' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
                                 : task.status === 'In Progress' ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
@@ -801,6 +824,7 @@ const TasksView: React.FC = () => {
                           {columnTasks.map((task) => {
                             const dateInfo = formatDateCompact(new Date(task.endDate));
                             const isOverdue = new Date(task.endDate) < new Date() && task.status !== 'Done';
+                            const isBlocked = blockedTaskIds.has(task.id);
                             const projectName = getProjectName(task.projectId);
                             const subtaskInfo = subtaskCounts[task.id];
                             const isBeingWorkedOn = tasksBeingWorkedOn.has(task.id);
@@ -814,14 +838,19 @@ const TasksView: React.FC = () => {
                                   } ${isOverdue ? 'bg-error/5' : ''}`}
                                   onClick={() => setSelectedTask(task)}
                                 >
-                                  {/* Title + Working indicator */}
+                                  {/* Title + Working / Blocked indicator */}
                                   <div className="flex items-start justify-between gap-2 mb-2">
                                     <p className={`text-sm font-medium leading-snug ${task.status === 'Done' ? 'line-through text-muted-foreground' : ''}`}>
                                       {task.title}
                                     </p>
-                                    {isBeingWorkedOn && (
-                                      <span className="w-2 h-2 rounded-full bg-success animate-pulse flex-shrink-0 mt-1" />
-                                    )}
+                                    <div className="flex items-center gap-1 flex-shrink-0 mt-0.5">
+                                      {isBeingWorkedOn && (
+                                        <span className="w-2 h-2 rounded-full bg-success animate-pulse" />
+                                      )}
+                                      {isBlocked && (
+                                        <span className="text-[9px] text-orange-600 bg-orange-50 dark:bg-orange-950 px-1 py-0.5 rounded-full border border-orange-200 dark:border-orange-800">🔒</span>
+                                      )}
+                                    </div>
                                   </div>
 
                                   {/* Project badge */}
@@ -914,6 +943,7 @@ const TasksView: React.FC = () => {
             onDelete={taskMutation.remove}
             projects={projects}
             projectsLoading={projectsLoading}
+            allTasks={allTasks || []}
             onSelectSubtask={(subtask) => setSelectedTask(subtask)}
           />
         </div>

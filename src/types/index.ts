@@ -530,6 +530,20 @@ export interface ClientRequest {
   createdByUserId: string | null;
 }
 
+// ── Morning Standup ──
+
+export interface StandupEntry {
+  id: string;
+  userId: string;
+  teamId?: string;
+  date: string; // YYYY-MM-DD
+  yesterday: string;
+  today: string;
+  blockers?: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 // ── Daily Reports ──
 
 export interface DailyReport {

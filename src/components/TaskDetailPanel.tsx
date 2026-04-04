@@ -31,6 +31,7 @@ interface TaskDetailPanelProps {
   onDelete: (id: string) => Promise<any>;
   projects?: { id: string; name: string }[];
   projectsLoading?: boolean;
+  allTasks?: Task[];
   onSelectSubtask?: (subtask: Task) => void;
 }
 
@@ -45,6 +46,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   onDelete,
   projects = [],
   projectsLoading = false,
+  allTasks,
   onSelectSubtask
 }) => {
   const { user } = useAuth();
@@ -950,6 +952,41 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                       </div>
                     </div>
                   )}
+                </div>
+              </div>
+            )}
+
+            {/* Dependencies */}
+            {task.dependsOn && task.dependsOn.length > 0 && (
+              <div className="flex items-start gap-3 sm:gap-4">
+                <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0 pt-0.5">Varet nga</span>
+                <div className="flex flex-col gap-1">
+                  {task.dependsOn.map((depId) => {
+                    // Look up the dependency among subtasks + any task we might have
+                    const allKnown = [...(subtasks || [])];
+                    const dep = allKnown.find((t) => t.id === depId);
+                    const isDone = dep?.status === 'Done';
+                    return (
+                      <span
+                        key={depId}
+                        className={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full border ${
+                          isDone
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300'
+                            : 'bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950 dark:text-orange-300'
+                        }`}
+                      >
+                        {isDone ? '✓' : '🔒'}
+                        <span className="truncate max-w-[160px]">
+                          {dep?.title || depId.slice(0, 8) + '…'}
+                        </span>
+                        {dep && (
+                          <span className="text-[10px] opacity-70">
+                            ({dep.status === 'Done' ? 'Kryer' : dep.status === 'In Progress' ? 'Në progres' : dep.status === 'Review' ? 'Rishikim' : 'Në pritje'})
+                          </span>
+                        )}
+                      </span>
+                    );
+                  })}
                 </div>
               </div>
             )}

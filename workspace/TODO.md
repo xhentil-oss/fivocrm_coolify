@@ -19,17 +19,17 @@ Rules:
 <!-- Add tasks here only when there are real next steps. -->
 
 <todo>
-Implement Daily Standup / Check-in System
-Auto-prompt users each morning: what did yesterday, what doing today, any blockers. Aggregate reports for managers.
+Standup History View
+Add a dedicated view (or tab in DailyReportsView) to browse past morning standups by date/member.
 </todo>
 
 <todo>
-Add Task Dependencies
-Allow tasks to depend on other tasks, visualize dependency chains, notify when parent task completes.
+Workload Reassign
+From WorkloadView, allow drag-and-drop or quick-assign to move tasks between team members.
 </todo>
 
 <todo>
-Create Workload View
-Show task count per team member, identify overloaded members, help balance work distribution.
+Blocked Task Notifications
+When a dependency task gets marked Done, automatically notify the blocker's assignee that they are now unblocked.
 </todo>
 
