@@ -19,6 +19,7 @@ import type { Notification } from '../types';
 const NotificationsCenter: React.FC = () => {
   const { user } = useAuth();
   const { data: notifications, loading: isPending } = useCollection<Notification>('notifications', {
+    skip: !user,
     where: user ? [{ field: 'userId', operator: '==', value: user.uid }] : undefined,
     orderBy: { field: 'createdAt', direction: 'desc' },
   });

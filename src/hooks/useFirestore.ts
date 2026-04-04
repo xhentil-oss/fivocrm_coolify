@@ -23,6 +23,7 @@ interface QueryOptions {
   orderBy?: { field: string; direction?: 'asc' | 'desc' };
   skipTeamFilter?: boolean; // For portal views and hooks that handle their own scoping
   limit?: number; // Server-side limit for non-team-scoped collections (ignored for team-scoped)
+  skip?: boolean; // Skip the query entirely (e.g. when required params are not yet available)
 }
 
 // ---- Reactive global teamId for data isolation ----
@@ -152,6 +153,13 @@ export function useCollection<T = DocumentData>(
   const skipTeamFilter = options?.skipTeamFilter || false;
 
   useEffect(() => {
+    // Skip the query entirely when caller says so (e.g. user not yet loaded)
+    if (options?.skip) {
+      setData([]);
+      setLoading(false);
+      return;
+    }
+
     // For team-scoped collections, don't query until teamId is available
     if (isTeamScoped && !globalTeamId) {
       setData([]);
@@ -250,7 +258,7 @@ export function useCollection<T = DocumentData>(
     );
 
     return () => unsubscribe();
-  }, [collectionName, whereKey, orderKey, skipTeamFilter, globalTeamId, superAdmin]);
+  }, [collectionName, whereKey, orderKey, skipTeamFilter, globalTeamId, superAdmin, options?.skip]);
 
   return { data, loading, error };
 }
