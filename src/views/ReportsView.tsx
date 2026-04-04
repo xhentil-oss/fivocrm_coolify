@@ -9,7 +9,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import {
   BarChart as RechartsBarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer,
   LineChart as RechartsLineChart, Line, Area, AreaChart,
-  PieChart, Pie, Cell, Legend
+  PieChart, Pie, Cell, Legend,
+  ComposedChart,
 } from 'recharts';
 import type { Invoice, Project, Team, Expense, Service, InvoiceItem, Task, Lead, Customer, Activity, TeamMember } from '../types';
 import { toAll } from '../lib/utils';
@@ -53,6 +54,24 @@ const LineChart: React.FC<{ data: { label: string; value: number }[]; height?: n
         <Tooltip formatter={(value: number) => value.toLocaleString()} />
         <Area type="monotone" dataKey="value" stroke={color} strokeWidth={2.5} fill={`url(#grad-${color.replace('#', '')})`} dot={{ r: 4, fill: '#fff', stroke: color, strokeWidth: 2 }} />
       </AreaChart>
+    </ResponsiveContainer>
+  );
+};
+
+// ── Recharts Cashflow Chart (Bars + Net Line) ──
+const CashflowChart: React.FC<{ data: { label: string; inflow: number; outflow: number; net: number }[] }> = ({ data }) => {
+  if (!data.length) return <div className="text-muted-foreground text-center py-8">Nuk ka të dhëna</div>;
+  return (
+    <ResponsiveContainer width="100%" height={240}>
+      <ComposedChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+        <XAxis dataKey="label" tick={{ fontSize: 11 }} tickLine={false} axisLine={false} />
+        <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={46} tickFormatter={(v: number) => v >= 1000 ? `${(v / 1000).toFixed(0)}k` : String(v)} />
+        <Tooltip formatter={(value: number, name: string) => [value.toLocaleString() + ' ALL', name === 'inflow' ? 'Të Ardhura' : name === 'outflow' ? 'Shpenzime' : 'Neto']} />
+        <Legend formatter={(value: string) => value === 'inflow' ? 'Të Ardhura' : value === 'outflow' ? 'Shpenzime' : 'Neto'} />
+        <Bar dataKey="inflow" fill="#22c55e" fillOpacity={0.85} radius={[3, 3, 0, 0]} />
+        <Bar dataKey="outflow" fill="#ef4444" fillOpacity={0.85} radius={[3, 3, 0, 0]} />
+        <Line type="monotone" dataKey="net" stroke="#6366f1" strokeWidth={2.5} dot={{ r: 4, fill: '#fff', stroke: '#6366f1', strokeWidth: 2 }} />
+      </ComposedChart>
     </ResponsiveContainer>
   );
 };
@@ -191,6 +210,45 @@ const ReportsView: React.FC = () => {
     }
     return months;
   }, [expenses, totalMonthlySalary]);
+
+  // ── Expenses by Category ──
+  const expensesByCategory = useMemo(() => {
+    if (!expenses) return [];
+    const map = new Map<string, number>();
+    expenses.forEach(exp => {
+      const cat = exp.category || 'Të tjera';
+      map.set(cat, (map.get(cat) || 0) + (exp.amount || 0));
+    });
+    return Array.from(map.entries())
+      .map(([label, value]) => ({ label, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [expenses]);
+
+  // ── Cashflow by Month (inflow vs outflow vs net) ──
+  const cashflowByMonth = useMemo(() => {
+    if (!invoices || !expenses) return [];
+    const now = new Date();
+    return Array.from({ length: 6 }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
+      const label = d.toLocaleDateString('sq-AL', { month: 'short' });
+      const inflow = invoices
+        .filter(inv => {
+          if (inv.status !== 'Paid') return false;
+          const pd = inv.paidAt ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt))
+            : (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt));
+          return pd.getMonth() === d.getMonth() && pd.getFullYear() === d.getFullYear();
+        })
+        .reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
+      const outflow = expenses
+        .filter(exp => {
+          const cd = exp.date ? (exp.date instanceof Date ? exp.date : new Date(exp.date))
+            : (exp.createdAt instanceof Date ? exp.createdAt : new Date(exp.createdAt));
+          return cd.getMonth() === d.getMonth() && cd.getFullYear() === d.getFullYear();
+        })
+        .reduce((s, exp) => s + (exp.amount || 0), 0) + totalMonthlySalary;
+      return { label, inflow, outflow, net: inflow - outflow };
+    });
+  }, [invoices, expenses, totalMonthlySalary]);
 
   // ── Lead Funnel ──
   const leadFunnel = useMemo(() => {
@@ -515,6 +573,7 @@ const ReportsView: React.FC = () => {
           {!isSales && <TabsTrigger value="expenses">Shpenzime</TabsTrigger>}
           <TabsTrigger value="leads">Lead Funnel</TabsTrigger>
           <TabsTrigger value="invoices">Faturat</TabsTrigger>
+          {!isSales && <TabsTrigger value="cashflow">Cashflow</TabsTrigger>}
         </TabsList>
 
         <TabsContent value="revenue">
@@ -528,6 +587,30 @@ const ReportsView: React.FC = () => {
           <Card className="p-6">
             <h3 className="text-lg font-semibold mb-4">Shpenzimet - 6 Muajt e Fundit</h3>
             <BarChart data={expensesByMonth.map(d => ({ ...d, color: '#ef4444' }))} />
+          </Card>
+        </TabsContent>
+        )}
+        {!isSales && (
+        <TabsContent value="cashflow">
+          <Card className="p-6 space-y-6">
+            <h3 className="text-lg font-semibold">Cashflow – 6 Muajt e Fundit</h3>
+            <CashflowChart data={cashflowByMonth} />
+            <div className="grid grid-cols-3 gap-4 pt-4 border-t">
+              <div className="text-center">
+                <p className="text-xs text-muted-foreground mb-1">Totale Hyrje</p>
+                <p className="text-lg font-bold text-green-600">{cashflowByMonth.reduce((s, m) => s + m.inflow, 0).toLocaleString()} ALL</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs text-muted-foreground mb-1">Totale Dalje</p>
+                <p className="text-lg font-bold text-red-500">{cashflowByMonth.reduce((s, m) => s + m.outflow, 0).toLocaleString()} ALL</p>
+              </div>
+              <div className="text-center">
+                <p className="text-xs text-muted-foreground mb-1">Neto</p>
+                <p className={`text-lg font-bold ${cashflowByMonth.reduce((s, m) => s + m.net, 0) >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                  {cashflowByMonth.reduce((s, m) => s + m.net, 0).toLocaleString()} ALL
+                </p>
+              </div>
+            </div>
           </Card>
         </TabsContent>
         )}
@@ -654,6 +737,49 @@ const ReportsView: React.FC = () => {
           </div>
         )}
       </Card>
+
+      {/* Expenses by Department/Category */}
+      {!isSales && (
+      <Card className="p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold">Shpenzime sipas Departamentit</h3>
+          <Badge variant="secondary">{expensesByCategory.length} kategori</Badge>
+        </div>
+        {expensesByCategory.length === 0 ? (
+          <p className="text-sm text-muted-foreground text-center py-8">Nuk ka shpenzime të regjistruara.</p>
+        ) : (
+          <div className="space-y-3">
+            {expensesByCategory.map(cat => {
+              const totalCatExp = expensesByCategory.reduce((s, c) => s + c.value, 0);
+              const pct = totalCatExp > 0 ? (cat.value / totalCatExp) * 100 : 0;
+              return (
+                <div key={cat.label} className="space-y-1.5">
+                  <div className="flex items-center justify-between text-sm">
+                    <div className="flex items-center gap-2">
+                      <Receipt className="h-4 w-4 text-muted-foreground" />
+                      <span className="font-medium">{cat.label}</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="font-semibold">{cat.value.toLocaleString()} ALL</span>
+                      <div className="text-xs text-muted-foreground">{pct.toFixed(1)}%</div>
+                    </div>
+                  </div>
+                  <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                    <div className="h-full bg-red-400 rounded-full transition-all" style={{ width: `${pct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+            <div className="pt-3 border-t">
+              <div className="flex justify-between text-sm font-semibold">
+                <span>Totale Shpenzime</span>
+                <span className="text-red-600">{(expenses?.reduce((s, e) => s + (e.amount || 0), 0) || 0).toLocaleString()} ALL</span>
+              </div>
+            </div>
+          </div>
+        )}
+      </Card>
+      )}
     </div>
         )}
       </TabsContent>
