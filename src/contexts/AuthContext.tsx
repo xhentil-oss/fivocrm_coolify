@@ -1,8 +1,7 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
 import { 
   User,
-  signInWithRedirect,
-  getRedirectResult,
+  signInWithPopup,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signOut,
@@ -28,11 +27,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Handle the redirect result when user returns from Google sign-in
-    getRedirectResult(auth).catch((err) => {
-      console.error('getRedirectResult error:', err);
-    });
-
     const unsubscribe = onAuthStateChanged(auth, (user) => {
       setUser(user);
       setLoading(false);
@@ -42,7 +36,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const signInWithGoogle = async () => {
-    await signInWithRedirect(auth, googleProvider);
+    try {
+      await signInWithPopup(auth, googleProvider);
+    } catch (error: any) {
+      if (error?.code !== 'auth/popup-closed-by-user') {
+        console.error('Google sign-in error:', error);
+        throw error;
+      }
+    }
   };
 
   const signInWithEmail = async (email: string, password: string) => {
