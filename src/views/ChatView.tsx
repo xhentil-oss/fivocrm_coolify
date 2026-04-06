@@ -784,7 +784,9 @@ const ChatView: React.FC = () => {
                 )}
               </div>
               <div className="space-y-0.5 max-h-[30vh] overflow-y-auto">
-                {portalAccess.filter(a => {
+                {portalAccess.filter((a, i, arr) => {
+                  // Deduplicate by customerId — keep first occurrence only
+                  if (arr.findIndex(x => x.customerId === a.customerId) !== i) return false;
                   if (!clientSearch.trim()) return true;
                   const q = clientSearch.toLowerCase();
                   const c = customers?.find(cu => cu.id === a.customerId);
