@@ -834,29 +834,28 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     }
   }, [allInvoices, invoicesLoading, teamId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-fill bank defaults from settings when user switches to Bank payment
+  // Auto-fill bank defaults from settings when creating a new invoice
   React.useEffect(() => {
-    if (paymentMethod === 'Bank' && !isEditing && !bankIBAN) {
-      // Use first saved bank account if available, otherwise fall back to legacy localStorage keys
-      try {
-        const accounts = JSON.parse(localStorage.getItem('bank_accounts') || '[]');
-        if (accounts.length > 0) {
-          const first = accounts[0];
-          setBankName(first.bankName || '');
-          setBankIBAN(first.iban || '');
-          setBankSWIFT(first.swift || '');
-          setBankAccountHolder(first.accountHolder || '');
-          setBankCountry(first.country || '');
-          return;
-        }
-      } catch { /* ignore */ }
-      setBankName(localStorage.getItem('default_bank_name') || '');
-      setBankIBAN(localStorage.getItem('default_bank_iban') || '');
-      setBankSWIFT(localStorage.getItem('default_bank_swift') || '');
-      setBankAccountHolder(localStorage.getItem('default_bank_holder') || '');
-      setBankCountry(localStorage.getItem('default_bank_country') || '');
-    }
-  }, [paymentMethod]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (isEditing) return; // don't overwrite when editing existing invoice
+    if (bankIBAN) return;  // already has a value
+    try {
+      const accounts = JSON.parse(localStorage.getItem('bank_accounts') || '[]');
+      if (accounts.length > 0) {
+        const first = accounts[0];
+        setBankName(first.bankName || '');
+        setBankIBAN(first.iban || '');
+        setBankSWIFT(first.swift || '');
+        setBankAccountHolder(first.accountHolder || '');
+        setBankCountry(first.country || '');
+        return;
+      }
+    } catch { /* ignore */ }
+    setBankName(localStorage.getItem('default_bank_name') || '');
+    setBankIBAN(localStorage.getItem('default_bank_iban') || '');
+    setBankSWIFT(localStorage.getItem('default_bank_swift') || '');
+    setBankAccountHolder(localStorage.getItem('default_bank_holder') || '');
+    setBankCountry(localStorage.getItem('default_bank_country') || '');
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load existing line items when editing
   React.useEffect(() => {
@@ -923,11 +922,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       invoiceNumber,
       paymentMethod,
       currency,
-      bankName: paymentMethod === 'Bank' ? bankName : '',
-      bankIBAN: paymentMethod === 'Bank' ? bankIBAN : '',
-      bankSWIFT: paymentMethod === 'Bank' ? bankSWIFT : '',
-      bankAccountHolder: paymentMethod === 'Bank' ? bankAccountHolder : '',
-      bankCountry: paymentMethod === 'Bank' ? bankCountry : '',
+      bankName: bankName || '',
+      bankIBAN: bankIBAN || '',
+      bankSWIFT: bankSWIFT || '',
+      bankAccountHolder: bankAccountHolder || '',
+      bankCountry: bankCountry || '',
       status,
       invoiceDate: invoiceDate || new Date(),
       dueDate: dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
