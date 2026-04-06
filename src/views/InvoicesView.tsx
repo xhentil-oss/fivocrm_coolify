@@ -29,7 +29,7 @@ import {
 } from '../components/ui/dropdown-menu';
 import type { Invoice, Customer, Service, InvoiceItem, Project, ClientPortalAccess } from '../types';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
-import { toAll } from '../lib/utils';
+import { toAll, getEurToAllRate } from '../lib/utils';
 import { toast } from '../hooks/use-toast';
 import { getStatusColor } from '../lib/statusColors';
 
@@ -1639,6 +1639,15 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             const margin = 20;
             let y = 20;
             const cur = (invoice as any).currency === 'EUR' ? '€' : 'L';
+            const invCurrency: 'EUR' | 'ALL' = (invoice as any).currency === 'EUR' ? 'EUR' : 'ALL';
+            const eurRate = getEurToAllRate();
+            // Helper: format a value in both currencies
+            const fmtBoth = (amount: number) => {
+              if (invCurrency === 'EUR') {
+                return { primary: `${amount.toFixed(2)} €`, secondary: `${(amount * eurRate).toFixed(0)} L` };
+              }
+              return { primary: `${amount.toFixed(2)} L`, secondary: `${(amount / eurRate).toFixed(2)} €` };
+            };
 
             // Header
             doc.setFontSize(22);
@@ -1710,13 +1719,22 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             doc.setFont('helvetica', 'normal');
             for (const item of invoiceItems || []) {
               const svc = services[item.serviceId];
+              const unitFmt = fmtBoth(item.unitPrice ?? 0);
+              const lineFmt = fmtBoth(item.totalPrice ?? 0);
               doc.text(svc?.title || 'Shërbim', margin + 2, y + 4);
               doc.text(String(item.quantity), w - margin - 60, y + 4, { align: 'right' });
-              doc.text(`${(item.unitPrice ?? 0).toFixed(2)} ${cur}`, w - margin - 30, y + 4, { align: 'right' });
-              doc.text(`${(item.totalPrice ?? 0).toFixed(2)} ${cur}`, w - margin - 2, y + 4, { align: 'right' });
+              doc.text(unitFmt.primary, w - margin - 30, y + 4, { align: 'right' });
+              doc.text(lineFmt.primary, w - margin - 2, y + 4, { align: 'right' });
+              // secondary row (other currency, smaller)
+              doc.setFontSize(7);
+              doc.setTextColor(130);
+              doc.text(unitFmt.secondary, w - margin - 30, y + 8, { align: 'right' });
+              doc.text(lineFmt.secondary, w - margin - 2, y + 8, { align: 'right' });
+              doc.setTextColor(0);
+              doc.setFontSize(10);
               doc.setDrawColor(230);
-              doc.line(margin, y + 7, w - margin, y + 7);
-              y += 9;
+              doc.line(margin, y + 11, w - margin, y + 11);
+              y += 13;
             }
 
             // Totals
@@ -1724,29 +1742,54 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             doc.setDrawColor(200);
             doc.line(w - margin - 70, y, w - margin, y);
             y += 7;
+            const subtotalFmt = fmtBoth(invoice.subtotal || 0);
             doc.text('Nëntotali:', w - margin - 40, y, { align: 'right' });
-            doc.text(`${(invoice.subtotal || 0).toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' });
-            y += 6;
+            doc.text(subtotalFmt.primary, w - margin - 2, y, { align: 'right' });
+            y += 5;
+            doc.setFontSize(8);
+            doc.setTextColor(130);
+            doc.text(subtotalFmt.secondary, w - margin - 2, y, { align: 'right' });
+            doc.setTextColor(0);
+            doc.setFontSize(10);
+            y += 4;
             if (invoice.discount != null && invoice.discount > 0) {
               const discAmt = invoice.discountType === 'percent'
                 ? (invoice.subtotal || 0) * (invoice.discount / 100)
                 : invoice.discount;
               const discLabel = invoice.discountType === 'percent' ? `Zbritje (${invoice.discount}%):` : 'Zbritje:';
+              const discFmt = fmtBoth(discAmt);
               doc.setTextColor(220, 50, 50);
               doc.text(discLabel, w - margin - 40, y, { align: 'right' });
-              doc.text(`-${discAmt.toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' });
+              doc.text(`-${discFmt.primary}`, w - margin - 2, y, { align: 'right' });
+              y += 5;
+              doc.setFontSize(8);
+              doc.text(`-${discFmt.secondary}`, w - margin - 2, y, { align: 'right' });
+              doc.setFontSize(10);
               doc.setTextColor(0);
-              y += 6;
+              y += 4;
             }
             if (invoice.tax) {
+              const taxFmt = fmtBoth(invoice.tax);
               doc.text('Taksa:', w - margin - 40, y, { align: 'right' });
-              doc.text(`${invoice.tax.toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' });
-              y += 6;
+              doc.text(taxFmt.primary, w - margin - 2, y, { align: 'right' });
+              y += 5;
+              doc.setFontSize(8);
+              doc.setTextColor(130);
+              doc.text(taxFmt.secondary, w - margin - 2, y, { align: 'right' });
+              doc.setTextColor(0);
+              doc.setFontSize(10);
+              y += 4;
             }
+            const totalFmt = fmtBoth(invoice.total || 0);
             doc.setFont('helvetica', 'bold');
             doc.setFontSize(12);
             doc.text('TOTALI:', w - margin - 40, y, { align: 'right' });
-            doc.text(`${(invoice.total || 0).toFixed(2)} ${cur}`, w - margin - 2, y, { align: 'right' });
+            doc.text(totalFmt.primary, w - margin - 2, y, { align: 'right' });
+            y += 6;
+            doc.setFontSize(10);
+            doc.setTextColor(80);
+            doc.text(totalFmt.secondary, w - margin - 2, y, { align: 'right' });
+            doc.setTextColor(0);
 
             // Notes
             if (invoice.notes) {
