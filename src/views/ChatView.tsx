@@ -168,8 +168,7 @@ const ChatView: React.FC = () => {
   const waQuery = useMemo(() => ({
     skip: !waEnabled || !waTeamId,
     where: waTeamId ? [{ field: 'teamId', operator: '==' as const, value: waTeamId }] : undefined,
-    orderBy: { field: 'createdAt', direction: 'desc' as const },
-    limit: 200,
+    // No orderBy — avoids composite index requirement; sorting is done client-side
     skipTeamFilter: true,
   }), [waEnabled, waTeamId]);
   const { data: allWaMessages } = useCollection<WhatsAppMessage>('whatsappMessages', waQuery);
@@ -419,6 +418,13 @@ const ChatView: React.FC = () => {
         if (msg.leadId && !existing.leadId) existing.leadId = msg.leadId;
         if (msg.jid?.endsWith('@s.whatsapp.net') && !existing.jid?.endsWith('@s.whatsapp.net')) existing.jid = msg.jid;
         if (msg.direction === 'inbound' && msg.status === 'received') existing.unread++;
+        // Track the latest message per conversation
+        const msgTime = msg.createdAt instanceof Date ? msg.createdAt.getTime() : (msg.createdAt as any)?.toMillis?.() ?? 0;
+        const existTime = existing.lastDate instanceof Date ? existing.lastDate.getTime() : existing.lastDate?.toMillis?.() ?? 0;
+        if (msgTime > existTime) {
+          existing.lastDate = msg.createdAt;
+          existing.lastMessage = msg.message;
+        }
       }
     }
     return Array.from(map.values()).sort((a, b) => {
@@ -435,7 +441,11 @@ const ChatView: React.FC = () => {
         ? m.jid.split('@')[0].replace(/[^\d]/g, '')
         : (m.phone || '').replace(/[^\d]/g, '');
       return key === activeWaPhone;
-    }).reverse();
+    }).sort((a, b) => {
+      const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
+      const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toMillis?.() ?? 0;
+      return ta - tb;
+    });
   }, [allWaMessages, activeWaPhone]);
 
   const waTotalUnread = useMemo(
