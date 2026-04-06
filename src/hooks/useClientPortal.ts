@@ -176,11 +176,18 @@ export function useClientPortal() {
     }
   }, [user, authLoading, activeByUserId, activeByEmail, byUserIdLoading, byEmailLoading, matchingCustomers, customersLoading, teamMembersLoading, autoCreating, createDoc, allTeamMembers]);
 
-  const access = activeByUserId[0] || activeByEmail[0] || null;
+  const access = (activeByUserId.find(a => a.customerId) || activeByUserId[0])
+    || (activeByEmail.find(a => a.customerId) || activeByEmail[0])
+    || null;
+
+  // Prefer Active customer when multiple customers share the same email
+  const preferredCustomer = matchingCustomers?.find(c => (c as any).status === 'Active')
+    || matchingCustomers?.[0]
+    || null;
 
   const resolvedCustomerId = access?.customerId
     || createdCustomerId
-    || matchingCustomers?.[0]?.id
+    || preferredCustomer?.id
     || null;
 
   // Keep isLoading=true in the gap between "queries done" and "useEffect fires auto-create"

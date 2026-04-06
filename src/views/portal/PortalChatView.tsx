@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { addDoc, collection, Timestamp } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useCollection, useMutation } from '../../hooks/useFirestore';
 import { useAuth } from '../../contexts/AuthContext';
@@ -89,19 +91,25 @@ const PortalChatView: React.FC = () => {
 
     try {
       const msgContent = messageText || '📎 Bashkëngjitje';
-      await messageMutation.create({
+      // Use addDoc directly — portal users have getGlobalTeamId()=null which makes
+      // useMutation.create() throw before reaching Firestore. The Firestore rule
+      // allows create when senderType == 'client' (no teamId needed).
+      await addDoc(collection(db, 'messages'), {
         content: msgContent,
         senderId: user.uid,
         channelId,
         isRead: false,
-        attachmentUrl: attachmentUrl.trim() || undefined,
+        attachmentUrl: attachmentUrl.trim() || null,
         senderType: 'client',
         ...(replyingTo ? {
           replyToId: replyingTo.id,
           replyToContent: replyingTo.content.slice(0, 100),
           replyToSender: getDisplayName(replyingTo.senderId),
         } : {}),
-      } as any);
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+        createdByUserId: user.uid,
+      });
 
       // Notify team members — works for BOTH general and project channels
       if (teamMembers) {
@@ -235,13 +243,16 @@ const PortalChatView: React.FC = () => {
   const sendQuickMessage = async (msg: string) => {
     if (!user || !customerId) return;
     try {
-      await messageMutation.create({
+      await addDoc(collection(db, 'messages'), {
         content: msg,
         senderId: user.uid,
         channelId,
         isRead: false,
         senderType: 'client',
-      } as any);
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+        createdByUserId: user.uid,
+      });
     } catch {
       toast({ title: 'Gabim', description: 'Mesazhi nuk u dërgua.', variant: 'destructive' });
     }
