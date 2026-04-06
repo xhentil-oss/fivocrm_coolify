@@ -92,6 +92,7 @@ const StandupPopup: React.FC = () => {
     setSubmitting(true);
     try {
       await standupMutation.create({
+        teamId: permissions.teamId,
         userId: user.uid,
         date: todayStr,
         yesterday: yesterday.trim(),
