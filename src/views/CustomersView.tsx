@@ -219,6 +219,22 @@ const CustomersView: React.FC = () => {
           status: 'Active',
         });
       } catch { /* non-blocking */ }
+
+      // Send welcome email with portal link
+      try {
+        const idToken = await user!.getIdToken();
+        const portalUrl = `${window.location.origin}/portal`;
+        await fetch('/api/send-welcome-email', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+          body: JSON.stringify({
+            customerName: data.name || data.email,
+            customerEmail: data.email,
+            portalUrl,
+            teamName: permissions.teamId ? undefined : 'FivoCRM',
+          }),
+        });
+      } catch { /* non-blocking — klienti u krijua, email-i eshte opsional */ }
     }
 
     toast({ title: 'Klienti u krijua me sukses!' });
