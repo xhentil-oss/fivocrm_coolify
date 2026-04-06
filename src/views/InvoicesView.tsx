@@ -520,7 +520,7 @@ const InvoicesView: React.FC = () => {
                         <Send className="w-4 h-4 mr-2" /> Shëno Kujtesën
                       </DropdownMenuItem>
                     )}
-                    {invoice.status === 'Pending' && (
+                    {invoice.status !== 'Paid' && (
                       <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleStripePayment(invoice); }}>
                         <CreditCard className="w-4 h-4 mr-2" /> Paguaj me Stripe
                       </DropdownMenuItem>
@@ -690,7 +690,7 @@ const InvoicesView: React.FC = () => {
                             <Send className="w-4 h-4" />
                           </Button>
                         )}
-                        {invoice.status === 'Pending' && (
+                        {invoice.status !== 'Paid' && (
                           <Button
                             size="sm"
                             className="bg-[#635BFF] hover:bg-[#5851ea] text-white"
@@ -1562,7 +1562,7 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
           </Button>
         )}
         
-        {invoice.status === 'Pending' && (
+        {invoice.status !== 'Paid' && (
           <Button 
             className="w-full bg-[#635BFF] hover:bg-[#5851ea] text-white"
             onClick={async () => {
