@@ -150,7 +150,9 @@ async function connectWhatsApp(): Promise<void> {
           resolvedJid = phoneJid;
           console.log(`[WA] LID resolved: ${rawJid} → ${phoneJid}`);
         } else {
-          console.log(`[WA] LID not in contacts map yet: ${rawJid}`);
+          // LID unresolved — skip storing to avoid phantom conversations
+          console.log(`[WA] LID not in contacts map yet — skipping: ${rawJid}`);
+          continue;
         }
       }
 
@@ -221,6 +223,38 @@ async function connectWhatsApp(): Promise<void> {
         console.log(`[WA] ${isFromMe ? '→ (telefon)' : '←'} ${phone}: ${body.slice(0, 80)}`);
       } catch (e) {
         console.error('[WA] Gabim gjatë ruajtjes së mesazhit:', e);
+      }
+    }
+  });
+
+  // ── Delivery / read receipts → update status in Firestore ─────────────────
+  sock.ev.on('messages.update', async (updates) => {
+    for (const update of updates) {
+      const waMessageId = update.key?.id;
+      if (!waMessageId) continue;
+
+      // Map Baileys receipt status to our status field
+      const receiptMap: Record<number, string> = {
+        2: 'sent',       // MESSAGE_SENT
+        3: 'delivered',  // MESSAGE_DELIVERED
+        4: 'read',       // MESSAGE_READ
+      };
+      const newStatus = receiptMap[(update.update as any)?.status];
+      if (!newStatus) continue;
+
+      try {
+        const snap = await db.collection('whatsappMessages')
+          .where('waMessageId', '==', waMessageId)
+          .limit(1).get();
+        if (!snap.empty) {
+          await snap.docs[0].ref.update({
+            status: newStatus,
+            updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+          });
+          console.log(`[WA] Receipt: ${waMessageId} → ${newStatus}`);
+        }
+      } catch (e) {
+        console.error('[WA] Gabim gjatë update receipt:', e);
       }
     }
   });

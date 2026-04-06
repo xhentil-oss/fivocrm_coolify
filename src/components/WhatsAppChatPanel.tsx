@@ -25,6 +25,7 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
   const normalizedPhone = phone.replace(/[^\d]/g, '');
 
   const { data: messages, loading } = useCollection<WhatsAppMessage>('whatsappMessages', {
+    skip: !normalizedPhone,
     where: [{ field: 'phone', operator: '==', value: normalizedPhone }],
     orderBy: { field: 'createdAt', direction: 'asc' },
     skipTeamFilter: true,

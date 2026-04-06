@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import { adminAuth } from './_firebaseAdmin';
 
 function isValidPhone(phone: string): boolean {
   const digits = phone.replace(/[^\d]/g, '');
@@ -10,10 +11,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
-  // Basic auth check — must have an Authorization header (Bearer token from Firebase client)
+  // Verify Firebase ID token
   const authHeader = req.headers.authorization;
-  if (!authHeader?.startsWith('Bearer ') || !authHeader.slice(7).trim()) {
+  const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
+  if (!token) {
     return res.status(401).json({ error: 'Missing authorization header' });
+  }
+  try {
+    await adminAuth.verifyIdToken(token);
+  } catch {
+    return res.status(401).json({ error: 'Invalid or expired token' });
   }
 
   const { to, message, leadId, leadName, teamId, jid } = req.body || {};

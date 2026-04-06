@@ -165,11 +165,12 @@ const ChatView: React.FC = () => {
     }
   }, [waEnabled]);
   const waQuery = useMemo(() => ({
+    skip: !waEnabled || !waTeamId,
     where: waTeamId ? [{ field: 'teamId', operator: '==' as const, value: waTeamId }] : undefined,
     orderBy: { field: 'createdAt', direction: 'desc' as const },
     limit: 200,
     skipTeamFilter: true,
-  }), [waTeamId]);
+  }), [waEnabled, waTeamId]);
   const { data: allWaMessages } = useCollection<WhatsAppMessage>('whatsappMessages', waQuery);
 
   const channelMsgQuery = useMemo(() => ({
@@ -401,7 +402,11 @@ const ChatView: React.FC = () => {
         if (msg.direction === 'inbound' && msg.status === 'received') existing.unread++;
       }
     }
-    return Array.from(map.values());
+    return Array.from(map.values()).sort((a, b) => {
+      const ta = a.lastDate instanceof Date ? a.lastDate.getTime() : a.lastDate?.toMillis?.() ?? 0;
+      const tb = b.lastDate instanceof Date ? b.lastDate.getTime() : b.lastDate?.toMillis?.() ?? 0;
+      return tb - ta;
+    });
   }, [allWaMessages]);
 
   const waActiveMessages = useMemo(() => {
@@ -426,7 +431,7 @@ const ChatView: React.FC = () => {
     }
   }, [waActiveMessages.length]);
 
-  // Mark WA messages as read when conversation opens
+  // Mark WA messages as read when conversation opens or new messages arrive
   useEffect(() => {
     if (!activeWaPhone || !allWaMessages) return;
     const unread = allWaMessages.filter(m => {
@@ -438,7 +443,7 @@ const ChatView: React.FC = () => {
     unread.forEach(m => {
       waMutation.update(m.id, { status: 'read' } as any).catch(() => {});
     });
-  }, [activeWaPhone]);
+  }, [activeWaPhone, waActiveMessages.length]);
 
   // Message Handlers
   const handleSendMessage = async (e: React.FormEvent) => {
