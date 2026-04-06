@@ -105,6 +105,7 @@ const ChatView: React.FC = () => {
   const { data: allMessages } = useCollection<ChatMessage>('messages', {
     orderBy: { field: 'createdAt', direction: 'desc' as const },
     limit: 500,
+    skipTeamFilter: true,
   });
   const { data: requests, } = useCollection<ClientRequest>('clientRequests', {
     orderBy: { field: 'createdAt', direction: 'desc' },

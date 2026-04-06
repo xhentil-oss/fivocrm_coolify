@@ -61,10 +61,29 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
 
   const { data: unreadMessages } = useCollection<any>('messages', unreadDmQuery);
 
+  // Unread client-channel messages (senderType == 'client', not read)
+  const unreadClientQuery = useMemo(() => {
+    if (!user) return undefined;
+    return {
+      where: [
+        { field: 'senderType', operator: '==', value: 'client' },
+        { field: 'isRead', operator: '==', value: false },
+      ],
+      skipTeamFilter: true,
+    };
+  }, [user]);
+  const { data: unreadClientMessages } = useCollection<any>('messages', unreadClientQuery);
+
   const unreadChatCount = useMemo(() => {
-    if (!unreadMessages || !user) return 0;
-    return unreadMessages.filter(m => m.senderId !== user.uid && !m.channelId).length;
-  }, [unreadMessages, user]);
+    let count = 0;
+    if (unreadMessages && user) {
+      count += unreadMessages.filter(m => m.senderId !== user.uid && !m.channelId).length;
+    }
+    if (unreadClientMessages && user) {
+      count += unreadClientMessages.filter(m => m.senderId !== user.uid).length;
+    }
+    return count;
+  }, [unreadMessages, unreadClientMessages, user]);
 
   // Play notification sound when unread count increases
   const prevUnreadRef = useRef(unreadChatCount);
