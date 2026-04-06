@@ -233,10 +233,11 @@ service cloud.firestore {
       // Portal user can only update their own safe fields — NOT accessLevel/role.
       allow update: if isAuth() && (
         resource.data.userId == request.auth.uid ||
+        resource.data.userId == '' ||
         (
-          resource.data.email == request.auth.token.email &&
+          resource.data.email.lower() == request.auth.token.email.lower() &&
           !request.resource.data.diff(resource.data).affectedKeys()
-            .hasAny(['accessLevel', 'role', 'teamId', 'customerId', 'userId'])
+            .hasAny(['accessLevel', 'role', 'teamId', 'customerId'])
         )
       );
       allow delete: if isAuth();

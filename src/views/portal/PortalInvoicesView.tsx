@@ -35,6 +35,7 @@ const PortalInvoicesView: React.FC = () => {
   }, []);
 
   const { data: rawInvoices, loading } = useCollection<Invoice>('invoices', {
+    skip: !customerId,
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });

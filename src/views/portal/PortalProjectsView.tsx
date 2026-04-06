@@ -15,6 +15,7 @@ const PortalProjectsView: React.FC = () => {
 
   // Query 1: projects linked to this customer by customerId
   const { data: projectsByCustomer, loading: loadingByCustomer } = useCollection<Project>('projects', {
+    skip: !customerId,
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });

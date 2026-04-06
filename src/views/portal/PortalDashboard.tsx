@@ -43,6 +43,7 @@ const PortalDashboard: React.FC = () => {
   const displayName = user?.displayName || user?.email?.split('@')[0] || 'klient';
 
   const { data: rawInvoices } = useCollection<Invoice>('invoices', {
+    skip: !customerId,
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });
@@ -61,6 +62,7 @@ const PortalDashboard: React.FC = () => {
   useCollection<Service>('services', { skipTeamFilter: true });
 
   const { data: rawRequests } = useCollection<ClientRequest>('clientRequests', {
+    skip: !customerId,
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });
@@ -94,6 +96,7 @@ const PortalDashboard: React.FC = () => {
 
   // Projects for this customer (by customerId) or where user is a member
   const { data: projectsByCustomer } = useCollection<Project>('projects', {
+    skip: !customerId,
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });
