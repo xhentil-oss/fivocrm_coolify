@@ -75,6 +75,10 @@ const PortalChatView: React.FC = () => {
   const messageMutation = useMutation<ChatMessage>('messages');
   const notificationMutation = useMutation<any>('notifications');
 
+  // Resolve teamId from team members so client messages include it — required for
+  // admin's team-scoped useCollection('messages') to see them.
+  const resolvedTeamId = allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
+
   // Auto-scroll on new messages
   const prevCountRef = useRef(0);
   useEffect(() => {
@@ -101,6 +105,7 @@ const PortalChatView: React.FC = () => {
         isRead: false,
         attachmentUrl: attachmentUrl.trim() || null,
         senderType: 'client',
+        ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
         ...(replyingTo ? {
           replyToId: replyingTo.id,
           replyToContent: replyingTo.content.slice(0, 100),
@@ -249,10 +254,30 @@ const PortalChatView: React.FC = () => {
         channelId,
         isRead: false,
         senderType: 'client',
+        ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
         createdByUserId: user.uid,
       });
+
+      // Notify team members about the quick message
+      if (teamMembers) {
+        const notifyMembers = teamMembers.filter(
+          (m: any) => m.role === 'Admin' || m.canAccessCRM
+        );
+        for (const member of notifyMembers) {
+          try {
+            await notificationMutation.create({
+              userId: member.userId,
+              type: 'client_message',
+              title: 'Mesazh i ri nga klienti',
+              message: msg.length > 100 ? msg.slice(0, 100) + '...' : msg,
+              isRead: false,
+              linkTo: channelId,
+            } as any);
+          } catch { /* don't block */ }
+        }
+      }
     } catch {
       toast({ title: 'Gabim', description: 'Mesazhi nuk u dërgua.', variant: 'destructive' });
     }
