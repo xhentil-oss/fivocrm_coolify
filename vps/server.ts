@@ -63,6 +63,47 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 /** Maps LID JID (e.g. "123456789@lid") → phone JID (e.g. "355691234567@s.whatsapp.net") */
 const lidToPhoneMap = new Map<string, string>();
 
+/** Queue of messages that arrived with unresolved LID JIDs */
+const pendingLidMessages = new Map<string, Array<{ msg: any; body: string; ts: Date; waMessageId: string | null; isFromMe: boolean }>>();
+
+/** Register a LID→phone mapping and trigger backfill + queue processing */
+async function registerLidMapping(lid: string, phoneJid: string): Promise<void> {
+  if (!lid || !phoneJid || lidToPhoneMap.has(lid)) return;
+  lidToPhoneMap.set(lid, phoneJid);
+  console.log(`[WA] LID mapping: ${lid} → ${phoneJid} (total: ${lidToPhoneMap.size})`);
+
+  // Backfill old messages stored with LID number
+  backfillLidMessages(lid, phoneJid);
+
+  // Process queued messages for this LID
+  const queued = pendingLidMessages.get(lid);
+  if (queued?.length) {
+    const phone = normalizePhone(phoneJid.split('@')[0]);
+    console.log(`[WA] Processing ${queued.length} queued messages for ${lid} → ${phone}`);
+    for (const item of queued) {
+      try {
+        const docId = item.waMessageId || db.collection('whatsappMessages').doc().id;
+        await db.collection('whatsappMessages').doc(docId).set({
+          phone,
+          jid: phoneJid,
+          direction: item.isFromMe ? 'outbound' : 'inbound',
+          message: item.body,
+          waMessageId: item.waMessageId,
+          leadId: null,
+          leadName: null,
+          teamId: TEAM_ID,
+          status: item.isFromMe ? 'sent' : 'received',
+          createdAt: admin.firestore.Timestamp.fromDate(item.ts),
+          updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+        }, { merge: true });
+      } catch (e) {
+        console.error(`[WA] Error saving queued message:`, e);
+      }
+    }
+    pendingLidMessages.delete(lid);
+  }
+}
+
 /** When a new LID→phone mapping is discovered, backfill old messages stored with the LID number */
 async function backfillLidMessages(lidJid: string, phoneJid: string): Promise<void> {
   const lidPhone = normalizePhone(lidJid.split('@')[0]);
@@ -145,26 +186,39 @@ async function connectWhatsApp(): Promise<void> {
     }
   });
 
-  // ── Build LID → phone map from contacts ─────────────────────────────────────
+  // ── Build LID → phone map from all available sources ─────────────────────────
   sock.ev.on('contacts.upsert', (contacts) => {
     for (const contact of contacts) {
       const lid = (contact as any).lid as string | undefined;
-      if (lid && contact.id) {
-        const isNew = !lidToPhoneMap.has(lid);
-        lidToPhoneMap.set(lid, contact.id);
-        if (isNew) backfillLidMessages(lid, contact.id);
-      }
+      if (lid && contact.id) registerLidMapping(lid, contact.id);
     }
   });
 
   sock.ev.on('contacts.update', (updates) => {
     for (const update of updates) {
       const lid = (update as any).lid as string | undefined;
-      if (lid && update.id) {
-        const isNew = !lidToPhoneMap.has(lid);
-        lidToPhoneMap.set(lid, update.id);
-        if (isNew) backfillLidMessages(lid, update.id);
-      }
+      if (lid && update.id) registerLidMapping(lid, update.id);
+    }
+  });
+
+  // History sync provides the richest source of LID mappings at connection time
+  sock.ev.on('messaging-history.set', (data: any) => {
+    // Explicit LID→PN pairs from sync
+    const mappings = data.lidPnMappings || data.phoneNumberToLidMappings || [];
+    for (const m of mappings) {
+      const lid = m.lid || m.lidJid;
+      const pn = m.pn || m.pnJid;
+      if (lid && pn) registerLidMapping(lid, pn);
+    }
+    // Also extract from synced contacts
+    const contacts = data.contacts || [];
+    for (const c of contacts) {
+      const lid = (c as any).lid as string | undefined;
+      const pn = c.id || (c as any).phoneNumber;
+      if (lid && pn) registerLidMapping(lid, pn);
+    }
+    if (mappings.length || contacts.length) {
+      console.log(`[WA] History sync: ${mappings.length} LID mappings, ${contacts.length} contacts`);
     }
   });
 
@@ -186,8 +240,13 @@ async function connectWhatsApp(): Promise<void> {
           resolvedJid = phoneJid;
           console.log(`[WA] LID resolved: ${rawJid} → ${phoneJid}`);
         } else {
-          // LID unresolved — skip storing to avoid phantom conversations
-          console.log(`[WA] LID not in contacts map yet — skipping: ${rawJid}`);
+          // Queue message for later processing when mapping arrives
+          const body = msg.message.conversation || msg.message.extendedTextMessage?.text || '[Media]';
+          const ts = new Date(Number(msg.messageTimestamp) * 1000);
+          const queue = pendingLidMessages.get(rawJid) || [];
+          queue.push({ msg, body, ts, waMessageId: msg.key.id || null, isFromMe: !!msg.key.fromMe });
+          pendingLidMessages.set(rawJid, queue);
+          console.log(`[WA] LID queued (${queue.length}): ${rawJid}`);
           continue;
         }
       }
