@@ -789,6 +789,16 @@ const ChatView: React.FC = () => {
                   const q = clientSearch.toLowerCase();
                   const c = customers?.find(cu => cu.id === a.customerId);
                   return c?.name?.toLowerCase().includes(q) || c?.email?.toLowerCase().includes(q) || a.email?.toLowerCase().includes(q);
+                }).sort((a, b) => {
+                  const ua = (channelUnreadMap.get(`client-${a.customerId}`) || 0)
+                    + (projects?.filter(p => p.customerId === a.customerId) || [])
+                        .reduce((s, p) => s + (channelUnreadMap.get(`client-${a.customerId}-project-${p.id}`) || 0), 0);
+                  const ub = (channelUnreadMap.get(`client-${b.customerId}`) || 0)
+                    + (projects?.filter(p => p.customerId === b.customerId) || [])
+                        .reduce((s, p) => s + (channelUnreadMap.get(`client-${b.customerId}-project-${p.id}`) || 0), 0);
+                  if (ua > 0 && ub === 0) return -1;
+                  if (ub > 0 && ua === 0) return 1;
+                  return 0;
                 }).map(access => {
                   const customer = customers?.find(c => c.id === access.customerId);
                   const clientChannelId = `client-${access.customerId}`;
