@@ -278,10 +278,31 @@ const CustomersView: React.FC = () => {
     });
     const creditLimit = formData.get('creditLimit') as string;
     if (creditLimit) data.creditLimit = parseFloat(creditLimit);
-    // Duplicate email check (exclude current customer)
-    if (data.email && customers?.some(c => c.id !== selectedCustomer.id && c.email?.toLowerCase() === data.email.toLowerCase())) {
-      toast({ title: 'Ky email ekziston tashmë!', description: 'Ka një klient tjetër me këtë email.', variant: 'destructive' });
-      return;
+
+    const normEmail = (data.email as string | undefined)?.toLowerCase().trim();
+    const normPhone = (data.phone as string | undefined)?.replace(/\D/g, '');
+
+    // Duplicate email check (exclude current customer, check leads too)
+    if (normEmail) {
+      if (customers?.some(c => c.id !== selectedCustomer.id && c.email?.toLowerCase().trim() === normEmail)) {
+        toast({ title: 'Ky email ekziston tek Klientët!', description: 'Ka një klient tjetër me këtë email.', variant: 'destructive' });
+        return;
+      }
+      if (leads?.some((l: any) => l.email?.toLowerCase().trim() === normEmail)) {
+        toast({ title: 'Ky email ekziston tek Leads!', description: 'Ka një lead me këtë email.', variant: 'destructive' });
+        return;
+      }
+    }
+    // Duplicate phone check (exclude current customer, check leads too)
+    if (normPhone && normPhone.length >= 7) {
+      if (customers?.some(c => c.id !== selectedCustomer.id && c.phone?.replace(/\D/g, '') === normPhone)) {
+        toast({ title: 'Ky numër ekziston tek Klientët!', description: 'Ka një klient tjetër me këtë numër telefoni.', variant: 'destructive' });
+        return;
+      }
+      if (leads?.some((l: any) => l.phoneNumber?.replace(/\D/g, '') === normPhone)) {
+        toast({ title: 'Ky numër ekziston tek Leads!', description: 'Ka një lead me këtë numër telefoni.', variant: 'destructive' });
+        return;
+      }
     }
     await customerMutation.update(selectedCustomer.id, data as any);
     setIsEditDialogOpen(false);

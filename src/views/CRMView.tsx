@@ -218,6 +218,34 @@ const CRMView: React.FC = () => {
       const status = formData.get('status') as string;
       const lastFollowUpDate = formData.get('lastFollowUpDate') as string;
       const phoneNumber = formData.get('phoneNumber') as string;
+
+      // Duplicate check on edit (exclude current lead)
+      const normEmail = email?.toLowerCase().trim();
+      const normPhone = phoneNumber?.replace(/\D/g, '');
+      if (normEmail) {
+        const dupLead = leads?.find(l => l.id !== editLead.id && l.email?.toLowerCase().trim() === normEmail);
+        const dupCustomer = customers?.find(c => c.email?.toLowerCase().trim() === normEmail);
+        if (dupLead) {
+          toast({ title: 'Email ekziston tek Leads!', description: `Lead "${dupLead.name}" ka të njëjtin email.`, variant: 'destructive' });
+          setSaving(false); return;
+        }
+        if (dupCustomer) {
+          toast({ title: 'Email ekziston tek Klientët!', description: `Klienti "${dupCustomer.name}" ka të njëjtin email.`, variant: 'destructive' });
+          setSaving(false); return;
+        }
+      }
+      if (normPhone && normPhone.length >= 7) {
+        const dupLead = leads?.find(l => l.id !== editLead.id && l.phoneNumber?.replace(/\D/g, '') === normPhone);
+        const dupCustomer = customers?.find(c => c.phone?.replace(/\D/g, '') === normPhone);
+        if (dupLead) {
+          toast({ title: 'Numri ekziston tek Leads!', description: `Lead "${dupLead.name}" ka të njëjtin numër telefoni.`, variant: 'destructive' });
+          setSaving(false); return;
+        }
+        if (dupCustomer) {
+          toast({ title: 'Numri ekziston tek Klientët!', description: `Klienti "${dupCustomer.name}" ka të njëjtin numër telefoni.`, variant: 'destructive' });
+          setSaving(false); return;
+        }
+      }
       const address = formData.get('address') as string;
       const company = formData.get('company') as string;
       const jobTitle = formData.get('jobTitle') as string;
