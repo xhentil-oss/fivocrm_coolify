@@ -69,14 +69,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     clearTimeout(timeout);
 
-    const data = await vpsRes.json().catch(() => ({}));
+    const text = await vpsRes.text();
+    let data: Record<string, unknown> = {};
+    try { data = JSON.parse(text); } catch { /* non-JSON response */ }
+
     if (!vpsRes.ok) {
+      console.error('[send-whatsapp] VPS error:', vpsRes.status, text.slice(0, 300));
       return res.status(vpsRes.status).json({ error: (data as any)?.error || 'VPS server error' });
     }
 
     return res.status(200).json({ success: true, id: (data as any)?.id });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Lidhja me VPS dështoi';
+    console.error('[send-whatsapp] Exception:', msg);
     return res.status(500).json({ error: msg });
   }
 }
