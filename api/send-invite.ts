@@ -30,6 +30,7 @@ function isValidEmail(email: string): boolean {
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
+  try {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -69,7 +70,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!['http:', 'https:'].includes(parsed.protocol)) {
       return res.status(400).json({ error: 'Invalid invite link' });
     }
-    const allowedHosts = (process.env.ALLOWED_HOSTS || 'fivoo.net,localhost').split(',').map(h => h.trim());
+    const allowedHosts = (process.env.ALLOWED_HOSTS || 'fivoo.net,fivocrm.vercel.app,localhost').split(',').map(h => h.trim());
     if (!allowedHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h))) {
       return res.status(400).json({ error: 'Invalid invite link domain' });
     }
@@ -132,5 +133,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } catch (error: any) {
     console.error('Email error:', error);
     return res.status(500).json({ error: 'Failed to send email', details: error.message });
+  }
+  } catch (fatal: any) {
+    console.error('[send-invite] fatal crash:', fatal?.message, fatal?.stack);
+    return res.status(500).json({ error: 'Server error', detail: fatal?.message ?? 'unknown' });
   }
 }
