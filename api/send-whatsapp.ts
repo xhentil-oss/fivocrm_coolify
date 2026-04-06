@@ -6,6 +6,14 @@ function isValidPhone(phone: string): boolean {
   return digits.length >= 7 && digits.length <= 15;
 }
 
+/** Normalize Albanian phone: 069… → 35569…, 355069… → 35569… */
+function normalizeAlbanianPhone(raw: string): string {
+  const digits = raw.replace(/[^\d]/g, '');
+  if (/^3550[6-9]/.test(digits)) return '355' + digits.slice(4);
+  if (/^0[6-9]/.test(digits)) return '355' + digits.slice(1);
+  return digits;
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -57,7 +65,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         'x-api-key': vpsSecret,
       },
       body: JSON.stringify({
-        to: to.replace(/[^\d]/g, ''),
+        to: normalizeAlbanianPhone(to),
         message: message.trim(),
         leadId: leadId || null,
         leadName: leadName || null,

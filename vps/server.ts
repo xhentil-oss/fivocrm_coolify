@@ -39,7 +39,14 @@ const db = admin.firestore();
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 /** Strip all non-digit characters for consistent phone storage */
-const normalizePhone = (phone: string): string => phone.replace(/[^\d]/g, '');
+const normalizePhone = (phone: string): string => {
+  const digits = phone.replace(/[^\d]/g, '');
+  // Albanian trunk-prefix: "3550[6-9]…" → strip the extra zero
+  if (/^3550[6-9]/.test(digits)) return '355' + digits.slice(4);
+  // Local Albanian: "0[6-9]…" → prepend country code
+  if (/^0[6-9]/.test(digits)) return '355' + digits.slice(1);
+  return digits;
+};
 
 function requireApiKey(
   req: express.Request,

@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
 import { X, Send, MessageSquare, Loader2, Phone } from 'lucide-react';
 import { Button } from './ui/button';
+import { normalizeAlbanianPhone } from '../lib/utils';
 import type { WhatsAppMessage } from '../types';
 
 interface Props {
@@ -22,7 +23,7 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
   const scrollRef = useRef<HTMLDivElement>(null);
   const waMutation = useMutation<WhatsAppMessage>('whatsappMessages');
 
-  const normalizedPhone = phone.replace(/[^\d]/g, '');
+  const normalizedPhone = normalizeAlbanianPhone(phone);
 
   const { data: messages, loading } = useCollection<WhatsAppMessage>('whatsappMessages', {
     skip: !normalizedPhone,

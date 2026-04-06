@@ -25,7 +25,7 @@ import DetailDrawer from '../components/DetailDrawer';
 import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
-import { safeHref, phoneKeyDown } from '../lib/utils';
+import { safeHref, phoneKeyDown, normalizeAlbanianPhone } from '../lib/utils';
 import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember } from '../types';
 
 const CRMView: React.FC = () => {
@@ -77,9 +77,11 @@ const CRMView: React.FC = () => {
     if (!allWaMessages) return map;
     allWaMessages.forEach(m => {
       if (m.direction === 'inbound' && m.status === 'received') {
-        const key = m.jid?.endsWith('@s.whatsapp.net')
-          ? m.jid.split('@')[0].replace(/[^\d]/g, '')
-          : (m.phone || '').replace(/[^\d]/g, '');
+        const key = normalizeAlbanianPhone(
+          m.jid?.endsWith('@s.whatsapp.net')
+            ? m.jid.split('@')[0]
+            : (m.phone || '')
+        );
         if (key) map.set(key, (map.get(key) || 0) + 1);
       }
     });
@@ -665,7 +667,7 @@ const CRMView: React.FC = () => {
             {filteredLeads.map((lead) => {
               const s = (lead as any).score ?? calculateLeadScore(lead);
               const scoreColor = s >= 70 ? 'text-green-600' : s >= 40 ? 'text-yellow-600' : 'text-red-500';
-              const leadPhone = (lead.phoneNumber || lead.phone || '').replace(/[^\d]/g, '');
+              const leadPhone = normalizeAlbanianPhone(lead.phoneNumber || lead.phone || '');
               const waUnread = leadPhone ? (waUnreadByPhone.get(leadPhone) || 0) : 0;
               return (
                 <Card key={lead.id} className="p-4 space-y-3" onClick={() => setSelectedLead(lead)}>

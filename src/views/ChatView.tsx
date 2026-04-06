@@ -19,6 +19,7 @@ import {
   ClipboardList, ExternalLink,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
+import { normalizeAlbanianPhone } from '../lib/utils';
 import { auth } from '../lib/firebase';
 import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, WhatsAppMessage, ClientRequest, Team } from '../types';
 
@@ -395,8 +396,8 @@ const ChatView: React.FC = () => {
     if (!allWaMessages) return [];
     // Derive canonical phone: prefer jid-based (stable WhatsApp international format)
     const phoneKey = (msg: WhatsAppMessage) => {
-      if (msg.jid?.endsWith('@s.whatsapp.net')) return msg.jid.split('@')[0].replace(/[^\d]/g, '');
-      return (msg.phone || '').replace(/[^\d]/g, '');
+      if (msg.jid?.endsWith('@s.whatsapp.net')) return normalizeAlbanianPhone(msg.jid.split('@')[0]);
+      return normalizeAlbanianPhone(msg.phone || '');
     };
     // Real phone numbers are max 15 digits; numbers >13 digits without a jid are unresolved LIDs
     const isRealPhone = (phone: string, jid?: string | null) =>
@@ -442,9 +443,11 @@ const ChatView: React.FC = () => {
   const waActiveMessages = useMemo(() => {
     if (!allWaMessages || !activeWaPhone) return [];
     return [...allWaMessages].filter(m => {
-      const key = m.jid?.endsWith('@s.whatsapp.net')
-        ? m.jid.split('@')[0].replace(/[^\d]/g, '')
-        : (m.phone || '').replace(/[^\d]/g, '');
+      const key = normalizeAlbanianPhone(
+        m.jid?.endsWith('@s.whatsapp.net')
+          ? m.jid.split('@')[0]
+          : (m.phone || '')
+      );
       return key === activeWaPhone;
     }).sort((a, b) => {
       const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
@@ -469,9 +472,11 @@ const ChatView: React.FC = () => {
   useEffect(() => {
     if (!activeWaPhone || !allWaMessages) return;
     const unread = allWaMessages.filter(m => {
-      const key = m.jid?.endsWith('@s.whatsapp.net')
-        ? m.jid.split('@')[0].replace(/[^\d]/g, '')
-        : (m.phone || '').replace(/[^\d]/g, '');
+      const key = normalizeAlbanianPhone(
+        m.jid?.endsWith('@s.whatsapp.net')
+          ? m.jid.split('@')[0]
+          : (m.phone || '')
+      );
       return key === activeWaPhone && m.direction === 'inbound' && m.status === 'received';
     });
     unread.forEach(m => {

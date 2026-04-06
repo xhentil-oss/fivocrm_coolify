@@ -100,6 +100,20 @@ export function toAll(amount: number, currency?: string): number {
 }
 
 /**
+ * Normalize an Albanian phone number to international digit-only format.
+ * "069123456" → "35569123456", "+355069123456" → "35569123456",
+ * "35569123456" → "35569123456" (no change).
+ */
+export function normalizeAlbanianPhone(raw: string): string {
+  const digits = raw.replace(/[^\d]/g, '');
+  // "3550[6-9]…" → strip the trunk-prefix zero
+  if (/^3550[6-9]/.test(digits)) return '355' + digits.slice(4);
+  // "0[6-9]…" → local format, prepend country code
+  if (/^0[6-9]/.test(digits)) return '355' + digits.slice(1);
+  return digits;
+}
+
+/**
  * onKeyDown handler for phone/tel inputs.
  * Allows: digits, +, -, (, ), space, and control keys.
  */
