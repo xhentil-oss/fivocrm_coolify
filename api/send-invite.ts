@@ -42,8 +42,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let decodedToken;
   try {
     decodedToken = await adminAuth.verifyIdToken(authHeader.split('Bearer ')[1]);
-  } catch {
-    return res.status(401).json({ error: 'Invalid or expired token' });
+  } catch (err: any) {
+    console.error('[send-invite] verifyIdToken failed:', err?.code, err?.message);
+    return res.status(401).json({ error: 'Invalid or expired token', detail: err?.code ?? 'unknown' });
   }
 
   // Rate limit: max 20 invites per hour per user

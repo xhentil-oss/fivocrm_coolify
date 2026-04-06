@@ -183,7 +183,9 @@ const TeamsView: React.FC = () => {
       if (response.ok) {
         toast({ title: 'Ftesa u dërgua!', description: `Email-i i ftesës u dërgua te ${email}.` });
       } else {
-        toast({ title: 'Ftesa u ruajt', description: 'Email-i nuk u dërgua. Kontrolloni konfigurimin SMTP.', variant: 'destructive' });
+        const errBody = await response.json().catch(() => ({}));
+        console.error('[send-invite] error:', response.status, errBody);
+        toast({ title: 'Ftesa u ruajt', description: `Email nuk u dërgua (${response.status}: ${errBody.detail ?? errBody.error ?? 'unknown'})`, variant: 'destructive' });
       }
     } catch (error) {
       console.error('Email error:', error);
