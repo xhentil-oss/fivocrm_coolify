@@ -1667,17 +1667,24 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             if (customer?.phone) { doc.text(customer.phone, margin, y); y += 5; }
             if (customer?.address) { doc.text(customer.address, margin, y); y += 5; }
 
-            // Bank info (right side)
-            if (invoice.paymentMethod === 'Bank' && (invoice as any).bankIBAN) {
+            // Bank info (right side) — use invoice fields, fall back to localStorage defaults
+            const pdfBankIBAN = (invoice as any).bankIBAN || localStorage.getItem('default_bank_iban') || '';
+            const pdfBankName = (invoice as any).bankName || localStorage.getItem('default_bank_name') || '';
+            const pdfBankHolder = (invoice as any).bankAccountHolder || localStorage.getItem('default_bank_holder') || '';
+            const pdfBankSwift = (invoice as any).bankSWIFT || localStorage.getItem('default_bank_swift') || '';
+            if (pdfBankIBAN) {
               let by = 58;
               const bx = w / 2 + 10;
               doc.setFont('helvetica', 'bold');
+              doc.setFontSize(10);
               doc.text('Detajet Bankare', bx, by); by += 6;
               doc.setFont('helvetica', 'normal');
-              if ((invoice as any).bankName) { doc.text(`Banka: ${(invoice as any).bankName}`, bx, by); by += 5; }
-              if ((invoice as any).bankAccountHolder) { doc.text(`Mbajtësi: ${(invoice as any).bankAccountHolder}`, bx, by); by += 5; }
-              doc.text(`IBAN: ${(invoice as any).bankIBAN}`, bx, by); by += 5;
-              if ((invoice as any).bankSWIFT) { doc.text(`SWIFT: ${(invoice as any).bankSWIFT}`, bx, by); by += 5; }
+              doc.setFontSize(9);
+              if (pdfBankName) { doc.text(`Banka: ${pdfBankName}`, bx, by); by += 5; }
+              if (pdfBankHolder) { doc.text(`Mbajtësi: ${pdfBankHolder}`, bx, by); by += 5; }
+              doc.text(`IBAN: ${pdfBankIBAN}`, bx, by); by += 5;
+              if (pdfBankSwift) { doc.text(`SWIFT: ${pdfBankSwift}`, bx, by); by += 5; }
+              doc.setFontSize(10);
             }
 
             y = Math.max(y, 100);
