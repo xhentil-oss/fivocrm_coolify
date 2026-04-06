@@ -124,6 +124,21 @@ const SettingsView: React.FC = () => {
     setBankLoaded(true);
   }, [firestoreSettings, bankLoaded]);
 
+  // Load all other settings from Firestore once (Firestore takes priority over localStorage)
+  const otherSettingsLoaded = React.useRef(false);
+  useEffect(() => {
+    if (otherSettingsLoaded.current) return;
+    if (firestoreSettings === null) return;
+    otherSettingsLoaded.current = true;
+    if (firestoreSettings.eurAllRate) setEurAllRate(firestoreSettings.eurAllRate);
+    if (firestoreSettings.whatsappEnabled !== undefined) setWhatsappEnabled(firestoreSettings.whatsappEnabled);
+    if (firestoreSettings.whatsappVpsUrl) setWhatsappVpsUrl(firestoreSettings.whatsappVpsUrl);
+    if (firestoreSettings.whatsappVpsSecret) setWhatsappVpsSecret(firestoreSettings.whatsappVpsSecret);
+    if (firestoreSettings.cronSettings) setCronSettings(firestoreSettings.cronSettings);
+    if (firestoreSettings.stripePublishableKey) setStripePublishableKey(firestoreSettings.stripePublishableKey);
+    if (firestoreSettings.stripeMode) setStripeMode(firestoreSettings.stripeMode);
+  }, [firestoreSettings]);
+
   // ── EUR→ALL exchange rate ──
   const [eurAllRate, setEurAllRate] = useState(() => localStorage.getItem('eur_all_rate') || '100');
   const [rateSaved, setRateSaved] = useState(false);
@@ -174,6 +189,7 @@ const SettingsView: React.FC = () => {
   const handleSaveStripeSettings = () => {
     localStorage.setItem('stripe_publishable_key', stripePublishableKey);
     localStorage.setItem('stripe_mode', stripeMode);
+    if (teamId) saveTeamSettings(teamId, { stripePublishableKey, stripeMode });
     setStripeSaved(true);
     setTimeout(() => setStripeSaved(false), 3000);
   };

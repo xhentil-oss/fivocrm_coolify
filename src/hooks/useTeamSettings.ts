@@ -20,6 +20,9 @@ export interface TeamSettings {
   whatsappVpsSecret?: string;
   cronSettings?: Record<string, any>;
   cronLastRuns?: Record<string, any>;
+  stripePublishableKey?: string;
+  stripeMode?: 'test' | 'live';
+  taskListOrder?: string[];
 }
 
 /** Write partial teamSettings to Firestore (merge, not overwrite). */
@@ -82,6 +85,18 @@ export function useTeamSettingsSync(): void {
 
       if (settings.cronLastRuns !== undefined) {
         localStorage.setItem('cron_last_runs', JSON.stringify(settings.cronLastRuns));
+      }
+
+      if (settings.stripePublishableKey !== undefined) {
+        localStorage.setItem('stripe_publishable_key', settings.stripePublishableKey);
+      }
+
+      if (settings.stripeMode !== undefined) {
+        localStorage.setItem('stripe_mode', settings.stripeMode);
+      }
+
+      if (settings.taskListOrder !== undefined) {
+        localStorage.setItem('tasks_list_order', JSON.stringify(settings.taskListOrder));
       }
     });
 

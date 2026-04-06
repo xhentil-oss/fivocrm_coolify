@@ -4,7 +4,8 @@ import { DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useS
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { getStatusColor, getPriorityColor } from '../lib/statusColors';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, useMutation, useGlobalTeamId } from '../hooks/useFirestore';
+import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { Calendar as CalendarIcon, User, Flag, MoreVertical, Plus, MessageSquare, CalendarDays, Filter, List, LayoutGrid, Users, ChevronRight, ChevronDown, Target, Clock, Play, Pause, Square, Check, X, AlertCircle, CheckCircle2, CircleDot, ListChecks, Maximize2, Minimize2, Edit2, Trash2, AlertTriangle, GripVertical } from 'lucide-react';
@@ -57,6 +58,18 @@ const TasksView: React.FC = () => {
   const [listOrder, setListOrder] = useState<string[]>(() => {
     try { return JSON.parse(localStorage.getItem('tasks_list_order') || '[]'); } catch { return []; }
   });
+  const teamId = useGlobalTeamId();
+  const teamSettingsData = useTeamSettingsData();
+  const listOrderLoaded = React.useRef(false);
+  // Load task list order from Firestore once (Firestore takes priority over localStorage)
+  useEffect(() => {
+    if (listOrderLoaded.current) return;
+    if (teamSettingsData === null) return;
+    listOrderLoaded.current = true;
+    if (teamSettingsData.taskListOrder && teamSettingsData.taskListOrder.length > 0) {
+      setListOrder(teamSettingsData.taskListOrder);
+    }
+  }, [teamSettingsData]);
   const [searchParams, setSearchParams] = useSearchParams();
 
   // Fetch data — skipTeamFilter to avoid dependency on globalTeamId timing.
@@ -385,6 +398,7 @@ const TasksView: React.FC = () => {
         const reordered = arrayMove(currentOrder, oldIndex, newIndex);
         setListOrder(reordered);
         localStorage.setItem('tasks_list_order', JSON.stringify(reordered));
+        if (teamId) saveTeamSettings(teamId, { taskListOrder: reordered });
       }
       return;
     }
