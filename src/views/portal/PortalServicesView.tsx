@@ -108,6 +108,10 @@ const PortalServicesView: React.FC = () => {
 
   const createLeadAndAutomations = async (formData: any, inquiryId: string) => {
 
+    // 1b. Check if a lead already exists for this inquiry (prevent duplicate on re-submit)
+    const existingLeads = myInquiries?.find(i => i.id === inquiryId && (i as any).leadId);
+    if (existingLeads) return;
+
     // 2. Determine tags
     const tags: string[] = [];
     if (formData.servicesInterestedIn.includes('Web Design')) tags.push('Web Design Lead');

@@ -1,7 +1,7 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useCollection } from './useFirestore';
 import { useAuth } from '../contexts/AuthContext';
-import { collection, addDoc, updateDoc, doc, Timestamp } from 'firebase/firestore';
+import { collection, addDoc, updateDoc, doc, Timestamp, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import type { ClientPortalAccess, Customer } from '../types';
 
@@ -147,9 +147,44 @@ export function useClientPortal() {
       });
     } else {
       // No customer at all — create Customer + Access + Lead + Notify admins
+      // Double-check Firestore directly to avoid race with RegisterView which may
+      // have just created a customer moments ago (real-time listener may lag).
       setAutoCreating(true);
       didAutoCreate.current = true;
       _moduleCreatingForUid = user.uid;
+
+      let existingCustomer: { id: string } | null = null;
+      try {
+        const snap = await getDocs(
+          query(collection(db, 'customers'), where('email', '==', user.email!.toLowerCase()))
+        );
+        if (!snap.empty) {
+          existingCustomer = { id: snap.docs[0].id };
+        }
+      } catch { /* fall through to create */ }
+
+      if (existingCustomer) {
+        // Customer was already created (likely by RegisterView) — just create portal access
+        setCreatedCustomerId(existingCustomer.id);
+        createDoc('clientPortalAccess', {
+          customerId: existingCustomer.id,
+          userId: user.uid,
+          email: user.email?.toLowerCase(),
+          status: 'Active',
+        }).then(() => {
+          _moduleCreatedForUid = user.uid;
+          _moduleCreatingForUid = null;
+          setAutoCreated(true);
+          setAutoCreating(false);
+        }).catch(() => {
+          _moduleCreatingForUid = null;
+          setAutoCreating(false);
+          setCreatedCustomerId(null);
+          didAutoCreate.current = false;
+        });
+        return;
+      }
+
       const displayName = user.displayName || user.email || 'Klient';
 
       createDoc('customers', {

@@ -85,8 +85,20 @@ const RegisterView: React.FC = () => {
       // Set display name
       await updateProfile(user, { displayName: fullName });
 
+      // Resolve teamId from existing team members so new documents are visible
+      // to admins (team-scoped views filter by teamId).
+      let teamId: string | null = null;
+      try {
+        const tmSnap = await getDocs(
+          query(collection(db, 'teamMembers'), where('status', '==', 'Active'))
+        );
+        teamId = tmSnap.docs.find(d => d.data().teamId)?.data().teamId || null;
+      } catch { /* non-critical */ }
+      const teamIdField = teamId ? { teamId } : {};
+
       // 2. Create a Lead in Firestore
       await addDoc(collection(db, 'leads'), {
+        ...teamIdField,
         name: fullName,
         firstName: firstName.trim(),
         lastName: lastName.trim(),
@@ -106,6 +118,7 @@ const RegisterView: React.FC = () => {
       let customerId: string | null = null;
       try {
         const customerDoc = await addDoc(collection(db, 'customers'), {
+          ...teamIdField,
           name: fullName,
           email: email.trim(),
           phone: phone.trim() || null,

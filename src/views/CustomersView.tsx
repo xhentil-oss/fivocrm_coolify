@@ -333,6 +333,15 @@ const CustomersView: React.FC = () => {
   const handleGrantAccess = async (customerId: string) => {
     const customer = customers?.find(c => c.id === customerId);
     if (!customer?.email) return;
+    // Check if active portal access already exists for this customer
+    const existing = portalAccess?.find(
+      a => a.customerId === customerId && a.status === 'Active'
+    );
+    if (existing) {
+      toast({ title: 'Ky klient ka tashmë akses aktiv në portal' });
+      setIsGrantDialogOpen(false);
+      return;
+    }
     await accessMutation.create({
       customerId, userId: '', email: customer.email, status: 'Active',
     });
