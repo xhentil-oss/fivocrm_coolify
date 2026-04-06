@@ -15,7 +15,7 @@ function playBirdChirp() {
       gain.connect(ctx.destination);
 
       osc.type = 'sine';
-      // Quick frequency sweep — the "ciu" sound
+      // Quick frequency sweep — chirp sound
       osc.frequency.setValueAtTime(2600, t);
       osc.frequency.exponentialRampToValueAtTime(4400, t + 0.06);
       osc.frequency.exponentialRampToValueAtTime(3000, t + 0.13);
@@ -30,7 +30,7 @@ function playBirdChirp() {
       osc.stop(t + 0.13);
     };
 
-    // "Ciu — ciu — ciu" with ~280 ms gap between each
+    // Three chirps with ~280 ms gap between each
     const now = ctx.currentTime;
     chirp(now);
     chirp(now + 0.28);
@@ -65,14 +65,15 @@ function fireBreakNotification(showToast: (opts: any) => void) {
   playBirdChirp();
 
   showToast({
-    title: '🐦 Ciu ciu!',
-    description: 'Ngriu nga vendi — leviz se zyrja ndryshk! 🌿',
+    title: '🏃 Koha për lëvizje!',
+    description: 'Ngrihu nga vendi — trupi jot të falënderon! 💪',
+
     duration: 12_000,
   });
 
   const notify = () =>
-    new Notification('🐦 Ciu ciu!', {
-      body: 'Ngriu nga vendi — leviz se zyrja ndryshk!',
+    new Notification('🏃 Koha për lëvizje!', {
+      body: 'Ngrihu nga vendi — trupi jot të falënderon! 💪',
       icon: '/favicon.ico',
       tag: 'break-reminder', // replaces previous if user hasn't dismissed
     });

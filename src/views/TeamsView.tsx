@@ -168,9 +168,10 @@ const TeamsView: React.FC = () => {
     // Send invitation email via API
     try {
       const inviteLink = `${window.location.origin}/join/${token}`;
+      const idToken = await user.getIdToken();
       const response = await fetch('/api/send-invite', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
         body: JSON.stringify({
           to: email,
           teamName: selectedTeam.name,
@@ -233,9 +234,10 @@ const TeamsView: React.FC = () => {
     if (email) {
       try {
         const appLink = window.location.origin + '/app';
+        const idToken = await user.getIdToken();
         const response = await fetch('/api/send-invite', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
           body: JSON.stringify({
             to: email,
             teamName: selectedTeam.name,

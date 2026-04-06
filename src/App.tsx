@@ -133,7 +133,7 @@ function AppContent() {
   // Sync team settings from Firestore → localStorage on every change
   useTeamSettingsSync();
 
-  // "Ciu ciu" — get-up-and-move reminder every 2 hours from 8:00
+  // Break reminder — get-up-and-move reminder every 2 hours from 8:00
   useBreakReminder();
 
   // Cross-device onboarding check: if Firestore says completed, skip wizard

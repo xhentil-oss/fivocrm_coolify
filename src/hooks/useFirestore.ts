@@ -135,6 +135,7 @@ export function useCollection<T = DocumentData>(
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<Error | null>(null);
 
+  const { user } = useAuth();
   const reactiveTeamId = useGlobalTeamId();
   const superAdmin = useIsSuperAdmin();
   // Super admin bypasses all team filters — treat every collection as non-team-scoped
@@ -155,6 +156,13 @@ export function useCollection<T = DocumentData>(
   useEffect(() => {
     // Skip the query entirely when caller says so (e.g. user not yet loaded)
     if (options?.skip) {
+      setData([]);
+      setLoading(false);
+      return;
+    }
+
+    // Don't open any Firestore listener until the user is authenticated
+    if (!user) {
       setData([]);
       setLoading(false);
       return;
@@ -258,7 +266,7 @@ export function useCollection<T = DocumentData>(
     );
 
     return () => unsubscribe();
-  }, [collectionName, whereKey, orderKey, skipTeamFilter, globalTeamId, superAdmin, options?.skip]);
+  }, [collectionName, whereKey, orderKey, skipTeamFilter, globalTeamId, superAdmin, options?.skip, user?.uid]);
 
   return { data, loading, error };
 }

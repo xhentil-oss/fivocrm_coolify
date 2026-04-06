@@ -670,7 +670,7 @@ const TasksView: React.FC = () => {
                               )}
                             </div>
                             <div className="flex items-center gap-2 mt-1 flex-wrap">
-                              {/* Status badge */
+                              {/* Status badge */}
                               <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
                                 task.status === 'Done' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
                                 : task.status === 'In Progress' ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
