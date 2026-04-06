@@ -112,7 +112,12 @@ service cloud.firestore {
         request.resource.data.teamId is string ||
         request.resource.data.senderType == 'client'
       );
-      allow update, delete: if isAuth() && resource.data.senderId == request.auth.uid;
+      // Sender can update/delete own messages; any authenticated user can mark as read
+      allow update: if isAuth() && (
+        resource.data.senderId == request.auth.uid ||
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'updatedAt'])
+      );
+      allow delete: if isAuth() && resource.data.senderId == request.auth.uid;
     }
 
     match /activities/{docId} {
