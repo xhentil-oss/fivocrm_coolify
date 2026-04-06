@@ -179,14 +179,14 @@ const ChatView: React.FC = () => {
   }), [activeChannel]);
   const { data: channelMessages, loading: channelPending, error: channelError } = useCollection<ChatMessage>('messages', channelMsgQuery);
 
-  const directMsgQuery = useMemo(() => {
-    if (!user?.uid || chatMode !== 'direct') return undefined;
-    return { where: [{ field: 'senderId', operator: '==', value: user.uid }] };
-  }, [user?.uid, chatMode]);
-  const directMsgReceivedQuery = useMemo(() => {
-    if (!user?.uid || chatMode !== 'direct') return undefined;
-    return { where: [{ field: 'receiverId', operator: '==', value: user.uid }] };
-  }, [user?.uid, chatMode]);
+  const directMsgQuery = useMemo(() => ({
+    skip: !user?.uid || chatMode !== 'direct',
+    where: user?.uid ? [{ field: 'senderId', operator: '==', value: user.uid }] : undefined,
+  }), [user?.uid, chatMode]);
+  const directMsgReceivedQuery = useMemo(() => ({
+    skip: !user?.uid || chatMode !== 'direct',
+    where: user?.uid ? [{ field: 'receiverId', operator: '==', value: user.uid }] : undefined,
+  }), [user?.uid, chatMode]);
 
   const { data: sentDirectMessages, loading: sentPending } = useCollection<ChatMessage>('messages', directMsgQuery);
   const { data: receivedDirectMessages, loading: receivedPending } = useCollection<ChatMessage>('messages', directMsgReceivedQuery);
