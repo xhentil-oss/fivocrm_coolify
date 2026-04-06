@@ -317,14 +317,28 @@ const ChatView: React.FC = () => {
     };
   }, [chatMode, activeChannel, activeDirectUserId]);
 
-  // Auto-scroll
+  // Auto-scroll — on new messages AND when switching conversations
   useEffect(() => {
     const currentCount = filteredMessages?.length || 0;
     if (currentCount > prevMessageCountRef.current && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      // Use rAF to ensure DOM has rendered the new messages before scrolling
+      requestAnimationFrame(() => {
+        if (scrollRef.current) {
+          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        }
+      });
     }
     prevMessageCountRef.current = currentCount;
   }, [filteredMessages?.length]);
+
+  // Scroll to bottom whenever the active conversation changes
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      if (scrollRef.current) {
+        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      }
+    });
+  }, [activeChannel, activeDirectUserId, chatMode]);
 
   // AI auto-scroll
   useEffect(() => {

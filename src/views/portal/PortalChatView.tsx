@@ -79,15 +79,23 @@ const PortalChatView: React.FC = () => {
   // admin's team-scoped useCollection('messages') to see them.
   const resolvedTeamId = allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
 
-  // Auto-scroll on new messages
+  // Auto-scroll on new messages and when switching project channels
   const prevCountRef = useRef(0);
   useEffect(() => {
     const count = messages?.length || 0;
     if (count > prevCountRef.current && scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      requestAnimationFrame(() => {
+        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      });
     }
     prevCountRef.current = count;
   }, [messages?.length]);
+
+  useEffect(() => {
+    requestAnimationFrame(() => {
+      if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+    });
+  }, [channelId]);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
