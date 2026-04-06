@@ -1,4 +1,6 @@
 import React, { useState } from 'react';
+import { addDoc, collection, Timestamp } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCollection, useMutation } from '../../hooks/useFirestore';
@@ -145,17 +147,24 @@ const PortalRequestsView: React.FC = () => {
       webViewLink: f.webViewLink || '',
     }));
 
-    await requestMutation.create({
+    // Use addDoc directly — portal users have getGlobalTeamId()=null which makes
+    // useMutation.create() throw for team-scoped collections.
+    const resolvedTeamId = allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
+    await addDoc(collection(db, 'clientRequests'), {
       customerId,
       clientUserId: user.uid,
       title,
       description,
-      category: category as ClientRequest['category'],
+      category,
       status: 'New',
-      priority: priority as ClientRequest['priority'],
-      serviceId: serviceId || undefined,
-      assignedTeamId,
-      driveAttachments: mappedAttachments.length > 0 ? mappedAttachments : undefined,
+      priority,
+      ...(serviceId ? { serviceId } : {}),
+      ...(assignedTeamId ? { assignedTeamId } : {}),
+      ...(mappedAttachments.length > 0 ? { driveAttachments: mappedAttachments } : {}),
+      ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+      createdByUserId: user.uid,
     });  
 
     // Notify admin team members about new request

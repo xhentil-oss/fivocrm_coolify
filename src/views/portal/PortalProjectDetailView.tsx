@@ -1,4 +1,6 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { addDoc, collection, Timestamp } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useAuth } from '../../contexts/AuthContext';
@@ -261,17 +263,24 @@ const PortalProjectDetailView: React.FC = () => {
 
     const assignedTeamId = getTeamForCategory(category) || project?.teamId;
 
-    await requestMutation.create({
+    // Use addDoc directly — portal users have getGlobalTeamId()=null which makes
+    // useMutation.create() throw for team-scoped collections.
+    const resolvedTeamId = allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
+    await addDoc(collection(db, 'clientRequests'), {
       customerId,
       clientUserId: user.uid,
       title,
       description,
-      category: category as ClientRequest['category'],
+      category,
       status: 'New',
-      priority: priority as ClientRequest['priority'],
-      assignedTeamId,
+      priority,
+      ...(assignedTeamId ? { assignedTeamId } : {}),
       projectId,
-    } as any);
+      ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+      createdByUserId: user.uid,
+    });
 
     // Notify team
     const adminMembers = allTeamMembers?.filter(m => m.role === 'Admin') || [];
