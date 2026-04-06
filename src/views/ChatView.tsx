@@ -173,11 +173,15 @@ const ChatView: React.FC = () => {
   }), [waEnabled, waTeamId]);
   const { data: allWaMessages } = useCollection<WhatsAppMessage>('whatsappMessages', waQuery);
 
+  // Client channels (client-*) need skipTeamFilter because portal users may send
+  // messages without teamId.  The composite index channelId+createdAt already exists.
+  const isClientChannel = activeChannel.startsWith('client-');
   const channelMsgQuery = useMemo(() => ({
     where: [{ field: 'channelId', operator: '==', value: activeChannel }],
     orderBy: { field: 'createdAt', direction: 'asc' as const },
     limit: 100,
-  }), [activeChannel]);
+    ...(isClientChannel ? { skipTeamFilter: true } : {}),
+  }), [activeChannel, isClientChannel]);
   const { data: channelMessages, loading: channelPending, error: channelError } = useCollection<ChatMessage>('messages', channelMsgQuery);
 
   const directMsgQuery = useMemo(() => ({
