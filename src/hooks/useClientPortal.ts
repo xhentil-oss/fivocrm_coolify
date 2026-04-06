@@ -153,39 +153,40 @@ export function useClientPortal() {
       didAutoCreate.current = true;
       _moduleCreatingForUid = user.uid;
 
-      let existingCustomer: { id: string } | null = null;
-      try {
-        const snap = await getDocs(
-          query(collection(db, 'customers'), where('email', '==', user.email!.toLowerCase()))
-        );
-        if (!snap.empty) {
-          existingCustomer = { id: snap.docs[0].id };
+      (async () => {
+        let existingCustomer: { id: string } | null = null;
+        try {
+          const snap = await getDocs(
+            query(collection(db, 'customers'), where('email', '==', user.email!.toLowerCase()))
+          );
+          if (!snap.empty) {
+            existingCustomer = { id: snap.docs[0].id };
+          }
+        } catch { /* fall through to create */ }
+
+        if (existingCustomer) {
+          // Customer was already created (likely by RegisterView) — just create portal access
+          setCreatedCustomerId(existingCustomer.id);
+          createDoc('clientPortalAccess', {
+            customerId: existingCustomer.id,
+            userId: user.uid,
+            email: user.email?.toLowerCase(),
+            status: 'Active',
+          }).then(() => {
+            _moduleCreatedForUid = user.uid;
+            _moduleCreatingForUid = null;
+            setAutoCreated(true);
+            setAutoCreating(false);
+          }).catch(() => {
+            _moduleCreatingForUid = null;
+            setAutoCreating(false);
+            setCreatedCustomerId(null);
+            didAutoCreate.current = false;
+          });
+          return;
         }
-      } catch { /* fall through to create */ }
 
-      if (existingCustomer) {
-        // Customer was already created (likely by RegisterView) — just create portal access
-        setCreatedCustomerId(existingCustomer.id);
-        createDoc('clientPortalAccess', {
-          customerId: existingCustomer.id,
-          userId: user.uid,
-          email: user.email?.toLowerCase(),
-          status: 'Active',
-        }).then(() => {
-          _moduleCreatedForUid = user.uid;
-          _moduleCreatingForUid = null;
-          setAutoCreated(true);
-          setAutoCreating(false);
-        }).catch(() => {
-          _moduleCreatingForUid = null;
-          setAutoCreating(false);
-          setCreatedCustomerId(null);
-          didAutoCreate.current = false;
-        });
-        return;
-      }
-
-      const displayName = user.displayName || user.email || 'Klient';
+        const displayName = user.displayName || user.email || 'Klient';
 
       createDoc('customers', {
         name: displayName,
@@ -235,6 +236,7 @@ export function useClientPortal() {
         setCreatedCustomerId(null);
         didAutoCreate.current = false;
       });
+      })(); // end async IIFE
     }
   }, [user, authLoading, anyByUserId, anyByEmail, byUserIdLoading, byEmailLoading, matchingCustomers, customersLoading, teamMembersLoading, autoCreating, createDoc, allTeamMembers]);
 
