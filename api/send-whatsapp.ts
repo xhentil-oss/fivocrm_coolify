@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { adminAuth } from './_firebaseAdmin';
+import { adminAuth } from './_firebaseAdmin.js';
 
 function isValidPhone(phone: string): boolean {
   const digits = phone.replace(/[^\d]/g, '');
