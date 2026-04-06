@@ -398,6 +398,9 @@ const ChatView: React.FC = () => {
       if (msg.jid?.endsWith('@s.whatsapp.net')) return msg.jid.split('@')[0].replace(/[^\d]/g, '');
       return (msg.phone || '').replace(/[^\d]/g, '');
     };
+    // Real phone numbers are max 15 digits; numbers >13 digits without a jid are unresolved LIDs
+    const isRealPhone = (phone: string, jid?: string | null) =>
+      !!jid?.endsWith('@s.whatsapp.net') || phone.length <= 13;
     const map = new Map<string, { phone: string; jid: string | null; leadName: string; leadId?: string | null; lastMessage: string; lastDate: any; unread: number }>();
     for (const msg of allWaMessages) {
       const key = phoneKey(msg);
@@ -427,7 +430,9 @@ const ChatView: React.FC = () => {
         }
       }
     }
-    return Array.from(map.values()).sort((a, b) => {
+    return Array.from(map.values())
+      .filter(c => isRealPhone(c.phone, c.jid))
+      .sort((a, b) => {
       const ta = a.lastDate instanceof Date ? a.lastDate.getTime() : a.lastDate?.toMillis?.() ?? 0;
       const tb = b.lastDate instanceof Date ? b.lastDate.getTime() : b.lastDate?.toMillis?.() ?? 0;
       return tb - ta;
@@ -995,7 +1000,7 @@ const ChatView: React.FC = () => {
                     <Smartphone className="h-4 w-4 text-[#25D366]" />
                   </div>
                   <div className="flex-1 min-w-0">
-                    <span className={`truncate block text-sm ${isWaActive ? 'text-[#25D366] font-medium' : ''}`}>{conv.leadName}</span>
+                    <span className={`truncate block text-sm ${isWaActive ? 'text-[#25D366] font-medium' : ''}`}>{conv.leadName !== conv.phone ? conv.leadName : `+${conv.phone}`}</span>
                     <span className="text-[10px] text-muted-foreground/60 truncate block">{(conv.lastMessage || '').slice(0, 32)}</span>
                   </div>
                   {conv.unread > 0 && !isWaActive && (

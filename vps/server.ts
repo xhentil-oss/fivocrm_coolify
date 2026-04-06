@@ -63,6 +63,38 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 /** Maps LID JID (e.g. "123456789@lid") → phone JID (e.g. "355691234567@s.whatsapp.net") */
 const lidToPhoneMap = new Map<string, string>();
 
+/** When a new LID→phone mapping is discovered, backfill old messages stored with the LID number */
+async function backfillLidMessages(lidJid: string, phoneJid: string): Promise<void> {
+  const lidPhone = normalizePhone(lidJid.split('@')[0]);
+  const realPhone = normalizePhone(phoneJid.split('@')[0]);
+  if (!lidPhone || !realPhone || lidPhone === realPhone) return;
+
+  try {
+    const snap = await db.collection('whatsappMessages')
+      .where('teamId', '==', TEAM_ID)
+      .where('phone', '==', lidPhone)
+      .get();
+    if (snap.empty) return;
+
+    const batch = db.batch();
+    let count = 0;
+    for (const doc of snap.docs) {
+      batch.update(doc.ref, {
+        phone: realPhone,
+        jid: phoneJid,
+        updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+      });
+      count++;
+      // Firestore batch limit is 500
+      if (count >= 499) break;
+    }
+    await batch.commit();
+    console.log(`[WA] Backfill: ${lidPhone} → ${realPhone} (${count} mesazhe u përditësuan)`);
+  } catch (e) {
+    console.error(`[WA] Backfill error for ${lidPhone}:`, e);
+  }
+}
+
 // ── Connect WhatsApp ──────────────────────────────────────────────────────────
 async function connectWhatsApp(): Promise<void> {
   if (reconnectTimer) {
@@ -118,7 +150,9 @@ async function connectWhatsApp(): Promise<void> {
     for (const contact of contacts) {
       const lid = (contact as any).lid as string | undefined;
       if (lid && contact.id) {
+        const isNew = !lidToPhoneMap.has(lid);
         lidToPhoneMap.set(lid, contact.id);
+        if (isNew) backfillLidMessages(lid, contact.id);
       }
     }
   });
@@ -127,7 +161,9 @@ async function connectWhatsApp(): Promise<void> {
     for (const update of updates) {
       const lid = (update as any).lid as string | undefined;
       if (lid && update.id) {
+        const isNew = !lidToPhoneMap.has(lid);
         lidToPhoneMap.set(lid, update.id);
+        if (isNew) backfillLidMessages(lid, update.id);
       }
     }
   });
