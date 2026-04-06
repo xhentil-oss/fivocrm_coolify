@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Checkbox } from '../components/ui/checkbox';
 import { Badge } from '../components/ui/badge';
 import { useCollection, useMutation, setGlobalWaEnabled } from '../hooks/useFirestore';
-import { saveTeamSettings } from '../hooks/useTeamSettings';
+import { saveTeamSettings, useTeamSettingsData } from '../hooks/useTeamSettings';
 import { isBreakReminderEnabled, setBreakReminderEnabled } from '../hooks/useBreakReminder';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -91,6 +91,7 @@ const CronJobCard: React.FC<CronJobCardProps> = ({
 // ─── SettingsView ──────────────────────────────────────────────────────────────
 const SettingsView: React.FC = () => {
   const { teamId } = usePermissions();
+  const firestoreSettings = useTeamSettingsData();
   const [breakReminderOn, setBreakReminderOn] = useState(isBreakReminderEnabled);
   const [stripePublishableKey, setStripePublishableKey] = useState('');
   const [stripeWebhookSecret, setStripeWebhookSecret] = useState('');
@@ -98,20 +99,30 @@ const SettingsView: React.FC = () => {
   const [stripeSaved, setStripeSaved] = useState(false);
 
   // ── Bank Transfer default settings (multi-bank) ──
-  const [bankAccounts, setBankAccounts] = useState<Array<{ id: string; bankName: string; accountHolder: string; iban: string; swift: string; country: string }>>(() => {
+  const [bankAccounts, setBankAccounts] = useState<Array<{ id: string; bankName: string; accountHolder: string; iban: string; swift: string; country: string }>>([]);
+  const [bankSaved, setBankSaved] = useState(false);
+  const [bankLoaded, setBankLoaded] = useState(false);
+
+  // Populate bank accounts from Firestore once (prefer Firestore over localStorage)
+  useEffect(() => {
+    if (bankLoaded) return;
+    if (firestoreSettings === null) return; // still loading
+    if (firestoreSettings.bankAccounts && firestoreSettings.bankAccounts.length > 0) {
+      setBankAccounts(firestoreSettings.bankAccounts);
+      setBankLoaded(true);
+      return;
+    }
+    // Firestore has no data — fall back to localStorage
     try {
       const stored = localStorage.getItem('bank_accounts');
-      if (stored) return JSON.parse(stored);
-      // Migrate from old single-bank format
-      const oldName = localStorage.getItem('default_bank_name');
+      if (stored) { setBankAccounts(JSON.parse(stored)); setBankLoaded(true); return; }
       const oldIban = localStorage.getItem('default_bank_iban');
       if (oldIban) {
-        return [{ id: crypto.randomUUID(), bankName: oldName || '', accountHolder: localStorage.getItem('default_bank_holder') || '', iban: oldIban, swift: localStorage.getItem('default_bank_swift') || '', country: '' }];
+        setBankAccounts([{ id: crypto.randomUUID(), bankName: localStorage.getItem('default_bank_name') || '', accountHolder: localStorage.getItem('default_bank_holder') || '', iban: oldIban, swift: localStorage.getItem('default_bank_swift') || '', country: '' }]);
       }
-      return [];
-    } catch { return []; }
-  });
-  const [bankSaved, setBankSaved] = useState(false);
+    } catch { /* ignore */ }
+    setBankLoaded(true);
+  }, [firestoreSettings, bankLoaded]);
 
   // ── EUR→ALL exchange rate ──
   const [eurAllRate, setEurAllRate] = useState(() => localStorage.getItem('eur_all_rate') || '100');

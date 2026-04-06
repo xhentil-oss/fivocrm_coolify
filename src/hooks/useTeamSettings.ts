@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { doc, onSnapshot, setDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useGlobalTeamId, setGlobalWaEnabled } from './useFirestore';
@@ -87,4 +87,25 @@ export function useTeamSettingsSync(): void {
 
     return unsub;
   }, [teamId]);
+}
+
+/**
+ * Returns teamSettings as reactive React state, refreshed whenever Firestore
+ * updates. Returns null until the first snapshot arrives (teamId not yet
+ * resolved or document not yet loaded).
+ */
+export function useTeamSettingsData(): TeamSettings | null {
+  const [settings, setSettings] = useState<TeamSettings | null>(null);
+  const teamId = useGlobalTeamId();
+
+  useEffect(() => {
+    if (!teamId) return;
+    const docRef = doc(db, 'teamSettings', teamId);
+    const unsub = onSnapshot(docRef, (snap) => {
+      setSettings(snap.exists() ? (snap.data() as TeamSettings) : {});
+    });
+    return unsub;
+  }, [teamId]);
+
+  return settings;
 }

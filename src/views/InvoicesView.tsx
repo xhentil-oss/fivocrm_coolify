@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useCollection, useMutation, useGlobalTeamId } from '../hooks/useFirestore';
+import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { getNextInvoiceNumber } from '../lib/firebase';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -785,9 +786,10 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
   const [bankSWIFT, setBankSWIFT] = useState((editInvoice as any)?.bankSWIFT || '');
   const [bankAccountHolder, setBankAccountHolder] = useState((editInvoice as any)?.bankAccountHolder || '');
   const [bankCountry, setBankCountry] = useState((editInvoice as any)?.bankCountry || '');
-  const [savedBankAccounts] = useState<Array<{ id: string; bankName: string; accountHolder: string; iban: string; swift: string; country: string }>>(() => {
+  const teamSettingsData = useTeamSettingsData();
+  const savedBankAccounts = teamSettingsData?.bankAccounts ?? (() => {
     try { return JSON.parse(localStorage.getItem('bank_accounts') || '[]'); } catch { return []; }
-  });
+  })();
   const [status, setStatus] = useState(editInvoice?.status || 'Pending');
   const [notes, setNotes] = useState((editInvoice as any)?.notes || '');
   const [paymentUrl, setPaymentUrl] = useState((editInvoice as any)?.paymentUrl || '');
@@ -838,24 +840,29 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
   React.useEffect(() => {
     if (isEditing) return; // don't overwrite when editing existing invoice
     if (bankIBAN) return;  // already has a value
-    try {
-      const accounts = JSON.parse(localStorage.getItem('bank_accounts') || '[]');
-      if (accounts.length > 0) {
-        const first = accounts[0];
-        setBankName(first.bankName || '');
-        setBankIBAN(first.iban || '');
-        setBankSWIFT(first.swift || '');
-        setBankAccountHolder(first.accountHolder || '');
-        setBankCountry(first.country || '');
-        return;
-      }
-    } catch { /* ignore */ }
-    setBankName(localStorage.getItem('default_bank_name') || '');
-    setBankIBAN(localStorage.getItem('default_bank_iban') || '');
-    setBankSWIFT(localStorage.getItem('default_bank_swift') || '');
-    setBankAccountHolder(localStorage.getItem('default_bank_holder') || '');
-    setBankCountry(localStorage.getItem('default_bank_country') || '');
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    // Try Firestore data first, then localStorage fallback
+    const accounts = teamSettingsData?.bankAccounts ?? (() => {
+      try { return JSON.parse(localStorage.getItem('bank_accounts') || '[]'); } catch { return []; }
+    })();
+    if (accounts.length > 0) {
+      const first = accounts[0];
+      setBankName(first.bankName || '');
+      setBankIBAN(first.iban || '');
+      setBankSWIFT(first.swift || '');
+      setBankAccountHolder(first.accountHolder || '');
+      setBankCountry(first.country || '');
+      return;
+    }
+    // Legacy single-bank keys
+    const legacyIban = localStorage.getItem('default_bank_iban');
+    if (legacyIban) {
+      setBankName(localStorage.getItem('default_bank_name') || '');
+      setBankIBAN(legacyIban);
+      setBankSWIFT(localStorage.getItem('default_bank_swift') || '');
+      setBankAccountHolder(localStorage.getItem('default_bank_holder') || '');
+      setBankCountry(localStorage.getItem('default_bank_country') || '');
+    }
+  }, [teamSettingsData]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Load existing line items when editing
   React.useEffect(() => {
