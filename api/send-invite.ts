@@ -81,7 +81,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const smtpUser = process.env.SMTP_USER;
   const smtpPass = process.env.SMTP_PASS;
   if (!smtpUser || !smtpPass) {
-    return res.status(500).json({ error: 'SMTP not configured' });
+    return res.status(500).json({ error: 'SMTP not configured', detail: `SMTP_USER=${!!smtpUser} SMTP_PASS=${!!smtpPass}` });
   }
 
   const transporter = nodemailer.createTransport({
