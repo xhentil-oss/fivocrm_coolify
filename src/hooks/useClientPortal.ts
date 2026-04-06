@@ -12,6 +12,16 @@ import type { ClientPortalAccess, Customer } from '../types';
  *
  * Uses direct Firestore writes (not useMutation) to avoid hook closure issues.
  */
+
+// ── Module-level singleton guards ───────────────────────────────────────────
+// Multiple portal views call useClientPortal() simultaneously (PortalLayout,
+// PortalDashboard, PortalChatView, etc.). Each instance has its own React ref,
+// so without a shared lock they all fire auto-create concurrently and produce
+// duplicate customers/leads/portal-access records.
+// These module vars are shared across ALL hook instances in the same JS process.
+let _moduleCreatingForUid: string | null = null;  // uid currently being created
+let _moduleCreatedForUid: string | null = null;   // uid already created this session
+
 export function useClientPortal() {
   const { user, loading: authLoading } = useAuth();
   const [autoCreating, setAutoCreating] = useState(false);
@@ -57,6 +67,10 @@ export function useClientPortal() {
   const activeByUserId = byUserId?.filter(a => a.status === 'Active') || [];
   const activeByEmail = byEmail?.filter(a => a.status === 'Active') || [];
 
+  // ANY existing records (any status) — used to block auto-create when duplicates already exist
+  const anyByUserId = byUserId || [];
+  const anyByEmail = byEmail || [];
+
   // Auto-link: if portal access exists by email but userId is empty, update it
   useEffect(() => {
     if (!user || byUserIdLoading || byEmailLoading || didAutoLink.current) return;
@@ -98,8 +112,13 @@ export function useClientPortal() {
   useEffect(() => {
     if (!user?.email || authLoading || byUserIdLoading || byEmailLoading || customersLoading || teamMembersLoading) return;
     if (autoCreating || didAutoCreate.current) return;
-    if (activeByUserId.length > 0) return;
-    if (activeByEmail.length > 0) return;
+    // Block if ANY portal access record already exists (any status), not just Active.
+    // This prevents re-creation for users who have Pending/legacy records.
+    if (anyByUserId.length > 0 || anyByEmail.length > 0) return;
+
+    // Module-level guard: if another instance is already creating for this uid,
+    // or has already created this session, skip entirely.
+    if (_moduleCreatingForUid === user.uid || _moduleCreatedForUid === user.uid) return;
 
     const customer = matchingCustomers?.[0];
 
@@ -107,6 +126,7 @@ export function useClientPortal() {
       // Customer exists but no Active portal access — create access
       setAutoCreating(true);
       didAutoCreate.current = true;
+      _moduleCreatingForUid = user.uid;
       setCreatedCustomerId(customer.id);
 
       createDoc('clientPortalAccess', {
@@ -115,9 +135,12 @@ export function useClientPortal() {
         email: user.email?.toLowerCase(),
         status: 'Active',
       }).then(() => {
+        _moduleCreatedForUid = user.uid;
+        _moduleCreatingForUid = null;
         setAutoCreated(true);
         setAutoCreating(false);
       }).catch(() => {
+        _moduleCreatingForUid = null;
         setAutoCreating(false);
         setCreatedCustomerId(null);
         didAutoCreate.current = false;
@@ -126,6 +149,7 @@ export function useClientPortal() {
       // No customer at all — create Customer + Access + Lead + Notify admins
       setAutoCreating(true);
       didAutoCreate.current = true;
+      _moduleCreatingForUid = user.uid;
       const displayName = user.displayName || user.email || 'Klient';
 
       createDoc('customers', {
@@ -166,15 +190,18 @@ export function useClientPortal() {
           }).catch(() => { /* non-critical */ });
         }
       }).then(() => {
+        _moduleCreatedForUid = user.uid;
+        _moduleCreatingForUid = null;
         setAutoCreated(true);
         setAutoCreating(false);
       }).catch(() => {
+        _moduleCreatingForUid = null;
         setAutoCreating(false);
         setCreatedCustomerId(null);
         didAutoCreate.current = false;
       });
     }
-  }, [user, authLoading, activeByUserId, activeByEmail, byUserIdLoading, byEmailLoading, matchingCustomers, customersLoading, teamMembersLoading, autoCreating, createDoc, allTeamMembers]);
+  }, [user, authLoading, anyByUserId, anyByEmail, byUserIdLoading, byEmailLoading, matchingCustomers, customersLoading, teamMembersLoading, autoCreating, createDoc, allTeamMembers]);
 
   const access = (activeByUserId.find(a => a.customerId) || activeByUserId[0])
     || (activeByEmail.find(a => a.customerId) || activeByEmail[0])
