@@ -215,7 +215,7 @@ const CustomersView: React.FC = () => {
         await accessMutation.create({
           customerId: created.id,
           userId: '',
-          email: data.email,
+          email: data.email.toLowerCase().trim(),
           status: 'Active',
         });
       } catch { /* non-blocking */ }

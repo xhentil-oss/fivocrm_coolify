@@ -34,7 +34,7 @@ export function useClientPortal() {
     'clientPortalAccess',
     {
       skip: !user?.email,
-      where: user?.email ? [{ field: 'email', operator: '==', value: user.email }] : undefined,
+      where: user?.email ? [{ field: 'email', operator: '==', value: user.email.toLowerCase() }] : undefined,
     }
   );
 
@@ -43,7 +43,7 @@ export function useClientPortal() {
     'customers',
     {
       skip: !user?.email,
-      where: user?.email ? [{ field: 'email', operator: '==', value: user.email }] : undefined,
+      where: user?.email ? [{ field: 'email', operator: '==', value: user.email.toLowerCase() }] : undefined,
       skipTeamFilter: true,
     }
   );
@@ -112,7 +112,7 @@ export function useClientPortal() {
       createDoc('clientPortalAccess', {
         customerId: customer.id,
         userId: user.uid,
-        email: user.email,
+        email: user.email?.toLowerCase(),
         status: 'Active',
       }).then(() => {
         setAutoCreated(true);
@@ -130,7 +130,7 @@ export function useClientPortal() {
 
       createDoc('customers', {
         name: displayName,
-        email: user.email,
+        email: user.email?.toLowerCase(),
         status: 'Pending',
       }).then(async (newCustomer) => {
         setCreatedCustomerId(newCustomer.id);
@@ -139,14 +139,14 @@ export function useClientPortal() {
         await createDoc('clientPortalAccess', {
           customerId: newCustomer.id,
           userId: user.uid,
-          email: user.email!,
+          email: user.email?.toLowerCase(),
           status: 'Active',
         });
 
         // Create Lead (so admin sees it in CRM)
         createDoc('leads', {
           name: displayName,
-          email: user.email,
+          email: user.email?.toLowerCase(),
           status: 'New',
           source: 'Portal - Google Sign In',
         }).catch(() => { /* non-critical */ });

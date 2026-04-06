@@ -324,7 +324,7 @@ const CRMView: React.FC = () => {
           await portalAccessMutation.create({
             customerId: customerDoc.id,
             userId: '', // Will be linked when client registers/logs in
-            email: lead.email,
+            email: lead.email.toLowerCase().trim(),
             status: 'Active',
           });
         }

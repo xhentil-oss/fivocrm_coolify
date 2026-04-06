@@ -998,7 +998,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
           await accessMutation.create({
             customerId: selectedCustomerId,
             userId: '',
-            email: customer.email,
+            email: customer.email.toLowerCase().trim(),
             status: 'Active',
           }).catch(() => { /* non-blocking */ });
         }
