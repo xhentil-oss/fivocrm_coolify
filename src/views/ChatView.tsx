@@ -399,15 +399,17 @@ const ChatView: React.FC = () => {
       if (msg.jid?.endsWith('@s.whatsapp.net')) return normalizeAlbanianPhone(msg.jid.split('@')[0]);
       return normalizeAlbanianPhone(msg.phone || '');
     };
-    // Real phone numbers are max 15 digits; numbers >13 digits without a jid are unresolved LIDs
-    // Show them anyway — label as "Numër i panjohur" until mapping resolves
+    // Real phone = has @s.whatsapp.net JID OR phone digits ≤ 13
     const isRealPhone = (phone: string, jid?: string | null) =>
       !!jid?.endsWith('@s.whatsapp.net') || phone.length <= 13;
     const map = new Map<string, { phone: string; jid: string | null; leadName: string; leadId?: string | null; lastMessage: string; lastDate: any; unread: number; isLid: boolean }>();
     for (const msg of allWaMessages) {
+      // Skip unresolved LID messages — they have >13-digit phone with no real JID
+      // These will reappear under the correct phone once the LID→phone mapping resolves
+      if ((msg as any).isLid === true) continue;
       const key = phoneKey(msg);
       if (!key) continue;
-      const msgIsLid = !isRealPhone(key, msg.jid) || !!(msg as any).isLid;
+      const msgIsLid = !isRealPhone(key, msg.jid);
       if (!map.has(key)) {
         map.set(key, {
           phone: key,
