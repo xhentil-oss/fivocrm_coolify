@@ -14,7 +14,7 @@ import {
   Timestamp,
   DocumentData
 } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { db, auth } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 
 // Types for query options
@@ -175,6 +175,17 @@ export function useCollection<T = DocumentData>(
       return;
     }
 
+    // Ensure the auth token is fresh before opening the listener.
+    // With persistentLocalCache the Firestore SDK may open an internal sync
+    // connection immediately; if the cached token is expired the sync fails with
+    // "Missing or insufficient permissions" as an uncaught promise rejection.
+    // Calling getIdToken() first forces a refresh when needed.
+    let cancelled = false;
+    let unsubscribe: (() => void) | undefined;
+
+    (auth.currentUser?.getIdToken() ?? Promise.resolve()).then(() => {
+      if (cancelled) return;
+
     const constraints: QueryConstraint[] = [];
 
     // For team-scoped collections: fetch ALL docs, then filter client-side.
@@ -199,7 +210,7 @@ export function useCollection<T = DocumentData>(
 
     const q = query(collection(db, collectionName), ...constraints);
 
-    const unsubscribe = onSnapshot(
+    unsubscribe = onSnapshot(
       q,
       (snapshot) => {
         let items = snapshot.docs.map((doc) => ({
@@ -265,7 +276,13 @@ export function useCollection<T = DocumentData>(
       }
     );
 
-    return () => unsubscribe();
+    }).catch(() => {
+      // Token refresh failed — user will be signed out by Firebase Auth
+      setData([]);
+      setLoading(false);
+    });
+
+    return () => { cancelled = true; unsubscribe?.(); };
   }, [collectionName, whereKey, orderKey, skipTeamFilter, globalTeamId, superAdmin, options?.skip, user?.uid]);
 
   return { data, loading, error };
