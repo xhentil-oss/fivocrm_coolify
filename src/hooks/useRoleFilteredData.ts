@@ -121,7 +121,7 @@ export function useFilteredProjects<T extends Partial<Project> & { id: string }>
  * - 'all'/'team': see everything
  * - 'assigned'/'readonly': see only own records
  */
-export function useFilteredByOwner<T extends { id: string; createdByUserId?: string | null }>(
+export function useFilteredByOwner<T extends { id: string; createdByUserId?: string | null; ownerId?: string }>(
   data: T[] | undefined
 ): T[] {
   const { user } = useAuth();
@@ -132,7 +132,9 @@ export function useFilteredByOwner<T extends { id: string; createdByUserId?: str
     if (!data) return [];
     if (!user) return [];
     if (dataScope === 'all' || dataScope === 'team') return data;
-    return data.filter(d => matchesUser(d.createdByUserId, userIds));
+    return data.filter(d =>
+      matchesUser(d.createdByUserId, userIds) || matchesUser(d.ownerId, userIds)
+    );
   }, [data, user, userIds, dataScope]);
 }
 
