@@ -404,12 +404,9 @@ const ChatView: React.FC = () => {
       !!jid?.endsWith('@s.whatsapp.net') || phone.length <= 13;
     const map = new Map<string, { phone: string; jid: string | null; leadName: string; leadId?: string | null; lastMessage: string; lastDate: any; unread: number; isLid: boolean }>();
     for (const msg of allWaMessages) {
-      // Skip unresolved LID messages — they have >13-digit phone with no real JID
-      // These will reappear under the correct phone once the LID→phone mapping resolves
-      if ((msg as any).isLid === true) continue;
       const key = phoneKey(msg);
       if (!key) continue;
-      const msgIsLid = !isRealPhone(key, msg.jid);
+      const msgIsLid = !isRealPhone(key, msg.jid) || (msg as any).isLid === true;
       if (!map.has(key)) {
         map.set(key, {
           phone: key,
