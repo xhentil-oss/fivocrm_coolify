@@ -66,6 +66,7 @@ let sock: ReturnType<typeof makeWASocket> | null = null;
 let qrDataUrl: string | null = null;
 let connectionStatus: ConnectionStatus = 'disconnected';
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+let lidResyncTimer: ReturnType<typeof setInterval> | null = null;
 
 /** Maps LID JID (e.g. "123456789@lid") → phone JID (e.g. "355691234567@s.whatsapp.net") */
 const lidToPhoneMap = new Map<string, string>();
@@ -231,6 +232,48 @@ async function reverseLookupLeads(): Promise<void> {
     }
 
     console.log(`[WA] Reverse lookup complete: ${resolved} new mappings from ${phones.size} phones`);
+
+    // 4. Try to resolve remaining unresolved LIDs directly via onWhatsApp
+    const stillUnresolved = await db.collection('whatsappMessages')
+      .where('teamId', '==', TEAM_ID)
+      .where('isLid', '==', true)
+      .select('jid', 'pushName')
+      .limit(100)
+      .get();
+
+    const lidJids = new Set<string>();
+    for (const doc of stillUnresolved.docs) {
+      const jid = doc.data().jid;
+      if (jid?.endsWith('@lid') && !lidToPhoneMap.has(jid)) lidJids.add(jid);
+    }
+
+    if (lidJids.size > 0) {
+      console.log(`[WA] Attempting direct resolution for ${lidJids.size} unresolved LIDs...`);
+      let directResolved = 0;
+      for (const lidJid of lidJids) {
+        try {
+          // Try USyncQuery with the LID itself — some LIDs can be resolved this way
+          const { USyncQuery, USyncUser } = await import('baileys');
+          const q = new USyncQuery();
+          q.withMode('query').withContext('interactive');
+          const u = new USyncUser();
+          u.withJid(lidJid);
+          q.withUser(u);
+          q.withContactProtocol();
+          const result = await sock!.executeUSyncQuery(q);
+          for (const item of (result?.list) || []) {
+            const id = (item as any).id;
+            if (id && id.endsWith('@s.whatsapp.net') && id !== lidJid) {
+              registerLidMapping(lidJid, id);
+              directResolved++;
+            }
+          }
+        } catch { /* skip individual failures */ }
+      }
+      if (directResolved > 0) {
+        console.log(`[WA] Direct LID resolution: ${directResolved}/${lidJids.size} resolved`);
+      }
+    }
   } catch (e) {
     console.error('[WA] Reverse lookup error:', e);
   }
@@ -287,6 +330,15 @@ async function connectWhatsApp(): Promise<void> {
 
       // After connection opens, resolve known leads via USyncQuery (phone→LID)
       setTimeout(() => reverseLookupLeads(), 8000);
+
+      // Schedule periodic re-sync every 30 minutes
+      if (lidResyncTimer) clearInterval(lidResyncTimer);
+      lidResyncTimer = setInterval(() => {
+        if (connectionStatus === 'connected' && sock) {
+          console.log('[WA] Periodic LID re-sync starting...');
+          reverseLookupLeads();
+        }
+      }, 30 * 60 * 1000);
     }
   });
 
