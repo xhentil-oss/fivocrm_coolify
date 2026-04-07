@@ -46,7 +46,7 @@ service cloud.firestore {
 
     match /tasks/{docId} {
       allow read: if isAuth();
-      allow create: if canCreateForTeam();
+      allow create: if isAuth();
       allow update, delete: if isAuth();
     }
 
@@ -152,13 +152,14 @@ service cloud.firestore {
 
     match /clientRequests/{docId} {
       allow read: if isAuth();
-      allow create: if canCreateForTeam();
+      // Portal users may not have teamId resolved yet
+      allow create: if isAuth();
       allow update, delete: if isAuth();
     }
 
     match /customIndustries/{docId} {
       allow read: if isAuth();
-      allow create: if canCreateForTeam();
+      allow create: if isAuth();
       allow update, delete: if isAuth();
     }
 
@@ -176,13 +177,15 @@ service cloud.firestore {
 
     match /projectComments/{docId} {
       allow read: if isAuth();
-      allow create: if canCreateForTeam();
+      // Portal clients can create comments
+      allow create: if isAuth();
       allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
     }
 
     match /serviceInquiries/{docId} {
       allow read: if isAuth();
-      allow create: if canCreateForTeam();
+      // Portal clients can submit inquiries
+      allow create: if isAuth();
       allow update, delete: if isAuth();
     }
 

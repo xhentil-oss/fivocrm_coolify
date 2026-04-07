@@ -2,6 +2,8 @@ import React, { useState, useCallback } from 'react';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCollection, useMutation } from '../../hooks/useFirestore';
+import { addDoc, collection, Timestamp } from 'firebase/firestore';
+import { db } from '../../lib/firebase';
 import { getStatusColor } from '../../lib/statusColors';
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
@@ -11,7 +13,7 @@ import { ShoppingBag, Tag, DollarSign, FileText, CheckCircle2, Clock, Eye, Edit3
 import { sanitizeHtml } from '../../lib/utils';
 import { useToast } from '../../hooks/use-toast';
 import ServiceQuestionnaireForm from '../../components/ServiceQuestionnaireForm';
-import type { Invoice, InvoiceItem, Service, ServiceInquiry, Lead, Customer, Task, Notification } from '../../types';
+import type { Invoice, InvoiceItem, Service, ServiceInquiry, Notification } from '../../types';
 
 const PortalServicesView: React.FC = () => {
   const { user } = useAuth();
@@ -40,13 +42,12 @@ const PortalServicesView: React.FC = () => {
 
   // Mutations for CRM automation
   const inquiryMutation = useMutation<ServiceInquiry>('serviceInquiries');
-  const leadMutation = useMutation<Lead>('leads');
-  useMutation<Customer>('customers');
-  const taskMutation = useMutation<Task>('tasks');
   const notificationMutation = useMutation<Notification>('notifications');
   const { data: activeTeamMembers } = useCollection<any>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
+  // Portal users don't have getGlobalTeamId() — resolve from any team member
+  const resolvedTeamId = activeTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
 
   // Handle questionnaire submission with CRM automations
   const handleQuestionnaireSubmit = async (formData: any) => {
@@ -74,14 +75,19 @@ const PortalServicesView: React.FC = () => {
       return;
     }
 
-    // 1. Save inquiry to Firestore
-    const inquiry = await inquiryMutation.create({
+    // 1. Save inquiry to Firestore (use addDoc — portal users can't use useMutation.create)
+    const inquiryRef = await addDoc(collection(db, 'serviceInquiries'), {
       ...formData,
       status: 'New',
       isDraft: false,
       customerId: customerId || undefined,
       clientUserId: user?.uid || undefined,
+      ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+      createdByUserId: user?.uid || null,
     });
+    const inquiry = { id: inquiryRef.id };
 
     await createLeadAndAutomations(formData, inquiry.id);
 
@@ -128,8 +134,8 @@ const PortalServicesView: React.FC = () => {
     else if (formData.budgetRange === '100,000–300,000 L') estimatedValue = 200000;
     else if (formData.budgetRange === '300,000+ L') estimatedValue = 400000;
 
-    // 4. Create Lead in CRM
-    const lead = await leadMutation.create({
+    // 4. Create Lead in CRM (use addDoc for portal users)
+    const leadRef = await addDoc(collection(db, 'leads'), {
       name: formData.contactName,
       email: formData.email,
       phoneNumber: formData.phoneNumber,
@@ -142,7 +148,12 @@ const PortalServicesView: React.FC = () => {
       tags,
       notes: `Shërbime: ${formData.servicesInterestedIn.join(', ')}\nObjektivi: ${formData.mainGoal}\nBuxheti: ${formData.budgetRange}\nAfati: ${formData.timeline}\n\nPërshkrimi: ${formData.projectNeedDescription}\nSfida: ${formData.currentMainChallenge}`,
       serviceInquiryId: inquiryId,
+      ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+      createdByUserId: user?.uid || null,
     });
+    const lead = { id: leadRef.id };
 
     // 5. Update inquiry with leadId
     await inquiryMutation.update(inquiryId, { leadId: lead.id });
@@ -153,7 +164,7 @@ const PortalServicesView: React.FC = () => {
     tomorrow.setDate(tomorrow.getDate() + 1);
     const salesAdminMembers = activeTeamMembers?.filter((m: any) => m.role === 'Admin' || m.canAccessCRM) || [];
     
-    await taskMutation.create({
+    await addDoc(collection(db, 'tasks'), {
       title: `Kontakto lead: ${formData.contactName} (${formData.businessName})`,
       description: `Lead i ri nga pyetësori i shërbimeve.\n\nShërbime: ${formData.servicesInterestedIn.join(', ')}\nObjektivi: ${formData.mainGoal}\nBuxheti: ${formData.budgetRange}\nAfati: ${formData.timeline}\nKontakt: ${formData.email} / ${formData.phoneNumber}${formData.preferredContactMethod ? '\nMënyra e preferuar: ' + formData.preferredContactMethod : ''}`,
       status: 'Todo',
@@ -162,6 +173,10 @@ const PortalServicesView: React.FC = () => {
       endDate: tomorrow,
       dueDate: tomorrow,
       assignedToUserId: salesAdminMembers?.[0]?.userId || '',
+      ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+      createdByUserId: user?.uid || null,
     });
 
     // 7. Send notification to Admin + Sales (canAccessCRM) team members
@@ -198,7 +213,7 @@ const PortalServicesView: React.FC = () => {
   };
 
   const startNewDraft = async (serviceCategory?: string) => {
-    const draft = await inquiryMutation.create({
+    const draftRef = await addDoc(collection(db, 'serviceInquiries'), {
       businessName: '',
       contactName: user?.displayName || '',
       email: user?.email || '',
@@ -208,7 +223,12 @@ const PortalServicesView: React.FC = () => {
       customerId: customerId || undefined,
       servicesInterestedIn: serviceCategory ? [serviceCategory] : [],
       lastSavedStep: 1,
-    } as any);
+      ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+      createdByUserId: user?.uid || null,
+    });
+    const draft = { id: draftRef.id };
     setEditingInquiry({ ...draft, id: draft.id } as any);
     setPreselectedService(serviceCategory);
     setShowSuccess(false);

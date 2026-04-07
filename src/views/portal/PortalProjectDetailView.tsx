@@ -116,8 +116,6 @@ const PortalProjectDetailView: React.FC = () => {
   // User profiles for comment display names
   const { data: userProfiles } = useCollection<any>('userProfiles');
 
-  const commentMutation = useMutation<ProjectComment>('projectComments');
-  const requestMutation = useMutation<ClientRequest>('clientRequests');
   const notificationMutation = useMutation<any>('notifications');
 
   // Auto-scroll comments
@@ -200,12 +198,18 @@ const PortalProjectDetailView: React.FC = () => {
     if (!commentText.trim() || !user || !projectId) return;
 
     try {
-      await commentMutation.create({
+      // Use addDoc — portal users can't use useMutation.create() on team-scoped collections
+      const commentTeamId = allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
+      await addDoc(collection(db, 'projectComments'), {
         projectId,
         content: commentText.trim(),
         userId: user.uid,
         senderType: 'client',
-      } as any);
+        ...(commentTeamId ? { teamId: commentTeamId } : {}),
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+        createdByUserId: user.uid,
+      });
 
       // Notify project team
       if (project?.teamId && allTeamMembers) {

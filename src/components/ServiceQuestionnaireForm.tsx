@@ -349,10 +349,10 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
   const resolvedTeamId = useMemo(() => {
     const global = getGlobalTeamId();
     if (global) return global;
-    if (!user || !allTeamMembers?.length) return null;
-    const membership = allTeamMembers.find((m: any) => m.userId === user.uid);
-    return membership?.teamId || null;
-  }, [user, allTeamMembers]);
+    if (!allTeamMembers?.length) return null;
+    // Portal users are NOT in teamMembers — grab any team's ID
+    return allTeamMembers.find((m: any) => m.teamId)?.teamId || null;
+  }, [allTeamMembers]);
 
   const allIndustries = useMemo(() => {
     const customNames = (customIndustries || []).map((ci: any) => ci.name);
@@ -364,9 +364,10 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
     if (!name || allIndustries.some(i => i.toLowerCase() === name.toLowerCase())) return;
     await addDoc(collection(db, 'customIndustries'), {
       name,
-      teamId: resolvedTeamId,
+      ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
+      createdByUserId: user?.uid || null,
     });
     set('industry', name);
     setNewIndustryName('');
