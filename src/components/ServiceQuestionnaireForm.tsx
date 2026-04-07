@@ -1,5 +1,8 @@
 import React, { useState, useMemo, useEffect, useCallback, useRef } from 'react';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, getGlobalTeamId } from '../hooks/useFirestore';
+import { useAuth } from '../contexts/AuthContext';
+import { collection, addDoc, Timestamp } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import { phoneKeyDown } from '../lib/utils';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -337,9 +340,19 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
     orderBy: { field: 'name', direction: 'asc' },
     skipTeamFilter: true,
   });
-  const customIndustryMutation = useMutation<any>('customIndustries');
   const [showAddIndustry, setShowAddIndustry] = useState(false);
   const [newIndustryName, setNewIndustryName] = useState('');
+
+  // Resolve teamId for portal users who don't have getGlobalTeamId()
+  const { user } = useAuth();
+  const { data: allTeamMembers } = useCollection<any>('teamMembers', { skipTeamFilter: true });
+  const resolvedTeamId = useMemo(() => {
+    const global = getGlobalTeamId();
+    if (global) return global;
+    if (!user || !allTeamMembers?.length) return null;
+    const membership = allTeamMembers.find((m: any) => m.userId === user.uid);
+    return membership?.teamId || null;
+  }, [user, allTeamMembers]);
 
   const allIndustries = useMemo(() => {
     const customNames = (customIndustries || []).map((ci: any) => ci.name);
@@ -349,7 +362,12 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
   const handleAddIndustry = async () => {
     const name = newIndustryName.trim();
     if (!name || allIndustries.some(i => i.toLowerCase() === name.toLowerCase())) return;
-    await customIndustryMutation.create({ name });
+    await addDoc(collection(db, 'customIndustries'), {
+      name,
+      teamId: resolvedTeamId,
+      createdAt: Timestamp.now(),
+      updatedAt: Timestamp.now(),
+    });
     set('industry', name);
     setNewIndustryName('');
     setShowAddIndustry(false);
