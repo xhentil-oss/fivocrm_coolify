@@ -44,7 +44,7 @@ const GoalsView: React.FC = () => {
   const { data: projects } = useCollection<Project>('projects');
   const { data: leads } = useCollection<Lead>('leads');
   const { data: tasks } = useCollection<Task>('tasks');
-  const getName = useUserNames(teamMembers);
+  const { getName } = useUserNames(teamMembers);
 
   // Mutations
   const goalMutation = useMutation<Goal>('goals');
