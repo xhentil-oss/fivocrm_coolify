@@ -70,6 +70,33 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 /** Maps LID JID (e.g. "123456789@lid") → phone JID (e.g. "355691234567@s.whatsapp.net") */
 const lidToPhoneMap = new Map<string, string>();
 
+/** Load persisted LID mappings from Firestore on startup */
+async function loadLidMappings(): Promise<void> {
+  try {
+    const snap = await db.collection('lidMappings').where('teamId', '==', TEAM_ID).get();
+    for (const doc of snap.docs) {
+      const { lid, phoneJid } = doc.data();
+      if (lid && phoneJid) lidToPhoneMap.set(lid, phoneJid);
+    }
+    console.log(`[WA] Loaded ${lidToPhoneMap.size} persisted LID mappings`);
+  } catch (e) {
+    console.error('[WA] Error loading LID mappings:', e);
+  }
+}
+
+/** Persist a LID mapping to Firestore */
+async function persistLidMapping(lid: string, phoneJid: string): Promise<void> {
+  try {
+    const docId = lid.replace(/[@.]/g, '_');
+    await db.collection('lidMappings').doc(docId).set({
+      lid, phoneJid, teamId: TEAM_ID,
+      updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+    }, { merge: true });
+  } catch (e) {
+    console.error('[WA] Error persisting LID mapping:', e);
+  }
+}
+
 /** Queue of messages that arrived with unresolved LID JIDs — kept only as in-memory index
  *  for fast processing when mapping arrives. Messages are ALWAYS saved to Firestore (with isLid: true). */
 const pendingLidMessages = new Map<string, string[]>(); // LID JID → array of Firestore doc IDs
@@ -79,6 +106,7 @@ async function registerLidMapping(lid: string, phoneJid: string): Promise<void> 
   if (!lid || !phoneJid || lidToPhoneMap.has(lid)) return;
   lidToPhoneMap.set(lid, phoneJid);
   console.log(`[WA] LID mapping: ${lid} → ${phoneJid} (total: ${lidToPhoneMap.size})`);
+  persistLidMapping(lid, phoneJid);
 
   // Backfill old messages stored with LID number
   backfillLidMessages(lid, phoneJid);
@@ -138,6 +166,76 @@ async function backfillLidMessages(lidJid: string, phoneJid: string): Promise<vo
   }
 }
 
+/** Reverse-resolve known leads: query phone→LID via USyncQuery */
+async function reverseLookupLeads(): Promise<void> {
+  if (!sock) return;
+  try {
+    const { USyncQuery, USyncUser } = await import('baileys');
+
+    // 1. Collect all unique phone numbers from leads
+    const leadsSnap = await db.collection('leads')
+      .where('teamId', '==', TEAM_ID)
+      .select('phoneNumber', 'phone')
+      .get();
+
+    const phones = new Set<string>();
+    for (const doc of leadsSnap.docs) {
+      const d = doc.data();
+      const p = normalizePhone(String(d.phoneNumber || d.phone || ''));
+      if (p && p.length >= 7 && p.length <= 15) phones.add(p);
+    }
+
+    // 2. Also collect phones from LID messages (unresolved)
+    const lidSnap = await db.collection('whatsappMessages')
+      .where('teamId', '==', TEAM_ID)
+      .where('isLid', '==', true)
+      .select('jid')
+      .limit(200)
+      .get();
+
+    const unresolvedLids = new Set<string>();
+    for (const doc of lidSnap.docs) {
+      const jid = doc.data().jid;
+      if (jid?.endsWith('@lid')) unresolvedLids.add(jid);
+    }
+
+    console.log(`[WA] Reverse lookup: ${phones.size} lead phones, ${unresolvedLids.size} unresolved LIDs`);
+
+    // 3. Query leads' phones via USyncQuery (batch of 20)
+    const phoneArr = Array.from(phones);
+    let resolved = 0;
+    for (let i = 0; i < phoneArr.length; i += 20) {
+      const batch = phoneArr.slice(i, i + 20);
+      try {
+        const query = new USyncQuery();
+        query.withMode('query').withContext('interactive');
+        for (const phone of batch) {
+          const user = new USyncUser();
+          user.withPhone('+' + phone);
+          query.withUser(user);
+        }
+        query.withLIDProtocol();
+        query.withContactProtocol();
+        const result = await sock!.executeUSyncQuery(query);
+        for (const item of (result?.list) || []) {
+          const lid = (item as any).lid;
+          const id = (item as any).id;
+          if (lid && id && id !== 'undefined') {
+            registerLidMapping(lid, id);
+            resolved++;
+          }
+        }
+      } catch (e) {
+        console.error(`[WA] USyncQuery batch error:`, e);
+      }
+    }
+
+    console.log(`[WA] Reverse lookup complete: ${resolved} new mappings from ${phones.size} phones`);
+  } catch (e) {
+    console.error('[WA] Reverse lookup error:', e);
+  }
+}
+
 // ── Connect WhatsApp ──────────────────────────────────────────────────────────
 async function connectWhatsApp(): Promise<void> {
   if (reconnectTimer) {
@@ -157,6 +255,7 @@ async function connectWhatsApp(): Promise<void> {
     logger: pino({ level: 'silent' }),
     browser: ['Business CRM', 'Chrome', '1.0.0'],
     printQRInTerminal: true,
+    shouldSyncHistoryMessage: () => true,
   });
 
   sock.ev.on('creds.update', saveCreds);
@@ -186,31 +285,8 @@ async function connectWhatsApp(): Promise<void> {
       qrDataUrl = null;
       console.log('[WA] ✅ I lidhur me sukses!');
 
-      // Extract LID mappings from Baileys internal store (if available)
-      setTimeout(() => {
-        try {
-          const store = (sock as any)?.authState?.creds?.me ||
-                        (sock as any)?.user;
-          if (store?.id) {
-            console.log(`[WA] Connected as: ${store.id}`);
-          }
-          // Try to read contacts from auth store
-          const contacts = (sock as any)?.store?.contacts;
-          if (contacts && typeof contacts === 'object') {
-            let count = 0;
-            for (const [jid, contact] of Object.entries(contacts)) {
-              const lid = (contact as any)?.lid;
-              if (lid && jid.endsWith('@s.whatsapp.net')) {
-                registerLidMapping(lid, jid);
-                count++;
-              }
-            }
-            if (count) console.log(`[WA] Store contacts: ${count} LID mappings extracted`);
-          }
-        } catch (e) {
-          console.error('[WA] Error reading store contacts:', e);
-        }
-      }, 5000);
+      // After connection opens, resolve known leads via USyncQuery (phone→LID)
+      setTimeout(() => reverseLookupLeads(), 8000);
     }
   });
 
@@ -533,5 +609,5 @@ app.listen(PORT, () => {
   console.log(`\n[VPS Server] ✅ Aktiv në port ${PORT}`);
   console.log(`[VPS Server]  → Status: http://localhost:${PORT}/status`);
   console.log(`[VPS Server]  → QR:     http://localhost:${PORT}/qr\n`);
-  connectWhatsApp();
+  loadLidMappings().then(() => connectWhatsApp());
 });
