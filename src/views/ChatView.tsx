@@ -1012,7 +1012,14 @@ const ChatView: React.FC = () => {
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className={`truncate block text-sm ${isWaActive ? 'text-[#25D366] font-medium' : ''}`}>{conv.leadName !== conv.phone ? conv.leadName : `+${conv.phone}`}</span>
-                    <span className="text-[10px] text-muted-foreground/60 truncate block">{(conv.lastMessage || '').slice(0, 32)}</span>
+                    <span className="text-[10px] text-muted-foreground/60 truncate block">
+                      {conv.isLid
+                        ? (conv.lastMessage || '').slice(0, 32)
+                        : conv.leadName !== conv.phone
+                          ? `+${conv.phone}${conv.lastMessage ? ' · ' + conv.lastMessage.slice(0, 20) : ''}`
+                          : (conv.lastMessage || '').slice(0, 32)
+                      }
+                    </span>
                   </div>
                   {conv.unread > 0 && !isWaActive && (
                     <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-[#25D366] text-white text-[10px] font-bold">{conv.unread}</span>
@@ -1082,10 +1089,12 @@ const ChatView: React.FC = () => {
                 <Smartphone className="h-4 w-4 text-[#25D366]" />
               </div>
               <div className="min-w-0">
-                <p className="font-semibold text-sm truncate">{activeWaLeadName || activeWaPhone}</p>
-                <p className="text-[11px] text-muted-foreground flex items-center gap-1">
-                  <Phone className="h-3 w-3" /> {activeWaPhone}
-                </p>
+                <p className="font-semibold text-sm truncate">{activeWaLeadName || (activeWaPhone && activeWaPhone.length <= 13 ? `+${activeWaPhone}` : 'Numër i panjohur')}</p>
+                {activeWaPhone && activeWaPhone.length <= 13 && (
+                  <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+                    <Phone className="h-3 w-3" /> +{activeWaPhone}
+                  </p>
+                )}
               </div>
             </div>
           ) : (
