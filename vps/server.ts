@@ -70,8 +70,9 @@ let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 /** Maps LID JID (e.g. "123456789@lid") → phone JID (e.g. "355691234567@s.whatsapp.net") */
 const lidToPhoneMap = new Map<string, string>();
 
-/** Queue of messages that arrived with unresolved LID JIDs */
-const pendingLidMessages = new Map<string, Array<{ msg: any; body: string; ts: Date; waMessageId: string | null; isFromMe: boolean }>>();
+/** Queue of messages that arrived with unresolved LID JIDs — kept only as in-memory index
+ *  for fast processing when mapping arrives. Messages are ALWAYS saved to Firestore (with isLid: true). */
+const pendingLidMessages = new Map<string, string[]>(); // LID JID → array of Firestore doc IDs
 
 /** Register a LID→phone mapping and trigger backfill + queue processing */
 async function registerLidMapping(lid: string, phoneJid: string): Promise<void> {
@@ -82,30 +83,24 @@ async function registerLidMapping(lid: string, phoneJid: string): Promise<void> 
   // Backfill old messages stored with LID number
   backfillLidMessages(lid, phoneJid);
 
-  // Process queued messages for this LID
-  const queued = pendingLidMessages.get(lid);
-  if (queued?.length) {
+  // Update queued messages (already in Firestore with isLid: true) with the real phone
+  const queuedDocIds = pendingLidMessages.get(lid);
+  if (queuedDocIds?.length) {
     const phone = normalizePhone(phoneJid.split('@')[0]);
-    console.log(`[WA] Processing ${queued.length} queued messages for ${lid} → ${phone}`);
-    for (const item of queued) {
-      try {
-        const docId = item.waMessageId || db.collection('whatsappMessages').doc().id;
-        await db.collection('whatsappMessages').doc(docId).set({
-          phone,
-          jid: phoneJid,
-          direction: item.isFromMe ? 'outbound' : 'inbound',
-          message: item.body,
-          waMessageId: item.waMessageId,
-          leadId: null,
-          leadName: null,
-          teamId: TEAM_ID,
-          status: item.isFromMe ? 'sent' : 'received',
-          createdAt: admin.firestore.Timestamp.fromDate(item.ts),
-          updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
-        }, { merge: true });
-      } catch (e) {
-        console.error(`[WA] Error saving queued message:`, e);
-      }
+    console.log(`[WA] Updating ${queuedDocIds.length} queued LID docs for ${lid} → ${phone}`);
+    const batch = db.batch();
+    for (const docId of queuedDocIds) {
+      batch.update(db.collection('whatsappMessages').doc(docId), {
+        phone,
+        jid: phoneJid,
+        isLid: false,
+        updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+      });
+    }
+    try {
+      await batch.commit();
+    } catch (e) {
+      console.error(`[WA] Error updating queued LID docs:`, e);
     }
     pendingLidMessages.delete(lid);
   }
@@ -241,20 +236,15 @@ async function connectWhatsApp(): Promise<void> {
 
       // Resolve LID to real phone JID if we have the mapping
       let resolvedJid = rawJid;
+      let isLid = false;
       if (rawJid.endsWith('@lid')) {
         const phoneJid = lidToPhoneMap.get(rawJid);
         if (phoneJid) {
           resolvedJid = phoneJid;
           console.log(`[WA] LID resolved: ${rawJid} → ${phoneJid}`);
         } else {
-          // Queue message for later processing when mapping arrives
-          const body = msg.message.conversation || msg.message.extendedTextMessage?.text || '[Media]';
-          const ts = new Date(Number(msg.messageTimestamp) * 1000);
-          const queue = pendingLidMessages.get(rawJid) || [];
-          queue.push({ msg, body, ts, waMessageId: msg.key.id || null, isFromMe: !!msg.key.fromMe });
-          pendingLidMessages.set(rawJid, queue);
-          console.log(`[WA] LID queued (${queue.length}): ${rawJid}`);
-          continue;
+          // Save with LID as phone — will be updated when mapping arrives
+          isLid = true;
         }
       }
 
@@ -319,10 +309,20 @@ async function connectWhatsApp(): Promise<void> {
           leadName: autoLeadName,
           teamId: TEAM_ID,
           status: isFromMe ? 'sent' : 'received',
+          isLid,
           createdAt: admin.firestore.Timestamp.fromDate(ts),
           updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
         }, { merge: true });
-        console.log(`[WA] ${isFromMe ? '→ (telefon)' : '←'} ${phone}: ${body.slice(0, 80)}`);
+
+        // Track LID docs so we can update them when mapping arrives
+        if (isLid) {
+          const queue = pendingLidMessages.get(rawJid) || [];
+          queue.push(docId);
+          pendingLidMessages.set(rawJid, queue);
+          console.log(`[WA] LID saved (${queue.length}): ${rawJid} → doc ${docId}`);
+        } else {
+          console.log(`[WA] ${isFromMe ? '→ (telefon)' : '←'} ${phone}: ${body.slice(0, 80)}`);
+        }
       } catch (e) {
         console.error('[WA] Gabim gjatë ruajtjes së mesazhit:', e);
       }

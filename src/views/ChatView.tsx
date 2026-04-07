@@ -400,21 +400,24 @@ const ChatView: React.FC = () => {
       return normalizeAlbanianPhone(msg.phone || '');
     };
     // Real phone numbers are max 15 digits; numbers >13 digits without a jid are unresolved LIDs
+    // Show them anyway — label as "Numër i panjohur" until mapping resolves
     const isRealPhone = (phone: string, jid?: string | null) =>
       !!jid?.endsWith('@s.whatsapp.net') || phone.length <= 13;
-    const map = new Map<string, { phone: string; jid: string | null; leadName: string; leadId?: string | null; lastMessage: string; lastDate: any; unread: number }>();
+    const map = new Map<string, { phone: string; jid: string | null; leadName: string; leadId?: string | null; lastMessage: string; lastDate: any; unread: number; isLid: boolean }>();
     for (const msg of allWaMessages) {
       const key = phoneKey(msg);
       if (!key) continue;
+      const msgIsLid = !isRealPhone(key, msg.jid) || !!(msg as any).isLid;
       if (!map.has(key)) {
         map.set(key, {
           phone: key,
           jid: msg.jid || null,
-          leadName: msg.leadName || key,
+          leadName: msg.leadName || (msgIsLid ? 'Numër i panjohur' : `+${key}`),
           leadId: msg.leadId || null,
           lastMessage: msg.message,
           lastDate: msg.createdAt,
           unread: (msg.direction === 'inbound' && msg.status === 'received') ? 1 : 0,
+          isLid: msgIsLid,
         });
       } else {
         const existing = map.get(key)!;
@@ -432,7 +435,6 @@ const ChatView: React.FC = () => {
       }
     }
     return Array.from(map.values())
-      .filter(c => isRealPhone(c.phone, c.jid))
       .sort((a, b) => {
       const ta = a.lastDate instanceof Date ? a.lastDate.getTime() : a.lastDate?.toMillis?.() ?? 0;
       const tb = b.lastDate instanceof Date ? b.lastDate.getTime() : b.lastDate?.toMillis?.() ?? 0;
