@@ -208,14 +208,40 @@ export interface Goal {
   id: string;
   title: string;
   description?: string;
+  /** 'team' = shared team goal, 'individual' = personal member goal */
+  scope: 'team' | 'individual';
+  /** For individual goals: the assigned member's userId */
+  ownerId?: string;
+  /** Parent goal ID for cascading (team→individual breakdown) */
+  parentGoalId?: string;
+  progress: number; // 0-100
+  startDate?: Date;
+  dueDate?: Date;
+  status: 'On Track' | 'At Risk' | 'Off Track' | 'Achieved';
+  /** Linked CRM elements */
+  linkedProjects?: string[];
+  linkedLeads?: string[];
+  linkedTasks?: string[];
+  /** Metric tracking */
   targetValue?: number;
   currentValue?: number;
-  dueDate?: Date;
-  status: 'Not Started' | 'In Progress' | 'Completed';
+  metricUnit?: string; // e.g. "€", "leads", "projekte"
   teamId?: string;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
+}
+
+export interface Milestone {
+  id: string;
+  goalId: string;
+  title: string;
+  description?: string;
+  status: 'Pending' | 'In Progress' | 'Completed';
+  completed?: boolean;
+  dueDate?: Date;
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export interface Lead {
@@ -428,16 +454,6 @@ export interface TimeEntry {
   duration?: number;
   isBillable?: boolean;
   isPomodoroSession?: boolean;
-  createdAt: Date;
-  updatedAt: Date;
-}
-
-export interface Milestone {
-  id: string;
-  goalId: string;
-  title: string;
-  completed?: boolean;
-  dueDate?: Date;
   createdAt: Date;
   updatedAt: Date;
 }
