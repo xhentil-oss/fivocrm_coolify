@@ -185,6 +185,32 @@ async function connectWhatsApp(): Promise<void> {
       connectionStatus = 'connected';
       qrDataUrl = null;
       console.log('[WA] ✅ I lidhur me sukses!');
+
+      // Extract LID mappings from Baileys internal store (if available)
+      setTimeout(() => {
+        try {
+          const store = (sock as any)?.authState?.creds?.me ||
+                        (sock as any)?.user;
+          if (store?.id) {
+            console.log(`[WA] Connected as: ${store.id}`);
+          }
+          // Try to read contacts from auth store
+          const contacts = (sock as any)?.store?.contacts;
+          if (contacts && typeof contacts === 'object') {
+            let count = 0;
+            for (const [jid, contact] of Object.entries(contacts)) {
+              const lid = (contact as any)?.lid;
+              if (lid && jid.endsWith('@s.whatsapp.net')) {
+                registerLidMapping(lid, jid);
+                count++;
+              }
+            }
+            if (count) console.log(`[WA] Store contacts: ${count} LID mappings extracted`);
+          }
+        } catch (e) {
+          console.error('[WA] Error reading store contacts:', e);
+        }
+      }, 5000);
     }
   });
 
@@ -259,6 +285,7 @@ async function connectWhatsApp(): Promise<void> {
       const ts = new Date(Number(msg.messageTimestamp) * 1000);
       const waMessageId = msg.key.id || null;
       const isFromMe = !!msg.key.fromMe;
+      const pushName = (msg as any).pushName || null;
 
       // Use waMessageId as doc ID to prevent duplicates
       const docId = waMessageId || db.collection('whatsappMessages').doc().id;
@@ -306,7 +333,8 @@ async function connectWhatsApp(): Promise<void> {
           message: body,
           waMessageId,
           leadId: autoLeadId,
-          leadName: autoLeadName,
+          leadName: autoLeadName || pushName,
+          pushName,
           teamId: TEAM_ID,
           status: isFromMe ? 'sent' : 'received',
           isLid,
@@ -404,6 +432,37 @@ app.get('/qr', (_req, res) => {
       <script>setTimeout(() => location.reload(), 30000)</script>
     </body></html>
   `);
+});
+
+/** Sync: reconnect WhatsApp to trigger fresh history + LID mappings */
+app.post('/sync', requireApiKey, async (_req, res) => {
+  if (!sock) {
+    res.status(503).json({ error: 'WhatsApp jo i inicializuar' });
+    return;
+  }
+  console.log('[WA] Sync requested — rilidh për sinkronizim...');
+  const beforeMappings = lidToPhoneMap.size;
+  try {
+    // Close and reconnect — triggers full history sync with LID mappings
+    sock.end(undefined);
+    await new Promise(r => setTimeout(r, 2000));
+    await connectWhatsApp();
+    // Wait for history sync to arrive (typically 5-15s)
+    await new Promise(r => setTimeout(r, 12000));
+    const newMappings = lidToPhoneMap.size - beforeMappings;
+    console.log(`[WA] Sync complete: ${newMappings} new LID mappings (total: ${lidToPhoneMap.size})`);
+    res.json({
+      success: true,
+      status: connectionStatus,
+      lidMappings: lidToPhoneMap.size,
+      newMappings,
+      pendingLids: pendingLidMessages.size,
+    });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : 'Sync dështoi';
+    console.error('[WA] Sync error:', err);
+    res.status(500).json({ error: msg });
+  }
 });
 
 /** Send a WhatsApp message */
