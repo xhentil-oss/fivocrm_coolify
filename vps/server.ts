@@ -279,6 +279,52 @@ async function reverseLookupLeads(): Promise<void> {
   }
 }
 
+/** Resolve LIDs from group participant metadata — most powerful method.
+ *  Group participants carry BOTH phone JID and LID, even for non-contacts. */
+async function resolveFromGroups(): Promise<void> {
+  if (!sock) return;
+  try {
+    console.log('[WA] Fetching group participants for LID resolution...');
+    const groups = await sock.groupFetchAllParticipating();
+    const groupCount = Object.keys(groups).length;
+    let newMappings = 0;
+
+    for (const group of Object.values(groups)) {
+      for (const participant of group.participants) {
+        // Case 1: id is phone JID, lid field has the LID
+        if (participant.lid && participant.id && !participant.id.endsWith('@lid')) {
+          const lid = participant.lid.endsWith('@lid')
+            ? participant.lid
+            : `${participant.lid}@lid`;
+          const phoneJid = participant.id.endsWith('@s.whatsapp.net')
+            ? participant.id
+            : `${participant.id}@s.whatsapp.net`;
+          if (!lidToPhoneMap.has(lid)) {
+            registerLidMapping(lid, phoneJid);
+            newMappings++;
+          }
+        }
+        // Case 2: id is LID, phoneNumber field has the real phone
+        if ((participant as any).phoneNumber && participant.id?.endsWith('@lid')) {
+          const lid = participant.id;
+          const pn = (participant as any).phoneNumber;
+          const phoneJid = pn.endsWith('@s.whatsapp.net')
+            ? pn
+            : `${pn}@s.whatsapp.net`;
+          if (!lidToPhoneMap.has(lid)) {
+            registerLidMapping(lid, phoneJid);
+            newMappings++;
+          }
+        }
+      }
+    }
+
+    console.log(`[WA] Groups: ${groupCount} groups scanned, ${newMappings} new LID mappings (total: ${lidToPhoneMap.size})`);
+  } catch (e) {
+    console.error('[WA] Group LID resolution error:', e);
+  }
+}
+
 // ── Connect WhatsApp ──────────────────────────────────────────────────────────
 async function connectWhatsApp(): Promise<void> {
   if (reconnectTimer) {
@@ -330,13 +376,16 @@ async function connectWhatsApp(): Promise<void> {
 
       // After connection opens, resolve known leads via USyncQuery (phone→LID)
       setTimeout(() => reverseLookupLeads(), 8000);
+      // Then scan group participants for additional LID→phone mappings
+      setTimeout(() => resolveFromGroups(), 20000);
 
       // Schedule periodic re-sync every 30 minutes
       if (lidResyncTimer) clearInterval(lidResyncTimer);
-      lidResyncTimer = setInterval(() => {
+      lidResyncTimer = setInterval(async () => {
         if (connectionStatus === 'connected' && sock) {
           console.log('[WA] Periodic LID re-sync starting...');
-          reverseLookupLeads();
+          await reverseLookupLeads();
+          await resolveFromGroups();
         }
       }, 30 * 60 * 1000);
     }
@@ -578,6 +627,9 @@ app.post('/sync', requireApiKey, async (_req, res) => {
     await connectWhatsApp();
     // Wait for history sync to arrive (typically 5-15s)
     await new Promise(r => setTimeout(r, 12000));
+    // Run all resolution strategies
+    await reverseLookupLeads();
+    await resolveFromGroups();
     const newMappings = lidToPhoneMap.size - beforeMappings;
     console.log(`[WA] Sync complete: ${newMappings} new LID mappings (total: ${lidToPhoneMap.size})`);
     res.json({
