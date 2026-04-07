@@ -27,6 +27,12 @@ const rateLimitMap = new Map<string, { count: number; resetAt: number }>();
 
 function checkRateLimit(userId: string): boolean {
   const now = Date.now();
+
+  // Purge expired entries to prevent unbounded memory growth
+  for (const [key, val] of rateLimitMap) {
+    if (now > val.resetAt) rateLimitMap.delete(key);
+  }
+
   const entry = rateLimitMap.get(userId);
   if (!entry || now > entry.resetAt) {
     rateLimitMap.set(userId, { count: 1, resetAt: now + 3600000 });
@@ -83,10 +89,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Build context-aware system message
   let systemMessage = SYSTEM_PROMPT;
   if (context) {
+    const sanitize = (v: unknown) => typeof v === 'string' ? v.slice(0, 100).replace(/[\n\r]/g, ' ') : '';
     systemMessage += '\n\nKonteksti aktual i përdoruesit:';
-    if (context.currentView) systemMessage += `\n- Faqja aktuale: ${context.currentView}`;
-    if (context.userRole) systemMessage += `\n- Roli: ${context.userRole}`;
-    if (context.teamName) systemMessage += `\n- Ekipi: ${context.teamName}`;
+    if (context.currentView) systemMessage += `\n- Faqja aktuale: ${sanitize(context.currentView)}`;
+    if (context.userRole) systemMessage += `\n- Roli: ${sanitize(context.userRole)}`;
+    if (context.teamName) systemMessage += `\n- Ekipi: ${sanitize(context.teamName)}`;
   }
 
   const apiKey = process.env.OPENAI_API_KEY;
