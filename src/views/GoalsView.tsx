@@ -422,12 +422,13 @@ const GoalForm: React.FC<{
       startDate: startDate || undefined,
       dueDate: dueDate || undefined,
       ownerId: scope === 'individual' ? ownerId : (currentUserId || undefined),
-      teamId: teamId || undefined,
       parentGoalId: parentGoalId || undefined,
       linkedProjects: linkedProjects.length ? linkedProjects : undefined,
       linkedLeads: linkedLeads.length ? linkedLeads : undefined,
       linkedTasks: linkedTasks.length ? linkedTasks : undefined,
     };
+    // Only set teamId when explicitly chosen; otherwise let useMutation auto-inject it
+    if (teamId) data.teamId = teamId;
 
     const tv = fd.get('targetValue') as string;
     if (tv) {
