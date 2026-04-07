@@ -82,6 +82,7 @@ const ChatView: React.FC = () => {
   const [activeWaPhone, setActiveWaPhone] = useState<string | null>(null);
   const [activeWaJid, setActiveWaJid] = useState<string | null>(null);
   const [activeWaLeadName, setActiveWaLeadName] = useState('');
+  const [activeWaChannel, setActiveWaChannel] = useState<'baileys' | 'meta' | null>(null);
   const [waText, setWaText] = useState('');
   const [waSending, setWaSending] = useState(false);
   const waScrollRef = useRef<HTMLDivElement>(null);
@@ -402,7 +403,7 @@ const ChatView: React.FC = () => {
     // Real phone = has @s.whatsapp.net JID OR phone digits ≤ 13
     const isRealPhone = (phone: string, jid?: string | null) =>
       !!jid?.endsWith('@s.whatsapp.net') || phone.length <= 13;
-    const map = new Map<string, { phone: string; jid: string | null; leadName: string; leadId?: string | null; lastMessage: string; lastDate: any; unread: number; isLid: boolean }>();
+    const map = new Map<string, { phone: string; jid: string | null; leadName: string; leadId?: string | null; lastMessage: string; lastDate: any; unread: number; isLid: boolean; channel?: 'baileys' | 'meta' }>();
     for (const msg of allWaMessages) {
       const key = phoneKey(msg);
       if (!key) continue;
@@ -419,6 +420,7 @@ const ChatView: React.FC = () => {
           lastDate: msg.createdAt,
           unread: (msg.direction === 'inbound' && msg.status === 'received') ? 1 : 0,
           isLid: msgIsLid,
+          channel: (msg as any).channel || 'baileys',
         });
       } else {
         const existing = map.get(key)!;
@@ -655,11 +657,12 @@ const ChatView: React.FC = () => {
     setReplyingTo(null);
   }, []);
 
-  const handleSelectWhatsApp = useCallback((phone: string, leadName: string, jid?: string | null) => {
+  const handleSelectWhatsApp = useCallback((phone: string, leadName: string, jid?: string | null, channel?: 'baileys' | 'meta') => {
     setChatMode('whatsapp');
     setActiveWaPhone(phone);
     setActiveWaJid(jid || null);
     setActiveWaLeadName(leadName);
+    setActiveWaChannel(channel || 'baileys');
     setShowSidebar(false);
     setShowSearch(false);
     setSearchQuery('');
@@ -672,10 +675,15 @@ const ChatView: React.FC = () => {
     setWaText('');
     try {
       const token = await user.getIdToken();
-      const res = await fetch('/api/send-whatsapp', {
+      const isMeta = activeWaChannel === 'meta';
+      const endpoint = isMeta ? '/api/meta-send' : '/api/send-whatsapp';
+      const payload = isMeta
+        ? { to: activeWaPhone, message: body, leadName: activeWaLeadName, teamId: getGlobalTeamId() }
+        : { to: activeWaPhone, message: body, leadName: activeWaLeadName, teamId: getGlobalTeamId(), jid: activeWaJid || undefined };
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ to: activeWaPhone, message: body, leadName: activeWaLeadName, teamId: getGlobalTeamId(), jid: activeWaJid || undefined }),
+        body: JSON.stringify(payload),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -1000,15 +1008,15 @@ const ChatView: React.FC = () => {
               return (
                 <button
                   key={conv.phone}
-                  onClick={() => handleSelectWhatsApp(conv.phone, conv.leadName, conv.jid)}
+                  onClick={() => handleSelectWhatsApp(conv.phone, conv.leadName, conv.jid, conv.channel)}
                   className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-left ${
                     isWaActive
                       ? 'bg-[#25D366]/10 border border-[#25D366]/20 shadow-sm'
                       : 'hover:bg-accent/50 text-foreground/70'
                   }`}
                 >
-                  <div className="h-8 w-8 rounded-lg bg-[#25D366]/15 flex items-center justify-center flex-shrink-0">
-                    <Smartphone className="h-4 w-4 text-[#25D366]" />
+                  <div className={`h-8 w-8 rounded-lg flex items-center justify-center flex-shrink-0 ${conv.channel === 'meta' ? 'bg-blue-500/15' : 'bg-[#25D366]/15'}`}>
+                    <Smartphone className={`h-4 w-4 ${conv.channel === 'meta' ? 'text-blue-500' : 'text-[#25D366]'}`} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className={`truncate block text-sm ${isWaActive ? 'text-[#25D366] font-medium' : ''}`}>{conv.leadName !== conv.phone ? conv.leadName : `+${conv.phone}`}</span>

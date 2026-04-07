@@ -413,6 +413,7 @@ async function connectWhatsApp(): Promise<void> {
           pushName,
           teamId: TEAM_ID,
           status: isFromMe ? 'sent' : 'received',
+          channel: 'baileys',
           isLid,
           createdAt: admin.firestore.Timestamp.fromDate(ts),
           updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
@@ -591,6 +592,7 @@ app.post('/send', requireApiKey, async (req, res) => {
       waMessageId,
       teamId: resolvedTeamId,
       status: 'sent',
+      channel: 'baileys',
       createdAt: admin.firestore.Timestamp.fromDate(new Date()),
       updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
     });

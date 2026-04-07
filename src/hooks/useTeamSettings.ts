@@ -12,12 +12,25 @@ export interface BankAccount {
   country: string;
 }
 
+export interface MetaChannel {
+  id: string;
+  label: string;
+  phone: string;
+  phoneNumberId: string;
+  accessToken: string;
+  businessAccountId?: string;
+}
+
 export interface TeamSettings {
   bankAccounts?: BankAccount[];
   eurAllRate?: string;
   whatsappEnabled?: boolean;
   whatsappVpsUrl?: string;
   whatsappVpsSecret?: string;
+  metaEnabled?: boolean;
+  metaChannels?: MetaChannel[];
+  metaWebhookVerifyToken?: string;
+  metaPhoneNumberIds?: string[];
   cronSettings?: Record<string, any>;
   cronLastRuns?: Record<string, any>;
   stripePublishableKey?: string;

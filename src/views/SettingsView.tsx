@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare } from 'lucide-react';
+import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare, Copy, Phone, Cloud } from 'lucide-react';
+import { MetaChannel } from '../hooks/useTeamSettings';
 import { swiftKeyDown, ibanChange } from '../lib/utils';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -137,6 +138,11 @@ const SettingsView: React.FC = () => {
     if (firestoreSettings.cronSettings) setCronSettings(firestoreSettings.cronSettings);
     if (firestoreSettings.stripePublishableKey) setStripePublishableKey(firestoreSettings.stripePublishableKey);
     if (firestoreSettings.stripeMode) setStripeMode(firestoreSettings.stripeMode);
+    // Meta Cloud API
+    if (firestoreSettings.metaEnabled !== undefined) setMetaEnabled(firestoreSettings.metaEnabled);
+    if (firestoreSettings.metaChannels) setMetaChannels(firestoreSettings.metaChannels);
+    if (firestoreSettings.metaWebhookVerifyToken) setMetaWebhookVerifyToken(firestoreSettings.metaWebhookVerifyToken);
+    setMetaLoaded(true);
   }, [firestoreSettings]);
 
   // ── EUR→ALL exchange rate ──
@@ -148,6 +154,13 @@ const SettingsView: React.FC = () => {
   const [whatsappVpsUrl, setWhatsappVpsUrl] = useState(() => localStorage.getItem('whatsapp_vps_url') || '');
   const [whatsappVpsSecret, setWhatsappVpsSecret] = useState(() => localStorage.getItem('whatsapp_vps_secret') || '');
   const [whatsappSaved, setWhatsappSaved] = useState(false);
+
+  // ── Meta WhatsApp Cloud API settings ──
+  const [metaEnabled, setMetaEnabled] = useState(false);
+  const [metaChannels, setMetaChannels] = useState<MetaChannel[]>([]);
+  const [metaWebhookVerifyToken, setMetaWebhookVerifyToken] = useState('');
+  const [metaSaved, setMetaSaved] = useState(false);
+  const [metaLoaded, setMetaLoaded] = useState(false);
 
   // ── Cron / Automation settings (persisted in localStorage) ──
   const [cronSettings, setCronSettings] = useState<Record<string, any>>(() => {
@@ -224,6 +237,37 @@ const SettingsView: React.FC = () => {
     if (teamId) saveTeamSettings(teamId, { whatsappEnabled, whatsappVpsUrl, whatsappVpsSecret });
     setWhatsappSaved(true);
     setTimeout(() => setWhatsappSaved(false), 3000);
+  };
+
+  // ── Meta Cloud API handlers ──
+  const handleToggleMeta = (val: boolean) => {
+    setMetaEnabled(val);
+    if (teamId) saveTeamSettings(teamId, { metaEnabled: val });
+  };
+
+  const handleSaveMetaSettings = () => {
+    // Denormalize phoneNumberIds for Firestore array-contains querying in webhook
+    const metaPhoneNumberIds = metaChannels.map(ch => ch.phoneNumberId).filter(Boolean);
+    if (teamId) saveTeamSettings(teamId, { metaEnabled, metaChannels, metaWebhookVerifyToken, metaPhoneNumberIds });
+    setMetaSaved(true);
+    setTimeout(() => setMetaSaved(false), 3000);
+  };
+
+  const addMetaChannel = () => {
+    setMetaChannels(prev => [...prev, { id: crypto.randomUUID(), label: '', phone: '', phoneNumberId: '', accessToken: '', businessAccountId: '' }]);
+  };
+
+  const updateMetaChannel = (id: string, field: keyof MetaChannel, value: string) => {
+    setMetaChannels(prev => prev.map(ch => ch.id === id ? { ...ch, [field]: value } : ch));
+  };
+
+  const removeMetaChannel = (id: string) => {
+    setMetaChannels(prev => prev.filter(ch => ch.id !== id));
+  };
+
+  const copyToClipboard = (text: string) => {
+    navigator.clipboard.writeText(text);
+    toast({ title: 'U kopjua!', description: text.slice(0, 60) + '...' });
   };
 
   const addBankAccount = () => {
@@ -856,6 +900,189 @@ const SettingsView: React.FC = () => {
                       disabled={!whatsappVpsUrl || !whatsappVpsSecret}
                     >
                       Ruaj Cilësimet WhatsApp
+                    </Button>
+                  </div>
+                </div>
+              </>
+            )}
+          </Card>
+
+          {/* Meta WhatsApp Cloud API */}
+          <Card className="p-6 space-y-6">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-blue-500/10 rounded-lg">
+                  <Cloud className="w-6 h-6 text-blue-500" />
+                </div>
+                <div>
+                  <h3 className="text-h4 text-foreground">Meta WhatsApp Cloud API</h3>
+                  <p className="text-body-sm text-muted-foreground">
+                    Numra të shumtë WhatsApp me API zyrtare të Meta — pa VPS, numra realë 100%
+                  </p>
+                </div>
+              </div>
+              <Switch checked={metaEnabled} onCheckedChange={handleToggleMeta} />
+            </div>
+
+            {metaEnabled && (
+              <>
+                <Separator />
+                <div className="flex items-start gap-2 p-3 bg-blue-50 dark:bg-blue-500/10 border border-blue-200 dark:border-blue-500/20 rounded-lg">
+                  <AlertCircle className="w-4 h-4 text-blue-600 mt-0.5 shrink-0" />
+                  <div className="text-xs text-blue-700 dark:text-blue-400 space-y-1">
+                    <p>Kërkon një <strong>Meta Business Account</strong> me WhatsApp Business API të aktivizuar.</p>
+                    <p>Krijo app në <a href="https://developers.facebook.com" target="_blank" rel="noopener noreferrer" className="underline">developers.facebook.com</a> → WhatsApp → API Setup.</p>
+                  </div>
+                </div>
+
+                {/* Webhook URL info */}
+                <div className="space-y-2">
+                  <label className="text-body-sm text-foreground font-medium flex items-center gap-2">
+                    <Globe className="w-4 h-4" />
+                    Webhook URL (vendose në Meta Dashboard)
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      readOnly
+                      value={typeof window !== 'undefined' ? `${window.location.origin}/api/meta-webhook` : '/api/meta-webhook'}
+                      className="w-full h-11 px-4 bg-muted border border-border rounded-md text-body text-foreground font-mono text-sm cursor-text"
+                    />
+                    <Button variant="outline" size="icon" className="shrink-0 h-11 w-11" onClick={() => copyToClipboard(`${window.location.origin}/api/meta-webhook`)}>
+                      <Copy className="w-4 h-4" />
+                    </Button>
+                  </div>
+                </div>
+
+                {/* Webhook Verify Token */}
+                <div className="space-y-2">
+                  <label className="text-body-sm text-foreground font-medium flex items-center gap-2">
+                    <Key className="w-4 h-4" />
+                    Webhook Verify Token
+                  </label>
+                  <div className="flex gap-2">
+                    <input
+                      type="text"
+                      value={metaWebhookVerifyToken}
+                      onChange={(e) => setMetaWebhookVerifyToken(e.target.value)}
+                      placeholder="Vendos një token unik verifikimi"
+                      className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono text-sm"
+                    />
+                    <Button variant="outline" size="icon" className="shrink-0 h-11 w-11" onClick={() => {
+                      const token = crypto.randomUUID();
+                      setMetaWebhookVerifyToken(token);
+                    }}>
+                      <RefreshCw className="w-4 h-4" />
+                    </Button>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Vendos të njëjtin token edhe në <code className="bg-muted px-1 rounded text-xs">META_WEBHOOK_VERIFY_TOKEN</code> tek Vercel env variables
+                  </p>
+                </div>
+
+                <Separator />
+
+                {/* Meta Channels */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <label className="text-body-sm text-foreground font-medium flex items-center gap-2">
+                      <Phone className="w-4 h-4" />
+                      Numrat WhatsApp (Meta)
+                    </label>
+                    <Button variant="outline" size="sm" onClick={addMetaChannel}>
+                      <Plus className="w-4 h-4 mr-1" /> Shto Numër
+                    </Button>
+                  </div>
+
+                  {metaChannels.length === 0 && (
+                    <div className="p-4 border border-dashed border-border rounded-lg text-center text-sm text-muted-foreground">
+                      Asnjë numër Meta i konfiguruar. Kliko "Shto Numër" për të filluar.
+                    </div>
+                  )}
+
+                  {metaChannels.map((ch, idx) => (
+                    <Card key={ch.id} className="p-4 space-y-3 border-blue-200 dark:border-blue-500/20">
+                      <div className="flex items-center justify-between">
+                        <Badge variant="outline" className="text-blue-600 border-blue-300">
+                          Numri #{idx + 1}
+                        </Badge>
+                        <Button variant="ghost" size="icon" className="h-8 w-8 text-destructive hover:text-destructive" onClick={() => removeMetaChannel(ch.id)}>
+                          <Trash2 className="w-4 h-4" />
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        <div className="space-y-1">
+                          <label className="text-xs text-muted-foreground">Emërtim (p.sh. "Shitje", "Mbështetje")</label>
+                          <input
+                            value={ch.label}
+                            onChange={(e) => updateMetaChannel(ch.id, 'label', e.target.value)}
+                            placeholder="Emërtimi i numrit"
+                            className="w-full h-9 px-3 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs text-muted-foreground">Numri i telefonit</label>
+                          <input
+                            value={ch.phone}
+                            onChange={(e) => updateMetaChannel(ch.id, 'phone', e.target.value)}
+                            placeholder="+355 6x xxx xxxx"
+                            className="w-full h-9 px-3 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs text-muted-foreground">Phone Number ID (nga Meta Dashboard)</label>
+                          <input
+                            value={ch.phoneNumberId}
+                            onChange={(e) => updateMetaChannel(ch.id, 'phoneNumberId', e.target.value)}
+                            placeholder="1234567890"
+                            className="w-full h-9 px-3 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div className="space-y-1">
+                          <label className="text-xs text-muted-foreground">Business Account ID (opsionale)</label>
+                          <input
+                            value={ch.businessAccountId || ''}
+                            onChange={(e) => updateMetaChannel(ch.id, 'businessAccountId', e.target.value)}
+                            placeholder="1234567890"
+                            className="w-full h-9 px-3 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono"
+                          />
+                        </div>
+                        <div className="space-y-1 md:col-span-2">
+                          <label className="text-xs text-muted-foreground">Access Token (Permanent)</label>
+                          <input
+                            type="password"
+                            value={ch.accessToken}
+                            onChange={(e) => updateMetaChannel(ch.id, 'accessToken', e.target.value)}
+                            placeholder="EAAxxxxxxx..."
+                            className="w-full h-9 px-3 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono"
+                          />
+                        </div>
+                      </div>
+                    </Card>
+                  ))}
+                </div>
+
+                <Separator />
+                <div className="flex items-center justify-between">
+                  {metaSaved && (
+                    <div className="flex items-center gap-2 text-success">
+                      <CheckCircle2 className="w-4 h-4" />
+                      <span className="text-sm">Cilësimet Meta u ruajtën!</span>
+                    </div>
+                  )}
+                  <div className="ml-auto flex gap-3">
+                    <Button
+                      variant="outline"
+                      className="bg-background text-foreground border-border hover:bg-muted"
+                      onClick={() => { setMetaChannels([]); setMetaWebhookVerifyToken(''); }}
+                    >
+                      Pastro
+                    </Button>
+                    <Button
+                      className="bg-blue-500 text-white hover:bg-blue-600"
+                      onClick={handleSaveMetaSettings}
+                      disabled={metaChannels.length === 0}
+                    >
+                      Ruaj Cilësimet Meta
                     </Button>
                   </div>
                 </div>

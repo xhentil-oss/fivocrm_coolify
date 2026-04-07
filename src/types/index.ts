@@ -11,6 +11,8 @@ export interface WhatsAppMessage {
   waMessageId?: string | null;
   teamId?: string;
   status: 'sent' | 'delivered' | 'read' | 'received' | 'failed';
+  channel?: 'baileys' | 'meta';
+  channelPhone?: string;
   createdAt: Date;
   updatedAt: Date;
 }
