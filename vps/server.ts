@@ -10,9 +10,12 @@ import QRCode from 'qrcode';
 import { readFileSync, existsSync } from 'fs';
 import pino from 'pino';
 
-// Prevent crash on unhandled rejections (e.g. Baileys internal errors)
+// Prevent crash on unhandled rejections/exceptions (e.g. Baileys internal errors)
 process.on('unhandledRejection', (err) => {
   console.error('[WA] Unhandled rejection (caught):', err);
+});
+process.on('uncaughtException', (err) => {
+  console.error('[WA] Uncaught exception (caught):', err);
 });
 
 const app = express();
@@ -72,6 +75,8 @@ let qrDataUrl: string | null = null;
 let connectionStatus: ConnectionStatus = 'disconnected';
 let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
 let lidResyncTimer: ReturnType<typeof setInterval> | null = null;
+/** Reference to the auth state keys store — used to read Baileys' internal lid-mapping entries */
+let authKeys: { get: (type: string, ids: string[]) => Promise<Record<string, any>> } | null = null;
 
 /** Maps LID JID (e.g. "123456789@lid") → phone JID (e.g. "355691234567@s.whatsapp.net") */
 const lidToPhoneMap = new Map<string, string>();
@@ -87,6 +92,72 @@ async function loadLidMappings(): Promise<void> {
     console.log(`[WA] Loaded ${lidToPhoneMap.size} persisted LID mappings`);
   } catch (e) {
     console.error('[WA] Error loading LID mappings:', e);
+  }
+}
+
+/** Read LID mappings from Baileys' internal key store (lid-mapping entries in auth_info) */
+async function readBaileysLidMappings(): Promise<void> {
+  if (!authKeys) return;
+  try {
+    // Read all session files to find LID user IDs, then check for their reverse mappings
+    const { readdirSync, readFileSync: readF } = await import('fs');
+    const files = readdirSync('./auth_info');
+
+    // Collect LID user IDs from session files (sessions with LID-like long numbers)
+    const lidUsers = new Set<string>();
+    for (const f of files) {
+      const match = f.match(/^session-(\d+)\.\d+\.json$/);
+      if (match) {
+        const user = match[1];
+        // LID numbers are typically 15+ digits; phone numbers are 7-15
+        if (user.length >= 15) lidUsers.add(user);
+      }
+    }
+
+    // Check for lid-mapping files
+    const lidMappingFiles = files.filter(f => f.startsWith('lid-mapping-'));
+    if (lidMappingFiles.length) {
+      console.log(`[WA] Found ${lidMappingFiles.length} Baileys lid-mapping files`);
+
+      // Read reverse entries: lid-mapping-{lidUser}_reverse.json → pnUser
+      const reverseKeys = lidMappingFiles
+        .filter(f => f.includes('_reverse'))
+        .map(f => f.replace('lid-mapping-', '').replace('.json', ''));
+      if (reverseKeys.length) {
+        const stored = await authKeys.get('lid-mapping', reverseKeys);
+        for (const [key, pnUser] of Object.entries(stored)) {
+          if (!pnUser || typeof pnUser !== 'string') continue;
+          const lidUser = key.replace('_reverse', '');
+          const lid = `${lidUser}@lid`;
+          const pn = `${pnUser}@s.whatsapp.net`;
+          if (!lidToPhoneMap.has(lid)) {
+            console.log(`[WA] Baileys store: ${lid} → ${pn}`);
+            registerLidMapping(lid, pn);
+          }
+        }
+      }
+
+      // Read forward entries: lid-mapping-{pnUser}.json → lidUser
+      const forwardKeys = lidMappingFiles
+        .filter(f => !f.includes('_reverse'))
+        .map(f => f.replace('lid-mapping-', '').replace('.json', ''));
+      if (forwardKeys.length) {
+        const stored = await authKeys.get('lid-mapping', forwardKeys);
+        for (const [pnUser, lidUser] of Object.entries(stored)) {
+          if (!lidUser || typeof lidUser !== 'string') continue;
+          const lid = `${lidUser}@lid`;
+          const pn = `${pnUser}@s.whatsapp.net`;
+          if (!lidToPhoneMap.has(lid)) {
+            console.log(`[WA] Baileys store (fwd): ${lid} → ${pn}`);
+            registerLidMapping(lid, pn);
+          }
+        }
+      }
+    }
+
+    console.log(`[WA] Baileys key store: ${lidMappingFiles.length} lid-mapping files, ${lidUsers.size} LID sessions found`);
+  } catch (e) {
+    console.error('[WA] Error reading Baileys LID mappings:', e);
   }
 }
 
@@ -301,6 +372,9 @@ async function connectWhatsApp(): Promise<void> {
   const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
   const { version } = await fetchLatestBaileysVersion();
 
+  // Save keys reference so we can read Baileys' internal lid-mapping store
+  authKeys = state.keys as any;
+
   sock = makeWASocket({
     version,
     auth: state,
@@ -337,6 +411,8 @@ async function connectWhatsApp(): Promise<void> {
       qrDataUrl = null;
       console.log('[WA] ✅ I lidhur me sukses!');
 
+      // Read any LID mappings from Baileys' internal key store
+      setTimeout(() => readBaileysLidMappings(), 3000);
       // After connection opens, resolve known leads via USyncQuery (phone→LID)
       setTimeout(() => reverseLookupLeads(), 8000);
       // Then scan group participants for additional LID→phone mappings
@@ -355,6 +431,15 @@ async function connectWhatsApp(): Promise<void> {
   });
 
   // ── Build LID → phone map from all available sources ─────────────────────────
+
+  // 🔑 PRIMARY: LID migration mapping sync from the connected phone
+  // Fires when WhatsApp syncs LID↔phone pairs from the device's contact database
+  // Cast to any because older Baileys type defs may not include this event
+  (sock.ev as any).on('lid-mapping.update', ({ lid, pn }: { lid: string; pn: string }) => {
+    console.log(`[WA] 📱 lid-mapping.update: ${lid} → ${pn}`);
+    registerLidMapping(lid, pn);
+  });
+
   sock.ev.on('contacts.upsert', (contacts) => {
     for (const contact of contacts) {
       const lid = (contact as any).lid as string | undefined;
@@ -385,9 +470,14 @@ async function connectWhatsApp(): Promise<void> {
       const pn = c.id || (c as any).phoneNumber;
       if (lid && pn) registerLidMapping(lid, pn);
     }
-    if (mappings.length || contacts.length) {
-      console.log(`[WA] History sync: ${mappings.length} LID mappings, ${contacts.length} contacts`);
+    // Also check chats for LID references
+    const chats = data.chats || [];
+    for (const ch of chats) {
+      const lid = (ch as any).lid || (ch as any).lidJid;
+      const pn = ch.id || (ch as any).pnJid;
+      if (lid && pn && !pn.endsWith('@g.us')) registerLidMapping(lid, pn);
     }
+    console.log(`[WA] History sync: ${mappings.length} LID mappings, ${contacts.length} contacts, ${chats.length} chats`);
   });
 
   // ── Incoming messages → save to Firestore ──────────────────────────────────
