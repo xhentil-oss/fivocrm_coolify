@@ -33,7 +33,7 @@ const GoalsView: React.FC = () => {
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [activeTab, setActiveTab] = useState('all');
 
-  // Data
+  // Data — core collections always loaded
   const { data: rawGoals, loading } = useCollection<Goal>('goals', {
     orderBy: { field: 'dueDate', direction: 'asc' },
   });
@@ -41,9 +41,11 @@ const GoalsView: React.FC = () => {
   const { data: teams } = useCollection<Team>('teams');
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers');
   const { data: milestones } = useCollection<Milestone>('milestones');
-  const { data: projects } = useCollection<Project>('projects');
-  const { data: leads } = useCollection<Lead>('leads');
-  const { data: tasks } = useCollection<Task>('tasks');
+  // CRM collections — lazy-loaded only when a dialog is open
+  const needsCRM = isCreateDialogOpen || !!editingGoal || !!selectedGoal;
+  const { data: projects } = useCollection<Project>('projects', { skip: !needsCRM });
+  const { data: leads } = useCollection<Lead>('leads', { skip: !needsCRM });
+  const { data: tasks } = useCollection<Task>('tasks', { skip: !needsCRM });
   const { getName } = useUserNames(teamMembers);
 
   // Mutations
