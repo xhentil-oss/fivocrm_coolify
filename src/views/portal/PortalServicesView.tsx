@@ -9,7 +9,7 @@ import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
-import { ShoppingBag, Tag, DollarSign, FileText, CheckCircle2, Clock, Eye, Edit3, Send } from 'lucide-react';
+import { ShoppingBag, Tag, DollarSign, FileText, CheckCircle2, Eye, Edit3, Send } from 'lucide-react';
 import { sanitizeHtml } from '../../lib/utils';
 import { useToast } from '../../hooks/use-toast';
 import ServiceQuestionnaireForm from '../../components/ServiceQuestionnaireForm';
@@ -210,29 +210,6 @@ const PortalServicesView: React.FC = () => {
 
   const openViewInquiry = (inquiry: ServiceInquiry) => {
     setViewingInquiry(inquiry);
-  };
-
-  const startNewDraft = async (serviceCategory?: string) => {
-    const draftRef = await addDoc(collection(db, 'serviceInquiries'), {
-      businessName: '',
-      contactName: user?.displayName || '',
-      email: user?.email || '',
-      status: 'Draft',
-      isDraft: true,
-      clientUserId: user?.uid || undefined,
-      customerId: customerId || undefined,
-      servicesInterestedIn: serviceCategory ? [serviceCategory] : [],
-      lastSavedStep: 1,
-      ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
-      createdAt: Timestamp.now(),
-      updatedAt: Timestamp.now(),
-      createdByUserId: user?.uid || null,
-    });
-    const draft = { id: draftRef.id };
-    setEditingInquiry({ ...draft, id: draft.id } as any);
-    setPreselectedService(serviceCategory);
-    setShowSuccess(false);
-    setIsQuestionnaireOpen(true);
   };
 
   // Build a map of purchased services from invoice items

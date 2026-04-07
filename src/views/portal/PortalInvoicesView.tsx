@@ -158,7 +158,6 @@ const PortalInvoicesView: React.FC = () => {
 
   const totalPaid = invoices?.filter(i => i.status === 'Paid').reduce((s, i) => s + (i.total ?? i.amount ?? 0), 0) || 0;
   const totalPending = invoices?.filter(i => i.status === 'Pending' || i.status === 'Overdue').reduce((s, i) => s + (i.total ?? i.amount ?? 0), 0) || 0;
-  const paidCurrencyMixed = invoices?.some(i => i.status === 'Paid' && (i as any).currency === 'EUR') && invoices?.some(i => i.status === 'Paid' && (i as any).currency !== 'EUR');
 
   if (loading) {
     return (
