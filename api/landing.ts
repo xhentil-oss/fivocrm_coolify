@@ -81,7 +81,7 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
     return res.status(429).json({ error: 'Keni arritur limitin e kërkesave. Provoni përsëri pas pak.' });
   }
 
-  const { name, email, phone, website, message, packageId, packageName } = req.body || {};
+  const { name, email, phone, website, message, packageId, packageName, source, category } = req.body || {};
 
   const sName = sanitize(name, 100);
   const sEmail = sanitize(email, 200);
@@ -97,6 +97,8 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
   const sMessage = sanitize(message, 2000);
   const sPackageId = sanitize(packageId, 100);
   const sPackageName = sanitize(packageName, 100);
+  const sSource = sanitize(source, 100) || 'SEO Landing Page';
+  const sCategory = sanitize(category, 100) || 'SEO';
 
   try {
     let teamId: string | null = null;
@@ -115,9 +117,9 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
       phoneNumber: sPhone,
       website: sWebsite,
       industry: '',
-      servicesInterestedIn: ['SEO'],
-      mainGoal: 'SEO - Rritje e trafikut organik',
-      projectNeedDescription: sMessage || `Kërkim nga faqja SEO landing page${sPackageName ? ` — Paketa: ${sPackageName}` : ''}`,
+      servicesInterestedIn: [sCategory],
+      mainGoal: `${sCategory} - Kërkim nga landing page`,
+      projectNeedDescription: sMessage || `Kërkim nga faqja ${sSource}${sPackageName ? ` — Paketa: ${sPackageName}` : ''}`,
       currentMainChallenge: '',
       budgetRange: '',
       timeline: '',
@@ -127,7 +129,7 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
       seo_targetMarket: 'Shqipëri',
       status: 'New',
       isDraft: false,
-      source: 'SEO Landing Page',
+      source: sSource,
       ...(teamId ? { teamId } : {}),
       createdAt: now,
       updatedAt: now,
@@ -137,7 +139,7 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
     const inquiryRef = await adminDb.collection('serviceInquiries').add(inquiryData);
 
     // 2. Lead linked to the inquiry
-    const tags = ['SEO Lead', 'Landing Page'];
+    const tags = [`${sCategory} Lead`, 'Landing Page'];
     if (sPackageName) tags.push(sPackageName);
 
     const leadData: Record<string, any> = {
@@ -146,7 +148,7 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
       phoneNumber: sPhone,
       website: sWebsite,
       status: 'New',
-      source: 'SEO Landing Page',
+      source: sSource,
       estimatedValue: 0,
       tags,
       notes: [
@@ -193,9 +195,9 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
     }
 
     await adminDb.collection('tasks').add({
-      title: `Kontakto lead SEO: ${sName}`,
+      title: `Kontakto lead ${sCategory}: ${sName}`,
       description: [
-        `Lead i ri nga faqja SEO landing page.`,
+        `Lead i ri nga faqja ${sSource}.`,
         `Email: ${sEmail}`,
         sPhone ? `Telefon: ${sPhone}` : '',
         sWebsite ? `Website: ${sWebsite}` : '',
@@ -224,8 +226,8 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
         batch.set(nRef, {
           userId: m.data().userId,
           type: 'lead_created',
-          title: 'Lead i Ri SEO — Landing Page',
-          message: `${sName} dorëzoi kërkesë nga faqja SEO${sPackageName ? ` (${sPackageName})` : ''}`,
+          title: `Lead i Ri ${sCategory} — Landing Page`,
+          message: `${sName} dorëzoi kërkesë nga faqja ${sSource}${sPackageName ? ` (${sPackageName})` : ''}`,
           isRead: false,
           ...(teamId ? { teamId } : {}),
           createdAt: now,
