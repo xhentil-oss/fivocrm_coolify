@@ -34,9 +34,14 @@ function sanitize(val: unknown, maxLen = 500): string {
 
 // ── Handler ──────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method === 'GET') return handleGetServices(req, res);
-  if (req.method === 'POST') return handlePostInquiry(req, res);
-  return res.status(405).json({ error: 'Method not allowed' });
+  try {
+    if (req.method === 'GET') return await handleGetServices(req, res);
+    if (req.method === 'POST') return await handlePostInquiry(req, res);
+    return res.status(405).json({ error: 'Method not allowed' });
+  } catch (err: any) {
+    console.error('landing top-level error:', err);
+    return res.status(500).json({ error: 'Internal server error', detail: err?.message });
+  }
 }
 
 // ── GET: public services ─────────────────────────────────────────────
@@ -175,7 +180,7 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
     tomorrow.setDate(tomorrow.getDate() + 1);
 
     let assigneeId = '';
-    let teamMembersSnap: FirebaseFirestore.QuerySnapshot | null = null;
+    let teamMembersSnap: any = null;
     if (teamId) {
       teamMembersSnap = await adminDb
         .collection('teamMembers')
