@@ -47,7 +47,6 @@ async function handleGetServices(_req: VercelRequest, res: VercelResponse) {
     const snap = await adminDb
       .collection('services')
       .where('category', '==', category)
-      .orderBy('price', 'asc')
       .get();
 
     const services = snap.docs.map(doc => {
@@ -60,7 +59,7 @@ async function handleGetServices(_req: VercelRequest, res: VercelResponse) {
         currency: d.currency || 'ALL',
         category: d.category || '',
       };
-    });
+    }).sort((a, b) => a.price - b.price);
 
     res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=60');
     return res.status(200).json({ services });
@@ -176,15 +175,15 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
     tomorrow.setDate(tomorrow.getDate() + 1);
 
     let assigneeId = '';
+    let teamMembersSnap: FirebaseFirestore.QuerySnapshot | null = null;
     if (teamId) {
-      const membersSnap = await adminDb
+      teamMembersSnap = await adminDb
         .collection('teamMembers')
         .where('teamId', '==', teamId)
-        .where('role', 'in', ['Admin', 'Owner'])
-        .limit(1)
         .get();
-      if (!membersSnap.empty) {
-        assigneeId = membersSnap.docs[0].data().userId || '';
+      const adminDoc = teamMembersSnap.docs.find(d => ['Admin', 'Owner'].includes(d.data().role));
+      if (adminDoc) {
+        assigneeId = adminDoc.data().userId || '';
       }
     }
 
@@ -211,15 +210,11 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
     });
 
     // 5. Notifications to admin/sales
-    if (teamId) {
-      const allAdmins = await adminDb
-        .collection('teamMembers')
-        .where('teamId', '==', teamId)
-        .where('role', 'in', ['Admin', 'Owner'])
-        .get();
+    if (teamId && teamMembersSnap) {
+      const adminDocs = teamMembersSnap.docs.filter(d => ['Admin', 'Owner'].includes(d.data().role));
 
       const batch = adminDb.batch();
-      allAdmins.docs.forEach(m => {
+      adminDocs.forEach(m => {
         const nRef = adminDb.collection('notifications').doc();
         batch.set(nRef, {
           userId: m.data().userId,
