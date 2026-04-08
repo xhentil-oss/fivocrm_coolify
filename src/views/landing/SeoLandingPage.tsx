@@ -54,74 +54,44 @@ function Counter({ end, suffix = '', duration = 2000 }: { end: number; suffix?: 
   return <span ref={ref}>{count.toLocaleString()}{suffix}</span>;
 }
 
-/* ─── SEO Packages ─── */
-const PACKAGES = [
+/* ─── SEO Packages (fallback when API has no data) ─── */
+const FALLBACK_PACKAGES = [
   {
     id: 'starter',
-    name: 'Starter',
-    subtitle: 'Për biznese të reja që duan praninë online',
+    title: 'SEO Starter',
+    description: 'Për biznese të reja që duan praninë online',
     price: 29_900,
-    period: '/muaj',
-    popular: false,
-    features: [
-      'Audit teknik i faqes (1 herë)',
-      'Optimizim 10 fjalësh kyçe',
-      'Optimizim On-Page bazik',
-      'Google Business Profile setup',
-      'Raport mujor SEO',
-      'Suport me email',
-    ],
-    cta: 'Fillo Tani',
-    color: 'from-blue-500 to-cyan-500',
-    border: 'border-blue-200 hover:border-blue-400',
-    badge: null,
+    currency: 'ALL',
   },
   {
     id: 'professional',
-    name: 'Professional',
-    subtitle: 'Për biznese që duan rritje të qëndrueshme',
+    title: 'SEO Professional',
+    description: 'Për biznese që duan rritje të qëndrueshme',
     price: 59_900,
-    period: '/muaj',
-    popular: true,
-    features: [
-      'Gjithçka në Starter +',
-      'Optimizim 30 fjalësh kyçe',
-      'Optimizim On-Page & Off-Page',
-      'Link building (10 backlinks/muaj)',
-      'Analiza konkurrentëve',
-      'Optimizim i shpejtësisë',
-      'Raporte javore me analitikë',
-      'Suport prioritar',
-    ],
-    cta: 'Zgjidh Profesionalin',
-    color: 'from-purple-600 to-indigo-600',
-    border: 'border-purple-300 hover:border-purple-500',
-    badge: 'Më i Popullarizuari',
+    currency: 'ALL',
   },
   {
     id: 'enterprise',
-    name: 'Enterprise',
-    subtitle: 'Dominim total i tregut dixhital',
+    title: 'SEO Enterprise',
+    description: 'Dominim total i tregut dixhital',
     price: 119_900,
-    period: '/muaj',
-    popular: false,
-    features: [
-      'Gjithçka në Professional +',
-      'Fjalë kyçe të pakufizuara',
-      'Strategji e plotë SEO (teknik + përmbajtje)',
-      'Link building premium (30+/muaj)',
-      'Krijim përmbajtjesh blog (4 artikuj/muaj)',
-      'Schema Markup & Rich Snippets',
-      'Optimizim për konvertime (CRO)',
-      'Menaxher i dedikuar llogarie',
-      'Raporte të personalizuara',
-      'Konsultim strategjik mujor',
-    ],
-    cta: 'Kontakto për Enterprise',
-    color: 'from-amber-500 to-orange-600',
-    border: 'border-amber-200 hover:border-amber-400',
-    badge: 'ROI Maksimal',
+    currency: 'ALL',
   },
+];
+
+interface SeoPackage {
+  id: string;
+  title: string;
+  description: string;
+  price: number;
+  currency: string;
+}
+
+/* Card styling by position index */
+const CARD_STYLES = [
+  { color: 'from-blue-500 to-cyan-500', border: 'border-blue-200 hover:border-blue-400', badge: null as string | null, popular: false, cta: 'Fillo Tani' },
+  { color: 'from-purple-600 to-indigo-600', border: 'border-purple-300 hover:border-purple-500', badge: 'Më i Popullarizuari', popular: true, cta: 'Zgjidh Këtë Paket' },
+  { color: 'from-amber-500 to-orange-600', border: 'border-amber-200 hover:border-amber-400', badge: 'ROI Maksimal', popular: false, cta: 'Kontakto për Detaje' },
 ];
 
 const RESULTS = [
@@ -180,18 +150,53 @@ export default function SeoLandingPage() {
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [formData, setFormData] = useState({ name: '', email: '', phone: '', website: '', message: '' });
   const [formSent, setFormSent] = useState(false);
+  const [formError, setFormError] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const [selectedPackage, setSelectedPackage] = useState<SeoPackage | null>(null);
+  const [packages, setPackages] = useState<SeoPackage[]>(FALLBACK_PACKAGES);
+
+  // Fetch real SEO packages from CRM
+  useEffect(() => {
+    fetch('/api/public-services?category=SEO')
+      .then(r => r.json())
+      .then(data => {
+        if (data.services?.length) {
+          setPackages(data.services);
+        }
+      })
+      .catch(() => { /* keep fallback packages */ });
+  }, []);
 
   const scrollToPackages = () => {
     document.getElementById('packages')?.scrollIntoView({ behavior: 'smooth' });
   };
-  const scrollToContact = () => {
+  const scrollToContact = (pkg?: SeoPackage) => {
+    if (pkg) setSelectedPackage(pkg);
     document.getElementById('contact')?.scrollIntoView({ behavior: 'smooth' });
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    // TODO: Integrate with your backend (send-invite or a new endpoint)
-    setFormSent(true);
+    setFormError('');
+    setSubmitting(true);
+    try {
+      const res = await fetch('/api/landing-inquiry', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...formData,
+          packageId: selectedPackage?.id || '',
+          packageName: selectedPackage?.title || '',
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Diçka shkoi keq');
+      setFormSent(true);
+    } catch (err: any) {
+      setFormError(err.message || 'Diçka shkoi keq. Provoni përsëri.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -221,7 +226,7 @@ export default function SeoLandingPage() {
               Hyr
             </Link>
             <button
-              onClick={scrollToContact}
+              onClick={() => scrollToContact()}
               className="px-5 py-2.5 text-sm font-semibold text-white rounded-full bg-gradient-to-r from-purple-600 to-indigo-600 hover:shadow-lg hover:shadow-purple-500/25 transition-all duration-300 hover:-translate-y-0.5"
             >
               Fillo Tani
@@ -294,7 +299,7 @@ export default function SeoLandingPage() {
                   <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                 </button>
                 <button
-                  onClick={scrollToContact}
+                  onClick={() => scrollToContact()}
                   className="w-full sm:w-auto px-8 py-4 text-lg font-semibold rounded-xl border-2 border-gray-200 hover:border-purple-300 hover:bg-purple-50 transition-all duration-300 flex items-center justify-center gap-2"
                 >
                   <Phone className="w-5 h-5" />
@@ -423,51 +428,48 @@ export default function SeoLandingPage() {
             </div>
           </FadeIn>
 
-          <div className="grid md:grid-cols-3 gap-8 items-start">
-            {PACKAGES.map((pkg, i) => (
+          <div className={`grid gap-8 items-start ${packages.length === 1 ? 'max-w-md mx-auto' : packages.length === 2 ? 'md:grid-cols-2 max-w-3xl mx-auto' : 'md:grid-cols-3'}`}>
+            {packages.map((pkg, i) => {
+              const style = CARD_STYLES[i] || CARD_STYLES[0];
+              const isSelected = selectedPackage?.id === pkg.id;
+              return (
               <FadeIn key={pkg.id} delay={i * 150}>
-                <div className={`relative rounded-2xl bg-white border-2 ${pkg.border} transition-all duration-300 hover:shadow-2xl ${pkg.popular ? 'md:-mt-4 md:mb-4 shadow-xl ring-2 ring-purple-500/20' : 'shadow-sm'}`}>
-                  {pkg.badge && (
-                    <div className={`absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-gradient-to-r ${pkg.color} text-white text-xs font-bold tracking-wide`}>
-                      {pkg.badge}
+                <div className={`relative rounded-2xl bg-white border-2 ${style.border} transition-all duration-300 hover:shadow-2xl ${style.popular ? 'md:-mt-4 md:mb-4 shadow-xl ring-2 ring-purple-500/20' : 'shadow-sm'} ${isSelected ? 'ring-2 ring-green-500' : ''}`}>
+                  {style.badge && (
+                    <div className={`absolute -top-4 left-1/2 -translate-x-1/2 px-4 py-1.5 rounded-full bg-gradient-to-r ${style.color} text-white text-xs font-bold tracking-wide`}>
+                      {style.badge}
                     </div>
                   )}
                   <div className="p-8">
-                    <h3 className="text-2xl font-bold">{pkg.name}</h3>
-                    <p className="text-sm text-gray-500 mt-1">{pkg.subtitle}</p>
+                    <h3 className="text-2xl font-bold">{pkg.title}</h3>
+                    {pkg.description && (
+                      <p className="text-sm text-gray-500 mt-1" dangerouslySetInnerHTML={{ __html: pkg.description.replace(/<[^>]*>/g, '').slice(0, 120) }} />
+                    )}
 
                     <div className="mt-6">
                       <div className="flex items-baseline gap-1.5">
-                        <span className={`text-4xl font-bold bg-gradient-to-r ${pkg.color} bg-clip-text text-transparent`}>
+                        <span className={`text-4xl font-bold bg-gradient-to-r ${style.color} bg-clip-text text-transparent`}>
                           {pkg.price.toLocaleString()}
                         </span>
-                        <span className="text-sm text-gray-500">ALL{pkg.period}</span>
+                        <span className="text-sm text-gray-500">{pkg.currency || 'ALL'}/muaj</span>
                       </div>
                     </div>
 
-                    <div className="mt-8 space-y-4">
-                      {pkg.features.map((f, j) => (
-                        <div key={j} className="flex items-start gap-3">
-                          <CheckCircle2 className={`w-5 h-5 mt-0.5 flex-shrink-0 ${pkg.popular ? 'text-purple-600' : 'text-green-500'}`} />
-                          <span className="text-sm text-gray-700">{f}</span>
-                        </div>
-                      ))}
-                    </div>
-
                     <button
-                      onClick={scrollToContact}
+                      onClick={() => scrollToContact(pkg)}
                       className={`mt-8 w-full py-3.5 rounded-xl text-sm font-semibold transition-all duration-300 hover:-translate-y-0.5 ${
-                        pkg.popular
+                        style.popular
                           ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:shadow-lg hover:shadow-purple-500/25'
                           : 'bg-gray-100 text-gray-900 hover:bg-gray-200'
                       }`}
                     >
-                      {pkg.cta}
+                      {isSelected ? '✓ Zgjedhur' : style.cta}
                     </button>
                   </div>
                 </div>
               </FadeIn>
-            ))}
+              );
+            })}
           </div>
 
           <FadeIn delay={500}>
@@ -604,6 +606,18 @@ export default function SeoLandingPage() {
               ) : (
                 <form onSubmit={handleSubmit} className="bg-white/10 backdrop-blur-xl rounded-2xl p-8 border border-white/10 space-y-5">
                   <h3 className="text-xl font-bold mb-2">Merr konsultimin falas</h3>
+
+                  {/* Selected package indicator */}
+                  {selectedPackage && (
+                    <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-purple-500/20 border border-purple-500/30">
+                      <div>
+                        <p className="text-xs text-purple-300">Paketa e zgjedhur</p>
+                        <p className="font-semibold text-white">{selectedPackage.title} — {selectedPackage.price.toLocaleString()} {selectedPackage.currency || 'ALL'}/muaj</p>
+                      </div>
+                      <button type="button" onClick={() => setSelectedPackage(null)} className="text-purple-300 hover:text-white text-sm underline">Ndrysho</button>
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-sm font-medium text-gray-300 mb-1.5">Emri i plotë *</label>
                     <input
@@ -658,12 +672,20 @@ export default function SeoLandingPage() {
                       placeholder="Na tregoni pak për biznesin tuaj..."
                     />
                   </div>
+
+                  {formError && (
+                    <div className="px-4 py-3 rounded-xl bg-red-500/20 border border-red-500/30 text-sm text-red-300">
+                      {formError}
+                    </div>
+                  )}
+
                   <button
                     type="submit"
-                    className="w-full py-4 rounded-xl text-lg font-bold bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-400 hover:to-indigo-400 text-white shadow-lg shadow-purple-500/25 hover:shadow-xl hover:shadow-purple-500/30 transition-all duration-300 hover:-translate-y-0.5 flex items-center justify-center gap-2"
+                    disabled={submitting}
+                    className="w-full py-4 rounded-xl text-lg font-bold bg-gradient-to-r from-purple-500 to-indigo-500 hover:from-purple-400 hover:to-indigo-400 text-white shadow-lg shadow-purple-500/25 hover:shadow-xl hover:shadow-purple-500/30 transition-all duration-300 hover:-translate-y-0.5 flex items-center justify-center gap-2 disabled:opacity-60 disabled:cursor-not-allowed"
                   >
-                    Dërgo Kërkesën
-                    <ArrowUpRight className="w-5 h-5" />
+                    {submitting ? 'Duke dërguar...' : 'Dërgo Kërkesën'}
+                    {!submitting && <ArrowUpRight className="w-5 h-5" />}
                   </button>
                   <p className="text-xs text-gray-400 text-center">
                     Duke dërguar pranoni{' '}
