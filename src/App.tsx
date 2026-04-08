@@ -74,6 +74,7 @@ const PortalProjectDetailView = React.lazy(() => import('./views/portal/PortalPr
 const OnboardingWizard = React.lazy(() => import('./components/OnboardingWizard'));
 const SeoLandingPage = lazyRetry(() => import('./views/landing/SeoLandingPage'));
 const RealEstateLandingPage = lazyRetry(() => import('./views/landing/RealEstateLandingPage'));
+const ResortLandingPage = lazyRetry(() => import('./views/landing/ResortLandingPage'));
 const PriceCalculatorView = lazyRetry(() => import('./views/PriceCalculatorView'));
 
 function LazyFallback() {
@@ -173,6 +174,7 @@ function AppContent() {
       <Route path="/join/:token" element={<JoinInviteView />} />
       <Route path="/seo" element={<Suspense fallback={<LazyFallback />}><SeoLandingPage /></Suspense>} />
       <Route path="/real-estate" element={<Suspense fallback={<LazyFallback />}><RealEstateLandingPage /></Suspense>} />
+      <Route path="/resorte" element={<Suspense fallback={<LazyFallback />}><ResortLandingPage /></Suspense>} />
 
       {/* Client Portal routes */}
       <Route path="/portal" element={<Suspense fallback={<LazyFallback />}><PortalLayout /></Suspense>}>
