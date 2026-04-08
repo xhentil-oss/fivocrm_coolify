@@ -94,6 +94,39 @@ const CARD_STYLES = [
   { color: 'from-amber-500 to-orange-600', border: 'border-amber-200 hover:border-amber-400', badge: 'ROI Maksimal', popular: false, cta: 'Kontakto për Detaje' },
 ];
 
+const PACKAGE_FEATURES = [
+  [
+    'Audit teknik i faqes',
+    'Kërkimi i fjalëve kyçe (deri 20)',
+    'Optimizim On-Page bazë',
+    'Google Business Profile',
+    'Raport mujor i performancës',
+    '1 artikull blog / muaj',
+  ],
+  [
+    'Gjithçka nga Starter +',
+    'Kërkimi i fjalëve kyçe (deri 50)',
+    'Optimizim On-Page i avancuar',
+    'Strategji linkbuilding',
+    'Optimizim i shpejtësisë (Core Web Vitals)',
+    '4 artikuj blog / muaj',
+    'Raport javor me analiza',
+    'Menaxhim i Google Ads bazë',
+  ],
+  [
+    'Gjithçka nga Professional +',
+    'Fjalë kyçe të pakufizuara',
+    'SEO teknik i thelluar',
+    'Content marketing strategjik',
+    'Linkbuilding premium (DR 50+)',
+    '8+ artikuj / muaj',
+    'Menaxher i dedikuar llogarie',
+    'Analiza konkurrentësh mujore',
+    'A/B testing & CRO bazë',
+    'Raporte live dashboard',
+  ],
+];
+
 const RESULTS = [
   { metric: '347', suffix: '%', label: 'Rritje mesatare e trafikut organik', icon: TrendingUp },
   { metric: '89', suffix: '%', label: 'Klientë që arrijnë Faqen 1 të Google', icon: Award },
@@ -454,6 +487,18 @@ export default function SeoLandingPage() {
                         <span className="text-sm text-gray-500">{pkg.currency || 'ALL'}/muaj</span>
                       </div>
                     </div>
+
+                    {/* Feature list */}
+                    {PACKAGE_FEATURES[i] && (
+                      <ul className="mt-6 space-y-3">
+                        {PACKAGE_FEATURES[i].map((feature, fi) => (
+                          <li key={fi} className="flex items-start gap-2.5 text-sm text-gray-700">
+                            <CheckCircle2 className={`w-4.5 h-4.5 mt-0.5 flex-shrink-0 ${style.popular ? 'text-purple-500' : 'text-green-500'}`} />
+                            {feature}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
 
                     <button
                       onClick={() => scrollToContact(pkg)}
