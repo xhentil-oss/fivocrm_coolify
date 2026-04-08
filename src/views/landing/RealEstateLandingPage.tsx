@@ -140,7 +140,7 @@ const PACKAGES: RealEstatePackage[] = [
         items: [
           'Menaxhim i 2 platformave',
           '16 postime / muaj',
-          '4 reels / muaj',
+          '20 reels / muaj',
           'Design grafik',
           'Copywriting',
           'Publikim sipas kalendarit',
@@ -190,7 +190,7 @@ const PACKAGES: RealEstatePackage[] = [
         items: [
           'Menaxhim i 2–3 platformave',
           '20 postime / muaj',
-          '6–8 reels / muaj',
+          '25 reels / muaj',
           'Design grafik premium',
           'Copywriting i avancuar',
           'Publikim dhe planifikim mujor',
