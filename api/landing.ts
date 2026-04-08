@@ -2,18 +2,18 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminDb, Timestamp } from './_firebaseAdmin.js';
 
 /**
- * POST /api/landing-inquiry
- * Public endpoint for landing page lead capture.
- * Creates: ServiceInquiry → Lead → Task → Notifications
+ * Combined landing-page API (public, no auth).
+ *
+ * GET  /api/landing?category=SEO  → published services
+ * POST /api/landing               → lead capture (inquiry → lead → task → notifications)
  */
 
-// Basic rate limiting per IP (in-memory, cleaned on each check)
+// ── Rate limiting (POST only) ────────────────────────────────────────
 const ipLimitMap = new Map<string, { count: number; resetAt: number }>();
 const MAX_PER_HOUR = 5;
 
 function checkIpRateLimit(ip: string): boolean {
   const now = Date.now();
-  // Purge expired
   for (const [key, val] of ipLimitMap) {
     if (now > val.resetAt) ipLimitMap.delete(key);
   }
@@ -32,12 +32,46 @@ function sanitize(val: unknown, maxLen = 500): string {
   return val.trim().slice(0, maxLen);
 }
 
+// ── Handler ──────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (req.method === 'GET') return handleGetServices(req, res);
+  if (req.method === 'POST') return handlePostInquiry(req, res);
+  return res.status(405).json({ error: 'Method not allowed' });
+}
 
-  // Rate limit by IP
+// ── GET: public services ─────────────────────────────────────────────
+async function handleGetServices(_req: VercelRequest, res: VercelResponse) {
+  const category = (_req.query.category as string) || 'SEO';
+
+  try {
+    const snap = await adminDb
+      .collection('services')
+      .where('category', '==', category)
+      .orderBy('price', 'asc')
+      .get();
+
+    const services = snap.docs.map(doc => {
+      const d = doc.data();
+      return {
+        id: doc.id,
+        title: d.title || d.name || '',
+        description: d.description || '',
+        price: d.price ?? 0,
+        currency: d.currency || 'ALL',
+        category: d.category || '',
+      };
+    });
+
+    res.setHeader('Cache-Control', 's-maxage=300, stale-while-revalidate=60');
+    return res.status(200).json({ services });
+  } catch (err: any) {
+    console.error('landing GET error:', err);
+    return res.status(500).json({ error: 'Failed to fetch services' });
+  }
+}
+
+// ── POST: lead capture ───────────────────────────────────────────────
+async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
   const ip = (req.headers['x-forwarded-for'] as string)?.split(',')[0]?.trim() || 'unknown';
   if (!checkIpRateLimit(ip)) {
     return res.status(429).json({ error: 'Keni arritur limitin e kërkesave. Provoni përsëri pas pak.' });
@@ -45,13 +79,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const { name, email, phone, website, message, packageId, packageName } = req.body || {};
 
-  // Validate required fields
   const sName = sanitize(name, 100);
   const sEmail = sanitize(email, 200);
   if (!sName || !sEmail) {
     return res.status(400).json({ error: 'Emri dhe email janë të detyrueshëm.' });
   }
-  // Basic email format check
   if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(sEmail)) {
     return res.status(400).json({ error: 'Email i pavlefshëm.' });
   }
@@ -63,7 +95,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const sPackageName = sanitize(packageName, 100);
 
   try {
-    // Resolve teamId: pick the first team that has services
     let teamId: string | null = null;
     const teamsSnap = await adminDb.collection('teams').limit(1).get();
     if (!teamsSnap.empty) {
@@ -72,7 +103,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const now = Timestamp.now();
 
-    // 1. Create ServiceInquiry
+    // 1. ServiceInquiry
     const inquiryData: Record<string, any> = {
       businessName: '',
       contactName: sName,
@@ -88,7 +119,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       timeline: '',
       decisionMaker: 'Po',
       hasExistingMaterials: 'Jo',
-      // SEO-specific
       seo_hasWebsite: sWebsite ? 'Po' : 'Jo',
       seo_targetMarket: 'Shqipëri',
       status: 'New',
@@ -102,7 +132,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const inquiryRef = await adminDb.collection('serviceInquiries').add(inquiryData);
 
-    // 2. Create Lead linked to the inquiry
+    // 2. Lead linked to the inquiry
     const tags = ['SEO Lead', 'Landing Page'];
     if (sPackageName) tags.push(sPackageName);
 
@@ -127,7 +157,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       createdByUserId: null,
     };
 
-    // Try to estimate value from service price
     if (sPackageId) {
       try {
         const svcDoc = await adminDb.collection('services').doc(sPackageId).get();
@@ -139,14 +168,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const leadRef = await adminDb.collection('leads').add(leadData);
 
-    // 3. Link inquiry to lead
+    // 3. Link inquiry → lead
     await inquiryRef.update({ leadId: leadRef.id });
 
-    // 4. Create follow-up task
+    // 4. Follow-up task
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
 
-    // Find admin/sales team members for assignment
     let assigneeId = '';
     if (teamId) {
       const membersSnap = await adminDb
@@ -182,7 +210,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       createdByUserId: null,
     });
 
-    // 5. Send notification to admin/sales members
+    // 5. Notifications to admin/sales
     if (teamId) {
       const allAdmins = await adminDb
         .collection('teamMembers')
@@ -213,7 +241,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       inquiryId: inquiryRef.id,
     });
   } catch (err: any) {
-    console.error('landing-inquiry error:', err);
+    console.error('landing POST error:', err);
     return res.status(500).json({ error: 'Diçka shkoi keq. Ju lutem provoni përsëri.' });
   }
 }

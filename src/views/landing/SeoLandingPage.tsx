@@ -157,7 +157,7 @@ export default function SeoLandingPage() {
 
   // Fetch real SEO packages from CRM
   useEffect(() => {
-    fetch('/api/public-services?category=SEO')
+    fetch('/api/landing?category=SEO')
       .then(r => r.json())
       .then(data => {
         if (data.services?.length) {
@@ -180,7 +180,7 @@ export default function SeoLandingPage() {
     setFormError('');
     setSubmitting(true);
     try {
-      const res = await fetch('/api/landing-inquiry', {
+      const res = await fetch('/api/landing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
