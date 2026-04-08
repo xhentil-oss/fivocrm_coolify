@@ -40,7 +40,6 @@ const CRMView: React.FC = () => {
   const [saving, setSaving] = useState(false);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [sourceFilter, setSourceFilter] = useState('all');
   const [scoreFilter, setScoreFilter] = useState('all');
   const [assignedFilter, setAssignedFilter] = useState('all');
   const { toast } = useToast();
@@ -419,7 +418,6 @@ const CRMView: React.FC = () => {
         l.company?.toLowerCase().includes(q)
       );
     }
-    if (sourceFilter !== 'all') result = result.filter(l => l.source === sourceFilter);
     if (scoreFilter !== 'all') result = result.filter(l => {
       const s = (l as any).score ?? calculateLeadScore(l);
       if (scoreFilter === 'high') return s >= 70;
@@ -430,7 +428,7 @@ const CRMView: React.FC = () => {
     if (assignedFilter === 'mine') result = result.filter(l => l.assignedToUserId === user?.uid);
     if (assignedFilter === 'unassigned') result = result.filter(l => !l.assignedToUserId);
     return result;
-  }, [leads, activeTab, searchQuery, sourceFilter, scoreFilter, assignedFilter, user]);
+  }, [leads, activeTab, searchQuery, scoreFilter, assignedFilter, user]);
 
   const needsFollowUp = React.useMemo(() => {
     if (!leads) return [];
@@ -535,21 +533,7 @@ const CRMView: React.FC = () => {
             </button>
           )}
         </div>
-        <Select value={sourceFilter} onValueChange={setSourceFilter}>
-          <SelectTrigger className="w-full sm:w-[150px] h-9">
-            <SelectValue placeholder="Burimi" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Të gjithë burimet</SelectItem>
-            <SelectItem value="Website">Faqja Web</SelectItem>
-            <SelectItem value="Referral">Referim</SelectItem>
-            <SelectItem value="Cold Call">Thirrje e Ftoftë</SelectItem>
-            <SelectItem value="Social Media">Rrjete Sociale</SelectItem>
-            <SelectItem value="Email Campaign">Fushata Email</SelectItem>
-            <SelectItem value="Event">Event</SelectItem>
-            <SelectItem value="Other">Tjetër</SelectItem>
-          </SelectContent>
-        </Select>
+
         <Select value={scoreFilter} onValueChange={setScoreFilter}>
           <SelectTrigger className="w-full sm:w-[145px] h-9">
             <SelectValue placeholder="Pikët" />
@@ -725,7 +709,6 @@ const CRMView: React.FC = () => {
                       <Percent className="w-3 h-3 mr-0.5" />
                       {lead.probability ?? STAGE_PROBABILITY[lead.status] ?? 0}%
                     </Badge>
-                    {lead.source && <Badge variant="outline" className="text-xs">{lead.source}</Badge>}
                     {lead.estimatedValue ? (
                       <span className="text-xs font-medium text-foreground">{lead.estimatedValue.toLocaleString()} L</span>
                     ) : null}
@@ -769,9 +752,6 @@ const CRMView: React.FC = () => {
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
                       Statusi
-                    </th>
-                    <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
-                      Burimi
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
                       Asignuar
@@ -861,9 +841,6 @@ const CRMView: React.FC = () => {
                             <SelectItem value="Lost">Humbur</SelectItem>
                           </SelectContent>
                         </Select>
-                      </td>
-                      <td className="px-6 py-4 text-body text-foreground">
-                        {lead.source || '-'}
                       </td>
                       <td className="px-6 py-4" onClick={e => e.stopPropagation()}>
                         {permissions.canEdit ? (
