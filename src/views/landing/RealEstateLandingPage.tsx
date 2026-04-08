@@ -93,7 +93,7 @@ const PACKAGES: RealEstatePackage[] = [
         items: [
           'Menaxhim i 2 platformave (Facebook + Instagram)',
           '12 postime / muaj',
-          '2 reels / muaj',
+          '10 reels / muaj',
           'Design grafik për postimet',
           'Copywriting për përshkrimet',
           'Publikim sipas kalendarit',
@@ -446,7 +446,7 @@ export default function RealEstateLandingPage() {
                   ))}
                 </div>
                 <span className="text-sm font-medium text-emerald-700">
-                  120+ agjenci na besojnë
+                  120+ biznese na besojnë
                 </span>
                 <div className="flex">
                   {[1,2,3,4,5].map(i => <Star key={i} className="w-3.5 h-3.5 text-amber-400 fill-amber-400" />)}
