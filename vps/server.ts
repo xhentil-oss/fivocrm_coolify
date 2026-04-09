@@ -243,6 +243,48 @@ async function backfillLidMessages(lidJid: string, phoneJid: string): Promise<vo
   }
 }
 
+/** Sync contact display name from device to existing WhatsApp messages in Firestore.
+ *  Updates pushName on messages that have no leadName (not yet linked to a CRM lead). */
+const syncedContactNames = new Map<string, string>(); // phone → last synced name (dedup)
+async function syncContactName(jid: string, displayName: string): Promise<void> {
+  const phone = normalizePhone(jid.split('@')[0]);
+  if (!phone || !displayName) return;
+  // Skip if we already synced this exact name for this phone
+  if (syncedContactNames.get(phone) === displayName) return;
+  syncedContactNames.set(phone, displayName);
+
+  try {
+    // Update messages that have no leadName or still show just the phone number
+    const snap = await db.collection('whatsappMessages')
+      .where('teamId', '==', TEAM_ID)
+      .where('phone', '==', phone)
+      .limit(500)
+      .get();
+    if (snap.empty) return;
+
+    const batch = db.batch();
+    let count = 0;
+    for (const doc of snap.docs) {
+      const data = doc.data();
+      // Only update if there's no CRM lead linked and pushName is missing or different
+      if (!data.leadId && (!data.pushName || data.pushName !== displayName)) {
+        batch.update(doc.ref, {
+          pushName: displayName,
+          leadName: displayName,
+          updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+        });
+        count++;
+      }
+    }
+    if (count > 0) {
+      await batch.commit();
+      console.log(`[WA] Contact sync: ${phone} → "${displayName}" (${count} mesazhe u përditësuan)`);
+    }
+  } catch (e) {
+    console.error(`[WA] Contact sync error for ${phone}:`, e);
+  }
+}
+
 /** Reverse-resolve known leads: query phone→LID via USyncQuery */
 async function reverseLookupLeads(): Promise<void> {
   if (!sock) return;
@@ -444,6 +486,11 @@ async function connectWhatsApp(): Promise<void> {
     for (const contact of contacts) {
       const lid = (contact as any).lid as string | undefined;
       if (lid && contact.id) registerLidMapping(lid, contact.id);
+      // Sync display name from device contacts
+      const displayName = (contact as any).notify || (contact as any).name || null;
+      if (displayName && contact.id?.endsWith('@s.whatsapp.net')) {
+        syncContactName(contact.id, displayName);
+      }
     }
   });
 
@@ -451,6 +498,11 @@ async function connectWhatsApp(): Promise<void> {
     for (const update of updates) {
       const lid = (update as any).lid as string | undefined;
       if (lid && update.id) registerLidMapping(lid, update.id);
+      // Sync display name from device contacts
+      const displayName = (update as any).notify || (update as any).name || null;
+      if (displayName && update.id?.endsWith('@s.whatsapp.net')) {
+        syncContactName(update.id, displayName);
+      }
     }
   });
 
@@ -469,6 +521,12 @@ async function connectWhatsApp(): Promise<void> {
       const lid = (c as any).lid as string | undefined;
       const pn = c.id || (c as any).phoneNumber;
       if (lid && pn) registerLidMapping(lid, pn);
+      // Sync display name from history contacts
+      const displayName = (c as any).notify || (c as any).name || null;
+      const jid = c.id as string | undefined;
+      if (displayName && jid?.endsWith('@s.whatsapp.net')) {
+        syncContactName(jid, displayName);
+      }
     }
     // Also check chats for LID references
     const chats = data.chats || [];

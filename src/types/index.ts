@@ -8,6 +8,7 @@ export interface WhatsAppMessage {
   message: string;
   leadId?: string | null;
   leadName?: string | null;
+  pushName?: string | null;
   waMessageId?: string | null;
   teamId?: string;
   status: 'sent' | 'delivered' | 'read' | 'received' | 'failed';

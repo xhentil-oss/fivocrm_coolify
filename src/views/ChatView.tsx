@@ -413,7 +413,7 @@ const ChatView: React.FC = () => {
       if (!key) continue;
       const msgIsLid = !isRealPhone(key, msg.jid) || (msg as any).isLid === true;
       // Use leadName, then pushName (WhatsApp display name), then phone/unknown
-      const displayName = msg.leadName || (msg as any).pushName || (msgIsLid ? 'Numër i panjohur' : `+${key}`);
+      const displayName = msg.leadName || msg.pushName || (msgIsLid ? 'Numër i panjohur' : `+${key}`);
       if (!map.has(key)) {
         map.set(key, {
           phone: key,
@@ -424,13 +424,13 @@ const ChatView: React.FC = () => {
           lastDate: msg.createdAt,
           unread: (msg.direction === 'inbound' && msg.status === 'received') ? 1 : 0,
           isLid: msgIsLid,
-          channel: (msg as any).channel || 'baileys',
+          channel: msg.channel || 'baileys',
         });
       } else {
         const existing = map.get(key)!;
         // Upgrade display name if we find a better one
-        if ((msg.leadName || (msg as any).pushName) && (existing.leadName === existing.phone || existing.leadName === 'Numër i panjohur')) {
-          existing.leadName = msg.leadName || (msg as any).pushName;
+        if ((msg.leadName || msg.pushName) && (existing.leadName === existing.phone || existing.leadName === 'Numër i panjohur')) {
+          existing.leadName = msg.leadName || msg.pushName || existing.leadName;
         }
         if (msg.leadId && !existing.leadId) existing.leadId = msg.leadId;
         if (msg.jid?.endsWith('@s.whatsapp.net') && !existing.jid?.endsWith('@s.whatsapp.net')) existing.jid = msg.jid;
