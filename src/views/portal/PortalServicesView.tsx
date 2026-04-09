@@ -135,13 +135,11 @@ const PortalServicesView: React.FC = () => {
     else if (formData.budgetRange === '300,000+ L') estimatedValue = 400000;
 
     // 4. Create Lead in CRM (use addDoc for portal users)
-    const leadRef = await addDoc(collection(db, 'leads'), {
+    const leadData: Record<string, any> = {
       name: formData.contactName,
       email: formData.email,
       phoneNumber: formData.phoneNumber,
       company: formData.businessName,
-      jobTitle: formData.jobTitle || undefined,
-      website: formData.website || undefined,
       status: 'New',
       source: 'Service Questionnaire',
       estimatedValue,
@@ -152,7 +150,10 @@ const PortalServicesView: React.FC = () => {
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
       createdByUserId: user?.uid || null,
-    });
+    };
+    if (formData.jobTitle) leadData.jobTitle = formData.jobTitle;
+    if (formData.website) leadData.website = formData.website;
+    const leadRef = await addDoc(collection(db, 'leads'), leadData);
     const lead = { id: leadRef.id };
 
     // 5. Update inquiry with leadId
