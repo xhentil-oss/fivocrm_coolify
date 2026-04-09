@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -47,6 +47,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Waves,
     color: 'text-cyan-600',
     gradient: 'from-cyan-500 to-blue-600',
+    status: 'active',
+  },
+  {
+    id: 'estetike',
+    title: 'Estetikë & Beauty',
+    description: 'Paketa Social Media për klinika estetike, sallone, dhe industrinë e bukurisë.',
+    path: '/estetike',
+    category: 'Social Media',
+    icon: Sparkles,
+    color: 'text-rose-500',
+    gradient: 'from-rose-500 to-pink-600',
     status: 'active',
   },
 ];

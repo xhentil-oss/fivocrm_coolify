@@ -74,6 +74,7 @@ const OnboardingWizard = React.lazy(() => import('./components/OnboardingWizard'
 const SeoLandingPage = lazyRetry(() => import('./views/landing/SeoLandingPage'));
 const RealEstateLandingPage = lazyRetry(() => import('./views/landing/RealEstateLandingPage'));
 const ResortLandingPage = lazyRetry(() => import('./views/landing/ResortLandingPage'));
+const EstetikeLandingPage = lazyRetry(() => import('./views/landing/EstetikeLandingPage'));
 const PriceCalculatorView = lazyRetry(() => import('./views/PriceCalculatorView'));
 const LandingPagesView = lazyRetry(() => import('./views/LandingPagesView'));
 
@@ -175,6 +176,7 @@ function AppContent() {
       <Route path="/seo" element={<Suspense fallback={<LazyFallback />}><SeoLandingPage /></Suspense>} />
       <Route path="/real-estate" element={<Suspense fallback={<LazyFallback />}><RealEstateLandingPage /></Suspense>} />
       <Route path="/resorte" element={<Suspense fallback={<LazyFallback />}><ResortLandingPage /></Suspense>} />
+      <Route path="/estetike" element={<Suspense fallback={<LazyFallback />}><EstetikeLandingPage /></Suspense>} />
 
       {/* Client Portal routes */}
       <Route path="/portal" element={<Suspense fallback={<LazyFallback />}><PortalLayout /></Suspense>}>
