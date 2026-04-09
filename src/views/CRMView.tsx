@@ -277,6 +277,16 @@ const CRMView: React.FC = () => {
         assignedToUserId: resolvedAssigned,
       });
 
+      // Notify if lead was reassigned to a different user
+      if (resolvedAssigned && user && resolvedAssigned !== user.uid && resolvedAssigned !== editLead.assignedToUserId) {
+        await notificationMutation.create({
+          userId: resolvedAssigned,
+          title: 'Lead i asignuar ty',
+          message: `${user.displayName || 'Një admin'} të asignoi lead-in "${name}"`,
+          isRead: false,
+        }).catch(() => {});
+      }
+
       toast({ title: 'Lead u përditësua', description: `${name} u përditësua me sukses.` });
       setEditLead(null);
     } finally {

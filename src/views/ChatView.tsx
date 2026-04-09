@@ -16,12 +16,13 @@ import {
   FolderOpen, ArrowLeft, Search, Pencil, Trash2, Reply,
   SmilePlus, Check, Plus, Link2,
   Bot, Sparkles, Loader2, Copy, RefreshCw, Phone, Smartphone,
-  ClipboardList, ExternalLink,
+  ClipboardList, ExternalLink, UserPlus,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { normalizeAlbanianPhone } from '../lib/utils';
-import { auth } from '../lib/firebase';
-import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, WhatsAppMessage, ClientRequest, Team } from '../types';
+import { auth, db } from '../lib/firebase';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, WhatsAppMessage, ClientRequest, Team, Lead } from '../types';
 
 type ChatMode = 'channel' | 'direct' | 'ai' | 'whatsapp' | 'requests';
 
@@ -83,6 +84,8 @@ const ChatView: React.FC = () => {
   const [activeWaJid, setActiveWaJid] = useState<string | null>(null);
   const [activeWaLeadName, setActiveWaLeadName] = useState('');
   const [activeWaChannel, setActiveWaChannel] = useState<'baileys' | 'meta' | null>(null);
+  const [activeWaLeadId, setActiveWaLeadId] = useState<string | null>(null);
+  const [convertingToLead, setConvertingToLead] = useState(false);
   const [waText, setWaText] = useState('');
   const [waSending, setWaSending] = useState(false);
   const waScrollRef = useRef<HTMLDivElement>(null);
@@ -274,6 +277,7 @@ const ChatView: React.FC = () => {
   const messageMutation = useMutation<ChatMessage>('messages');
   const notificationMutation = useMutation<any>('notifications');
   const waMutation = useMutation<WhatsAppMessage>('whatsappMessages');
+  const leadsMutation = useMutation<Lead>('leads');
   const isSending = messageMutation.loading;
 
   // Typing indicators
@@ -657,12 +661,13 @@ const ChatView: React.FC = () => {
     setReplyingTo(null);
   }, []);
 
-  const handleSelectWhatsApp = useCallback((phone: string, leadName: string, jid?: string | null, channel?: 'baileys' | 'meta') => {
+  const handleSelectWhatsApp = useCallback((phone: string, leadName: string, jid?: string | null, channel?: 'baileys' | 'meta', leadId?: string | null) => {
     setChatMode('whatsapp');
     setActiveWaPhone(phone);
     setActiveWaJid(jid || null);
     setActiveWaLeadName(leadName);
     setActiveWaChannel(channel || 'baileys');
+    setActiveWaLeadId(leadId || null);
     setShowSidebar(false);
     setShowSearch(false);
     setSearchQuery('');
@@ -694,6 +699,57 @@ const ChatView: React.FC = () => {
       toast({ title: 'Gabim WhatsApp', description: err instanceof Error ? err.message : 'Dërgimi dështoi', variant: 'destructive' });
     } finally {
       setWaSending(false);
+    }
+  };
+
+  // Convert WhatsApp contact to Lead
+  const handleConvertToLead = async () => {
+    if (!activeWaPhone || !user || convertingToLead) return;
+    setConvertingToLead(true);
+    try {
+      const teamId = getGlobalTeamId();
+      const normPhone = activeWaPhone.replace(/\D/g, '');
+
+      // Duplicate check: query leads by phone
+      const leadsRef = collection(db, 'leads');
+      const q1 = query(leadsRef, where('phoneNumber', '==', normPhone), where('teamId', '==', teamId));
+      const q2 = query(leadsRef, where('phoneNumber', '==', `+${normPhone}`), where('teamId', '==', teamId));
+      const [snap1, snap2] = await Promise.all([getDocs(q1), getDocs(q2)]);
+      if (!snap1.empty || !snap2.empty) {
+        const existing = snap1.docs[0]?.data() || snap2.docs[0]?.data();
+        toast({ title: 'Numri ekziston tek Leads!', description: `Lead "${existing?.name}" ka të njëjtin numër.`, variant: 'destructive' });
+        setConvertingToLead(false);
+        return;
+      }
+
+      const leadName = activeWaLeadName || `+${activeWaPhone}`;
+      const newLead = await leadsMutation.create({
+        name: leadName,
+        phoneNumber: `+${normPhone}`,
+        source: 'WhatsApp',
+        status: 'New',
+        score: 10,
+        probability: 10,
+      } as any);
+
+      // Update all whatsappMessages for this phone with the new leadId
+      if (newLead?.id) {
+        const msgs = allWaMessages?.filter(m => {
+          const key = m.jid?.endsWith('@s.whatsapp.net')
+            ? normalizeAlbanianPhone(m.jid.split('@')[0])
+            : normalizeAlbanianPhone(m.phone || '');
+          return key === activeWaPhone;
+        }) || [];
+        await Promise.all(msgs.map(m => waMutation.update(m.id, { leadId: newLead.id, leadName: leadName })));
+        setActiveWaLeadId(newLead.id);
+        setActiveWaLeadName(leadName);
+      }
+
+      toast({ title: 'Lead u krijua!', description: `"${leadName}" u shtua si lead nga WhatsApp.` });
+    } catch (err: unknown) {
+      toast({ title: 'Gabim', description: err instanceof Error ? err.message : 'Konvertimi dështoi', variant: 'destructive' });
+    } finally {
+      setConvertingToLead(false);
     }
   };
 
@@ -1008,15 +1064,20 @@ const ChatView: React.FC = () => {
               return (
                 <button
                   key={conv.phone}
-                  onClick={() => handleSelectWhatsApp(conv.phone, conv.leadName, conv.jid, conv.channel)}
+                  onClick={() => handleSelectWhatsApp(conv.phone, conv.leadName, conv.jid, conv.channel, conv.leadId)}
                   className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-left ${
                     isWaActive
                       ? 'bg-[#25D366]/10 border border-[#25D366]/20 shadow-sm'
                       : 'hover:bg-accent/50 text-foreground/70'
                   }`}
                 >
-                  <div className={`h-8 w-8 rounded-lg flex items-center justify-center flex-shrink-0 ${conv.channel === 'meta' ? 'bg-blue-500/15' : 'bg-[#25D366]/15'}`}>
-                    <Smartphone className={`h-4 w-4 ${conv.channel === 'meta' ? 'text-blue-500' : 'text-[#25D366]'}`} />
+                  <div className="relative flex-shrink-0">
+                    <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${conv.channel === 'meta' ? 'bg-blue-500/15' : 'bg-[#25D366]/15'}`}>
+                      <Smartphone className={`h-4 w-4 ${conv.channel === 'meta' ? 'text-blue-500' : 'text-[#25D366]'}`} />
+                    </div>
+                    {!conv.leadId && !conv.isLid && (
+                      <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-amber-500 border-2 border-background" title="Nuk është në CRM" />
+                    )}
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className={`truncate block text-sm ${isWaActive ? 'text-[#25D366] font-medium' : ''}`}>{conv.leadName !== conv.phone ? conv.leadName : `+${conv.phone}`}</span>
@@ -1096,7 +1157,7 @@ const ChatView: React.FC = () => {
               <div className="h-9 w-9 rounded-xl bg-[#25D366]/15 flex items-center justify-center flex-shrink-0">
                 <Smartphone className="h-4 w-4 text-[#25D366]" />
               </div>
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <p className="font-semibold text-sm truncate">{activeWaLeadName || (activeWaPhone && activeWaPhone.length <= 13 ? `+${activeWaPhone}` : 'Numër i panjohur')}</p>
                 {activeWaPhone && activeWaPhone.length <= 13 && (
                   <p className="text-[11px] text-muted-foreground flex items-center gap-1">
@@ -1104,6 +1165,18 @@ const ChatView: React.FC = () => {
                   </p>
                 )}
               </div>
+              {activeWaPhone && !activeWaLeadId && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="ml-auto h-8 gap-1.5 text-xs border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-600 dark:text-amber-400 dark:hover:bg-amber-950"
+                  onClick={handleConvertToLead}
+                  disabled={convertingToLead}
+                >
+                  {convertingToLead ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
+                  Shto si Lead
+                </Button>
+              )}
             </div>
           ) : (
             <div className="flex items-center gap-3 flex-1 min-w-0">

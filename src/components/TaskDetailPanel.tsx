@@ -317,6 +317,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const handleCreateSubtask = async () => {
     if (!subtaskForm.title.trim() || !user) return;
 
+    const subtaskAssignee = subtaskForm.assignedToUserId || user.uid;
     await taskMutation.create({
       title: subtaskForm.title,
       description: subtaskForm.description,
@@ -324,11 +325,21 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       priority: subtaskForm.priority,
       startDate: subtaskForm.startDate,
       endDate: subtaskForm.endDate,
-      assignedToUserId: subtaskForm.assignedToUserId || user.uid,
+      assignedToUserId: subtaskAssignee,
       projectId: task.projectId,
       parentTaskId: task.id,
       collaboratorIds: [],
     });
+
+    // Notify assigned user for subtask
+    if (subtaskAssignee !== user.uid) {
+      await notificationMutation.create({
+        userId: subtaskAssignee,
+        title: 'Nën-detyrë e Re e Caktuar',
+        message: `Ju u caktuat te nën-detyra: ${subtaskForm.title}`,
+        isRead: false,
+      }).catch(() => {});
+    }
 
     resetSubtaskForm();
     setShowSubtaskForm(false);
@@ -691,11 +702,11 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                         onClick={async () => {
                           const prevAssignee = task.assignedToUserId;
                           await onUpdate(task.id, { assignedToUserId: user.uid });
-                          if (prevAssignee !== user.uid) {
+                          if (prevAssignee && prevAssignee !== user.uid) {
                             await notificationMutation.create({
-                              userId: user.uid,
-                              title: 'Detyrë e Re e Caktuar',
-                              message: `Ju u caktuat te detyra: ${task.title}`,
+                              userId: prevAssignee,
+                              title: 'Detyrë e Ri-caktuar',
+                              message: `Detyra "${task.title}" u ri-caktua nga ti te ${user.displayName || 'një anëtar tjetër'}`,
                               isRead: false,
                             });
                             logActivity('update', `Detyra "${task.title}" u ri-caktua`, {
