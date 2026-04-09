@@ -133,7 +133,7 @@ export function useFilteredByOwner<T extends { id: string; createdByUserId?: str
     if (!user) return [];
     if (dataScope === 'all' || dataScope === 'team') return data;
     return data.filter(d =>
-      matchesUser(d.createdByUserId, userIds) || matchesUser(d.ownerId, userIds)
+      matchesUser(d.createdByUserId, userIds) || matchesUser(d.ownerId, userIds) || matchesUser((d as any).assignedToUserId, userIds)
     );
   }, [data, user, userIds, dataScope]);
 }

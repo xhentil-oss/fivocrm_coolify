@@ -3,6 +3,7 @@ import { addDoc, collection, Timestamp } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useAuth } from '../../contexts/AuthContext';
+import { usePermissions } from '../../hooks/usePermissions';
 import { useCollection, useMutation } from '../../hooks/useFirestore';
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
@@ -38,6 +39,7 @@ const PRIORITIES = [
 const PortalRequestsView: React.FC = () => {
   const { user } = useAuth();
   const { customerId } = useClientPortal();
+  const permissions = usePermissions();
   const { toast } = useToast();
   const [isCreateOpen, setIsCreateOpen] = useState(false);
   const [selectedRequest, setSelectedRequest] = useState<ClientRequest | null>(null);
@@ -702,7 +704,8 @@ const PortalRequestsView: React.FC = () => {
                 )}
               </div>
 
-              {/* Delete button */}
+              {/* Delete button — admin only */}
+              {(permissions.isAdmin || permissions.isOwner) && (
               <div className="pt-3 border-t">
                 <Button
                   variant="outline"
@@ -714,6 +717,7 @@ const PortalRequestsView: React.FC = () => {
                   Fshi Kërkesën
                 </Button>
               </div>
+              )}
             </div>
           )}
         </DialogContent>
