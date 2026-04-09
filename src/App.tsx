@@ -11,7 +11,6 @@ import LoginView from './views/LoginView';
 import RegisterView from './views/RegisterView';
 import FloatingActionButton from './components/FloatingActionButton';
 import DailyReportPopup from './components/DailyReportPopup';
-import StandupPopup from './components/StandupPopup';
 import CommandPalette from './components/CommandPalette';
 import PermissionGate from './components/PermissionGate';
 import PendingInvitesBanner from './components/PendingInvitesBanner';
@@ -76,6 +75,7 @@ const SeoLandingPage = lazyRetry(() => import('./views/landing/SeoLandingPage'))
 const RealEstateLandingPage = lazyRetry(() => import('./views/landing/RealEstateLandingPage'));
 const ResortLandingPage = lazyRetry(() => import('./views/landing/ResortLandingPage'));
 const PriceCalculatorView = lazyRetry(() => import('./views/PriceCalculatorView'));
+const LandingPagesView = lazyRetry(() => import('./views/LandingPagesView'));
 
 function LazyFallback() {
   return (
@@ -253,6 +253,7 @@ function AppContent() {
                       <Route path="/app/workspace" element={<PermissionGate permissionKey="canAccessProjects"><WorkspaceView /></PermissionGate>} />
                       <Route path="/app/workload" element={<PermissionGate permissionKey="canAccessReports"><WorkloadView /></PermissionGate>} />
                       <Route path="/app/price-calculator" element={<PermissionGate permissionKey="canAccessServices"><Suspense fallback={<div className="p-8 text-center"><span className="animate-spin">⏳</span></div>}><PriceCalculatorView /></Suspense></PermissionGate>} />
+                      <Route path="/app/landing-pages" element={<PermissionGate permissionKey="canAccessServices"><Suspense fallback={<div className="p-8 text-center"><span className="animate-spin">⏳</span></div>}><LandingPagesView /></Suspense></PermissionGate>} />
                       <Route path="/app/settings" element={<PermissionGate permissionKey="canAccessSettings"><SettingsView /></PermissionGate>} />
                       <Route path="*" element={
                       <div className="text-center py-20">
@@ -272,7 +273,6 @@ function AppContent() {
 
             <FloatingActionButton />
             <DailyReportPopup />
-            <StandupPopup />
             <CommandPalette 
               open={commandPaletteOpen} 
               onOpenChange={setCommandPaletteOpen} 

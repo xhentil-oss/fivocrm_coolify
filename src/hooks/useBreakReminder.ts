@@ -7,6 +7,7 @@ function playBirdChirp() {
     const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
     if (!Ctx) return;
     const ctx: AudioContext = new Ctx();
+    if (ctx.state === 'suspended') ctx.resume();
 
     const chirp = (t: number) => {
       const osc = ctx.createOscillator();
