@@ -15,7 +15,7 @@ import {
   Target, FileText, DollarSign,
   ChevronRight, ChevronLeft, Check, Instagram, Facebook, Linkedin,
   Share2, Search, Palette, PenTool, Megaphone, Send, AlertCircle, PlusCircle,
-  ShoppingCart, Heart, Save, Clock,
+  ShoppingCart, Heart, Save, Clock, Trash2, Upload, Package,
 } from 'lucide-react';
 
 // --------------- Types ---------------
@@ -94,6 +94,7 @@ interface FormData {
   ecom_productCategories: string;
   ecom_existingShopLink: string;
   ecom_features: string[];
+  ecom_products: { name: string; category: string; price: string }[];
   // Coaching
   coach_niche: string;
   coach_targetAudience: string;
@@ -139,6 +140,7 @@ const initialFormData: FormData = {
   ecom_platform: '', ecom_productsCount: '', ecom_hasInventory: '',
   ecom_paymentMethods: [], ecom_shippingNeeds: '', ecom_hasProductPhotos: '',
   ecom_productCategories: '', ecom_existingShopLink: '', ecom_features: [],
+  ecom_products: [],
   coach_niche: '', coach_targetAudience: '', coach_deliveryMethod: [],
   coach_hasProgram: '', coach_programDescription: '', coach_needsBooking: '',
   coach_needsPayment: '', coach_contentNeeds: [], coach_socialPresence: '',
@@ -1292,6 +1294,127 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
             <div>
               <Label className="text-sm font-medium">Kategoritë e produkteve</Label>
               <Textarea value={form.ecom_productCategories} onChange={e => set('ecom_productCategories', e.target.value)} placeholder="p.sh. Veshje, Aksesorë, Elektronikë..." className="mt-1 min-h-[60px]" />
+            </div>
+
+            {/* ── Product List ── */}
+            <div className="space-y-3">
+              <div className="flex items-center justify-between">
+                <Label className="text-sm font-medium flex items-center gap-1.5">
+                  <Package className="w-4 h-4 text-amber-600" />
+                  Lista e Produkteve
+                </Label>
+                <label className="cursor-pointer">
+                  <input
+                    type="file"
+                    accept=".csv"
+                    className="hidden"
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = ev => {
+                        const text = ev.target?.result as string;
+                        if (!text) return;
+                        const lines = text.split(/\r?\n/).filter(l => l.trim());
+                        const newProducts: { name: string; category: string; price: string }[] = [];
+                        for (let i = 0; i < lines.length; i++) {
+                          const cols = lines[i].split(/[,;\t]/).map(c => c.trim().replace(/^["']|["']$/g, ''));
+                          // Skip header row if detected
+                          if (i === 0 && /^(em[eë]r|name|produkt)/i.test(cols[0])) continue;
+                          if (cols[0]) {
+                            newProducts.push({
+                              name: cols[0] || '',
+                              category: cols[1] || '',
+                              price: cols[2] || '',
+                            });
+                          }
+                        }
+                        if (newProducts.length > 0) {
+                          set('ecom_products', [...form.ecom_products, ...newProducts]);
+                        }
+                      };
+                      reader.readAsText(file);
+                      e.target.value = '';
+                    }}
+                  />
+                  <span className="inline-flex items-center gap-1.5 text-xs text-amber-700 hover:text-amber-900 dark:text-amber-400 dark:hover:text-amber-300 cursor-pointer font-medium">
+                    <Upload className="w-3.5 h-3.5" />
+                    Ngarko CSV
+                  </span>
+                </label>
+              </div>
+              <p className="text-[11px] text-muted-foreground -mt-1">
+                Shtoni produktet një nga një ose ngarkoni skedar CSV (kolona: Emër, Kategori, Çmim)
+              </p>
+
+              {form.ecom_products.length > 0 && (
+                <div className="border rounded-lg overflow-hidden">
+                  <div className="grid grid-cols-[1fr_1fr_100px_36px] gap-0 bg-muted/50 border-b px-3 py-1.5">
+                    <span className="text-[11px] font-medium text-muted-foreground">Emri</span>
+                    <span className="text-[11px] font-medium text-muted-foreground">Kategoria</span>
+                    <span className="text-[11px] font-medium text-muted-foreground">Çmimi</span>
+                    <span />
+                  </div>
+                  <div className="max-h-[240px] overflow-y-auto">
+                    {form.ecom_products.map((prod, idx) => (
+                      <div key={idx} className="grid grid-cols-[1fr_1fr_100px_36px] gap-0 items-center px-3 py-1 border-b last:border-0 hover:bg-muted/20">
+                        <Input
+                          value={prod.name}
+                          onChange={e => {
+                            const updated = [...form.ecom_products];
+                            updated[idx] = { ...updated[idx], name: e.target.value };
+                            set('ecom_products', updated);
+                          }}
+                          className="h-7 text-xs border-0 bg-transparent shadow-none px-0 focus-visible:ring-0"
+                          placeholder="Emri..."
+                        />
+                        <Input
+                          value={prod.category}
+                          onChange={e => {
+                            const updated = [...form.ecom_products];
+                            updated[idx] = { ...updated[idx], category: e.target.value };
+                            set('ecom_products', updated);
+                          }}
+                          className="h-7 text-xs border-0 bg-transparent shadow-none px-0 focus-visible:ring-0"
+                          placeholder="Kategoria..."
+                        />
+                        <Input
+                          value={prod.price}
+                          onChange={e => {
+                            const updated = [...form.ecom_products];
+                            updated[idx] = { ...updated[idx], price: e.target.value };
+                            set('ecom_products', updated);
+                          }}
+                          className="h-7 text-xs border-0 bg-transparent shadow-none px-0 focus-visible:ring-0"
+                          placeholder="Çmimi..."
+                        />
+                        <button
+                          type="button"
+                          onClick={() => set('ecom_products', form.ecom_products.filter((_, i) => i !== idx))}
+                          className="h-7 w-7 flex items-center justify-center text-muted-foreground hover:text-destructive rounded transition-colors"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {form.ecom_products.length > 0 && (
+                <p className="text-[11px] text-muted-foreground">{form.ecom_products.length} produkte të shtuara</p>
+              )}
+
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="gap-1.5 text-xs"
+                onClick={() => set('ecom_products', [...form.ecom_products, { name: '', category: '', price: '' }])}
+              >
+                <PlusCircle className="w-3.5 h-3.5" />
+                Shto Produkt
+              </Button>
             </div>
 
             <div>

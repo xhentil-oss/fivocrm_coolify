@@ -360,6 +360,7 @@ export interface ServiceInquiry {
   ecom_productCategories?: string;
   ecom_existingShopLink?: string;
   ecom_features?: string[];
+  ecom_products?: { name: string; category: string; price: string }[];
   // 5. Service-specific: Coaching
   coach_niche?: string;
   coach_targetAudience?: string;
