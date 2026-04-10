@@ -76,15 +76,6 @@ export default function PriceCalculatorView() {
     } catch (err: any) {
       toast({ title: 'Gabim', description: err.message, variant: 'destructive' });
     }
-
-    // Also download JSON as before
-    const quote = { date: new Date().toISOString(), selections: sel, result };
-    const blob = new Blob([JSON.stringify(quote, null, 2)], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = `quote-${result.suggestedLabel.toLowerCase()}-${Date.now()}.json`;
-    a.click();
-    URL.revokeObjectURL(a.href);
   };
 
   const handleSaveSettings = (s: SettingsType) => {
