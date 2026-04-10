@@ -76,12 +76,13 @@ const Customer360View: React.FC = () => {
 
   const customerQuotes = useMemo(() => {
     if (!quotes) return [];
-    return quotes.filter(q => q.customerId === customerId).sort((a, b) => {
+    const leadId = (customer as any)?.leadId;
+    return quotes.filter(q => q.customerId === customerId || (leadId && q.leadId === leadId)).sort((a, b) => {
       const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
       const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toMillis?.() ?? 0;
       return tb - ta;
     });
-  }, [quotes, customerId]);
+  }, [quotes, customerId, customer]);
 
   // Stats
   const totalRevenue = customerInvoices.reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
