@@ -26,7 +26,7 @@ import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
 import { safeHref, phoneKeyDown, normalizeAlbanianPhone } from '../lib/utils';
-import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember } from '../types';
+import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember, Quote } from '../types';
 
 const CRMView: React.FC = () => {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
@@ -88,6 +88,7 @@ const CRMView: React.FC = () => {
   }, [allWaMessages]);
   const notificationMutation = useMutation<Notification>('notifications');
   const portalAccessMutation = useMutation<ClientPortalAccess>('clientPortalAccess');
+  const { data: allQuotes } = useCollection<Quote>('quotes');
   const { getName } = useUserNames(teamMembers || []);
 
   const STAGE_PROBABILITY: Record<string, number> = {
@@ -1025,6 +1026,42 @@ const CRMView: React.FC = () => {
                 <p className="text-xs text-destructive font-medium">Arsyeja e humbjes: {selectedLead.lostReason}</p>
               </div>
             )}
+
+            {/* Quotes / Preventiva for this lead */}
+            {(() => {
+              const leadQuotes = (allQuotes || []).filter(q => q.leadId === selectedLead.id);
+              if (leadQuotes.length === 0) return null;
+              return (
+                <div className="mt-4 pt-3 border-t border-border">
+                  <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide mb-2">
+                    Preventiva ({leadQuotes.length})
+                  </p>
+                  <div className="space-y-2">
+                    {leadQuotes.map(q => {
+                      const cur = q.currency === 'EUR' ? '€' : q.currency === 'USD' ? '$' : 'L';
+                      return (
+                        <div key={q.id} className="p-2.5 rounded-lg border bg-muted/30 text-sm">
+                          <div className="flex items-center justify-between">
+                            <span className="font-medium">{q.label || q.result?.suggestedLabel}</span>
+                            <Badge variant="secondary" className={
+                              q.status === 'Accepted' ? 'bg-green-100 text-green-700' :
+                              q.status === 'Rejected' ? 'bg-red-100 text-red-700' :
+                              q.status === 'Sent' ? 'bg-blue-100 text-blue-700' :
+                              'bg-gray-100 text-gray-700'
+                            }>{q.status}</Badge>
+                          </div>
+                          <div className="flex items-center gap-3 mt-1 text-xs text-muted-foreground">
+                            <span>Total: <strong className="text-foreground">{(q.result?.grandTotal ?? 0).toLocaleString()} {cur}</strong></span>
+                            <span>{q.result?.enabledServicesCount ?? 0} shërbime</span>
+                            <span>{q.createdAt instanceof Date ? q.createdAt.toLocaleDateString('sq-AL') : ''}</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })()}
           </div>
         ) : undefined}
       />

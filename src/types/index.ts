@@ -550,6 +550,40 @@ export interface ClientRequest {
   createdByUserId: string | null;
 }
 
+// ── Quotes / Preventiva ──
+
+export interface Quote {
+  id: string;
+  leadId?: string;
+  customerId?: string;
+  leadName?: string;
+  customerName?: string;
+  label: string;
+  currency: string;
+  market: string;
+  selections: Record<string, any>;
+  result: {
+    categories: { category: string; oneTime: number; monthly: number; items: any[] }[];
+    subtotalOneTime: number;
+    subtotalMonthly: number;
+    totalOneTime: number;
+    totalMonthly: number;
+    grandTotal: number;
+    suggestedLabel: string;
+    enabledServicesCount: number;
+    bundleDiscountAmount?: number;
+    bundleDiscountLabel?: string;
+    manualDiscountAmount?: number;
+  };
+  status: 'Draft' | 'Sent' | 'Accepted' | 'Rejected';
+  validUntil?: Date;
+  notes?: string;
+  teamId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
 // ── Morning Standup ──
 
 export interface StandupEntry {

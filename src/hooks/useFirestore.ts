@@ -111,7 +111,7 @@ const teamScopedCollections = new Set([
   'taskCollaborators', 'customIndustries', 'typingIndicators',
   'directMessages', 'milestones', 'serviceInquiries', 'projectComments',
   'workspaceFolders', 'workspaceDriveFiles', 'projects', 'dailyReports',
-  'roleTemplates', 'standups',
+  'roleTemplates', 'standups', 'quotes',
 ]);
 
 // Convert Firestore timestamps to Date

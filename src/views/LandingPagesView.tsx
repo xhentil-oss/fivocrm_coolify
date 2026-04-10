@@ -73,14 +73,19 @@ const LANDING_PAGES: LandingPageEntry[] = [
   },
 ];
 
+const CATEGORIES = ['Të gjitha', ...Array.from(new Set(LANDING_PAGES.map((p) => p.category)))];
+
 export default function LandingPagesView() {
   const [filter, setFilter] = useState('');
+  const [activeCategory, setActiveCategory] = useState('Të gjitha');
 
-  const filtered = LANDING_PAGES.filter(
-    (p) =>
+  const filtered = LANDING_PAGES.filter((p) => {
+    const matchesSearch =
       p.title.toLowerCase().includes(filter.toLowerCase()) ||
-      p.category.toLowerCase().includes(filter.toLowerCase()),
-  );
+      p.category.toLowerCase().includes(filter.toLowerCase());
+    const matchesCategory = activeCategory === 'Të gjitha' || p.category === activeCategory;
+    return matchesSearch && matchesCategory;
+  });
 
   const copyUrl = (path: string) => {
     const url = `${window.location.origin}${path}`;
@@ -99,20 +104,37 @@ export default function LandingPagesView() {
           </p>
         </div>
         <Badge variant="secondary" className="w-fit">
-          {LANDING_PAGES.length} faqe
+          {filtered.length} / {LANDING_PAGES.length} faqe
         </Badge>
       </div>
 
-      {/* Search */}
-      <div className="relative max-w-sm">
-        <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
-        <input
-          type="text"
-          placeholder="Kërko landing page..."
-          value={filter}
-          onChange={(e) => setFilter(e.target.value)}
-          className="w-full pl-10 pr-4 py-2.5 rounded-xl border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
-        />
+      {/* Search + Category Filter */}
+      <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+        <div className="relative max-w-sm flex-1">
+          <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
+          <input
+            type="text"
+            placeholder="Kërko landing page..."
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
+            className="w-full pl-10 pr-4 py-2.5 rounded-xl border bg-background text-sm focus:outline-none focus:ring-2 focus:ring-primary/20"
+          />
+        </div>
+        <div className="flex items-center gap-1.5 flex-wrap">
+          {CATEGORIES.map((cat) => (
+            <button
+              key={cat}
+              onClick={() => setActiveCategory(cat)}
+              className={`px-3.5 py-1.5 text-xs font-medium rounded-full border transition-all duration-200 ${
+                activeCategory === cat
+                  ? 'bg-primary text-primary-foreground border-primary shadow-sm'
+                  : 'bg-background text-muted-foreground border-border hover:bg-muted hover:text-foreground'
+              }`}
+            >
+              {cat}
+            </button>
+          ))}
+        </div>
       </div>
 
       {/* Grid */}

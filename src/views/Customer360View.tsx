@@ -18,7 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Separator } from '../components/ui/separator';
 import { safeHref, toAll } from '../lib/utils';
-import type { Customer, Invoice, Project, ClientRequest, Activity, Task } from '../types';
+import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote } from '../types';
 
 const Customer360View: React.FC = () => {
   const { customerId } = useParams<{ customerId: string }>();
@@ -36,6 +36,7 @@ const Customer360View: React.FC = () => {
   const { data: requests } = useCollection<ClientRequest>('clientRequests', { skipTeamFilter: true });
   const { data: activities } = useCollection<Activity>('activities', { skipTeamFilter: true });
   const { data: tasks } = useCollection<Task>('tasks', { skipTeamFilter: true });
+  const { data: quotes } = useCollection<Quote>('quotes', { skipTeamFilter: true });
   const activityMutation = useMutation<Activity>('activities');
 
   const customer = customers?.find(c => c.id === customerId);
@@ -72,6 +73,15 @@ const Customer360View: React.FC = () => {
       return tb - ta;
     });
   }, [activities, customerId]);
+
+  const customerQuotes = useMemo(() => {
+    if (!quotes) return [];
+    return quotes.filter(q => q.customerId === customerId).sort((a, b) => {
+      const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
+      const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toMillis?.() ?? 0;
+      return tb - ta;
+    });
+  }, [quotes, customerId]);
 
   // Stats
   const totalRevenue = customerInvoices.reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
@@ -205,6 +215,7 @@ const Customer360View: React.FC = () => {
           <TabsTrigger value="projects">Projektet ({customerProjects.length})</TabsTrigger>
           <TabsTrigger value="requests">Kërkesat ({customerRequests.length})</TabsTrigger>
           <TabsTrigger value="activities">Aktivitete ({customerActivities.length})</TabsTrigger>
+          <TabsTrigger value="quotes">Preventiva ({customerQuotes.length})</TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
@@ -466,6 +477,56 @@ const Customer360View: React.FC = () => {
                       </div>
                     </div>
                   ))}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Quotes / Preventiva Tab */}
+        <TabsContent value="quotes">
+          <Card>
+            <CardContent className="pt-6">
+              {customerQuotes.length === 0 ? (
+                <p className="text-sm text-muted-foreground text-center py-8">Nuk ka preventiva për këtë klient. Krijo një preventivë tek Price Calculator.</p>
+              ) : (
+                <div className="overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead className="bg-muted">
+                      <tr>
+                        <th className="px-4 py-2 text-left">Label</th>
+                        <th className="px-4 py-2 text-left">Data</th>
+                        <th className="px-4 py-2 text-right">One-time</th>
+                        <th className="px-4 py-2 text-right">Mujore</th>
+                        <th className="px-4 py-2 text-right">Grand Total</th>
+                        <th className="px-4 py-2 text-left">Statusi</th>
+                        <th className="px-4 py-2 text-center">Shërbime</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y">
+                      {customerQuotes.map(q => {
+                        const cur = q.currency === 'EUR' ? '€' : q.currency === 'USD' ? '$' : 'L';
+                        return (
+                          <tr key={q.id} className="hover:bg-muted/50">
+                            <td className="px-4 py-2.5 font-medium">{q.label || q.result?.suggestedLabel || '-'}</td>
+                            <td className="px-4 py-2.5">{q.createdAt instanceof Date ? q.createdAt.toLocaleDateString('sq-AL') : ''}</td>
+                            <td className="px-4 py-2.5 text-right tabular-nums">{(q.result?.totalOneTime ?? 0).toLocaleString()} {cur}</td>
+                            <td className="px-4 py-2.5 text-right tabular-nums">{(q.result?.totalMonthly ?? 0).toLocaleString()} {cur}/muaj</td>
+                            <td className="px-4 py-2.5 text-right font-semibold tabular-nums">{(q.result?.grandTotal ?? 0).toLocaleString()} {cur}</td>
+                            <td className="px-4 py-2.5">
+                              <Badge variant="secondary" className={
+                                q.status === 'Accepted' ? 'bg-green-100 text-green-700' :
+                                q.status === 'Rejected' ? 'bg-red-100 text-red-700' :
+                                q.status === 'Sent' ? 'bg-blue-100 text-blue-700' :
+                                'bg-gray-100 text-gray-700'
+                              }>{q.status}</Badge>
+                            </td>
+                            <td className="px-4 py-2.5 text-center">{q.result?.enabledServicesCount ?? 0}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               )}
             </CardContent>
