@@ -48,15 +48,11 @@ export default function PriceCalculatorView() {
     const linkedCustomer = linkType === 'customer' && linkedId ? customers?.find(c => c.id === linkedId) : null;
 
     try {
-      await quoteMutation.create({
-        leadId: linkedLead ? linkedId : undefined,
-        customerId: linkedCustomer ? linkedId : undefined,
-        leadName: linkedLead?.name,
-        customerName: linkedCustomer?.name,
+      const doc: Record<string, any> = {
         label: result.suggestedLabel,
         currency: sel.currency,
         market: sel.market,
-        selections: sel as any,
+        selections: sel,
         result: {
           categories: result.categories,
           subtotalOneTime: result.subtotalOneTime,
@@ -66,12 +62,16 @@ export default function PriceCalculatorView() {
           grandTotal: result.grandTotal,
           suggestedLabel: result.suggestedLabel,
           enabledServicesCount: result.enabledServicesCount,
-          bundleDiscountAmount: result.bundleDiscountAmount,
-          bundleDiscountLabel: result.bundleDiscountLabel,
-          manualDiscountAmount: result.manualDiscountAmount,
+          bundleDiscountAmount: result.bundleDiscountAmount || 0,
+          bundleDiscountLabel: result.bundleDiscountLabel || '',
+          manualDiscountAmount: result.manualDiscountAmount || 0,
         },
         status: 'Draft',
-      } as any);
+      };
+      if (linkedLead) { doc.leadId = linkedId; doc.leadName = linkedLead.name; }
+      if (linkedCustomer) { doc.customerId = linkedId; doc.customerName = linkedCustomer.name; }
+
+      await quoteMutation.create(doc as any);
       toast({ title: 'Preventivi u ruajt!', description: linkedLead ? `Lidhur me lead: ${linkedLead.name}` : linkedCustomer ? `Lidhur me klient: ${linkedCustomer.name}` : 'Pa lidhje me lead/klient' });
     } catch (err: any) {
       toast({ title: 'Gabim', description: err.message, variant: 'destructive' });
