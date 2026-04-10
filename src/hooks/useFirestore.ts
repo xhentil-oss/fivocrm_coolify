@@ -332,10 +332,18 @@ export function useDocument<T = DocumentData>(
 }
 
 // Helper to remove undefined values (Firebase doesn't accept undefined)
-function removeUndefined(obj: Record<string, any>): Record<string, any> {
-  return Object.fromEntries(
-    Object.entries(obj).filter(([_, value]) => value !== undefined)
-  );
+function removeUndefined(obj: any): any {
+  if (obj === null || obj === undefined) return obj;
+  if (Array.isArray(obj)) return obj.map(removeUndefined);
+  if (obj instanceof Date || obj instanceof Timestamp) return obj;
+  if (typeof obj === 'object') {
+    return Object.fromEntries(
+      Object.entries(obj)
+        .filter(([_, v]) => v !== undefined)
+        .map(([k, v]) => [k, removeUndefined(v)])
+    );
+  }
+  return obj;
 }
 
 // Hook for mutations (create, update, delete)
