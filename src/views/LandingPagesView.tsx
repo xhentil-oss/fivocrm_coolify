@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -58,6 +58,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Sparkles,
     color: 'text-rose-500',
     gradient: 'from-rose-500 to-pink-600',
+    status: 'active',
+  },
+  {
+    id: 'recruit',
+    title: 'Recruit & Staffing',
+    description: 'Paketa Social Media për agjenci rekrutimi dhe kompani HR.',
+    path: '/recruit',
+    category: 'Social Media',
+    icon: Briefcase,
+    color: 'text-blue-600',
+    gradient: 'from-blue-500 to-indigo-600',
     status: 'active',
   },
 ];
