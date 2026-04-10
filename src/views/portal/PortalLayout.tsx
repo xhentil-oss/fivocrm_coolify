@@ -10,6 +10,7 @@ import {
   MessageSquare,
   ClipboardList,
   FolderKanban,
+  Calculator,
   LogOut,
   Menu,
   X,
@@ -25,6 +26,7 @@ const navItems = [
   { to: '/portal/projects', icon: FolderKanban, label: 'Projektet' },
   { to: '/portal/chat', icon: MessageSquare, label: 'Biseda' },
   { to: '/portal/requests', icon: ClipboardList, label: 'Kërkesat' },
+  { to: '/portal/preventiva', icon: Calculator, label: 'Preventiva' },
 ];
 
 const PortalLayout: React.FC = () => {

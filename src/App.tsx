@@ -70,6 +70,7 @@ const PortalChatView = React.lazy(() => import('./views/portal/PortalChatView'))
 const PortalRequestsView = React.lazy(() => import('./views/portal/PortalRequestsView'));
 const PortalProjectsView = React.lazy(() => import('./views/portal/PortalProjectsView'));
 const PortalProjectDetailView = React.lazy(() => import('./views/portal/PortalProjectDetailView'));
+const PortalQuotesView = React.lazy(() => import('./views/portal/PortalQuotesView'));
 const OnboardingWizard = React.lazy(() => import('./components/OnboardingWizard'));
 const SeoLandingPage = lazyRetry(() => import('./views/landing/SeoLandingPage'));
 const RealEstateLandingPage = lazyRetry(() => import('./views/landing/RealEstateLandingPage'));
@@ -189,6 +190,7 @@ function AppContent() {
         <Route path="requests" element={<Suspense fallback={<LazyFallback />}><PortalRequestsView /></Suspense>} />
         <Route path="projects" element={<Suspense fallback={<LazyFallback />}><PortalProjectsView /></Suspense>} />
         <Route path="projects/:projectId" element={<Suspense fallback={<LazyFallback />}><PortalProjectDetailView /></Suspense>} />
+        <Route path="preventiva" element={<Suspense fallback={<LazyFallback />}><PortalQuotesView /></Suspense>} />
       </Route>
       
       {/* Protected routes */}
