@@ -161,12 +161,12 @@ export default function PriceCalculatorView() {
                   <SelectItem value="customer">Klient</SelectItem>
                 </SelectContent>
               </Select>
-              <Select value={linkedId} onValueChange={setLinkedId}>
+              <Select value={linkedId || '__none__'} onValueChange={v => setLinkedId(v === '__none__' ? '' : v)}>
                 <SelectTrigger className="w-48 h-9 text-sm">
                   <SelectValue placeholder={linkType === 'lead' ? 'Zgjidh lead...' : 'Zgjidh klient...'} />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">Asnjë</SelectItem>
+                  <SelectItem value="__none__">Asnjë</SelectItem>
                   {linkType === 'lead'
                     ? (leads || []).map(l => <SelectItem key={l.id} value={l.id}>{l.name}{l.company ? ` — ${l.company}` : ''}</SelectItem>)
                     : (customers || []).map(c => <SelectItem key={c.id} value={c.id}>{c.name}{c.company ? ` — ${c.company}` : ''}</SelectItem>)
