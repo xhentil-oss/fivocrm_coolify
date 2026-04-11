@@ -4,6 +4,12 @@ import { Button } from './ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { ScrollArea } from './ui/scroll-area';
 
+interface ExtraTab {
+  value: string;
+  label: string;
+  content: React.ReactNode;
+}
+
 interface DetailDrawerProps {
   open: boolean;
   onClose: () => void;
@@ -11,9 +17,10 @@ interface DetailDrawerProps {
   data: any;
   onSaveNotes?: (notes: string) => void;
   actions?: React.ReactNode;
+  extraTabs?: ExtraTab[];
 }
 
-const DetailDrawer: React.FC<DetailDrawerProps> = ({ open, onClose, title, data, onSaveNotes, actions }) => {
+const DetailDrawer: React.FC<DetailDrawerProps> = ({ open, onClose, title, data, onSaveNotes, actions, extraTabs }) => {
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -61,6 +68,11 @@ const DetailDrawer: React.FC<DetailDrawerProps> = ({ open, onClose, title, data,
                 <TabsTrigger value="overview" className="flex-1 data-[state=active]:bg-background data-[state=active]:text-primary">
                   Overview
                 </TabsTrigger>
+                {extraTabs?.map(tab => (
+                  <TabsTrigger key={tab.value} value={tab.value} className="flex-1 data-[state=active]:bg-background data-[state=active]:text-primary">
+                    {tab.label}
+                  </TabsTrigger>
+                ))}
                 <TabsTrigger value="activity" className="flex-1 data-[state=active]:bg-background data-[state=active]:text-primary">
                   Activity
                 </TabsTrigger>
@@ -86,6 +98,12 @@ const DetailDrawer: React.FC<DetailDrawerProps> = ({ open, onClose, title, data,
                   })}
                 </div>
               </TabsContent>
+
+              {extraTabs?.map(tab => (
+                <TabsContent key={tab.value} value={tab.value} className="space-y-4 mt-6">
+                  {tab.content}
+                </TabsContent>
+              ))}
 
               <TabsContent value="activity" className="space-y-4 mt-6">
                 <div className="space-y-4">

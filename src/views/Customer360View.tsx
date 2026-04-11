@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { getStatusColor } from '../lib/statusColors';
 import {
   ArrowLeft, Building2, Mail, Phone, FileText, DollarSign,
-  ClipboardList, Calendar, Plus, Clock, Target
+  ClipboardList, Calendar, Plus, Clock, Target, Calculator
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -489,7 +489,18 @@ const Customer360View: React.FC = () => {
           <Card>
             <CardContent className="pt-6">
               {customerQuotes.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-8">Nuk ka preventiva për këtë klient. Krijo një preventivë tek Price Calculator.</p>
+                <div className="text-center py-8 space-y-3">
+                  <FileText className="w-10 h-10 mx-auto text-muted-foreground/40" />
+                  <p className="text-sm text-muted-foreground">Nuk ka preventiva për këtë klient.</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => navigate('/app/price-calculator')}
+                  >
+                    <Calculator className="w-4 h-4 mr-1.5" />
+                    Krijo Preventivë
+                  </Button>
+                </div>
               ) : (
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
