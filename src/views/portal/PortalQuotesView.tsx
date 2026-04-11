@@ -4,7 +4,7 @@ import { useCollection } from '../../hooks/useFirestore';
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { FileText, Calculator } from 'lucide-react';
-import type { Quote, Customer } from '../../types';
+import type { Quote, Customer, Lead } from '../../types';
 
 const statusMap: Record<string, { label: string; class: string }> = {
   Draft: { label: 'Draft', class: 'bg-gray-100 text-gray-700' },
@@ -26,20 +26,45 @@ const PortalQuotesView: React.FC = () => {
     skipTeamFilter: true,
   });
 
+  // Find leads that belong to this customer (lead.customerId or lead.email match)
+  const { data: leads } = useCollection<Lead>('leads', {
+    skip: !customerId,
+    skipTeamFilter: true,
+  });
+
   const customer = customers?.find(c => c.id === customerId);
-  const leadId = (customer as any)?.leadId;
+  const customerLeadId = (customer as any)?.leadId;
+  const customerEmail = customer?.email?.toLowerCase();
+
+  // Collect all lead IDs linked to this customer
+  const linkedLeadIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    if (customerLeadId) ids.add(customerLeadId);
+    if (leads && customerId) {
+      leads.forEach(l => {
+        // Lead was created with customerId pointing to this customer
+        if ((l as any).customerId === customerId) ids.add(l.id);
+        // Lead email matches customer email
+        if (customerEmail && l.email?.toLowerCase() === customerEmail) ids.add(l.id);
+      });
+    }
+    return ids;
+  }, [leads, customerId, customerLeadId, customerEmail]);
 
   const myQuotes = React.useMemo(() => {
     if (!quotes) return [];
     return quotes
-      .filter(q => q.customerId === customerId || (leadId && q.leadId === leadId))
+      .filter(q =>
+        q.customerId === customerId ||
+        (q.leadId && linkedLeadIds.has(q.leadId))
+      )
       .filter(q => q.status !== 'Draft') // Don't show drafts to clients
       .sort((a, b) => {
         const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
         const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toMillis?.() ?? 0;
         return tb - ta;
       });
-  }, [quotes, customerId, leadId]);
+  }, [quotes, customerId, linkedLeadIds]);
 
   if (loading) {
     return (

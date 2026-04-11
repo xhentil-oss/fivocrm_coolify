@@ -5,9 +5,9 @@ import { useCollection } from '../../hooks/useFirestore';
 import { getStatusColor } from '../../lib/statusColors';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
-import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2, Sparkles } from 'lucide-react';
+import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2, Sparkles, Calculator } from 'lucide-react';
 import { Link } from 'react-router-dom';
-import type { Invoice, InvoiceItem, Service, ClientRequest, Project, Task } from '../../types';
+import type { Invoice, InvoiceItem, Service, ClientRequest, Project, Task, Quote, Lead } from '../../types';
 
 const QUOTES = [
   'Suksesi nuk është çelësi i lumturisë. Lumturia është çelësi i suksesit.',
@@ -94,6 +94,46 @@ const PortalDashboard: React.FC = () => {
 
   const activeRequests = requests?.filter(r => r.status !== 'Completed' && r.status !== 'Rejected').length || 0;
 
+  // Quotes / Preventiva
+  const { data: allQuotes } = useCollection<Quote>('quotes', {
+    skip: !customerId,
+    skipTeamFilter: true,
+  });
+  const { data: allLeads } = useCollection<Lead>('leads', {
+    skip: !customerId,
+    skipTeamFilter: true,
+  });
+  const { data: allCustomers } = useCollection<any>('customers', {
+    skip: !customerId,
+    skipTeamFilter: true,
+  });
+  const myCustomer = allCustomers?.find((c: any) => c.id === customerId);
+  const customerEmail = myCustomer?.email?.toLowerCase();
+
+  const linkedLeadIds = React.useMemo(() => {
+    const ids = new Set<string>();
+    if ((myCustomer as any)?.leadId) ids.add((myCustomer as any).leadId);
+    if (allLeads && customerId) {
+      allLeads.forEach(l => {
+        if ((l as any).customerId === customerId) ids.add(l.id);
+        if (customerEmail && l.email?.toLowerCase() === customerEmail) ids.add(l.id);
+      });
+    }
+    return ids;
+  }, [allLeads, customerId, myCustomer, customerEmail]);
+
+  const myQuotes = React.useMemo(() => {
+    if (!allQuotes) return [];
+    return allQuotes
+      .filter(q =>
+        q.customerId === customerId ||
+        (q.leadId && linkedLeadIds.has(q.leadId))
+      )
+      .filter(q => q.status !== 'Draft');
+  }, [allQuotes, customerId, linkedLeadIds]);
+
+  const quotesCount = myQuotes.length;
+
   // Projects for this customer (by customerId) or where user is a member
   const { data: projectsByCustomer } = useCollection<Project>('projects', {
     skip: !customerId,
@@ -155,7 +195,7 @@ const PortalDashboard: React.FC = () => {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
         <Link to="/portal/invoices">
           <Card className="hover:shadow-md transition-shadow cursor-pointer">
             <CardContent className="pt-6">
@@ -216,6 +256,22 @@ const PortalDashboard: React.FC = () => {
                 <div>
                   <p className="text-sm text-muted-foreground">Kërkesa Aktive</p>
                   <p className="text-2xl font-bold">{activeRequests}</p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </Link>
+
+        <Link to="/portal/preventiva">
+          <Card className="hover:shadow-md transition-shadow cursor-pointer">
+            <CardContent className="pt-6">
+              <div className="flex items-center gap-3">
+                <div className="p-2 bg-indigo-100 rounded-lg">
+                  <Calculator className="h-5 w-5 text-indigo-600" />
+                </div>
+                <div>
+                  <p className="text-sm text-muted-foreground">Preventiva</p>
+                  <p className="text-2xl font-bold">{quotesCount}</p>
                 </div>
               </div>
             </CardContent>

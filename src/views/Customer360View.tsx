@@ -18,7 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Separator } from '../components/ui/separator';
 import { safeHref, toAll } from '../lib/utils';
-import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote } from '../types';
+import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead } from '../types';
 
 const Customer360View: React.FC = () => {
   const { customerId } = useParams<{ customerId: string }>();
@@ -37,9 +37,25 @@ const Customer360View: React.FC = () => {
   const { data: activities } = useCollection<Activity>('activities', { skipTeamFilter: true });
   const { data: tasks } = useCollection<Task>('tasks', { skipTeamFilter: true });
   const { data: quotes } = useCollection<Quote>('quotes', { skipTeamFilter: true });
+  const { data: allLeads } = useCollection<Lead>('leads', { skipTeamFilter: true });
   const activityMutation = useMutation<Activity>('activities');
 
   const customer = customers?.find(c => c.id === customerId);
+
+  // Collect all lead IDs linked to this customer
+  const linkedLeadIds = useMemo(() => {
+    const ids = new Set<string>();
+    const custLeadId = (customer as any)?.leadId;
+    if (custLeadId) ids.add(custLeadId);
+    const custEmail = customer?.email?.toLowerCase();
+    if (allLeads && customerId) {
+      allLeads.forEach(l => {
+        if ((l as any).customerId === customerId) ids.add(l.id);
+        if (custEmail && l.email?.toLowerCase() === custEmail) ids.add(l.id);
+      });
+    }
+    return ids;
+  }, [allLeads, customerId, customer]);
 
   // Filter data for this customer
   const customerInvoices = useMemo(() => {
@@ -76,13 +92,15 @@ const Customer360View: React.FC = () => {
 
   const customerQuotes = useMemo(() => {
     if (!quotes) return [];
-    const leadId = (customer as any)?.leadId;
-    return quotes.filter(q => q.customerId === customerId || (leadId && q.leadId === leadId)).sort((a, b) => {
+    return quotes.filter(q =>
+      q.customerId === customerId ||
+      (q.leadId && linkedLeadIds.has(q.leadId))
+    ).sort((a, b) => {
       const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
       const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toMillis?.() ?? 0;
       return tb - ta;
     });
-  }, [quotes, customerId, customer]);
+  }, [quotes, customerId, linkedLeadIds]);
 
   // Stats
   const totalRevenue = customerInvoices.reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
