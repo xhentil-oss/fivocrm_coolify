@@ -9,14 +9,14 @@ import {
   CheckCircle2, Clock, AlertTriangle, Flame, Target, TrendingUp,
   ArrowRight, Sparkles, Calendar, Zap, Flag,
   FolderKanban, MessageSquare, Users, ChevronRight, Timer, Coffee,
-  Trophy
+  Trophy, BarChart3, FileCheck
 } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import type {
   Task, Project, Customer, Invoice, TimeEntry,
-  Activity, Goal
+  Activity, Goal, DailyReport
 } from '../types';
 import { useFilteredTasks, useFilteredProjects, useFilteredByOwner } from '../hooks/useRoleFilteredData';
 
@@ -95,6 +95,8 @@ const StaffDashboard: React.FC = () => {
   const { data: activeTimeEntries } = useCollection<TimeEntry>('timeEntries', {
     where: [{ field: 'endTime', operator: '==', value: null }]
   });
+  const { data: allTimeEntries } = useCollection<TimeEntry>('timeEntries');
+  const { data: dailyReports } = useCollection<DailyReport>('dailyReports');
   const { data: userProfiles } = useCollection<any>('userProfiles');
 
   // Role-based filtering
@@ -253,6 +255,42 @@ const StaffDashboard: React.FC = () => {
       })
       .slice(0, 5);
   }, [activeTimeEntries, tasks, userProfiles, user]);
+
+  // ── Daily Productivity ──
+  const DAILY_TASK_TARGET = 5;
+
+  const todayTrackedHours = useMemo(() => {
+    if (!allTimeEntries || !user) return 0;
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    let totalMs = 0;
+    allTimeEntries.forEach(e => {
+      if (e.userId !== user.uid) return;
+      const start = e.startTime instanceof Date ? e.startTime : new Date(e.startTime);
+      if (start < todayStart) return;
+      if (e.endTime) {
+        const end = e.endTime instanceof Date ? e.endTime : new Date(e.endTime);
+        totalMs += end.getTime() - start.getTime();
+      } else {
+        totalMs += Date.now() - start.getTime();
+      }
+    });
+    return totalMs / 3600000; // convert to hours
+  }, [allTimeEntries, user]);
+
+  const todayReportSubmitted = useMemo(() => {
+    if (!dailyReports || !user) return false;
+    const todayStr = new Date().toISOString().split('T')[0];
+    return dailyReports.some(r => r.userId === user.uid && r.date === todayStr);
+  }, [dailyReports, user]);
+
+  const dailyProductivityPct = useMemo(() => {
+    const tasksPct = Math.min(100, (myCompletedToday.length / DAILY_TASK_TARGET) * 100);
+    const hoursPct = Math.min(100, (todayTrackedHours / 8) * 100);
+    const reportPct = todayReportSubmitted ? 100 : 0;
+    // Weight: tasks 50%, hours 35%, report 15%
+    return Math.round(tasksPct * 0.5 + hoursPct * 0.35 + reportPct * 0.15);
+  }, [myCompletedToday, todayTrackedHours, todayReportSubmitted]);
 
   // Get project name for a task
   const getProjectName = (projectId?: string) => {
@@ -596,6 +634,137 @@ const StaffDashboard: React.FC = () => {
         {/* ── RIGHT SIDEBAR ── */}
         <div className="space-y-4">
 
+          {/* Daily Productivity */}
+          <Card className="overflow-hidden">
+            <div className="p-3 border-b bg-gradient-to-r from-indigo-50/80 to-violet-50/80 dark:from-indigo-950/30 dark:to-violet-950/30">
+              <div className="flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-indigo-500" />
+                <h3 className="text-sm font-semibold text-foreground">Produktiviteti i Ditës</h3>
+              </div>
+            </div>
+            <div className="p-4 space-y-4">
+              {/* Circular Progress */}
+              <div className="flex items-center justify-center">
+                <div className="relative w-28 h-28">
+                  <svg className="w-28 h-28 -rotate-90" viewBox="0 0 100 100">
+                    <circle cx="50" cy="50" r="42" fill="none" stroke="currentColor" strokeWidth="8"
+                      className="text-muted/30" />
+                    <circle cx="50" cy="50" r="42" fill="none" strokeWidth="8" strokeLinecap="round"
+                      strokeDasharray={`${dailyProductivityPct * 2.64} 264`}
+                      className={
+                        dailyProductivityPct >= 80 ? 'text-green-500' :
+                        dailyProductivityPct >= 50 ? 'text-blue-500' :
+                        dailyProductivityPct >= 25 ? 'text-amber-500' : 'text-red-400'
+                      }
+                      style={{ transition: 'stroke-dasharray 0.6s ease' }}
+                    />
+                  </svg>
+                  <div className="absolute inset-0 flex flex-col items-center justify-center">
+                    <span className="text-2xl font-bold text-foreground">{dailyProductivityPct}%</span>
+                    <span className="text-[9px] text-muted-foreground uppercase tracking-wider">Progres</span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Breakdown items */}
+              <div className="space-y-2.5">
+                {/* Tasks completed */}
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                    myCompletedToday.length >= DAILY_TASK_TARGET
+                      ? 'bg-green-100 dark:bg-green-900/30'
+                      : 'bg-muted'
+                  }`}>
+                    <CheckCircle2 className={`w-4 h-4 ${
+                      myCompletedToday.length >= DAILY_TASK_TARGET ? 'text-green-500' : 'text-muted-foreground'
+                    }`} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-foreground">Detyra të përfunduara</span>
+                      <span className="text-xs font-bold text-foreground tabular-nums">
+                        {myCompletedToday.length}/{DAILY_TASK_TARGET}
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-muted rounded-full overflow-hidden mt-1">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          myCompletedToday.length >= DAILY_TASK_TARGET ? 'bg-green-500' : 'bg-blue-500'
+                        }`}
+                        style={{ width: `${Math.min(100, (myCompletedToday.length / DAILY_TASK_TARGET) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Hours tracked */}
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                    todayTrackedHours >= 7 ? 'bg-green-100 dark:bg-green-900/30' : 'bg-muted'
+                  }`}>
+                    <Clock className={`w-4 h-4 ${
+                      todayTrackedHours >= 7 ? 'text-green-500' : 'text-muted-foreground'
+                    }`} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-medium text-foreground">Orë të trakuara</span>
+                      <span className="text-xs font-bold text-foreground tabular-nums">
+                        {todayTrackedHours.toFixed(1)}/8h
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-muted rounded-full overflow-hidden mt-1">
+                      <div
+                        className={`h-full rounded-full transition-all duration-500 ${
+                          todayTrackedHours >= 7 ? 'bg-green-500' : 'bg-purple-500'
+                        }`}
+                        style={{ width: `${Math.min(100, (todayTrackedHours / 8) * 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Daily report */}
+                <div className="flex items-center gap-2.5">
+                  <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                    todayReportSubmitted ? 'bg-green-100 dark:bg-green-900/30' : 'bg-muted'
+                  }`}>
+                    <FileCheck className={`w-4 h-4 ${
+                      todayReportSubmitted ? 'text-green-500' : 'text-muted-foreground'
+                    }`} />
+                  </div>
+                  <div className="flex-1">
+                    <span className="text-xs font-medium text-foreground">Raporti ditor</span>
+                  </div>
+                  <Badge variant="secondary" className={`text-[10px] h-5 ${
+                    todayReportSubmitted
+                      ? 'bg-green-100 text-green-700 dark:bg-green-900/40 dark:text-green-400'
+                      : 'bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-400'
+                  }`}>
+                    {todayReportSubmitted ? '✓ Dorëzuar' : 'Mungon'}
+                  </Badge>
+                </div>
+              </div>
+
+              {/* Motivational message */}
+              <div className={`text-center text-[11px] px-2 py-1.5 rounded-lg ${
+                dailyProductivityPct >= 80
+                  ? 'bg-green-50 text-green-700 dark:bg-green-950/30 dark:text-green-400'
+                  : dailyProductivityPct >= 50
+                  ? 'bg-blue-50 text-blue-700 dark:bg-blue-950/30 dark:text-blue-400'
+                  : 'bg-amber-50 text-amber-700 dark:bg-amber-950/30 dark:text-amber-400'
+              }`}>
+                {dailyProductivityPct >= 80
+                  ? '🔥 Shkëlqyeshëm! Dita po shkon shumë mirë!'
+                  : dailyProductivityPct >= 50
+                  ? '💪 Mirë po shkon! Vazhdo kështu!'
+                  : dailyProductivityPct >= 25
+                  ? '⚡ Ke filluar, vazhdo përpara!'
+                  : '🚀 Koha për të filluar ditën!'}
+              </div>
+            </div>
+          </Card>
+
           {/* Due This Week */}
           {myDueThisWeek.length > 0 && (
             <Card className="overflow-hidden">
@@ -659,7 +828,7 @@ const StaffDashboard: React.FC = () => {
           )}
 
           {/* Goals Progress */}
-          {goals && goals.filter(g => g.status !== 'Completed').length > 0 && (
+          {goals && goals.filter(g => g.status !== 'Achieved').length > 0 && (
             <Card className="overflow-hidden">
               <div className="p-3 border-b bg-muted/30">
                 <div className="flex items-center gap-2">
@@ -669,7 +838,7 @@ const StaffDashboard: React.FC = () => {
               </div>
               <div className="divide-y">
                 {goals
-                  .filter(g => g.status !== 'Completed')
+                  .filter(g => g.status !== 'Achieved')
                   .slice(0, 3)
                   .map(goal => {
                     const pct = goal.targetValue && goal.currentValue
