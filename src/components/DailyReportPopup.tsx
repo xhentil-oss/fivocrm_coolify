@@ -66,11 +66,49 @@ const DailyReportPopup: React.FC = () => {
     });
   }, [myTasks]);
 
-  // Pending tasks (not Done)
-  const pendingTasks = useMemo(() => {
+  // Tasks assigned for today: due today, started today, or created/assigned today
+  const todaysAssignedTasks = useMemo(() => {
     if (!myTasks) return [];
-    return myTasks.filter(t => t.status !== 'Done');
+    const todayStr = getTodayString();
+    const todayStart = new Date();
+    todayStart.setHours(0, 0, 0, 0);
+    const todayEnd = new Date(todayStart);
+    todayEnd.setDate(todayEnd.getDate() + 1);
+
+    return myTasks.filter(t => {
+      if (t.status === 'Done') return false;
+      // Due date is today
+      const due = t.endDate || t.dueDate;
+      if (due) {
+        const d = due instanceof Date ? due : new Date(due);
+        const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        if (dStr === todayStr) return true;
+        // Also include overdue tasks
+        if (d < todayStart) return true;
+      }
+      // Start date is today or earlier (task should be active)
+      if (t.startDate) {
+        const s = t.startDate instanceof Date ? t.startDate : new Date(t.startDate);
+        if (s <= todayEnd) {
+          const due2 = t.endDate || t.dueDate;
+          if (!due2 || new Date(due2) >= todayStart) return true;
+        }
+      }
+      // Status is "In Progress" — actively being worked on
+      if (t.status === 'In Progress') return true;
+      // Created/assigned today (new assignment)
+      const created = t.createdAt instanceof Date ? t.createdAt : new Date(t.createdAt);
+      if (created >= todayStart) return true;
+      return false;
+    });
   }, [myTasks]);
+
+  // Other pending tasks (not today's and not done)
+  const otherPendingTasks = useMemo(() => {
+    if (!myTasks) return [];
+    const todayIds = new Set(todaysAssignedTasks.map(t => t.id));
+    return myTasks.filter(t => t.status !== 'Done' && !todayIds.has(t.id));
+  }, [myTasks, todaysAssignedTasks]);
 
   const alreadySubmitted = useMemo(() => {
     return (todayReports?.length || 0) > 0;
@@ -210,17 +248,57 @@ const DailyReportPopup: React.FC = () => {
           </div>
 
           {/* Tasks section */}
-          {(completedTodayTasks.length > 0 || pendingTasks.length > 0) && (
+          {(completedTodayTasks.length > 0 || todaysAssignedTasks.length > 0 || otherPendingTasks.length > 0) && (
             <div className="space-y-3">
               <Label className="flex items-center gap-2">
                 <CheckSquare className="w-4 h-4 text-primary" />
                 Detyrat e sotme
               </Label>
 
+              {/* Tasks assigned for today (most important — shown first) */}
+              {todaysAssignedTasks.length > 0 && (
+                <div className="space-y-1">
+                  <p className="text-xs text-muted-foreground font-medium">
+                    📋 Të caktuara për sot ({todaysAssignedTasks.length}):
+                  </p>
+                  {todaysAssignedTasks.map(task => {
+                    const due = task.endDate || task.dueDate;
+                    const isOverdue = due && new Date(due) < new Date(new Date().setHours(0, 0, 0, 0));
+                    return (
+                      <button
+                        key={task.id}
+                        type="button"
+                        onClick={() => toggleTask(task.id)}
+                        className={`flex items-center gap-2 p-2 rounded-lg text-sm w-full text-left transition-all ${
+                          selectedTaskIds.includes(task.id)
+                            ? 'bg-primary/10 border border-primary/30'
+                            : isOverdue
+                            ? 'bg-red-50 dark:bg-red-950/20 hover:bg-red-100 dark:hover:bg-red-950/30 border border-red-200 dark:border-red-800'
+                            : 'bg-amber-50/50 dark:bg-amber-950/20 hover:bg-amber-100/50 dark:hover:bg-amber-950/30 border border-amber-200/50 dark:border-amber-800/50'
+                        }`}
+                      >
+                        {selectedTaskIds.includes(task.id) ? (
+                          <CheckSquare className="w-4 h-4 text-primary flex-shrink-0" />
+                        ) : (
+                          <Square className="w-4 h-4 text-muted-foreground flex-shrink-0" />
+                        )}
+                        <span className={`truncate flex-1 ${selectedTaskIds.includes(task.id) ? 'line-through text-muted-foreground' : ''}`}>
+                          {task.title}
+                        </span>
+                        {isOverdue && <Badge variant="destructive" className="text-[10px] ml-auto flex-shrink-0">Vonuar</Badge>}
+                        {task.priority === 'urgent' && <Badge variant="destructive" className="text-[10px] ml-auto flex-shrink-0">Urgjent</Badge>}
+                        {task.priority === 'high' && !isOverdue && <Badge className="text-[10px] ml-auto bg-orange-500 flex-shrink-0">E lartë</Badge>}
+                        {task.status === 'In Progress' && <Badge variant="secondary" className="text-[10px] ml-auto flex-shrink-0">Në progres</Badge>}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
               {/* Tasks completed today (auto-detected) */}
               {completedTodayTasks.length > 0 && (
                 <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">Të përfunduara sot:</p>
+                  <p className="text-xs text-muted-foreground">✅ Të përfunduara sot ({completedTodayTasks.length}):</p>
                   {completedTodayTasks.map(task => (
                     <div key={task.id} className="flex items-center gap-2 p-2 rounded-lg bg-success/10 text-sm">
                       <CheckCircle2 className="w-4 h-4 text-success flex-shrink-0" />
@@ -230,11 +308,11 @@ const DailyReportPopup: React.FC = () => {
                 </div>
               )}
 
-              {/* Pending tasks (checkable) */}
-              {pendingTasks.length > 0 && (
+              {/* Other pending tasks */}
+              {otherPendingTasks.length > 0 && (
                 <div className="space-y-1">
-                  <p className="text-xs text-muted-foreground">Shëno si të përfunduara:</p>
-                  {pendingTasks.map(task => (
+                  <p className="text-xs text-muted-foreground">Detyra të tjera aktive:</p>
+                  {otherPendingTasks.slice(0, 8).map(task => (
                     <button
                       key={task.id}
                       type="button"
@@ -257,6 +335,11 @@ const DailyReportPopup: React.FC = () => {
                       {task.priority === 'high' && <Badge className="text-[10px] ml-auto bg-orange-500">E lartë</Badge>}
                     </button>
                   ))}
+                  {otherPendingTasks.length > 8 && (
+                    <p className="text-[11px] text-muted-foreground text-center py-1">
+                      +{otherPendingTasks.length - 8} detyra të tjera
+                    </p>
+                  )}
                 </div>
               )}
             </div>
