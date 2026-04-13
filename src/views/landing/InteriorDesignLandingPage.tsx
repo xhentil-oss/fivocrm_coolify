@@ -91,6 +91,7 @@ const PACKAGES: InteriorDesignPackage[] = [
       {
         category: 'Përmbajtja & Menaxhimi',
         items: [
+                    'Menaxhim SEO bazë për profilet sociale (optimizim për kërkim, përshkrime, hashtags)',
           'Menaxhim i 2 platformave (Facebook + Instagram)',
           '12 postime / muaj',
           '10 reels / muaj',
@@ -103,11 +104,12 @@ const PACKAGES: InteriorDesignPackage[] = [
         ],
       },
       {
-        category: 'Ads & Reklama',
+        category: 'Google Ads & Reklama',
         items: [
-          'Setup bazë i fushatave',
-          'Menaxhim bazë i reklamave',
-          'Optimizim i thjeshtë',
+          'Menaxhim bazë i Google Ads (setup, optimizim fushatash për interior design)',
+          'Setup bazë i fushatave Meta',
+          'Menaxhim bazë i reklamave Meta',
+          'Optimizim i thjeshtë Meta',
         ],
       },
     ],
@@ -138,6 +140,7 @@ const PACKAGES: InteriorDesignPackage[] = [
       {
         category: 'Përmbajtja & Menaxhimi',
         items: [
+                    'SEO i avancuar për profilet sociale dhe përmbajtjen (hashtags, përshkrime, optimizim vizual)',
           'Menaxhim i 2 platformave',
           '16 postime / muaj',
           '20 reels / muaj',
@@ -151,10 +154,11 @@ const PACKAGES: InteriorDesignPackage[] = [
         ],
       },
       {
-        category: 'Ads & Reklama',
+        category: 'Google Ads & Reklama',
         items: [
+          'Menaxhim i avancuar i Google Ads (fushata për lead generation, optimizim performance)',
           'Menaxhim i plotë i Meta Ads',
-          'Krijim fushatash',
+          'Krijim fushatash Meta',
           'Testim kreativësh',
           'Audience targeting',
           'Optimizim javor',
@@ -188,6 +192,7 @@ const PACKAGES: InteriorDesignPackage[] = [
       {
         category: 'Përmbajtja & Menaxhimi',
         items: [
+                    'SEO i plotë për profilet sociale, përmbajtjen dhe projektet (analizë fjalësh kyçe, optimizim për kërkim)',
           'Menaxhim i 2–3 platformave',
           '20 postime / muaj',
           '25 reels / muaj',
@@ -202,10 +207,11 @@ const PACKAGES: InteriorDesignPackage[] = [
         ],
       },
       {
-        category: 'Ads & Reklama',
+        category: 'Google Ads & Reklama',
         items: [
+          'Menaxhim i plotë i Google Ads (strategji, optimizim, raportim i avancuar)',
           'Menaxhim i plotë i Meta Ads',
-          'Lead generation campaigns',
+          'Lead generation campaigns Meta',
           'Retargeting',
           'Audience segmentation',
           'Testim i shumë kreativëve',
@@ -240,6 +246,8 @@ const PACKAGES: InteriorDesignPackage[] = [
       {
         category: 'Mund të përfshijë',
         items: [
+                    'SEO i personalizuar për çdo platformë dhe projekt',
+                    'Menaxhim i avancuar i Google Ads për projekte të mëdha',
           'Më shumë platforma sociale (Pinterest, TikTok)',
           'Më shumë xhirime mujore',
           'Drone profesionale',
