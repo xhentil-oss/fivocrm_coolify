@@ -19,7 +19,7 @@ import type {
   Activity, Goal, DailyReport
 } from '../types';
 import { useFilteredTasks, useFilteredProjects, useFilteredByOwner } from '../hooks/useRoleFilteredData';
-import AdminTestPopup from './AdminTestPopup';
+
 
 // ── Greeting based on time of day ──
 function getGreeting(): string {
