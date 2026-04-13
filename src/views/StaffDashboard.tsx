@@ -19,6 +19,7 @@ import type {
   Activity, Goal, DailyReport
 } from '../types';
 import { useFilteredTasks, useFilteredProjects, useFilteredByOwner } from '../hooks/useRoleFilteredData';
+import AdminTestPopup from './AdminTestPopup';
 
 // ── Greeting based on time of day ──
 function getGreeting(): string {
@@ -324,7 +325,9 @@ const StaffDashboard: React.FC = () => {
   };
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6">
+    <>
+      <AdminTestPopup />
+      <div className="max-w-6xl mx-auto space-y-6">
 
       {/* ── Hero: Greeting + Stats ── */}
       <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-primary/10 via-primary/5 to-transparent border border-primary/10 p-4 sm:p-6">
@@ -910,7 +913,7 @@ const StaffDashboard: React.FC = () => {
 
         </div>
       </div>
-    </div>
+    </>
   );
 };
 
