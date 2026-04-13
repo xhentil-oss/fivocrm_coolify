@@ -83,7 +83,7 @@ const PACKAGES: InteriorDesignPackage[] = [
     price: '700€',
     priceNote: '/ muaj + ad spend',
     targetAudience: [
-      'Dizajnerë interieri të rinj',
+      'Dizajnerë interiori të rinj',
       'Studio të vogla dizajni',
       'Biznese që duan prezencë profesionale',
     ],
@@ -133,7 +133,7 @@ const PACKAGES: InteriorDesignPackage[] = [
     popular: true,
     badge: 'Më i Popullarizuari',
     targetAudience: [
-      'Studio dizajni që duan më shumë projekte',
+      'Studio interiori që duan më shumë projekte',
       'Dizajnerë që duan lead generation',
     ],
     features: [
@@ -279,7 +279,7 @@ const RESULTS = [
   { metric: '180', suffix: '+', label: 'Projekte të promovuara me sukses', icon: Paintbrush },
   { metric: '90', suffix: '%', label: 'Klientë që marrin kërkesa brenda muajit', icon: Target },
   { metric: '4.5', suffix: 'x', label: 'Rritje e ndjekësve në 6 muaj', icon: TrendingUp },
-  { metric: '95', suffix: '+', label: 'Studio dizajni të kënaqura', icon: Users },
+  { metric: '95', suffix: '+', label: 'Studio interiori të kënaqura', icon: Users },
 ];
 
 const PAIN_POINTS = [
@@ -296,7 +296,7 @@ const PAIN_POINTS = [
   {
     icon: Clock,
     title: 'Koha po shkon, projekte po humbasin',
-    desc: 'Çdo ditë pa prezencë aktive në social media, po humbisni klientë potencialë që kërkojnë dizajner interieri.',
+    desc: 'Çdo ditë pa prezencë aktive në social media, po humbisni klientë potencialë që kërkojnë dizajner interiori.',
   },
 ];
 
@@ -317,7 +317,7 @@ const TESTIMONIALS = [
   },
   {
     name: 'Driton Hoxha',
-    role: 'Dizajner Interieri, DH Design',
+    role: 'Dizajner Interiori, DH Design',
     quote: 'Reels-et e projekteve para/pas u bënë virale. Kam marrë 3x më shumë kërkesa se para — e pabesueshme.',
     rating: 5,
     avatar: 'DH',
