@@ -2,10 +2,11 @@ import React, { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../hooks/use-toast';
 import { getStatusColor } from '../lib/statusColors';
 import {
   ArrowLeft, Building2, Mail, Phone, FileText, DollarSign,
-  ClipboardList, Calendar, Plus, Clock, Target, Calculator
+  ClipboardList, Calendar, Plus, Clock, Target, Calculator, Send
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -24,10 +25,12 @@ const Customer360View: React.FC = () => {
   const { customerId } = useParams<{ customerId: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { toast } = useToast();
   const [isActivityDialogOpen, setIsActivityDialogOpen] = useState(false);
   const [activityType, setActivityType] = useState<string>('note');
   const [activityTitle, setActivityTitle] = useState('');
   const [activityDesc, setActivityDesc] = useState('');
+  const [sendingQuoteId, setSendingQuoteId] = useState<string | null>(null);
 
   // Data
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
@@ -39,6 +42,7 @@ const Customer360View: React.FC = () => {
   const { data: quotes } = useCollection<Quote>('quotes', { skipTeamFilter: true });
   const { data: allLeads } = useCollection<Lead>('leads', { skipTeamFilter: true });
   const activityMutation = useMutation<Activity>('activities');
+  const quoteMutation = useMutation<Quote>('quotes');
 
   const customer = customers?.find(c => c.id === customerId);
 
@@ -531,6 +535,7 @@ const Customer360View: React.FC = () => {
                         <th className="px-4 py-2 text-right">Grand Total</th>
                         <th className="px-4 py-2 text-left">Statusi</th>
                         <th className="px-4 py-2 text-center">Shërbime</th>
+                        <th className="px-4 py-2 text-center">Veprime</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
@@ -552,6 +557,30 @@ const Customer360View: React.FC = () => {
                               }>{q.status}</Badge>
                             </td>
                             <td className="px-4 py-2.5 text-center">{q.result?.enabledServicesCount ?? 0}</td>
+                            <td className="px-4 py-2.5 text-center">
+                              {q.status === 'Draft' && (
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="text-xs h-7 gap-1 text-blue-600 border-blue-200 hover:bg-blue-50"
+                                  disabled={sendingQuoteId === q.id}
+                                  onClick={async () => {
+                                    setSendingQuoteId(q.id);
+                                    try {
+                                      await quoteMutation.update(q.id, { status: 'Sent' });
+                                      toast({ title: '✅ Preventiva u dërgua te klienti!' });
+                                    } catch {
+                                      toast({ title: 'Gabim', description: 'Ndodhi një gabim', variant: 'destructive' });
+                                    } finally {
+                                      setSendingQuoteId(null);
+                                    }
+                                  }}
+                                >
+                                  <Send className="w-3 h-3" />
+                                  Dërgo
+                                </Button>
+                              )}
+                            </td>
                           </tr>
                         );
                       })}
