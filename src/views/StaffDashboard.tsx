@@ -326,7 +326,7 @@ const StaffDashboard: React.FC = () => {
 
   return (
     <>
-      <AdminTestPopup />
+      {/* <AdminTestPopup /> removed: popup feature no longer used */}
       <div className="max-w-6xl mx-auto space-y-6">
 
       {/* ── Hero: Greeting + Stats ── */}
