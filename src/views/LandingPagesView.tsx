@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -69,6 +69,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Briefcase,
     color: 'text-blue-600',
     gradient: 'from-blue-500 to-indigo-600',
+    status: 'active',
+  },
+  {
+    id: 'interior-design',
+    title: 'Interior Design',
+    description: 'Paketa Social Media për studio dizajni interieri dhe dizajnerë.',
+    path: '/interior-design',
+    category: 'Social Media',
+    icon: Paintbrush,
+    color: 'text-amber-600',
+    gradient: 'from-amber-500 to-orange-600',
     status: 'active',
   },
 ];
