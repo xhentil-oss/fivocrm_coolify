@@ -913,6 +913,7 @@ const StaffDashboard: React.FC = () => {
 
         </div>
       </div>
+    </div>
     </>
   );
 };
