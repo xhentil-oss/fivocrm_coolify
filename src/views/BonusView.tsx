@@ -161,22 +161,46 @@ const BonusView: React.FC = () => {
   const allMemberResults = useMemo(() => {
     if (!teamMembers) return [];
 
-    // ── 1. Office / general expenses for the selected period ─────────────────
     const month = parseInt(selectedMonth);
     const year = parseInt(selectedYear);
+
+    // ── 0. Salary lookup from Expenses (category='Salary', memberId set) ─────
+    // If an expense with category 'Salary' is linked to a member via memberId,
+    // use that amount as their salary for this period instead of monthlySalary.
+    const salaryFromExpenses = new Map<string, number>();
+    (expenses || []).forEach(e => {
+      if (e.category !== 'Salary') return;
+      const memberId = (e as any).memberId as string | undefined;
+      if (!memberId) return;
+      const d = e.date ? new Date(e.date) : null;
+      if (!d || isNaN(d.getTime())) return;
+      if (d.getMonth() !== month || d.getFullYear() !== year) return;
+      salaryFromExpenses.set(memberId, (salaryFromExpenses.get(memberId) || 0) + (e.amount || 0));
+    });
+
+    const effectiveSalary = (uid: string, monthlySalary?: number): number =>
+      salaryFromExpenses.get(uid) ?? monthlySalary ?? 0;
+
+    // ── 1. Office / general expenses for the selected period ─────────────────
+    // Exclude Salary-category and project-specific expenses from office overhead.
     const totalOfficeExpenses = (expenses || []).reduce((sum, e) => {
       if ((e as any).projectId) return sum; // project-specific → skip
+      if (e.category === 'Salary') return sum; // salary is tracked separately
       const d = e.date ? new Date(e.date) : null;
       if (!d || isNaN(d.getTime())) return sum;
       if (d.getMonth() !== month || d.getFullYear() !== year) return sum;
       return sum + (e.amount || 0);
     }, 0);
+
     // Allocate office expenses proportionally to each project's budget weight
     const totalPeriodBudget = periodProjects.reduce((s, p) => s + (p.budget || 0), 0);
 
     return teamMembers
-      .filter(m => m.monthlySalary && m.monthlySalary > 0)
+      .filter(m => effectiveSalary(m.userId, m.monthlySalary) > 0)
       .map(member => {
+        const salary = effectiveSalary(member.userId, member.monthlySalary);
+        const salarySource = salaryFromExpenses.has(member.userId) ? 'expenses' : 'profile';
+
         // Match by responsibleUserId first; fall back to createdByUserId
         const memberProjects = periodProjects.filter(p => {
           const owner = p.responsibleUserId || p.createdByUserId;
@@ -196,24 +220,21 @@ const BonusView: React.FC = () => {
           const perProjectOffice = totalOfficeExpenses * budgetFraction;
 
           // ── salary cost of each assigned member (prorated by project budget) ─
-          // Each member's monthly salary is split proportionally across the
-          // projects they are assigned to, weighted by each project's budget.
-          // This avoids over-charging small projects and under-charging large ones.
+          // Uses salary from Expenses if linked, else falls back to monthlySalary.
           const memberIds: string[] = (p.memberUserIds as string[] | undefined) || [];
           const salaryCosts = memberIds.reduce((sum, uid) => {
             const tm = teamMembers.find(m => m.userId === uid);
-            if (!tm?.monthlySalary) return sum;
-            // All projects this member is assigned to in this period
+            const tmSalary = effectiveSalary(uid, tm?.monthlySalary);
+            if (!tmSalary) return sum;
             const assignedProjects = periodProjects.filter(pp =>
               ((pp.memberUserIds as string[] | undefined) || []).includes(uid) ||
               pp.responsibleUserId === uid
             );
             const totalAssignedBudget = assignedProjects.reduce((s, pp) => s + (pp.budget || 0), 0);
-            // Fraction = this project's budget / total budget across all assigned projects
             const fraction = totalAssignedBudget > 0
               ? (p.budget || 0) / totalAssignedBudget
-              : 1 / Math.max(1, assignedProjects.length); // fallback: equal split if no budgets set
-            return sum + tm.monthlySalary * fraction;
+              : 1 / Math.max(1, assignedProjects.length);
+            return sum + tmSalary * fraction;
           }, 0);
 
           const budget = p.budget || 0;
@@ -231,13 +252,14 @@ const BonusView: React.FC = () => {
         });
 
         const netContribution = projectDetails.reduce((sum, p) => sum + p.net, 0);
-        const bonus = calculateBonus(member.monthlySalary!, netContribution);
+        const bonus = calculateBonus(salary, netContribution);
 
         return {
           member,
+          salarySource,
           ...bonus,
           projects: projectDetails,
-        } as BonusResult & { member: TeamMember };
+        } as BonusResult & { member: TeamMember; salarySource: 'expenses' | 'profile' };
       })
       .sort((a, b) => b.totalBonus - a.totalBonus);
   }, [teamMembers, periodProjects, expenses, selectedMonth, selectedYear]);
@@ -468,7 +490,8 @@ const BonusView: React.FC = () => {
           <Award className="h-10 w-10 mx-auto text-muted-foreground/40 mb-3" />
           <p className="font-medium text-foreground/70">Sistemi i bonusit është gati</p>
           <p className="text-sm text-muted-foreground mt-1">
-            Shko te <strong>Ekipet</strong> → edito anëtarët dhe cakto rrogën mujore për secilin.
+            Shko te <strong>Ekipet</strong> → edito anëtarët dhe cakto rrogën mujore për secilin,
+            ose shto shpenzim me kategori <strong>Paga</strong> te Shpenzimet dhe lidhe me anëtarin.
             Edito gjithashtu projektet dhe cakto <strong>Përgjegjësin e Projektit</strong>.
           </p>
         </Card>
@@ -481,7 +504,7 @@ const BonusView: React.FC = () => {
           {memberResults.map(result => {
             const isExpanded = expandedMember === result.member.id;
             const hasBonus = result.totalBonus > 0;
-            const progressMax = result.member.monthlySalary! * 5;
+            const progressMax = (result.threshold / 3) * 5; // threshold = salary×3, so salary = threshold/3
 
             return (
               <Card
@@ -499,7 +522,12 @@ const BonusView: React.FC = () => {
                     </div>
                     <div className="min-w-0">
                       <p className="font-medium text-sm truncate">{getName(result.member.userId, result.member.displayName || result.member.email?.split('@')[0])}</p>
-                      <p className="text-xs text-muted-foreground">{result.member.role} · Rroga: {result.member.monthlySalary?.toLocaleString()} L/muaj</p>
+                      <p className="text-xs text-muted-foreground">
+                        {result.member.role} · Rroga: {result.threshold ? Math.round(result.threshold / 3).toLocaleString() : '—'} L/muaj
+                        {(result as any).salarySource === 'expenses' && (
+                          <span className="ml-1 text-blue-500" title="Rroga e marrë nga shpenzimet e muajit">· nga shpenzimet</span>
+                        )}
+                      </p>
                     </div>
                   </div>
 

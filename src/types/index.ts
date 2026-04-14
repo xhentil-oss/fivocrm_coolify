@@ -196,6 +196,7 @@ export interface Expense {
   projectId?: string;
   departmentId?: string;
   status?: string;
+  memberId?: string;       // for Salary expenses: links to TeamMember.userId
   isRecurring?: boolean;
   recurringFrequency?: string;
   nextRecurringDate?: Date;
@@ -535,7 +536,7 @@ export interface ClientRequest {
   title: string;
   description: string;
   category: 'Design' | 'Development' | 'Support' | 'Marketing' | 'Consulting' | 'Other';
-  status: 'New' | 'In Review' | 'In Progress' | 'Completed' | 'Rejected';
+  status: 'New' | 'In Review' | 'In Progress' | 'Completed' | 'Rejected' | 'Archived';
   priority: 'low' | 'medium' | 'high' | 'urgent';
   projectId?: string;
   serviceId?: string;

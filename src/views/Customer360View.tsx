@@ -6,7 +6,8 @@ import { useToast } from '../hooks/use-toast';
 import { getStatusColor } from '../lib/statusColors';
 import {
   ArrowLeft, Building2, Mail, Phone, FileText, DollarSign,
-  ClipboardList, Calendar, Plus, Clock, Target, Calculator, Send
+  ClipboardList, Calendar, Plus, Clock, Target, Calculator, Send,
+  Archive, Trash2, CheckSquare, Square
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -31,6 +32,8 @@ const Customer360View: React.FC = () => {
   const [activityTitle, setActivityTitle] = useState('');
   const [activityDesc, setActivityDesc] = useState('');
   const [sendingQuoteId, setSendingQuoteId] = useState<string | null>(null);
+  const [selectedRequestIds, setSelectedRequestIds] = useState<Set<string>>(new Set());
+  const [showArchivedRequests, setShowArchivedRequests] = useState(false);
 
   // Data
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
@@ -43,6 +46,7 @@ const Customer360View: React.FC = () => {
   const { data: allLeads } = useCollection<Lead>('leads', { skipTeamFilter: true });
   const activityMutation = useMutation<Activity>('activities');
   const quoteMutation = useMutation<Quote>('quotes');
+  const requestMutation = useMutation<ClientRequest>('clientRequests');
 
   const customer = customers?.find(c => c.id === customerId);
 
@@ -76,7 +80,7 @@ const Customer360View: React.FC = () => {
     return projects.filter(p => p.customerId === customerId);
   }, [projects, customerId]);
 
-  const customerRequests = useMemo(() => {
+  const allCustomerRequests = useMemo(() => {
     if (!requests) return [];
     return requests.filter(r => r.customerId === customerId).sort((a, b) => {
       const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
@@ -84,6 +88,47 @@ const Customer360View: React.FC = () => {
       return tb - ta;
     });
   }, [requests, customerId]);
+
+  const customerRequests = useMemo(() =>
+    allCustomerRequests.filter(r => showArchivedRequests ? r.status === 'Archived' : r.status !== 'Archived'),
+    [allCustomerRequests, showArchivedRequests]
+  );
+
+  const archivedRequestsCount = useMemo(() =>
+    allCustomerRequests.filter(r => r.status === 'Archived').length,
+    [allCustomerRequests]
+  );
+
+  const handleBulkArchiveRequests = async () => {
+    const ids = [...selectedRequestIds];
+    await Promise.all(ids.map(id => requestMutation.update(id, { status: 'Archived' } as any)));
+    setSelectedRequestIds(new Set());
+    toast({ title: `${ids.length} kërkesa u arkivuan` });
+  };
+
+  const handleBulkDeleteRequests = async () => {
+    if (!confirm(`Je i sigurt që dëshiron të fshish ${selectedRequestIds.size} kërkesa?`)) return;
+    const ids = [...selectedRequestIds];
+    await Promise.all(ids.map(id => requestMutation.remove(id)));
+    setSelectedRequestIds(new Set());
+    toast({ title: `${ids.length} kërkesa u fshinë` });
+  };
+
+  const toggleRequestSelection = (id: string) => {
+    setSelectedRequestIds(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAllRequests = () => {
+    if (selectedRequestIds.size === customerRequests.length) {
+      setSelectedRequestIds(new Set());
+    } else {
+      setSelectedRequestIds(new Set(customerRequests.map(r => r.id)));
+    }
+  };
 
   const customerActivities = useMemo(() => {
     if (!activities) return [];
@@ -236,7 +281,7 @@ const Customer360View: React.FC = () => {
           <TabsTrigger value="overview">Përmbledhje</TabsTrigger>
           <TabsTrigger value="invoices">Faturat ({customerInvoices.length})</TabsTrigger>
           <TabsTrigger value="projects">Projektet ({customerProjects.length})</TabsTrigger>
-          <TabsTrigger value="requests">Kërkesat ({customerRequests.length})</TabsTrigger>
+          <TabsTrigger value="requests">Kërkesat ({allCustomerRequests.filter(r => r.status !== 'Archived').length})</TabsTrigger>
           <TabsTrigger value="activities">Aktivitete ({customerActivities.length})</TabsTrigger>
           <TabsTrigger value="quotes">Preventiva ({customerQuotes.length})</TabsTrigger>
         </TabsList>
@@ -435,24 +480,90 @@ const Customer360View: React.FC = () => {
         {/* Requests Tab */}
         <TabsContent value="requests">
           <Card>
-            <CardContent className="pt-6">
+            <CardContent className="pt-4">
+              {/* Toolbar */}
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
+                <div className="flex items-center gap-2">
+                  {selectedRequestIds.size > 0 && (
+                    <>
+                      <Button size="sm" variant="outline" onClick={handleBulkArchiveRequests} className="gap-1.5 text-xs">
+                        <Archive className="w-3.5 h-3.5" /> Arkivo ({selectedRequestIds.size})
+                      </Button>
+                      <Button size="sm" variant="outline" onClick={handleBulkDeleteRequests} className="gap-1.5 text-xs text-red-600 border-red-200 hover:bg-red-50">
+                        <Trash2 className="w-3.5 h-3.5" /> Fshi ({selectedRequestIds.size})
+                      </Button>
+                    </>
+                  )}
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="text-xs text-muted-foreground"
+                  onClick={() => { setShowArchivedRequests(v => !v); setSelectedRequestIds(new Set()); }}
+                >
+                  <Archive className="w-3.5 h-3.5 mr-1" />
+                  {showArchivedRequests ? 'Shfaq aktive' : `Arkivi (${archivedRequestsCount})`}
+                </Button>
+              </div>
+
               {customerRequests.length === 0 ? (
-                <p className="text-sm text-muted-foreground text-center py-8">Nuk ka kërkesa</p>
+                <p className="text-sm text-muted-foreground text-center py-8">
+                  {showArchivedRequests ? 'Nuk ka kërkesa të arkivuara' : 'Nuk ka kërkesa'}
+                </p>
               ) : (
-                <div className="space-y-3">
+                <div className="space-y-0.5">
+                  {/* Select-all row */}
+                  <div className="flex items-center gap-2 px-1 pb-2 border-b mb-1">
+                    <button onClick={toggleAllRequests} className="text-muted-foreground hover:text-foreground">
+                      {selectedRequestIds.size === customerRequests.length && customerRequests.length > 0
+                        ? <CheckSquare className="w-4 h-4" />
+                        : <Square className="w-4 h-4" />
+                      }
+                    </button>
+                    <span className="text-xs text-muted-foreground">
+                      {selectedRequestIds.size > 0 ? `${selectedRequestIds.size} zgjedhur` : 'Zgjidh të gjitha'}
+                    </span>
+                  </div>
+
                   {customerRequests.map(req => (
-                    <div key={req.id} className="flex items-center justify-between py-3 border-b last:border-0">
-                      <div>
-                        <p className="font-medium text-sm">{req.title}</p>
+                    <div key={req.id} className="flex items-center gap-2 py-2.5 border-b last:border-0">
+                      <button onClick={() => toggleRequestSelection(req.id)} className="flex-shrink-0 text-muted-foreground hover:text-foreground">
+                        {selectedRequestIds.has(req.id)
+                          ? <CheckSquare className="w-4 h-4 text-primary" />
+                          : <Square className="w-4 h-4" />
+                        }
+                      </button>
+                      <div className="flex-1 min-w-0">
+                        <p className="font-medium text-sm truncate">{req.title}</p>
                         <div className="flex items-center gap-2 text-xs text-muted-foreground mt-0.5">
                           <span>{req.category}</span>
                           <span>•</span>
                           <span>{req.createdAt instanceof Date ? req.createdAt.toLocaleDateString('sq-AL') : ''}</span>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-shrink-0">
                         <Badge variant="outline" className="text-xs">{req.priority}</Badge>
                         <Badge className={getStatusColor(req.status)} variant="secondary">{req.status}</Badge>
+                        {!showArchivedRequests && (
+                          <button
+                            onClick={() => requestMutation.update(req.id, { status: 'Archived' } as any)}
+                            className="p-1 text-muted-foreground hover:text-foreground rounded"
+                            title="Arkivo"
+                          >
+                            <Archive className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        <button
+                          onClick={async () => {
+                            if (!confirm('Fshi kërkesën?')) return;
+                            await requestMutation.remove(req.id);
+                            toast({ title: 'Kërkesa u fshi' });
+                          }}
+                          className="p-1 text-muted-foreground hover:text-red-600 rounded"
+                          title="Fshi"
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </button>
                       </div>
                     </div>
                   ))}

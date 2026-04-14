@@ -15,7 +15,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popove
 import { Switch } from '../components/ui/switch';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
-import type { Expense, Team, Project } from '../types';
+import type { Expense, Team, Project, TeamMember } from '../types';
 
 const ExpensesView: React.FC = () => {
   const permissions = usePermissions();
@@ -48,6 +48,8 @@ const ExpensesView: React.FC = () => {
     const paidDate = formData.get('paidDate') as string;
     const projectId = formData.get('projectId') as string;
 
+    const memberId = formData.get('memberId') as string;
+
     await expenseMutation.create({
       title,
       description: description || undefined,
@@ -61,7 +63,8 @@ const ExpensesView: React.FC = () => {
       status: status || 'Active',
       paidDate: paidDate ? new Date(paidDate) : undefined,
       projectId: projectId && projectId !== '__none__' ? projectId : undefined,
-    });
+      memberId: memberId && memberId !== '__none__' ? memberId : undefined,
+    } as any);
 
     logActivity('expense_added', `Shpenzim: ${title}`, { entityType: 'expense', description: `${amount} ${currency || 'ALL'}` });
     setIsCreateDialogOpen(false);
@@ -82,6 +85,8 @@ const ExpensesView: React.FC = () => {
     const status = formData.get('status') as string;
     const paidDate = formData.get('paidDate') as string;
 
+    const memberId = formData.get('memberId') as string;
+
     await expenseMutation.update(selectedExpense.id, {
       title,
       description: description || undefined,
@@ -94,7 +99,8 @@ const ExpensesView: React.FC = () => {
       nextRecurringDate: isRecurring && nextRecurringDate ? new Date(nextRecurringDate) : undefined,
       status: status || 'Active',
       paidDate: paidDate ? new Date(paidDate) : undefined,
-    });
+      memberId: memberId && memberId !== '__none__' ? memberId : undefined,
+    } as any);
 
     setIsEditDialogOpen(false);
     setSelectedExpense(null);
@@ -401,6 +407,11 @@ const ExpenseForm: React.FC<{
 }> = ({ onSubmit, teams, projects, initialData }) => {
   const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
   const [projectSearch, setProjectSearch] = useState('');
+  const [selectedMemberId, setSelectedMemberId] = useState<string>((initialData as any)?.memberId || '__none__');
+  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
+    where: [{ field: 'status', operator: '==', value: 'Active' }],
+    skipTeamFilter: true,
+  });
 
   // Custom categories stored in Firestore
   const { data: customCategoryDocs } = useCollection<{ id: string; label: string }>('expenseCategories');
@@ -543,6 +554,27 @@ const ExpenseForm: React.FC<{
           </SelectContent>
         </Select>
       </div>
+
+      {selectedCategory === 'Salary' && (
+        <div>
+          <Label htmlFor="memberId">Anëtar i stafit (Opsionale)</Label>
+          <input type="hidden" name="memberId" value={selectedMemberId} />
+          <Select value={selectedMemberId} onValueChange={setSelectedMemberId}>
+            <SelectTrigger>
+              <SelectValue placeholder="Zgjidh anëtarin..." />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">Pa lidhje me anëtar</SelectItem>
+              {(teamMembers || []).map(m => (
+                <SelectItem key={m.userId} value={m.userId}>
+                  {m.name || m.email || m.userId}
+                  {m.monthlySalary ? ` — ${m.monthlySalary.toLocaleString('sq-AL')} L/muaj` : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       <div>
         <Label htmlFor="projectId">Projekti (Opsionale)</Label>

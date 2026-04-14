@@ -53,11 +53,13 @@ const PortalRequestsView: React.FC = () => {
 
   const requests = React.useMemo(() => {
     if (!rawRequests) return [];
-    return [...rawRequests].sort((a, b) => {
-      const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
-      const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toMillis?.() ?? 0;
-      return tb - ta;
-    });
+    return [...rawRequests]
+      .filter(r => r.status !== 'Archived')
+      .sort((a, b) => {
+        const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
+        const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toMillis?.() ?? 0;
+        return tb - ta;
+      });
   }, [rawRequests]);
 
   const { data: teams } = useCollection<Team>('teams');
@@ -88,6 +90,7 @@ const PortalRequestsView: React.FC = () => {
       case 'In Progress': return 'bg-yellow-100 text-yellow-800';
       case 'Completed': return 'bg-green-100 text-green-800';
       case 'Rejected': return 'bg-red-100 text-red-800';
+      case 'Archived': return 'bg-gray-100 text-gray-500';
       default: return 'bg-gray-100 text-gray-800';
     }
   };
@@ -99,6 +102,7 @@ const PortalRequestsView: React.FC = () => {
       case 'In Progress': return 'Në Progres';
       case 'Completed': return 'Përfunduar';
       case 'Rejected': return 'Refuzuar';
+      case 'Archived': return 'Arkivuar';
       default: return status;
     }
   };
