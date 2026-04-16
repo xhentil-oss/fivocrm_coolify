@@ -438,6 +438,46 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     setShowMentionSuggestions(false);
   };
 
+  const playFrogSound = () => {
+    try {
+      const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+      const playRibbit = (startTime: number) => {
+        // Frequency sweep: high → low (the "rib" part)
+        const osc1 = ctx.createOscillator();
+        const gain1 = ctx.createGain();
+        osc1.connect(gain1);
+        gain1.connect(ctx.destination);
+        osc1.type = 'sine';
+        osc1.frequency.setValueAtTime(900, startTime);
+        osc1.frequency.exponentialRampToValueAtTime(300, startTime + 0.12);
+        gain1.gain.setValueAtTime(0, startTime);
+        gain1.gain.linearRampToValueAtTime(0.18, startTime + 0.01);
+        gain1.gain.exponentialRampToValueAtTime(0.001, startTime + 0.13);
+        osc1.start(startTime);
+        osc1.stop(startTime + 0.14);
+
+        // Second harmonic for texture
+        const osc2 = ctx.createOscillator();
+        const gain2 = ctx.createGain();
+        osc2.connect(gain2);
+        gain2.connect(ctx.destination);
+        osc2.type = 'triangle';
+        osc2.frequency.setValueAtTime(1600, startTime);
+        osc2.frequency.exponentialRampToValueAtTime(600, startTime + 0.10);
+        gain2.gain.setValueAtTime(0, startTime);
+        gain2.gain.linearRampToValueAtTime(0.07, startTime + 0.01);
+        gain2.gain.exponentialRampToValueAtTime(0.001, startTime + 0.11);
+        osc2.start(startTime);
+        osc2.stop(startTime + 0.12);
+      };
+      // Two quick "rib-bit" pulses
+      playRibbit(ctx.currentTime);
+      playRibbit(ctx.currentTime + 0.18);
+    } catch {
+      // Audio not supported — fail silently
+    }
+  };
+
   const handleAddCommentSubmit = async () => {
     if (commentText.trim()) {
       // Extract userIds from both new @[Name](uid) format and legacy @uid format
@@ -456,9 +496,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           message: `${user?.displayName || 'Dikush'} ju përmendi në detyrën: ${task.title}`,
           isRead: false,
         }));
-      
+
       await Promise.all(notificationPromises);
 
+      playFrogSound();
       onAddComment(task.id, commentText);
       setCommentText('');
     }
