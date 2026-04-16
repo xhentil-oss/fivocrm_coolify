@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
-import { Bell, Check, Trash2, Mail, Calendar, User, AlertCircle, CheckCircle, Info, ExternalLink } from 'lucide-react';
+import { Bell, Check, Trash2, Mail, Calendar, User, AlertCircle, CheckCircle, Info, ExternalLink, MessageSquare } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
@@ -27,6 +27,7 @@ const NotificationsCenter: React.FC = () => {
   const notificationMutation = useMutation<Notification>('notifications');
 
   const unreadCount = notifications?.filter(n => !n.isRead).length || 0;
+  const unreadClientCount = notifications?.filter(n => !n.isRead && (n as any).type === 'client_message').length || 0;
 
   const handleMarkAsRead = async (id: string) => {
     await notificationMutation.update(id, { isRead: true });
@@ -46,7 +47,11 @@ const NotificationsCenter: React.FC = () => {
     await notificationMutation.remove(id);
   };
 
-  const getNotificationIcon = (title: string) => {
+  const getNotificationIcon = (title: string, type?: string) => {
+    // Client message from portal
+    if (type === 'client_message' || title.includes('klienti') || title.includes('Klienti')) return <MessageSquare className="w-4 h-4 text-emerald-500" />;
+    // Staff message to client
+    if (type === 'staff_message' || title.includes('stafi') || title.includes('Stafi')) return <MessageSquare className="w-4 h-4 text-blue-500" />;
     // Task assignment (Albanian + English)
     if (title.includes('Caktuar') || title.includes('caktua') || title.includes('Assigned') || title.includes('Task')) return <User className="w-4 h-4 text-success" />;
     // Comments (Albanian + English)
@@ -70,16 +75,23 @@ const NotificationsCenter: React.FC = () => {
   return (
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
-        <Button 
-          variant="ghost" 
+        <Button
+          variant="ghost"
           size="icon"
           className="bg-white/10 text-primary-foreground hover:bg-white/20 relative"
           aria-label="Notifications"
         >
-          <Bell className="w-5 h-5" />
+          {unreadClientCount > 0
+            ? <span className="text-base leading-none animate-bird-fly">🐦</span>
+            : <Bell className="w-5 h-5" />
+          }
           {unreadCount > 0 && (
-            <Badge 
-              className="absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 bg-accent text-accent-foreground text-xs"
+            <Badge
+              className={`absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 text-xs ${
+                unreadClientCount > 0
+                  ? 'bg-emerald-500 text-white'
+                  : 'bg-accent text-accent-foreground'
+              }`}
             >
               {unreadCount > 9 ? '9+' : unreadCount}
             </Badge>
@@ -131,7 +143,7 @@ const NotificationsCenter: React.FC = () => {
                       notification={notification}
                       onMarkAsRead={handleMarkAsRead}
                       onDelete={handleDelete}
-                      getIcon={getNotificationIcon}
+                      getIcon={(title) => getNotificationIcon(title, (notification as any).type)}
                     />
                   ))}
                 </div>
@@ -158,7 +170,7 @@ const NotificationsCenter: React.FC = () => {
                       notification={notification}
                       onMarkAsRead={handleMarkAsRead}
                       onDelete={handleDelete}
-                      getIcon={getNotificationIcon}
+                      getIcon={(title) => getNotificationIcon(title, (notification as any).type)}
                     />
                   ))}
                 </div>
@@ -188,22 +200,34 @@ const NotificationItem: React.FC<{
     return new Date(date).toLocaleDateString();
   };
 
+  const n = notification as any;
+  const isClientMsg = n.type === 'client_message';
+  const isStaffMsg = n.type === 'staff_message';
+
   const handleAction = () => {
-    const n = notification as any;
-    if (n.actionType === 'navigate' && n.actionUrl) {
+    if (isClientMsg || n.linkTo) {
+      navigate('/app/chat');
+      if (!notification.isRead) onMarkAsRead(notification.id);
+    } else if (n.actionType === 'navigate' && n.actionUrl) {
       navigate(n.actionUrl);
       if (!notification.isRead) onMarkAsRead(notification.id);
     }
   };
 
-  const actionLabel = (notification as any).actionLabel;
-  const actionUrl = (notification as any).actionUrl;
+  const actionLabel = n.actionLabel;
+  const actionUrl = n.actionUrl;
+  const hasAction = isClientMsg || n.linkTo || (actionUrl && actionLabel);
 
   return (
-    <div 
+    <div
       className={`p-4 hover:bg-muted/50 transition-colors ${
-        !notification.isRead ? 'bg-primary/5' : ''
-      }`}
+        isClientMsg && !notification.isRead
+          ? 'bg-emerald-50/70 dark:bg-emerald-950/20 border-l-2 border-l-emerald-400'
+          : isStaffMsg && !notification.isRead
+          ? 'bg-blue-50/70 dark:bg-blue-950/20 border-l-2 border-l-blue-400'
+          : !notification.isRead ? 'bg-primary/5' : ''
+      } ${isClientMsg || n.linkTo ? 'cursor-pointer' : ''}`}
+      onClick={isClientMsg || n.linkTo ? handleAction : undefined}
     >
       <div className="flex gap-3">
         <div className="flex-shrink-0 mt-1">
@@ -218,15 +242,23 @@ const NotificationItem: React.FC<{
               <p className="text-sm text-muted-foreground mt-1">
                 {notification.message}
               </p>
-              {actionUrl && actionLabel && (
+              {hasAction && (
                 <Button
                   variant="outline"
                   size="sm"
-                  className="mt-2 h-7 text-xs gap-1"
-                  onClick={handleAction}
+                  className={`mt-2 h-7 text-xs gap-1 ${
+                    isClientMsg
+                      ? 'border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400'
+                      : isStaffMsg
+                      ? 'border-blue-200 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400'
+                      : ''
+                  }`}
+                  onClick={(e) => { e.stopPropagation(); handleAction(); }}
                 >
-                  <ExternalLink className="w-3 h-3" />
-                  {actionLabel}
+                  {isClientMsg || n.linkTo
+                    ? <><MessageSquare className="w-3 h-3" />Hap Chat</>
+                    : <><ExternalLink className="w-3 h-3" />{actionLabel}</>
+                  }
                 </Button>
               )}
               <p className="text-xs text-muted-foreground mt-2">

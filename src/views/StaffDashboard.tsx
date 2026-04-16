@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -99,6 +99,11 @@ const StaffDashboard: React.FC = () => {
   const { data: allTimeEntries } = useCollection<TimeEntry>('timeEntries');
   const { data: dailyReports } = useCollection<DailyReport>('dailyReports');
   const { data: userProfiles } = useCollection<any>('userProfiles');
+  const { data: allUserNotifs } = useCollection<any>('notifications', {
+    skip: !user,
+    where: user ? [{ field: 'userId', operator: '==', value: user.uid }] : undefined,
+    skipTeamFilter: true,
+  });
 
   // Role-based filtering
   const tasks = useFilteredTasks(rawTasks);
@@ -108,6 +113,30 @@ const StaffDashboard: React.FC = () => {
   const goals = useFilteredByOwner(rawGoals);
 
   const taskMutation = useMutation<Task>('tasks');
+
+  // ── Unread client messages: count from notifications ──
+  const unreadClientMsgs = useMemo(
+    () => allUserNotifs?.filter((n: any) => n.type === 'client_message' && !n.isRead).length || 0,
+    [allUserNotifs]
+  );
+
+  // ── Toast when new client message arrives ──
+  const prevClientMsgCountRef = useRef(0);
+  const clientMsgFirstLoadRef = useRef(true);
+  useEffect(() => {
+    if (clientMsgFirstLoadRef.current) {
+      clientMsgFirstLoadRef.current = false;
+      prevClientMsgCountRef.current = unreadClientMsgs;
+      return;
+    }
+    if (unreadClientMsgs > prevClientMsgCountRef.current) {
+      toast({
+        title: '🐦 Mesazh i ri nga klienti!',
+        description: 'Klikoni zogun për të parë mesazhin.',
+      });
+    }
+    prevClientMsgCountRef.current = unreadClientMsgs;
+  }, [unreadClientMsgs]);
 
   // ── Computed data ──
   const myTasks = useMemo(() => {
@@ -884,11 +913,16 @@ const StaffDashboard: React.FC = () => {
               <Button
                 variant="outline"
                 size="sm"
-                className="justify-start text-xs h-9"
+                className={`justify-start text-xs h-9 relative ${unreadClientMsgs > 0 ? 'border-emerald-300 dark:border-emerald-700' : ''}`}
                 onClick={() => navigate('/app/chat')}
               >
-                <MessageSquare className="w-3.5 h-3.5 mr-1.5 text-green-500" />
+                <MessageSquare className={`w-3.5 h-3.5 mr-1.5 ${unreadClientMsgs > 0 ? 'text-emerald-500' : 'text-green-500'}`} />
                 Chat
+                {unreadClientMsgs > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[16px] h-4 bg-red-500 rounded-full flex items-center justify-center text-white text-[9px] font-bold px-0.5">
+                    {unreadClientMsgs > 9 ? '9+' : unreadClientMsgs}
+                  </span>
+                )}
               </Button>
               <Button
                 variant="outline"
@@ -914,6 +948,31 @@ const StaffDashboard: React.FC = () => {
         </div>
       </div>
     </div>
+
+    {/* ── Floating Bird Widget: unread client messages ── */}
+    {unreadClientMsgs > 0 && (
+      <button
+        onClick={() => navigate('/app/chat')}
+        className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-white dark:bg-gray-900 rounded-2xl shadow-xl px-4 py-3 border border-emerald-200 dark:border-emerald-800 hover:shadow-lg hover:scale-105 transition-all duration-200 animate-bird-enter"
+        title="Mesazh i ri nga klienti — klikoni për chat"
+      >
+        {/* Bird with pulse ring */}
+        <div className="relative flex-shrink-0 w-9 h-9 flex items-center justify-center">
+          <div className="absolute inset-0 rounded-full bg-emerald-400/25 animate-pulse-ring" />
+          <span className="text-2xl block animate-bird-fly select-none">🐦</span>
+          <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] bg-red-500 rounded-full flex items-center justify-center text-white text-[9px] font-bold px-0.5 shadow">
+            {unreadClientMsgs > 9 ? '9+' : unreadClientMsgs}
+          </span>
+        </div>
+        {/* Label */}
+        <div className="text-left">
+          <div className="text-xs font-semibold text-foreground whitespace-nowrap leading-tight">Mesazh nga klienti</div>
+          <div className="text-[10px] text-emerald-600 dark:text-emerald-400 font-medium mt-0.5">
+            {unreadClientMsgs} të palexuar · Hap chat →
+          </div>
+        </div>
+      </button>
+    )}
     </>
   );
 };

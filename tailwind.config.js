@@ -153,6 +153,20 @@ module.exports = {
           from: { opacity: "0", transform: "translateY(10px)" },
           to: { opacity: "1", transform: "translateY(0)" },
         },
+        "bird-enter": {
+          "0%": { transform: "translateX(80px) scale(0.5)", opacity: "0" },
+          "70%": { transform: "translateX(-4px) scale(1.08)", opacity: "1" },
+          "100%": { transform: "translateX(0) scale(1)", opacity: "1" },
+        },
+        "bird-fly": {
+          "0%, 100%": { transform: "translateY(0px) rotate(0deg)" },
+          "30%": { transform: "translateY(-8px) rotate(-8deg)" },
+          "70%": { transform: "translateY(4px) rotate(5deg)" },
+        },
+        "pulse-ring": {
+          "0%": { transform: "scale(1)", opacity: "0.5" },
+          "100%": { transform: "scale(1.8)", opacity: "0" },
+        },
       },
       animation: {
         "accordion-down": "accordion-down 0.2s ease-out",
@@ -161,6 +175,9 @@ module.exports = {
         "slide-out-right": "slide-out-right 0.3s ease-out",
         "fade-in": "fade-in 0.2s ease-in",
         "count-up": "count-up 0.8s ease-out",
+        "bird-enter": "bird-enter 0.7s cubic-bezier(0.34, 1.56, 0.64, 1) forwards",
+        "bird-fly": "bird-fly 2.5s ease-in-out infinite",
+        "pulse-ring": "pulse-ring 1.8s ease-out infinite",
       },
     },
   },
