@@ -133,7 +133,7 @@ function AppContent() {
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { user } = useAuth();
-  const { isOwner, previewRole } = usePermissions();
+  const { isOwner, previewRole, isLoading: permissionsLoading } = usePermissions();
   const [showOnboarding, setShowOnboarding] = useState(() => {
     return !localStorage.getItem('fivocrm_onboarding_done');
   });
@@ -154,6 +154,16 @@ function AppContent() {
       }
     }).catch(() => { /* non-blocking */ });
   }, [user, showOnboarding]);
+
+  // Auto-skip onboarding for staff members — wizard is only for owners setting up a new account.
+  // Waits for permissions to load so we don't dismiss prematurely before knowing the role.
+  useEffect(() => {
+    if (permissionsLoading || !showOnboarding) return;
+    if (!isOwner) {
+      localStorage.setItem('fivocrm_onboarding_done', '1');
+      setShowOnboarding(false);
+    }
+  }, [permissionsLoading, isOwner, showOnboarding]);
 
   // One-time migration: stamp teamId on pre-isolation documents
   useTeamDataMigration();
