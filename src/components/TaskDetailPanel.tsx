@@ -595,23 +595,35 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   return (
     <>
     <div className="h-full flex flex-col bg-background border-l">
-      {/* Header with Status Badge and Close */}
+      {/* Header with Status Select and Close */}
       <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b bg-muted/30">
-        <Badge 
-          className={`
-            transition-all duration-300
-            ${task.status === 'Done' ? 'bg-emerald-500 text-white'
-              : task.status === 'In Progress' ? 'bg-blue-500 text-white'
-              : task.status === 'Review' ? 'bg-amber-500 text-white'
-              : 'bg-slate-200 text-slate-700 dark:bg-slate-700 dark:text-slate-200'}
-          `}
+        <Select
+          value={task.status}
+          onValueChange={async (newStatus) => {
+            await onUpdate(task.id, { status: newStatus });
+            const labels: Record<string, string> = { Todo: 'Për të bërë', 'In Progress': 'Në progres', Review: 'Rishikim', Done: 'Përfunduar' };
+            toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${labels[newStatus] ?? newStatus}` });
+          }}
         >
-          {task.status === 'Done' && <Check className="w-3 h-3 mr-1" />}
-          {task.status === 'Todo' ? 'Për të bërë'
-            : task.status === 'In Progress' ? 'Në progres'
-            : task.status === 'Review' ? 'Rishikim'
-            : 'Përfunduar'}
-        </Badge>
+          <SelectTrigger
+            className={`
+              h-7 w-auto border-0 shadow-none text-xs font-semibold px-2.5 py-1 rounded-full focus:ring-0 gap-1.5
+              ${task.status === 'Done' ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/25'
+                : task.status === 'In Progress' ? 'bg-blue-500/15 text-blue-700 dark:text-blue-400 hover:bg-blue-500/25'
+                : task.status === 'Review' ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 hover:bg-amber-500/25'
+                : 'bg-slate-200/80 text-slate-700 dark:bg-slate-700 dark:text-slate-300 hover:bg-slate-300/80'}
+            `}
+          >
+            {task.status === 'Done' && <Check className="w-3 h-3" />}
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="Todo">Për të bërë</SelectItem>
+            <SelectItem value="In Progress">Në progres</SelectItem>
+            <SelectItem value="Review">Rishikim</SelectItem>
+            <SelectItem value="Done">Përfunduar</SelectItem>
+          </SelectContent>
+        </Select>
         <div className="flex items-center gap-1">
           {activeWorkers.length > 0 && (
             <div className="flex items-center gap-1 text-xs text-success">
@@ -1500,44 +1512,93 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
           {/* Comments */}
           <div className="pt-4 border-t">
-            <h4 className="text-sm font-medium text-muted-foreground mb-3">
-              Komente ({comments.length})
-            </h4>
-            
+            <div className="flex items-center justify-between mb-3">
+              <h4 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
+                <MessageSquare className="w-4 h-4 text-muted-foreground" />
+                Komente
+                {comments.length > 0 && (
+                  <span className="text-xs font-normal text-muted-foreground">({comments.length})</span>
+                )}
+              </h4>
+            </div>
+
             {comments.length > 0 && (
-              <div className="space-y-3 mb-4">
-                {comments.map(comment => {
-                  // Get commenter info
-                  const commenterMember = teamMembers?.find(m => m.userId === comment.createdByUserId);
-                  const isCurrentUser = comment.createdByUserId === user?.uid;
-                  const commenterName = getUserDisplayName(comment.createdByUserId || '');
-                  
-                  return (
-                    <div key={comment.id} className="bg-muted/50 p-3 rounded">
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-xs font-medium">
-                          {commenterName.slice(0, 2).toUpperCase()}
+              <div className="space-y-1 mb-4">
+                {[...comments]
+                  .sort((a, b) => {
+                    const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? new Date(a.createdAt as any).getTime() ?? 0;
+                    const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toMillis?.() ?? new Date(b.createdAt as any).getTime() ?? 0;
+                    return ta - tb;
+                  })
+                  .map((comment, idx, arr) => {
+                    const isCurrentUser = (comment.createdByUserId || comment.userId) === user?.uid;
+                    const commenterName = getUserDisplayName(comment.createdByUserId || comment.userId || '');
+                    const initials = commenterName.slice(0, 2).toUpperCase();
+                    const createdAt = comment.createdAt instanceof Date
+                      ? comment.createdAt
+                      : (comment.createdAt as any)?.toDate?.()
+                        ? (comment.createdAt as any).toDate()
+                        : new Date(comment.createdAt as any);
+                    const now = new Date();
+                    const diffMs = now.getTime() - createdAt.getTime();
+                    const diffMin = Math.floor(diffMs / 60000);
+                    const timeLabel = diffMin < 1 ? 'tani'
+                      : diffMin < 60 ? `${diffMin} min`
+                      : diffMin < 1440 ? `${Math.floor(diffMin / 60)} orë`
+                      : createdAt.toLocaleDateString('sq-AL', { day: '2-digit', month: 'short' });
+
+                    // Show name only when author changes
+                    const prevComment = idx > 0 ? arr[idx - 1] : null;
+                    const showName = !prevComment || (prevComment.createdByUserId || prevComment.userId) !== (comment.createdByUserId || comment.userId);
+
+                    return (
+                      <div key={comment.id} className={`flex gap-2 ${isCurrentUser ? 'flex-row-reverse' : 'flex-row'}`}>
+                        {/* Avatar — only show when author changes */}
+                        <div className="flex-shrink-0 w-7">
+                          {showName && (
+                            <div className={`w-7 h-7 rounded-full flex items-center justify-center text-[10px] font-bold
+                              ${isCurrentUser
+                                ? 'bg-primary text-primary-foreground'
+                                : 'bg-muted-foreground/20 text-muted-foreground'}`}>
+                              {initials}
+                            </div>
+                          )}
                         </div>
-                        <span className="text-sm font-medium">{commenterName}</span>
-                        <span className="text-xs text-muted-foreground">
-                          {new Date(comment.createdAt).toLocaleString('sq-AL')}
-                        </span>
+
+                        <div className={`max-w-[75%] ${isCurrentUser ? 'items-end' : 'items-start'} flex flex-col gap-0.5`}>
+                          {showName && (
+                            <span className={`text-[11px] font-medium text-muted-foreground px-1 ${isCurrentUser ? 'text-right' : 'text-left'}`}>
+                              {isCurrentUser ? 'Ti' : commenterName}
+                            </span>
+                          )}
+                          <div className={`px-3 py-2 rounded-2xl text-sm leading-relaxed
+                            ${isCurrentUser
+                              ? 'bg-primary text-primary-foreground rounded-tr-sm'
+                              : 'bg-muted text-foreground rounded-tl-sm'}`}>
+                            {renderCommentWithMentions(comment.content)}
+                          </div>
+                          <span className={`text-[10px] text-muted-foreground px-1 ${isCurrentUser ? 'text-right' : 'text-left'}`}>
+                            {timeLabel}
+                          </span>
+                        </div>
                       </div>
-                      <p className="text-sm pl-8">{renderCommentWithMentions(comment.content)}</p>
-                    </div>
-                  );
-                })}
+                    );
+                  })}
               </div>
             )}
-            
+
+            {comments.length === 0 && (
+              <p className="text-xs text-muted-foreground text-center py-4 italic">Ende nuk ka komente</p>
+            )}
+
             {/* Comment Input */}
             <div className="relative">
-              <div className="flex items-center gap-2 bg-muted/30 rounded-lg p-2">
-                <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-xs font-medium flex-shrink-0">
-                  {user?.displayName?.slice(0, 2).toUpperCase() || 'U'}
+              <div className="flex items-center gap-2 bg-muted/40 border border-border/50 rounded-xl px-3 py-2 focus-within:border-primary/50 focus-within:bg-background transition-colors">
+                <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-[10px] font-bold text-primary-foreground flex-shrink-0">
+                  {user?.displayName?.slice(0, 2).toUpperCase() || user?.email?.slice(0, 2).toUpperCase() || 'U'}
                 </div>
                 <Input
-                  placeholder="Shto koment... përdor @emri për të përmendur dikë"
+                  placeholder="Shto koment... @emri për të përmendur"
                   value={commentText}
                   onChange={handleCommentChange}
                   onKeyDown={(e) => {
@@ -1548,8 +1609,16 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                       setShowMentionSuggestions(false);
                     }
                   }}
-                  className="border-0 bg-transparent focus-visible:ring-0 text-sm"
+                  className="border-0 bg-transparent focus-visible:ring-0 text-sm p-0 h-auto"
                 />
+                {commentText.trim() && (
+                  <button
+                    onClick={handleAddCommentSubmit}
+                    className="flex-shrink-0 w-7 h-7 rounded-lg bg-primary flex items-center justify-center hover:bg-primary/90 transition-colors"
+                  >
+                    <Send className="w-3.5 h-3.5 text-primary-foreground" />
+                  </button>
+                )}
               </div>
               {showMentionSuggestions && mentionSuggestions.length > 0 && (
                 <div className="absolute bottom-full left-0 right-0 mb-1 bg-popover border rounded-lg shadow-lg z-50">
