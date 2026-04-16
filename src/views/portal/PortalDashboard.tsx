@@ -1,12 +1,13 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCollection } from '../../hooks/useFirestore';
 import { getStatusColor } from '../../lib/statusColors';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
-import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2, Sparkles, Calculator } from 'lucide-react';
-import { Link } from 'react-router-dom';
+import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2, Sparkles, Calculator, MessageSquare } from 'lucide-react';
+import { Link, useNavigate } from 'react-router-dom';
+import { useToast } from '../../hooks/use-toast';
 import type { Invoice, InvoiceItem, Service, ClientRequest, Project, Task, Quote, Lead } from '../../types';
 
 const QUOTES = [
@@ -25,6 +26,8 @@ const QUOTES = [
 const PortalDashboard: React.FC = () => {
   const { customerId } = useClientPortal();
   const { user } = useAuth();
+  const navigate = useNavigate();
+  const { toast } = useToast();
 
   // Greeting based on time of day
   const greeting = React.useMemo(() => {
@@ -41,6 +44,35 @@ const PortalDashboard: React.FC = () => {
   }, []);
 
   const displayName = user?.displayName || user?.email?.split('@')[0] || 'klient';
+
+  // ── Unread staff messages via notifications ──
+  const { data: portalUserNotifs } = useCollection<any>('notifications', {
+    skip: !user,
+    where: user ? [{ field: 'userId', operator: '==', value: user.uid }] : undefined,
+    skipTeamFilter: true,
+  });
+  const unreadStaffMsgs = React.useMemo(
+    () => portalUserNotifs?.filter((n: any) => n.type === 'staff_message' && !n.isRead).length || 0,
+    [portalUserNotifs]
+  );
+
+  // ── Toast when new staff message arrives ──
+  const prevStaffMsgCountRef = useRef(0);
+  const staffMsgFirstLoadRef = useRef(true);
+  useEffect(() => {
+    if (staffMsgFirstLoadRef.current) {
+      staffMsgFirstLoadRef.current = false;
+      prevStaffMsgCountRef.current = unreadStaffMsgs;
+      return;
+    }
+    if (unreadStaffMsgs > prevStaffMsgCountRef.current) {
+      toast({
+        title: '🐦 Mesazh i ri nga ekipi!',
+        description: 'Klikoni zogun për të parë mesazhin.',
+      });
+    }
+    prevStaffMsgCountRef.current = unreadStaffMsgs;
+  }, [unreadStaffMsgs]);
 
   const { data: rawInvoices } = useCollection<Invoice>('invoices', {
     skip: !customerId,
@@ -455,6 +487,31 @@ const PortalDashboard: React.FC = () => {
             </div>
           </CardContent>
         </Card>
+      )}
+
+      {/* ── Floating Bird Widget: unread staff messages ── */}
+      {unreadStaffMsgs > 0 && (
+        <button
+          onClick={() => navigate('/portal/chat')}
+          className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-white dark:bg-gray-900 rounded-2xl shadow-xl px-4 py-3 border border-primary/20 dark:border-primary/30 hover:shadow-lg hover:scale-105 transition-all duration-200 animate-bird-enter"
+          title="Mesazh i ri nga ekipi — klikoni për chat"
+        >
+          {/* Bird + pulse ring */}
+          <div className="relative flex-shrink-0 w-9 h-9 flex items-center justify-center">
+            <div className="absolute inset-0 rounded-full bg-primary/20 animate-pulse-ring" />
+            <span className="text-2xl block animate-bird-fly select-none">🐦</span>
+            <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] bg-red-500 rounded-full flex items-center justify-center text-white text-[9px] font-bold px-0.5 shadow">
+              {unreadStaffMsgs > 9 ? '9+' : unreadStaffMsgs}
+            </span>
+          </div>
+          {/* Label */}
+          <div className="text-left">
+            <div className="text-xs font-semibold text-foreground whitespace-nowrap leading-tight">Mesazh nga ekipi</div>
+            <div className="text-[10px] text-primary font-medium mt-0.5">
+              {unreadStaffMsgs} të palexuar · Hap chat →
+            </div>
+          </div>
+        </button>
       )}
     </div>
   );
