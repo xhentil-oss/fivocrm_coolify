@@ -1,8 +1,9 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { NavLink, Outlet, useNavigate, Navigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { usePermissions } from '../../hooks/usePermissions';
+import { useCollection } from '../../hooks/useFirestore';
 import {
   LayoutDashboard,
   FileText,
@@ -35,6 +36,17 @@ const PortalLayout: React.FC = () => {
   const { isClient, isLoading } = useClientPortal();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
+
+  // ── Unread staff messages badge ──
+  const { data: portalNotifs } = useCollection<any>('notifications', {
+    skip: !user,
+    where: user ? [{ field: 'userId', operator: '==', value: user.uid }] : undefined,
+    skipTeamFilter: true,
+  });
+  const unreadStaffMsgs = useMemo(
+    () => portalNotifs?.filter((n: any) => n.type === 'staff_message' && !n.isRead).length || 0,
+    [portalNotifs]
+  );
 
   // Staff members should never land on the client portal.
   // Redirect them to the main app before useClientPortal can auto-create client records.
@@ -145,10 +157,48 @@ const PortalLayout: React.FC = () => {
 
       {/* Main content */}
       <main className="lg:ml-[240px] pt-16">
-        <div className="p-4 sm:p-6 lg:p-8">
+        <div className="p-4 pb-20 sm:p-6 sm:pb-20 lg:p-8">
           <Outlet />
         </div>
       </main>
+
+      {/* ── Mobile bottom navigation (hidden on lg+) ── */}
+      <nav className="fixed bottom-0 left-0 right-0 z-40 h-16 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 border-t flex items-stretch lg:hidden">
+        {navItems.map(item => {
+          const Icon = item.icon;
+          const isChatItem = item.to === '/portal/chat';
+          return (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.end}
+              onClick={() => setMobileOpen(false)}
+              className={({ isActive }) =>
+                `flex-1 flex flex-col items-center justify-center gap-0.5 relative transition-colors ${
+                  isActive ? 'text-primary' : 'text-muted-foreground'
+                }`
+              }
+            >
+              {({ isActive }) => (
+                <>
+                  <div className={`relative p-1.5 rounded-xl transition-all ${isActive ? 'bg-primary/10' : ''}`}>
+                    <Icon className={`w-5 h-5 transition-transform ${isActive ? 'scale-110' : ''}`} />
+                    {isChatItem && unreadStaffMsgs > 0 && (
+                      <span className="absolute -top-0.5 -right-0.5 min-w-[14px] h-3.5 bg-red-500 rounded-full flex items-center justify-center text-white text-[8px] font-bold px-0.5">
+                        {unreadStaffMsgs > 9 ? '9+' : unreadStaffMsgs}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-[10px] font-medium leading-none">{item.label}</span>
+                  {isActive && (
+                    <span className="absolute bottom-1 w-1 h-1 rounded-full bg-primary" />
+                  )}
+                </>
+              )}
+            </NavLink>
+          );
+        })}
+      </nav>
     </div>
   );
 };

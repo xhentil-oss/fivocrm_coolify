@@ -10,6 +10,7 @@ import Sidebar from './components/Sidebar';
 import LoginView from './views/LoginView';
 import RegisterView from './views/RegisterView';
 import FloatingActionButton from './components/FloatingActionButton';
+import MobileBottomNav from './components/MobileBottomNav';
 import DailyReportPopup from './components/DailyReportPopup';
 import CommandPalette from './components/CommandPalette';
 import PermissionGate from './components/PermissionGate';
@@ -244,7 +245,7 @@ function AppContent() {
                   sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'
                 }`}
               >
-                <div className="p-3 sm:p-6 lg:p-8">
+                <div className="p-3 pb-20 sm:p-6 sm:pb-20 lg:p-8">
                   <PendingInvitesBanner />
                   <ErrorBoundary>
                     <Suspense fallback={<LazyFallback />}>
@@ -289,6 +290,7 @@ function AppContent() {
               </main>
             </div>
 
+            <MobileBottomNav />
             <FloatingActionButton />
             <DailyReportPopup />
             <CommandPalette 
