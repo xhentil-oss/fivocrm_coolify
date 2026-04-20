@@ -89,6 +89,10 @@ const InvoicesView: React.FC = () => {
   const { data: allInvoiceItems } = useCollection<InvoiceItem>('invoiceItems', { skipTeamFilter: true });
   const invoiceMutation = useMutation<Invoice>('invoices');
   const invoiceItemMutationTop = useMutation<InvoiceItem>('invoiceItems');
+  const notificationMutation = useMutation<any>('notifications');
+  const { data: teamMembers } = useCollection<any>('teamMembers', {
+    where: [{ field: 'status', operator: '==', value: 'Active' }],
+  });
 
   const handleDeleteInvoice = async (id: string) => {
     // Delete associated invoice items first
@@ -237,8 +241,24 @@ const InvoicesView: React.FC = () => {
         updateData.paidAt = new Date();
       }
     }
-    
+
     await invoiceMutation.update(invoiceId, updateData);
+
+    // Notify Admin/finance team when invoice marked Paid
+    if (field === 'status' && editValue === 'Paid') {
+      const invoice = invoices?.find(i => i.id === invoiceId);
+      const recipients = teamMembers?.filter((m: any) => m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices)) || [];
+      Promise.all(recipients.map((m: any) => notificationMutation.create({
+        userId: m.userId,
+        type: 'invoice_paid',
+        title: 'Faturë e Paguar ✓',
+        message: `Fatura${invoice?.invoiceNumber ? ` ${invoice.invoiceNumber}` : ''} u shënua si e paguar.`,
+        isRead: false,
+        actionUrl: '/app/invoices',
+        actionLabel: 'Shiko Faturat',
+      }))).catch(() => {});
+    }
+
     cancelEditing();
   };
 
@@ -807,9 +827,14 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     ? { where: [{ field: 'invoiceId', operator: '==', value: editInvoice!.id }], skipTeamFilter: true }
     : undefined
   );
+  const { user: currentUser } = useAuth();
   const invoiceMutation = useMutation<Invoice>('invoices');
   const invoiceItemMutation = useMutation<InvoiceItem>('invoiceItems');
   const accessMutation = useMutation<ClientPortalAccess>('clientPortalAccess');
+  const invoiceNotifMutation = useMutation<any>('notifications');
+  const { data: invoiceTeamMembers } = useCollection<any>('teamMembers', {
+    where: [{ field: 'status', operator: '==', value: 'Active' }],
+  });
 
   // Auto-generate invoice number for new invoices using a Firebase atomic counter.
   // The counter doc (counters/invoices_{teamId}) is incremented transactionally to avoid duplicates.
@@ -993,6 +1018,18 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         entityType: 'invoice', entityId: invoice.id, customerId: selectedCustomerId,
         description: `${total.toLocaleString()} ALL — ${customerName}`
       });
+
+      // Notify Admin/finance members about the new invoice
+      const invoiceRecipients = invoiceTeamMembers?.filter((m: any) => m.userId !== currentUser?.uid && (m.role === 'Admin' || m.canAccessInvoices)) || [];
+      Promise.all(invoiceRecipients.map((m: any) => invoiceNotifMutation.create({
+        userId: m.userId,
+        type: 'invoice_created',
+        title: 'Faturë e Re',
+        message: `Faturë e re${invoiceNumber ? ` ${invoiceNumber}` : ''} për ${customerName || 'klient'} — ${total.toLocaleString()} ${invoiceData.currency || 'ALL'}.`,
+        isRead: false,
+        actionUrl: '/app/invoices',
+        actionLabel: 'Shiko Faturat',
+      }))).catch(() => {});
 
       // Auto-create portal access for this customer if it doesn't exist
       if (selectedCustomerId) {

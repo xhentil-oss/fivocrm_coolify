@@ -205,18 +205,19 @@ const NotificationItem: React.FC<{
   const isStaffMsg = n.type === 'staff_message';
 
   const handleAction = () => {
-    if (isClientMsg || n.linkTo) {
+    if (!notification.isRead) onMarkAsRead(notification.id);
+    if (n.linkTo) {
+      navigate(n.linkTo);
+    } else if (isClientMsg) {
       navigate('/app/chat');
-      if (!notification.isRead) onMarkAsRead(notification.id);
-    } else if (n.actionType === 'navigate' && n.actionUrl) {
+    } else if (n.actionUrl) {
       navigate(n.actionUrl);
-      if (!notification.isRead) onMarkAsRead(notification.id);
     }
   };
 
   const actionLabel = n.actionLabel;
   const actionUrl = n.actionUrl;
-  const hasAction = isClientMsg || n.linkTo || (actionUrl && actionLabel);
+  const hasAction = isClientMsg || n.linkTo || actionUrl;
 
   return (
     <div
@@ -226,8 +227,8 @@ const NotificationItem: React.FC<{
           : isStaffMsg && !notification.isRead
           ? 'bg-blue-50/70 dark:bg-blue-950/20 border-l-2 border-l-blue-400'
           : !notification.isRead ? 'bg-primary/5' : ''
-      } ${isClientMsg || n.linkTo ? 'cursor-pointer' : ''}`}
-      onClick={isClientMsg || n.linkTo ? handleAction : undefined}
+      } ${hasAction ? 'cursor-pointer' : ''}`}
+      onClick={hasAction ? handleAction : undefined}
     >
       <div className="flex gap-3">
         <div className="flex-shrink-0 mt-1">
