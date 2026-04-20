@@ -8,8 +8,8 @@ import {
 } from 'lucide-react';
 
 /* ─── Intersection Observer ─── */
-function useInView(threshold = 0.15) {
-  const ref = useRef<HTMLDivElement>(null);
+function useInView<T extends Element = HTMLDivElement>(threshold = 0.15) {
+  const ref = useRef<T>(null);
   const [visible, setVisible] = useState(false);
   useEffect(() => {
     const el = ref.current;
@@ -25,7 +25,7 @@ function useInView(threshold = 0.15) {
 }
 
 function FadeIn({ children, className = '', delay = 0 }: { children: React.ReactNode; className?: string; delay?: number }) {
-  const { ref, visible } = useInView();
+  const { ref, visible } = useInView<HTMLDivElement>();
   return (
     <div
       ref={ref}
@@ -38,7 +38,7 @@ function FadeIn({ children, className = '', delay = 0 }: { children: React.React
 }
 
 function Counter({ end, suffix = '', duration = 2000 }: { end: number; suffix?: string; duration?: number }) {
-  const { ref, visible } = useInView();
+  const { ref, visible } = useInView<HTMLSpanElement>();
   const [count, setCount] = useState(0);
   useEffect(() => {
     if (!visible) return;
@@ -51,7 +51,7 @@ function Counter({ end, suffix = '', duration = 2000 }: { end: number; suffix?: 
     }, 16);
     return () => clearInterval(timer);
   }, [visible, end, duration]);
-  return <span ref={ref}>{count.toLocaleString()}{suffix}</span>;
+  return <span ref={ref as React.RefObject<HTMLSpanElement>}>{count.toLocaleString()}{suffix}</span>;
 }
 
 /* ═══════════════════════════════════════════════
@@ -135,7 +135,7 @@ const PACKAGES: SocialPackage[] = [
     subtitle: 'Rritje e audiencës dhe gjenerim i klientëve',
     price: '700€',
     priceNote: '/ muaj + ad spend',
-    popular: false,
+    popular: true,
     badge: 'Popullor',
     color: 'from-violet-500 to-purple-600',
     border: 'border-violet-200 hover:border-violet-400',
@@ -193,7 +193,7 @@ const PACKAGES: SocialPackage[] = [
     subtitle: 'Dominim dixhital dhe rezultate të matshme',
     price: '1,400€',
     priceNote: '/ muaj + ad spend',
-    popular: true,
+    popular: false,
     badge: 'Më i Zgjedhuri',
     color: 'from-indigo-500 to-blue-600',
     border: 'border-indigo-300 hover:border-indigo-500',
@@ -672,7 +672,7 @@ const SocialMediaLandingPage: React.FC = () => {
                     ))}
 
                     {/* Not included */}
-                    {pkg.notIncluded.length > 1 && (
+                    {pkg.notIncluded.length > 0 && (
                       <div>
                         <p className="text-[10px] font-bold text-gray-300 uppercase tracking-wider mb-1.5">Nuk përfshihet</p>
                         <ul className="space-y-1">
