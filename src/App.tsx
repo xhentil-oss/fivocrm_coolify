@@ -79,6 +79,7 @@ const ResortLandingPage = lazyRetry(() => import('./views/landing/ResortLandingP
 const EstetikeLandingPage = lazyRetry(() => import('./views/landing/EstetikeLandingPage'));
 const RecruitLandingPage = lazyRetry(() => import('./views/landing/RecruitLandingPage'));
 const InteriorDesignLandingPage = lazyRetry(() => import('./views/landing/InteriorDesignLandingPage'));
+const EducationLandingPage = lazyRetry(() => import('./views/landing/EducationLandingPage'));
 const PriceCalculatorView = lazyRetry(() => import('./views/PriceCalculatorView'));
 const LandingPagesView = lazyRetry(() => import('./views/LandingPagesView'));
 
@@ -193,6 +194,7 @@ function AppContent() {
       <Route path="/estetike" element={<Suspense fallback={<LazyFallback />}><EstetikeLandingPage /></Suspense>} />
       <Route path="/recruit" element={<Suspense fallback={<LazyFallback />}><RecruitLandingPage /></Suspense>} />
       <Route path="/interior-design" element={<Suspense fallback={<LazyFallback />}><InteriorDesignLandingPage /></Suspense>} />
+      <Route path="/arsim" element={<Suspense fallback={<LazyFallback />}><EducationLandingPage /></Suspense>} />
 
       {/* Client Portal routes */}
       <Route path="/portal" element={<Suspense fallback={<LazyFallback />}><PortalLayout /></Suspense>}>

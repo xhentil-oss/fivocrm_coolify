@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -80,6 +80,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Paintbrush,
     color: 'text-amber-600',
     gradient: 'from-amber-500 to-orange-600',
+    status: 'active',
+  },
+  {
+    id: 'arsim',
+    title: 'Arsim & Qendra Kursesh',
+    description: 'Paketa marketing për shkolla private, qendra kursesh dhe akademi.',
+    path: '/arsim',
+    category: 'Education',
+    icon: GraduationCap,
+    color: 'text-indigo-600',
+    gradient: 'from-indigo-500 to-violet-600',
     status: 'active',
   },
 ];
