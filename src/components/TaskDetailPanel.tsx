@@ -504,15 +504,46 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       setMentionMap({});
       playFrogSound();
 
-      const notificationPromises = [...mentionedUids]
-        .filter(uid => uid !== user?.uid)
+      const mentionedArray = [...mentionedUids].filter(uid => uid !== user?.uid);
+
+      // Auto-add mentioned staff as task collaborators so they can see task + project
+      const currentCollaboratorIds: string[] = Array.isArray((task as any).collaboratorIds)
+        ? (task as any).collaboratorIds
+        : [];
+      const newCollaborators = mentionedArray.filter(uid => !currentCollaboratorIds.includes(uid));
+      if (newCollaborators.length > 0) {
+        await taskMutation.update(task.id, {
+          collaboratorIds: [...currentCollaboratorIds, ...newCollaborators],
+        });
+        // Notify new collaborators they now have access
+        await Promise.all(newCollaborators.map(uid =>
+          notificationMutation.create({
+            userId: uid,
+            type: 'task_collaborator_added',
+            title: '📋 Shtuar si Bashkëpunëtor',
+            message: `${user?.displayName || 'Dikush'} ju shtoi si bashkëpunëtor në detyrën: "${task.title}"`,
+            isRead: false,
+            actionUrl: task.projectId ? `/app/projects/${task.projectId}` : '/app/tasks',
+            actionLabel: task.projectId ? 'Shiko Projektin' : 'Shiko Detyrat',
+          })
+        ));
+      }
+
+      // Notify everyone mentioned who didn't already get the "added as collaborator" notification
+      const alreadyNotified = new Set(newCollaborators);
+      const senderName = user?.displayName || user?.email?.split('@')[0] || 'Dikush';
+      const mentionNotifPromises = mentionedArray
+        .filter(uid => !alreadyNotified.has(uid))
         .map(uid => notificationMutation.create({
-          userId: uid,
-          title: 'Ju përmendën në një koment',
-          message: `${user?.displayName || 'Dikush'} ju përmendi në detyrën: ${task.title}`,
+          userId: uid,            // ← goes to RECIPIENT (mentioned person), never sender
+          type: 'task_mention',
+          title: `💬 ${senderName} ju përmendi`,
+          message: `Në detyrën: "${task.title}"`,
           isRead: false,
+          actionUrl: task.projectId ? `/app/projects/${task.projectId}` : '/app/tasks',
+          actionLabel: task.projectId ? 'Shiko Detyrën' : 'Shiko Detyrat',
         }));
-      await Promise.all(notificationPromises);
+      await Promise.all(mentionNotifPromises);
     } catch {
       // Comment failed to save — keep text so user can retry
     }

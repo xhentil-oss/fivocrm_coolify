@@ -190,9 +190,9 @@ const CRMView: React.FC = () => {
       source: source || undefined,
       businessCategory,
       notes: notes || undefined,
-      estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined,
+      estimatedValue: estimatedValue && !isNaN(parseFloat(estimatedValue)) ? parseFloat(estimatedValue) : undefined,
       probability: STAGE_PROBABILITY[status] ?? 10,
-      score: calculateLeadScore({ name, email, phoneNumber, company, estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined }),
+      score: calculateLeadScore({ name, email, phoneNumber, company, estimatedValue: estimatedValue && !isNaN(parseFloat(estimatedValue)) ? parseFloat(estimatedValue) : undefined }),
       assignedToUserId: resolvedAssigned,
     });
 

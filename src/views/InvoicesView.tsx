@@ -95,12 +95,15 @@ const InvoicesView: React.FC = () => {
   });
 
   const handleDeleteInvoice = async (id: string) => {
-    // Delete associated invoice items first
-    const relatedItems = allInvoiceItems?.filter(item => (item as any).invoiceId === id) || [];
-    await Promise.all(relatedItems.map(item => invoiceItemMutationTop.remove(item.id)));
-    await invoiceMutation.remove(id);
-    toast({ title: 'Fatura u fshi me sukses!' });
-    setInvoiceToDelete(null);
+    try {
+      await invoiceMutation.remove(id);
+      const relatedItems = allInvoiceItems?.filter(item => (item as any).invoiceId === id) || [];
+      await Promise.all(relatedItems.map(item => invoiceItemMutationTop.remove(item.id)));
+      toast({ title: 'Fatura u fshi me sukses!' });
+      setInvoiceToDelete(null);
+    } catch {
+      toast({ title: 'Gabim gjatë fshirjes së faturës', variant: 'destructive' });
+    }
   };
 
   const handleSendEmail = async (invoiceId: string) => {

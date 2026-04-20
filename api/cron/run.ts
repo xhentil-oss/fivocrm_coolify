@@ -331,6 +331,58 @@ async function runRecurringProjectReset() {
   return { reset: resetCount };
 }
 
+// ── JOB: goal-overdue-alerts ─────────────────────────────────────────────────
+async function runGoalOverdueAlerts() {
+  const now = new Date();
+  const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+
+  const goalsSnap = await db.collection('goals').get();
+  if (goalsSnap.empty) return { notified: 0 };
+
+  let notified = 0;
+  const ops: Promise<any>[] = [];
+
+  for (const goalDoc of goalsSnap.docs) {
+    const goal = goalDoc.data();
+
+    // Skip if already achieved, cancelled, or already notified
+    if (goal.status === 'Achieved' || goal.status === 'Cancelled') continue;
+    if (goal.goalOverdueSent) continue;
+
+    // Determine the reference date (dueDate preferred, fall back to createdAt)
+    const refDate: Date | null =
+      goal.dueDate?.toDate?.() ? goal.dueDate.toDate()
+      : goal.dueDate ? new Date(goal.dueDate)
+      : goal.createdAt?.toDate?.() ? goal.createdAt.toDate()
+      : goal.createdAt ? new Date(goal.createdAt)
+      : null;
+
+    if (!refDate || refDate > twoWeeksAgo) continue;
+
+    const recipientId = goal.ownerId || goal.createdByUserId;
+    if (!recipientId) continue;
+
+    ops.push(goalDoc.ref.update({
+      goalOverdueSent: true,
+      updatedAt: admin.firestore.Timestamp.now(),
+    }));
+    ops.push(db.collection('notifications').add({
+      userId: recipientId,
+      type: 'goal_overdue',
+      title: `⚠️ Objektiv i Vonuar: "${goal.title || 'Pa titull'}"`,
+      message: `Ky objektiv ka kaluar afatin prej më shumë se 2 javësh dhe ende nuk është arritur.`,
+      isRead: false,
+      actionUrl: '/app/goals',
+      actionLabel: 'Shiko Objektivat',
+      createdAt: admin.firestore.Timestamp.now(),
+    }));
+    notified++;
+  }
+
+  await Promise.allSettled(ops);
+  return { notified };
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!authorize(req)) {
@@ -360,6 +412,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'recurring-project-reset':
         result = await runRecurringProjectReset();
+        break;
+      case 'goal-overdue-alerts':
+        result = await runGoalOverdueAlerts();
         break;
       default:
         return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset` });

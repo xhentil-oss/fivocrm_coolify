@@ -80,10 +80,10 @@ const TasksView: React.FC = () => {
   });
   // Role-based filtering: Member/Viewer see only assigned tasks
   const allTasks = useFilteredTasks(
-    // Client-side team filtering: show only tasks for this team (or legacy tasks without teamId)
+    // Client-side team filtering: show only tasks that explicitly belong to this team
     useMemo(() => {
       if (!rawTasks || !permissions.teamId) return rawTasks || [];
-      return rawTasks.filter(t => (t as any).teamId === permissions.teamId || !(t as any).teamId);
+      return rawTasks.filter(t => (t as any).teamId === permissions.teamId);
     }, [rawTasks, permissions.teamId])
   );
   const { data: projects, loading: projectsLoading } = useCollection<Project>('projects');
@@ -362,16 +362,6 @@ const TasksView: React.FC = () => {
       taskId,
       content,
     });
-
-    const task = tasks.find(t => t.id === taskId);
-    if (task && task.assignedToUserId && task.assignedToUserId !== user?.uid) {
-      await notificationMutation.create({
-        userId: task.assignedToUserId,
-        title: 'Koment i Ri',
-        message: `Koment i ri te detyra: ${task.title}`,
-        isRead: false,
-      });
-    }
   };
 
   // --- @dnd-kit drag-and-drop for kanban ---
@@ -1275,7 +1265,7 @@ const TaskForm: React.FC<{
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: 28 }, (_, i) => i + 1).map(d => (
+                    {Array.from({ length: 31 }, (_, i) => i + 1).map(d => (
                       <SelectItem key={d} value={String(d)}>
                         {d}
                       </SelectItem>

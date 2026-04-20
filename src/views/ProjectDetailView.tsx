@@ -85,7 +85,14 @@ const ProjectDetailView: React.FC = () => {
   }, [allTasks, filterStatus, searchQuery]);
 
   const team = teams?.find(t => t.id === project?.teamId);
-  const projectMembers = teamMembers?.filter(m => m.teamId === project?.teamId) || [];
+  // Respect explicit memberUserIds; fall back to full team
+  const projectMembers = React.useMemo(() => {
+    if (!teamMembers) return [];
+    if (project?.memberUserIds && project.memberUserIds.length > 0) {
+      return teamMembers.filter(m => project.memberUserIds!.includes(m.userId));
+    }
+    return teamMembers.filter(m => m.teamId === project?.teamId);
+  }, [teamMembers, project]);
 
   // Keep selectedTask in sync with live Firestore data
   useEffect(() => {
@@ -251,14 +258,17 @@ const ProjectDetailView: React.FC = () => {
           lastCompletedAt: now,
         });
       }
-      await notificationMutation.create({
-        userId: project.createdByUserId || user?.uid,
-        type: 'project_completed',
-        title: `✅ Projekti "${project.name}" u mbyll automatikisht`,
-        message: 'Të gjitha detyrat u shënuan si Përfunduar.',
-        isRead: false,
-        createdAt: now,
-      });
+      // Notify creator (skip if it's the same person who just updated)
+      if (project.createdByUserId && project.createdByUserId !== user?.uid) {
+        await notificationMutation.create({
+          userId: project.createdByUserId,
+          type: 'project_completed',
+          title: `✅ Projekti "${project.name}" u mbyll automatikisht`,
+          message: 'Të gjitha detyrat u shënuan si Përfunduar.',
+          isRead: false,
+          createdAt: now,
+        });
+      }
     }
   }, [taskMutation, project, rawProjectTasks, projectMutation, notificationMutation, user]);
 
@@ -276,10 +286,12 @@ const ProjectDetailView: React.FC = () => {
     if (!over) return;
     const taskId = String(active.id);
     const overId = String(over.id);
+    // Use allTasks (unfiltered) so drag works even when filters are active
+    const allTasksFlat = allTasks || [];
     const targetStatus = columns.find(c => c.status === overId)?.status
-      || columns.find(c => tasks.filter(t => t.status === c.status).some(t => t.id === overId))?.status;
+      || columns.find(c => allTasksFlat.filter(t => t.status === c.status).some(t => t.id === overId))?.status;
     if (targetStatus) {
-      const task = tasks.find(t => t.id === taskId);
+      const task = allTasksFlat.find(t => t.id === taskId);
       if (task && task.status !== targetStatus) {
         await handleTaskUpdate(taskId, { status: targetStatus });
       }

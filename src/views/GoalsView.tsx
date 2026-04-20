@@ -51,6 +51,7 @@ const GoalsView: React.FC = () => {
   // Mutations
   const goalMutation = useMutation<Goal>('goals');
   const milestoneMutation = useMutation<Milestone>('milestones');
+  const notificationMutation = useMutation<any>('notifications');
 
   // Filtered goals
   const goals = useMemo(() => {
@@ -92,12 +93,41 @@ const GoalsView: React.FC = () => {
 
   const handleCreate = async (data: Partial<Goal>) => {
     await goalMutation.create({ ...data, scope: data.scope || 'team' } as any);
+    // Notify assigned owner if different from creator
+    if (data.ownerId && data.ownerId !== user?.uid) {
+      notificationMutation.create({
+        userId: data.ownerId,
+        type: 'goal_assigned',
+        title: 'Objektiv i Ri i Caktuar',
+        message: `Ju u caktuat si përgjegjës i objektivit: "${data.title}"`,
+        isRead: false,
+        actionUrl: '/app/goals',
+        actionLabel: 'Shiko Objektivat',
+      }).catch(() => {});
+    }
     setIsCreateDialogOpen(false);
   };
 
   const handleUpdate = async (data: Partial<Goal>) => {
     if (!editingGoal) return;
     await goalMutation.update(editingGoal.id, data as any);
+    // Notify team when a goal is marked Achieved
+    if (data.status === 'Achieved' && editingGoal.status !== 'Achieved') {
+      const recipients = (teamMembers || []).filter(m => m.userId !== user?.uid && m.status === 'Active');
+      if (recipients.length > 0) {
+        Promise.all(recipients.map(m =>
+          notificationMutation.create({
+            userId: m.userId,
+            type: 'goal_achieved',
+            title: `🏆 Objektiv i Arritur`,
+            message: `Objektivi "${editingGoal.title || data.title}" u shënua si i arritur!`,
+            isRead: false,
+            actionUrl: '/app/goals',
+            actionLabel: 'Shiko Objektivat',
+          })
+        )).catch(() => {});
+      }
+    }
     setEditingGoal(null);
   };
 

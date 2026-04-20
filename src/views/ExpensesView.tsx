@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil, Search, Check, X } from 'lucide-react';
 import { Card } from '../components/ui/card';
@@ -18,6 +19,7 @@ import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import type { Expense, Team, Project, TeamMember } from '../types';
 
 const ExpensesView: React.FC = () => {
+  const { user } = useAuth();
   const permissions = usePermissions();
   const logActivity = useActivityLogger();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -32,12 +34,17 @@ const ExpensesView: React.FC = () => {
   const expenses = useFilteredByOwner(rawExpenses);
   const { data: teams } = useCollection<Team>('teams');
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
+  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
+    where: [{ field: 'status', operator: '==', value: 'Active' }]
+  });
   const expenseMutation = useMutation<Expense>('expenses');
+  const notificationMutation = useMutation<any>('notifications');
 
   const handleCreateExpense = async (formData: FormData) => {
     const title = formData.get('title') as string;
     const description = formData.get('description') as string;
     const amount = parseFloat(formData.get('amount') as string);
+    if (isNaN(amount) || amount < 0) return;
     const currency = formData.get('currency') as string;
     const category = formData.get('category') as string;
     const departmentId = formData.get('departmentId') as string;
@@ -67,6 +74,25 @@ const ExpensesView: React.FC = () => {
     } as any);
 
     logActivity('expense_added', `Shpenzim: ${title}`, { entityType: 'expense', description: `${amount} ${currency || 'ALL'}` });
+
+    // Notify Admins and Managers about new expense (exclude submitter)
+    const adminManagers = (teamMembers || []).filter(m =>
+      m.userId !== user?.uid && (m.role === 'Admin' || m.role === 'Manager')
+    );
+    if (adminManagers.length > 0) {
+      Promise.all(adminManagers.map(m =>
+        notificationMutation.create({
+          userId: m.userId,
+          type: 'expense_submitted',
+          title: 'Shpenzim i Ri i Shtuar',
+          message: `${title} — ${amount} ${currency || 'ALL'}`,
+          isRead: false,
+          actionUrl: '/app/expenses',
+          actionLabel: 'Shiko Shpenzimet',
+        })
+      )).catch(() => {});
+    }
+
     setIsCreateDialogOpen(false);
   };
 
@@ -76,6 +102,7 @@ const ExpensesView: React.FC = () => {
     const title = formData.get('title') as string;
     const description = formData.get('description') as string;
     const amount = parseFloat(formData.get('amount') as string);
+    if (isNaN(amount) || amount < 0) return;
     const currency = formData.get('currency') as string;
     const category = formData.get('category') as string;
     const departmentId = formData.get('departmentId') as string;

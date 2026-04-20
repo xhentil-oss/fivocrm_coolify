@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
-import { Bell, Check, Trash2, Mail, Calendar, User, AlertCircle, CheckCircle, Info, ExternalLink, MessageSquare } from 'lucide-react';
+import { Bell, Check, Trash2, Mail, Calendar, User, Users, AlertCircle, CheckCircle, Info, ExternalLink, MessageSquare } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
@@ -28,6 +28,7 @@ const NotificationsCenter: React.FC = () => {
 
   const unreadCount = notifications?.filter(n => !n.isRead).length || 0;
   const unreadClientCount = notifications?.filter(n => !n.isRead && (n as any).type === 'client_message').length || 0;
+  const unreadMentionCount = notifications?.filter(n => !n.isRead && ((n as any).type === 'task_mention' || (n as any).type === 'task_collaborator_added')).length || 0;
 
   const handleMarkAsRead = async (id: string) => {
     await notificationMutation.update(id, { isRead: true });
@@ -48,6 +49,12 @@ const NotificationsCenter: React.FC = () => {
   };
 
   const getNotificationIcon = (title: string, type?: string) => {
+    // Overdue goal
+    if (type === 'goal_overdue') return <AlertCircle className="w-4 h-4 text-orange-500" />;
+    // Mention in comment
+    if (type === 'task_mention') return <MessageSquare className="w-4 h-4 text-violet-500" />;
+    // Added as task collaborator
+    if (type === 'task_collaborator_added') return <Users className="w-4 h-4 text-violet-500" />;
     // Client message from portal
     if (type === 'client_message' || title.includes('klienti') || title.includes('Klienti')) return <MessageSquare className="w-4 h-4 text-emerald-500" />;
     // Staff message to client
@@ -83,6 +90,8 @@ const NotificationsCenter: React.FC = () => {
         >
           {unreadClientCount > 0
             ? <span className="text-base leading-none animate-bird-fly">🐦</span>
+            : unreadMentionCount > 0
+            ? <span className="text-base leading-none animate-bird-fly">💬</span>
             : <Bell className="w-5 h-5" />
           }
           {unreadCount > 0 && (
@@ -90,6 +99,8 @@ const NotificationsCenter: React.FC = () => {
               className={`absolute -top-1 -right-1 h-5 w-5 flex items-center justify-center p-0 text-xs ${
                 unreadClientCount > 0
                   ? 'bg-emerald-500 text-white'
+                  : unreadMentionCount > 0
+                  ? 'bg-violet-500 text-white'
                   : 'bg-accent text-accent-foreground'
               }`}
             >
@@ -203,6 +214,7 @@ const NotificationItem: React.FC<{
   const n = notification as any;
   const isClientMsg = n.type === 'client_message';
   const isStaffMsg = n.type === 'staff_message';
+  const isMention = n.type === 'task_mention' || n.type === 'task_collaborator_added';
 
   const handleAction = () => {
     if (!notification.isRead) onMarkAsRead(notification.id);
@@ -226,6 +238,8 @@ const NotificationItem: React.FC<{
           ? 'bg-emerald-50/70 dark:bg-emerald-950/20 border-l-2 border-l-emerald-400'
           : isStaffMsg && !notification.isRead
           ? 'bg-blue-50/70 dark:bg-blue-950/20 border-l-2 border-l-blue-400'
+          : isMention && !notification.isRead
+          ? 'bg-violet-50/70 dark:bg-violet-950/20 border-l-2 border-l-violet-400'
           : !notification.isRead ? 'bg-primary/5' : ''
       } ${hasAction ? 'cursor-pointer' : ''}`}
       onClick={hasAction ? handleAction : undefined}
@@ -252,6 +266,8 @@ const NotificationItem: React.FC<{
                       ? 'border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400'
                       : isStaffMsg
                       ? 'border-blue-200 text-blue-700 hover:bg-blue-50 dark:border-blue-700 dark:text-blue-400'
+                      : isMention
+                      ? 'border-violet-200 text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:text-violet-400'
                       : ''
                   }`}
                   onClick={(e) => { e.stopPropagation(); handleAction(); }}

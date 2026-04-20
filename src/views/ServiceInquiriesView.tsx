@@ -15,17 +15,19 @@ import {
   FileText, Search, Building, User, Mail, Phone, Globe, MapPin, Target,
   DollarSign, Clock, FolderOpen, Share2, Megaphone, Palette,
   ExternalLink, Tag, Calendar, CheckCircle2, Eye, AlertCircle,
-  Instagram, Facebook, Linkedin, ArrowRight,
+  Instagram, Facebook, Linkedin, ArrowRight, Trash2,
 } from 'lucide-react';
 import type { ServiceInquiry, Lead } from '../types';
 import { safeHref } from '../lib/utils';
 
 const ServiceInquiriesView: React.FC = () => {
-  usePermissions(); // ensures teamId is synced
+  const permissions = usePermissions();
+  const canDelete = permissions.role === 'Admin' || permissions.role === 'Manager';
   const [selectedInquiry, setSelectedInquiry] = useState<ServiceInquiry | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [convertingId, setConvertingId] = useState<string | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
 
   const { toast } = useToast();
 
@@ -63,6 +65,13 @@ const ServiceInquiriesView: React.FC = () => {
       converted: inquiries.filter(i => i.status === 'Converted').length,
     };
   }, [inquiries]);
+
+  const handleDelete = async (id: string) => {
+    await inquiryMutation.remove(id);
+    setDeleteConfirmId(null);
+    if (selectedInquiry?.id === id) setSelectedInquiry(null);
+    toast({ title: 'Kërkesa u fshi' });
+  };
 
   const handleStatusChange = async (id: string, status: string) => {
     await inquiryMutation.update(id, { status: status as ServiceInquiry['status'] });
@@ -264,7 +273,19 @@ const ServiceInquiriesView: React.FC = () => {
                       <h3 className="font-semibold text-sm truncate">{inquiry.businessName}</h3>
                       <p className="text-xs text-muted-foreground truncate">{inquiry.contactName} · {inquiry.email}</p>
                     </div>
-                    {getStatusBadge(inquiry.status)}
+                    <div className="flex items-center gap-1.5 flex-shrink-0">
+                      {getStatusBadge(inquiry.status)}
+                      {canDelete && (
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 text-muted-foreground hover:text-destructive"
+                          onClick={e => { e.stopPropagation(); setDeleteConfirmId(inquiry.id); }}
+                        >
+                          <Trash2 className="w-3.5 h-3.5" />
+                        </Button>
+                      )}
+                    </div>
                   </div>
 
                   {/* Services */}
@@ -303,6 +324,34 @@ const ServiceInquiriesView: React.FC = () => {
         </div>
       )}
 
+      {/* Delete Confirmation Dialog */}
+      <Dialog open={!!deleteConfirmId} onOpenChange={open => { if (!open) setDeleteConfirmId(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-destructive">
+              <Trash2 className="w-5 h-5" />
+              Konfirmo Fshirjen
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Jeni i sigurt që doni ta fshini këtë kërkesë? Ky veprim nuk mund të kthehet.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" size="sm" onClick={() => setDeleteConfirmId(null)}>
+              Anulo
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={() => deleteConfirmId && handleDelete(deleteConfirmId)}
+            >
+              <Trash2 className="w-3.5 h-3.5 mr-1" />
+              Fshi
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
       {/* Detail Dialog */}
       <Dialog open={!!selectedInquiry} onOpenChange={open => { if (!open) setSelectedInquiry(null); }}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
@@ -322,7 +371,7 @@ const ServiceInquiriesView: React.FC = () => {
                     {getStatusBadge(selectedInquiry.status)}
                     <span className="text-xs text-muted-foreground">{formatDate(selectedInquiry.createdAt)}</span>
                   </div>
-                  <div className="flex gap-2">
+                  <div className="flex gap-2 flex-wrap">
                     {selectedInquiry.status === 'New' && (
                       <Button size="sm" variant="outline" onClick={() => handleStatusChange(selectedInquiry.id, 'Reviewed')}>
                         <Eye className="w-3.5 h-3.5 mr-1" />
@@ -338,6 +387,17 @@ const ServiceInquiriesView: React.FC = () => {
                       >
                         <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
                         {convertingId === selectedInquiry.id ? 'Duke krijuar...' : 'Konverto në Lead'}
+                      </Button>
+                    )}
+                    {canDelete && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive border-destructive/30 hover:bg-destructive/10"
+                        onClick={() => setDeleteConfirmId(selectedInquiry.id)}
+                      >
+                        <Trash2 className="w-3.5 h-3.5 mr-1" />
+                        Fshi
                       </Button>
                     )}
                   </div>

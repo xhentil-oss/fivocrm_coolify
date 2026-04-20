@@ -41,9 +41,10 @@ const PortalProjectsView: React.FC = () => {
     return rawProjects.map(p => p.id);
   }, [rawProjects]);
 
+  // Firestore 'in' operator supports up to 30 items (Firebase SDK v9)
   const { data: projectTasks } = useCollection<Task>('tasks', {
     where: projectIds.length > 0
-      ? [{ field: 'projectId', operator: 'in', value: projectIds.slice(0, 10) }]
+      ? [{ field: 'projectId', operator: 'in', value: projectIds.slice(0, 30) }]
       : undefined,
     skipTeamFilter: true,
   });

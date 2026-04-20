@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useToast } from '../hooks/use-toast';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { getNextInvoiceNumber } from '../lib/firebase';
@@ -29,6 +30,7 @@ import type { Project, Task, Team, TeamMember, Customer, Invoice, Service, Invoi
 const ProjectsView: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
+  const { toast } = useToast();
   const permissions = usePermissions();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<{ id: string; name: string } | null>(null);
@@ -61,6 +63,7 @@ const ProjectsView: React.FC = () => {
   const taskMutation = useMutation<Task>('tasks');
   const invoiceMutation = useMutation<Invoice>('invoices');
   const invoiceItemMutation = useMutation<InvoiceItem>('invoiceItems');
+  const notificationMutation = useMutation<any>('notifications');
   const logActivity = useActivityLogger();
 
   const { getName, getInitials } = useUserNames(teamMembers || []);
@@ -304,16 +307,43 @@ const ProjectsView: React.FC = () => {
     }
 
     logActivity('project_created', `Projekt i ri: ${name}`, { entityType: 'project', entityId: newProject.id });
+
+    // Notify responsible user and project members (exclude creator)
+    const notifyUids = new Set<string>();
+    if (responsibleUserId && responsibleUserId !== '__none__' && responsibleUserId !== user?.uid) {
+      notifyUids.add(responsibleUserId);
+    }
+    if (memberUserIds) {
+      memberUserIds.forEach(uid => { if (uid !== user?.uid) notifyUids.add(uid); });
+    }
+    if (notifyUids.size > 0) {
+      Promise.all([...notifyUids].map(uid =>
+        notificationMutation.create({
+          userId: uid,
+          type: 'project_created',
+          title: `Projekt i Ri: ${name}`,
+          message: `Ju u shtuat si pjesëtar i projektit "${name}".`,
+          isRead: false,
+          actionUrl: `/app/projects/${(newProject as any).id}`,
+          actionLabel: 'Shiko Projektin',
+        })
+      )).catch(() => {});
+    }
+
     setIsCreateDialogOpen(false);
     navigate(`/app/projects/${newProject.id}`);
   };
 
   const handleDeleteProject = async (id: string, name: string) => {
-    const projectTasks = allTasks?.filter(t => (t as any).projectId === id) || [];
-    await Promise.all(projectTasks.map(t => taskMutation.remove(t.id)));
-    await projectMutation.remove(id);
-    logActivity('project_deleted', `Projekt i fshiër: ${name}`, { entityType: 'project', entityId: id });
-    setProjectToDelete(null);
+    try {
+      await projectMutation.remove(id);
+      const projectTasks = allTasks?.filter(t => (t as any).projectId === id) || [];
+      await Promise.all(projectTasks.map(t => taskMutation.remove(t.id)));
+      logActivity('project_deleted', `Projekt i fshiër: ${name}`, { entityType: 'project', entityId: id });
+      setProjectToDelete(null);
+    } catch {
+      toast({ title: 'Gabim gjatë fshirjes së projektit', variant: 'destructive' });
+    }
   };
 
   const handleEditProject = async (formData: FormData) => {
