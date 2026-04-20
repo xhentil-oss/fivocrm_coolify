@@ -371,17 +371,16 @@ const CRMView: React.FC = () => {
             status: 'Active',
           });
         }
-      } catch (err) {
-        // If portal access creation failed after customer was created, roll back customer
+      // Delete the lead inside the same try — if it fails, roll back customer too
+      await leadMutation.remove(lead.id);
+    } catch (err) {
+        // Roll back customer if it was created before the failure
         if (customerDoc?.id) {
-          await customerMutation.remove(customerDoc.id);
+          await customerMutation.remove(customerDoc.id).catch(() => {});
         }
         toast({ title: 'Gabim gjatë konvertimit', description: 'Ndodhi një gabim. Statusi nuk u ndryshua.', variant: 'destructive' });
         return;
       }
-
-      // Delete the lead — it now lives as a Customer
-      await leadMutation.remove(lead.id);
 
       // Send notification to Admin + Sales (canAccessCRM) team members (best-effort)
       if (user && teamMembers) {

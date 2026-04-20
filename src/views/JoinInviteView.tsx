@@ -114,6 +114,21 @@ const JoinInviteView: React.FC = () => {
 
     setAccepting(true);
     try {
+      // Guard against duplicate member (race condition: double-click or retry after partial failure)
+      const existingMember = await getDocs(
+        query(collection(db, 'teamMembers'),
+          where('userId', '==', user.uid),
+          where('teamId', '==', invite.teamId))
+      );
+      if (!existingMember.empty) {
+        // Already a member — just mark the invite as accepted and proceed
+        const inviteRef = doc(db, 'teamInvites', invite.id);
+        await updateDoc(inviteRef, { status: 'Accepted', acceptedByUserId: user.uid, acceptedAt: Timestamp.now(), updatedAt: Timestamp.now() }).catch(() => {});
+        setSuccess(true);
+        setAccepting(false);
+        return;
+      }
+
       // Create team member
       await addDoc(collection(db, 'teamMembers'), {
         userId: user.uid,

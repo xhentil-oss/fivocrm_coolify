@@ -68,11 +68,15 @@ const RegisterView: React.FC = () => {
     }
 
     try {
-      // 0. Block staff emails from registering as clients
-      const staffSnap = await getDocs(
-        query(collection(db, 'teamMembers'), where('email', '==', email.trim()))
-      );
-      if (!staffSnap.empty) {
+      // 0. Block staff emails from registering as clients (case-insensitive)
+      const normEmail = email.trim().toLowerCase();
+      const [staffSnapExact, staffSnapLower] = await Promise.all([
+        getDocs(query(collection(db, 'teamMembers'), where('email', '==', email.trim()))),
+        getDocs(query(collection(db, 'teamMembers'), where('email', '==', normEmail))),
+      ]);
+      const isStaff = !staffSnapExact.empty || !staffSnapLower.empty ||
+        [...staffSnapExact.docs, ...staffSnapLower.docs].some(d => d.data().email?.toLowerCase() === normEmail);
+      if (isStaff) {
         setError('Ky email është i regjistruar si staf. Ju lutem hyni nga faqja e hyrjes.');
         setLoading(false);
         return;
