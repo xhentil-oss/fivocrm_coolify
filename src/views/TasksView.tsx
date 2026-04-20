@@ -364,7 +364,7 @@ const TasksView: React.FC = () => {
     });
 
     const task = tasks.find(t => t.id === taskId);
-    if (task && task.assignedToUserId !== user?.uid) {
+    if (task && task.assignedToUserId && task.assignedToUserId !== user?.uid) {
       await notificationMutation.create({
         userId: task.assignedToUserId,
         title: 'Koment i Ri',

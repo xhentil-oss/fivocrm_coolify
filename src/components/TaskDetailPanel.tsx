@@ -479,14 +479,22 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   };
 
   const handleAddCommentSubmit = async () => {
-    if (commentText.trim()) {
-      // Extract userIds from both new @[Name](uid) format and legacy @uid format
-      const newFormatRegex = /@\[[^\]]+\]\(([^)]+)\)/g;
-      const legacyFormatRegex = /@([A-Za-z0-9_-]{10,})/g;
-      const mentionedUids = new Set<string>();
-      let m: RegExpExecArray | null;
-      while ((m = newFormatRegex.exec(commentText)) !== null) mentionedUids.add(m[1]);
-      while ((m = legacyFormatRegex.exec(commentText)) !== null) mentionedUids.add(m[1]);
+    const text = commentText.trim();
+    if (!text) return;
+
+    // Extract userIds from both new @[Name](uid) format and legacy @uid format
+    const newFormatRegex = /@\[[^\]]+\]\(([^)]+)\)/g;
+    const legacyFormatRegex = /@([A-Za-z0-9_-]{10,})/g;
+    const mentionedUids = new Set<string>();
+    let m: RegExpExecArray | null;
+    while ((m = newFormatRegex.exec(text)) !== null) mentionedUids.add(m[1]);
+    while ((m = legacyFormatRegex.exec(text)) !== null) mentionedUids.add(m[1]);
+
+    try {
+      // Save comment first — then notify
+      await onAddComment(task.id, commentText);
+      setCommentText('');
+      playFrogSound();
 
       const notificationPromises = [...mentionedUids]
         .filter(uid => uid !== user?.uid)
@@ -496,12 +504,9 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           message: `${user?.displayName || 'Dikush'} ju përmendi në detyrën: ${task.title}`,
           isRead: false,
         }));
-
       await Promise.all(notificationPromises);
-
-      playFrogSound();
-      onAddComment(task.id, commentText);
-      setCommentText('');
+    } catch {
+      // Comment failed to save — keep text so user can retry
     }
   };
 
