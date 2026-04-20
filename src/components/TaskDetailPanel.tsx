@@ -53,6 +53,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const permissions = usePermissions();
   const { isConnected: isGoogleConnected } = useGoogleApi();
   const [commentText, setCommentText] = useState('');
+  const [mentionMap, setMentionMap] = useState<Record<string, string>>({}); // displayName → uid
   const [showSubtasks, setShowSubtasks] = useState(true);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleText, setTitleText] = useState(task.title);
@@ -433,8 +434,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const insertMention = (userId: string) => {
     const displayName = getUserDisplayName(userId);
     const lastAtIndex = commentText.lastIndexOf('@');
-    const newText = commentText.slice(0, lastAtIndex) + `@[${displayName}](${userId}) `;
+    // Store only the readable name in the input; uid is kept in mentionMap
+    const newText = commentText.slice(0, lastAtIndex) + `@${displayName} `;
     setCommentText(newText);
+    setMentionMap(prev => ({ ...prev, [displayName]: userId }));
     setShowMentionSuggestions(false);
   };
 
@@ -482,18 +485,23 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     const text = commentText.trim();
     if (!text) return;
 
-    // Extract userIds from both new @[Name](uid) format and legacy @uid format
+    // Transform @DisplayName → @[DisplayName](uid) for storage using mentionMap
+    let finalText = text;
+    Object.entries(mentionMap).forEach(([displayName, uid]) => {
+      finalText = finalText.split(`@${displayName}`).join(`@[${displayName}](${uid})`);
+    });
+
+    // Also extract uids from already-formatted text (legacy or pasted content)
     const newFormatRegex = /@\[[^\]]+\]\(([^)]+)\)/g;
-    const legacyFormatRegex = /@([A-Za-z0-9_-]{10,})/g;
-    const mentionedUids = new Set<string>();
+    const mentionedUids = new Set<string>(Object.values(mentionMap));
     let m: RegExpExecArray | null;
-    while ((m = newFormatRegex.exec(text)) !== null) mentionedUids.add(m[1]);
-    while ((m = legacyFormatRegex.exec(text)) !== null) mentionedUids.add(m[1]);
+    while ((m = newFormatRegex.exec(finalText)) !== null) mentionedUids.add(m[1]);
 
     try {
       // Save comment first — then notify
-      await onAddComment(task.id, commentText);
+      await onAddComment(task.id, finalText);
       setCommentText('');
+      setMentionMap({});
       playFrogSound();
 
       const notificationPromises = [...mentionedUids]
