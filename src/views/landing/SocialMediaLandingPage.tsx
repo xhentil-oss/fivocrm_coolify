@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   TrendingUp, Zap, CheckCircle2, ArrowRight, Star, Users,
   Target, Clock, ChevronDown, Phone, ArrowUpRight, Sparkles,
-  BarChart3, X, Video, Heart, MessageSquare, Search,
+  BarChart3, X, Video, MessageSquare, Search,
   Shield, Award, Camera, Globe, Megaphone,
 } from 'lucide-react';
 
@@ -575,7 +575,6 @@ const SocialMediaLandingPage: React.FC = () => {
         <div className="max-w-6xl mx-auto px-4 sm:px-6">
           <FadeIn>
             <div className="text-center mb-14">
-              <span className="inline-block bg-red-100 text-red-600 text-xs font-bold px-3 py-1 rounded-full mb-4 uppercase tracking-wide">A ju njeh?</span>
               <h2 className="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">Pse nuk po rritet biznesi juaj online?</h2>
               <p className="text-gray-500 max-w-xl mx-auto">Ne kemi ndihmuar mbi 120 biznese të kalojnë nga rrëmuja digjitale te një sistem që sjell rezultate të matshme.</p>
             </div>
