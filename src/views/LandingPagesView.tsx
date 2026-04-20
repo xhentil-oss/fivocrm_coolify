@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2 } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -91,6 +91,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: GraduationCap,
     color: 'text-indigo-600',
     gradient: 'from-indigo-500 to-violet-600',
+    status: 'active',
+  },
+  {
+    id: 'social-media',
+    title: 'Rrjete Sociale',
+    description: 'Paketa Social Media për çdo biznes — Starter, Growth, Pro, Agency.',
+    path: '/social-media',
+    category: 'Social Media',
+    icon: Share2,
+    color: 'text-pink-600',
+    gradient: 'from-pink-500 to-purple-600',
     status: 'active',
   },
 ];
