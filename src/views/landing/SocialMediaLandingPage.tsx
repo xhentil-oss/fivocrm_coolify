@@ -576,8 +576,8 @@ const SocialMediaLandingPage: React.FC = () => {
           <FadeIn>
             <div className="text-center mb-14">
               <span className="inline-block bg-red-100 text-red-600 text-xs font-bold px-3 py-1 rounded-full mb-4 uppercase tracking-wide">A ju njeh?</span>
-              <h2 className="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">Sfidat që ndal rritjen tuaj online</h2>
-              <p className="text-gray-500 max-w-xl mx-auto">Kemi ndihmuar mbi 120 biznese të kalojnë nga kaosi dixhital te rezultate të matshme.</p>
+              <h2 className="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">Pse nuk po rritet biznesi juaj online?</h2>
+              <p className="text-gray-500 max-w-xl mx-auto">Ne kemi ndihmuar mbi 120 biznese të kalojnë nga rrëmuja digjitale te një sistem që sjell rezultate të matshme.</p>
             </div>
           </FadeIn>
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-6">
