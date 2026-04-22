@@ -8,7 +8,7 @@ import { useCollection, useMutation, useDocument } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useToast } from '../hooks/use-toast';
-import { ArrowLeft, Plus, LayoutGrid, List, Calendar as CalendarIcon, Users, Settings, MoreVertical, Upload, Download, Trash2, FileText, MessageSquare, CheckSquare, Filter, Search } from 'lucide-react';
+import { ArrowLeft, Plus, LayoutGrid, List, Calendar as CalendarIcon, Users, Settings, MoreVertical, Upload, Download, Trash2, FileText, MessageSquare, CheckSquare, Filter, Search, UserPlus, X, Eye } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -43,6 +43,7 @@ const ProjectDetailView: React.FC = () => {
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isCreateTaskOpen, setIsCreateTaskOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isGuestDialogOpen, setIsGuestDialogOpen] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
   const [filterStatus, setFilterStatus] = useState<string>('all');
@@ -99,6 +100,13 @@ const ProjectDetailView: React.FC = () => {
     }
     return teamMembers.filter(m => m.teamId === project?.teamId);
   }, [teamMembers, project]);
+
+  // Is the current user a guest on this project? (read-only + comments, no editing)
+  const isGuestOnProject = React.useMemo(() => {
+    if (!user || !project) return false;
+    const guestIds: string[] = (project as any).guestUserIds || [];
+    return guestIds.includes(user.uid);
+  }, [user, project]);
 
   // Keep selectedTask in sync with live Firestore data
   useEffect(() => {
@@ -210,6 +218,26 @@ const ProjectDetailView: React.FC = () => {
       }).catch(err => console.error('[Notifications] task_assigned dërgim dështoi:', err));
     }
 
+    // Notify guests about the new task
+    if (project) {
+      const guestIds: string[] = (project as any).guestUserIds || [];
+      await Promise.all(
+        guestIds
+          .filter(id => id !== user?.uid)
+          .map(guestId =>
+            notificationMutation.create({
+              userId: guestId,
+              type: 'guest_task_new',
+              title: `➕ ${project.name}: detyrë e re`,
+              message: `"${title}" u shtua në projekt.`,
+              isRead: false,
+              actionUrl: `/app/projects/${projectId}`,
+              actionLabel: 'Shiko Projektin',
+            }).catch(err => console.error('[Notifications] guest_task_new dërgim dështoi:', err))
+          )
+      );
+    }
+
     setIsCreateTaskOpen(false);
     setSelectedTask(newTask);
   };
@@ -243,7 +271,34 @@ const ProjectDetailView: React.FC = () => {
 
   // Auto-complete project when every task is marked Done
   const handleTaskUpdate = React.useCallback(async (taskId: string, data: any) => {
+    // Guests cannot change task status or other fields
+    if (isGuestOnProject) return;
     await taskMutation.update(taskId, data);
+
+    // Notify guests when a task status changes
+    if (data.status && project) {
+      const guestIds: string[] = (project as any).guestUserIds || [];
+      const task = rawProjectTasks?.find(t => t.id === taskId);
+      if (task && guestIds.length > 0) {
+        const statusLabel: Record<string, string> = { 'Done': 'Përfunduar', 'In Progress': 'Në progres', 'Review': 'Rishikim', 'Todo': 'Për të bërë' };
+        await Promise.all(
+          guestIds
+            .filter(id => id !== user?.uid)
+            .map(guestId =>
+              notificationMutation.create({
+                userId: guestId,
+                type: 'guest_task_update',
+                title: `📋 ${project.name}: "${task.title}"`,
+                message: `Statusi ndryshoi → ${statusLabel[data.status] ?? data.status}`,
+                isRead: false,
+                actionUrl: `/app/projects/${projectId}`,
+                actionLabel: 'Shiko Projektin',
+              }).catch(err => console.error('[Notifications] guest_task_update dërgim dështoi:', err))
+            )
+        );
+      }
+    }
+
     // Only check when a task is being set to Done
     if (data.status !== 'Done') return;
     if (!project || project.status === 'Completed' || project.status === 'Archived' || project.status === 'Cancelled' || !rawProjectTasks?.length) return;
@@ -329,7 +384,15 @@ const ProjectDetailView: React.FC = () => {
                 <List className="w-5 h-5 text-pink-600" />
               </div>
               <div>
-                <h1 className="text-xl font-semibold">{project.name}</h1>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-xl font-semibold">{project.name}</h1>
+                  {isGuestOnProject && (
+                    <Badge className="text-xs bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400 border-0 flex items-center gap-1">
+                      <Eye className="w-3 h-3" />
+                      Guest
+                    </Badge>
+                  )}
+                </div>
                 <div className="flex items-center gap-2 text-sm text-muted-foreground">
                   <Badge className={getStatusColor(project.status)}>{project.status}</Badge>
                   {team && (
@@ -373,11 +436,19 @@ const ProjectDetailView: React.FC = () => {
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
-              <DropdownMenuItem onClick={() => setIsSettingsOpen(true)}>
-                <Settings className="w-4 h-4 mr-2" />
-                Cilësimet
-              </DropdownMenuItem>
-              {permissions.canEdit && (
+              {!isGuestOnProject && (
+                <DropdownMenuItem onClick={() => setIsSettingsOpen(true)}>
+                  <Settings className="w-4 h-4 mr-2" />
+                  Cilësimet
+                </DropdownMenuItem>
+              )}
+              {permissions.canEdit && !isGuestOnProject && (
+                <DropdownMenuItem onClick={() => setIsGuestDialogOpen(true)}>
+                  <UserPlus className="w-4 h-4 mr-2" />
+                  Menaxho Guestët
+                </DropdownMenuItem>
+              )}
+              {permissions.canEdit && !isGuestOnProject && (
                 <DropdownMenuItem
                   className="text-error"
                   onClick={() => setShowDeleteConfirm(true)}
@@ -425,6 +496,12 @@ const ProjectDetailView: React.FC = () => {
           </Tabs>
 
           <div className="flex items-center gap-2">
+            {isGuestOnProject && (
+              <Badge variant="outline" className="text-xs text-amber-700 border-amber-200 flex items-center gap-1">
+                <Eye className="w-3 h-3" />
+                Vetëm shikimi + komente
+              </Badge>
+            )}
             <div className="relative">
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -447,6 +524,7 @@ const ProjectDetailView: React.FC = () => {
                 <SelectItem value="Done">Përfunduar</SelectItem>
               </SelectContent>
             </Select>
+            {!isGuestOnProject && (
             <Dialog open={isCreateTaskOpen} onOpenChange={setIsCreateTaskOpen}>
               <DialogTrigger asChild>
                 <Button size="sm" className="bg-primary text-primary-foreground">
@@ -466,6 +544,7 @@ const ProjectDetailView: React.FC = () => {
                 />
               </DialogContent>
             </Dialog>
+            )}
           </div>
         </div>
       </div>
@@ -482,6 +561,43 @@ const ProjectDetailView: React.FC = () => {
             onSave={async (memberUserIds) => {
               await projectMutation.update(project.id, { memberUserIds });
               setIsSettingsOpen(false);
+            }}
+          />
+        </DialogContent>
+      </Dialog>
+
+      {/* Guest Management Dialog */}
+      <Dialog open={isGuestDialogOpen} onOpenChange={setIsGuestDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <UserPlus className="w-5 h-5 text-amber-600" />
+              Menaxho Guestët
+            </DialogTitle>
+          </DialogHeader>
+          <ProjectGuestForm
+            project={project}
+            teamMembers={teamMembers || []}
+            user={user}
+            onSave={async (guestUserIds) => {
+              await projectMutation.update(project.id, { guestUserIds });
+              // Notify newly added guests
+              const prevGuests: string[] = (project as any).guestUserIds || [];
+              const newGuests = guestUserIds.filter(id => !prevGuests.includes(id));
+              await Promise.all(
+                newGuests.map(guestId =>
+                  notificationMutation.create({
+                    userId: guestId,
+                    type: 'guest_project_invited',
+                    title: `👋 U shtove si Guest: "${project.name}"`,
+                    message: `Tani mund të shikosh dhe komentosh detyrat e këtij projekti.`,
+                    isRead: false,
+                    actionUrl: `/app/projects/${projectId}`,
+                    actionLabel: 'Shiko Projektin',
+                  }).catch(err => console.error('[Notifications] guest_invited dërgim dështoi:', err))
+                )
+              );
+              setIsGuestDialogOpen(false);
             }}
           />
         </DialogContent>
@@ -507,12 +623,12 @@ const ProjectDetailView: React.FC = () => {
                       } ${isOverdue ? 'bg-error/5' : ''}`}
                       onClick={() => setSelectedTask(task)}
                     >
-                      <Checkbox 
+                      <Checkbox
                         checked={task.status === 'Done'}
+                        disabled={isGuestOnProject}
                         onCheckedChange={async (checked) => {
-                          await handleTaskUpdate(task.id, { 
-                            status: checked ? 'Done' : 'Todo' 
-                          });
+                          if (isGuestOnProject) return;
+                          await handleTaskUpdate(task.id, { status: checked ? 'Done' : 'Todo' });
                         }}
                         onClick={(e) => e.stopPropagation()}
                         className={task.status === 'Done' ? 'bg-success border-success' : ''}
@@ -730,6 +846,85 @@ const ProjectSettingsForm: React.FC<{
       </div>
       <Button className="w-full" onClick={() => onSave(selected)}>
         Ruaj Ndryshimet
+      </Button>
+    </div>
+  );
+};
+
+// Guest Management Form Component
+const ProjectGuestForm: React.FC<{
+  project: Project;
+  teamMembers: import('../types').TeamMember[];
+  user: import('firebase/auth').User | null;
+  onSave: (guestUserIds: string[]) => Promise<void>;
+}> = ({ project, teamMembers, user, onSave }) => {
+  const { getName } = useUserNames(teamMembers);
+  const currentGuestIds: string[] = (project as any).guestUserIds || [];
+  const [selected, setSelected] = useState<string[]>(currentGuestIds);
+  const [saving, setSaving] = useState(false);
+
+  // Exclude the project owner and users already in memberUserIds from the guest list
+  const eligibleMembers = teamMembers.filter(m => {
+    if (m.userId === user?.uid) return false;
+    return true;
+  });
+
+  const toggle = (userId: string) => {
+    setSelected(prev =>
+      prev.includes(userId) ? prev.filter(id => id !== userId) : [...prev, userId]
+    );
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      await onSave(selected);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <p className="text-sm text-muted-foreground">
+        Zgjidhni anëtarët që do të kenë akses vetëm-lexim + komente në këtë projekt.
+      </p>
+      {eligibleMembers.length === 0 ? (
+        <p className="text-sm text-center text-muted-foreground py-4">Nuk ka anëtarë të tjerë.</p>
+      ) : (
+        <div className="space-y-1 max-h-64 overflow-y-auto border rounded-md p-2">
+          {eligibleMembers.map(m => {
+            const isGuest = selected.includes(m.userId);
+            return (
+              <label key={m.id} className="flex items-center gap-3 cursor-pointer hover:bg-muted/50 px-2 py-1.5 rounded">
+                <input
+                  type="checkbox"
+                  className="w-4 h-4 accent-amber-500"
+                  checked={isGuest}
+                  onChange={() => toggle(m.userId)}
+                />
+                <div className="flex items-center gap-2 flex-1">
+                  <div className="w-8 h-8 rounded-full bg-amber-100 flex items-center justify-center text-xs font-semibold text-amber-700">
+                    {getName(m.userId).charAt(0).toUpperCase()}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">{getName(m.userId)}</p>
+                    <p className="text-xs text-muted-foreground">{m.role}</p>
+                  </div>
+                </div>
+                {isGuest && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-700 font-medium">Guest</span>
+                )}
+              </label>
+            );
+          })}
+        </div>
+      )}
+      {selected.length > 0 && (
+        <p className="text-xs text-amber-600 mt-1">{selected.length} guest{selected.length !== 1 ? 'ë' : ''} të zgjedhur</p>
+      )}
+      <Button className="w-full" onClick={handleSave} disabled={saving}>
+        {saving ? 'Duke ruajtur...' : 'Ruaj Guestët'}
       </Button>
     </div>
   );

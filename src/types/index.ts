@@ -29,6 +29,7 @@ export interface Project {
   spent?: number;
   responsibleUserId?: string;
   memberUserIds?: string[];
+  guestUserIds?: string[];  // Users with read-only + comment access to this project
   // Recurring project support
   isRecurring?: boolean;
   recurringFrequency?: 'weekly' | 'monthly';
@@ -55,7 +56,7 @@ export interface TeamMember {
   userId: string;
   email?: string;
   displayName?: string;
-  role: 'Admin' | 'Sales' | 'SalesAgent' | 'Manager' | 'Member' | 'Viewer';
+  role: 'Admin' | 'Sales' | 'SalesAgent' | 'Manager' | 'Member' | 'Viewer' | 'Guest';
   status: 'Active' | 'Inactive';
   canAccessProjects?: boolean;
   canAccessTasks?: boolean;

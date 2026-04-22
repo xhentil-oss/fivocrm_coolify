@@ -52,6 +52,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 }) => {
   const { user } = useAuth();
   const permissions = usePermissions();
+  const isGuestMode = permissions.isGuest;
   const { isConnected: isGoogleConnected } = useGoogleApi();
   const [commentText, setCommentText] = useState('');
   const [mentionMap, setMentionMap] = useState<Record<string, string>>({}); // displayName → uid
@@ -689,6 +690,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b bg-muted/30">
         <Select
           value={task.status}
+          disabled={isGuestMode}
           onValueChange={async (newStatus) => {
             if (newStatus === 'Done' && task.dependsOn && task.dependsOn.length > 0 && allTasks) {
               const blockers = task.dependsOn.filter(depId => {
@@ -773,9 +775,9 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 />
               </div>
             ) : (
-              <h1 
-                className="text-xl sm:text-2xl font-semibold text-foreground cursor-pointer hover:bg-muted/50 rounded px-2 py-1 -mx-2 transition-colors"
-                onClick={() => setIsEditingTitle(true)}
+              <h1
+                className={`text-xl sm:text-2xl font-semibold text-foreground rounded px-2 py-1 -mx-2 transition-colors ${!isGuestMode ? 'cursor-pointer hover:bg-muted/50' : ''}`}
+                onClick={() => !isGuestMode && setIsEditingTitle(true)}
               >
                 {task.title}
               </h1>
@@ -789,8 +791,9 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0">Caktuar te</span>
               <Popover>
                 <PopoverTrigger asChild>
-                  <button 
-                    className="flex items-center gap-2 hover:bg-muted/50 rounded px-2 py-1 -mx-2 transition-colors"
+                  <button
+                    disabled={isGuestMode}
+                    className="flex items-center gap-2 hover:bg-muted/50 rounded px-2 py-1 -mx-2 transition-colors disabled:opacity-100 disabled:cursor-default disabled:hover:bg-transparent"
                   >
                     <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-xs font-medium">
                       {getUserDisplayName(task.assignedToUserId!).slice(0, 2).toUpperCase()}
@@ -798,7 +801,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                     <span className="text-sm">
                       {getUserDisplayName(task.assignedToUserId || '') || 'Pa caktuar'}
                     </span>
-                    <ChevronDown className="w-3 h-3 text-muted-foreground" />
+                    {!isGuestMode && <ChevronDown className="w-3 h-3 text-muted-foreground" />}
                   </button>
                 </PopoverTrigger>
                 <PopoverContent className="w-64 p-2" align="start">
@@ -962,10 +965,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0">Afati</span>
               <Popover>
                 <PopoverTrigger asChild>
-                  <button className="flex items-center gap-2 text-sm hover:bg-muted/50 rounded px-2 py-1 -mx-2 transition-colors">
+                  <button disabled={isGuestMode} className="flex items-center gap-2 text-sm hover:bg-muted/50 rounded px-2 py-1 -mx-2 transition-colors disabled:cursor-default disabled:hover:bg-transparent">
                     <CalendarIcon className="w-4 h-4 text-muted-foreground" />
                     <span>{formatDateCompact(endDate)}</span>
-                    <X className="w-3 h-3 text-muted-foreground hover:text-foreground" onClick={(e) => e.stopPropagation()} />
+                    {!isGuestMode && <X className="w-3 h-3 text-muted-foreground hover:text-foreground" onClick={(e) => e.stopPropagation()} />}
                   </button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0" align="start">
@@ -984,7 +987,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0">Fillimi</span>
               <Popover>
                 <PopoverTrigger asChild>
-                  <button className="flex items-center gap-2 text-sm text-muted-foreground hover:bg-muted/50 rounded px-2 py-1 -mx-2 transition-colors">
+                  <button disabled={isGuestMode} className="flex items-center gap-2 text-sm text-muted-foreground hover:bg-muted/50 rounded px-2 py-1 -mx-2 transition-colors disabled:cursor-default disabled:hover:bg-transparent">
                     <CalendarIcon className="w-3 h-3" />
                     <span className="text-xs">{formatDateCompact(startDate)}</span>
                   </button>
@@ -1162,8 +1165,9 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
             <div className="flex items-center gap-3 sm:gap-4">
               <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0">Prioriteti</span>
-              <Select 
-                value={task.priority || 'medium'} 
+              <Select
+                value={task.priority || 'medium'}
+                disabled={isGuestMode}
                 onValueChange={async (newPriority) => {
                   await onUpdate(task.id, { priority: newPriority });
                 }}
@@ -1226,14 +1230,14 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 </div>
               </div>
             ) : (
-              <div 
-                className="min-h-[100px] text-sm cursor-pointer hover:bg-muted/50 p-3 rounded border border-dashed border-transparent hover:border-border transition-colors"
-                onClick={() => setIsEditingDescription(true)}
+              <div
+                className={`min-h-[100px] text-sm p-3 rounded border border-dashed transition-colors ${!isGuestMode ? 'cursor-pointer hover:bg-muted/50 border-transparent hover:border-border' : 'border-transparent'}`}
+                onClick={() => !isGuestMode && setIsEditingDescription(true)}
               >
                 {task.description ? (
                   <RichTextDisplay content={task.description} />
                 ) : (
-                  <span className="text-muted-foreground">Kliko për të shtuar përshkrim...</span>
+                  <span className="text-muted-foreground">{isGuestMode ? 'Nuk ka përshkrim.' : 'Kliko për të shtuar përshkrim...'}</span>
                 )}
               </div>
             )}
@@ -1317,16 +1321,18 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 <h4 className="text-sm font-medium text-muted-foreground">
                   Nën-detyra ({subtasks?.length || 0})
                 </h4>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => {
-                    resetSubtaskForm();
-                    setShowSubtaskForm(!showSubtaskForm);
-                  }}
-                >
-                  <Plus className="w-4 h-4" />
-                </Button>
+                {!isGuestMode && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      resetSubtaskForm();
+                      setShowSubtaskForm(!showSubtaskForm);
+                    }}
+                  >
+                    <Plus className="w-4 h-4" />
+                  </Button>
+                )}
               </div>
 
               {showSubtaskForm && (
@@ -1564,16 +1570,18 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 <Paperclip className="w-4 h-4" />
                 Skedarët ({attachments.length})
               </h4>
-              <div className="flex gap-1">
-                {isGoogleConnected && (
-                  <Button variant="ghost" size="sm" onClick={() => setShowDrivePicker(true)} title="Google Drive">
-                    <Cloud className="w-4 h-4" />
+              {!isGuestMode && (
+                <div className="flex gap-1">
+                  {isGoogleConnected && (
+                    <Button variant="ghost" size="sm" onClick={() => setShowDrivePicker(true)} title="Google Drive">
+                      <Cloud className="w-4 h-4" />
+                    </Button>
+                  )}
+                  <Button variant="ghost" size="sm" onClick={() => fileInputRef.current?.click()} title="Ngarko skedar">
+                    <Upload className="w-4 h-4" />
                   </Button>
-                )}
-                <Button variant="ghost" size="sm" onClick={() => fileInputRef.current?.click()} title="Ngarko skedar">
-                  <Upload className="w-4 h-4" />
-                </Button>
-              </div>
+                </div>
+              )}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -1606,14 +1614,16 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                         <span className="truncate">{file.name}</span>
                       )}
                     </div>
-                    <Button
-                      variant="ghost"
-                      size="sm"
-                      className="h-6 w-6 p-0"
-                      onClick={() => handleRemoveAttachment(index)}
-                    >
-                      <X className="w-3 h-3" />
-                    </Button>
+                    {!isGuestMode && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-6 w-6 p-0"
+                        onClick={() => handleRemoveAttachment(index)}
+                      >
+                        <X className="w-3 h-3" />
+                      </Button>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1756,10 +1766,17 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
       {/* Footer Actions */}
       <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-t bg-muted/30">
-        <Button variant="ghost" size="sm" className="text-error hover:text-error" onClick={() => setDeleteConfirm(true)}>
-          <Trash2 className="w-4 h-4 mr-1" />
-          Fshi
-        </Button>
+        {!isGuestMode ? (
+          <Button variant="ghost" size="sm" className="text-error hover:text-error" onClick={() => setDeleteConfirm(true)}>
+            <Trash2 className="w-4 h-4 mr-1" />
+            Fshi
+          </Button>
+        ) : (
+          <span className="text-xs text-amber-600 flex items-center gap-1">
+            <Eye className="w-3 h-3" />
+            Vetëm shikimi + komente
+          </span>
+        )}
       </div>
     </div>
 

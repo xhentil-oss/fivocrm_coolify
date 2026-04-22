@@ -3,6 +3,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from './usePermissions';
 import type { Task, Project } from '../types';
 
+
 // Helper: check if a value matches the current user's uid or email
 // (teamMembers.userId can be stored as email instead of Firebase Auth UID)
 function useUserIdentifiers(): string[] {
@@ -30,33 +31,30 @@ export function useFilteredTasks<T extends Partial<Task> & { id: string }>(
   tasks: T[] | undefined
 ): T[] {
   const { user } = useAuth();
-  const { dataScope } = usePermissions();
+  const { dataScope, isGuest } = usePermissions();
   const userIds = useUserIdentifiers();
 
   return useMemo(() => {
     if (!tasks) return [];
     if (!user) return [];
 
-    // Admin/Owner: see everything
-    if (dataScope === 'all') return tasks;
+    // Admin/Owner/Manager: see everything
+    if (dataScope === 'all' || dataScope === 'team') return tasks;
 
-    // Manager: see all team tasks (already filtered by teamId via useCollection)
-    if (dataScope === 'team') return tasks;
+    // Guest: sees all tasks (already scoped to their invited project by the caller)
+    if (isGuest) return tasks;
 
     // Member/Viewer: see only tasks assigned to them, created by them, or where they're collaborators
     return tasks.filter(t => {
       if (matchesUser(t.assignedToUserId, userIds)) return true;
       if (matchesUser(t.createdByUserId, userIds)) return true;
-      // Check collaboratorIds
       if (t.collaboratorIds) {
-        const ids: string[] = Array.isArray(t.collaboratorIds)
-          ? t.collaboratorIds
-          : [];
+        const ids: string[] = Array.isArray(t.collaboratorIds) ? t.collaboratorIds : [];
         if (ids.some(id => userIds.includes(id))) return true;
       }
       return false;
     });
-  }, [tasks, user, userIds, dataScope]);
+  }, [tasks, user, userIds, dataScope, isGuest]);
 }
 
 /**
@@ -79,7 +77,6 @@ export function useFilteredProjects<T extends Partial<Project> & { id: string }>
 
     if (dataScope === 'all' || dataScope === 'team') return projects;
 
-    // Member/Viewer: see projects they created, are a member of, or have tasks in
     const myProjectIds = new Set<string>();
 
     // Projects they created
@@ -94,6 +91,13 @@ export function useFilteredProjects<T extends Partial<Project> & { id: string }>
       }
     });
 
+    // Projects where they are listed as a guest
+    projects.forEach(p => {
+      if (Array.isArray((p as any).guestUserIds) && (p as any).guestUserIds.some((id: string) => userIds.includes(id))) {
+        myProjectIds.add(p.id);
+      }
+    });
+
     // Projects where they have assigned tasks
     if (tasks) {
       tasks.forEach(t => {
@@ -102,12 +106,8 @@ export function useFilteredProjects<T extends Partial<Project> & { id: string }>
           myProjectIds.add(t.projectId);
         }
         if (t.collaboratorIds) {
-          const ids: string[] = Array.isArray(t.collaboratorIds)
-            ? t.collaboratorIds
-            : [];
-          if (ids.some(id => userIds.includes(id))) {
-            myProjectIds.add(t.projectId!);
-          }
+          const ids: string[] = Array.isArray(t.collaboratorIds) ? t.collaboratorIds : [];
+          if (ids.some(id => userIds.includes(id))) myProjectIds.add(t.projectId!);
         }
       });
     }

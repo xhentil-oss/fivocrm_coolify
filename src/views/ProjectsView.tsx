@@ -596,7 +596,8 @@ const ProjectsView: React.FC = () => {
             const members = getProjectMembers(project);
             const team = getTeamName(project.teamId);
             const isJoined = members.some(m => m.userId === user?.uid);
-            
+            const isGuestOnProject = Array.isArray((project as any).guestUserIds) && (project as any).guestUserIds.includes(user?.uid);
+
             return (
               <div
                 key={project.id}
@@ -611,8 +612,13 @@ const ProjectsView: React.FC = () => {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-foreground truncate">{project.name}</span>
+                      {isGuestOnProject && (
+                        <Badge className="text-[10px] px-1.5 py-0 h-4 bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400 border-0">
+                          Guest
+                        </Badge>
+                      )}
                     </div>
-                    {isJoined && (
+                    {isJoined && !isGuestOnProject && (
                       <span className="text-xs text-success">Joined</span>
                     )}
                   </div>

@@ -27,6 +27,7 @@ export type UserPermissions = {
   canAccessProfile: boolean;
   canAccessTimeTracking: boolean;
   canEdit: boolean;
+  canComment: boolean;
   canAssignTasks: boolean;
   canManageMembers: boolean;
   role: string | null;
@@ -36,12 +37,13 @@ export type UserPermissions = {
   isAdmin: boolean;
   isOwner: boolean;
   isManager: boolean;
+  isGuest: boolean;
   isSuperAdmin: boolean;
   isLoading: boolean;
 };
 
 // Full access for admin/owner
-const fullAccessPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamId' | 'teamName' | 'isAdmin' | 'isOwner' | 'isManager' | 'isLoading'> = {
+const fullAccessPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamId' | 'teamName' | 'isAdmin' | 'isOwner' | 'isManager' | 'isGuest' | 'isLoading'> = {
   canAccessProjects: true,
   canAccessTasks: true,
   canAccessCRM: true,
@@ -57,12 +59,14 @@ const fullAccessPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canAccessProfile: true,
   canAccessTimeTracking: true,
   canEdit: true,
+  canComment: true,
   canAssignTasks: true,
   canManageMembers: true,
+  isSuperAdmin: false,
 };
 
 // Minimal access for users not yet assigned to a team
-const restrictedPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamId' | 'teamName' | 'isAdmin' | 'isOwner' | 'isManager' | 'isLoading'> = {
+const restrictedPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamId' | 'teamName' | 'isAdmin' | 'isOwner' | 'isManager' | 'isGuest' | 'isLoading'> = {
   canAccessProjects: false,
   canAccessTasks: false,
   canAccessCRM: false,
@@ -78,8 +82,10 @@ const restrictedPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canAccessProfile: true,
   canAccessTimeTracking: false,
   canEdit: false,
+  canComment: false,
   canAssignTasks: false,
   canManageMembers: false,
+  isSuperAdmin: false,
 };
 
 export function usePermissions(): UserPermissions {
@@ -164,6 +170,7 @@ export function usePermissions(): UserPermissions {
         isAdmin: true,
         isOwner: false,
         isManager: false,
+        isGuest: false,
         isSuperAdmin: true,
         isLoading: false,
       };
@@ -180,29 +187,21 @@ export function usePermissions(): UserPermissions {
         isAdmin: false,
         isOwner: false,
         isManager: false,
+        isGuest: false,
         isSuperAdmin: false,
         isLoading: isLoading,
       };
     }
 
     // OWNER: User who created a team gets full admin access.
-    // Check owner BEFORE hasError so that owners are never locked out
-    // when teamMembers queries fail.
     if (isOwner) {
-      // Check if owner also has a team membership (for teamId/teamName)
       const ownerMembership = teamMembers.length > 0 ? teamMembers[0] : null;
       let ownerTeamId = ownerMembership?.teamId || null;
       let ownerTeam = ownerTeamId ? teams?.find((t: any) => t.id === ownerTeamId) : null;
-
-      // Fallback: if no teamMembers record, derive teamId from owned team directly
       if (!ownerTeamId && teams && teams.length > 0) {
         const ownedTeam = teams.find((t: any) => t.createdByUserId === user?.uid);
-        if (ownedTeam) {
-          ownerTeamId = ownedTeam.id;
-          ownerTeam = ownedTeam;
-        }
+        if (ownedTeam) { ownerTeamId = ownedTeam.id; ownerTeam = ownedTeam; }
       }
-
       return {
         ...fullAccessPermissions,
         role: ownerMembership?.role || 'Admin',
@@ -212,6 +211,7 @@ export function usePermissions(): UserPermissions {
         isAdmin: true,
         isOwner: true,
         isManager: false,
+        isGuest: false,
         isSuperAdmin: false,
         isLoading: false,
       };
@@ -228,6 +228,7 @@ export function usePermissions(): UserPermissions {
         isAdmin: false,
         isOwner: false,
         isManager: false,
+        isGuest: false,
         isSuperAdmin: false,
         isLoading: false,
       };
@@ -244,14 +245,15 @@ export function usePermissions(): UserPermissions {
         isAdmin: false,
         isOwner: false,
         isManager: false,
+        isGuest: false,
         isSuperAdmin: false,
         isLoading: false,
       };
     }
 
     // Has team membership — use role-based permissions
-    // Sort by role priority for deterministic selection when user has multiple teams
-    const roleOrder: Record<string, number> = { Admin: 0, Manager: 1, Sales: 2, SalesAgent: 3, Member: 4, Viewer: 5 };
+    // Sort by role priority; Guest is lowest (6)
+    const roleOrder: Record<string, number> = { Admin: 0, Manager: 1, Sales: 2, SalesAgent: 3, Member: 4, Viewer: 5, Guest: 6 };
     const membership = [...teamMembers].sort((a, b) => (roleOrder[a.role] ?? 99) - (roleOrder[b.role] ?? 99))[0];
     const team = teams?.find((t: any) => t.id === membership.teamId);
     const memberIsAdmin = membership.role === 'Admin';
@@ -268,6 +270,41 @@ export function usePermissions(): UserPermissions {
         isAdmin: true,
         isOwner: false,
         isManager: false,
+        isGuest: false,
+        isSuperAdmin: false,
+        isLoading: false,
+      };
+    }
+
+    // Guest role: read-only + comment access, only to explicitly invited projects
+    if (membership.role === 'Guest') {
+      return {
+        canAccessProjects: true,
+        canAccessTasks: true,
+        canAccessCRM: false,
+        canAccessInvoices: false,
+        canAccessReports: false,
+        canAccessSettings: false,
+        canAccessGoals: false,
+        canAccessTeams: false,
+        canAccessChat: false,
+        canAccessCustomers: false,
+        canAccessServices: false,
+        canAccessExpenses: false,
+        canAccessProfile: true,
+        canAccessTimeTracking: false,
+        canEdit: false,
+        canComment: true,
+        canAssignTasks: false,
+        canManageMembers: false,
+        role: 'Guest',
+        dataScope: 'readonly',
+        teamId: membership.teamId,
+        teamName: team?.name || null,
+        isAdmin: false,
+        isOwner: false,
+        isManager: false,
+        isGuest: true,
         isSuperAdmin: false,
         isLoading: false,
       };
@@ -291,6 +328,7 @@ export function usePermissions(): UserPermissions {
         canAccessProfile: true,
         canAccessTimeTracking: membership.canAccessTasks === true,
         canEdit: true,
+        canComment: true,
         canAssignTasks: false,
         canManageMembers: false,
         role: membership.role,
@@ -300,6 +338,7 @@ export function usePermissions(): UserPermissions {
         isAdmin: false,
         isOwner: false,
         isManager: false,
+        isGuest: false,
         isSuperAdmin: false,
         isLoading: false,
       };
@@ -323,6 +362,7 @@ export function usePermissions(): UserPermissions {
         canAccessProfile: true,
         canAccessTimeTracking: true,
         canEdit: true,
+        canComment: true,
         canAssignTasks: true,
         canManageMembers: false,
         role: membership.role,
@@ -332,6 +372,7 @@ export function usePermissions(): UserPermissions {
         isAdmin: false,
         isOwner: false,
         isManager: true,
+        isGuest: false,
         isSuperAdmin: false,
         isLoading: false,
       };
@@ -355,6 +396,7 @@ export function usePermissions(): UserPermissions {
         canAccessProfile: true,
         canAccessTimeTracking: true,
         canEdit: true,
+        canComment: true,
         canAssignTasks: false,
         canManageMembers: false,
         role: membership.role,
@@ -364,6 +406,7 @@ export function usePermissions(): UserPermissions {
         isAdmin: false,
         isOwner: false,
         isManager: false,
+        isGuest: false,
         isSuperAdmin: false,
         isLoading: false,
       };
@@ -372,7 +415,7 @@ export function usePermissions(): UserPermissions {
     // Viewer role: read-only access to assigned items only
     // Member role: access to assigned items with edit rights
     const isViewer = membership.role === 'Viewer';
-    
+
     return {
       canAccessProjects: membership.canAccessProjects === true,
       canAccessTasks: membership.canAccessTasks === true,
@@ -381,15 +424,16 @@ export function usePermissions(): UserPermissions {
       canAccessReports: true,
       canAccessSettings: membership.canAccessSettings === true,
       canAccessGoals: membership.canAccessGoals === true || membership.canAccessTasks === true,
-      canAccessTeams: false, // Only admin/owner can manage teams
+      canAccessTeams: false,
       canAccessChat: true,
       canAccessCustomers: membership.canAccessCustomers === true || membership.canAccessCRM === true,
       canAccessServices: membership.canAccessServices === true || membership.canAccessInvoices === true,
       canAccessExpenses: membership.canAccessExpenses === true || membership.canAccessInvoices === true,
       canAccessProfile: true,
       canAccessTimeTracking: membership.canAccessTasks === true,
-      canEdit: !isViewer, // Viewers can only read, Members can edit
-      canAssignTasks: false, // Members can't assign to others
+      canEdit: !isViewer,
+      canComment: true,
+      canAssignTasks: false,
       canManageMembers: false,
       role: membership.role,
       dataScope: isViewer ? 'readonly' : 'assigned',
@@ -398,6 +442,7 @@ export function usePermissions(): UserPermissions {
       isAdmin: false,
       isOwner: false,
       isManager: false,
+      isGuest: false,
       isSuperAdmin: false,
       isLoading: false,
     };
