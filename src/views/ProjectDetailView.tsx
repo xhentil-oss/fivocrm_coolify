@@ -26,7 +26,7 @@ import {
   DropdownMenuTrigger,
 } from '../components/ui/dropdown-menu';
 import TaskDetailPanel from '../components/TaskDetailPanel';
-import { useFilteredTasks } from '../hooks/useRoleFilteredData';
+import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
 import type { Task, Project, Team, TeamMember } from '../types';
 
@@ -54,9 +54,10 @@ const ProjectDetailView: React.FC = () => {
   // Role-based filtering: Member/Viewer see only their assigned tasks within this project
   const allTasks = useFilteredTasks(rawProjectTasks);
   const { data: teams } = useCollection<Team>('teams');
-  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
+  const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
+  const teamMembers = useUniqueTeamMembers(rawTeamMembers);
   const { data: comments } = useCollection<any>('taskComments', { skipTeamFilter: true });
 
   const projectMutation = useMutation<Project>('projects');

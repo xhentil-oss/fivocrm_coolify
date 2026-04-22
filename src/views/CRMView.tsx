@@ -24,7 +24,7 @@ import { Textarea } from '../components/ui/textarea';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
 import DetailDrawer from '../components/DetailDrawer';
 import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
-import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
+import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
 import { safeHref, phoneKeyDown, normalizeAlbanianPhone } from '../lib/utils';
 import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember, Quote } from '../types';
@@ -55,9 +55,10 @@ const CRMView: React.FC = () => {
   });
   // Role-based filtering: Member/Viewer see only leads they created
   const leads = useFilteredByOwner(rawLeads);
-  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
+  const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
+  const teamMembers = useUniqueTeamMembers(rawTeamMembers);
   const leadMutation = useMutation<Lead>('leads');
   const customerMutation = useMutation<Customer>('customers');
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });

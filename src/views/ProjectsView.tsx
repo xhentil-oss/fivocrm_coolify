@@ -23,7 +23,7 @@ import {
   DropdownMenuTrigger,
 } from '../components/ui/dropdown-menu';
 import { useActivityLogger } from '../hooks/useActivityLogger';
-import { useFilteredProjects } from '../hooks/useRoleFilteredData';
+import { useFilteredProjects, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
 import type { Project, Task, Team, TeamMember, Customer, Invoice, Service, InvoiceItem } from '../types';
 
@@ -52,9 +52,10 @@ const ProjectsView: React.FC = () => {
   // Role-based filtering: Member/Viewer see only projects they're involved in
   const projects = useFilteredProjects(rawProjects, allTasks);
   const { data: teams } = useCollection<Team>('teams');
-  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
+  const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
+  const teamMembers = useUniqueTeamMembers(rawTeamMembers);
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
   const { data: allInvoices } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
@@ -1030,14 +1031,12 @@ const ProjectForm: React.FC<{
       )}
 
       {/* Project Members */}
-      {teamMembers && teamMembers.length > 0 && (() => {
-        const uniqueMembers = teamMembers.filter((m, i, arr) => arr.findIndex(x => x.userId === m.userId) === i);
-        return (
+      {teamMembers && teamMembers.length > 0 && (
         <div>
           <Label>Anëtarët e Projektit</Label>
           <p className="text-xs text-muted-foreground mb-2">Zgjidh personat që do të marrin pjesë në këtë projekt</p>
           <div className="space-y-2 max-h-48 overflow-y-auto border rounded-md p-2">
-            {uniqueMembers.map(m => (
+            {teamMembers.map(m => (
               <label key={m.id} className="flex items-center gap-2 cursor-pointer hover:bg-muted/50 px-2 py-1 rounded">
                 <input
                   type="checkbox"
@@ -1065,8 +1064,7 @@ const ProjectForm: React.FC<{
             <p className="text-xs text-primary mt-1">{memberUserIds.length} person{memberUserIds.length !== 1 ? 'a' : ''} të zgjedhur</p>
           )}
         </div>
-        );
-      })()}
+      )}
 
       {/* Recurring Project */}
       <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/40">

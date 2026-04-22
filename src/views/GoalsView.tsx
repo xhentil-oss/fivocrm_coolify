@@ -20,7 +20,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { Calendar as CalendarComponent } from '../components/ui/calendar';
-import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
+import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import type { Goal, Team, TeamMember, Milestone, Project, Lead, Task } from '../types';
 
 // ─── Main View ───────────────────────────────────────────────────────────────
@@ -39,7 +39,8 @@ const GoalsView: React.FC = () => {
   });
   const allGoals = useFilteredByOwner(rawGoals);
   const { data: teams } = useCollection<Team>('teams');
-  const { data: teamMembers } = useCollection<TeamMember>('teamMembers');
+  const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers');
+  const teamMembers = useUniqueTeamMembers(rawTeamMembers);
   const { data: milestones } = useCollection<Milestone>('milestones');
   // CRM collections — lazy-loaded only when a dialog is open
   const needsCRM = isCreateDialogOpen || !!editingGoal || !!selectedGoal;

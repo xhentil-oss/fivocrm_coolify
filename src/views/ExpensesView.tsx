@@ -15,7 +15,7 @@ import { Calendar } from '../components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { Switch } from '../components/ui/switch';
 import { useActivityLogger } from '../hooks/useActivityLogger';
-import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
+import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import type { Expense, Team, Project, TeamMember } from '../types';
 
 const ExpensesView: React.FC = () => {
@@ -34,9 +34,10 @@ const ExpensesView: React.FC = () => {
   const expenses = useFilteredByOwner(rawExpenses);
   const { data: teams } = useCollection<Team>('teams');
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
-  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
+  const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
+  const teamMembers = useUniqueTeamMembers(rawTeamMembers);
   const expenseMutation = useMutation<Expense>('expenses');
   const notificationMutation = useMutation<any>('notifications');
 
@@ -486,10 +487,11 @@ const ExpenseForm: React.FC<{
   const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
   const [projectSearch, setProjectSearch] = useState('');
   const [selectedMemberId, setSelectedMemberId] = useState<string>((initialData as any)?.memberId || '__none__');
-  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
+  const { data: rawTeamMembersForm } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
     skipTeamFilter: true,
   });
+  const teamMembers = useUniqueTeamMembers(rawTeamMembersForm);
 
   // Custom categories stored in Firestore
   const { data: customCategoryDocs } = useCollection<{ id: string; label: string }>('expenseCategories');

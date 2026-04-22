@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -138,9 +139,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     where: [{ field: 'endTime', operator: '==', value: null }]
   });
 
-  const { data: teamMembers } = useCollection<any>('teamMembers', {
+  const { data: rawTeamMembers } = useCollection<any>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
+  const teamMembers = useUniqueTeamMembers(rawTeamMembers);
 
   const { data: userProfiles } = useCollection<any>('userProfiles');
   const { data: teams } = useCollection<any>('teams');

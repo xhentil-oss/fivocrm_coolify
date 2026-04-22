@@ -1,6 +1,6 @@
 import { useMemo } from 'react';
 import { useAuth } from '../contexts/AuthContext';
-import { usePermissions, DataScope } from './usePermissions';
+import { usePermissions } from './usePermissions';
 import type { Task, Project } from '../types';
 
 // Helper: check if a value matches the current user's uid or email
@@ -162,4 +162,23 @@ export function useFilteredTimeEntries<T extends { id: string; userId?: string }
 export function useScopeIsAll(): boolean {
   const { dataScope } = usePermissions();
   return dataScope === 'all' || dataScope === 'team';
+}
+
+/**
+ * Deduplicates teamMembers by userId.
+ * A user who belongs to multiple teams has one Firestore record per team.
+ * Without this, they appear multiple times in every dropdown/selector.
+ */
+export function useUniqueTeamMembers<T extends { userId: string }>(
+  members: T[] | null | undefined
+): T[] {
+  return useMemo(() => {
+    if (!members) return [];
+    const seen = new Set<string>();
+    return members.filter(m => {
+      if (seen.has(m.userId)) return false;
+      seen.add(m.userId);
+      return true;
+    });
+  }, [members]);
 }
