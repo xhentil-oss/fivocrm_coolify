@@ -226,7 +226,7 @@ const PortalProjectDetailView: React.FC = () => {
             actionType: 'navigate',
             actionUrl: `/app/projects/${projectId}`,
             actionLabel: 'Shiko Projektin',
-          } as any).catch(() => {});
+          } as any).catch(err => console.error('[Notifications] project_comment dërgim dështoi:', err));
         }
       }
 
@@ -303,7 +303,7 @@ const PortalProjectDetailView: React.FC = () => {
         actionType: 'navigate',
         actionUrl: `/app/projects/${projectId}`,
         actionLabel: 'Shiko Projektin',
-      } as any).catch(() => {});
+      } as any).catch(err => console.error('[Notifications] client_request dërgim dështoi:', err));
     }
 
     setIsRequestOpen(false);

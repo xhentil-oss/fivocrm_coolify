@@ -66,12 +66,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           if (invoiceData?.createdByUserId) {
             await db.collection('notifications').add({
               userId: invoiceData.createdByUserId,
-              title: 'Pagesë e Pranuar',
+              type: 'invoice_paid',
+              title: 'Pagesë e Pranuar ✓',
               message: `Fatura ${invoiceData.invoiceNumber || invoiceId.slice(0, 8)} u pagua me Stripe — €${((session.amount_total || 0) / 100).toFixed(2)}`,
               isRead: false,
+              actionUrl: '/app/invoices',
+              actionLabel: 'Shiko Faturat',
               createdAt: admin.firestore.FieldValue.serverTimestamp(),
-              updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-            });
+            }).catch(err => console.error('[Stripe Webhook] notification dërgim dështoi:', err));
           }
 
           console.log(`Invoice ${invoiceId} marked as paid via Stripe`);

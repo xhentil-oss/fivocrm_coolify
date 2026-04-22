@@ -1,12 +1,40 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
 import { buildInvoiceEmail } from '../_invoiceEmail.js';
-import admin, { adminDb as db } from '../_firebaseAdmin.js';
+import admin, { adminDb as db, adminMessaging } from '../_firebaseAdmin.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 function authorize(req: VercelRequest): boolean {
   const cronSecret = process.env.CRON_SECRET;
   return !!(cronSecret && req.headers.authorization === `Bearer ${cronSecret}`);
+}
+
+// ── settleAll: Promise.allSettled with error logging ─────────────────────────
+async function settleAll(ops: Promise<any>[], jobName: string): Promise<void> {
+  const results = await Promise.allSettled(ops);
+  results.forEach((r, i) => {
+    if (r.status === 'rejected') {
+      console.error(`[CRON:${jobName}] op[${i}] dështoi:`, r.reason);
+    }
+  });
+}
+
+// ── sendPush: send FCM push to a user if they have a registered token ─────────
+async function sendPush(userId: string, title: string, body: string, data?: Record<string, string>): Promise<void> {
+  try {
+    const tokenDoc = await db.collection('userPushTokens').doc(userId).get();
+    if (!tokenDoc.exists) return;
+    const token = tokenDoc.data()?.token;
+    if (!token) return;
+    await adminMessaging.send({
+      token,
+      notification: { title, body },
+      data: data || {},
+      android: { priority: 'high' },
+    });
+  } catch (err) {
+    console.error(`[Push] dërgimi për ${userId} dështoi:`, err);
+  }
 }
 
 // ── SMTP helper ───────────────────────────────────────────────────────────────
@@ -69,7 +97,9 @@ async function runTaskDeadlineAlerts() {
 
   for (const doc of tasksSnap.docs) {
     const task = doc.data();
-    if (!task.endDate || !task.assignedToUserId || task.status === 'Done') continue;
+    if (!task.endDate || task.status === 'Done') continue;
+    const recipientId = task.assignedToUserId || task.createdByUserId;
+    if (!recipientId) continue;
     const endDate: Date = task.endDate?.toDate ? task.endDate.toDate() : new Date(task.endDate);
     if (isNaN(endDate.getTime())) continue;
 
@@ -84,12 +114,13 @@ async function runTaskDeadlineAlerts() {
       ? `Detyra "${task.title}" ka kaluar afatin prej ${overdueByDays} ditë.`
       : `Detyra "${task.title}" skadon ${daysLeft === 0 ? 'sot' : `për ${daysLeft} ditë`}.`;
 
-    ops.push(db.collection('notifications').add({ userId: task.assignedToUserId, type: isOverdue ? 'task_overdue' : 'task_due_soon', title: notifTitle, message: notifMessage, isRead: false, createdAt: admin.firestore.Timestamp.now() }));
+    ops.push(db.collection('notifications').add({ userId: recipientId, type: isOverdue ? 'task_overdue' : 'task_due_soon', title: notifTitle, message: notifMessage, isRead: false, actionUrl: '/app/tasks', actionLabel: 'Shiko Detyrat', createdAt: admin.firestore.Timestamp.now() }));
     ops.push(doc.ref.update({ dueNotificationSent: true }));
+    ops.push(sendPush(recipientId, notifTitle, notifMessage));
 
     if (transporter && smtpUser) {
       try {
-        const userRecord = await admin.auth().getUser(task.assignedToUserId);
+        const userRecord = await admin.auth().getUser(recipientId);
         if (userRecord.email) {
           ops.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: userRecord.email, subject: notifTitle, html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;"><h2 style="color:${isOverdue ? '#ef4444' : '#f59e0b'}">${notifTitle}</h2><p>${notifMessage}</p><p style="color:#9ca3af;font-size:12px">FivoCRM – Njoftime automatike</p></div>` }));
         }
@@ -98,7 +129,7 @@ async function runTaskDeadlineAlerts() {
     notified++;
   }
 
-  await Promise.allSettled(ops);
+  await settleAll(ops, 'task-deadline-alerts');
   return { notified };
 }
 
@@ -124,7 +155,12 @@ async function runInvoiceReminders() {
     if (dueDate < now) {
       ops.push(doc.ref.update({ status: 'Overdue', updatedAt: admin.firestore.Timestamp.now() }));
       overdueMarked++;
-      if (invoice.createdByUserId) ops.push(db.collection('notifications').add({ userId: invoice.createdByUserId, type: 'invoice_overdue', title: `🔴 Faturë e skaduara: #${invoiceLabel}`, message: `Fatura #${invoiceLabel} ka kaluar afatin e pagesës.`, isRead: false, createdAt: admin.firestore.Timestamp.now() }));
+      if (invoice.createdByUserId) {
+        const ovTitle = `🔴 Faturë e skaduara: #${invoiceLabel}`;
+        const ovMsg = `Fatura #${invoiceLabel} ka kaluar afatin e pagesës.`;
+        ops.push(db.collection('notifications').add({ userId: invoice.createdByUserId, type: 'invoice_overdue', title: ovTitle, message: ovMsg, isRead: false, actionUrl: '/app/invoices', actionLabel: 'Shiko Faturat', createdAt: admin.firestore.Timestamp.now() }));
+        ops.push(sendPush(invoice.createdByUserId, ovTitle, ovMsg));
+      }
     } else if (dueDate <= reminderThreshold && !invoice.reminderSent) {
       ops.push(doc.ref.update({ reminderSent: true, updatedAt: admin.firestore.Timestamp.now() }));
       remindersSent++;
@@ -139,7 +175,7 @@ async function runInvoiceReminders() {
       if (invoice.createdByUserId) ops.push(db.collection('notifications').add({ userId: invoice.createdByUserId, type: 'invoice_reminder_sent', title: `📧 Kujtesë u dërgua: Fatura #${invoiceLabel}`, message: `Kujtesa e pagesës u dërgua te klienti.`, isRead: false, createdAt: admin.firestore.Timestamp.now() }));
     }
   }
-  await Promise.allSettled(ops);
+  await settleAll(ops, 'invoice-reminders');
 
   // 25th/last-day recurring invoice reminders
   const todayDate = now.getDate();
@@ -168,7 +204,7 @@ async function runInvoiceReminders() {
       if (invoice.createdByUserId) reminderOps.push(db.collection('notifications').add({ userId: invoice.createdByUserId, type: `invoice_${type}_sent`, title: `📧 Kujtesë dërguar (${is25th ? '25' : 'dita e fundit'}): #${invoiceLabel}`, message: `Kujtesa e pagesës u dërgua te ${customer.name || 'klienti'}.`, isRead: false, createdAt: admin.firestore.Timestamp.now() }));
       is25th ? reminder25Sent++ : reminderLastDaySent++;
     }
-    await Promise.allSettled(reminderOps);
+    await settleAll(reminderOps, 'invoice-reminders-recurring');
   }
 
   return { overdueMarked, remindersSent, reminder25Sent, reminderLastDaySent };
@@ -197,14 +233,15 @@ async function runRecurringTasks() {
 
     ops.push(db.collection('tasks').add({ title: task.title, description: task.description ?? null, status: 'Todo', priority: task.priority ?? null, projectId: task.projectId ?? null, assignedToUserId: task.assignedToUserId ?? null, startDate: admin.firestore.Timestamp.fromDate(newStart), endDate: admin.firestore.Timestamp.fromDate(newEnd), isRecurring: true, recurringFrequency: task.recurringFrequency, recurringInterval: task.recurringInterval ?? 1, recurringDayOfWeek: task.recurringDayOfWeek ?? null, recurringDayOfMonth: task.recurringDayOfMonth ?? null, recurringDaysOfWeek: task.recurringDaysOfWeek ?? null, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), dueNotificationSent: false, parentTaskId: task.parentTaskId ?? null, createdByUserId: task.createdByUserId ?? null, teamId: task.teamId ?? null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
     ops.push(doc.ref.update({ nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), updatedAt: admin.firestore.Timestamp.now() }));
-    if (task.assignedToUserId) {
+    const notifRecipient = task.assignedToUserId || task.createdByUserId;
+    if (notifRecipient) {
       const freqLabel: Record<string, string> = { weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
-      ops.push(db.collection('notifications').add({ userId: task.assignedToUserId, type: 'recurring_task_created', title: `🔄 Detyrë e re periodike: ${task.title}`, message: `Detyra periodike "${task.title}" (${freqLabel[task.recurringFrequency] ?? task.recurringFrequency}) u krijua automatikisht.`, isRead: false, createdAt: admin.firestore.Timestamp.now() }));
+      ops.push(db.collection('notifications').add({ userId: notifRecipient, type: 'recurring_task_created', title: `🔄 Detyrë e re periodike: ${task.title}`, message: `Detyra periodike "${task.title}" (${freqLabel[task.recurringFrequency] ?? task.recurringFrequency}) u krijua automatikisht.`, isRead: false, actionUrl: '/app/tasks', actionLabel: 'Shiko Detyrat', createdAt: admin.firestore.Timestamp.now() }));
     }
     created++;
   }
 
-  await Promise.allSettled(ops);
+  await settleAll(ops, 'recurring-tasks');
   return { created };
 }
 
@@ -252,7 +289,7 @@ async function runRecurringInvoices() {
     created++;
   }
 
-  await Promise.allSettled(ops);
+  await settleAll(ops, 'recurring-invoices');
   return { created, skipped };
 }
 
@@ -291,7 +328,7 @@ async function runProjectCompletionReminder() {
     notified++;
   }
 
-  await Promise.allSettled(ops);
+  await settleAll(ops, 'project-completion-reminder');
   return { notified, totalOpenProjects: projectsSnap.size };
 }
 
@@ -327,7 +364,7 @@ async function runRecurringProjectReset() {
     resetCount++;
   }
 
-  await Promise.allSettled(ops);
+  await settleAll(ops, 'recurring-project-reset');
   return { reset: resetCount };
 }
 
@@ -392,7 +429,7 @@ async function runRecurringExpenses() {
     created++;
   }
 
-  await Promise.allSettled(ops);
+  await settleAll(ops, 'recurring-expenses');
   return { created };
 }
 
@@ -415,7 +452,7 @@ async function runExpireInvitations() {
     expired++;
   }
 
-  await Promise.allSettled(ops);
+  await settleAll(ops, 'expire-invitations');
   return { expired };
 }
 
@@ -454,20 +491,23 @@ async function runGoalOverdueAlerts() {
       goalOverdueSent: true,
       updatedAt: admin.firestore.Timestamp.now(),
     }));
+    const goalTitle = `⚠️ Objektiv i Vonuar: "${goal.title || 'Pa titull'}"`;
+    const goalMsg = `Ky objektiv ka kaluar afatin prej më shumë se 2 javësh dhe ende nuk është arritur.`;
     ops.push(db.collection('notifications').add({
       userId: recipientId,
       type: 'goal_overdue',
-      title: `⚠️ Objektiv i Vonuar: "${goal.title || 'Pa titull'}"`,
-      message: `Ky objektiv ka kaluar afatin prej më shumë se 2 javësh dhe ende nuk është arritur.`,
+      title: goalTitle,
+      message: goalMsg,
       isRead: false,
       actionUrl: '/app/goals',
       actionLabel: 'Shiko Objektivat',
       createdAt: admin.firestore.Timestamp.now(),
     }));
+    ops.push(sendPush(recipientId, goalTitle, goalMsg));
     notified++;
   }
 
-  await Promise.allSettled(ops);
+  await settleAll(ops, 'goal-overdue-alerts');
   return { notified };
 }
 
@@ -508,7 +548,7 @@ async function runLeadFollowUpReminders() {
       if (lastSent >= twentyThreeHoursAgo) continue;
     }
 
-    const assignedUserId = lead.assignedToUserId;
+    const assignedUserId = lead.assignedToUserId || lead.createdByUserId;
     if (!assignedUserId) continue;
 
     const isOverdue = followUpDate < todayStart;
@@ -516,14 +556,17 @@ async function runLeadFollowUpReminders() {
       ? `Vonuar (${followUpDate.toLocaleDateString('sq-AL')})`
       : 'Sot';
 
+    const followTitle = isOverdue ? `⚠ Rikontaktim i vonuar: ${lead.name}` : `🔔 Rikontaktim sot: ${lead.name}`;
+    const followMsg = lead.followUpNote
+      ? `${dateLabel} · ${lead.followUpNote}`
+      : `${dateLabel} · Është koha të rikontaktoni këtë lead.`;
+
     ops.push(
       db.collection('notifications').add({
         userId: assignedUserId,
         type: 'lead_follow_up',
-        title: isOverdue ? `⚠ Rikontaktim i vonuar: ${lead.name}` : `🔔 Rikontaktim sot: ${lead.name}`,
-        message: lead.followUpNote
-          ? `${dateLabel} · ${lead.followUpNote}`
-          : `${dateLabel} · Është koha të rikontaktoni këtë lead.`,
+        title: followTitle,
+        message: followMsg,
         isRead: false,
         actionType: 'link',
         actionUrl: '/app/crm',
@@ -531,6 +574,7 @@ async function runLeadFollowUpReminders() {
         createdAt: admin.firestore.Timestamp.now(),
       })
     );
+    ops.push(sendPush(assignedUserId, followTitle, followMsg));
 
     // Update lastReminderSentAt to debounce future runs
     ops.push(
@@ -540,8 +584,38 @@ async function runLeadFollowUpReminders() {
     notified++;
   }
 
-  await Promise.allSettled(ops);
+  await settleAll(ops, 'lead-follow-up-reminders');
   return { notified };
+}
+
+// ── JOB: cleanup-old-notifications ───────────────────────────────────────────
+async function runCleanupOldNotifications() {
+  const cutoff = new Date();
+  cutoff.setDate(cutoff.getDate() - 60);
+  const cutoffTs = admin.firestore.Timestamp.fromDate(cutoff);
+
+  // Only delete read notifications older than 60 days (keep all unread)
+  const snap = await db.collection('notifications')
+    .where('isRead', '==', true)
+    .where('createdAt', '<', cutoffTs)
+    .get();
+
+  if (snap.empty) return { deleted: 0 };
+
+  let deleted = 0;
+  const BATCH_SIZE = 400;
+  const docs = snap.docs;
+
+  for (let i = 0; i < docs.length; i += BATCH_SIZE) {
+    const batch = db.batch();
+    const chunk = docs.slice(i, i + BATCH_SIZE);
+    for (const d of chunk) batch.delete(d.ref);
+    await batch.commit();
+    deleted += chunk.length;
+  }
+
+  console.log(`[CRON:cleanup-old-notifications] fshirë ${deleted} njoftime të vjetra`);
+  return { deleted };
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
@@ -585,6 +659,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'lead-follow-up-reminders':
         result = await runLeadFollowUpReminders();
+        break;
+      case 'cleanup-old-notifications':
+        result = await runCleanupOldNotifications();
         break;
       default:
         return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset` });

@@ -20,6 +20,7 @@ import { PermissionsProvider, usePermissions } from './contexts/PermissionsConte
 import { useTeamDataMigration } from './hooks/useTeamDataMigration';
 import { useTeamSettingsSync } from './hooks/useTeamSettings';
 import { useBreakReminder } from './hooks/useBreakReminder';
+import { usePushNotifications } from './hooks/usePushNotifications';
 import { Toaster } from './components/ui/toaster';
 import { Loader2 } from 'lucide-react';
 
@@ -146,6 +147,9 @@ function AppContent() {
 
   // Break reminder — get-up-and-move reminder every 2 hours from 8:00
   useBreakReminder();
+
+  // Register for push notifications on Android (saves FCM token to Firestore)
+  usePushNotifications(user?.uid);
 
   // Cross-device onboarding check: if Firestore says completed, skip wizard
   useEffect(() => {

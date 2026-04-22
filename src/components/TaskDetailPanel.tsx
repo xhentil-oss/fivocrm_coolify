@@ -338,10 +338,13 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     if (subtaskAssignee !== user.uid) {
       await notificationMutation.create({
         userId: subtaskAssignee,
+        type: 'task_assigned',
         title: 'Nën-detyrë e Re e Caktuar',
         message: `Ju u caktuat te nën-detyra: ${subtaskForm.title}`,
         isRead: false,
-      }).catch(() => {});
+        actionUrl: '/app/tasks',
+        actionLabel: 'Shiko Detyrat',
+      }).catch(err => console.error('[Notifications] subtask_assigned dërgim dështoi:', err));
     }
 
     resetSubtaskForm();

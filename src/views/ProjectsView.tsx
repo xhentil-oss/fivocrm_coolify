@@ -318,7 +318,7 @@ const ProjectsView: React.FC = () => {
       memberUserIds.forEach(uid => { if (uid !== user?.uid) notifyUids.add(uid); });
     }
     if (notifyUids.size > 0) {
-      Promise.all([...notifyUids].map(uid =>
+      await Promise.all([...notifyUids].map(uid =>
         notificationMutation.create({
           userId: uid,
           type: 'project_created',
@@ -328,7 +328,7 @@ const ProjectsView: React.FC = () => {
           actionUrl: `/app/projects/${(newProject as any).id}`,
           actionLabel: 'Shiko Projektin',
         })
-      )).catch(() => {});
+      )).catch(err => console.error('[Notifications] project_created dërgim dështoi:', err));
     }
 
     setIsCreateDialogOpen(false);

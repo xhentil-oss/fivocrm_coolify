@@ -84,7 +84,7 @@ const ExpensesView: React.FC = () => {
       m.userId !== user?.uid && (m.role === 'Admin' || m.role === 'Manager')
     );
     if (adminManagers.length > 0) {
-      Promise.all(adminManagers.map(m =>
+      await Promise.all(adminManagers.map(m =>
         notificationMutation.create({
           userId: m.userId,
           type: 'expense_submitted',
@@ -94,7 +94,7 @@ const ExpensesView: React.FC = () => {
           actionUrl: '/app/expenses',
           actionLabel: 'Shiko Shpenzimet',
         })
-      )).catch(() => {});
+      )).catch(err => console.error('[Notifications] expense_submitted dërgim dështoi:', err));
     }
 
     setIsCreateDialogOpen(false);

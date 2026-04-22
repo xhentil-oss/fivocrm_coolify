@@ -251,7 +251,7 @@ const InvoicesView: React.FC = () => {
     if (field === 'status' && editValue === 'Paid') {
       const invoice = invoices?.find(i => i.id === invoiceId);
       const recipients = teamMembers?.filter((m: any) => m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices)) || [];
-      Promise.all(recipients.map((m: any) => notificationMutation.create({
+      await Promise.all(recipients.map((m: any) => notificationMutation.create({
         userId: m.userId,
         type: 'invoice_paid',
         title: 'Faturë e Paguar ✓',
@@ -259,7 +259,7 @@ const InvoicesView: React.FC = () => {
         isRead: false,
         actionUrl: '/app/invoices',
         actionLabel: 'Shiko Faturat',
-      }))).catch(() => {});
+      }))).catch(err => console.error('[Notifications] invoice_paid dërgim dështoi:', err));
     }
 
     cancelEditing();
@@ -1024,7 +1024,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
 
       // Notify Admin/finance members about the new invoice
       const invoiceRecipients = invoiceTeamMembers?.filter((m: any) => m.userId !== currentUser?.uid && (m.role === 'Admin' || m.canAccessInvoices)) || [];
-      Promise.all(invoiceRecipients.map((m: any) => invoiceNotifMutation.create({
+      await Promise.all(invoiceRecipients.map((m: any) => invoiceNotifMutation.create({
         userId: m.userId,
         type: 'invoice_created',
         title: 'Faturë e Re',
@@ -1032,7 +1032,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         isRead: false,
         actionUrl: '/app/invoices',
         actionLabel: 'Shiko Faturat',
-      }))).catch(() => {});
+      }))).catch(err => console.error('[Notifications] invoice_created dërgim dështoi:', err));
 
       // Auto-create portal access for this customer if it doesn't exist
       if (selectedCustomerId) {

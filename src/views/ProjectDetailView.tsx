@@ -201,10 +201,13 @@ const ProjectDetailView: React.FC = () => {
     if (assignedToUserId && assignedToUserId !== user?.uid) {
       await notificationMutation.create({
         userId: assignedToUserId,
+        type: 'task_assigned',
         title: 'Detyrë e Re e Caktuar',
         message: `Ju u caktuat te detyra: ${title}`,
         isRead: false,
-      });
+        actionUrl: `/app/projects/${projectId}`,
+        actionLabel: 'Shiko Projektin',
+      }).catch(err => console.error('[Notifications] task_assigned dërgim dështoi:', err));
     }
 
     setIsCreateTaskOpen(false);

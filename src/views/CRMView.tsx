@@ -209,10 +209,13 @@ const CRMView: React.FC = () => {
     if (resolvedAssigned && user && resolvedAssigned !== user.uid) {
       await notificationMutation.create({
         userId: resolvedAssigned,
+        type: 'lead_assigned',
         title: 'Lead i asignuar ty',
         message: `${user.displayName || 'Një admin'} të asignoi lead-in "${name}"`,
         isRead: false,
-      }).catch(() => {});
+        actionUrl: '/app/crm',
+        actionLabel: 'Shiko CRM',
+      }).catch(err => console.error('[Notifications] lead_assigned dërgim dështoi:', err));
     }
 
     logActivity('lead_created', `Lead i ri: ${name}`, { entityType: 'lead', description: company || email || '' });
@@ -293,10 +296,13 @@ const CRMView: React.FC = () => {
       if (resolvedAssigned && user && resolvedAssigned !== user.uid && resolvedAssigned !== editLead.assignedToUserId) {
         await notificationMutation.create({
           userId: resolvedAssigned,
+          type: 'lead_assigned',
           title: 'Lead i asignuar ty',
           message: `${user.displayName || 'Një admin'} të asignoi lead-in "${name}"`,
           isRead: false,
-        }).catch(() => {});
+          actionUrl: '/app/crm',
+          actionLabel: 'Shiko CRM',
+        }).catch(err => console.error('[Notifications] lead_assigned dërgim dështoi:', err));
       }
 
       toast({ title: 'Lead u përditësua', description: `${name} u përditësua me sukses.` });
@@ -328,10 +334,13 @@ const CRMView: React.FC = () => {
     if (resolved && user && resolved !== user.uid) {
       await notificationMutation.create({
         userId: resolved,
+        type: 'lead_assigned',
         title: 'Lead i asignuar ty',
         message: `${user.displayName || 'Një admin'} të asignoi lead-in "${lead.name}"`,
         isRead: false,
-      }).catch(() => {});
+        actionUrl: '/app/crm',
+        actionLabel: 'Shiko CRM',
+      }).catch(err => console.error('[Notifications] lead_assigned dërgim dështoi:', err));
     }
   };
 
@@ -480,7 +489,7 @@ const CRMView: React.FC = () => {
             message: `${lead.name} u konvertua me sukses në klient!`,
             isRead: false,
           }));
-        await Promise.all(notifyPromises).catch(() => {});
+        await Promise.all(notifyPromises).catch(err => console.error('[Notifications] lead_converted dërgim dështoi:', err));
       }
 
       logActivity('lead_converted', `Lead u konvertua: ${lead.name}`, { entityType: 'lead', entityId: lead.id });

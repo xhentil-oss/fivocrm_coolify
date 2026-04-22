@@ -9,7 +9,8 @@
     { "path": "/api/cron/run?job=goal-overdue-alerts",         "schedule": "0 9 * * 1" },
     { "path": "/api/cron/run?job=recurring-expenses",          "schedule": "0 1 * * *" },
     { "path": "/api/cron/run?job=expire-invitations",          "schedule": "0 2 * * *" },
-    { "path": "/api/cron/run?job=lead-follow-up-reminders",    "schedule": "0 8 * * *" }
+    { "path": "/api/cron/run?job=lead-follow-up-reminders",    "schedule": "0 8 * * *" },
+    { "path": "/api/cron/run?job=cleanup-old-notifications",   "schedule": "0 3 * * 0" }
   ],
   "rewrites": [
     { "source": "/api/(.*)", "destination": "/api/$1" },

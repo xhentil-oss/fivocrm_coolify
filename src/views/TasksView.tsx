@@ -333,9 +333,12 @@ const TasksView: React.FC = () => {
       notificationPromises.push(
         notificationMutation.create({
           userId: assignedToUserId,
+          type: 'task_assigned',
           title: 'Detyrë e Re e Caktuar',
           message: `Ju u caktuat te detyra: ${title}`,
           isRead: false,
+          actionUrl: '/app/tasks',
+          actionLabel: 'Shiko Detyrat',
         })
       );
     }
@@ -344,9 +347,12 @@ const TasksView: React.FC = () => {
         notificationPromises.push(
           notificationMutation.create({
             userId: collabId,
+            type: 'task_collaborator_added',
             title: 'U shtuat si bashkëpunëtor',
             message: `U shtuat si bashkëpunëtor te detyra: ${title}`,
             isRead: false,
+            actionUrl: '/app/tasks',
+            actionLabel: 'Shiko Detyrat',
           })
         );
       }
