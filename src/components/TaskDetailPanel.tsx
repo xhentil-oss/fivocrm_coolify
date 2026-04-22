@@ -685,6 +685,16 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
         <Select
           value={task.status}
           onValueChange={async (newStatus) => {
+            if (newStatus === 'Done' && task.dependsOn && task.dependsOn.length > 0 && allTasks) {
+              const blockers = task.dependsOn.filter(depId => {
+                const dep = allTasks.find(t => t.id === depId);
+                return dep && dep.status !== 'Done';
+              });
+              if (blockers.length > 0) {
+                toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${blockers.length} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
+                return;
+              }
+            }
             await onUpdate(task.id, { status: newStatus });
             const labels: Record<string, string> = { Todo: 'Për të bërë', 'In Progress': 'Në progres', Review: 'Rishikim', Done: 'Përfunduar' };
             toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${labels[newStatus] ?? newStatus}` });
@@ -1115,9 +1125,19 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             {/* Status & Priority - Inline */}
             <div className="flex items-center gap-3 sm:gap-4">
               <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0">Statusi</span>
-              <Select 
-                value={task.status} 
+              <Select
+                value={task.status}
                 onValueChange={async (newStatus) => {
+                  if (newStatus === 'Done' && task.dependsOn && task.dependsOn.length > 0 && allTasks) {
+                    const blockers = task.dependsOn.filter(depId => {
+                      const dep = allTasks.find(t => t.id === depId);
+                      return dep && dep.status !== 'Done';
+                    });
+                    if (blockers.length > 0) {
+                      toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${blockers.length} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
+                      return;
+                    }
+                  }
                   await onUpdate(task.id, { status: newStatus });
                   const labels: Record<string, string> = { Todo: 'Për të bërë', 'In Progress': 'Në progres', Review: 'Rishikim', Done: 'Përfunduar' };
                   toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${labels[newStatus] ?? newStatus}` });

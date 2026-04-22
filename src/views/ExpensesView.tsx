@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil, Search, Check, X } from 'lucide-react';
+import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil, Search, Check, X, ThumbsUp, ThumbsDown, Clock } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -57,6 +57,7 @@ const ExpensesView: React.FC = () => {
 
     const memberId = formData.get('memberId') as string;
 
+    const isAdminOrManager = permissions.role === 'Admin' || permissions.role === 'Manager';
     await expenseMutation.create({
       title,
       description: description || undefined,
@@ -68,6 +69,8 @@ const ExpensesView: React.FC = () => {
       recurringFrequency: isRecurring ? recurringFrequency : undefined,
       nextRecurringDate: isRecurring && nextRecurringDate ? new Date(nextRecurringDate) : undefined,
       status: status || 'Active',
+      approvalStatus: isAdminOrManager ? 'Approved' : 'Submitted',
+      approvedByUserId: isAdminOrManager ? user?.uid : undefined,
       paidDate: paidDate ? new Date(paidDate) : undefined,
       projectId: projectId && projectId !== '__none__' ? projectId : undefined,
       memberId: memberId && memberId !== '__none__' ? memberId : undefined,
@@ -133,6 +136,14 @@ const ExpensesView: React.FC = () => {
     setSelectedExpense(null);
   };
 
+  const handleApproveExpense = async (id: string) => {
+    await expenseMutation.update(id, { approvalStatus: 'Approved', approvedByUserId: user?.uid } as any);
+  };
+
+  const handleRejectExpense = async (id: string) => {
+    await expenseMutation.update(id, { approvalStatus: 'Rejected', approvedByUserId: user?.uid } as any);
+  };
+
   const handleDeleteExpense = async (id: string) => {
     if (confirm('Je i sigurt që dëshiron të fshish këtë shpenzim?')) {
       await expenseMutation.remove(id);
@@ -159,6 +170,8 @@ const ExpensesView: React.FC = () => {
   const totalExpenses = expenses?.reduce((sum, exp) => sum + exp.amount, 0) || 0;
   const activeExpenses = expenses?.filter(e => e.status === 'Active').length || 0;
   const recurringExpenses = expenses?.filter(e => e.isRecurring).length || 0;
+  const pendingApprovalCount = expenses?.filter(e => (e as any).approvalStatus === 'Submitted').length || 0;
+  const isAdminOrManager = permissions.role === 'Admin' || permissions.role === 'Manager';
 
   const getCategoryLabel = (category: string) => {
     switch (category) {
@@ -185,6 +198,12 @@ const ExpensesView: React.FC = () => {
           <h1 className="text-h2 text-foreground">Shpenzimet</h1>
           <p className="text-body text-muted-foreground mt-1">
             {expenses?.length || 0} shpenzime totale · {activeExpenses} aktive · {recurringExpenses} periodike
+            {isAdminOrManager && pendingApprovalCount > 0 && (
+              <span className="ml-2 inline-flex items-center gap-1 text-amber-600 font-medium">
+                <Clock className="w-3.5 h-3.5" />
+                {pendingApprovalCount} në pritje miratimi
+              </span>
+            )}
           </p>
         </div>
         {permissions.canEdit && (
@@ -269,11 +288,28 @@ const ExpensesView: React.FC = () => {
                   Periodike: {expense.recurringFrequency}
                 </div>
               )}
+              {(expense as any).approvalStatus && (
+                <div className="flex items-center gap-1">
+                  {(expense as any).approvalStatus === 'Submitted' && <Badge className="bg-amber-100 text-amber-800 text-xs"><Clock className="w-3 h-3 mr-1" />Në Pritje</Badge>}
+                  {(expense as any).approvalStatus === 'Approved' && <Badge className="bg-green-100 text-green-800 text-xs"><Check className="w-3 h-3 mr-1" />Aprovuar</Badge>}
+                  {(expense as any).approvalStatus === 'Rejected' && <Badge className="bg-red-100 text-red-800 text-xs"><X className="w-3 h-3 mr-1" />Refuzuar</Badge>}
+                </div>
+              )}
               {permissions.canEdit && (
                 <div className="flex gap-2 pt-1 border-t">
                   <Button variant="outline" size="sm" className="flex-1 gap-1" onClick={() => { setSelectedExpense(expense); setIsEditDialogOpen(true); }}>
                     <Pencil className="w-3.5 h-3.5" /> Ndrysho
                   </Button>
+                  {isAdminOrManager && (expense as any).approvalStatus === 'Submitted' && (
+                    <>
+                      <Button variant="outline" size="sm" className="text-green-600 hover:text-green-700 border-green-200" onClick={() => handleApproveExpense(expense.id)}>
+                        <ThumbsUp className="w-3.5 h-3.5" />
+                      </Button>
+                      <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700 border-red-200" onClick={() => handleRejectExpense(expense.id)}>
+                        <ThumbsDown className="w-3.5 h-3.5" />
+                      </Button>
+                    </>
+                  )}
                   <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => handleDeleteExpense(expense.id)}>
                     <Trash2 className="w-3.5 h-3.5" />
                   </Button>
@@ -363,12 +399,17 @@ const ExpensesView: React.FC = () => {
                       )}
                     </td>
                     <td className="px-6 py-4">
-                      <Badge variant={expense.status === 'Active' ? 'default' : 'secondary'}>
-                        {expense.status === 'Active' ? 'Aktiv' : expense.status === 'Inactive' ? 'Joaktiv' : expense.status}
-                      </Badge>
+                      <div className="flex flex-col gap-1">
+                        <Badge variant={expense.status === 'Active' ? 'default' : 'secondary'}>
+                          {expense.status === 'Active' ? 'Aktiv' : expense.status === 'Inactive' ? 'Joaktiv' : expense.status}
+                        </Badge>
+                        {(expense as any).approvalStatus === 'Submitted' && <Badge className="bg-amber-100 text-amber-800 text-xs w-fit"><Clock className="w-3 h-3 mr-1" />Në Pritje</Badge>}
+                        {(expense as any).approvalStatus === 'Approved' && <Badge className="bg-green-100 text-green-800 text-xs w-fit"><Check className="w-3 h-3 mr-1" />Aprovuar</Badge>}
+                        {(expense as any).approvalStatus === 'Rejected' && <Badge className="bg-red-100 text-red-800 text-xs w-fit"><X className="w-3 h-3 mr-1" />Refuzuar</Badge>}
+                      </div>
                     </td>
                     <td className="px-6 py-4">
-                      <div className="flex gap-2">
+                      <div className="flex gap-2 flex-wrap">
                         {permissions.canEdit && (
                           <Button
                             variant="outline"
@@ -380,6 +421,16 @@ const ExpensesView: React.FC = () => {
                           >
                             Ndrysho
                           </Button>
+                        )}
+                        {isAdminOrManager && (expense as any).approvalStatus === 'Submitted' && (
+                          <>
+                            <Button variant="outline" size="sm" className="text-green-600 hover:text-green-700 border-green-200 gap-1" onClick={() => handleApproveExpense(expense.id)}>
+                              <ThumbsUp className="w-3.5 h-3.5" /> Aprovo
+                            </Button>
+                            <Button variant="outline" size="sm" className="text-red-600 hover:text-red-700 border-red-200 gap-1" onClick={() => handleRejectExpense(expense.id)}>
+                              <ThumbsDown className="w-3.5 h-3.5" /> Refuzo
+                            </Button>
+                          </>
                         )}
                         {permissions.canEdit && (
                           <Button

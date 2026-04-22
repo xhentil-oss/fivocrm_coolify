@@ -348,7 +348,18 @@ const CRMView: React.FC = () => {
 
     // If status is "Converted", create a customer + portal access, then delete the lead
     if (newStatus === 'Converted') {
+      // Dedup: block conversion if a customer with the same email already exists
+      const normEmail = lead.email?.toLowerCase().trim();
+      if (normEmail) {
+        const existing = customers?.find(c => c.email?.toLowerCase().trim() === normEmail);
+        if (existing) {
+          toast({ title: 'Klienti ekziston tashmë', description: `Klient me email "${lead.email}" ekziston: "${existing.name}".`, variant: 'destructive' });
+          return;
+        }
+      }
+
       let customerDoc: { id: string } | undefined | null = null;
+      let portalAccessDoc: { id: string } | undefined | null = null;
       try {
         customerDoc = await customerMutation.create({
           name: lead.name,
@@ -364,20 +375,19 @@ const CRMView: React.FC = () => {
 
         // Auto-create client portal access if customer has an email
         if (lead.email && customerDoc?.id) {
-          await portalAccessMutation.create({
+          portalAccessDoc = await portalAccessMutation.create({
             customerId: customerDoc.id,
             userId: '', // Will be linked when client registers/logs in
             email: lead.email.toLowerCase().trim(),
             status: 'Active',
           });
         }
-      // Delete the lead inside the same try — if it fails, roll back customer too
-      await leadMutation.remove(lead.id);
-    } catch (err) {
-        // Roll back customer if it was created before the failure
-        if (customerDoc?.id) {
-          await customerMutation.remove(customerDoc.id).catch(() => {});
-        }
+        // Delete the lead inside the same try — if it fails, roll back everything
+        await leadMutation.remove(lead.id);
+      } catch (err) {
+        // Roll back both customer and portal access on any failure
+        if (portalAccessDoc?.id) await portalAccessMutation.remove(portalAccessDoc.id).catch(() => {});
+        if (customerDoc?.id) await customerMutation.remove(customerDoc.id).catch(() => {});
         toast({ title: 'Gabim gjatë konvertimit', description: 'Ndodhi një gabim. Statusi nuk u ndryshua.', variant: 'destructive' });
         return;
       }

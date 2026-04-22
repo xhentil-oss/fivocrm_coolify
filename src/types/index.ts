@@ -154,6 +154,7 @@ export interface Invoice {
   invoiceDate?: Date;
   dueDate?: Date;
   paidAt?: Date;
+  paidAmount?: number;
   emailSent?: boolean;
   reminderSent?: boolean;
   reminder25Sent?: boolean;
@@ -196,6 +197,9 @@ export interface Expense {
   projectId?: string;
   departmentId?: string;
   status?: string;
+  approvalStatus?: 'Submitted' | 'Approved' | 'Rejected';
+  approvedByUserId?: string;
+  rejectionReason?: string;
   memberId?: string;       // for Salary expenses: links to TeamMember.userId
   isRecurring?: boolean;
   recurringFrequency?: string;

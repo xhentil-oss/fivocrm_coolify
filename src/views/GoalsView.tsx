@@ -713,6 +713,7 @@ const GoalDetailDialog: React.FC<{
   milestoneMutation: ReturnType<typeof useMutation<Milestone>>;
 }> = ({ goal, open, onOpenChange, milestones, childGoals, projects, leads, tasks, getName, getStatusIcon, onUpdate, onDelete, onEdit, milestoneMutation }) => {
   const [newMilestone, setNewMilestone] = useState('');
+  const [newMilestoneDueDate, setNewMilestoneDueDate] = useState<Date | undefined>();
   const isTeam = (goal.scope || 'team') === 'team';
   const progressColor =
     (goal.progress || 0) >= 75 ? 'bg-green-500' :
@@ -724,8 +725,10 @@ const GoalDetailDialog: React.FC<{
       goalId: goal.id,
       title: newMilestone.trim(),
       status: 'Pending',
+      dueDate: newMilestoneDueDate || undefined,
     } as any);
     setNewMilestone('');
+    setNewMilestoneDueDate(undefined);
   };
 
   const toggleMilestone = async (m: Milestone) => {
@@ -862,14 +865,24 @@ const GoalDetailDialog: React.FC<{
           <div className="border-t pt-4">
             <h4 className="font-medium mb-3">Etapat ({milestones.length})</h4>
             <div className="space-y-2">
-              {milestones.map(m => (
-                <div key={m.id} className="flex items-center gap-3 p-3 bg-muted/50 rounded group">
+              {milestones.map(m => {
+                const mDue = m.dueDate ? new Date(m.dueDate as any) : null;
+                const mOverdue = mDue && m.status !== 'Completed' && mDue < new Date();
+                return (
+                <div key={m.id} className={`flex items-center gap-3 p-3 rounded group ${mOverdue ? 'bg-red-50 dark:bg-red-950/20 border border-red-200 dark:border-red-800' : 'bg-muted/50'}`}>
                   <button onClick={() => toggleMilestone(m)}>
-                    <CheckCircle2 className={`w-5 h-5 ${m.status === 'Completed' ? 'text-green-500' : 'text-muted-foreground hover:text-green-400'}`} />
+                    <CheckCircle2 className={`w-5 h-5 ${m.status === 'Completed' ? 'text-green-500' : mOverdue ? 'text-red-400 hover:text-green-400' : 'text-muted-foreground hover:text-green-400'}`} />
                   </button>
-                  <span className={`flex-1 text-sm ${m.status === 'Completed' ? 'line-through text-muted-foreground' : ''}`}>
-                    {m.title}
-                  </span>
+                  <div className="flex-1 min-w-0">
+                    <span className={`text-sm ${m.status === 'Completed' ? 'line-through text-muted-foreground' : ''}`}>
+                      {m.title}
+                    </span>
+                    {mDue && (
+                      <p className={`text-xs mt-0.5 ${mOverdue ? 'text-red-600 font-medium' : 'text-muted-foreground'}`}>
+                        {mOverdue ? '⚠ Vonuar · ' : ''}{mDue.toLocaleDateString('sq-AL')}
+                      </p>
+                    )}
+                  </div>
                   <button
                     onClick={() => milestoneMutation.remove(m.id)}
                     className="opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
@@ -877,18 +890,32 @@ const GoalDetailDialog: React.FC<{
                     <Trash2 className="w-4 h-4" />
                   </button>
                 </div>
-              ))}
-              <div className="flex gap-2">
-                <Input
-                  placeholder="Shto etapë të re..."
-                  value={newMilestone}
-                  onChange={e => setNewMilestone(e.target.value)}
-                  onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), handleAddMilestone())}
-                  className="h-9"
-                />
-                <Button size="sm" variant="outline" onClick={handleAddMilestone} disabled={!newMilestone.trim()}>
-                  <Plus className="w-4 h-4" />
-                </Button>
+              );
+              })}
+              <div className="space-y-2 pt-1">
+                <div className="flex gap-2">
+                  <Input
+                    placeholder="Shto etapë të re..."
+                    value={newMilestone}
+                    onChange={e => setNewMilestone(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && (e.preventDefault(), handleAddMilestone())}
+                    className="h-9"
+                  />
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button size="sm" variant="outline" className={`h-9 gap-1 ${newMilestoneDueDate ? 'text-primary border-primary' : ''}`}>
+                        <Calendar className="w-3.5 h-3.5" />
+                        {newMilestoneDueDate ? newMilestoneDueDate.toLocaleDateString('sq-AL') : 'Afat'}
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="w-auto p-0">
+                      <CalendarComponent mode="single" selected={newMilestoneDueDate} onSelect={setNewMilestoneDueDate} />
+                    </PopoverContent>
+                  </Popover>
+                  <Button size="sm" variant="outline" onClick={handleAddMilestone} disabled={!newMilestone.trim()}>
+                    <Plus className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
             </div>
           </div>

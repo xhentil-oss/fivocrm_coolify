@@ -331,6 +331,94 @@ async function runRecurringProjectReset() {
   return { reset: resetCount };
 }
 
+// ── JOB: recurring-expenses ──────────────────────────────────────────────────
+async function runRecurringExpenses() {
+  const now = new Date();
+  const expensesSnap = await db.collection('expenses').where('isRecurring', '==', true).get();
+  if (expensesSnap.empty) return { created: 0 };
+
+  let created = 0;
+  const ops: Promise<any>[] = [];
+
+  for (const doc of expensesSnap.docs) {
+    const expense = doc.data();
+    if (!expense.nextRecurringDate || !expense.recurringFrequency) continue;
+    const nextDate: Date = expense.nextRecurringDate?.toDate ? expense.nextRecurringDate.toDate() : new Date(expense.nextRecurringDate);
+    if (isNaN(nextDate.getTime()) || nextDate > now) continue;
+
+    // Calculate the next occurrence
+    const next = new Date(nextDate);
+    if (expense.recurringFrequency === 'weekly') next.setDate(next.getDate() + 7);
+    else if (expense.recurringFrequency === 'monthly') next.setMonth(next.getMonth() + 1);
+    else if (expense.recurringFrequency === 'yearly') next.setFullYear(next.getFullYear() + 1);
+    else next.setMonth(next.getMonth() + 1); // default monthly
+
+    // Create a new expense entry for this cycle
+    ops.push(db.collection('expenses').add({
+      title: expense.title,
+      description: expense.description || null,
+      amount: expense.amount,
+      currency: expense.currency || 'ALL',
+      category: expense.category,
+      teamId: expense.teamId || null,
+      projectId: expense.projectId || null,
+      departmentId: expense.departmentId || null,
+      memberId: expense.memberId || null,
+      isRecurring: false, // child entries are not recurring themselves
+      status: expense.status || 'Active',
+      approvalStatus: 'Submitted',
+      createdByUserId: expense.createdByUserId || null,
+      date: admin.firestore.Timestamp.fromDate(now),
+      createdAt: admin.firestore.Timestamp.now(),
+      updatedAt: admin.firestore.Timestamp.now(),
+    }));
+
+    // Update nextRecurringDate on the parent
+    ops.push(doc.ref.update({ nextRecurringDate: admin.firestore.Timestamp.fromDate(next), updatedAt: admin.firestore.Timestamp.now() }));
+
+    // Notify the creator
+    if (expense.createdByUserId) {
+      ops.push(db.collection('notifications').add({
+        userId: expense.createdByUserId,
+        type: 'recurring_expense_created',
+        title: `🔄 Shpenzim periodik: ${expense.title}`,
+        message: `Shpenzimi periodik "${expense.title}" (${expense.amount} ${expense.currency || 'ALL'}) u krijua automatikisht.`,
+        isRead: false,
+        actionUrl: '/app/expenses',
+        actionLabel: 'Shiko Shpenzimet',
+        createdAt: admin.firestore.Timestamp.now(),
+      }));
+    }
+    created++;
+  }
+
+  await Promise.allSettled(ops);
+  return { created };
+}
+
+// ── JOB: expire-invitations ───────────────────────────────────────────────────
+async function runExpireInvitations() {
+  const now = admin.firestore.Timestamp.fromDate(new Date());
+  const invitesSnap = await db.collection('teamInvites').where('status', '==', 'Pending').get();
+  if (invitesSnap.empty) return { expired: 0 };
+
+  let expired = 0;
+  const ops: Promise<any>[] = [];
+
+  for (const doc of invitesSnap.docs) {
+    const invite = doc.data();
+    if (!invite.expiresAt) continue;
+    const expiresAt: Date = invite.expiresAt?.toDate ? invite.expiresAt.toDate() : new Date(invite.expiresAt);
+    if (isNaN(expiresAt.getTime()) || expiresAt > new Date()) continue;
+
+    ops.push(doc.ref.update({ status: 'Expired', updatedAt: now }));
+    expired++;
+  }
+
+  await Promise.allSettled(ops);
+  return { expired };
+}
+
 // ── JOB: goal-overdue-alerts ─────────────────────────────────────────────────
 async function runGoalOverdueAlerts() {
   const now = new Date();
@@ -345,8 +433,8 @@ async function runGoalOverdueAlerts() {
   for (const goalDoc of goalsSnap.docs) {
     const goal = goalDoc.data();
 
-    // Skip if already achieved, cancelled, or already notified
-    if (goal.status === 'Achieved' || goal.status === 'Cancelled') continue;
+    // Skip if already achieved or already notified
+    if (goal.status === 'Achieved') continue;
     if (goal.goalOverdueSent) continue;
 
     // Determine the reference date (dueDate preferred, fall back to createdAt)
@@ -415,6 +503,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'goal-overdue-alerts':
         result = await runGoalOverdueAlerts();
+        break;
+      case 'recurring-expenses':
+        result = await runRecurringExpenses();
+        break;
+      case 'expire-invitations':
+        result = await runExpireInvitations();
         break;
       default:
         return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset` });
