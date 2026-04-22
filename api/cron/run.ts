@@ -471,6 +471,79 @@ async function runGoalOverdueAlerts() {
   return { notified };
 }
 
+// ── JOB: lead-follow-up-reminders ────────────────────────────────────────────
+async function runLeadFollowUpReminders() {
+  const now = new Date();
+  const todayStart = new Date(now);
+  todayStart.setHours(0, 0, 0, 0);
+
+  // 23-hour debounce: don't re-notify if we already notified today
+  const twentyThreeHoursAgo = new Date(now.getTime() - 23 * 60 * 60 * 1000);
+
+  const leadsSnap = await db.collection('leads').get();
+  if (leadsSnap.empty) return { notified: 0 };
+
+  let notified = 0;
+  const ops: Promise<any>[] = [];
+
+  for (const leadDoc of leadsSnap.docs) {
+    const lead = leadDoc.data();
+
+    if (!lead.nextFollowUpDate) continue;
+    if (lead.status === 'Won' || lead.status === 'Lost') continue;
+
+    const followUpDate: Date = lead.nextFollowUpDate?.toDate?.()
+      ? lead.nextFollowUpDate.toDate()
+      : new Date(lead.nextFollowUpDate);
+    followUpDate.setHours(0, 0, 0, 0);
+
+    // Only trigger for today or overdue
+    if (followUpDate > todayStart) continue;
+
+    // Debounce: skip if already notified in the last 23h
+    if (lead.lastReminderSentAt) {
+      const lastSent: Date = lead.lastReminderSentAt?.toDate?.()
+        ? lead.lastReminderSentAt.toDate()
+        : new Date(lead.lastReminderSentAt);
+      if (lastSent >= twentyThreeHoursAgo) continue;
+    }
+
+    const assignedUserId = lead.assignedToUserId;
+    if (!assignedUserId) continue;
+
+    const isOverdue = followUpDate < todayStart;
+    const dateLabel = isOverdue
+      ? `Vonuar (${followUpDate.toLocaleDateString('sq-AL')})`
+      : 'Sot';
+
+    ops.push(
+      db.collection('notifications').add({
+        userId: assignedUserId,
+        type: 'lead_follow_up',
+        title: isOverdue ? `⚠ Rikontaktim i vonuar: ${lead.name}` : `🔔 Rikontaktim sot: ${lead.name}`,
+        message: lead.followUpNote
+          ? `${dateLabel} · ${lead.followUpNote}`
+          : `${dateLabel} · Është koha të rikontaktoni këtë lead.`,
+        isRead: false,
+        actionType: 'link',
+        actionUrl: '/app/crm',
+        actionLabel: 'Shko tek CRM',
+        createdAt: admin.firestore.Timestamp.now(),
+      })
+    );
+
+    // Update lastReminderSentAt to debounce future runs
+    ops.push(
+      leadDoc.ref.update({ lastReminderSentAt: admin.firestore.Timestamp.now() })
+    );
+
+    notified++;
+  }
+
+  await Promise.allSettled(ops);
+  return { notified };
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!authorize(req)) {
@@ -509,6 +582,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'expire-invitations':
         result = await runExpireInvitations();
+        break;
+      case 'lead-follow-up-reminders':
+        result = await runLeadFollowUpReminders();
         break;
       default:
         return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset` });

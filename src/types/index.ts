@@ -271,6 +271,9 @@ export interface Lead {
   businessCategory?: string;
   notes?: string;
   lastFollowUpDate?: Date;
+  nextFollowUpDate?: Date;
+  followUpNote?: string;
+  lastReminderSentAt?: Date;
   tags?: string[];
   serviceInquiryId?: string;
   assignedToUserId?: string;

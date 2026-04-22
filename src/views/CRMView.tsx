@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation, useGlobalTeamId, useWhatsappEnabled } from '../hooks/useFirestore';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -8,7 +8,7 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { getStatusColor } from '../lib/statusColors';
 import { useToast } from '../hooks/use-toast';
-import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle, Edit2, Percent, MessageSquare, ExternalLink, Calculator, FileText } from 'lucide-react';
+import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle, Edit2, Percent, MessageSquare, ExternalLink, Calculator, FileText, Clock, Bell, Send } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -45,6 +45,14 @@ const CRMView: React.FC = () => {
   const [scoreFilter, setScoreFilter] = useState('all');
   const [assignedFilter, setAssignedFilter] = useState('all');
   const { toast } = useToast();
+
+  // Follow-up / re-contact state (synced with selectedLead)
+  const [followUpDate, setFollowUpDate] = useState('');
+  const [followUpNote, setFollowUpNote] = useState('');
+  const [followUpSaving, setFollowUpSaving] = useState(false);
+  const [recontactMsg, setRecontactMsg] = useState('');
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [sendingWa, setSendingWa] = useState(false);
 
   const { user } = useAuth();
   const permissions = usePermissions();
@@ -337,6 +345,75 @@ const CRMView: React.FC = () => {
       lastFollowUpDate: new Date(),
       status: 'Follow-up',
     });
+  };
+
+  // Sync follow-up state whenever the selected lead changes
+  useEffect(() => {
+    if (!selectedLead) return;
+    const nd = selectedLead.nextFollowUpDate;
+    setFollowUpDate(nd
+      ? (nd instanceof Date ? nd : new Date((nd as any)?.seconds ? (nd as any).seconds * 1000 : nd)).toISOString().split('T')[0]
+      : '');
+    setFollowUpNote(selectedLead.followUpNote || '');
+    const firstName = selectedLead.name?.split(' ')[0] || selectedLead.name || 'ju';
+    setRecontactMsg(`Përshëndetje ${firstName},\n\nDoja t'ju kontaktoja lidhur me shërbimin tonë.\n\nA keni mundësi të flasim këtë javë?\n\nFaleminderit!`);
+  }, [selectedLead?.id]);
+
+  const handleSaveFollowUp = async () => {
+    if (!selectedLead) return;
+    setFollowUpSaving(true);
+    try {
+      await leadMutation.update(selectedLead.id, {
+        nextFollowUpDate: followUpDate ? new Date(followUpDate) : null,
+        followUpNote: followUpNote.trim() || null,
+      });
+      toast({ title: 'Kujtesë e ruajtur' });
+    } catch {
+      toast({ title: 'Gabim', description: 'Kujtesja nuk u ruajt', variant: 'destructive' });
+    } finally {
+      setFollowUpSaving(false);
+    }
+  };
+
+  const handleSendRecontactWhatsApp = async () => {
+    if (!selectedLead?.phoneNumber || !recontactMsg.trim()) return;
+    setSendingWa(true);
+    try {
+      const token = await user?.getIdToken();
+      const normalized = normalizeAlbanianPhone(selectedLead.phoneNumber);
+      const res = await fetch('/api/send-whatsapp', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ to: normalized, message: recontactMsg, leadId: selectedLead.id, leadName: selectedLead.name, teamId: waTeamId }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Dërgimi dështoi'); }
+      toast({ title: 'WhatsApp u dërgua!' });
+      await leadMutation.update(selectedLead.id, { lastFollowUpDate: new Date() });
+    } catch (err: unknown) {
+      toast({ title: 'Gabim WhatsApp', description: err instanceof Error ? err.message : 'Dërgimi dështoi', variant: 'destructive' });
+    } finally {
+      setSendingWa(false);
+    }
+  };
+
+  const handleSendRecontactEmail = async () => {
+    if (!selectedLead?.email || !recontactMsg.trim()) return;
+    setSendingEmail(true);
+    try {
+      const token = await user?.getIdToken();
+      const res = await fetch('/api/send-lead-reminder-email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ leadId: selectedLead.id, message: recontactMsg }),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Dërgimi dështoi'); }
+      toast({ title: 'Email u dërgua!' });
+      await leadMutation.update(selectedLead.id, { lastFollowUpDate: new Date() });
+    } catch (err: unknown) {
+      toast({ title: 'Gabim Email', description: err instanceof Error ? err.message : 'Dërgimi dështoi', variant: 'destructive' });
+    } finally {
+      setSendingEmail(false);
+    }
   };
 
   const handleStatusChange = async (lead: Lead, newStatus: string) => {
@@ -747,9 +824,26 @@ const CRMView: React.FC = () => {
                       <div className="flex items-center gap-1"><Phone className="w-3 h-3" />{lead.phoneNumber}</div>
                     )}
                   </div>
-                  <div className="text-xs text-muted-foreground">
-                    Ndjekja e fundit: {lead.lastFollowUpDate ? new Date(lead.lastFollowUpDate).toLocaleDateString() : 'Asnjëherë'}
-                  </div>
+                  {(() => {
+                    const nd = lead.nextFollowUpDate;
+                    if (!nd) return null;
+                    const d = nd instanceof Date ? new Date(nd) : new Date((nd as any)?.seconds ? (nd as any).seconds * 1000 : nd);
+                    const today = new Date(); today.setHours(0,0,0,0); d.setHours(0,0,0,0);
+                    const isOverdue = d < today;
+                    const isDueToday = d.getTime() === today.getTime();
+                    return (
+                      <div className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
+                        isOverdue ? 'bg-red-100 text-red-700' :
+                        isDueToday ? 'bg-amber-100 text-amber-700' :
+                        'bg-blue-100 text-blue-700'
+                      }`}>
+                        <Clock className="w-3 h-3" />
+                        {isOverdue ? `Vonuar · ${d.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}` :
+                         isDueToday ? 'Rikontakto sot' :
+                         d.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}
+                      </div>
+                    );
+                  })()}
                   {lead.assignedToUserId && (
                     <div className="flex items-center gap-1 text-xs text-muted-foreground">
                       <UserCircle className="w-3 h-3" />
@@ -789,7 +883,7 @@ const CRMView: React.FC = () => {
                       Prob.
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
-                      Ndjekja e fundit
+                      Rikontakto
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
                       Veprime
@@ -922,10 +1016,25 @@ const CRMView: React.FC = () => {
                           );
                         })()}
                       </td>
-                      <td className="px-6 py-4 text-body text-foreground">
-                        {lead.lastFollowUpDate 
-                          ? new Date(lead.lastFollowUpDate).toLocaleDateString()
-                          : 'Asnjëherë'}
+                      <td className="px-6 py-4">
+                        {(() => {
+                          const nd = lead.nextFollowUpDate;
+                          if (!nd) return <span className="text-xs text-muted-foreground">—</span>;
+                          const d = nd instanceof Date ? new Date(nd) : new Date((nd as any)?.seconds ? (nd as any).seconds * 1000 : nd);
+                          const today = new Date(); today.setHours(0,0,0,0); d.setHours(0,0,0,0);
+                          const isOverdue = d < today;
+                          const isDueToday = d.getTime() === today.getTime();
+                          return (
+                            <div className={`flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full w-fit ${
+                              isOverdue ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
+                              isDueToday ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
+                              'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                            }`}>
+                              <Clock className="w-3 h-3" />
+                              {isDueToday ? 'Sot' : d.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}
+                            </div>
+                          );
+                        })()}
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex gap-2">
@@ -1041,6 +1150,139 @@ const CRMView: React.FC = () => {
           </div>
         ) : undefined}
         extraTabs={selectedLead ? [
+          {
+            value: 'rikontakto',
+            label: (() => {
+              const nd = selectedLead.nextFollowUpDate;
+              if (!nd) return 'Rikontakto';
+              const d = nd instanceof Date ? nd : new Date((nd as any)?.seconds ? (nd as any).seconds * 1000 : nd);
+              const today = new Date(); today.setHours(0,0,0,0); d.setHours(0,0,0,0);
+              if (d < today) return '🔴 Rikontakto';
+              if (d.getTime() === today.getTime()) return '🟡 Rikontakto';
+              return '🔵 Rikontakto';
+            })(),
+            content: (() => {
+              const today = new Date(); today.setHours(0,0,0,0);
+              const nd = followUpDate ? new Date(followUpDate) : null;
+              if (nd) nd.setHours(0,0,0,0);
+              const isOverdue = nd && nd < today;
+              const isDueToday = nd && nd.getTime() === today.getTime();
+              const hasContact = selectedLead.phoneNumber || selectedLead.email;
+              return (
+                <div className="space-y-5">
+                  {/* ── Scheduled reminder ── */}
+                  <div className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Bell className="w-4 h-4 text-primary" />
+                      <p className="text-sm font-semibold">Kujtesë e Caktuar</p>
+                    </div>
+
+                    {nd && (
+                      <div className={`flex items-center gap-2 p-2.5 rounded-lg text-sm font-medium ${
+                        isOverdue ? 'bg-red-50 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-400' :
+                        isDueToday ? 'bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-900/20 dark:text-amber-400' :
+                        'bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-900/20 dark:text-blue-400'
+                      }`}>
+                        <Clock className="w-4 h-4 shrink-0" />
+                        <span>
+                          {isOverdue ? `Vonuar · ${nd.toLocaleDateString('sq-AL')}` :
+                           isDueToday ? 'Sot' :
+                           nd.toLocaleDateString('sq-AL', { weekday: 'short', day: 'numeric', month: 'short' })}
+                        </span>
+                        {followUpNote && <span className="text-xs font-normal opacity-80 ml-1 truncate">— {followUpNote}</span>}
+                      </div>
+                    )}
+
+                    <div className="space-y-2">
+                      <div>
+                        <Label className="text-xs text-muted-foreground">Data e Rikontaktimit</Label>
+                        <Input
+                          type="date"
+                          value={followUpDate}
+                          onChange={(e) => setFollowUpDate(e.target.value)}
+                          className="mt-1 text-sm"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs text-muted-foreground">Shënim (opsional)</Label>
+                        <Textarea
+                          value={followUpNote}
+                          onChange={(e) => setFollowUpNote(e.target.value)}
+                          placeholder="Diskuto çmimin, dërgo ofertën, kujto preferencat..."
+                          rows={2}
+                          className="mt-1 text-sm resize-none"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        <Button size="sm" onClick={handleSaveFollowUp} disabled={followUpSaving} className="flex-1">
+                          {followUpSaving ? 'Duke ruajtur...' : 'Ruaj Kujtesën'}
+                        </Button>
+                        {nd && (
+                          <Button
+                            size="sm" variant="outline"
+                            className="text-destructive hover:text-destructive border-destructive/30"
+                            onClick={async () => {
+                              await leadMutation.update(selectedLead.id, { nextFollowUpDate: null, followUpNote: null });
+                              setFollowUpDate(''); setFollowUpNote('');
+                              toast({ title: 'Kujtesë e fshirë' });
+                            }}
+                          >
+                            <X className="w-4 h-4" />
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* ── Send message now ── */}
+                  {hasContact && (
+                    <div className="border-t pt-4 space-y-3">
+                      <div className="flex items-center gap-2">
+                        <Send className="w-4 h-4 text-primary" />
+                        <p className="text-sm font-semibold">Dërgo Mesazh Tani</p>
+                      </div>
+                      <div>
+                        <Label className="text-xs text-muted-foreground">Mesazhi</Label>
+                        <Textarea
+                          value={recontactMsg}
+                          onChange={(e) => setRecontactMsg(e.target.value)}
+                          rows={4}
+                          className="mt-1 text-sm resize-none"
+                        />
+                      </div>
+                      <div className="flex gap-2">
+                        {selectedLead.phoneNumber && waEnabled && (
+                          <Button
+                            size="sm" variant="outline"
+                            className="flex-1 text-[#25D366] border-[#25D366]/30 hover:bg-[#25D366]/10"
+                            onClick={handleSendRecontactWhatsApp}
+                            disabled={sendingWa || !recontactMsg.trim()}
+                          >
+                            <MessageSquare className="w-4 h-4 mr-1.5" />
+                            {sendingWa ? 'Duke dërguar...' : 'WhatsApp'}
+                          </Button>
+                        )}
+                        {selectedLead.email && (
+                          <Button
+                            size="sm" variant="outline"
+                            className="flex-1"
+                            onClick={handleSendRecontactEmail}
+                            disabled={sendingEmail || !recontactMsg.trim()}
+                          >
+                            <Mail className="w-4 h-4 mr-1.5" />
+                            {sendingEmail ? 'Duke dërguar...' : 'Email'}
+                          </Button>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Pas dërgimit, data e "Ndjekjes së fundit" përditësohet automatikisht.
+                      </p>
+                    </div>
+                  )}
+                </div>
+              );
+            })(),
+          },
           {
             value: 'preventiva',
             label: `Preventiva (${(allQuotes || []).filter(q => q.leadId === selectedLead.id).length})`,
