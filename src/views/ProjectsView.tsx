@@ -424,7 +424,7 @@ const ProjectsView: React.FC = () => {
               <DialogHeader>
                 <DialogTitle>Krijo Projekt të Ri</DialogTitle>
               </DialogHeader>
-              <ProjectForm onSubmit={handleCreateProject} teams={teams || []} customers={customers || []} teamMembers={teamMembers || []} services={services || []} />
+              <ProjectForm key={isCreateDialogOpen ? 'open' : 'closed'} onSubmit={handleCreateProject} teams={teams || []} customers={customers || []} teamMembers={teamMembers || []} services={services || []} />
             </DialogContent>
           </Dialog>
         )}
@@ -778,6 +778,7 @@ const ProjectsView: React.FC = () => {
           </DialogHeader>
           {projectToEdit && (
             <ProjectForm
+              key={projectToEdit.id}
               onSubmit={handleEditProject}
               teams={teams || []}
               customers={customers || []}
@@ -808,6 +809,7 @@ const ProjectForm: React.FC<{
   const [recurringFrequency, setRecurringFrequency] = useState(initialData?.recurringFrequency || 'monthly');
   const [memberUserIds, setMemberUserIds] = useState<string[]>(initialData?.memberUserIds || []);
   const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
+  const [budgetInput, setBudgetInput] = useState(initialData?.budget ? String(initialData.budget) : '');
   const [serviceCategory, setServiceCategory] = useState<string>('__all__');
   const { getName } = useUserNames(teamMembers || []);
 
@@ -997,9 +999,8 @@ const ProjectForm: React.FC<{
           type="number"
           step="0.01"
           min="0"
-          value={serviceBudget !== null ? String(serviceBudget) : undefined}
-          defaultValue={serviceBudget !== null ? undefined : ((initialData as any)?.budget || '')}
-          onChange={() => {}}
+          value={serviceBudget !== null ? String(serviceBudget) : budgetInput}
+          onChange={serviceBudget !== null ? undefined : (e) => setBudgetInput(e.target.value)}
           placeholder="0.00"
           readOnly={serviceBudget !== null}
           className={serviceBudget !== null ? 'bg-muted cursor-not-allowed' : ''}

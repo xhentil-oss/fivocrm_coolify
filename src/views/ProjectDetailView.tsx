@@ -6,6 +6,8 @@ import { CSS } from '@dnd-kit/utilities';
 import { getStatusColor } from '../lib/statusColors';
 import { useCollection, useMutation, useDocument } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
+import { usePermissions } from '../contexts/PermissionsContext';
+import { useToast } from '../hooks/use-toast';
 import { ArrowLeft, Plus, LayoutGrid, List, Calendar as CalendarIcon, Users, Settings, MoreVertical, Upload, Download, Trash2, FileText, MessageSquare, CheckSquare, Filter, Search } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -34,12 +36,15 @@ const ProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
-  
+  const permissions = usePermissions();
+  const { toast } = useToast();
+
   const [viewMode, setViewMode] = useState<'list' | 'board' | 'calendar'>('list');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isCreateTaskOpen, setIsCreateTaskOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [deletingProject, setDeletingProject] = useState(false);
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
@@ -290,12 +295,11 @@ const ProjectDetailView: React.FC = () => {
     // Use allTasks (unfiltered) so drag works even when filters are active
     const allTasksFlat = allTasks || [];
     const targetStatus = columns.find(c => c.status === overId)?.status
-      || columns.find(c => allTasksFlat.filter(t => t.status === c.status).some(t => t.id === overId))?.status;
-    if (targetStatus) {
-      const task = allTasksFlat.find(t => t.id === taskId);
-      if (task && task.status !== targetStatus) {
-        await handleTaskUpdate(taskId, { status: targetStatus });
-      }
+      ?? columns.find(c => allTasksFlat.filter(t => t.status === c.status).some(t => t.id === overId))?.status;
+    if (!targetStatus) return;
+    const task = allTasksFlat.find(t => t.id === taskId);
+    if (task && task.status !== targetStatus) {
+      await handleTaskUpdate(taskId, { status: targetStatus });
     }
   };
 
@@ -370,15 +374,15 @@ const ProjectDetailView: React.FC = () => {
                 <Settings className="w-4 h-4 mr-2" />
                 Cilësimet
               </DropdownMenuItem>
-              <DropdownMenuItem
-                className="text-error"
-                onClick={async () => {
-                  setShowDeleteConfirm(true);
-                }}
-              >
-                <Trash2 className="w-4 h-4 mr-2" />
-                Fshi Projektin
-              </DropdownMenuItem>
+              {permissions.canEdit && (
+                <DropdownMenuItem
+                  className="text-error"
+                  onClick={() => setShowDeleteConfirm(true)}
+                >
+                  <Trash2 className="w-4 h-4 mr-2" />
+                  Fshi Projektin
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -648,8 +652,25 @@ const ProjectDetailView: React.FC = () => {
           <DialogHeader><DialogTitle>Fshi Projektin</DialogTitle></DialogHeader>
           <p className="text-sm text-muted-foreground">Jeni i sigurt që dëshironi të fshini këtë projekt? Ky veprim nuk mund të zhbëhet.</p>
           <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setShowDeleteConfirm(false)}>Anulo</Button>
-            <Button variant="destructive" onClick={async () => { setShowDeleteConfirm(false); await projectMutation.remove(projectId!); navigate('/app/projects'); }}>Fshi</Button>
+            <Button variant="outline" disabled={deletingProject} onClick={() => setShowDeleteConfirm(false)}>Anulo</Button>
+            <Button
+              variant="destructive"
+              disabled={deletingProject}
+              onClick={async () => {
+                if (!projectId) return;
+                setDeletingProject(true);
+                try {
+                  await projectMutation.remove(projectId);
+                  navigate('/app/projects');
+                } catch {
+                  setDeletingProject(false);
+                  setShowDeleteConfirm(false);
+                  toast({ title: 'Gabim', description: 'Projekti nuk u fshi. Provo sërish.', variant: 'destructive' });
+                }
+              }}
+            >
+              {deletingProject ? 'Duke fshirë...' : 'Fshi'}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
