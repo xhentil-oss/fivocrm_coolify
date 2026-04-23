@@ -397,7 +397,7 @@ export function usePermissions(): UserPermissions {
         canAccessTimeTracking: true,
         canEdit: true,
         canComment: true,
-        canAssignTasks: false,
+        canAssignTasks: true,
         canManageMembers: false,
         role: membership.role,
         dataScope: 'assigned',
