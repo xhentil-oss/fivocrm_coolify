@@ -520,7 +520,14 @@ const TasksView: React.FC = () => {
                   <DialogHeader>
                     <DialogTitle>Krijo Detyrë të Re</DialogTitle>
                   </DialogHeader>
-                  <TaskForm onSubmit={handleCreateTask} projects={projects || []} allTasks={tasks} />
+                  <TaskForm
+                    onSubmit={handleCreateTask}
+                    projects={projects || []}
+                    allTasks={tasks}
+                    teamMembers={teamMembers?.filter((m: any) => m.teamId === permissions.teamId) || []}
+                    canAssignTasks={permissions.canAssignTasks}
+                    currentUserId={user?.uid || ''}
+                  />
                 </DialogContent>
               </Dialog>
             )}
@@ -989,7 +996,10 @@ const TaskForm: React.FC<{
   projects: Project[];
   initialData?: Task;
   allTasks?: Task[];
-}> = ({ onSubmit, projects, initialData, allTasks = [] }) => {
+  teamMembers?: any[];
+  canAssignTasks?: boolean;
+  currentUserId?: string;
+}> = ({ onSubmit, projects, initialData, allTasks = [], teamMembers = [], canAssignTasks = false, currentUserId = '' }) => {
   const [startDate, setStartDate] = useState<Date | undefined>(
     initialData?.startDate ? new Date(initialData.startDate) : new Date()
   );
@@ -1140,16 +1150,31 @@ const TaskForm: React.FC<{
 
       <div>
         <Label htmlFor="assignedToUserId">Cakto te</Label>
-        <Input 
-          id="assignedToUserId" 
-          name="assignedToUserId" 
-          required 
-          defaultValue={initialData?.assignedToUserId || (typeof window !== 'undefined' ? (window as any).__CURRENT_USER_ID__ : '')} 
-          placeholder="User ID (lër bosh për veten)"
-        />
-        <p className="text-xs text-muted-foreground mt-1">
-          Lër bosh për ta caktuar vetes
-        </p>
+        {canAssignTasks ? (
+          <Select name="assignedToUserId" defaultValue={initialData?.assignedToUserId || currentUserId}>
+            <SelectTrigger id="assignedToUserId">
+              <SelectValue placeholder="Zgjidh anëtarin" />
+            </SelectTrigger>
+            <SelectContent>
+              {teamMembers.map((m: any) => (
+                <SelectItem key={m.userId} value={m.userId}>
+                  {m.displayName || m.email?.split('@')[0] || m.userId}
+                  {m.userId === currentUserId ? ' (ti)' : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        ) : (
+          <>
+            <input type="hidden" name="assignedToUserId" value={currentUserId} />
+            <div className="flex items-center h-9 px-3 rounded-md border bg-muted text-sm text-muted-foreground">
+              {teamMembers.find((m: any) => m.userId === currentUserId)?.displayName ||
+               teamMembers.find((m: any) => m.userId === currentUserId)?.email?.split('@')[0] ||
+               'Ti'} <span className="ml-1 text-xs">(vetëm ti)</span>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">Vetëm Admin/Manager mund të caktojnë te anëtarë të tjerë.</p>
+          </>
+        )}
       </div>
 
       <div>
