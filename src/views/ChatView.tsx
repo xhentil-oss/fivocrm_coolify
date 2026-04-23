@@ -906,7 +906,7 @@ const ChatView: React.FC = () => {
   return (
     <div className="flex h-[calc(100dvh-64px)] bg-background overflow-hidden">
       {/* SIDEBAR */}
-      <aside className={`w-72 border-r bg-muted/5 flex flex-col flex-shrink-0 transition-all ${showSidebar ? 'flex' : 'hidden lg:flex'}`}>
+      <aside className={`w-full lg:w-72 border-r bg-muted/5 flex flex-col flex-shrink-0 transition-all ${showSidebar ? 'flex' : 'hidden lg:flex'}`}>
         {/* Sidebar header */}
         <div className="px-4 py-3 border-b flex items-center justify-between">
           <h2 className="font-semibold text-sm">Mesazhe</h2>
@@ -1450,7 +1450,7 @@ const ChatView: React.FC = () => {
                     })();
                     return (
                       <div key={msg.id} className={`flex ${isOut ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[70%] px-3.5 py-2 rounded-2xl shadow-sm text-sm leading-relaxed ${
+                        <div className={`max-w-[85%] sm:max-w-[70%] px-3.5 py-2 rounded-2xl shadow-sm text-sm leading-relaxed ${
                           isOut
                             ? 'bg-[#d9fdd3] dark:bg-[#25D366]/25 text-foreground rounded-tr-none'
                             : 'bg-white dark:bg-card text-foreground rounded-tl-none'
@@ -1469,7 +1469,7 @@ const ChatView: React.FC = () => {
             </div>
 
             {activeWaPhone && (
-              <div className="px-4 pt-2 pb-3 border-t bg-background">
+              <div className="px-4 pt-2 border-t bg-background" style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom, 12px))' }}>
                 <div className="flex items-end gap-2">
                   <textarea
                     value={waText}
@@ -1481,7 +1481,7 @@ const ChatView: React.FC = () => {
                     onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendWa(); } }}
                     placeholder="Shkruaj mesazhin..."
                     rows={1}
-                    className="flex-1 resize-none px-3 py-2.5 bg-muted rounded-2xl text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[#25D366]/40 overflow-y-auto"
+                    className="flex-1 resize-none px-3 py-2.5 bg-muted rounded-2xl text-[16px] sm:text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[#25D366]/40 overflow-y-auto"
                     style={{ minHeight: '42px', maxHeight: '112px' }}
                   />
                   <Button
@@ -1537,7 +1537,7 @@ const ChatView: React.FC = () => {
                               </div>
                             )}
 
-                            <div className={`max-w-[70%] sm:max-w-[55%] flex flex-col ${isOwn ? 'items-end' : 'items-start'}`}>
+                            <div className={`max-w-[85%] sm:max-w-[70%] flex flex-col ${isOwn ? 'items-end' : 'items-start'}`}>
                               {/* Sender name */}
                               {!isOwn && !sameSender && (
                                 <div className="flex items-center gap-1.5 mb-1 ml-1">
@@ -1593,9 +1593,20 @@ const ChatView: React.FC = () => {
                                   </a>
                                 )}
 
+                                {/* Time inside bubble — WhatsApp style */}
+                                {!isEditing && (
+                                  <div className={`flex items-center gap-1 mt-1.5 ${isOwn ? 'justify-end' : 'justify-start'}`}>
+                                    <span className={`text-[10px] flex items-center gap-1 ${isOwn ? 'text-primary-foreground/55' : 'text-muted-foreground/50'}`}>
+                                      {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                                      {(message as any).editedAt && <span className="opacity-80"> · ndryshuar</span>}
+                                      {isOwn && <Check className="h-2.5 w-2.5 opacity-70" />}
+                                    </span>
+                                  </div>
+                                )}
+
                                 {/* Hover actions */}
                                 {!isDeleted && !isEditing && (
-                                  <div className={`absolute -top-3.5 ${isOwn ? 'left-1' : 'right-1'} opacity-0 group-hover:opacity-100 transition-all flex items-center bg-background border rounded-xl shadow-lg px-1 py-0.5 z-10 gap-0.5`}>
+                                  <div className={`absolute -top-3.5 ${isOwn ? 'left-1' : 'right-1'} opacity-0 group-hover:opacity-100 active:opacity-100 transition-all flex items-center bg-background border rounded-xl shadow-lg px-1 py-0.5 z-10 gap-0.5`}>
                                     <div className="relative">
                                       <button className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors"
                                         onClick={() => setShowEmojiPicker(showEmojiPicker === message.id ? null : message.id)}>
@@ -1640,12 +1651,7 @@ const ChatView: React.FC = () => {
                                 </div>
                               )}
 
-                              {/* Time */}
-                              <span className={`text-[10px] text-muted-foreground/40 mt-1 px-1 flex items-center gap-1 ${isOwn ? 'flex-row-reverse' : ''}`}>
-                                {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                {(message as any).editedAt && <span className="opacity-60"> · ndryshuar</span>}
-                                {isOwn && <Check className="h-2.5 w-2.5 opacity-50" />}
-                              </span>
+
                             </div>
                           </div>
                         </React.Fragment>
@@ -1691,7 +1697,7 @@ const ChatView: React.FC = () => {
             )}
 
             {/* Message Input */}
-            <div className="px-5 pt-2 pb-3 border-t bg-background">
+            <div className="px-4 pt-2 border-t bg-background" style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom, 12px))' }}>
               {showAttachmentInput && (
                 <div className="flex gap-2 items-center px-3 py-1.5 mb-2 bg-muted/30 rounded-xl border">
                   <Paperclip className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
@@ -1720,7 +1726,7 @@ const ChatView: React.FC = () => {
                     placeholder={`Shkruaj${chatMode === 'channel' ? ` në #${CHANNELS.find(c => c.id === activeChannel)?.name || activeChannel}` : ` te ${getUserDisplayName(activeDirectUserId || '')}`}...`}
                     disabled={isSending}
                     rows={1}
-                    className="flex-1 min-w-0 bg-transparent border-0 outline-none text-sm resize-none py-1.5 placeholder:text-muted-foreground/40 max-h-[120px]"
+                    className="flex-1 min-w-0 bg-transparent border-0 outline-none text-[16px] sm:text-sm resize-none py-1.5 placeholder:text-muted-foreground/40 max-h-[120px]"
                   />
 
                   <Button
@@ -1735,7 +1741,7 @@ const ChatView: React.FC = () => {
                   </Button>
                 </div>
               </form>
-              <div className="flex items-center justify-between mt-1.5 px-1">
+              <div className="hidden sm:flex items-center justify-between mt-1.5 px-1">
                 <p className="text-[10px] text-muted-foreground/30">Enter dërgon · Shift+Enter rresht i ri</p>
                 <button className="text-[10px] text-muted-foreground/30 hover:text-primary transition-colors flex items-center gap-1">
                   <Link2 className="h-2.5 w-2.5" /> Lidh me task
