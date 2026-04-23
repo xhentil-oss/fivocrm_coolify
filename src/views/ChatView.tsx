@@ -97,42 +97,6 @@ const ChatView: React.FC = () => {
   const prevSeenMsgIdsRef = useRef<Set<string>>(new Set());
   const isInitialMsgLoadRef = useRef(true);
 
-  const playZenSound = useCallback(() => {
-    try {
-      const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
-      if (!Ctx) return;
-      if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
-        audioCtxRef.current = new Ctx();
-      }
-      const ctx = audioCtxRef.current;
-      if (ctx.state === 'suspended') ctx.resume();
-      const now = ctx.currentTime;
-
-      const bowl = (freq: number, delay: number, duration: number, vol: number) => {
-        const osc = ctx.createOscillator();
-        const gain = ctx.createGain();
-        osc.connect(gain);
-        gain.connect(ctx.destination);
-        osc.type = 'sine';
-        osc.frequency.setValueAtTime(freq, now + delay);
-        gain.gain.setValueAtTime(0, now + delay);
-        gain.gain.linearRampToValueAtTime(vol, now + delay + 0.02);
-        gain.gain.exponentialRampToValueAtTime(0.001, now + delay + duration);
-        osc.start(now + delay);
-        osc.stop(now + delay + duration);
-      };
-
-      // Tibetan bowl — fundamental + overtone
-      bowl(396, 0,    2.8, 0.13);
-      bowl(792, 0,    2.2, 0.05);
-      // Soft second chime after a moment
-      bowl(528, 0.55, 2.4, 0.09);
-      bowl(1056, 0.55, 1.8, 0.03);
-    } catch {
-      // Audio not supported — silently ignore
-    }
-  }, []);
-
   const playBirdChirp = useCallback(() => {
     try {
       const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
@@ -645,7 +609,6 @@ const ChatView: React.FC = () => {
       const channelOrDm = chatMode === 'channel' ? activeChannel : `dm-${activeDirectUserId}`;
       const ex = typingIndicators?.find((t: any) => t.userId === user.uid && t.channelId === channelOrDm);
       if (ex) typingMutation.remove(ex.id).catch(() => {});
-      playZenSound();
     } catch (err) {
       toast({ title: 'Dërgimi dështoi', description: err instanceof Error ? err.message : 'Gabim', variant: 'destructive' });
     }
@@ -1501,7 +1464,7 @@ const ChatView: React.FC = () => {
           /* Regular Chat Area */
           <>
             <ScrollArea className="flex-1" ref={scrollRef}>
-              <div className="px-5 py-4 space-y-0">
+              <div className="px-2 sm:px-5 py-3 sm:py-4 space-y-0">
                 {filteredMessages.length > 0 ? (
                   (() => {
                     let lastDateKey = '';
@@ -1525,15 +1488,15 @@ const ChatView: React.FC = () => {
                               <div className="flex-1 h-px bg-border/50" />
                             </div>
                           )}
-                          <div className={`flex group ${isOwn ? 'justify-end' : 'justify-start'} ${sameSender ? 'mt-0.5' : 'mt-4'}`}>
-                            {/* Avatar */}
+                          <div className={`flex group ${isOwn ? 'justify-end' : 'justify-start'} ${sameSender ? 'mt-0.5' : 'mt-3'}`}>
+                            {/* Avatar — hidden on small screens to save space */}
                             {!isOwn && (
-                              <div className="flex-shrink-0 mr-2.5 self-end mb-5">
+                              <div className="hidden sm:flex flex-shrink-0 mr-2 self-end mb-5">
                                 {!sameSender ? (
-                                  <div className={`h-8 w-8 rounded-xl ${getAvatarColor(message.senderId)} flex items-center justify-center shadow-sm`}>
-                                    <span className="text-[10px] font-bold text-white">{senderName.slice(0, 2).toUpperCase()}</span>
+                                  <div className={`h-7 w-7 rounded-xl ${getAvatarColor(message.senderId)} flex items-center justify-center shadow-sm`}>
+                                    <span className="text-[9px] font-bold text-white">{senderName.slice(0, 2).toUpperCase()}</span>
                                   </div>
-                                ) : <div className="w-8" />}
+                                ) : <div className="w-7" />}
                               </div>
                             )}
 
@@ -1604,7 +1567,7 @@ const ChatView: React.FC = () => {
                                   </div>
                                 )}
 
-                                {/* Hover actions */}
+                                {/* Hover actions — desktop hover, mobile long-press hint */}
                                 {!isDeleted && !isEditing && (
                                   <div className={`absolute -top-3.5 ${isOwn ? 'left-1' : 'right-1'} opacity-0 group-hover:opacity-100 active:opacity-100 transition-all flex items-center bg-background border rounded-xl shadow-lg px-1 py-0.5 z-10 gap-0.5`}>
                                     <div className="relative">
@@ -1636,6 +1599,39 @@ const ChatView: React.FC = () => {
                                   </div>
                                 )}
                               </div>
+
+                              {/* Mobile-visible quick actions row */}
+                              {!isDeleted && !isEditing && (
+                                <div className={`flex sm:hidden items-center gap-1 mt-1 ${isOwn ? 'justify-end' : 'justify-start'}`}>
+                                  <button
+                                    className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-foreground active:text-foreground"
+                                    onClick={() => setReplyingTo(message)}
+                                  >
+                                    <Reply className="h-3.5 w-3.5" />
+                                  </button>
+                                  <button
+                                    className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-foreground active:text-foreground"
+                                    onClick={() => setShowEmojiPicker(showEmojiPicker === message.id ? null : message.id)}
+                                  >
+                                    <SmilePlus className="h-3.5 w-3.5" />
+                                  </button>
+                                  {showEmojiPicker === message.id && (
+                                    <div className={`absolute bottom-full ${isOwn ? 'right-0' : 'left-0'} mb-1 flex gap-1 bg-popover border rounded-xl shadow-lg px-2 py-2 z-50`}>
+                                      {EMOJI_REACTIONS.map(emoji => (
+                                        <button key={emoji} onClick={() => handleReaction(message.id, emoji)} className="text-lg p-0.5">{emoji}</button>
+                                      ))}
+                                    </div>
+                                  )}
+                                  {isOwn && (
+                                    <button
+                                      className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-destructive active:text-destructive"
+                                      onClick={() => handleDeleteMessage(message.id)}
+                                    >
+                                      <Trash2 className="h-3.5 w-3.5" />
+                                    </button>
+                                  )}
+                                </div>
+                              )}
 
                               {/* Reactions */}
                               {(message as any).reactions && Object.keys((message as any).reactions).length > 0 && (
@@ -1674,7 +1670,7 @@ const ChatView: React.FC = () => {
 
             {/* Typing indicator */}
             {activeTypingUsers.length > 0 && (
-              <div className="px-5 py-1.5 text-xs text-muted-foreground flex items-center gap-2 border-t bg-muted/10">
+              <div className="px-3 sm:px-5 py-1.5 text-xs text-muted-foreground flex items-center gap-2 border-t bg-muted/10">
                 <span className="flex gap-0.5">
                   <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:-0.3s]" />
                   <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:-0.15s]" />
@@ -1686,7 +1682,7 @@ const ChatView: React.FC = () => {
 
             {/* Reply preview */}
             {replyingTo && (
-              <div className="mx-5 mb-1 flex items-center gap-2 px-3 py-2 bg-muted/30 rounded-xl border-l-2 border-primary">
+              <div className="mx-3 mb-1 flex items-center gap-2 px-3 py-2 bg-muted/30 rounded-xl border-l-2 border-primary">
                 <Reply className="h-3 w-3 text-primary flex-shrink-0" />
                 <div className="flex-1 min-w-0">
                   <span className="text-[10px] font-semibold text-primary">{getUserDisplayName(replyingTo.senderId)}</span>
@@ -1732,7 +1728,7 @@ const ChatView: React.FC = () => {
                   <Button
                     type="submit"
                     size="icon"
-                    className={`h-8 w-8 rounded-xl flex-shrink-0 mb-0.5 transition-all ${
+                    className={`h-9 w-9 rounded-full flex-shrink-0 mb-0.5 transition-all ${
                       messageText.trim() || attachmentUrl.trim() ? 'bg-primary text-primary-foreground shadow-sm hover:bg-primary/90' : 'bg-transparent text-muted-foreground/30'
                     }`}
                     disabled={isSending || (!messageText.trim() && !attachmentUrl.trim()) || (chatMode === 'direct' && !activeDirectUserId)}
