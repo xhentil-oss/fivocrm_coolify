@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
+import { useFileUpload } from '../hooks/useFileUpload';
+import { usePermissions } from '../hooks/usePermissions';
 import { User, Briefcase, MapPin, Phone, Mail, Award, Edit, Save, X, Users, ChevronDown, Check, FlaskConical, Camera } from 'lucide-react';
 import { phoneKeyDown } from '../lib/utils';
 import { Card } from '../components/ui/card';
@@ -67,11 +69,14 @@ interface UserProfileViewProps {
 
 const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
   const { user: currentUser } = useAuth();
+  const { isAdmin, isOwner, isManager } = usePermissions();
+  const canUseDemoMode = isAdmin || isOwner || isManager;
   const [isEditing, setIsEditing] = useState(false);
   const [skills, setSkills] = useState<string[]>([]);
   const [newSkill, setNewSkill] = useState('');
   const avatarInputRef = useRef<HTMLInputElement>(null);
-  
+  const { upload: uploadFile, uploading: avatarUploading } = useFileUpload();
+
   // Demo mode state
   const [isDemoMode, setIsDemoMode] = useState(false);
   const [selectedDemoProfile, setSelectedDemoProfile] = useState(DEMO_PROFILES[0]);
@@ -168,24 +173,24 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
   const handleAvatarUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file || !targetUserId) return;
-    if (file.size > 500 * 1024) {
-      alert('Foto duhet të jetë më e vogël se 500KB');
+    if (file.size > 5 * 1024 * 1024) {
+      alert('Foto duhet të jetë më e vogël se 5MB');
       return;
     }
     if (!file.type.startsWith('image/')) {
       alert('Vetëm skedarë imazhi lejohen');
       return;
     }
-    const reader = new FileReader();
-    reader.onload = async () => {
-      const base64 = reader.result as string;
+    try {
+      const result = await uploadFile(file, 'avatars');
       if (profile) {
-        await profileMutation.update(profile.id, { avatarUrl: base64 });
+        await profileMutation.update(profile.id, { avatarUrl: result.url });
       } else {
-        await profileMutation.create({ userId: targetUserId, avatarUrl: base64 });
+        await profileMutation.create({ userId: targetUserId, avatarUrl: result.url });
       }
-    };
-    reader.readAsDataURL(file);
+    } catch {
+      alert('Gabim gjatë ngarkimit të fotos. Provo përsëri.');
+    }
   };
 
   const isOwnProfile = !userId || userId === currentUser?.uid;
@@ -224,7 +229,8 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
           </p>
         </div>
         <div className="flex items-center gap-3">
-          {/* Demo Mode Toggle */}
+          {/* Demo Mode Toggle — only for Admin/Owner/Manager */}
+          {canUseDemoMode && (
           <div className="flex items-center gap-2 px-3 py-2 bg-muted rounded-lg">
             <FlaskConical className="w-4 h-4 text-muted-foreground" />
             <span className="text-sm font-medium">Demo Mode</span>
@@ -233,6 +239,7 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
               onCheckedChange={setIsDemoMode}
             />
           </div>
+          )}
 
           {/* Demo Profile Selector */}
           {isDemoMode && (
@@ -303,10 +310,14 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
                 {isOwnProfile && !isDemoMode && (
                   <>
                     <button
-                      onClick={() => avatarInputRef.current?.click()}
+                      onClick={() => !avatarUploading && avatarInputRef.current?.click()}
                       className="absolute inset-0 rounded-full bg-black/40 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                      disabled={avatarUploading}
                     >
-                      <Camera className="w-6 h-6 text-white" />
+                      {avatarUploading
+                        ? <span className="text-white text-xs">Duke ngarkuar...</span>
+                        : <Camera className="w-6 h-6 text-white" />
+                      }
                     </button>
                     <input
                       ref={avatarInputRef}
@@ -588,7 +599,7 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
                       <Badge>{task.status}</Badge>
                     </div>
                     <div className="flex items-center gap-4 mt-3 text-sm text-muted-foreground">
-                      <span>Afati: {new Date(task.endDate).toLocaleDateString()}</span>
+                      {task.endDate && <span>Afati: {new Date((task.endDate as any)?.toDate?.() ?? task.endDate).toLocaleDateString()}</span>}
                       {task.priority && <Badge variant="secondary">{task.priority}</Badge>}
                     </div>
                   </div>

@@ -68,6 +68,7 @@ const TeamsView: React.FC = () => {
   const [editingMember, setEditingMember] = useState<TeamMember | null>(null);
   const [isEditMemberDialogOpen, setIsEditMemberDialogOpen] = useState(false);
   const [memberToDelete, setMemberToDelete] = useState<TeamMember | null>(null);
+  const [teamToDelete, setTeamToDelete] = useState<Team | null>(null);
 
   const { data: teams, loading: teamsLoading } = useCollection<Team>('teams', {
     orderBy: { field: 'createdAt', direction: 'desc' }
@@ -320,8 +321,8 @@ const TeamsView: React.FC = () => {
         await Promise.all(invitesSnap.docs.map(d => deleteDoc(doc(db, 'teamInvites', d.id))));
       }
 
-      // Cascade: remove userId from memberUserIds in all projects
-      const projectsSnap = await getDocs(query(collection(db, 'projects')));
+      // Cascade: remove userId from memberUserIds in this team's projects only
+      const projectsSnap = await getDocs(query(collection(db, 'projects'), where('teamId', '==', member.teamId)));
       await Promise.all(
         projectsSnap.docs
           .filter(d => ((d.data().memberUserIds as string[]) || []).includes(member.userId))
@@ -528,21 +529,7 @@ const TeamsView: React.FC = () => {
                           <Edit2 className="w-4 h-4 mr-2" />
                           Ndrysho Emrin
                         </DropdownMenuItem>
-                        <DropdownMenuItem className="text-error" onClick={async () => {
-                          if (confirm('Je i sigurt që dëshiron të fshish këtë ekip? Të gjithë anëtarët dhe ftesat do të fshihen gjithashtu.')) {
-                            await teamMutation.remove(team.id);
-                            // Cascade: delete all teamMembers and teamInvites for this team
-                            const [membersSnap, invitesSnap] = await Promise.all([
-                              getDocs(query(collection(db, 'teamMembers'), where('teamId', '==', team.id))),
-                              getDocs(query(collection(db, 'teamInvites'), where('teamId', '==', team.id))),
-                            ]);
-                            await Promise.all([
-                              ...membersSnap.docs.map(d => deleteDoc(doc(db, 'teamMembers', d.id))),
-                              ...invitesSnap.docs.map(d => deleteDoc(doc(db, 'teamInvites', d.id))),
-                            ]);
-                            toast({ title: 'Ekipi u fshi!', description: 'Anëtarët dhe ftesat u fshinë gjithashtu.' });
-                          }
-                        }}>
+                        <DropdownMenuItem className="text-error" onClick={() => setTeamToDelete(team)}>
                           <Trash2 className="w-4 h-4 mr-2" />
                           Fshi
                         </DropdownMenuItem>
@@ -639,6 +626,40 @@ const TeamsView: React.FC = () => {
               onClick={() => memberToDelete && handleRemoveMember(memberToDelete)}
             >
               Hiq
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Confirm Delete Team Dialog */}
+      <Dialog open={!!teamToDelete} onOpenChange={(open) => { if (!open) setTeamToDelete(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Fshi Ekipin</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Je i sigurt që dëshiron të fshish ekipin <span className="font-semibold text-foreground">{teamToDelete?.name}</span>? Të gjithë anëtarët dhe ftesat do të fshihen gjithashtu. Ky veprim nuk mund të zhbëhet.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setTeamToDelete(null)}>Anulo</Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                if (!teamToDelete) return;
+                await teamMutation.remove(teamToDelete.id);
+                const [membersSnap, invitesSnap] = await Promise.all([
+                  getDocs(query(collection(db, 'teamMembers'), where('teamId', '==', teamToDelete.id))),
+                  getDocs(query(collection(db, 'teamInvites'), where('teamId', '==', teamToDelete.id))),
+                ]);
+                await Promise.all([
+                  ...membersSnap.docs.map(d => deleteDoc(doc(db, 'teamMembers', d.id))),
+                  ...invitesSnap.docs.map(d => deleteDoc(doc(db, 'teamInvites', d.id))),
+                ]);
+                toast({ title: 'Ekipi u fshi!', description: 'Anëtarët dhe ftesat u fshinë gjithashtu.' });
+                setTeamToDelete(null);
+              }}
+            >
+              Fshi
             </Button>
           </div>
         </DialogContent>
@@ -839,7 +860,8 @@ const AddMemberForm: React.FC<{
                 Admin - Akses i plotë në gjithçka
               </div>
             </SelectItem>
-            <SelectItem value="Sales">Sales - Ekipi i shitjes (Klientë & CRM)</SelectItem>
+            <SelectItem value="Sales">Sales - Ekipi i shitjes (Klientë &amp; CRM)</SelectItem>
+            <SelectItem value="SalesAgent">SalesAgent - Agjent shitje (vetëm të vetat)</SelectItem>
             <SelectItem value="Manager">Manager - Menaxhon ekipin dhe projektet</SelectItem>
             <SelectItem value="Member">Member - Akses standard</SelectItem>
             <SelectItem value="Viewer">Viewer - Vetëm lexim</SelectItem>
@@ -1004,8 +1026,11 @@ const EditMemberForm: React.FC<{
     });
   };
 
-  // Auto-adjust permissions when role changes
+  const isFirstRender = React.useRef(true);
+
+  // Auto-adjust permissions when role changes — skip on initial mount (preserve existing values)
   React.useEffect(() => {
+    if (isFirstRender.current) { isFirstRender.current = false; return; }
     if (role === 'Admin') {
       // Admin gets everything
       setCanAccessProjects(true);

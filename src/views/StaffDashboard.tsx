@@ -58,8 +58,10 @@ function calculateStreak(activities: (Activity & { id: string })[], userId: stri
   // Get unique days with activity
   const activeDays = new Set<string>();
   userActivities.forEach(a => {
-    const d = a.createdAt instanceof Date ? a.createdAt : new Date(a.createdAt);
-    activeDays.add(d.toISOString().split('T')[0]);
+    const d = (a.createdAt as any)?.toDate?.() instanceof Date
+      ? (a.createdAt as any).toDate()
+      : (a.createdAt instanceof Date ? a.createdAt : new Date(a.createdAt as any));
+    activeDays.add(d.toLocaleDateString('sv'));
   });
 
   let streak = 0;
@@ -67,7 +69,7 @@ function calculateStreak(activities: (Activity & { id: string })[], userId: stri
 
   // Count consecutive days backward from today
   while (true) {
-    const key = checkDate.toISOString().split('T')[0];
+    const key = checkDate.toLocaleDateString('sv');
     if (activeDays.has(key)) {
       streak++;
       checkDate.setDate(checkDate.getDate() - 1);
@@ -167,12 +169,12 @@ const StaffDashboard: React.FC = () => {
 
   const myDueToday = useMemo(() => {
     const now = new Date();
-    const todayStr = now.toISOString().split('T')[0];
+    const todayStr = now.toLocaleDateString('sv');
     return myTasks.filter(t => {
       const due = t.endDate || t.dueDate;
       if (!due) return false;
-      const d = due instanceof Date ? due : new Date(due);
-      return d.toISOString().split('T')[0] === todayStr;
+      const d = (due as any)?.toDate?.() instanceof Date ? (due as any).toDate() : (due instanceof Date ? due : new Date(due as any));
+      return d.toLocaleDateString('sv') === todayStr;
     });
   }, [myTasks]);
 
@@ -310,7 +312,7 @@ const StaffDashboard: React.FC = () => {
 
   const todayReportSubmitted = useMemo(() => {
     if (!dailyReports || !user) return false;
-    const todayStr = new Date().toISOString().split('T')[0];
+    const todayStr = new Date().toLocaleDateString('sv');
     return dailyReports.some(r => r.userId === user.uid && r.date === todayStr);
   }, [dailyReports, user]);
 
