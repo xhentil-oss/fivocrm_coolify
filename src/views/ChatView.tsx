@@ -93,6 +93,81 @@ const ChatView: React.FC = () => {
   const prevMessageCountRef = useRef(0);
   const markedAsReadRef = useRef<Set<string>>(new Set());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const prevSeenMsgIdsRef = useRef<Set<string>>(new Set());
+  const isInitialMsgLoadRef = useRef(true);
+
+  const playZenSound = useCallback(() => {
+    try {
+      const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
+      if (!Ctx) return;
+      if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
+        audioCtxRef.current = new Ctx();
+      }
+      const ctx = audioCtxRef.current;
+      if (ctx.state === 'suspended') ctx.resume();
+      const now = ctx.currentTime;
+
+      const bowl = (freq: number, delay: number, duration: number, vol: number) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(freq, now + delay);
+        gain.gain.setValueAtTime(0, now + delay);
+        gain.gain.linearRampToValueAtTime(vol, now + delay + 0.02);
+        gain.gain.exponentialRampToValueAtTime(0.001, now + delay + duration);
+        osc.start(now + delay);
+        osc.stop(now + delay + duration);
+      };
+
+      // Tibetan bowl — fundamental + overtone
+      bowl(396, 0,    2.8, 0.13);
+      bowl(792, 0,    2.2, 0.05);
+      // Soft second chime after a moment
+      bowl(528, 0.55, 2.4, 0.09);
+      bowl(1056, 0.55, 1.8, 0.03);
+    } catch {
+      // Audio not supported — silently ignore
+    }
+  }, []);
+
+  const playBirdChirp = useCallback(() => {
+    try {
+      const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
+      if (!Ctx) return;
+      if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
+        audioCtxRef.current = new Ctx();
+      }
+      const ctx = audioCtxRef.current;
+      if (ctx.state === 'suspended') ctx.resume();
+
+      const chirp = (t: number) => {
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.type = 'sine';
+        // Soft frequency sweep — bird chirp feel
+        osc.frequency.setValueAtTime(2200, t);
+        osc.frequency.exponentialRampToValueAtTime(3800, t + 0.07);
+        osc.frequency.exponentialRampToValueAtTime(2600, t + 0.15);
+        gain.gain.setValueAtTime(0, t);
+        gain.gain.linearRampToValueAtTime(0.16, t + 0.02);
+        gain.gain.setValueAtTime(0.16, t + 0.10);
+        gain.gain.linearRampToValueAtTime(0, t + 0.15);
+        osc.start(t);
+        osc.stop(t + 0.15);
+      };
+
+      const now = ctx.currentTime;
+      chirp(now);
+      chirp(now + 0.28);
+    } catch {
+      // Audio not supported — silently ignore
+    }
+  }, []);
 
   // AI state
   const [aiMessages, setAiMessages] = useState<AIMessage[]>([]);
@@ -352,6 +427,30 @@ const ChatView: React.FC = () => {
     }
   }, [aiMessages]);
 
+  // Reset incoming message tracking when conversation changes
+  useEffect(() => {
+    prevSeenMsgIdsRef.current = new Set();
+    isInitialMsgLoadRef.current = true;
+  }, [activeChannel, activeDirectUserId, chatMode]);
+
+  // Bird chirp notification on new incoming messages from others
+  useEffect(() => {
+    if (!user || !filteredMessages) return;
+    if (isInitialMsgLoadRef.current) {
+      // Seed the set on first load — no sound
+      filteredMessages.forEach(m => prevSeenMsgIdsRef.current.add(m.id));
+      isInitialMsgLoadRef.current = false;
+      return;
+    }
+    const newIncoming = filteredMessages.filter(
+      m => m.senderId !== user.uid && !prevSeenMsgIdsRef.current.has(m.id)
+    );
+    if (newIncoming.length > 0) {
+      playBirdChirp();
+    }
+    filteredMessages.forEach(m => prevSeenMsgIdsRef.current.add(m.id));
+  }, [filteredMessages, user, playBirdChirp]);
+
   // Helpers
   const getUserDisplayName = useCallback((userId: string) => {
     if (userId === user?.uid) return user?.displayName || user?.email?.split('@')[0] || 'Ti';
@@ -546,6 +645,7 @@ const ChatView: React.FC = () => {
       const channelOrDm = chatMode === 'channel' ? activeChannel : `dm-${activeDirectUserId}`;
       const ex = typingIndicators?.find((t: any) => t.userId === user.uid && t.channelId === channelOrDm);
       if (ex) typingMutation.remove(ex.id).catch(() => {});
+      playZenSound();
     } catch (err) {
       toast({ title: 'Dërgimi dështoi', description: err instanceof Error ? err.message : 'Gabim', variant: 'destructive' });
     }
