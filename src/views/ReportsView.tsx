@@ -1,4 +1,4 @@
-import React, { useMemo, Suspense, lazy } from 'react';
+import React, { useMemo, useState, Suspense, lazy } from 'react';
 import { TrendingUp, TrendingDown, DollarSign, Users, CheckCircle, Clock, Building2, Receipt, Target, FileText, UserPlus, CreditCard, ClipboardList, FolderKanban, ListChecks } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { useCollection } from '../hooks/useFirestore';
@@ -115,6 +115,8 @@ const ReportsView: React.FC = () => {
   // Member/Viewer/unknown sees only personal stats (safe default)
   const isPersonalOnly = !isManagerOrAbove && !isSales;
 
+  const [selectedRevenueYear, setSelectedRevenueYear] = useState(new Date().getFullYear());
+
   const { data: invoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
   const { data: projects, loading: projectsLoading } = useCollection<Project>('projects', { skipTeamFilter: true });
   const { data: teams } = useCollection<Team>('teams');
@@ -173,26 +175,31 @@ const ReportsView: React.FC = () => {
     return teamMembers.reduce((sum, m) => sum + (m.monthlySalary || 0), 0);
   }, [teamMembers]);
 
-  // ── Revenue by Month (last 6 months) ──
+  // ── Revenue by Month (all 12 months for selected year) ──
+  const MONTH_LABELS_RPT = ['Jan', 'Shk', 'Mar', 'Pri', 'Maj', 'Qer', 'Kor', 'Gus', 'Sht', 'Tet', 'Nën', 'Dhj'];
   const revenueByMonth = useMemo(() => {
-    if (!invoices) return [];
-    const months: { label: string; value: number }[] = [];
-    const now = new Date();
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const label = d.toLocaleDateString('sq-AL', { month: 'short' });
-      const monthInvoices = invoices.filter(inv => {
+    if (!invoices) return MONTH_LABELS_RPT.map(label => ({ label, value: 0, paid: 0, pending: 0, count: 0 }));
+    return MONTH_LABELS_RPT.map((label, i) => {
+      const paidInvs = invoices.filter(inv => {
         if (inv.status !== 'Paid') return false;
-        // Prefer paidAt date; fall back to updatedAt/createdAt
-        const paidDate = inv.paidAt ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt))
-          : (inv.updatedAt ? (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt))
-          : (inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt)));
-        return paidDate.getMonth() === d.getMonth() && paidDate.getFullYear() === d.getFullYear();
+        const pd = inv.paidAt
+          ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt as any))
+          : (inv.updatedAt ? (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt as any))
+          : (inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt as any)));
+        return pd.getMonth() === i && pd.getFullYear() === selectedRevenueYear;
       });
-      months.push({ label, value: monthInvoices.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) });
-    }
-    return months;
-  }, [invoices]);
+      const pendingInvs = invoices.filter(inv => {
+        if (inv.status !== 'Pending' && inv.status !== 'Overdue') return false;
+        const cd = inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt as any);
+        return cd.getMonth() === i && cd.getFullYear() === selectedRevenueYear;
+      });
+      const paid = paidInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
+      return { label, value: paid, paid, pending: pendingInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0), count: paidInvs.length };
+    });
+  }, [invoices, selectedRevenueYear]);
+  const maxMonthRevRpt = useMemo(() => Math.max(...revenueByMonth.map(m => m.paid), 1), [revenueByMonth]);
+  const yearTotalRevRpt = useMemo(() => revenueByMonth.reduce((s, m) => s + m.paid, 0), [revenueByMonth]);
+  const revenueAvailableYears = [new Date().getFullYear(), new Date().getFullYear() - 1, new Date().getFullYear() - 2, new Date().getFullYear() - 3];
 
   // ── Expenses by Month ──
   const expensesByMonth = useMemo(() => {
@@ -577,9 +584,74 @@ const ReportsView: React.FC = () => {
         </TabsList>
 
         <TabsContent value="revenue">
-          <Card className="p-6">
-            <h3 className="text-lg font-semibold mb-4">Të Ardhurat - 6 Muajt e Fundit</h3>
-            <LineChart data={revenueByMonth} color="#22c55e" />
+          <Card className="p-4 sm:p-6 space-y-4">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h3 className="text-base font-semibold text-foreground">Të Ardhurat sipas Muajit</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Gjithsej {selectedRevenueYear}: <span className="font-semibold text-green-600">{yearTotalRevRpt.toLocaleString()} ALL</span>
+                </p>
+              </div>
+              <div className="flex gap-1">
+                {revenueAvailableYears.map(y => (
+                  <button
+                    key={y}
+                    onClick={() => setSelectedRevenueYear(y)}
+                    className={`h-7 px-3 text-xs rounded-full border font-medium transition-colors ${
+                      selectedRevenueYear === y
+                        ? 'bg-primary text-primary-foreground border-primary'
+                        : 'bg-background border-input text-muted-foreground hover:bg-muted'
+                    }`}
+                  >
+                    {y}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-12 gap-1.5 sm:gap-2">
+              {revenueByMonth.map((m, i) => {
+                const barH = maxMonthRevRpt > 0 ? Math.max((m.paid / maxMonthRevRpt) * 100, m.paid > 0 ? 4 : 0) : 0;
+                const isCurMonth = i === new Date().getMonth() && selectedRevenueYear === new Date().getFullYear();
+                return (
+                  <div key={m.label} className="flex flex-col items-center gap-1 group relative">
+                    <div className="w-full flex flex-col items-center justify-end" style={{ height: 72 }}>
+                      {m.paid > 0 ? (
+                        <div
+                          className={`w-full rounded-t-sm transition-all duration-500 ${isCurMonth ? 'bg-green-500' : 'bg-green-400/75'}`}
+                          style={{ height: `${barH}%`, minHeight: 4 }}
+                        />
+                      ) : m.pending > 0 ? (
+                        <div className="w-full rounded-t-sm bg-amber-300/70" style={{ height: '8%', minHeight: 3 }} />
+                      ) : (
+                        <div className="w-full rounded-t-sm bg-muted" style={{ height: '4%', minHeight: 2 }} />
+                      )}
+                    </div>
+                    <span className={`text-[9px] sm:text-[10px] font-medium ${isCurMonth ? 'text-green-600' : 'text-muted-foreground'}`}>
+                      {m.label}
+                    </span>
+                    <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 hidden group-hover:flex flex-col items-center pointer-events-none z-10">
+                      <div className="bg-popover border border-border rounded-md shadow-lg px-2.5 py-1.5 text-xs whitespace-nowrap min-w-[120px]">
+                        <p className="font-semibold text-foreground">{m.label} {selectedRevenueYear}</p>
+                        <p className="text-green-600">{m.paid.toLocaleString()} ALL paguar</p>
+                        {m.pending > 0 && <p className="text-amber-500">{m.pending.toLocaleString()} ALL pritje</p>}
+                        <p className="text-muted-foreground">{m.count} fatura</p>
+                      </div>
+                      <div className="w-2 h-2 bg-popover border-r border-b border-border rotate-45 -mt-1" />
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-4 pt-2 border-t">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <div className="w-3 h-3 rounded-sm bg-green-400/75" />
+                <span>E paguar</span>
+              </div>
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <div className="w-3 h-3 rounded-sm bg-amber-300/70" />
+                <span>Në pritje</span>
+              </div>
+            </div>
           </Card>
         </TabsContent>
         {!isSales && (
