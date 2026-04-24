@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useCollection, useMutation, useGlobalTeamId } from '../hooks/useFirestore';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { getNextInvoiceNumber } from '../lib/firebase';
@@ -48,6 +48,7 @@ const InvoicesView: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('__all__');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc'>('date_desc');
+  const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
 
   const { data: rawInvoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', {
     orderBy: { field: 'createdAt', direction: 'desc' },
@@ -266,6 +267,37 @@ const InvoicesView: React.FC = () => {
   };
 
   const totalRevenue = invoices?.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
+
+  // ── Revenue by Month ──
+  const MONTH_LABELS = ['Jan', 'Shk', 'Mar', 'Pri', 'Maj', 'Qer', 'Kor', 'Gus', 'Sht', 'Tet', 'Nën', 'Dhj'];
+  const revenueByMonth = useMemo(() => {
+    if (!invoices) return MONTH_LABELS.map(label => ({ label, paid: 0, pending: 0, count: 0 }));
+    return MONTH_LABELS.map((label, i) => {
+      const paidInvs = invoices.filter(inv => {
+        if (inv.status !== 'Paid') return false;
+        const pd = inv.paidAt
+          ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt as any))
+          : (inv.updatedAt instanceof Date ? inv.updatedAt : new Date((inv.updatedAt ?? inv.createdAt) as any));
+        return pd.getMonth() === i && pd.getFullYear() === selectedYear;
+      });
+      const pendingInvs = invoices.filter(inv => {
+        if (inv.status !== 'Pending' && inv.status !== 'Overdue') return false;
+        const cd = inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt as any);
+        return cd.getMonth() === i && cd.getFullYear() === selectedYear;
+      });
+      return {
+        label,
+        paid: paidInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0),
+        pending: pendingInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0),
+        count: paidInvs.length,
+      };
+    });
+  }, [invoices, selectedYear]);
+  const maxMonthRevenue = useMemo(() => Math.max(...revenueByMonth.map(m => m.paid), 1), [revenueByMonth]);
+  const yearTotalRevenue = useMemo(() => revenueByMonth.reduce((s, m) => s + m.paid, 0), [revenueByMonth]);
+  const currentMonth = new Date().getMonth();
+  const currentYear = new Date().getFullYear();
+  const availableYears = [currentYear, currentYear - 1, currentYear - 2, currentYear - 3];
   const paidInvoices = invoices?.filter(inv => inv.status === 'Paid').length || 0;
   const pendingAmount = invoices?.filter(inv => inv.status === 'Pending').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
   const draftAmount = invoices?.filter(inv => inv.status === 'Draft').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
@@ -454,6 +486,81 @@ const InvoicesView: React.FC = () => {
           </p>
         </Card>
       </div>
+
+      {/* Monthly Revenue Breakdown */}
+      <Card className="p-4 sm:p-6 space-y-4">
+        <div className="flex items-center justify-between flex-wrap gap-2">
+          <div>
+            <h3 className="text-sm sm:text-base font-semibold text-foreground">Të Ardhurat sipas Muajit</h3>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Gjithsej {selectedYear}: <span className="font-semibold text-green-600">{yearTotalRevenue.toLocaleString()} L</span>
+            </p>
+          </div>
+          <div className="flex gap-1">
+            {availableYears.map(y => (
+              <button
+                key={y}
+                onClick={() => setSelectedYear(y)}
+                className={`h-7 px-3 text-xs rounded-full border font-medium transition-colors ${
+                  selectedYear === y
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'bg-background border-input text-muted-foreground hover:bg-muted'
+                }`}
+              >
+                {y}
+              </button>
+            ))}
+          </div>
+        </div>
+        <div className="grid grid-cols-6 sm:grid-cols-12 gap-1.5 sm:gap-2">
+          {revenueByMonth.map((m, i) => {
+            const barHeight = maxMonthRevenue > 0 ? Math.max((m.paid / maxMonthRevenue) * 100, m.paid > 0 ? 4 : 0) : 0;
+            const isCurrentMonth = i === currentMonth && selectedYear === currentYear;
+            const hasPending = m.pending > 0;
+            return (
+              <div key={m.label} className="flex flex-col items-center gap-1 group relative">
+                <div className="w-full flex flex-col items-center justify-end" style={{ height: 64 }}>
+                  {m.paid > 0 && (
+                    <div
+                      className={`w-full rounded-t-sm transition-all duration-500 ${isCurrentMonth ? 'bg-green-500' : 'bg-green-400/70'}`}
+                      style={{ height: `${barHeight}%`, minHeight: m.paid > 0 ? 4 : 0 }}
+                    />
+                  )}
+                  {hasPending && m.paid === 0 && (
+                    <div className="w-full rounded-t-sm bg-amber-300/60" style={{ height: '8%', minHeight: 3 }} />
+                  )}
+                  {m.paid === 0 && !hasPending && (
+                    <div className="w-full rounded-t-sm bg-muted" style={{ height: '4%', minHeight: 2 }} />
+                  )}
+                </div>
+                <span className={`text-[9px] sm:text-[10px] font-medium ${isCurrentMonth ? 'text-green-600' : 'text-muted-foreground'}`}>
+                  {m.label}
+                </span>
+                {/* Tooltip */}
+                <div className="absolute bottom-full mb-2 left-1/2 -translate-x-1/2 hidden group-hover:flex flex-col items-center pointer-events-none z-10">
+                  <div className="bg-popover border border-border rounded-md shadow-lg px-2.5 py-1.5 text-xs whitespace-nowrap min-w-[110px]">
+                    <p className="font-semibold text-foreground">{m.label} {selectedYear}</p>
+                    <p className="text-green-600">{m.paid.toLocaleString()} L paguar</p>
+                    {m.pending > 0 && <p className="text-amber-500">{m.pending.toLocaleString()} L pritje</p>}
+                    <p className="text-muted-foreground">{m.count} fatura</p>
+                  </div>
+                  <div className="w-2 h-2 bg-popover border-r border-b border-border rotate-45 -mt-1" />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-4 pt-1 border-t">
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <div className="w-3 h-3 rounded-sm bg-green-400/70" />
+            <span>E paguar</span>
+          </div>
+          <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <div className="w-3 h-3 rounded-sm bg-amber-300/60" />
+            <span>Në pritje</span>
+          </div>
+        </div>
+      </Card>
 
       {/* Filter + Search Bar */}
       <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
