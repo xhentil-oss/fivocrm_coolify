@@ -54,6 +54,7 @@ const InvoicesView: React.FC = () => {
   const [partialMethod, setPartialMethod] = useState('Cash');
   const [partialNote, setPartialNote] = useState('');
   const [partialSaving, setPartialSaving] = useState(false);
+  const [paidAtDate, setPaidAtDate] = useState('');
 
   const { data: rawInvoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', {
     orderBy: { field: 'createdAt', direction: 'desc' },
@@ -225,6 +226,10 @@ const InvoicesView: React.FC = () => {
     setEditingInvoiceId(invoiceId);
     setEditingField(field);
     setEditValue(String(currentValue || ''));
+    if (field === 'status') {
+      // Pre-fill paidAt date with today
+      setPaidAtDate(new Date().toISOString().slice(0, 10));
+    }
   };
 
   const cancelEditing = () => {
@@ -245,9 +250,9 @@ const InvoicesView: React.FC = () => {
       updateData[field] = parsed;
     } else {
       updateData[field] = editValue;
-      // When status is marked Paid, record paidAt timestamp
+      // When status is marked Paid, record paidAt from the user-selected date
       if (field === 'status' && editValue === 'Paid') {
-        updateData.paidAt = new Date();
+        updateData.paidAt = paidAtDate ? new Date(paidAtDate + 'T12:00:00') : new Date();
       }
     }
 
@@ -820,35 +825,38 @@ const InvoicesView: React.FC = () => {
                     </td>
                     <td className="px-4 py-3">
                       {editingInvoiceId === invoice.id && editingField === 'status' ? (
-                        <div className="flex items-center gap-2">
-                          <select
-                            value={editValue}
-                            onChange={(e) => setEditValue(e.target.value)}
-                            className="px-2 py-1 border rounded"
-                            autoFocus
-                          >
-                            <option value="Draft">Draft</option>
-                            <option value="Pending">Pending</option>
-                            <option value="Partial">Partial</option>
-                            <option value="Paid">Paid</option>
-                            <option value="Overdue">Overdue</option>
-                          </select>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6"
-                            onClick={() => saveEdit(invoice.id, 'status')}
-                          >
-                            <Check className="w-4 h-4 text-success" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6"
-                            onClick={cancelEditing}
-                          >
-                            <X className="w-4 h-4 text-error" />
-                          </Button>
+                        <div className="flex flex-col gap-1.5">
+                          <div className="flex items-center gap-2">
+                            <select
+                              value={editValue}
+                              onChange={(e) => setEditValue(e.target.value)}
+                              className="px-2 py-1 border rounded"
+                              autoFocus
+                            >
+                              <option value="Draft">Draft</option>
+                              <option value="Pending">Pending</option>
+                              <option value="Partial">Partial</option>
+                              <option value="Paid">Paid</option>
+                              <option value="Overdue">Overdue</option>
+                            </select>
+                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => saveEdit(invoice.id, 'status')}>
+                              <Check className="w-4 h-4 text-success" />
+                            </Button>
+                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={cancelEditing}>
+                              <X className="w-4 h-4 text-error" />
+                            </Button>
+                          </div>
+                          {editValue === 'Paid' && (
+                            <div className="flex items-center gap-1.5">
+                              <CalendarIcon className="w-3 h-3 text-muted-foreground flex-shrink-0" />
+                              <input
+                                type="date"
+                                value={paidAtDate}
+                                onChange={e => setPaidAtDate(e.target.value)}
+                                className="h-7 px-2 border rounded text-xs bg-background"
+                              />
+                            </div>
+                          )}
                         </div>
                       ) : (
                         <div 
@@ -1131,6 +1139,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     try { return JSON.parse(localStorage.getItem('bank_accounts') || '[]'); } catch { return []; }
   })();
   const [status, setStatus] = useState(editInvoice?.status || 'Pending');
+  const [paidAtDateForm, setPaidAtDateForm] = useState<string>(
+    editInvoice?.paidAt
+      ? new Date(editInvoice.paidAt).toISOString().slice(0, 10)
+      : new Date().toISOString().slice(0, 10)
+  );
   const [notes, setNotes] = useState((editInvoice as any)?.notes || '');
   const [paymentUrl, setPaymentUrl] = useState((editInvoice as any)?.paymentUrl || '');
   const [isRecurring, setIsRecurring] = useState((editInvoice as any)?.isRecurring || false);
@@ -1301,7 +1314,10 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     if (isEditing) {
       // Set paidAt when manually marking as Paid via the full edit form
       if (status === 'Paid' && editInvoice?.status !== 'Paid') {
-        invoiceData.paidAt = new Date();
+        invoiceData.paidAt = paidAtDateForm ? new Date(paidAtDateForm + 'T12:00:00') : new Date();
+      } else if (status === 'Paid' && editInvoice?.status === 'Paid') {
+        // Keep existing paidAt but allow updating it via the date field
+        invoiceData.paidAt = paidAtDateForm ? new Date(paidAtDateForm + 'T12:00:00') : editInvoice.paidAt;
       }
 
       // Update existing invoice
@@ -1567,6 +1583,17 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
               <SelectItem value="Overdue">Overdue</SelectItem>
             </SelectContent>
           </Select>
+          {status === 'Paid' && (
+            <div className="mt-2">
+              <Label className="text-xs text-muted-foreground">Data e Pagesës</Label>
+              <input
+                type="date"
+                value={paidAtDateForm}
+                onChange={e => setPaidAtDateForm(e.target.value)}
+                className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+            </div>
+          )}
         </div>
       </div>
 
