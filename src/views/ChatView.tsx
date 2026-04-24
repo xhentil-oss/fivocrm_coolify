@@ -102,6 +102,7 @@ const ChatView: React.FC = () => {
   const prevMessageCountRef = useRef(0);
   const markedAsReadRef = useRef<Set<string>>(new Set());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const chatTextareaRef = useRef<HTMLTextAreaElement>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const prevSeenMsgIdsRef = useRef<Set<string>>(new Set());
   const isInitialMsgLoadRef = useRef(true);
@@ -293,14 +294,19 @@ const ChatView: React.FC = () => {
   }, [userProfiles]);
 
   const directConversations = useMemo(() => {
-    if (!allDirectMessages.length || !user) return [];
+    if (!user) return [];
     const userIds = new Set<string>();
+    // From active query (when in direct mode)
     allDirectMessages.forEach(m => {
       if (m.senderId !== user.uid) userIds.add(m.senderId);
       if (m.receiverId && m.receiverId !== user.uid) userIds.add(m.receiverId);
     });
+    // From background received DMs (always active) — shows recent conversations in any mode
+    bgReceivedDMs?.forEach(m => {
+      if (!(m as any).channelId) userIds.add(m.senderId);
+    });
     return Array.from(userIds);
-  }, [allDirectMessages, user]);
+  }, [allDirectMessages, bgReceivedDMs, user]);
 
   const directUnreadMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -411,6 +417,8 @@ const ChatView: React.FC = () => {
       setActiveDirectUserId(s.directUserId);
       setShowSidebar(false);
     }
+    // Clear state so back-navigation doesn't re-trigger
+    window.history.replaceState(null, '', window.location.pathname + window.location.search);
   }, [location.state]);
 
   // Scroll to bottom whenever the active conversation changes
@@ -650,7 +658,7 @@ const ChatView: React.FC = () => {
       const baseMessage: Partial<ChatMessage> = {
         content: messageText || '📎 Attachment',
         senderId: user.uid,
-        isRead: true,
+        isRead: false,
         attachmentUrl: attachmentUrl.trim() || undefined,
         ...(isClientChannel && chatMode === 'channel' ? { senderType: 'staff' as const } : {}),
         ...(replyingTo ? {
@@ -687,6 +695,8 @@ const ChatView: React.FC = () => {
       setAttachmentUrl('');
       setShowAttachmentInput(false);
       setReplyingTo(null);
+      // Reset textarea height
+      if (chatTextareaRef.current) chatTextareaRef.current.style.height = 'auto';
       const channelOrDm = chatMode === 'channel' ? activeChannel : `dm-${activeDirectUserId}`;
       const ex = typingIndicators?.find((t: any) => t.userId === user.uid && t.channelId === channelOrDm);
       if (ex) typingMutation.remove(ex.id).catch(() => {});
@@ -1797,6 +1807,7 @@ const ChatView: React.FC = () => {
                   </div>
 
                   <textarea
+                    ref={chatTextareaRef}
                     value={messageText}
                     onChange={handleTextareaInput}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e as any); } }}
