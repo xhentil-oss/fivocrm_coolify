@@ -19,6 +19,7 @@ import {
   ClipboardList, ExternalLink, UserPlus,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
+import { ToastAction } from '../components/ui/toast';
 import { normalizeAlbanianPhone } from '../lib/utils';
 import { auth, db } from '../lib/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
@@ -468,9 +469,18 @@ const ChatView: React.FC = () => {
         playBirdChirp();
         notifyDMs.forEach(dm => {
           const senderName = getUserDisplayName(dm.senderId);
+          const senderId = dm.senderId;
           toast({
             title: `📩 ${senderName}`,
             description: (dm.content || '').slice(0, 80) || 'Dërgoi një attachment',
+            action: (
+              <ToastAction
+                altText="Hap bisedën"
+                onClick={() => handleSelectDirectMessage(senderId)}
+              >
+                Hap
+              </ToastAction>
+            ),
           });
         });
       }
