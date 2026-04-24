@@ -49,6 +49,11 @@ const InvoicesView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc'>('date_desc');
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  const [partialPaymentInvoice, setPartialPaymentInvoice] = useState<Invoice | null>(null);
+  const [partialAmount, setPartialAmount] = useState('');
+  const [partialMethod, setPartialMethod] = useState('Cash');
+  const [partialNote, setPartialNote] = useState('');
+  const [partialSaving, setPartialSaving] = useState(false);
 
   const { data: rawInvoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', {
     orderBy: { field: 'createdAt', direction: 'desc' },
@@ -264,6 +269,54 @@ const InvoicesView: React.FC = () => {
     }
 
     cancelEditing();
+  };
+
+  const handleRecordPartialPayment = async () => {
+    if (!partialPaymentInvoice) return;
+    const amount = parseFloat(partialAmount);
+    if (isNaN(amount) || amount <= 0) {
+      toast({ title: 'Shumë e pavlefshme', description: 'Shkruaj një shumë pozitive.', variant: 'destructive' });
+      return;
+    }
+    const invoiceTotal = toAll(partialPaymentInvoice.total ?? partialPaymentInvoice.amount ?? 0, (partialPaymentInvoice as any).currency);
+    const alreadyPaid = partialPaymentInvoice.paidAmount ?? 0;
+    if (amount > invoiceTotal - alreadyPaid) {
+      toast({ title: 'Shumë e madhe', description: `Mbetet për t'u paguar: ${(invoiceTotal - alreadyPaid).toLocaleString()} L`, variant: 'destructive' });
+      return;
+    }
+    setPartialSaving(true);
+    try {
+      const newPayment = { amount, paidAt: new Date(), method: partialMethod, note: partialNote || undefined };
+      const existingPayments = partialPaymentInvoice.partialPayments ?? [];
+      const newPaidAmount = alreadyPaid + amount;
+      const isFullyPaid = newPaidAmount >= invoiceTotal;
+      const updateData: any = {
+        partialPayments: [...existingPayments, newPayment],
+        paidAmount: newPaidAmount,
+        status: isFullyPaid ? 'Paid' : 'Partial',
+      };
+      if (isFullyPaid) updateData.paidAt = new Date();
+      await invoiceMutation.update(partialPaymentInvoice.id, updateData);
+      if (isFullyPaid) {
+        const recipients = teamMembers?.filter((m: any) => m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices)) || [];
+        await Promise.all(recipients.map((m: any) => notificationMutation.create({
+          userId: m.userId,
+          type: 'invoice_paid',
+          title: 'Faturë e Paguar Plotësisht ✓',
+          message: `Fatura${partialPaymentInvoice.invoiceNumber ? ` ${partialPaymentInvoice.invoiceNumber}` : ''} u pagua plotësisht.`,
+          isRead: false,
+          actionUrl: '/app/invoices',
+          actionLabel: 'Shiko Faturat',
+        }))).catch(() => {});
+      }
+      toast({ title: isFullyPaid ? 'Fatura u pagua plotësisht! ✓' : `Pagesë e regjistruar: ${amount.toLocaleString()} L`, description: isFullyPaid ? undefined : `Mbetet: ${(invoiceTotal - newPaidAmount).toLocaleString()} L` });
+      setPartialPaymentInvoice(null);
+      setPartialAmount('');
+      setPartialNote('');
+      setPartialMethod('Cash');
+    } finally {
+      setPartialSaving(false);
+    }
   };
 
   const totalRevenue = invoices?.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
@@ -572,7 +625,7 @@ const InvoicesView: React.FC = () => {
           className="h-9 rounded-md border border-input bg-background px-3 text-sm flex-1 min-w-0 focus:outline-none focus:ring-2 focus:ring-ring"
         />
         <div className="flex gap-2 flex-wrap">
-          {(['__all__', 'Draft', 'Pending', 'Paid', 'Overdue'] as const).map(s => (
+          {(['__all__', 'Draft', 'Pending', 'Partial', 'Paid', 'Overdue'] as const).map(s => (
             <button
               key={s}
               onClick={() => setStatusFilter(s)}
@@ -582,7 +635,7 @@ const InvoicesView: React.FC = () => {
                   : 'bg-background border-input text-muted-foreground hover:bg-muted'
               }`}
             >
-              {s === '__all__' ? 'Të gjitha' : s === 'Draft' ? 'Draft' : s === 'Pending' ? 'Pritje' : s === 'Paid' ? 'Paguar' : 'Vonuar'}
+              {s === '__all__' ? 'Të gjitha' : s === 'Draft' ? 'Draft' : s === 'Pending' ? 'Pritje' : s === 'Partial' ? 'Pjesore' : s === 'Paid' ? 'Paguar' : 'Vonuar'}
               {s !== '__all__' && invoices && (
                 <span className="ml-1 opacity-60">({invoices.filter(i => i.status === s).length})</span>
               )}
@@ -619,6 +672,9 @@ const InvoicesView: React.FC = () => {
                   <p className="text-xs text-muted-foreground truncate">{customer?.name || 'Unknown'}</p>
                   <div className="flex items-center gap-3 mt-1.5">
                     <span className="text-sm font-semibold">{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} L</span>
+                    {invoice.status === 'Partial' && invoice.paidAmount != null && (
+                      <span className="text-[10px] text-cyan-600 font-medium">Paguar: {invoice.paidAmount.toLocaleString()} L</span>
+                    )}
                     <span className="text-[10px] text-muted-foreground">Afati: {invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : 'Pa afat'}</span>
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0">
                       {invoice.paymentMethod === 'Bank' ? 'Transfer' : invoice.paymentMethod === 'Cash' ? 'Kesh' : invoice.paymentMethod || 'Stripe'}
@@ -653,6 +709,11 @@ const InvoicesView: React.FC = () => {
                     {invoice.status !== 'Paid' && (
                       <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleStripePayment(invoice); }}>
                         <CreditCard className="w-4 h-4 mr-2" /> Paguaj me Stripe
+                      </DropdownMenuItem>
+                    )}
+                    {permissions.canEdit && invoice.status !== 'Paid' && (
+                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setPartialPaymentInvoice(invoice); setPartialAmount(''); setPartialNote(''); setPartialMethod('Cash'); }}>
+                        <DollarSign className="w-4 h-4 mr-2" /> Pagesë Pjesore
                       </DropdownMenuItem>
                     )}
                     {permissions.canEdit && (
@@ -730,7 +791,14 @@ const InvoicesView: React.FC = () => {
                           className={`flex items-center gap-2 px-2 py-1 rounded ${permissions.canEdit ? 'cursor-pointer hover:bg-muted/50' : ''}`}
                           onClick={() => startEditing(invoice.id, 'total', invoice.total ?? invoice.amount ?? 0)}
                         >
-                          {((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} L
+                          <div>
+                            <div>{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} L</div>
+                            {invoice.status === 'Partial' && invoice.paidAmount != null && (
+                              <div className="text-[10px] text-cyan-600 font-medium">
+                                {invoice.paidAmount.toLocaleString()} / {(invoice.total ?? invoice.amount ?? 0).toLocaleString()} L
+                              </div>
+                            )}
+                          </div>
                           <Edit2 className="w-3 h-3 opacity-0 group-hover:opacity-100" />
                         </div>
                       )}
@@ -746,6 +814,7 @@ const InvoicesView: React.FC = () => {
                           >
                             <option value="Draft">Draft</option>
                             <option value="Pending">Pending</option>
+                            <option value="Partial">Partial</option>
                             <option value="Paid">Paid</option>
                             <option value="Overdue">Overdue</option>
                           </select>
@@ -830,6 +899,18 @@ const InvoicesView: React.FC = () => {
                             Paguaj
                           </Button>
                         )}
+                        {permissions.canEdit && invoice.status !== 'Paid' && (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="text-cyan-600 border-cyan-300 hover:bg-cyan-50 dark:hover:bg-cyan-950"
+                            title="Regjistro Pagesë Pjesore"
+                            onClick={() => { setPartialPaymentInvoice(invoice); setPartialAmount(''); setPartialNote(''); setPartialMethod('Cash'); }}
+                          >
+                            <DollarSign className="w-4 h-4 mr-1" />
+                            Pjesore
+                          </Button>
+                        )}
                         {permissions.canEdit && (
                           <Button
                             variant="outline"
@@ -858,6 +939,120 @@ const InvoicesView: React.FC = () => {
               <DialogTitle>Detajet e Faturës</DialogTitle>
             </DialogHeader>
             <InvoiceDetails invoice={selectedInvoice} />
+          </DialogContent>
+        </Dialog>
+      )}
+
+      {/* Partial Payment Dialog */}
+      {partialPaymentInvoice && (
+        <Dialog open={!!partialPaymentInvoice} onOpenChange={(open) => { if (!open) { setPartialPaymentInvoice(null); setPartialAmount(''); setPartialNote(''); } }}>
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Pagesë Pjesore</DialogTitle>
+            </DialogHeader>
+            {(() => {
+              const inv = partialPaymentInvoice;
+              const total = toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
+              const alreadyPaid = inv.paidAmount ?? 0;
+              const remaining = total - alreadyPaid;
+              return (
+                <div className="space-y-4">
+                  <div className="bg-muted rounded-lg p-3 space-y-1 text-sm">
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">Totali i faturës</span>
+                      <span className="font-semibold">{total.toLocaleString()} L</span>
+                    </div>
+                    {alreadyPaid > 0 && (
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Paguar deri tani</span>
+                        <span className="font-semibold text-green-600">{alreadyPaid.toLocaleString()} L</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between border-t pt-1 mt-1">
+                      <span className="text-muted-foreground">Mbetet për t'u paguar</span>
+                      <span className="font-bold text-amber-600">{remaining.toLocaleString()} L</span>
+                    </div>
+                    {/* Progress bar */}
+                    {alreadyPaid > 0 && (
+                      <div className="w-full h-2 bg-background rounded-full overflow-hidden mt-2">
+                        <div className="h-full bg-green-500 rounded-full" style={{ width: `${Math.min((alreadyPaid / total) * 100, 100)}%` }} />
+                      </div>
+                    )}
+                  </div>
+                  {inv.partialPayments && inv.partialPayments.length > 0 && (
+                    <div className="space-y-1">
+                      <p className="text-xs font-medium text-muted-foreground">Pagesat e kaluara</p>
+                      {inv.partialPayments.map((p, i) => (
+                        <div key={i} className="flex justify-between text-xs border rounded px-2 py-1">
+                          <span className="text-muted-foreground">{new Date(p.paidAt).toLocaleDateString()} · {p.method || '-'}{p.note ? ` · ${p.note}` : ''}</span>
+                          <span className="font-medium text-green-600">+{p.amount.toLocaleString()} L</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="space-y-3">
+                    <div>
+                      <Label className="text-sm">Shuma e pagesës *</Label>
+                      <div className="flex gap-2 mt-1">
+                        <Input
+                          type="number"
+                          value={partialAmount}
+                          onChange={e => setPartialAmount(e.target.value)}
+                          placeholder={`max ${remaining.toLocaleString()}`}
+                          min={1}
+                          max={remaining}
+                          autoFocus
+                        />
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="whitespace-nowrap"
+                          onClick={() => setPartialAmount(String(Math.round(remaining / 2)))}
+                        >
+                          50%
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          onClick={() => setPartialAmount(String(remaining))}
+                        >
+                          Gjithçka
+                        </Button>
+                      </div>
+                    </div>
+                    <div>
+                      <Label className="text-sm">Mënyra e pagesës</Label>
+                      <select
+                        value={partialMethod}
+                        onChange={e => setPartialMethod(e.target.value)}
+                        className="mt-1 w-full h-9 rounded-md border border-input bg-background px-3 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+                      >
+                        <option value="Cash">Kesh</option>
+                        <option value="Bank">Transfer Bankar</option>
+                        <option value="Stripe">Stripe</option>
+                        <option value="Crypto">Crypto</option>
+                        <option value="Other">Tjetër</option>
+                      </select>
+                    </div>
+                    <div>
+                      <Label className="text-sm">Shënim (opsional)</Label>
+                      <Input
+                        value={partialNote}
+                        onChange={e => setPartialNote(e.target.value)}
+                        placeholder="p.sh. Paradhënie, këst i parë..."
+                        className="mt-1"
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-end gap-2 pt-2">
+                    <Button variant="outline" onClick={() => { setPartialPaymentInvoice(null); setPartialAmount(''); }}>Anulo</Button>
+                    <Button onClick={handleRecordPartialPayment} disabled={partialSaving || !partialAmount}>
+                      {partialSaving ? 'Duke ruajtur...' : 'Regjistro Pagesën'}
+                    </Button>
+                  </div>
+                </div>
+              );
+            })()}
           </DialogContent>
         </Dialog>
       )}

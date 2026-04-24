@@ -50,6 +50,9 @@ const STATUS_MAP: Record<string, string> = {
   qualified:   'bg-tertiary text-tertiary-foreground',
   proposal:    'bg-tertiary text-tertiary-foreground',
 
+  // ── Partial payment (cyan/teal) ──
+  partial:     'bg-cyan-500/20 text-cyan-700 dark:text-cyan-400',
+
   // ── Accent (pink) ──
   vip:         'bg-accent text-accent-foreground',
 

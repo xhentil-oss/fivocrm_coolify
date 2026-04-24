@@ -143,7 +143,7 @@ export interface Invoice {
   discountType?: 'fixed' | 'percent';
   tax?: number;
   notes?: string;
-  status: 'Draft' | 'Pending' | 'Paid' | 'Overdue';
+  status: 'Draft' | 'Pending' | 'Paid' | 'Overdue' | 'Partial';
   paymentMethod?: string;
   paymentUrl?: string;
   currency?: 'ALL' | 'EUR';
@@ -156,6 +156,7 @@ export interface Invoice {
   dueDate?: Date;
   paidAt?: Date;
   paidAmount?: number;
+  partialPayments?: { amount: number; paidAt: Date; method?: string; note?: string }[];
   emailSent?: boolean;
   reminderSent?: boolean;
   reminder25Sent?: boolean;
