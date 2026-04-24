@@ -319,7 +319,11 @@ const InvoicesView: React.FC = () => {
     }
   };
 
-  const totalRevenue = invoices?.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
+  const totalRevenue = invoices?.reduce((sum, inv) => {
+    if (inv.status === 'Paid') return sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
+    if (inv.status === 'Partial') return sum + toAll(inv.paidAmount ?? 0, (inv as any).currency);
+    return sum;
+  }, 0) || 0;
 
   // ── Revenue by Month ──
   const MONTH_LABELS = ['Jan', 'Shk', 'Mar', 'Pri', 'Maj', 'Qer', 'Kor', 'Gus', 'Sht', 'Tet', 'Nën', 'Dhj'];
@@ -338,9 +342,19 @@ const InvoicesView: React.FC = () => {
         const cd = inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt as any);
         return cd.getMonth() === i && cd.getFullYear() === selectedYear;
       });
+      // Add partial payments that occurred in this month
+      const partialForMonth = invoices
+        .filter(inv => inv.status === 'Partial' && inv.partialPayments?.length)
+        .reduce((s, inv) => {
+          const monthPartials = (inv.partialPayments ?? []).filter(p => {
+            const pd = p.paidAt instanceof Date ? p.paidAt : new Date(p.paidAt as any);
+            return pd.getMonth() === i && pd.getFullYear() === selectedYear;
+          });
+          return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, (inv as any).currency), 0);
+        }, 0);
       return {
         label,
-        paid: paidInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0),
+        paid: paidInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) + partialForMonth,
         pending: pendingInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0),
         count: paidInvs.length,
       };
@@ -351,10 +365,11 @@ const InvoicesView: React.FC = () => {
   const currentMonth = new Date().getMonth();
   const currentYear = new Date().getFullYear();
   const availableYears = [currentYear, currentYear - 1, currentYear - 2, currentYear - 3];
-  const paidInvoices = invoices?.filter(inv => inv.status === 'Paid').length || 0;
+  const paidInvoices = invoices?.filter(inv => inv.status === 'Paid' || inv.status === 'Partial').length || 0;
   const pendingAmount = invoices?.filter(inv => inv.status === 'Pending').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
   const draftAmount = invoices?.filter(inv => inv.status === 'Draft').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
-  const projectedRevenue = pendingAmount + draftAmount;
+  const partialRemainingAmount = invoices?.filter(inv => inv.status === 'Partial').reduce((sum, inv) => sum + Math.max(0, toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency) - toAll(inv.paidAmount ?? 0, (inv as any).currency)), 0) || 0;
+  const projectedRevenue = pendingAmount + draftAmount + partialRemainingAmount;
 
   // Filtered + sorted list used by both mobile cards and desktop table
   const filteredInvoices = React.useMemo(() => {

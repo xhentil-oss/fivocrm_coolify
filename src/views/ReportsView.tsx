@@ -193,7 +193,17 @@ const ReportsView: React.FC = () => {
         const cd = inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt as any);
         return cd.getMonth() === i && cd.getFullYear() === selectedRevenueYear;
       });
-      const paid = paidInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
+      // Add partial payments that occurred in this month
+      const partialForMonth = invoices
+        .filter(inv => inv.status === 'Partial' && inv.partialPayments?.length)
+        .reduce((s, inv) => {
+          const monthPartials = (inv.partialPayments ?? []).filter(p => {
+            const pd = p.paidAt instanceof Date ? p.paidAt : new Date(p.paidAt as any);
+            return pd.getMonth() === i && pd.getFullYear() === selectedRevenueYear;
+          });
+          return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, (inv as any).currency), 0);
+        }, 0);
+      const paid = paidInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) + partialForMonth;
       return { label, value: paid, paid, pending: pendingInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0), count: paidInvs.length };
     });
   }, [invoices, selectedRevenueYear]);
@@ -245,7 +255,16 @@ const ReportsView: React.FC = () => {
             : (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt));
           return pd.getMonth() === d.getMonth() && pd.getFullYear() === d.getFullYear();
         })
-        .reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
+        .reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0)
+        + invoices
+          .filter(inv => inv.status === 'Partial' && inv.partialPayments?.length)
+          .reduce((s, inv) => {
+            const monthPartials = (inv.partialPayments ?? []).filter(p => {
+              const pd = p.paidAt instanceof Date ? p.paidAt : new Date(p.paidAt as any);
+              return pd.getMonth() === d.getMonth() && pd.getFullYear() === d.getFullYear();
+            });
+            return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, (inv as any).currency), 0);
+          }, 0);
       const outflow = expenses
         .filter(exp => {
           const cd = exp.date ? (exp.date instanceof Date ? exp.date : new Date(exp.date))
@@ -280,6 +299,7 @@ const ReportsView: React.FC = () => {
     if (!invoices) return [];
     return [
       { label: 'Paguar', value: invoices.filter(i => i.status === 'Paid').length, color: '#22c55e' },
+      { label: 'Pjesore', value: invoices.filter(i => i.status === 'Partial').length, color: '#06b6d4' },
       { label: 'Në Pritje', value: invoices.filter(i => i.status === 'Pending').length, color: '#f59e0b' },
       { label: 'Vonuar', value: invoices.filter(i => i.status === 'Overdue').length, color: '#ef4444' },
       { label: 'Draft', value: invoices.filter(i => i.status === 'Draft').length, color: '#94a3b8' },
@@ -297,10 +317,13 @@ const ReportsView: React.FC = () => {
         const done = projectTasks.filter(t => t.status === 'Done').length;
         const total = projectTasks.length;
         const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-        // Revenue = sum of paid invoices linked to this project
+        // Revenue = sum of paid + partial invoices linked to this project
         const revenue = invoices
-          ? invoices.filter(inv => inv.projectId === p.id && inv.status === 'Paid')
-              .reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0)
+          ? invoices.filter(inv => inv.projectId === p.id && (inv.status === 'Paid' || inv.status === 'Partial'))
+              .reduce((s, inv) => {
+                if (inv.status === 'Paid') return s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
+                return s + toAll(inv.paidAmount ?? 0, (inv as any).currency);
+              }, 0)
           : 0;
         return { name: p.name, progress: pct, done, total, budget: p.budget, spent: p.spent, revenue };
       });
@@ -319,6 +342,11 @@ const ReportsView: React.FC = () => {
         current.total += toAll(item.totalPrice, (invoice as any).currency);
         current.count++;
         if (invoice.status === 'Paid') current.paid += toAll(item.totalPrice, (invoice as any).currency);
+        if (invoice.status === 'Partial') {
+          const invoiceTotal = toAll(invoice.total ?? invoice.amount ?? 0, (invoice as any).currency);
+          const paidFraction = invoiceTotal > 0 ? toAll(invoice.paidAmount ?? 0, (invoice as any).currency) / invoiceTotal : 0;
+          current.paid += toAll(item.totalPrice, (invoice as any).currency) * paidFraction;
+        }
         deptMap.set(dept, current);
       });
     });
@@ -326,9 +354,17 @@ const ReportsView: React.FC = () => {
   }, [invoices, invoiceItems, services]);
 
   // ── KPI Calculations ──
-  const totalRevenue = invoices?.filter(inv => inv.status === 'Paid').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
+  const totalRevenue = invoices?.reduce((sum, inv) => {
+    if (inv.status === 'Paid') return sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
+    if (inv.status === 'Partial') return sum + toAll(inv.paidAmount ?? 0, (inv as any).currency);
+    return sum;
+  }, 0) || 0;
   const paidRevenue = totalRevenue;
-  const projectedRevenue = invoices?.filter(inv => inv.status === 'Pending' || inv.status === 'Draft').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
+  const projectedRevenue = invoices?.reduce((sum, inv) => {
+    if (inv.status === 'Pending' || inv.status === 'Draft') return sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
+    if (inv.status === 'Partial') return sum + Math.max(0, toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency) - toAll(inv.paidAmount ?? 0, (inv as any).currency));
+    return sum;
+  }, 0) || 0;
   const totalExpenses = (expenses?.reduce((sum, exp) => sum + (exp.amount ?? 0), 0) || 0) + totalMonthlySalary;
   const profit = paidRevenue - totalExpenses;
   const activeProjects = projects?.filter(p => p.status === 'Active').length || 0;
@@ -337,30 +373,50 @@ const ReportsView: React.FC = () => {
   const totalLeads = leads?.length || 0;
   const conversionRate = totalLeads > 0 ? Math.round((wonLeads / totalLeads) * 100) : 0;
 
-  // ── Last month comparison for trends (Paid invoices only, by paidAt date) ──
+  // ── Last month comparison for trends ──
   const lastMonthRevenue = useMemo(() => {
     if (!invoices) return 0;
     const now = new Date();
     const lastMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
     const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
-    return invoices.filter(inv => {
+    const paidTotal = invoices.filter(inv => {
       if (inv.status !== 'Paid') return false;
       const d = inv.paidAt ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt))
         : (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt));
       return d >= lastMonth && d <= lastMonthEnd;
     }).reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
+    const partialTotal = invoices
+      .filter(inv => inv.status === 'Partial' && inv.partialPayments?.length)
+      .reduce((s, inv) => {
+        const monthPartials = (inv.partialPayments ?? []).filter(p => {
+          const pd = p.paidAt instanceof Date ? p.paidAt : new Date(p.paidAt as any);
+          return pd >= lastMonth && pd <= lastMonthEnd;
+        });
+        return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, (inv as any).currency), 0);
+      }, 0);
+    return paidTotal + partialTotal;
   }, [invoices]);
 
   const thisMonthRevenue = useMemo(() => {
     if (!invoices) return 0;
     const now = new Date();
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-    return invoices.filter(inv => {
+    const paidTotal = invoices.filter(inv => {
       if (inv.status !== 'Paid') return false;
       const d = inv.paidAt ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt))
         : (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt));
       return d >= thisMonth;
     }).reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
+    const partialTotal = invoices
+      .filter(inv => inv.status === 'Partial' && inv.partialPayments?.length)
+      .reduce((s, inv) => {
+        const monthPartials = (inv.partialPayments ?? []).filter(p => {
+          const pd = p.paidAt instanceof Date ? p.paidAt : new Date(p.paidAt as any);
+          return pd >= thisMonth;
+        });
+        return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, (inv as any).currency), 0);
+      }, 0);
+    return paidTotal + partialTotal;
   }, [invoices]);
 
   const revenueChange = lastMonthRevenue > 0 ? Math.round(((thisMonthRevenue - lastMonthRevenue) / lastMonthRevenue) * 100) : 0;
