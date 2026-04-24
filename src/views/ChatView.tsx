@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { useLocation } from 'react-router-dom';
 import { useCollection, useMutation, getGlobalTeamId, useGlobalTeamId, useWhatsappEnabled } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -64,12 +65,19 @@ const ACTIVE_PORTAL_QUERY = {
 const ChatView: React.FC = () => {
   const { user } = useAuth();
   const { toast } = useToast();
+  const location = useLocation();
 
   // State
   const [messageText, setMessageText] = useState('');
   const [chatMode, setChatMode] = useState<ChatMode>('channel');
-  const [activeChannel, setActiveChannel] = useState<string>('general');
-  const [activeDirectUserId, setActiveDirectUserId] = useState<string | null>(null);
+  const [activeChannel, setActiveChannel] = useState<string>(() => {
+    const s = (location.state as any);
+    return s?.channel && typeof s.channel === 'string' ? s.channel : 'general';
+  });
+  const [activeDirectUserId, setActiveDirectUserId] = useState<string | null>(() => {
+    const s = (location.state as any);
+    return s?.directUserId || null;
+  });
   const [attachmentUrl, setAttachmentUrl] = useState('');
   const [showAttachmentInput, setShowAttachmentInput] = useState(false);
   const [showSidebar, setShowSidebar] = useState(true);
@@ -389,6 +397,21 @@ const ChatView: React.FC = () => {
     }
     prevMessageCountRef.current = currentCount;
   }, [filteredMessages?.length]);
+
+  // If navigated here from a notification with channel/directUserId state, open that conversation
+  useEffect(() => {
+    const s = location.state as any;
+    if (!s) return;
+    if (s.channel && typeof s.channel === 'string') {
+      setChatMode('channel');
+      setActiveChannel(s.channel);
+      setShowSidebar(false);
+    } else if (s.directUserId && typeof s.directUserId === 'string') {
+      setChatMode('direct');
+      setActiveDirectUserId(s.directUserId);
+      setShowSidebar(false);
+    }
+  }, [location.state]);
 
   // Scroll to bottom whenever the active conversation changes
   useEffect(() => {

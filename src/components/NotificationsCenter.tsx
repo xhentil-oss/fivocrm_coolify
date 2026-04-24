@@ -274,9 +274,18 @@ const NotificationItem: React.FC<{
 
   const handleAction = () => {
     if (!notification.isRead) onMarkAsRead(notification.id);
-    if (n.linkTo) navigate(n.linkTo);
-    else if (n.type === 'client_message') navigate('/app/chat');
-    else if (n.actionUrl) navigate(n.actionUrl);
+    if (n.linkTo) {
+      // linkTo stores raw channel IDs (e.g. 'general', 'client-xxx') — map to chat route
+      if (n.linkTo.startsWith('/')) {
+        navigate(n.linkTo);
+      } else {
+        navigate('/app/chat', { state: { channel: n.linkTo } });
+      }
+    } else if (n.type === 'client_message') {
+      navigate('/app/chat');
+    } else if (n.actionUrl) {
+      navigate(n.actionUrl);
+    }
   };
 
   const isUnread = !notification.isRead;
