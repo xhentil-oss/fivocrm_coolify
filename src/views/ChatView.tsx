@@ -99,6 +99,7 @@ const ChatView: React.FC = () => {
   const isInitialMsgLoadRef = useRef(true);
   const prevBgDmIdsRef = useRef<Set<string>>(new Set());
   const bgDmInitialRef = useRef(true);
+  const mountTimeRef = useRef(new Date());
 
   const playBirdChirp = useCallback(() => {
     try {
@@ -457,9 +458,13 @@ const ChatView: React.FC = () => {
       bgDmInitialRef.current = false;
       return;
     }
-    const newDMs = bgReceivedDMs.filter(
-      m => !prevBgDmIdsRef.current.has(m.id) && !(m as any).deletedAt
-    );
+    const newDMs = bgReceivedDMs.filter(m => {
+      if (prevBgDmIdsRef.current.has(m.id)) return false;
+      if ((m as any).deletedAt) return false;
+      // Ignore messages that existed before this session started
+      const createdAt = m.createdAt instanceof Date ? m.createdAt : (m.createdAt as any)?.toDate?.();
+      return createdAt && createdAt > mountTimeRef.current;
+    });
     if (newDMs.length > 0) {
       // Only notify for DMs not in the currently open conversation
       const notifyDMs = newDMs.filter(
