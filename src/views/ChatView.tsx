@@ -96,6 +96,8 @@ const ChatView: React.FC = () => {
   const audioCtxRef = useRef<AudioContext | null>(null);
   const prevSeenMsgIdsRef = useRef<Set<string>>(new Set());
   const isInitialMsgLoadRef = useRef(true);
+  const prevBgDmIdsRef = useRef<Set<string>>(new Set());
+  const bgDmInitialRef = useRef(true);
 
   const playBirdChirp = useCallback(() => {
     try {
@@ -237,6 +239,15 @@ const ChatView: React.FC = () => {
     where: user?.uid ? [{ field: 'receiverId', operator: '==', value: user.uid }] : undefined,
   }), [user?.uid, chatMode]);
 
+  // Always-on background query: received DMs regardless of active chat mode
+  const bgDmQuery = useMemo(() => ({
+    skip: !user?.uid,
+    where: user?.uid ? [{ field: 'receiverId', operator: '==', value: user.uid }] : undefined,
+    orderBy: { field: 'createdAt', direction: 'desc' as const },
+    limit: 100,
+  }), [user?.uid]);
+  const { data: bgReceivedDMs } = useCollection<ChatMessage>('messages', bgDmQuery);
+
   const { data: sentDirectMessages, loading: sentPending } = useCollection<ChatMessage>('messages', directMsgQuery);
   const { data: receivedDirectMessages, loading: receivedPending } = useCollection<ChatMessage>('messages', directMsgReceivedQuery);
 
@@ -284,13 +295,15 @@ const ChatView: React.FC = () => {
   const directUnreadMap = useMemo(() => {
     const map = new Map<string, number>();
     if (!user) return map;
-    allDirectMessages.forEach(m => {
-      if (m.senderId !== user.uid && m.receiverId === user.uid && !m.isRead) {
+    // Use persistent bgReceivedDMs so unread badges work in all modes
+    const source = bgReceivedDMs ?? allDirectMessages;
+    source.forEach(m => {
+      if (!(m as any).channelId && m.senderId !== user.uid && m.receiverId === user.uid && !m.isRead) {
         map.set(m.senderId, (map.get(m.senderId) || 0) + 1);
       }
     });
     return map;
-  }, [allDirectMessages, user]);
+  }, [allDirectMessages, bgReceivedDMs, user]);
 
   const channelUnreadMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -397,7 +410,7 @@ const ChatView: React.FC = () => {
     isInitialMsgLoadRef.current = true;
   }, [activeChannel, activeDirectUserId, chatMode]);
 
-  // Bird chirp notification on new incoming messages from others
+  // Bird chirp notification on new incoming messages from others (active conversation)
   useEffect(() => {
     if (!user || !filteredMessages) return;
     if (isInitialMsgLoadRef.current) {
@@ -434,6 +447,36 @@ const ChatView: React.FC = () => {
     for (let i = 0; i < id.length; i++) hash = id.charCodeAt(i) + ((hash << 5) - hash);
     return colors[Math.abs(hash) % colors.length];
   }, []);
+
+  // Background DM notifications — fires when a DM arrives in any conversation
+  useEffect(() => {
+    if (!user || !bgReceivedDMs) return;
+    if (bgDmInitialRef.current) {
+      bgReceivedDMs.forEach(m => prevBgDmIdsRef.current.add(m.id));
+      bgDmInitialRef.current = false;
+      return;
+    }
+    const newDMs = bgReceivedDMs.filter(
+      m => !prevBgDmIdsRef.current.has(m.id) && !(m as any).deletedAt
+    );
+    if (newDMs.length > 0) {
+      // Only notify for DMs not in the currently open conversation
+      const notifyDMs = newDMs.filter(
+        m => !(chatMode === 'direct' && activeDirectUserId === m.senderId)
+      );
+      if (notifyDMs.length > 0) {
+        playBirdChirp();
+        notifyDMs.forEach(dm => {
+          const senderName = getUserDisplayName(dm.senderId);
+          toast({
+            title: `📩 ${senderName}`,
+            description: (dm.content || '').slice(0, 80) || 'Dërgoi një attachment',
+          });
+        });
+      }
+    }
+    bgReceivedDMs.forEach(m => prevBgDmIdsRef.current.add(m.id));
+  }, [bgReceivedDMs, user, chatMode, activeDirectUserId, playBirdChirp, toast, getUserDisplayName]);
 
   const formatDate = (date: any) => {
     if (!date) return '';
