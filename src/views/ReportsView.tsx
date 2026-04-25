@@ -175,22 +175,52 @@ const ReportsView: React.FC = () => {
     return teamMembers.reduce((sum, m) => sum + (m.monthlySalary || 0), 0);
   }, [teamMembers]);
 
+  const parseDate = (value: unknown): Date | null => {
+    if (!value) return null;
+    const d = value instanceof Date ? value : new Date(value as string);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+
+  const getInvoicePaidDate = (inv: Invoice): Date | null => {
+    return parseDate(inv.paidAt) || parseDate(inv.updatedAt) || parseDate(inv.createdAt);
+  };
+
+  const getExpenseDate = (exp: Expense): Date | null => {
+    return parseDate(exp.date) || parseDate(exp.createdAt);
+  };
+
   // ── Revenue by Month (all 12 months for selected year) ──
   const MONTH_LABELS_RPT = ['Jan', 'Shk', 'Mar', 'Pri', 'Maj', 'Qer', 'Kor', 'Gus', 'Sht', 'Tet', 'Nën', 'Dhj'];
+  const financialAvailableYears = useMemo(() => {
+    const years = new Set<number>([new Date().getFullYear()]);
+    (invoices ?? []).forEach(inv => {
+      const paidDate = getInvoicePaidDate(inv);
+      if (paidDate) years.add(paidDate.getFullYear());
+      (inv.partialPayments ?? []).forEach(p => {
+        const pd = parseDate(p.paidAt);
+        if (pd) years.add(pd.getFullYear());
+      });
+    });
+    (expenses ?? []).forEach(exp => {
+      const d = getExpenseDate(exp);
+      if (d) years.add(d.getFullYear());
+    });
+    return Array.from(years).sort((a, b) => b - a).slice(0, 8);
+  }, [invoices, expenses]);
+
   const revenueByMonth = useMemo(() => {
     if (!invoices) return MONTH_LABELS_RPT.map(label => ({ label, value: 0, paid: 0, pending: 0, count: 0 }));
     return MONTH_LABELS_RPT.map((label, i) => {
       const paidInvs = invoices.filter(inv => {
         if (inv.status !== 'Paid') return false;
-        const pd = inv.paidAt
-          ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt as any))
-          : (inv.updatedAt ? (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt as any))
-          : (inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt as any)));
+        const pd = getInvoicePaidDate(inv);
+        if (!pd) return false;
         return pd.getMonth() === i && pd.getFullYear() === selectedRevenueYear;
       });
       const pendingInvs = invoices.filter(inv => {
         if (inv.status !== 'Pending' && inv.status !== 'Overdue') return false;
-        const cd = inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt as any);
+        const cd = parseDate(inv.createdAt);
+        if (!cd) return false;
         return cd.getMonth() === i && cd.getFullYear() === selectedRevenueYear;
       });
       // Add partial payments that occurred in this month
@@ -198,7 +228,8 @@ const ReportsView: React.FC = () => {
         .filter(inv => inv.status === 'Partial' && inv.partialPayments?.length)
         .reduce((s, inv) => {
           const monthPartials = (inv.partialPayments ?? []).filter(p => {
-            const pd = p.paidAt instanceof Date ? p.paidAt : new Date(p.paidAt as any);
+            const pd = parseDate(p.paidAt);
+            if (!pd) return false;
             return pd.getMonth() === i && pd.getFullYear() === selectedRevenueYear;
           });
           return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, (inv as any).currency), 0);
@@ -209,24 +240,21 @@ const ReportsView: React.FC = () => {
   }, [invoices, selectedRevenueYear]);
   const maxMonthRevRpt = useMemo(() => Math.max(...revenueByMonth.map(m => m.paid), 1), [revenueByMonth]);
   const yearTotalRevRpt = useMemo(() => revenueByMonth.reduce((s, m) => s + m.paid, 0), [revenueByMonth]);
-  const revenueAvailableYears = [new Date().getFullYear(), new Date().getFullYear() - 1, new Date().getFullYear() - 2, new Date().getFullYear() - 3];
+  const revenueAvailableYears = financialAvailableYears;
 
   // ── Expenses by Month ──
   const expensesByMonth = useMemo(() => {
-    if (!expenses) return [];
-    const months: { label: string; value: number }[] = [];
-    const now = new Date();
-    for (let i = 5; i >= 0; i--) {
-      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
-      const label = d.toLocaleDateString('sq-AL', { month: 'short' });
-      const monthExpenses = expenses.filter(exp => {
-        const cd = exp.createdAt instanceof Date ? exp.createdAt : new Date(exp.createdAt);
-        return cd.getMonth() === d.getMonth() && cd.getFullYear() === d.getFullYear();
-      });
-      months.push({ label, value: monthExpenses.reduce((s, exp) => s + (exp.amount ?? 0), 0) + totalMonthlySalary });
-    }
-    return months;
-  }, [expenses, totalMonthlySalary]);
+    return MONTH_LABELS_RPT.map((label, i) => {
+      const monthExpenseTotal = (expenses ?? [])
+        .filter(exp => {
+          const d = getExpenseDate(exp);
+          if (!d) return false;
+          return d.getMonth() === i && d.getFullYear() === selectedRevenueYear;
+        })
+        .reduce((s, exp) => s + toAll(exp.amount ?? 0, (exp as any).currency), 0);
+      return { label, value: monthExpenseTotal + totalMonthlySalary };
+    });
+  }, [expenses, selectedRevenueYear, totalMonthlySalary]);
 
   // ── Expenses by Category ──
   const expensesByCategory = useMemo(() => {
@@ -243,38 +271,35 @@ const ReportsView: React.FC = () => {
 
   // ── Cashflow by Month (inflow vs outflow vs net) ──
   const cashflowByMonth = useMemo(() => {
-    if (!invoices || !expenses) return [];
-    const now = new Date();
-    return Array.from({ length: 6 }, (_, i) => {
-      const d = new Date(now.getFullYear(), now.getMonth() - (5 - i), 1);
-      const label = d.toLocaleDateString('sq-AL', { month: 'short' });
-      const inflow = invoices
+    return MONTH_LABELS_RPT.map((label, i) => {
+      const inflow = (invoices ?? [])
         .filter(inv => {
           if (inv.status !== 'Paid') return false;
-          const pd = inv.paidAt ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt))
-            : (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt));
-          return pd.getMonth() === d.getMonth() && pd.getFullYear() === d.getFullYear();
+          const pd = getInvoicePaidDate(inv);
+          if (!pd) return false;
+          return pd.getMonth() === i && pd.getFullYear() === selectedRevenueYear;
         })
         .reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0)
-        + invoices
+        + (invoices ?? [])
           .filter(inv => inv.status === 'Partial' && inv.partialPayments?.length)
           .reduce((s, inv) => {
             const monthPartials = (inv.partialPayments ?? []).filter(p => {
-              const pd = p.paidAt instanceof Date ? p.paidAt : new Date(p.paidAt as any);
-              return pd.getMonth() === d.getMonth() && pd.getFullYear() === d.getFullYear();
+              const pd = parseDate(p.paidAt);
+              if (!pd) return false;
+              return pd.getMonth() === i && pd.getFullYear() === selectedRevenueYear;
             });
             return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, (inv as any).currency), 0);
           }, 0);
-      const outflow = expenses
+      const outflow = (expenses ?? [])
         .filter(exp => {
-          const cd = exp.date ? (exp.date instanceof Date ? exp.date : new Date(exp.date))
-            : (exp.createdAt instanceof Date ? exp.createdAt : new Date(exp.createdAt));
-          return cd.getMonth() === d.getMonth() && cd.getFullYear() === d.getFullYear();
+          const d = getExpenseDate(exp);
+          if (!d) return false;
+          return d.getMonth() === i && d.getFullYear() === selectedRevenueYear;
         })
-        .reduce((s, exp) => s + (exp.amount || 0), 0) + totalMonthlySalary;
+        .reduce((s, exp) => s + toAll(exp.amount || 0, (exp as any).currency), 0) + totalMonthlySalary;
       return { label, inflow, outflow, net: inflow - outflow };
     });
-  }, [invoices, expenses, totalMonthlySalary]);
+  }, [invoices, expenses, selectedRevenueYear, totalMonthlySalary]);
 
   // ── Lead Funnel ──
   const leadFunnel = useMemo(() => {
@@ -423,7 +448,7 @@ const ReportsView: React.FC = () => {
     if (inv.status === 'Partial') return sum + Math.max(0, toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency) - toAll(inv.paidAmount ?? 0, (inv as any).currency));
     return sum;
   }, 0) || 0;
-  const totalExpenses = (expenses?.reduce((sum, exp) => sum + (exp.amount ?? 0), 0) || 0) + totalMonthlySalary;
+  const totalExpenses = (expenses?.reduce((sum, exp) => sum + toAll(exp.amount ?? 0, (exp as any).currency), 0) || 0) + totalMonthlySalary;
   const profit = paidRevenue - totalExpenses;
   const activeProjects = projects?.filter(p => p.status === 'Active').length || 0;
   const totalCustomers = customers?.length || 0;
@@ -439,15 +464,16 @@ const ReportsView: React.FC = () => {
     const lastMonthEnd = new Date(now.getFullYear(), now.getMonth(), 0);
     const paidTotal = invoices.filter(inv => {
       if (inv.status !== 'Paid') return false;
-      const d = inv.paidAt ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt))
-        : (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt));
+      const d = getInvoicePaidDate(inv);
+      if (!d) return false;
       return d >= lastMonth && d <= lastMonthEnd;
     }).reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
     const partialTotal = invoices
       .filter(inv => inv.status === 'Partial' && inv.partialPayments?.length)
       .reduce((s, inv) => {
         const monthPartials = (inv.partialPayments ?? []).filter(p => {
-          const pd = p.paidAt instanceof Date ? p.paidAt : new Date(p.paidAt as any);
+          const pd = parseDate(p.paidAt);
+          if (!pd) return false;
           return pd >= lastMonth && pd <= lastMonthEnd;
         });
         return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, (inv as any).currency), 0);
@@ -461,15 +487,16 @@ const ReportsView: React.FC = () => {
     const thisMonth = new Date(now.getFullYear(), now.getMonth(), 1);
     const paidTotal = invoices.filter(inv => {
       if (inv.status !== 'Paid') return false;
-      const d = inv.paidAt ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt))
-        : (inv.updatedAt instanceof Date ? inv.updatedAt : new Date(inv.updatedAt));
+      const d = getInvoicePaidDate(inv);
+      if (!d) return false;
       return d >= thisMonth;
     }).reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
     const partialTotal = invoices
       .filter(inv => inv.status === 'Partial' && inv.partialPayments?.length)
       .reduce((s, inv) => {
         const monthPartials = (inv.partialPayments ?? []).filter(p => {
-          const pd = p.paidAt instanceof Date ? p.paidAt : new Date(p.paidAt as any);
+          const pd = parseDate(p.paidAt);
+          if (!pd) return false;
           return pd >= thisMonth;
         });
         return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, (inv as any).currency), 0);
@@ -771,7 +798,7 @@ const ReportsView: React.FC = () => {
         {!isSales && (
         <TabsContent value="expenses">
           <Card className="p-6">
-            <h3 className="text-lg font-semibold mb-4">Shpenzimet - 6 Muajt e Fundit</h3>
+            <h3 className="text-lg font-semibold mb-4">Shpenzimet sipas Muajit ({selectedRevenueYear})</h3>
             <BarChart data={expensesByMonth.map(d => ({ ...d, color: '#ef4444' }))} />
           </Card>
         </TabsContent>
@@ -779,7 +806,7 @@ const ReportsView: React.FC = () => {
         {!isSales && (
         <TabsContent value="cashflow">
           <Card className="p-6 space-y-6">
-            <h3 className="text-lg font-semibold">Cashflow – 6 Muajt e Fundit</h3>
+            <h3 className="text-lg font-semibold">Cashflow sipas Muajit ({selectedRevenueYear})</h3>
             <CashflowChart data={cashflowByMonth} />
             <div className="grid grid-cols-3 gap-4 pt-4 border-t">
               <div className="text-center">
