@@ -429,9 +429,22 @@ const ReportsView: React.FC = () => {
 
   // ── Revenue by Staff Member (Admin/Owner only) ──
   const currentTeamId = useGlobalTeamId();
+  const scopedTeamMembers = useMemo(() => {
+    if (!teamMembers) return [];
+    const inTeam = teamMembers.filter(m => !currentTeamId || (m as any).teamId === currentTeamId);
+    const seen = new Set<string>();
+    return inTeam.filter(m => {
+      const uid = (m as any).userId || (m as any).uid || (m as any).id;
+      if (!uid) return true;
+      if (seen.has(uid)) return false;
+      seen.add(uid);
+      return true;
+    });
+  }, [teamMembers, currentTeamId]);
+
   const revenueByStaff = useMemo(() => {
-    if (!teamMembers || !projects || !invoices) return [];
-    return teamMembers
+    if (!scopedTeamMembers || !projects || !invoices) return [];
+    return scopedTeamMembers
       .map(member => {
         // Support legacy member records that may use uid/id instead of userId.
         const memberUserId = (member as any).userId || (member as any).uid || (member as any).id;
@@ -448,7 +461,7 @@ const ReportsView: React.FC = () => {
 
         // Revenue is attributed to one owner only to avoid double counting.
         // Fallbacks keep older records compatible.
-        const memberProjects = projects.filter(p => {
+        const memberOwnedProjects = projects.filter(p => {
           const responsible =
             p.responsibleUserId ||
             (p as any).ownerUserId ||
@@ -460,13 +473,30 @@ const ReportsView: React.FC = () => {
           const projectTeamId = (p as any).teamId;
           return !projectTeamId || !currentTeamId || projectTeamId === currentTeamId;
         });
-        const memberProjectIds = new Set(memberProjects.map(p => p.id));
-        const memberTaskCount = (tasks ?? []).filter(t => t.assignedToUserId === memberUserId).length;
+        const memberInvolvedProjects = projects.filter(p => {
+          const projectTeamId = (p as any).teamId;
+          const teamMatch = !projectTeamId || !currentTeamId || projectTeamId === currentTeamId;
+          if (!teamMatch) return false;
+          const owner =
+            p.responsibleUserId ||
+            (p as any).ownerUserId ||
+            (p as any).assignedToUserId ||
+            (p as any).createdByUserId;
+          const collaborators = Array.isArray((p as any).memberUserIds) ? ((p as any).memberUserIds as string[]) : [];
+          return owner === memberUserId || collaborators.includes(memberUserId);
+        });
+
+        const ownedProjectIds = new Set(memberOwnedProjects.map(p => p.id));
+        const memberTaskCount = (tasks ?? []).filter(t => {
+          if (t.assignedToUserId !== memberUserId) return false;
+          const taskTeamId = (t as any).teamId;
+          return !taskTeamId || !currentTeamId || taskTeamId === currentTeamId;
+        }).length;
         const memberInvoices = invoices.filter(inv => {
           const invoiceTeamId = (inv as any).teamId;
           const teamMatch = !invoiceTeamId || !currentTeamId || invoiceTeamId === currentTeamId;
           if (!teamMatch) return false;
-          if (inv.projectId && memberProjectIds.has(inv.projectId)) return true;
+          if (inv.projectId && ownedProjectIds.has(inv.projectId)) return true;
           const invoiceOwner = (inv as any).responsibleUserId || (inv as any).createdByUserId;
           return invoiceOwner === memberUserId;
         });
@@ -486,13 +516,13 @@ const ReportsView: React.FC = () => {
           role: member.role,
           revenue,
           outstanding,
-          projectCount: memberProjects.length,
+          projectCount: memberInvolvedProjects.length,
           taskCount: memberTaskCount,
         };
       })
       .filter(m => m.revenue > 0 || m.projectCount > 0 || m.taskCount > 0)
       .sort((a, b) => b.revenue - a.revenue);
-  }, [teamMembers, projects, invoices, tasks, currentTeamId]);
+  }, [scopedTeamMembers, projects, invoices, tasks, currentTeamId]);
 
   // ── KPI Calculations ──
   const totalRevenue = calculateCollectedRevenue(invoices);
