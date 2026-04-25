@@ -24,6 +24,7 @@ import {
   calculateRevenueBetween,
   calculateTotalExpenses,
   getFinancialAvailableYears,
+  getInvoicePaidDate,
   parseDate,
 } from '../lib/finance/financialAnalytics';
 
@@ -331,26 +332,79 @@ const ReportsView: React.FC = () => {
   // ── Revenue by Department ──
   const revenueByDepartment = useMemo(() => {
     if (!invoices || !invoiceItems || !services) return [];
-    const deptMap = new Map<string, { total: number; paid: number; count: number }>();
+    const serviceById = new Map(services.map(s => [s.id, s]));
+    const itemsByInvoiceId = new Map<string, InvoiceItem[]>();
+    invoiceItems.forEach(item => {
+      const arr = itemsByInvoiceId.get(item.invoiceId) || [];
+      arr.push(item);
+      itemsByInvoiceId.set(item.invoiceId, arr);
+    });
+
+    const deptMap = new Map<string, {
+      total: number;
+      paid: number;
+      count: number;
+      monthlyPaid: number[];
+      _invoiceIds: Set<string>;
+    }>();
+
     invoices.forEach(invoice => {
-      const items = invoiceItems.filter(item => item.invoiceId === invoice.id);
+      const items = itemsByInvoiceId.get(invoice.id) || [];
+      if (items.length === 0) return;
+
+      const createdDate = parseDate(invoice.createdAt);
+      const createdInYear = !!createdDate && createdDate.getFullYear() === selectedRevenueYear;
+      const paidDate = getInvoicePaidDate(invoice);
+      const paidInYear = !!paidDate && paidDate.getFullYear() === selectedRevenueYear;
+
       items.forEach(item => {
-        const service = services.find(s => s.id === item.serviceId);
+        const service = serviceById.get(item.serviceId);
         const dept = service?.category || 'General';
-        const current = deptMap.get(dept) || { total: 0, paid: 0, count: 0 };
-        current.total += toAll(item.totalPrice, (invoice as any).currency);
-        current.count++;
-        if (invoice.status === 'Paid') current.paid += toAll(item.totalPrice, (invoice as any).currency);
+        const current = deptMap.get(dept) || { total: 0, paid: 0, count: 0, monthlyPaid: Array(12).fill(0), _invoiceIds: new Set<string>() };
+        const itemValue = toAll(item.totalPrice, (invoice as any).currency);
+
+        if (createdInYear) {
+          current.total += itemValue;
+        }
+
+        current._invoiceIds.add(invoice.id);
+
+        if (invoice.status === 'Paid' && paidInYear && paidDate) {
+          current.paid += itemValue;
+          current.monthlyPaid[paidDate.getMonth()] += itemValue;
+        }
+
         if (invoice.status === 'Partial') {
           const invoiceTotal = toAll(invoice.total ?? invoice.amount ?? 0, (invoice as any).currency);
-          const paidFraction = invoiceTotal > 0 ? toAll(invoice.paidAmount ?? 0, (invoice as any).currency) / invoiceTotal : 0;
-          current.paid += toAll(item.totalPrice, (invoice as any).currency) * paidFraction;
+          const itemShare = invoiceTotal > 0 ? (itemValue / invoiceTotal) : 0;
+          (invoice.partialPayments ?? []).forEach(p => {
+            const pd = parseDate(p.paidAt);
+            if (!pd || pd.getFullYear() !== selectedRevenueYear) return;
+            const paidChunk = toAll(p.amount, (invoice as any).currency) * itemShare;
+            current.paid += paidChunk;
+            current.monthlyPaid[pd.getMonth()] += paidChunk;
+          });
         }
+
         deptMap.set(dept, current);
       });
     });
-    return Array.from(deptMap.entries()).map(([dept, stats]) => ({ department: dept, ...stats })).sort((a, b) => b.total - a.total);
-  }, [invoices, invoiceItems, services]);
+
+    return Array.from(deptMap.entries())
+      .map(([dept, stats]) => ({
+        department: dept,
+        total: stats.total,
+        paid: stats.paid,
+        count: stats._invoiceIds.size,
+        monthlyPaid: stats.monthlyPaid,
+      }))
+      .sort((a, b) => b.paid - a.paid);
+  }, [invoices, invoiceItems, services, selectedRevenueYear]);
+
+  const departmentYearTotal = useMemo(
+    () => revenueByDepartment.reduce((s, dept) => s + dept.paid, 0),
+    [revenueByDepartment]
+  );
 
   // ── KPI Calculations ──
   const totalRevenue = calculateCollectedRevenue(invoices);
@@ -824,7 +878,10 @@ const ReportsView: React.FC = () => {
       <Card className="p-6 space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-semibold">Të Ardhura sipas Departamentit</h3>
-          <Badge variant="secondary">{revenueByDepartment.length} departamente</Badge>
+          <div className="flex items-center gap-2">
+            <Badge variant="secondary">{selectedRevenueYear}</Badge>
+            <Badge variant="secondary">{revenueByDepartment.length} departamente</Badge>
+          </div>
         </div>
         {revenueByDepartment.length === 0 ? (
           <p className="text-sm text-muted-foreground text-center py-8">Krijoni fatura me shërbime për të parë ndarjen.</p>
@@ -832,6 +889,8 @@ const ReportsView: React.FC = () => {
           <div className="space-y-3">
             {revenueByDepartment.map(dept => {
               const paidPct = dept.total > 0 ? (dept.paid / dept.total) * 100 : 0;
+              const monthMax = Math.max(...dept.monthlyPaid, 1);
+              const thisMonthPaid = dept.monthlyPaid[new Date().getMonth()] || 0;
               return (
                 <div key={dept.department} className="space-y-1.5">
                   <div className="flex items-center justify-between">
@@ -841,20 +900,34 @@ const ReportsView: React.FC = () => {
                       <Badge variant="outline" className="text-xs">{dept.count} fatura</Badge>
                     </div>
                     <div className="text-right">
-                      <span className="font-semibold">{dept.total.toLocaleString()} ALL</span>
-                      <div className="text-xs text-muted-foreground">{dept.paid.toLocaleString()} paguar</div>
+                      <span className="font-semibold">{dept.paid.toLocaleString()} ALL</span>
+                      <div className="text-xs text-muted-foreground">nga {dept.total.toLocaleString()} ALL faturuar</div>
                     </div>
                   </div>
                   <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
                     <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${paidPct}%` }} />
+                  </div>
+                  <div className="grid grid-cols-12 gap-1">
+                    {dept.monthlyPaid.map((m, idx) => (
+                      <div
+                        key={`${dept.department}-${idx}`}
+                        className="bg-green-400/70 rounded-sm"
+                        style={{ height: `${Math.max(4, (m / monthMax) * 26)}px` }}
+                        title={`${MONTH_LABELS_RPT[idx]} ${selectedRevenueYear}: ${Math.round(m).toLocaleString()} ALL`}
+                      />
+                    ))}
+                  </div>
+                  <div className="text-[11px] text-muted-foreground flex justify-between">
+                    <span>Këtë muaj: {Math.round(thisMonthPaid).toLocaleString()} ALL</span>
+                    <span>Arkëtim: {Math.round(paidPct)}%</span>
                   </div>
                 </div>
               );
             })}
             <div className="pt-3 border-t space-y-2">
               <div className="flex justify-between text-sm font-semibold">
-                <span>Totale</span>
-                <span>{totalRevenue.toLocaleString()} ALL</span>
+                <span>Totale Departamente ({selectedRevenueYear})</span>
+                <span>{Math.round(departmentYearTotal).toLocaleString()} ALL</span>
               </div>
               {!isSales && (
               <div className="flex justify-between text-sm font-semibold">
