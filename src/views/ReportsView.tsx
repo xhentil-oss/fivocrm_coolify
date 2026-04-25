@@ -429,9 +429,10 @@ const ReportsView: React.FC = () => {
     if (!teamMembers || !projects || !invoices) return [];
     return teamMembers
       .map(member => {
+        // Revenue is attributed ONLY to the responsible person to avoid double-counting
+        // across project members (same invoice would otherwise be counted N times)
         const memberProjects = projects.filter(p =>
-          p.responsibleUserId === member.userId ||
-          (p.memberUserIds ?? []).includes(member.userId)
+          p.responsibleUserId === member.userId
         );
         const memberProjectIds = new Set(memberProjects.map(p => p.id));
         const memberTaskCount = (tasks ?? []).filter(t => t.assignedToUserId === member.userId).length;

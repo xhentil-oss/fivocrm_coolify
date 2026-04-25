@@ -235,7 +235,7 @@ const ChatView: React.FC = () => {
   const isClientChannel = activeChannel.startsWith('client-');
   const channelMsgQuery = useMemo(() => ({
     where: [{ field: 'channelId', operator: '==', value: activeChannel }],
-    orderBy: { field: 'createdAt', direction: 'asc' as const },
+    orderBy: { field: 'createdAt', direction: 'desc' as const },
     limit: 100,
     ...(isClientChannel ? { skipTeamFilter: true } : {}),
   }), [activeChannel, isClientChannel]);
@@ -282,10 +282,12 @@ const ChatView: React.FC = () => {
   const filteredMessages = useMemo(() => {
     if (!messages) return [];
     const visible = messages.filter(m => !(m as any).deletedAt);
-    if (!searchQuery.trim()) return visible;
+     // channelMsgQuery uses desc ordering; reverse so oldest messages appear at top in UI
+     const ordered = chatMode === 'channel' ? [...visible].reverse() : visible;
+     if (!searchQuery.trim()) return ordered;
     const q = searchQuery.toLowerCase();
-    return visible.filter(m => m.content.toLowerCase().includes(q));
-  }, [messages, searchQuery]);
+     return ordered.filter(m => m.content.toLowerCase().includes(q));
+    }, [messages, searchQuery, chatMode]);
 
   const profileMap = useMemo(() => {
     const map = new Map<string, UserProfile>();
@@ -325,12 +327,15 @@ const ChatView: React.FC = () => {
     const map = new Map<string, number>();
     if (!user || !allMessages) return map;
     allMessages.forEach(m => {
+      // Exclude messages from other teams (regular channels share IDs across teams)
+      const msgTeamId = (m as any).teamId;
+      if (msgTeamId && msgTeamId !== waTeamId) return;
       if (m.channelId && !m.isRead && m.senderId !== user.uid && !(m as any).deletedAt) {
         map.set(m.channelId, (map.get(m.channelId) || 0) + 1);
       }
     });
     return map;
-  }, [allMessages, user]);
+  }, [allMessages, user, waTeamId]);
 
   const otherMembers = useMemo(() => {
     if (!teamMembers) return [];
