@@ -431,6 +431,10 @@ const ReportsView: React.FC = () => {
   const currentTeamId = useGlobalTeamId();
   const revenueByStaff = useMemo(() => {
     if (!teamMembers || !projects || !invoices) return [];
+    console.log('[revenueByStaff DEBUG] currentTeamId:', currentTeamId);
+    console.log('[revenueByStaff DEBUG] teamMembers:', teamMembers.map(m => ({ userId: m.userId, name: m.displayName, teamId: (m as any).teamId })));
+    console.log('[revenueByStaff DEBUG] projects sample:', projects.slice(0, 3).map(p => ({ id: p.id, name: p.name, responsibleUserId: p.responsibleUserId, createdByUserId: (p as any).createdByUserId, teamId: (p as any).teamId })));
+    console.log('[revenueByStaff DEBUG] invoices sample:', invoices.slice(0, 3).map(i => ({ id: i.id, projectId: i.projectId, status: i.status, teamId: (i as any).teamId })));
     return teamMembers
       .map(member => {
         // Revenue is attributed ONLY to the responsible person to avoid double-counting.
