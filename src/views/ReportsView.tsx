@@ -431,26 +431,45 @@ const ReportsView: React.FC = () => {
   const currentTeamId = useGlobalTeamId();
   const revenueByStaff = useMemo(() => {
     if (!teamMembers || !projects || !invoices) return [];
-    console.log('[revenueByStaff DEBUG] currentTeamId:', currentTeamId);
-    console.log('[revenueByStaff DEBUG] teamMembers:', teamMembers.map(m => ({ userId: m.userId, name: m.displayName, teamId: (m as any).teamId })));
-    console.log('[revenueByStaff DEBUG] projects sample:', projects.slice(0, 3).map(p => ({ id: p.id, name: p.name, responsibleUserId: p.responsibleUserId, createdByUserId: (p as any).createdByUserId, teamId: (p as any).teamId })));
-    console.log('[revenueByStaff DEBUG] invoices sample:', invoices.slice(0, 3).map(i => ({ id: i.id, projectId: i.projectId, status: i.status, teamId: (i as any).teamId })));
     return teamMembers
       .map(member => {
-        // Revenue is attributed ONLY to the responsible person to avoid double-counting.
-        // Falls back to createdByUserId for projects created before responsibleUserId was introduced.
-        // Also scoped to current team to prevent cross-team data bleeding.
+        // Support legacy member records that may use uid/id instead of userId.
+        const memberUserId = (member as any).userId || (member as any).uid || (member as any).id;
+        if (!memberUserId) {
+          return {
+            name: member.displayName || member.email || 'Pa emër',
+            role: member.role,
+            revenue: 0,
+            outstanding: 0,
+            projectCount: 0,
+            taskCount: 0,
+          };
+        }
+
+        // Revenue is attributed to one owner only to avoid double counting.
+        // Fallbacks keep older records compatible.
         const memberProjects = projects.filter(p => {
-          const responsible = p.responsibleUserId || (p as any).createdByUserId;
-          if (responsible !== member.userId) return false;
+          const responsible =
+            p.responsibleUserId ||
+            (p as any).ownerUserId ||
+            (p as any).assignedToUserId ||
+            (p as any).createdByUserId;
+          if (responsible !== memberUserId) return false;
           // Allow projects with no teamId (legacy records created before teamId field existed).
           // If project has a teamId set, it must match the current team.
           const projectTeamId = (p as any).teamId;
           return !projectTeamId || !currentTeamId || projectTeamId === currentTeamId;
         });
         const memberProjectIds = new Set(memberProjects.map(p => p.id));
-        const memberTaskCount = (tasks ?? []).filter(t => t.assignedToUserId === member.userId).length;
-        const memberInvoices = invoices.filter(inv => inv.projectId && memberProjectIds.has(inv.projectId));
+        const memberTaskCount = (tasks ?? []).filter(t => t.assignedToUserId === memberUserId).length;
+        const memberInvoices = invoices.filter(inv => {
+          const invoiceTeamId = (inv as any).teamId;
+          const teamMatch = !invoiceTeamId || !currentTeamId || invoiceTeamId === currentTeamId;
+          if (!teamMatch) return false;
+          if (inv.projectId && memberProjectIds.has(inv.projectId)) return true;
+          const invoiceOwner = (inv as any).responsibleUserId || (inv as any).createdByUserId;
+          return invoiceOwner === memberUserId;
+        });
         const revenue = memberInvoices.reduce((s, inv) => {
           if (inv.status === 'Paid') return s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
           if (inv.status === 'Partial') return s + toAll(inv.paidAmount ?? 0, (inv as any).currency);
