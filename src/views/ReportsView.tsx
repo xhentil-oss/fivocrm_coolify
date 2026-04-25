@@ -448,6 +448,11 @@ const ReportsView: React.FC = () => {
       .map(member => {
         // Support legacy member records that may use uid/id instead of userId.
         const memberUserId = (member as any).userId || (member as any).uid || (member as any).id;
+        const memberIdentifiers = new Set<string>(
+          [memberUserId, (member as any).email]
+            .map(v => (typeof v === 'string' ? v.trim() : ''))
+            .filter(Boolean)
+        );
         if (!memberUserId) {
           return {
             name: member.displayName || member.email || 'Pa emër',
@@ -467,7 +472,7 @@ const ReportsView: React.FC = () => {
             (p as any).ownerUserId ||
             (p as any).assignedToUserId ||
             (p as any).createdByUserId;
-          if (responsible !== memberUserId) return false;
+          if (!responsible || !memberIdentifiers.has(responsible)) return false;
           // Allow projects with no teamId (legacy records created before teamId field existed).
           // If project has a teamId set, it must match the current team.
           const projectTeamId = (p as any).teamId;
@@ -483,12 +488,12 @@ const ReportsView: React.FC = () => {
             (p as any).assignedToUserId ||
             (p as any).createdByUserId;
           const collaborators = Array.isArray((p as any).memberUserIds) ? ((p as any).memberUserIds as string[]) : [];
-          return owner === memberUserId || collaborators.includes(memberUserId);
+          return (!!owner && memberIdentifiers.has(owner)) || collaborators.some(id => memberIdentifiers.has(id));
         });
 
         const ownedProjectIds = new Set(memberOwnedProjects.map(p => p.id));
         const memberTaskCount = (tasks ?? []).filter(t => {
-          if (t.assignedToUserId !== memberUserId) return false;
+          if (!t.assignedToUserId || !memberIdentifiers.has(t.assignedToUserId)) return false;
           const taskTeamId = (t as any).teamId;
           return !taskTeamId || !currentTeamId || taskTeamId === currentTeamId;
         }).length;
@@ -498,7 +503,7 @@ const ReportsView: React.FC = () => {
           if (!teamMatch) return false;
           if (inv.projectId && ownedProjectIds.has(inv.projectId)) return true;
           const invoiceOwner = (inv as any).responsibleUserId || (inv as any).createdByUserId;
-          return invoiceOwner === memberUserId;
+          return !!invoiceOwner && memberIdentifiers.has(invoiceOwner);
         });
         const revenue = memberInvoices.reduce((s, inv) => {
           if (inv.status === 'Paid') return s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
@@ -520,7 +525,6 @@ const ReportsView: React.FC = () => {
           taskCount: memberTaskCount,
         };
       })
-      .filter(m => m.revenue > 0 || m.projectCount > 0 || m.taskCount > 0)
       .sort((a, b) => b.revenue - a.revenue);
   }, [scopedTeamMembers, projects, invoices, tasks, currentTeamId]);
 
