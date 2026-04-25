@@ -112,10 +112,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     html,
   });
 
-  // Mark invoice as sent + set Pending
+  // Mark invoice as sent. Only upgrade Draft→Pending; never downgrade Paid/Partial/Overdue.
+  const currentStatus = invoice.status;
+  const shouldSetPending = !requestType || requestType !== 'reminder';
+  const newStatus = shouldSetPending && currentStatus === 'Draft' ? 'Pending' : currentStatus;
   await invoiceDoc.ref.update({
     emailSent: true,
-    status: 'Pending',
+    status: newStatus,
     updatedAt: admin.firestore.Timestamp.now(),
   });
 
