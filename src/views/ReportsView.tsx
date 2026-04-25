@@ -1,7 +1,7 @@
 import React, { useMemo, useState, Suspense, lazy } from 'react';
 import { TrendingUp, TrendingDown, DollarSign, Users, CheckCircle, Clock, Building2, Receipt, Target, FileText, UserPlus, CreditCard, ClipboardList, FolderKanban, ListChecks } from 'lucide-react';
 import { Card } from '../components/ui/card';
-import { useCollection } from '../hooks/useFirestore';
+import { useCollection, useGlobalTeamId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { Badge } from '../components/ui/badge';
@@ -425,14 +425,18 @@ const ReportsView: React.FC = () => {
   );
 
   // ── Revenue by Staff Member (Admin/Owner only) ──
+  const currentTeamId = useGlobalTeamId();
   const revenueByStaff = useMemo(() => {
     if (!teamMembers || !projects || !invoices) return [];
     return teamMembers
       .map(member => {
         // Revenue is attributed ONLY to the responsible person to avoid double-counting
-        // across project members (same invoice would otherwise be counted N times)
+        // across project members (same invoice would otherwise be counted N times).
+        // Also scoped to current team to prevent cross-team data bleeding
+        // (projects/invoices use skipTeamFilter for other parts of the report).
         const memberProjects = projects.filter(p =>
-          p.responsibleUserId === member.userId
+          p.responsibleUserId === member.userId &&
+          (!currentTeamId || (p as any).teamId === currentTeamId)
         );
         const memberProjectIds = new Set(memberProjects.map(p => p.id));
         const memberTaskCount = (tasks ?? []).filter(t => t.assignedToUserId === member.userId).length;
@@ -459,7 +463,7 @@ const ReportsView: React.FC = () => {
       })
       .filter(m => m.revenue > 0 || m.projectCount > 0 || m.taskCount > 0)
       .sort((a, b) => b.revenue - a.revenue);
-  }, [teamMembers, projects, invoices, tasks]);
+  }, [teamMembers, projects, invoices, tasks, currentTeamId]);
 
   // ── KPI Calculations ──
   const totalRevenue = calculateCollectedRevenue(invoices);
