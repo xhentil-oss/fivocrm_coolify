@@ -433,14 +433,14 @@ const ReportsView: React.FC = () => {
     if (!teamMembers || !projects || !invoices) return [];
     return teamMembers
       .map(member => {
-        // Revenue is attributed ONLY to the responsible person to avoid double-counting
-        // across project members (same invoice would otherwise be counted N times).
-        // Also scoped to current team to prevent cross-team data bleeding
-        // (projects/invoices use skipTeamFilter for other parts of the report).
-        const memberProjects = projects.filter(p =>
-          p.responsibleUserId === member.userId &&
-          (!currentTeamId || (p as any).teamId === currentTeamId)
-        );
+        // Revenue is attributed ONLY to the responsible person to avoid double-counting.
+        // Falls back to createdByUserId for projects created before responsibleUserId was introduced.
+        // Also scoped to current team to prevent cross-team data bleeding.
+        const memberProjects = projects.filter(p => {
+          const responsible = p.responsibleUserId || (p as any).createdByUserId;
+          return responsible === member.userId &&
+            (!currentTeamId || (p as any).teamId === currentTeamId);
+        });
         const memberProjectIds = new Set(memberProjects.map(p => p.id));
         const memberTaskCount = (tasks ?? []).filter(t => t.assignedToUserId === member.userId).length;
         const memberInvoices = invoices.filter(inv => inv.projectId && memberProjectIds.has(inv.projectId));
