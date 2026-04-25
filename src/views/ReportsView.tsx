@@ -438,8 +438,11 @@ const ReportsView: React.FC = () => {
         // Also scoped to current team to prevent cross-team data bleeding.
         const memberProjects = projects.filter(p => {
           const responsible = p.responsibleUserId || (p as any).createdByUserId;
-          return responsible === member.userId &&
-            (!currentTeamId || (p as any).teamId === currentTeamId);
+          if (responsible !== member.userId) return false;
+          // Allow projects with no teamId (legacy records created before teamId field existed).
+          // If project has a teamId set, it must match the current team.
+          const projectTeamId = (p as any).teamId;
+          return !projectTeamId || !currentTeamId || projectTeamId === currentTeamId;
         });
         const memberProjectIds = new Set(memberProjects.map(p => p.id));
         const memberTaskCount = (tasks ?? []).filter(t => t.assignedToUserId === member.userId).length;
