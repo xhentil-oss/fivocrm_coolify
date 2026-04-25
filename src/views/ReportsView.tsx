@@ -207,12 +207,19 @@ const ReportsView: React.FC = () => {
   }, [expenses, selectedRevenueYear, totalMonthlySalary]);
 
   // ── Expenses by Category ──
+  const normalizeFinanceCategory = (raw?: string) => {
+    const value = (raw || '').trim();
+    if (!value) return 'General';
+    if (value.toLowerCase().includes('seo')) return 'SEO';
+    return value;
+  };
+
   const expensesByCategory = useMemo(() => {
     if (!expenses) return [];
     const map = new Map<string, number>();
     expenses.forEach(exp => {
-      const cat = exp.category || 'Të tjera';
-      map.set(cat, (map.get(cat) || 0) + (exp.amount || 0));
+      const cat = normalizeFinanceCategory(exp.category || 'Të tjera');
+      map.set(cat, (map.get(cat) || 0) + toAll(exp.amount || 0, (exp as any).currency));
     });
     return Array.from(map.entries())
       .map(([label, value]) => ({ label, value }))
@@ -359,7 +366,7 @@ const ReportsView: React.FC = () => {
 
       items.forEach(item => {
         const service = serviceById.get(item.serviceId);
-        const dept = service?.category || 'General';
+        const dept = normalizeFinanceCategory(service?.category || 'General');
         const current = deptMap.get(dept) || { total: 0, paid: 0, count: 0, monthlyPaid: Array(12).fill(0), _invoiceIds: new Set<string>() };
         const itemValue = toAll(item.totalPrice, (invoice as any).currency);
 
@@ -400,6 +407,17 @@ const ReportsView: React.FC = () => {
       }))
       .sort((a, b) => b.paid - a.paid);
   }, [invoices, invoiceItems, services, selectedRevenueYear]);
+
+  const seoFinanceSummary = useMemo(() => {
+    const seoRevenue = revenueByDepartment
+      .filter(d => normalizeFinanceCategory(d.department) === 'SEO')
+      .reduce((s, d) => s + d.paid, 0);
+    const seoExpenses = expensesByCategory
+      .filter(c => normalizeFinanceCategory(c.label) === 'SEO')
+      .reduce((s, c) => s + c.value, 0);
+    const seoProfit = seoRevenue - seoExpenses;
+    return { seoRevenue, seoExpenses, seoProfit };
+  }, [revenueByDepartment, expensesByCategory]);
 
   const departmentYearTotal = useMemo(
     () => revenueByDepartment.reduce((s, dept) => s + dept.paid, 0),
@@ -881,6 +899,22 @@ const ReportsView: React.FC = () => {
           <div className="flex items-center gap-2">
             <Badge variant="secondary">{selectedRevenueYear}</Badge>
             <Badge variant="secondary">{revenueByDepartment.length} departamente</Badge>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+          <div className="rounded-md border p-2.5 bg-green-50/50">
+            <p className="text-[11px] text-muted-foreground">SEO - Të Ardhura</p>
+            <p className="text-sm font-semibold text-green-700">{Math.round(seoFinanceSummary.seoRevenue).toLocaleString()} ALL</p>
+          </div>
+          <div className="rounded-md border p-2.5 bg-red-50/50">
+            <p className="text-[11px] text-muted-foreground">SEO - Shpenzime</p>
+            <p className="text-sm font-semibold text-red-700">{Math.round(seoFinanceSummary.seoExpenses).toLocaleString()} ALL</p>
+          </div>
+          <div className="rounded-md border p-2.5 bg-indigo-50/50">
+            <p className="text-[11px] text-muted-foreground">SEO - Fitim Neto</p>
+            <p className={`text-sm font-semibold ${seoFinanceSummary.seoProfit >= 0 ? 'text-green-700' : 'text-red-700'}`}>
+              {Math.round(seoFinanceSummary.seoProfit).toLocaleString()} ALL
+            </p>
           </div>
         </div>
         {revenueByDepartment.length === 0 ? (
