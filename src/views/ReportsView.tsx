@@ -306,28 +306,86 @@ const ReportsView: React.FC = () => {
     ];
   }, [invoices]);
 
-  // ── Project Performance (real) ──
+  const toValidDate = (value: unknown): Date | null => {
+    if (!value) return null;
+    const d = value instanceof Date ? value : new Date(value as string);
+    return Number.isNaN(d.getTime()) ? null : d;
+  };
+
+  // ── Project Financial + Delivery Performance ──
   const projectPerformance = useMemo(() => {
     if (!projects || !tasks) return [];
     return projects
       .filter(p => p.status === 'Active' || p.status === 'Planning')
-      .slice(0, 6)
       .map(p => {
         const projectTasks = tasks.filter(t => t.projectId === p.id);
         const done = projectTasks.filter(t => t.status === 'Done').length;
         const total = projectTasks.length;
         const pct = total > 0 ? Math.round((done / total) * 100) : 0;
-        // Revenue = sum of paid + partial invoices linked to this project
-        const revenue = invoices
-          ? invoices.filter(inv => inv.projectId === p.id && (inv.status === 'Paid' || inv.status === 'Partial'))
-              .reduce((s, inv) => {
-                if (inv.status === 'Paid') return s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
-                return s + toAll(inv.paidAmount ?? 0, (inv as any).currency);
-              }, 0)
-          : 0;
-        return { name: p.name, progress: pct, done, total, budget: p.budget, spent: p.spent, revenue };
+        const projectInvoices = (invoices ?? []).filter(inv => inv.projectId === p.id);
+        const billed = projectInvoices.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
+        const collected = projectInvoices.reduce((s, inv) => {
+          if (inv.status === 'Paid') return s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
+          if (inv.status === 'Partial') return s + toAll(inv.paidAmount ?? 0, (inv as any).currency);
+          return s;
+        }, 0);
+        const outstanding = Math.max(0, billed - collected);
+
+        const overdueInvoices = projectInvoices.filter(inv => {
+          if (inv.status === 'Overdue') return true;
+          if (inv.status === 'Paid') return false;
+          const due = toValidDate(inv.dueDate);
+          return !!due && due < new Date();
+        });
+        const overdue = overdueInvoices.reduce((s, inv) => {
+          const invTotal = toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
+          const invPaid = inv.status === 'Partial' ? toAll(inv.paidAmount ?? 0, (inv as any).currency) : 0;
+          return s + Math.max(0, invTotal - invPaid);
+        }, 0);
+
+        const collectionRate = billed > 0 ? Math.round((collected / billed) * 100) : 0;
+        const margin = collected - (p.spent ?? 0);
+        const marginRatio = collected > 0 ? margin / collected : 0;
+
+        // Weighted health score used by top-performing services:
+        // collection quality + delivery progress + margin quality - overdue penalty.
+        const collectionScore = Math.min(100, collectionRate) * 0.45;
+        const deliveryScore = Math.min(100, pct) * 0.25;
+        const marginScore = Math.max(0, Math.min(100, ((marginRatio + 0.2) / 0.6) * 100)) * 0.30;
+        const overduePenalty = billed > 0 ? Math.min(20, (overdue / billed) * 100 * 0.2) : 0;
+        const healthScore = Math.max(0, Math.min(100, Math.round(collectionScore + deliveryScore + marginScore - overduePenalty)));
+
+        return {
+          id: p.id,
+          name: p.name,
+          progress: pct,
+          done,
+          total,
+          budget: p.budget,
+          spent: p.spent ?? 0,
+          invoicesCount: projectInvoices.length,
+          billed,
+          collected,
+          outstanding,
+          overdue,
+          collectionRate,
+          margin,
+          healthScore,
+        };
       });
   }, [projects, tasks, invoices]);
+
+  const projectPortfolioSummary = useMemo(() => {
+    const totalBilled = projectPerformance.reduce((s, p) => s + p.billed, 0);
+    const totalCollected = projectPerformance.reduce((s, p) => s + p.collected, 0);
+    const totalOutstanding = projectPerformance.reduce((s, p) => s + p.outstanding, 0);
+    const totalOverdue = projectPerformance.reduce((s, p) => s + p.overdue, 0);
+    const avgHealth = projectPerformance.length > 0
+      ? Math.round(projectPerformance.reduce((s, p) => s + p.healthScore, 0) / projectPerformance.length)
+      : 0;
+    const collectionRate = totalBilled > 0 ? Math.round((totalCollected / totalBilled) * 100) : 0;
+    return { totalBilled, totalCollected, totalOutstanding, totalOverdue, avgHealth, collectionRate };
+  }, [projectPerformance]);
 
   // ── Revenue by Department ──
   const revenueByDepartment = useMemo(() => {
@@ -763,17 +821,40 @@ const ReportsView: React.FC = () => {
             <h3 className="text-lg font-semibold">Performanca e Projekteve</h3>
             <Badge variant="secondary">{activeProjects} aktive</Badge>
           </div>
+          <div className="grid grid-cols-2 xl:grid-cols-4 gap-2.5">
+            <div className="rounded-md border p-2.5 bg-muted/30">
+              <p className="text-[11px] text-muted-foreground">Arkëtimi</p>
+              <p className="text-sm font-semibold text-green-600">{projectPortfolioSummary.collectionRate}%</p>
+            </div>
+            <div className="rounded-md border p-2.5 bg-muted/30">
+              <p className="text-[11px] text-muted-foreground">Të Pambledhura</p>
+              <p className="text-sm font-semibold text-amber-600">{projectPortfolioSummary.totalOutstanding.toLocaleString()} ALL</p>
+            </div>
+            <div className="rounded-md border p-2.5 bg-muted/30">
+              <p className="text-[11px] text-muted-foreground">Të Vonuara</p>
+              <p className="text-sm font-semibold text-red-600">{projectPortfolioSummary.totalOverdue.toLocaleString()} ALL</p>
+            </div>
+            <div className="rounded-md border p-2.5 bg-muted/30">
+              <p className="text-[11px] text-muted-foreground">Health Score</p>
+              <p className="text-sm font-semibold text-indigo-600">{projectPortfolioSummary.avgHealth}/100</p>
+            </div>
+          </div>
           {projectPerformance.length === 0 ? (
             <p className="text-sm text-muted-foreground py-4 text-center">Nuk ka projekte aktive</p>
           ) : (
             <div className="space-y-4">
-              {projectPerformance.map(p => (
-                <div key={p.name} className="space-y-1.5">
+              {projectPerformance
+                .sort((a, b) => (b.outstanding + b.overdue) - (a.outstanding + a.overdue))
+                .slice(0, 8)
+                .map(p => (
+                <div key={p.id} className="space-y-1.5 border rounded-md p-3">
                   <div className="flex items-center justify-between text-sm">
                     <span className="font-medium truncate max-w-[60%]">{p.name}</span>
                     <div className="flex items-center gap-2">
                       <span className="text-muted-foreground">{p.done}/{p.total} detyra</span>
-                      <span className="font-semibold">{p.progress}%</span>
+                      <Badge variant="outline" className={p.healthScore >= 75 ? 'text-green-700' : p.healthScore >= 50 ? 'text-amber-600' : 'text-red-600'}>
+                        Health {p.healthScore}
+                      </Badge>
                     </div>
                   </div>
                   <div className="w-full h-2.5 bg-muted rounded-full overflow-hidden">
@@ -785,10 +866,29 @@ const ReportsView: React.FC = () => {
                       }}
                     />
                   </div>
-                  {(p.budget != null || p.revenue > 0) && (
+                  <div className="text-xs text-muted-foreground flex justify-between">
+                    <span className="text-green-600 font-medium">Arkëtuar: {p.collected.toLocaleString()} ALL</span>
+                    <span className="text-amber-600">Pambledhura: {p.outstanding.toLocaleString()} ALL</span>
+                  </div>
+                  <div className="w-full h-1.5 bg-muted rounded-full overflow-hidden">
+                    <div
+                      className="h-full rounded-full bg-green-500 transition-all duration-500"
+                      style={{ width: `${Math.max(2, Math.min(100, p.collectionRate))}%` }}
+                    />
+                  </div>
+                  <div className="text-[11px] text-muted-foreground flex justify-between">
+                    <span>{p.invoicesCount} fatura · Arkëtim {p.collectionRate}%</span>
+                    <span className={p.overdue > 0 ? 'text-red-600 font-medium' : ''}>
+                      Të vonuara: {p.overdue.toLocaleString()} ALL
+                    </span>
+                  </div>
+                  {(p.budget != null || p.spent > 0 || p.margin !== 0) && (
                     <div className="text-xs text-muted-foreground flex justify-between">
-                      {p.revenue > 0 && <span className="text-green-600 font-medium">Të ardhura: {p.revenue.toLocaleString()} ALL</span>}
                       {p.budget != null && <span>Buxheti: {p.budget.toLocaleString()} ALL</span>}
+                      {p.spent > 0 && <span>Shpenzuar: {p.spent.toLocaleString()} ALL</span>}
+                      <span className={p.margin >= 0 ? 'text-green-600 font-medium' : 'text-red-600 font-medium'}>
+                        Marzhi: {p.margin.toLocaleString()} ALL
+                      </span>
                     </div>
                   )}
                 </div>
