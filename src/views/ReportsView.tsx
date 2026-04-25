@@ -424,6 +424,42 @@ const ReportsView: React.FC = () => {
     [revenueByDepartment]
   );
 
+  // ── Revenue by Staff Member (Admin/Owner only) ──
+  const revenueByStaff = useMemo(() => {
+    if (!teamMembers || !projects || !invoices) return [];
+    return teamMembers
+      .map(member => {
+        const memberProjects = projects.filter(p =>
+          p.responsibleUserId === member.userId ||
+          (p.memberUserIds ?? []).includes(member.userId)
+        );
+        const memberProjectIds = new Set(memberProjects.map(p => p.id));
+        const memberTaskCount = (tasks ?? []).filter(t => t.assignedToUserId === member.userId).length;
+        const memberInvoices = invoices.filter(inv => inv.projectId && memberProjectIds.has(inv.projectId));
+        const revenue = memberInvoices.reduce((s, inv) => {
+          if (inv.status === 'Paid') return s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
+          if (inv.status === 'Partial') return s + toAll(inv.paidAmount ?? 0, (inv as any).currency);
+          return s;
+        }, 0);
+        const outstanding = memberInvoices.reduce((s, inv) => {
+          if (inv.status === 'Paid') return s;
+          const total = toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
+          const paid = inv.status === 'Partial' ? toAll(inv.paidAmount ?? 0, (inv as any).currency) : 0;
+          return s + Math.max(0, total - paid);
+        }, 0);
+        return {
+          name: member.displayName || member.email || 'Pa emër',
+          role: member.role,
+          revenue,
+          outstanding,
+          projectCount: memberProjects.length,
+          taskCount: memberTaskCount,
+        };
+      })
+      .filter(m => m.revenue > 0 || m.projectCount > 0 || m.taskCount > 0)
+      .sort((a, b) => b.revenue - a.revenue);
+  }, [teamMembers, projects, invoices, tasks]);
+
   // ── KPI Calculations ──
   const totalRevenue = calculateCollectedRevenue(invoices);
   const paidRevenue = totalRevenue;
@@ -973,6 +1009,47 @@ const ReportsView: React.FC = () => {
           </div>
         )}
       </Card>
+
+      {/* Revenue by Staff Member — Admin/Owner only */}
+      {(permissions.isAdmin || permissions.isOwner) && revenueByStaff.length > 0 && (
+        <Card className="p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <h3 className="text-lg font-semibold">Të Ardhura sipas Stafit</h3>
+            <Badge variant="secondary">{revenueByStaff.length} anëtarë</Badge>
+          </div>
+          <div className="space-y-3">
+            {revenueByStaff.map((member, idx) => {
+              const maxRevenue = revenueByStaff[0]?.revenue || 1;
+              const revPct = maxRevenue > 0 ? (member.revenue / maxRevenue) * 100 : 0;
+              return (
+                <div key={`staff-${idx}`} className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Users className="h-4 w-4 text-muted-foreground" />
+                      <span className="font-medium">{member.name}</span>
+                      <Badge variant="outline" className="text-xs">{member.role}</Badge>
+                      <span className="text-xs text-muted-foreground">{member.projectCount} projekte · {member.taskCount} detyra</span>
+                    </div>
+                    <div className="text-right">
+                      <span className="font-semibold text-green-700">{Math.round(member.revenue).toLocaleString()} ALL</span>
+                      {member.outstanding > 0 && (
+                        <div className="text-xs text-amber-600">+{Math.round(member.outstanding).toLocaleString()} ALL pa arkëtuar</div>
+                      )}
+                    </div>
+                  </div>
+                  <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                    <div className="h-full bg-indigo-500 rounded-full transition-all" style={{ width: `${revPct}%` }} />
+                  </div>
+                </div>
+              );
+            })}
+            <div className="pt-3 border-t flex justify-between text-sm font-semibold">
+              <span>Total i Arkëtuar (Stafi)</span>
+              <span className="text-green-700">{Math.round(revenueByStaff.reduce((s, m) => s + m.revenue, 0)).toLocaleString()} ALL</span>
+            </div>
+          </div>
+        </Card>
+      )}
 
       {/* Expenses by Department/Category */}
       {!isSales && (
