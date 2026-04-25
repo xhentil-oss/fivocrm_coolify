@@ -115,6 +115,7 @@ const ExpensesView: React.FC = () => {
     const nextRecurringDate = formData.get('nextRecurringDate') as string;
     const status = formData.get('status') as string;
     const paidDate = formData.get('paidDate') as string;
+    const projectId = formData.get('projectId') as string;
 
     const memberId = formData.get('memberId') as string;
 
@@ -130,6 +131,7 @@ const ExpensesView: React.FC = () => {
       nextRecurringDate: isRecurring && nextRecurringDate ? new Date(nextRecurringDate) : undefined,
       status: status || 'Active',
       paidDate: paidDate ? new Date(paidDate) : undefined,
+      projectId: projectId && projectId !== '__none__' ? projectId : undefined,
       memberId: memberId && memberId !== '__none__' ? memberId : undefined,
     } as any);
 

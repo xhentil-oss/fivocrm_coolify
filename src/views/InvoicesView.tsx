@@ -1309,10 +1309,6 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       paymentUrl,
       isRecurring,
       recurringFrequency: isRecurring ? recurringFrequency : undefined,
-      emailSent: false,
-      reminderSent: false,
-      reminder25Sent: false,
-      reminderLastDaySent: false,
     };
 
     if (isEditing) {
@@ -1323,6 +1319,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         // Keep existing paidAt but allow updating it via the date field
         invoiceData.paidAt = paidAtDateForm ? new Date(paidAtDateForm + 'T12:00:00') : editInvoice.paidAt;
       }
+      // Do NOT reset emailSent/reminderSent flags on edit — cron uses them to avoid duplicate sends
 
       // Update existing invoice
       await invoiceMutation.update(editInvoice!.id, invoiceData);
@@ -1347,9 +1344,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         }
       }
     } else {
-      // Create new invoice
+      // Create new invoice — set email flags to false (not yet sent)
       invoiceData.emailSent = false;
       invoiceData.reminderSent = false;
+      invoiceData.reminder25Sent = false;
+      invoiceData.reminderLastDaySent = false;
 
       const invoice = await invoiceMutation.create(invoiceData);
 

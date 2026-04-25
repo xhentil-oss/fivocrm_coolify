@@ -273,11 +273,12 @@ const CustomersView: React.FC = () => {
     ['name', 'email', 'phone', 'company', 'address', 'website', 'industry',
      'taxId', 'billingAddress', 'shippingAddress', 'contactPerson', 'contactPhone',
      'notes', 'status', 'paymentTerms', 'tags'].forEach(key => {
+      // Always include the value so clearing a field (e.g. removing email/phone) is saved
       const val = formData.get(key) as string;
-      if (val) data[key] = val;
+      data[key] = val || '';
     });
     const creditLimit = formData.get('creditLimit') as string;
-    if (creditLimit) data.creditLimit = parseFloat(creditLimit);
+    data.creditLimit = creditLimit ? parseFloat(creditLimit) : null;
 
     const normEmail = (data.email as string | undefined)?.toLowerCase().trim();
     const normPhone = (data.phone as string | undefined)?.replace(/\D/g, '');
