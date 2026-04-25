@@ -283,10 +283,14 @@ const InvoicesView: React.FC = () => {
       toast({ title: 'Shumë e pavlefshme', description: 'Shkruaj një shumë pozitive.', variant: 'destructive' });
       return;
     }
-    const invoiceTotal = toAll(partialPaymentInvoice.total ?? partialPaymentInvoice.amount ?? 0, (partialPaymentInvoice as any).currency);
+    // Compare in the invoice's native currency (EUR or ALL) to avoid mismatch
+    // toAll() is only for display/aggregation, NOT for payment logic
+    const invoiceCurrency = (partialPaymentInvoice as any).currency || 'ALL';
+    const invoiceTotalNative = partialPaymentInvoice.total ?? partialPaymentInvoice.amount ?? 0;
     const alreadyPaid = partialPaymentInvoice.paidAmount ?? 0;
-    if (amount > invoiceTotal - alreadyPaid) {
-      toast({ title: 'Shumë e madhe', description: `Mbetet për t'u paguar: ${(invoiceTotal - alreadyPaid).toLocaleString()} L`, variant: 'destructive' });
+    const remaining = invoiceTotalNative - alreadyPaid;
+    if (amount > remaining) {
+      toast({ title: 'Shumë e madhe', description: `Mbetet për t'u paguar: ${remaining.toLocaleString()} ${invoiceCurrency}`, variant: 'destructive' });
       return;
     }
     setPartialSaving(true);
@@ -294,7 +298,7 @@ const InvoicesView: React.FC = () => {
       const newPayment = { amount, paidAt: new Date(), method: partialMethod, note: partialNote || undefined };
       const existingPayments = partialPaymentInvoice.partialPayments ?? [];
       const newPaidAmount = alreadyPaid + amount;
-      const isFullyPaid = newPaidAmount >= invoiceTotal;
+      const isFullyPaid = newPaidAmount >= invoiceTotalNative;
       const updateData: any = {
         partialPayments: [...existingPayments, newPayment],
         paidAmount: newPaidAmount,
@@ -314,7 +318,7 @@ const InvoicesView: React.FC = () => {
           actionLabel: 'Shiko Faturat',
         }))).catch(() => {});
       }
-      toast({ title: isFullyPaid ? 'Fatura u pagua plotësisht! ✓' : `Pagesë e regjistruar: ${amount.toLocaleString()} L`, description: isFullyPaid ? undefined : `Mbetet: ${(invoiceTotal - newPaidAmount).toLocaleString()} L` });
+      toast({ title: isFullyPaid ? 'Fatura u pagua plotësisht! ✓' : `Pagesë e regjistruar: ${amount.toLocaleString()} ${invoiceCurrency}`, description: isFullyPaid ? undefined : `Mbetet: ${(invoiceTotalNative - newPaidAmount).toLocaleString()} ${invoiceCurrency}` });
       setPartialPaymentInvoice(null);
       setPartialAmount('');
       setPartialNote('');

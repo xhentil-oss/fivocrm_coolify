@@ -78,14 +78,25 @@ export function buildRevenueByMonth(invoices: Invoice[] | undefined, year: numbe
     });
 
     const partialForMonth = invoices
-      .filter(inv => inv.status === 'Partial' && inv.partialPayments?.length)
+      .filter(inv => inv.status === 'Partial')
       .reduce((s, inv) => {
-        const monthPartials = (inv.partialPayments ?? []).filter(p => {
-          const pd = parseDate(p.paidAt);
-          if (!pd) return false;
-          return pd.getMonth() === i && pd.getFullYear() === year;
-        });
-        return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, inv.currency), 0);
+        // Prefer individual payment records (time-accurate)
+        if (inv.partialPayments?.length) {
+          const monthPartials = inv.partialPayments.filter(p => {
+            const pd = parseDate(p.paidAt);
+            if (!pd) return false;
+            return pd.getMonth() === i && pd.getFullYear() === year;
+          });
+          return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, inv.currency), 0);
+        }
+        // Fallback: no payment records, but paidAmount is set — assign to updatedAt/createdAt month
+        if (inv.paidAmount && inv.paidAmount > 0) {
+          const pd = getInvoicePaidDate(inv);
+          if (pd && pd.getMonth() === i && pd.getFullYear() === year) {
+            return s + toAll(inv.paidAmount, inv.currency);
+          }
+        }
+        return s;
       }, 0);
 
     const paid = paidInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, inv.currency), 0) + partialForMonth;
@@ -116,6 +127,26 @@ export function buildCashflowByMonth(
   monthLabels = MONTH_LABELS_SQ,
 ): CashflowMonthPoint[] {
   return monthLabels.map((label, i) => {
+    const partialInflow = (invoices ?? [])
+      .filter(inv => inv.status === 'Partial')
+      .reduce((s, inv) => {
+        if (inv.partialPayments?.length) {
+          const monthPartials = inv.partialPayments.filter(p => {
+            const pd = parseDate(p.paidAt);
+            if (!pd) return false;
+            return pd.getMonth() === i && pd.getFullYear() === year;
+          });
+          return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, inv.currency), 0);
+        }
+        if (inv.paidAmount && inv.paidAmount > 0) {
+          const pd = getInvoicePaidDate(inv);
+          if (pd && pd.getMonth() === i && pd.getFullYear() === year) {
+            return s + toAll(inv.paidAmount, inv.currency);
+          }
+        }
+        return s;
+      }, 0);
+
     const inflow = (invoices ?? [])
       .filter(inv => {
         if (inv.status !== 'Paid') return false;
@@ -124,16 +155,7 @@ export function buildCashflowByMonth(
         return pd.getMonth() === i && pd.getFullYear() === year;
       })
       .reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, inv.currency), 0)
-      + (invoices ?? [])
-        .filter(inv => inv.status === 'Partial' && inv.partialPayments?.length)
-        .reduce((s, inv) => {
-          const monthPartials = (inv.partialPayments ?? []).filter(p => {
-            const pd = parseDate(p.paidAt);
-            if (!pd) return false;
-            return pd.getMonth() === i && pd.getFullYear() === year;
-          });
-          return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, inv.currency), 0);
-        }, 0);
+      + partialInflow;
 
     const outflow = (expenses ?? [])
       .filter(exp => {

@@ -272,15 +272,18 @@ const ReportsView: React.FC = () => {
         const total = projectTasks.length;
         const pct = total > 0 ? Math.round((done / total) * 100) : 0;
         const projectInvoices = (invoices ?? []).filter(inv => inv.projectId === p.id);
-        const billed = projectInvoices.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
-        const collected = projectInvoices.reduce((s, inv) => {
+        // Exclude Draft invoices from billed — they haven't been sent to the client yet;
+        // including them inflates 'outstanding' with amounts not yet owed.
+        const sentInvoices = projectInvoices.filter(inv => inv.status !== 'Draft');
+        const billed = sentInvoices.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
+        const collected = sentInvoices.reduce((s, inv) => {
           if (inv.status === 'Paid') return s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
           if (inv.status === 'Partial') return s + toAll(inv.paidAmount ?? 0, (inv as any).currency);
           return s;
         }, 0);
         const outstanding = Math.max(0, billed - collected);
 
-        const overdueInvoices = projectInvoices.filter(inv => {
+        const overdueInvoices = sentInvoices.filter(inv => {
           if (inv.status === 'Overdue') return true;
           if (inv.status === 'Paid') return false;
           const due = parseDate(inv.dueDate);
