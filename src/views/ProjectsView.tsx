@@ -596,7 +596,7 @@ const ProjectsView: React.FC = () => {
             const members = getProjectMembers(project);
             const team = getTeamName(project.teamId);
             const isJoined = members.some(m => m.userId === user?.uid);
-            const isGuestOnProject = Array.isArray((project as any).guestUserIds) && (project as any).guestUserIds.includes(user?.uid);
+            const isGuestOnProject = Array.isArray(project.guestUserIds) && project.guestUserIds.includes(user?.uid);
 
             return (
               <div

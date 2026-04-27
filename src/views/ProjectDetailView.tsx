@@ -104,7 +104,7 @@ const ProjectDetailView: React.FC = () => {
   // Is the current user a guest on this project? (read-only + comments, no editing)
   const isGuestOnProject = React.useMemo(() => {
     if (!user || !project) return false;
-    const guestIds: string[] = (project as any).guestUserIds || [];
+    const guestIds: string[] = project.guestUserIds || [];
     return guestIds.includes(user.uid);
   }, [user, project]);
 
@@ -220,7 +220,7 @@ const ProjectDetailView: React.FC = () => {
 
     // Notify guests about the new task
     if (project) {
-      const guestIds: string[] = (project as any).guestUserIds || [];
+      const guestIds: string[] = project.guestUserIds || [];
       await Promise.all(
         guestIds
           .filter(id => id !== user?.uid)
@@ -277,7 +277,7 @@ const ProjectDetailView: React.FC = () => {
 
     // Notify guests when a task status changes
     if (data.status && project) {
-      const guestIds: string[] = (project as any).guestUserIds || [];
+      const guestIds: string[] = project.guestUserIds || [];
       const task = rawProjectTasks?.find(t => t.id === taskId);
       if (task && guestIds.length > 0) {
         const statusLabel: Record<string, string> = { 'Done': 'Përfunduar', 'In Progress': 'Në progres', 'Review': 'Rishikim', 'Todo': 'Për të bërë' };
@@ -576,14 +576,15 @@ const ProjectDetailView: React.FC = () => {
             </DialogTitle>
           </DialogHeader>
           <ProjectGuestForm
+            key={isGuestDialogOpen ? 'open' : 'closed'}
             project={project}
             teamMembers={teamMembers || []}
             user={user}
             onSave={async (guestUserIds) => {
-              await projectMutation.update(project.id, { guestUserIds });
-              // Notify newly added guests
-              const prevGuests: string[] = (project as any).guestUserIds || [];
+              // Capture before update so we can detect newly added guests
+              const prevGuests: string[] = project.guestUserIds || [];
               const newGuests = guestUserIds.filter(id => !prevGuests.includes(id));
+              await projectMutation.update(project.id, { guestUserIds });
               await Promise.all(
                 newGuests.map(guestId =>
                   notificationMutation.create({
@@ -760,6 +761,7 @@ const ProjectDetailView: React.FC = () => {
               onDelete={taskMutation.remove}
               projects={project ? [project] : undefined}
               onSelectSubtask={(subtask) => setSelectedTask(subtask)}
+              isProjectGuest={isGuestOnProject}
             />
           </div>
         )}
@@ -859,14 +861,14 @@ const ProjectGuestForm: React.FC<{
   onSave: (guestUserIds: string[]) => Promise<void>;
 }> = ({ project, teamMembers, user, onSave }) => {
   const { getName } = useUserNames(teamMembers);
-  const currentGuestIds: string[] = (project as any).guestUserIds || [];
+  const currentGuestIds: string[] = project.guestUserIds || [];
   const [selected, setSelected] = useState<string[]>(currentGuestIds);
   const [saving, setSaving] = useState(false);
 
-  // Exclude the project owner and users already in memberUserIds from the guest list
+  // Only users with role='Guest' can be project guests — admins/managers already have full access
   const eligibleMembers = teamMembers.filter(m => {
     if (m.userId === user?.uid) return false;
-    return true;
+    return m.role === 'Guest';
   });
 
   const toggle = (userId: string) => {

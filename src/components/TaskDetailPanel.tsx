@@ -34,25 +34,27 @@ interface TaskDetailPanelProps {
   projectsLoading?: boolean;
   allTasks?: Task[];
   onSelectSubtask?: (subtask: Task) => void;
+  isProjectGuest?: boolean;
 }
 
-const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({ 
-  task, 
+const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
+  task,
   onClose,
   onExpand,
   isExpanded,
-  comments, 
-  onAddComment, 
-  onUpdate, 
+  comments,
+  onAddComment,
+  onUpdate,
   onDelete,
   projects = [],
   projectsLoading = false,
   allTasks,
-  onSelectSubtask
+  onSelectSubtask,
+  isProjectGuest = false,
 }) => {
   const { user } = useAuth();
   const permissions = usePermissions();
-  const isGuestMode = permissions.isGuest;
+  const isGuestMode = permissions.isGuest || isProjectGuest;
   const { isConnected: isGoogleConnected } = useGoogleApi();
   const [commentText, setCommentText] = useState('');
   const [mentionMap, setMentionMap] = useState<Record<string, string>>({}); // displayName → uid

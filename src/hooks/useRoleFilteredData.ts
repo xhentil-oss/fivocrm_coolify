@@ -93,7 +93,7 @@ export function useFilteredProjects<T extends Partial<Project> & { id: string }>
 
     // Projects where they are listed as a guest
     projects.forEach(p => {
-      if (Array.isArray((p as any).guestUserIds) && (p as any).guestUserIds.some((id: string) => userIds.includes(id))) {
+      if (Array.isArray(p.guestUserIds) && p.guestUserIds.some((id: string) => userIds.includes(id))) {
         myProjectIds.add(p.id);
       }
     });
