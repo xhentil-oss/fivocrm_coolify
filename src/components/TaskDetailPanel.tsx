@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useCollection, useMutation } from '../hooks/useFirestore';
+import { buildNextRecurringTask } from '../lib/recurringUtils';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
@@ -704,6 +705,24 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 return;
               }
             }
+
+            // "After completion" recurring: when marked Done, immediately spawn the next cycle
+            if (newStatus === 'Done' && task.isRecurring && task.recurringFrequency && !task.nextCycleCreated) {
+              try {
+                const nextTask = buildNextRecurringTask(task);
+                await taskMutation.create(nextTask as any);
+                // Mark completed task so cron doesn't create a duplicate
+                await onUpdate(task.id, { status: 'Done', nextCycleCreated: true });
+                const freqLabel: Record<string, string> = { daily: 'ditore', weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
+                toast({ title: '✅ Detyrë e kryer + cikli i ri!', description: `Detyra periodike ${freqLabel[task.recurringFrequency] ?? ''} u rigjenerua automatikisht.` });
+              } catch (err) {
+                console.error('[Recurring] krijimi i ciklit tjetër dështoi:', err);
+                await onUpdate(task.id, { status: 'Done' });
+                toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
+              }
+              return;
+            }
+
             await onUpdate(task.id, { status: newStatus });
             const labels: Record<string, string> = { Todo: 'Për të bërë', 'In Progress': 'Në progres', Review: 'Rishikim', Done: 'Përfunduar' };
             toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${labels[newStatus] ?? newStatus}` });

@@ -30,6 +30,7 @@ import {
 import TaskDetailPanel from '../components/TaskDetailPanel';
 import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
+import { buildNextRecurringTask } from '../lib/recurringUtils';
 import type { Task, Project, Team, TeamMember } from '../types';
 
 const ProjectDetailView: React.FC = () => {
@@ -356,7 +357,19 @@ const ProjectDetailView: React.FC = () => {
       ?? columns.find(c => allTasksFlat.filter(t => t.status === c.status).some(t => t.id === overId))?.status;
     if (!targetStatus) return;
     const task = allTasksFlat.find(t => t.id === taskId);
-    if (task && task.status !== targetStatus) {
+    if (!task || task.status === targetStatus) return;
+
+    // "After completion" recurring: kanban drag to Done spawns next cycle immediately
+    if (targetStatus === 'Done' && task.isRecurring && task.recurringFrequency && !task.nextCycleCreated) {
+      try {
+        const nextTask = buildNextRecurringTask(task);
+        await taskMutation.create(nextTask as any);
+        await handleTaskUpdate(taskId, { status: 'Done', nextCycleCreated: true });
+      } catch (err) {
+        console.error('[Recurring] krijimi i ciklit tjetër dështoi (drag):', err);
+        await handleTaskUpdate(taskId, { status: 'Done' });
+      }
+    } else {
       await handleTaskUpdate(taskId, { status: targetStatus });
     }
   };

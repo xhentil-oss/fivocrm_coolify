@@ -99,6 +99,7 @@ export interface Task {
   recurringDaysOfWeek?: number[]; // for daily: which weekdays to include (e.g. [1,2,3,4,5] = Mon-Fri)
   recurringDayOfMonth?: number; // 1-31
   nextRecurringDate?: Date;
+  nextCycleCreated?: boolean;
   dueNotificationSent?: boolean;
   attachments?: string;
   collaboratorIds?: string[];
