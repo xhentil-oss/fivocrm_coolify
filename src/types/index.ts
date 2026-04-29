@@ -500,16 +500,31 @@ export interface UserProfile {
   updatedAt: Date;
 }
 
+export type NotificationType =
+  | 'task_assigned' | 'task_overdue' | 'task_due_soon' | 'task_mention' | 'task_collaborator_added'
+  | 'project_completed' | 'project_created' | 'project_open_reminder' | 'project_cycle_reset'
+  | 'invoice_paid' | 'invoice_overdue' | 'invoice_created' | 'invoice_reminder_sent'
+  | 'invoice_reminder1_sent' | 'invoice_reminder2_sent' | 'auto_invoice_created'
+  | 'lead_assigned' | 'lead_converted' | 'lead_follow_up'
+  | 'goal_achieved' | 'goal_assigned' | 'goal_overdue'
+  | 'client_message' | 'staff_message' | 'project_comment' | 'client_request'
+  | 'recurring_task_created' | 'recurring_expense_created'
+  | 'expense_submitted'
+  | 'guest_project_invited' | 'guest_task_new' | 'guest_task_update'
+  | string; // fallback for future types
+
 export interface Notification {
   id: string;
   userId: string;
-  type: string;
+  type: NotificationType;
   title: string;
   message?: string;
   isRead?: boolean;
+  teamId?: string;
   actionType?: 'link' | 'approve' | 'view';
   actionUrl?: string;
   actionLabel?: string;
+  linkTo?: string;
   createdAt: Date;
 }
 

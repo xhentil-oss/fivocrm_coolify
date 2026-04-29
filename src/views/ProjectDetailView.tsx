@@ -331,7 +331,8 @@ const ProjectDetailView: React.FC = () => {
           title: `✅ Projekti "${project.name}" u mbyll automatikisht`,
           message: 'Të gjitha detyrat u shënuan si Përfunduar.',
           isRead: false,
-          createdAt: now,
+          actionUrl: `/app/projects/${project.id}`,
+          actionLabel: 'Shiko Projektin',
         });
       }
     }

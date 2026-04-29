@@ -485,9 +485,12 @@ const CRMView: React.FC = () => {
           .filter(m => m.userId !== user.uid && (m.role === 'Admin' || m.canAccessCRM))
           .map(m => notificationMutation.create({
             userId: m.userId,
-            title: 'Lead u konvertua në Klient',
+            type: 'lead_converted',
+            title: '🎉 Lead u konvertua në Klient',
             message: `${lead.name} u konvertua me sukses në klient!`,
             isRead: false,
+            actionUrl: '/app/crm',
+            actionLabel: 'Shiko CRM',
           }));
         await Promise.all(notifyPromises).catch(err => console.error('[Notifications] lead_converted dërgim dështoi:', err));
       }

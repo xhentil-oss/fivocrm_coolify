@@ -841,9 +841,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                           if (prevAssignee && prevAssignee !== user.uid) {
                             await notificationMutation.create({
                               userId: prevAssignee,
+                              type: 'task_assigned',
                               title: 'Detyrë e Ri-caktuar',
                               message: `Detyra "${task.title}" u ri-caktua nga ti te ${user.displayName || 'një anëtar tjetër'}`,
                               isRead: false,
+                              actionUrl: task.projectId ? `/app/projects/${task.projectId}` : '/app/tasks',
+                              actionLabel: task.projectId ? 'Shiko Projektin' : 'Shiko Detyrat',
                             });
                             logActivity('update', `Detyra "${task.title}" u ri-caktua`, {
                               description: `Nga: ${prevAssignee || 'Pa caktuar'} → Te: ${user.uid}`,
@@ -886,9 +889,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                                     if (member.userId !== user?.uid) {
                                       await notificationMutation.create({
                                         userId: member.userId,
+                                        type: 'task_assigned',
                                         title: 'Detyrë e Re e Caktuar',
                                         message: `${user?.displayName || 'Dikush'} ju caktoi detyrën: ${task.title}`,
                                         isRead: false,
+                                        actionUrl: task.projectId ? `/app/projects/${task.projectId}` : '/app/tasks',
+                                        actionLabel: task.projectId ? 'Shiko Projektin' : 'Shiko Detyrat',
                                       });
                                     }
                                     logActivity('update', `Detyra "${task.title}" u ri-caktua`, {
@@ -934,9 +940,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                               if (newUserId !== user?.uid) {
                                 await notificationMutation.create({
                                   userId: newUserId,
+                                  type: 'task_assigned',
                                   title: 'Detyrë e Re e Caktuar',
                                   message: `${user?.displayName || 'Dikush'} ju caktoi detyrën: ${task.title}`,
                                   isRead: false,
+                                  actionUrl: task.projectId ? `/app/projects/${task.projectId}` : '/app/tasks',
+                                  actionLabel: task.projectId ? 'Shiko Projektin' : 'Shiko Detyrat',
                                 });
                               }
                               logActivity('update', `Detyra "${task.title}" u ri-caktua`, {
@@ -960,9 +969,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                             if (newUserId !== user?.uid) {
                               await notificationMutation.create({
                                 userId: newUserId,
+                                type: 'task_assigned',
                                 title: 'Detyrë e Re e Caktuar',
                                 message: `${user?.displayName || 'Dikush'} ju caktoi detyrën: ${task.title}`,
                                 isRead: false,
+                                actionUrl: task.projectId ? `/app/projects/${task.projectId}` : '/app/tasks',
+                                actionLabel: task.projectId ? 'Shiko Projektin' : 'Shiko Detyrat',
                               });
                             }
                             logActivity('update', `Detyra "${task.title}" u ri-caktua`, {

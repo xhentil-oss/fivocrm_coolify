@@ -5,7 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import {
   Bell, Check, Trash2, AlertCircle, CheckCircle, Info, ExternalLink,
   MessageSquare, DollarSign, RefreshCw, Target, FileText, Users, User,
-  Calendar, Clock, TrendingUp, Zap, ChevronDown,
+  Calendar, Clock, TrendingUp, Zap, ChevronDown, UserPlus, Eye, Plus,
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
@@ -63,8 +63,14 @@ const TYPE_CONFIG: Record<string, TypeConfig> = {
   recurring_task_created:  { icon: <RefreshCw className="w-4 h-4 text-indigo-500" />,    priority: 'neutral',  borderColor: '',                    bgColor: '' },
   recurring_expense_created:{ icon: <RefreshCw className="w-4 h-4 text-indigo-500" />,   priority: 'neutral',  borderColor: '',                    bgColor: '' },
   project_cycle_reset:     { icon: <RefreshCw className="w-4 h-4 text-indigo-500" />,    priority: 'neutral',  borderColor: '',                    bgColor: '' },
+  // Project completed
+  project_completed:       { icon: <CheckCircle className="w-4 h-4 text-emerald-500" />, priority: 'success',  borderColor: 'border-l-emerald-500', bgColor: 'bg-emerald-50/60 dark:bg-emerald-950/20' },
   // Expenses
   expense_submitted:       { icon: <DollarSign className="w-4 h-4 text-blue-500" />,     priority: 'neutral',  borderColor: '',                    bgColor: '' },
+  // Guest access
+  guest_project_invited:   { icon: <UserPlus className="w-4 h-4 text-amber-500" />,      priority: 'info',     borderColor: 'border-l-amber-500',  bgColor: 'bg-amber-50/60 dark:bg-amber-950/20' },
+  guest_task_new:          { icon: <Plus className="w-4 h-4 text-amber-500" />,          priority: 'neutral',  borderColor: '',                    bgColor: '' },
+  guest_task_update:       { icon: <Eye className="w-4 h-4 text-amber-500" />,           priority: 'neutral',  borderColor: '',                    bgColor: '' },
 };
 
 const DEFAULT_CONFIG: TypeConfig = {
@@ -94,9 +100,9 @@ const NotificationsCenter: React.FC = () => {
   const notificationMutation = useMutation<Notification>('notifications');
 
   const unreadCount = notifications?.filter(n => !n.isRead).length || 0;
-  const unreadClientCount = notifications?.filter(n => !n.isRead && (n as any).type === 'client_message').length || 0;
-  const unreadMentionCount = notifications?.filter(n => !n.isRead && ((n as any).type === 'task_mention' || (n as any).type === 'task_collaborator_added')).length || 0;
-  const criticalCount = notifications?.filter(n => !n.isRead && getConfig((n as any).type).priority === 'critical').length || 0;
+  const unreadClientCount = notifications?.filter(n => !n.isRead && n.type === 'client_message').length || 0;
+  const unreadMentionCount = notifications?.filter(n => !n.isRead && (n.type === 'task_mention' || n.type === 'task_collaborator_added')).length || 0;
+  const criticalCount = notifications?.filter(n => !n.isRead && getConfig(n.type).priority === 'critical').length || 0;
 
   const handleMarkAsRead = async (id: string) => {
     await notificationMutation.update(id, { isRead: true });
@@ -148,7 +154,7 @@ const NotificationsCenter: React.FC = () => {
                   : 'bg-accent text-accent-foreground'
               }`}
             >
-              {unreadCount > 9 ? '9+' : unreadCount}
+              {unreadCount > 99 ? '99+' : unreadCount}
             </Badge>
           )}
         </Button>
@@ -258,8 +264,7 @@ const NotificationItem: React.FC<{
   onDelete: (id: string) => void;
 }> = ({ notification, onMarkAsRead, onDelete }) => {
   const navigate = useNavigate();
-  const n = notification as any;
-  const config = getConfig(n.type);
+  const config = getConfig(notification.type);
 
   const timeAgo = (date: Date) => {
     const seconds = Math.floor((new Date().getTime() - new Date(date).getTime()) / 1000);
@@ -270,27 +275,28 @@ const NotificationItem: React.FC<{
     return new Date(date).toLocaleDateString('sq-AL');
   };
 
-  const hasAction = n.linkTo || n.actionUrl || n.type === 'client_message';
+  const hasAction = notification.linkTo || notification.actionUrl || notification.type === 'client_message' || notification.type === 'staff_message';
 
   const handleAction = () => {
     if (!notification.isRead) onMarkAsRead(notification.id);
-    if (n.linkTo) {
+    if (notification.linkTo) {
       // linkTo stores raw channel IDs (e.g. 'general', 'client-xxx') — map to chat route
-      if (n.linkTo.startsWith('/')) {
-        navigate(n.linkTo);
+      if (notification.linkTo.startsWith('/')) {
+        navigate(notification.linkTo);
       } else {
-        navigate('/app/chat', { state: { channel: n.linkTo } });
+        navigate('/app/chat', { state: { channel: notification.linkTo } });
       }
-    } else if (n.type === 'client_message') {
+    } else if (notification.type === 'client_message' || notification.type === 'staff_message') {
       navigate('/app/chat');
-    } else if (n.actionUrl) {
-      navigate(n.actionUrl);
+    } else if (notification.actionUrl) {
+      navigate(notification.actionUrl);
     }
   };
 
   const isUnread = !notification.isRead;
   const borderClass = isUnread && config.borderColor ? `border-l-2 ${config.borderColor}` : '';
   const bgClass = isUnread && config.bgColor ? config.bgColor : isUnread ? 'bg-primary/5' : '';
+  const isChat = notification.type === 'client_message' || notification.type === 'staff_message' || !!notification.linkTo;
 
   return (
     <div
@@ -323,15 +329,15 @@ const NotificationItem: React.FC<{
                       ? 'border-amber-200 text-amber-700 hover:bg-amber-50 dark:border-amber-700 dark:text-amber-400'
                       : config.priority === 'success'
                       ? 'border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400'
-                      : n.type === 'task_collaborator_added' || n.type === 'task_mention'
+                      : notification.type === 'task_collaborator_added' || notification.type === 'task_mention'
                       ? 'border-violet-200 text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:text-violet-400'
                       : ''
                   }`}
                   onClick={(e) => { e.stopPropagation(); handleAction(); }}
                 >
-                  {n.type === 'client_message' || n.linkTo
+                  {isChat
                     ? <><MessageSquare className="w-3 h-3" />Hap Chat</>
-                    : <><ExternalLink className="w-3 h-3" />{n.actionLabel || 'Shiko'}</>
+                    : <><ExternalLink className="w-3 h-3" />{notification.actionLabel || 'Shiko'}</>
                   }
                 </Button>
               )}

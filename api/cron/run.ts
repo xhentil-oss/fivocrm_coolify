@@ -176,7 +176,7 @@ async function runInvoiceReminders() {
           ops.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject: `Kujtesë pagese: Fatura #${invoiceLabel}`, html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;"><h2 style="color:#f59e0b">⏰ Kujtesë Pagese</h2><p>Fatura juaj <strong>#${invoiceLabel}</strong> skadon ${daysLeft === 0 ? 'sot' : `për ${daysLeft} ditë`}.</p><p style="color:#9ca3af;font-size:12px">FivoCRM – Njoftime automatike</p></div>` }));
         }
       }
-      if (invoice.createdByUserId) ops.push(db.collection('notifications').add({ userId: invoice.createdByUserId, type: 'invoice_reminder_sent', title: `📧 Kujtesë u dërgua: Fatura #${invoiceLabel}`, message: `Kujtesa e pagesës u dërgua te klienti.`, isRead: false, createdAt: admin.firestore.Timestamp.now() }));
+      if (invoice.createdByUserId) ops.push(db.collection('notifications').add({ userId: invoice.createdByUserId, type: 'invoice_reminder_sent', title: `📧 Kujtesë u dërgua: Fatura #${invoiceLabel}`, message: `Kujtesa e pagesës u dërgua te klienti.`, isRead: false, actionUrl: '/app/invoices', actionLabel: 'Shiko Faturat', createdAt: admin.firestore.Timestamp.now() }));
     }
   }
   await settleAll(ops, 'invoice-reminders');
@@ -368,7 +368,7 @@ async function runRecurringProjectReset() {
 
     for (const taskDoc of tasksSnap.docs) ops.push(taskDoc.ref.update({ status: 'Todo', updatedAt: admin.firestore.Timestamp.now(), dueNotificationSent: false }));
     ops.push(projectDoc.ref.update({ status: 'Active', nextRecurringDate: nextCycle, updatedAt: admin.firestore.Timestamp.now() }));
-    if (project.responsibleUserId) ops.push(db.collection('notifications').add({ userId: project.responsibleUserId, type: 'project_cycle_reset', title: `🔄 Projekti "${project.name}" u riaktivizua`, message: `Cikli i ri ka filluar. Të gjitha detyrat janë rivendosur te "Për të bërë".`, isRead: false, createdAt: admin.firestore.Timestamp.now() }));
+    if (project.responsibleUserId) ops.push(db.collection('notifications').add({ userId: project.responsibleUserId, type: 'project_cycle_reset', title: `🔄 Projekti "${project.name}" u riaktivizua`, message: `Cikli i ri ka filluar. Të gjitha detyrat janë rivendosur te "Për të bërë".`, isRead: false, actionUrl: '/app/projects', actionLabel: 'Shiko Projektet', createdAt: admin.firestore.Timestamp.now() }));
     resetCount++;
   }
 
