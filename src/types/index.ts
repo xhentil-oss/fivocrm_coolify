@@ -511,6 +511,7 @@ export type NotificationType =
   | 'recurring_task_created' | 'recurring_expense_created'
   | 'expense_submitted'
   | 'guest_project_invited' | 'guest_task_new' | 'guest_task_update'
+  | 'project_status_changed'
   | string; // fallback for future types
 
 export interface Notification {

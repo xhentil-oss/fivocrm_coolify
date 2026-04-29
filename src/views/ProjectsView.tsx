@@ -372,6 +372,8 @@ const ProjectsView: React.FC = () => {
     const budgetRaw = budgetStr ? parseFloat(budgetStr) : undefined;
     const budget = budgetRaw !== undefined && !isNaN(budgetRaw) ? budgetRaw : undefined;
 
+    const oldStatus = projectToEdit.status;
+
     await projectMutation.update(projectToEdit.id, {
       name,
       description,
@@ -387,6 +389,32 @@ const ProjectsView: React.FC = () => {
     } as any);
 
     logActivity('project_updated', `Projekt i përditësuar: ${name}`, { entityType: 'project', entityId: projectToEdit.id });
+
+    // Notify members when project status changes
+    if (oldStatus && status && oldStatus !== status) {
+      const STATUS_LABELS: Record<string, string> = {
+        Active: 'Aktiv', Planning: 'Planifikim', 'On Hold': 'Pezulluar',
+        Completed: 'Përfunduar', Archived: 'Arkivuar', Cancelled: 'Anuluar',
+      };
+      const recipientIds = new Set<string>([
+        ...(projectToEdit.memberUserIds || []),
+        ...(responsibleUserId && responsibleUserId !== '__none__' ? [responsibleUserId] : []),
+        ...(projectToEdit.responsibleUserId ? [projectToEdit.responsibleUserId] : []),
+      ]);
+      recipientIds.delete(user?.uid || '');
+      await Promise.all([...recipientIds].map(uid =>
+        notificationMutation.create({
+          userId: uid,
+          type: 'project_status_changed',
+          title: `📋 "${name}" → ${STATUS_LABELS[status] || status}`,
+          message: `Statusi i projektit ndryshoi nga ${STATUS_LABELS[oldStatus] || oldStatus} në ${STATUS_LABELS[status] || status}.`,
+          isRead: false,
+          actionUrl: `/app/projects/${projectToEdit.id}`,
+          actionLabel: 'Shiko Projektin',
+        }).catch(() => {})
+      ));
+    }
+
     setProjectToEdit(null);
   };
 

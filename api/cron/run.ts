@@ -22,6 +22,24 @@ async function settleAll(ops: Promise<any>[], jobName: string): Promise<void> {
 // ── sendPush: send FCM push to a user if they have a registered token ─────────
 async function sendPush(userId: string, title: string, body: string, data?: Record<string, string>): Promise<void> {
   try {
+    // Respect Do Not Disturb schedule from userPreferences
+    const prefsDoc = await db.collection('userPreferences').doc(userId).get();
+    if (prefsDoc.exists) {
+      const prefs = prefsDoc.data() as any;
+      if (prefs?.dndEnabled && prefs?.dndStart && prefs?.dndEnd) {
+        const now = new Date();
+        const currentMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
+        const [sh, sm] = (prefs.dndStart as string).split(':').map(Number);
+        const [eh, em] = (prefs.dndEnd as string).split(':').map(Number);
+        const startMin = sh * 60 + sm;
+        const endMin   = eh * 60 + em;
+        const isDND = startMin <= endMin
+          ? currentMinutes >= startMin && currentMinutes < endMin
+          : currentMinutes >= startMin || currentMinutes < endMin; // overnight window
+        if (isDND) return;
+      }
+    }
+
     const tokenDoc = await db.collection('userPushTokens').doc(userId).get();
     if (!tokenDoc.exists) return;
     const token = tokenDoc.data()?.token;
@@ -31,6 +49,7 @@ async function sendPush(userId: string, title: string, body: string, data?: Reco
       notification: { title, body },
       data: data || {},
       android: { priority: 'high' },
+      webpush: { notification: { icon: '/icon-192.png' }, fcmOptions: { link: data?.url || '/' } },
     });
   } catch (err) {
     console.error(`[Push] dërgimi për ${userId} dështoi:`, err);
@@ -239,12 +258,17 @@ async function runRecurringTasks() {
     const newEnd = addFrequency(endDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
     const newNext = addFrequency(nextRecurringDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
 
-    ops.push(db.collection('tasks').add({ title: task.title, description: task.description ?? null, status: 'Todo', priority: task.priority ?? null, projectId: task.projectId ?? null, assignedToUserId: task.assignedToUserId ?? null, startDate: admin.firestore.Timestamp.fromDate(newStart), endDate: admin.firestore.Timestamp.fromDate(newEnd), isRecurring: true, recurringFrequency: task.recurringFrequency, recurringInterval: task.recurringInterval ?? 1, recurringDayOfWeek: task.recurringDayOfWeek ?? null, recurringDayOfMonth: task.recurringDayOfMonth ?? null, recurringDaysOfWeek: task.recurringDaysOfWeek ?? null, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), nextCycleCreated: false, dueNotificationSent: false, parentTaskId: task.parentTaskId ?? null, createdByUserId: task.createdByUserId ?? null, teamId: task.teamId ?? null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
+    // Create new task ref first so we can reference its ID in the notification
+    const newTaskRef = db.collection('tasks').doc();
+    ops.push(newTaskRef.set({ title: task.title, description: task.description ?? null, status: 'Todo', priority: task.priority ?? null, projectId: task.projectId ?? null, assignedToUserId: task.assignedToUserId ?? null, startDate: admin.firestore.Timestamp.fromDate(newStart), endDate: admin.firestore.Timestamp.fromDate(newEnd), isRecurring: true, recurringFrequency: task.recurringFrequency, recurringInterval: task.recurringInterval ?? 1, recurringDayOfWeek: task.recurringDayOfWeek ?? null, recurringDayOfMonth: task.recurringDayOfMonth ?? null, recurringDaysOfWeek: task.recurringDaysOfWeek ?? null, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), nextCycleCreated: false, dueNotificationSent: false, parentTaskId: task.parentTaskId ?? null, createdByUserId: task.createdByUserId ?? null, teamId: task.teamId ?? null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
     ops.push(doc.ref.update({ nextCycleCreated: true, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), updatedAt: admin.firestore.Timestamp.now() }));
     const notifRecipient = task.assignedToUserId || task.createdByUserId;
     if (notifRecipient) {
-      const freqLabel: Record<string, string> = { weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
-      ops.push(db.collection('notifications').add({ userId: notifRecipient, type: 'recurring_task_created', title: `🔄 Detyrë e re periodike: ${task.title}`, message: `Detyra periodike "${task.title}" (${freqLabel[task.recurringFrequency] ?? task.recurringFrequency}) u krijua automatikisht.`, isRead: false, actionUrl: '/app/tasks', actionLabel: 'Shiko Detyrat', createdAt: admin.firestore.Timestamp.now() }));
+      const freqLabel: Record<string, string> = { daily: 'ditore', weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
+      const taskUrl = task.projectId
+        ? `/app/projects/${task.projectId}?task=${newTaskRef.id}`
+        : `/app/tasks`;
+      ops.push(db.collection('notifications').add({ userId: notifRecipient, type: 'recurring_task_created', title: `🔄 Detyrë e re periodike: ${task.title}`, message: `Detyra periodike "${task.title}" (${freqLabel[task.recurringFrequency] ?? task.recurringFrequency}) u krijua automatikisht.`, isRead: false, actionUrl: taskUrl, actionLabel: 'Hap Detyrën', createdAt: admin.firestore.Timestamp.now() }));
     }
     created++;
   }
@@ -596,6 +620,79 @@ async function runLeadFollowUpReminders() {
   return { notified };
 }
 
+// ── JOB: notification-digest ─────────────────────────────────────────────────
+async function runNotificationDigest() {
+  const transporter = makeTransporter();
+  const smtpUser = process.env.SMTP_USER;
+  if (!transporter || !smtpUser) return { sent: 0, skipped: 'no SMTP config' };
+
+  // Only send to users who have ≥3 unread notifications (avoid noise)
+  const snap = await db.collection('notifications').where('isRead', '==', false).get();
+  if (snap.empty) return { sent: 0 };
+
+  // Group by userId
+  const byUser = new Map<string, { title: string; message?: string; type?: string }[]>();
+  for (const d of snap.docs) {
+    const n = d.data();
+    if (!n.userId) continue;
+    const existing = byUser.get(n.userId) || [];
+    existing.push({ title: n.title, message: n.message, type: n.type });
+    byUser.set(n.userId, existing);
+  }
+
+  let sent = 0;
+  const ops: Promise<any>[] = [];
+
+  for (const [userId, notifs] of byUser) {
+    if (notifs.length < 3) continue;
+
+    // Check if digest already sent today
+    const prefsDoc = await db.collection('userPreferences').doc(userId).get();
+    const prefs = prefsDoc.exists ? prefsDoc.data() as any : {};
+    if (prefs?.digestSentAt) {
+      const last: Date = prefs.digestSentAt?.toDate ? prefs.digestSentAt.toDate() : new Date(prefs.digestSentAt);
+      const dayAgo = new Date(Date.now() - 23 * 60 * 60 * 1000);
+      if (last > dayAgo) continue;
+    }
+
+    try {
+      const userRecord = await admin.auth().getUser(userId);
+      if (!userRecord.email) continue;
+
+      const criticalCount = notifs.filter(n => ['task_overdue', 'invoice_overdue', 'goal_overdue'].includes(n.type || '')).length;
+      const listHtml = notifs.slice(0, 10).map(n =>
+        `<li style="margin-bottom:6px"><strong>${n.title}</strong>${n.message ? `<br><span style="color:#6b7280;font-size:13px">${n.message}</span>` : ''}</li>`
+      ).join('');
+      const moreCount = notifs.length > 10 ? `<p style="color:#6b7280;font-size:13px">... dhe ${notifs.length - 10} njoftime të tjera</p>` : '';
+
+      ops.push(transporter.sendMail({
+        from: `"FivoCRM" <${smtpUser}>`,
+        to: userRecord.email,
+        subject: `📬 Digest i njoftimeve: ${notifs.length} të palexuara${criticalCount > 0 ? ` (${criticalCount} urgjente)` : ''}`,
+        html: `
+          <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px">
+            <h2 style="color:#667eea">📬 Njoftime të Palexuara</h2>
+            <p>Keni <strong>${notifs.length}</strong> njoftime të palexuara${criticalCount > 0 ? `, nga të cilat <strong style="color:#ef4444">${criticalCount} janë urgjente</strong>` : ''}.</p>
+            <ul style="padding-left:16px;line-height:1.6">${listHtml}</ul>
+            ${moreCount}
+            <a href="${process.env.VITE_APP_URL || 'https://app.fivoo.net'}/app" style="display:inline-block;margin-top:16px;padding:10px 20px;background:#667eea;color:white;border-radius:6px;text-decoration:none">Hap FivoCRM</a>
+            <p style="color:#9ca3af;font-size:12px;margin-top:24px">FivoCRM – Digest ditor automatik</p>
+          </div>
+        `,
+      }).then(() => {
+        return db.collection('userPreferences').doc(userId).set(
+          { digestSentAt: admin.firestore.Timestamp.now() },
+          { merge: true }
+        );
+      }));
+      sent++;
+    } catch { /* skip user */ }
+  }
+
+  await settleAll(ops, 'notification-digest');
+  return { sent };
+}
+
 // ── JOB: cleanup-old-notifications ───────────────────────────────────────────
 async function runCleanupOldNotifications() {
   const cutoff = new Date();
@@ -671,8 +768,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'cleanup-old-notifications':
         result = await runCleanupOldNotifications();
         break;
+      case 'notification-digest':
+        result = await runNotificationDigest();
+        break;
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest` });
     }
 
     return res.status(200).json({ success: true, job, ...result, timestamp: new Date().toISOString() });
