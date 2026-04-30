@@ -11,13 +11,12 @@ import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { Calendar } from '../components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import ExportButton from '../components/ExportButton';
 import {
-  FileText, Calendar as CalendarIcon, CheckCircle2, Clock, AlertTriangle,
+  FileText, CheckCircle2, Clock, AlertTriangle,
   ArrowRight, Smile, Meh, Frown, User, Plus, ChevronLeft, ChevronRight,
-  Sparkles, Eye,
+  Sparkles, Eye, Bot, Loader2,
 } from 'lucide-react';
 import { toast } from '../hooks/use-toast';
 import type { DailyReport, TeamMember, Project } from '../types';
@@ -63,6 +62,8 @@ const DailyReportsView: React.FC = () => {
   const [selectedReport, setSelectedReport] = useState<DailyReport | null>(null);
   const [filterUserId, setFilterUserId] = useState<string>('all');
   const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [aiSummary, setAiSummary] = useState<string | null>(null);
+  const [aiLoading, setAiLoading] = useState(false);
 
   const { data: reports, loading } = useCollection<DailyReport>('dailyReports', {
     orderBy: { field: 'date', direction: 'desc' },
@@ -125,6 +126,49 @@ const DailyReportsView: React.FC = () => {
     return map;
   }, [weekReports, week.days]);
 
+  const handleAiSummary = async () => {
+    const todayReports = weekReports.filter(r => r.date === today);
+    if (todayReports.length === 0) {
+      toast({ title: 'Asnjë raport sot për të analizuar', variant: 'destructive' });
+      return;
+    }
+
+    setAiLoading(true);
+    setAiSummary(null);
+    try {
+      const reportText = todayReports.map(r => {
+        const name = getName(r.userId);
+        return [
+          `[${name}]`,
+          `Përfundoi: ${r.completedToday}`,
+          r.openItems?.trim() ? `Hapur: ${r.openItems}` : null,
+          r.blockers?.trim() ? `Pengesa: ${r.blockers}` : null,
+          r.planTomorrow?.trim() ? `Nesër: ${r.planTomorrow}` : null,
+          `Orë: ${r.hoursWorked || 8}, Humor: ${r.mood || 'good'}`,
+        ].filter(Boolean).join('\n');
+      }).join('\n\n');
+
+      const res = await fetch('/api/ai-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{
+            role: 'user',
+            content: `Analizoji raportet ditore të ekipit dhe jepe një përmbledhje të shkurtër (3-5 pika) në shqip. Identifiko produktivitetin, problemet dhe pengesat kryesore.\n\nRaportet:\n${reportText}`,
+          }],
+        }),
+      });
+
+      if (!res.ok) throw new Error('API error');
+      const data = await res.json();
+      setAiSummary(data.reply || data.message || 'Nuk mund të gjeneroj analizë.');
+    } catch {
+      toast({ title: 'Gabim AI', description: 'Nuk mund të lidhem me AI-n.', variant: 'destructive' });
+    } finally {
+      setAiLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="space-y-6">
@@ -153,6 +197,12 @@ const DailyReportsView: React.FC = () => {
           </p>
         </div>
         <div className="flex gap-2">
+          {isManagerOrAbove && (
+            <Button size="sm" variant="outline" onClick={handleAiSummary} disabled={aiLoading}>
+              {aiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4 sm:mr-2" />}
+              <span className="hidden sm:inline">{aiLoading ? 'Duke analizuar...' : 'Analizë AI'}</span>
+            </Button>
+          )}
           <ExportButton
             data={weekReports.map(r => ({
               ...r,
@@ -200,6 +250,20 @@ const DailyReportsView: React.FC = () => {
           </div>
         </Card>
       </div>
+
+      {/* AI Summary (manager only) */}
+      {isManagerOrAbove && aiSummary && (
+        <Card className="p-4 border-primary/20 bg-primary/5">
+          <div className="flex items-start gap-3">
+            <Bot className="w-5 h-5 text-primary mt-0.5 flex-shrink-0" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium mb-2">Analizë AI — Raportet e Sot</p>
+              <p className="text-sm text-muted-foreground whitespace-pre-wrap">{aiSummary}</p>
+            </div>
+            <Button size="sm" variant="ghost" className="flex-shrink-0 text-xs" onClick={() => setAiSummary(null)}>✕</Button>
+          </div>
+        </Card>
+      )}
 
       {/* Missing reports banner (manager only) */}
       {isManagerOrAbove && missingToday.length > 0 && (

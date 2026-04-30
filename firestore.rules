@@ -307,5 +307,16 @@ service cloud.firestore {
       allow read: if isAuth() && request.auth.uid == userId;
       allow write: if isAuth() && request.auth.uid == userId;
     }
+
+    // ── userPreferences: per-user notification preferences, DND settings ──
+    // Stores notification category toggles, DND schedule, digest settings.
+    match /userPreferences/{userId} {
+      allow read, write: if isAuth() && request.auth.uid == userId;
+    }
+
+    // ── userPushTokens: FCM push tokens per user ──
+    match /userPushTokens/{userId} {
+      allow read, write: if isAuth() && request.auth.uid == userId;
+    }
   }
 }

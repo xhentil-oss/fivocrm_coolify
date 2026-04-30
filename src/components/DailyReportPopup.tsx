@@ -7,15 +7,16 @@ import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 import { Label } from './ui/label';
 import { Input } from './ui/input';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { Badge } from './ui/badge';
-import { CheckCircle2, Clock, AlertTriangle, ArrowRight, Smile, Meh, Frown, Sparkles, Square, CheckSquare } from 'lucide-react';
+import {
+  CheckCircle2, Clock, AlertTriangle, ArrowRight, Smile, Meh, Frown,
+  Sparkles, Square, CheckSquare, TrendingUp, PhoneCall,
+} from 'lucide-react';
 import { toast } from '../hooks/use-toast';
-import type { DailyReport, Project, Task } from '../types';
+import type { DailyReport, Project, Task, Lead, StandupEntry, TeamMember, Notification } from '../types';
 
 const POPUP_HOUR = 16;
-const POPUP_MINUTE = 55;
-const STORAGE_KEY = 'daily_report_dismissed';
+const POPUP_MINUTE = 45;
 
 function getTodayString(): string {
   const d = new Date();
@@ -40,6 +41,9 @@ const DailyReportPopup: React.FC = () => {
 
   const today = getTodayString();
 
+  // User-scoped dismiss key — prevents cross-user interference on shared devices
+  const storageKey = user ? `daily_report_dismissed_${user.uid}` : 'daily_report_dismissed';
+
   const { data: todayReports } = useCollection<DailyReport>('dailyReports', {
     where: [
       { field: 'userId', operator: '==', value: user?.uid || '__never__' },
@@ -48,11 +52,34 @@ const DailyReportPopup: React.FC = () => {
   });
 
   const { data: projects } = useCollection<Project>('projects');
+
   const { data: myTasks } = useCollection<Task>('tasks', {
     where: [{ field: 'assignedToUserId', operator: '==', value: user?.uid || '__never__' }],
   });
+
+  // CRM leads assigned to this user (for SalesAgent / Sales / Admin)
+  const { data: myLeads } = useCollection<Lead>('leads', {
+    where: [{ field: 'assignedToUserId', operator: '==', value: user?.uid || '__never__' }],
+    skip: !permissions.canAccessCRM,
+  });
+
+  // Today's standup (for plan vs reality comparison)
+  const { data: todayStandups } = useCollection<StandupEntry>('standups', {
+    where: [
+      { field: 'userId', operator: '==', value: user?.uid || '__never__' },
+      { field: 'date', operator: '==', value: today },
+    ],
+  });
+
+  // Team members — needed to notify managers on blocker reports
+  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
+    skipTeamFilter: true,
+    skip: !permissions.teamId,
+  });
+
   const reportMutation = useMutation<DailyReport>('dailyReports');
   const taskMutation = useMutation<Task>('tasks');
+  const notificationMutation = useMutation<Notification>('notifications');
 
   // Tasks completed today (status=Done, updatedAt is today)
   const completedTodayTasks = useMemo(() => {
@@ -66,7 +93,7 @@ const DailyReportPopup: React.FC = () => {
     });
   }, [myTasks]);
 
-  // Tasks assigned for today: due today, started today, or created/assigned today
+  // Tasks assigned for today: due today, overdue, in progress, or created today
   const todaysAssignedTasks = useMemo(() => {
     if (!myTasks) return [];
     const todayStr = getTodayString();
@@ -77,16 +104,13 @@ const DailyReportPopup: React.FC = () => {
 
     return myTasks.filter(t => {
       if (t.status === 'Done') return false;
-      // Due date is today
       const due = t.endDate || t.dueDate;
       if (due) {
         const d = due instanceof Date ? due : new Date(due);
         const dStr = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
         if (dStr === todayStr) return true;
-        // Also include overdue tasks
         if (d < todayStart) return true;
       }
-      // Start date is today or earlier (task should be active)
       if (t.startDate) {
         const s = t.startDate instanceof Date ? t.startDate : new Date(t.startDate);
         if (s <= todayEnd) {
@@ -94,21 +118,36 @@ const DailyReportPopup: React.FC = () => {
           if (!due2 || new Date(due2) >= todayStart) return true;
         }
       }
-      // Status is "In Progress" — actively being worked on
       if (t.status === 'In Progress') return true;
-      // Created/assigned today (new assignment)
       const created = t.createdAt instanceof Date ? t.createdAt : new Date(t.createdAt);
       if (created >= todayStart) return true;
       return false;
     });
   }, [myTasks]);
 
-  // Other pending tasks (not today's and not done)
   const otherPendingTasks = useMemo(() => {
     if (!myTasks) return [];
     const todayIds = new Set(todaysAssignedTasks.map(t => t.id));
     return myTasks.filter(t => t.status !== 'Done' && !todayIds.has(t.id));
   }, [myTasks, todaysAssignedTasks]);
+
+  // CRM: leads with follow-up due today or overdue
+  const todayFollowUps = useMemo(() => {
+    if (!myLeads) return [];
+    const todayEnd = new Date();
+    todayEnd.setHours(23, 59, 59, 999);
+    return myLeads.filter(l => {
+      if (!l.nextFollowUpDate) return false;
+      if (l.status === 'Won' || l.status === 'Lost') return false;
+      const d = l.nextFollowUpDate instanceof Date ? l.nextFollowUpDate : new Date(l.nextFollowUpDate);
+      return d <= todayEnd;
+    });
+  }, [myLeads]);
+
+  // Standup plan for today
+  const todayStandup = useMemo(() => {
+    return todayStandups?.[0] || null;
+  }, [todayStandups]);
 
   const alreadySubmitted = useMemo(() => {
     return (todayReports?.length || 0) > 0;
@@ -124,15 +163,12 @@ const DailyReportPopup: React.FC = () => {
       const minute = now.getMinutes();
       const day = now.getDay(); // 0=Sun, 6=Sat
 
-      // Skip weekends
       if (day === 0 || day === 6) return;
 
-      // Check if already dismissed or submitted today
-      const dismissed = localStorage.getItem(STORAGE_KEY);
+      const dismissed = localStorage.getItem(storageKey);
       if (dismissed === today) return;
       if (alreadySubmitted) return;
 
-      // Show at 16:55 or later (until end of day)
       if (hour > POPUP_HOUR || (hour === POPUP_HOUR && minute >= POPUP_MINUTE)) {
         setOpen(true);
       }
@@ -141,14 +177,13 @@ const DailyReportPopup: React.FC = () => {
     checkTime();
     const interval = setInterval(checkTime, 60_000);
     return () => clearInterval(interval);
-  }, [user, permissions.teamId, today, alreadySubmitted]);
+  }, [user, permissions.teamId, today, alreadySubmitted, storageKey]);
 
   const handleDismiss = () => {
-    localStorage.setItem(STORAGE_KEY, today);
+    localStorage.setItem(storageKey, today);
     setOpen(false);
   };
 
-  // Close without persisting — popup will reappear on next timer tick (1 min)
   const handleClose = () => {
     setOpen(false);
   };
@@ -184,10 +219,31 @@ const DailyReportPopup: React.FC = () => {
         mood,
       } as any);
 
+      // Notify admin/manager when blocker is reported
+      if (blockers.trim() && teamMembers) {
+        const submitterName = user.displayName || user.email?.split('@')[0] || 'Punonjësi';
+        const managerRecipients = teamMembers.filter(m =>
+          m.teamId === permissions.teamId &&
+          m.status === 'Active' &&
+          (m.role === 'Admin' || m.role === 'Manager') &&
+          m.userId !== user.uid
+        );
+        for (const mgr of managerRecipients) {
+          await notificationMutation.create({
+            userId: mgr.userId,
+            type: 'blocker_reported',
+            title: 'Pengesa raportuar',
+            message: `${submitterName}: "${blockers.trim().slice(0, 120)}"`,
+            isRead: false,
+            actionUrl: '/app/daily-reports',
+            actionLabel: 'Shiko raportin',
+          } as any);
+        }
+      }
+
       toast({ title: 'Raporti ditor u ruajt!', description: 'Faleminderit për raportimin.' });
-      localStorage.setItem(STORAGE_KEY, today);
+      localStorage.setItem(storageKey, today);
       setOpen(false);
-      // Reset form
       setCompletedToday('');
       setOpenItems('');
       setBlockers('');
@@ -216,7 +272,6 @@ const DailyReportPopup: React.FC = () => {
     );
   };
 
-  // Don't render if already submitted
   if (alreadySubmitted) return null;
 
   return (
@@ -228,12 +283,54 @@ const DailyReportPopup: React.FC = () => {
             Raporti Ditor
           </DialogTitle>
           <p className="text-sm text-muted-foreground">
-            Plotëso raportin e ditës në 2 minuta para se të mbyllësh ditën.
+            Plotëso raportin e ditës para se të mbyllësh ditën.
           </p>
         </DialogHeader>
 
         <div className="space-y-4 pt-2">
-          {/* 1. Completed today */}
+
+          {/* ── Context Panel ─────────────────────────────────────── */}
+          {(todayFollowUps.length > 0 || todayStandup) && (
+            <div className="space-y-2">
+              {/* Standup plan comparison */}
+              {todayStandup && (
+                <div className="bg-blue-50/60 dark:bg-blue-950/20 rounded-lg px-3 py-2 border border-blue-200/50 dark:border-blue-800/50">
+                  <p className="text-[11px] font-medium text-blue-800 dark:text-blue-300 mb-0.5">
+                    Plani i mëngjesit (standup)
+                  </p>
+                  <p className="text-xs text-muted-foreground line-clamp-2">{todayStandup.today}</p>
+                  {todayStandup.blockers?.trim() && (
+                    <p className="text-xs text-amber-600 dark:text-amber-400 mt-0.5 line-clamp-1">
+                      ⚠ {todayStandup.blockers}
+                    </p>
+                  )}
+                </div>
+              )}
+
+              {/* CRM follow-ups due today */}
+              {todayFollowUps.length > 0 && (
+                <div className="bg-amber-50/60 dark:bg-amber-950/20 rounded-lg px-3 py-2 border border-amber-200/50 dark:border-amber-800/50">
+                  <p className="text-[11px] font-medium text-amber-800 dark:text-amber-300 flex items-center gap-1.5 mb-1">
+                    <PhoneCall className="w-3 h-3" />
+                    {todayFollowUps.length} lead me follow-up sot
+                  </p>
+                  <div className="space-y-0.5">
+                    {todayFollowUps.slice(0, 4).map(lead => (
+                      <p key={lead.id} className="text-xs text-muted-foreground truncate">
+                        • {lead.name}
+                        <span className="ml-1 text-[10px] text-muted-foreground/70">({lead.status})</span>
+                      </p>
+                    ))}
+                    {todayFollowUps.length > 4 && (
+                      <p className="text-[11px] text-muted-foreground/70">+{todayFollowUps.length - 4} të tjerë</p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ── 1. Completed today ─────────────────────────────────── */}
           <div>
             <Label className="flex items-center gap-2 mb-1.5">
               <CheckCircle2 className="w-4 h-4 text-success" />
@@ -247,7 +344,7 @@ const DailyReportPopup: React.FC = () => {
             />
           </div>
 
-          {/* Tasks section */}
+          {/* ── Tasks section ─────────────────────────────────────── */}
           {(completedTodayTasks.length > 0 || todaysAssignedTasks.length > 0 || otherPendingTasks.length > 0) && (
             <div className="space-y-3">
               <Label className="flex items-center gap-2">
@@ -255,7 +352,6 @@ const DailyReportPopup: React.FC = () => {
                 Detyrat e sotme
               </Label>
 
-              {/* Tasks assigned for today (most important — shown first) */}
               {todaysAssignedTasks.length > 0 && (
                 <div className="space-y-1">
                   <p className="text-xs text-muted-foreground font-medium">
@@ -295,7 +391,6 @@ const DailyReportPopup: React.FC = () => {
                 </div>
               )}
 
-              {/* Tasks completed today (auto-detected) */}
               {completedTodayTasks.length > 0 && (
                 <div className="space-y-1">
                   <p className="text-xs text-muted-foreground">✅ Të përfunduara sot ({completedTodayTasks.length}):</p>
@@ -308,7 +403,6 @@ const DailyReportPopup: React.FC = () => {
                 </div>
               )}
 
-              {/* Other pending tasks */}
               {otherPendingTasks.length > 0 && (
                 <div className="space-y-1">
                   <p className="text-xs text-muted-foreground">Detyra të tjera aktive:</p>
@@ -345,7 +439,7 @@ const DailyReportPopup: React.FC = () => {
             </div>
           )}
 
-          {/* 2. Open items */}
+          {/* ── 2. Open items ──────────────────────────────────────── */}
           <div>
             <Label className="flex items-center gap-2 mb-1.5">
               <Clock className="w-4 h-4 text-warning" />
@@ -359,11 +453,16 @@ const DailyReportPopup: React.FC = () => {
             />
           </div>
 
-          {/* 3. Blockers */}
+          {/* ── 3. Blockers ────────────────────────────────────────── */}
           <div>
             <Label className="flex items-center gap-2 mb-1.5">
               <AlertTriangle className="w-4 h-4 text-error" />
               Çfarë pengese kam
+              {blockers.trim() && (
+                <span className="ml-auto text-[10px] text-amber-600 dark:text-amber-400 font-normal">
+                  Menaxheri do njoftohet
+                </span>
+              )}
             </Label>
             <Textarea
               value={blockers}
@@ -373,7 +472,7 @@ const DailyReportPopup: React.FC = () => {
             />
           </div>
 
-          {/* 4. Plan for tomorrow */}
+          {/* ── 4. Plan for tomorrow ───────────────────────────────── */}
           <div>
             <Label className="flex items-center gap-2 mb-1.5">
               <ArrowRight className="w-4 h-4 text-primary" />
@@ -387,7 +486,7 @@ const DailyReportPopup: React.FC = () => {
             />
           </div>
 
-          {/* Hours + Mood row */}
+          {/* ── Hours + Mood ───────────────────────────────────────── */}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <Label className="mb-1.5">Sa orë punova</Label>
@@ -404,10 +503,10 @@ const DailyReportPopup: React.FC = () => {
               <Label className="mb-1.5">Si u ndjeva sot</Label>
               <div className="flex gap-2 mt-1">
                 {([
-                  { key: 'great', icon: Smile, color: 'text-success', label: 'Shkëlqyer' },
-                  { key: 'good', icon: Smile, color: 'text-primary', label: 'Mirë' },
-                  { key: 'neutral', icon: Meh, color: 'text-warning', label: 'Normale' },
-                  { key: 'struggling', icon: Frown, color: 'text-error', label: 'Vështirë' },
+                  { key: 'great', icon: Smile, color: 'text-success' },
+                  { key: 'good',  icon: Smile, color: 'text-primary' },
+                  { key: 'neutral', icon: Meh,  color: 'text-warning' },
+                  { key: 'struggling', icon: Frown, color: 'text-error' },
                 ] as const).map(({ key, icon: Icon, color }) => (
                   <button
                     key={key}
@@ -426,8 +525,8 @@ const DailyReportPopup: React.FC = () => {
             </div>
           </div>
 
-          {/* Projects */}
-          {projects && projects.length > 0 && (
+          {/* ── Projects (hidden if user has no project access) ────── */}
+          {permissions.canAccessProjects && projects && projects.length > 0 && (
             <div>
               <Label className="mb-1.5">Në cilat projekte punova</Label>
               <div className="flex flex-wrap gap-1.5 mt-1">
@@ -445,7 +544,33 @@ const DailyReportPopup: React.FC = () => {
             </div>
           )}
 
-          {/* Actions */}
+          {/* ── CRM: leads productivity summary ───────────────────── */}
+          {permissions.canAccessCRM && myLeads && myLeads.length > 0 && (
+            <div>
+              <Label className="flex items-center gap-2 mb-1.5">
+                <TrendingUp className="w-4 h-4 text-primary" />
+                CRM — aktiviteti sot
+              </Label>
+              <div className="flex flex-wrap gap-2">
+                <div className="text-xs bg-muted/50 rounded px-2 py-1">
+                  <span className="text-muted-foreground">Gjithsej leads: </span>
+                  <span className="font-medium">{myLeads.filter(l => l.status !== 'Won' && l.status !== 'Lost').length} aktiv</span>
+                </div>
+                {todayFollowUps.length > 0 && (
+                  <div className="text-xs bg-amber-50 dark:bg-amber-950/20 rounded px-2 py-1 text-amber-700 dark:text-amber-300">
+                    {todayFollowUps.length} follow-up sot
+                  </div>
+                )}
+                {myLeads.filter(l => l.status === 'Proposal').length > 0 && (
+                  <div className="text-xs bg-blue-50 dark:bg-blue-950/20 rounded px-2 py-1 text-blue-700 dark:text-blue-300">
+                    {myLeads.filter(l => l.status === 'Proposal').length} në propozim
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* ── Actions ────────────────────────────────────────────── */}
           <div className="flex justify-between pt-2">
             <Button variant="ghost" onClick={handleDismiss}>
               Më vonë

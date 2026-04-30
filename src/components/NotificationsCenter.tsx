@@ -73,6 +73,8 @@ const TYPE_CONFIG: Record<string, TypeConfig> = {
   guest_project_invited:    { icon: <UserPlus className="w-4 h-4 text-amber-500" />,       priority: 'info',     borderColor: 'border-l-amber-500',   bgColor: 'bg-amber-50/60 dark:bg-amber-950/20' },
   guest_task_new:           { icon: <Plus className="w-4 h-4 text-amber-500" />,           priority: 'neutral',  borderColor: '',                     bgColor: '' },
   guest_task_update:        { icon: <Eye className="w-4 h-4 text-amber-500" />,            priority: 'neutral',  borderColor: '',                     bgColor: '' },
+  // Daily report blocker
+  blocker_reported:         { icon: <AlertCircle className="w-4 h-4 text-red-500" />,      priority: 'warning',  borderColor: 'border-l-red-500',     bgColor: 'bg-red-50/60 dark:bg-red-950/20' },
 };
 
 const DEFAULT_CONFIG: TypeConfig = {
@@ -91,7 +93,7 @@ function getConfig(type?: string): TypeConfig {
 type Category = 'all' | 'tasks' | 'messages' | 'projects' | 'invoices';
 
 const CATEGORY_TYPES: Record<Exclude<Category, 'all'>, string[]> = {
-  tasks:    ['task_overdue', 'task_due_soon', 'task_assigned', 'task_collaborator_added', 'task_mention', 'recurring_task_created', 'goal_overdue', 'goal_assigned', 'goal_achieved'],
+  tasks:    ['task_overdue', 'task_due_soon', 'task_assigned', 'task_collaborator_added', 'task_mention', 'recurring_task_created', 'goal_overdue', 'goal_assigned', 'goal_achieved', 'blocker_reported'],
   messages: ['client_message', 'staff_message', 'project_comment', 'client_request'],
   projects: ['project_created', 'project_completed', 'project_open_reminder', 'project_cycle_reset', 'lead_converted', 'lead_assigned', 'lead_follow_up', 'guest_project_invited', 'guest_task_new', 'guest_task_update', 'project_status_changed'],
   invoices: ['invoice_overdue', 'invoice_paid', 'invoice_reminder_sent', 'auto_invoice_created', 'invoice_created', 'recurring_expense_created', 'expense_submitted'],

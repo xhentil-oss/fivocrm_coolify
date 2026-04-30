@@ -512,6 +512,7 @@ export type NotificationType =
   | 'expense_submitted'
   | 'guest_project_invited' | 'guest_task_new' | 'guest_task_update'
   | 'project_status_changed'
+  | 'blocker_reported'
   | string; // fallback for future types
 
 export interface Notification {
