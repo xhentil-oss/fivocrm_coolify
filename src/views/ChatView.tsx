@@ -231,11 +231,11 @@ const ChatView: React.FC = () => {
   const { data: allWaMessages } = useCollection<WhatsAppMessage>('whatsappMessages', waQuery);
 
   // Client channels (client-*) need skipTeamFilter because portal users may send
-  // messages without teamId.  The composite index channelId+createdAt already exists.
+  // messages without teamId.  No orderBy — avoids composite index requirement;
+  // sorting is done client-side in filteredMessages.
   const isClientChannel = activeChannel.startsWith('client-');
   const channelMsgQuery = useMemo(() => ({
     where: [{ field: 'channelId', operator: '==', value: activeChannel }],
-    orderBy: { field: 'createdAt', direction: 'desc' as const },
     limit: 100,
     ...(isClientChannel ? { skipTeamFilter: true } : {}),
   }), [activeChannel, isClientChannel]);
@@ -282,12 +282,17 @@ const ChatView: React.FC = () => {
   const filteredMessages = useMemo(() => {
     if (!messages) return [];
     const visible = messages.filter(m => !(m as any).deletedAt);
-     // channelMsgQuery uses desc ordering; reverse so oldest messages appear at top in UI
-     const ordered = chatMode === 'channel' ? [...visible].reverse() : visible;
-     if (!searchQuery.trim()) return ordered;
+    const ordered = chatMode === 'channel'
+      ? [...visible].sort((a, b) => {
+          const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
+          const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toMillis?.() ?? 0;
+          return ta - tb;
+        })
+      : visible;
+    if (!searchQuery.trim()) return ordered;
     const q = searchQuery.toLowerCase();
-     return ordered.filter(m => m.content.toLowerCase().includes(q));
-    }, [messages, searchQuery, chatMode]);
+    return ordered.filter(m => m.content.toLowerCase().includes(q));
+  }, [messages, searchQuery, chatMode]);
 
   const profileMap = useMemo(() => {
     const map = new Map<string, UserProfile>();
