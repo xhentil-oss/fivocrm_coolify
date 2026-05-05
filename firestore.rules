@@ -100,7 +100,7 @@ service cloud.firestore {
       // Sender can update/delete own messages; any authenticated user can mark as read
       allow update: if isAuth() && (
         resource.data.senderId == request.auth.uid ||
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'updatedAt'])
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['isRead', 'readAt', 'updatedAt'])
       );
       allow delete: if isAuth() && resource.data.senderId == request.auth.uid;
     }

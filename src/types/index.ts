@@ -434,6 +434,7 @@ export interface ChatMessage {
   channelId?: string;
   taskId?: string;
   isRead?: boolean;
+  readAt?: Date;
   attachmentUrl?: string;
   senderType?: 'staff' | 'client';
   replyToId?: string;

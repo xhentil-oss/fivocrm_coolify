@@ -689,6 +689,25 @@ const ChatView: React.FC = () => {
                 ? `Mesazh i ri nga stafi - ${projectName}`
                 : `Mesazh i ri nga stafi - ${customer?.name || 'Biseda'}`;
               try { await notificationMutation.create({ userId: (pa as any).userId || custId, type: 'staff_message', title, message: (messageText || '📎 Attachment').slice(0, 100), isRead: false, linkTo: activeChannel } as any); } catch { /* skip */ }
+              // Send email notification (rate-limited server-side)
+              if ((pa as any).email) {
+                try {
+                  const token = await auth.currentUser?.getIdToken();
+                  if (token) {
+                    fetch('/api/notify-client', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                      body: JSON.stringify({
+                        recipientEmail: (pa as any).email,
+                        recipientName: customer?.name,
+                        channelId: activeChannel,
+                        senderName: 'Ekipi',
+                        messagePreview: (messageText || '📎 Bashkëngjitje').slice(0, 200),
+                      }),
+                    }).catch(() => {});
+                  }
+                } catch { /* skip */ }
+              }
             }
           }
         }
@@ -927,7 +946,8 @@ const ChatView: React.FC = () => {
   useEffect(() => {
     if (chatMode !== 'channel' || !user || !channelMessages) return;
     const unread = channelMessages.filter(m => m.senderId !== user.uid && !m.isRead && !markedAsReadRef.current.has(m.id));
-    unread.forEach(m => { markedAsReadRef.current.add(m.id); messageMutation.update(m.id, { isRead: true }); });
+    const extra = isClientChannel ? { readAt: new Date() } : {};
+    unread.forEach(m => { markedAsReadRef.current.add(m.id); messageMutation.update(m.id, { isRead: true, ...extra }); });
   }, [chatMode, channelMessages, user]);
 
   // Auto-resize textarea
@@ -1659,6 +1679,11 @@ const ChatView: React.FC = () => {
                                       {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                       {(message as any).editedAt && <span className="opacity-80"> · ndryshuar</span>}
                                       {isOwn && <Check className="h-2.5 w-2.5 opacity-70" />}
+                                      {isOwn && isClientChannel && (message as any).readAt && (
+                                        <span className="opacity-80 text-[9px]">
+                                          · Parë {(() => { const d = (message as any).readAt?.toDate?.() ?? (message as any).readAt; return d instanceof Date ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''; })()}
+                                        </span>
+                                      )}
                                     </span>
                                   </div>
                                 )}

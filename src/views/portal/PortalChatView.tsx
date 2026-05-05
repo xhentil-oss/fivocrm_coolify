@@ -25,6 +25,7 @@ const PortalChatView: React.FC = () => {
   const [replyingTo, setReplyingTo] = useState<any>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const markedAsReadRef = useRef<Set<string>>(new Set());
 
   // Fetch projects assigned to this customer
   const { data: customerProjects } = useCollection<Project>('projects', {
@@ -96,6 +97,21 @@ const PortalChatView: React.FC = () => {
       if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     });
   }, [channelId]);
+
+  // Clear read tracking when switching channels
+  useEffect(() => { markedAsReadRef.current.clear(); }, [channelId]);
+
+  // Mark staff messages as readAt when client opens chat
+  useEffect(() => {
+    if (!user || !messages.length) return;
+    const unread = messages.filter(
+      (m: any) => m.senderType === 'staff' && !m.readAt && !markedAsReadRef.current.has(m.id)
+    );
+    unread.forEach((m: any) => {
+      markedAsReadRef.current.add(m.id);
+      messageMutation.update(m.id, { readAt: new Date() } as any).catch(() => {});
+    });
+  }, [messages, user]);
 
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -525,9 +541,14 @@ const PortalChatView: React.FC = () => {
                           {/* Timestamp */}
                           <span className={`text-[10px] mt-0.5 px-1.5 ${own ? 'text-muted-foreground/60' : 'text-muted-foreground/60'}`}>
                             {formatTime(msg.createdAt)}
-                            {msg.editedAt && ' · ndryshuar'}
+                            {(msg as any).editedAt && ' · ndryshuar'}
                             {own && (
                               <span className="ml-1 text-primary/60">✓</span>
+                            )}
+                            {own && (msg as any).readAt && (
+                              <span className="ml-1 text-emerald-500/70 text-[9px]">
+                                ✓✓ Parë {formatTime((msg as any).readAt)}
+                              </span>
                             )}
                           </span>
                         </div>
