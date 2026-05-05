@@ -13,7 +13,7 @@ import {
   ComposedChart,
 } from 'recharts';
 import type { Invoice, Project, Team, Expense, Service, InvoiceItem, Task, Lead, Customer, Activity, TeamMember } from '../types';
-import { toAll } from '../lib/utils';
+import { toAll, getTimestampMs } from '../lib/utils';
 import {
   MONTH_LABELS_SQ,
   buildCashflowByMonth,
@@ -559,11 +559,7 @@ const ReportsView: React.FC = () => {
   // ── Real Activity Feed ──
   const recentActivities = useMemo(() => {
     if (!activities) return [];
-    return [...activities].sort((a, b) => {
-      const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
-      const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
-      return tb - ta;
-    }).slice(0, 10);
+    return [...activities].sort((a, b) => getTimestampMs(b.createdAt) - getTimestampMs(a.createdAt)).slice(0, 10);
   }, [activities]);
 
   const timeAgo = (date: Date) => {
@@ -592,7 +588,7 @@ const ReportsView: React.FC = () => {
 
   return (
     <Tabs defaultValue="overview" className="space-y-6">
-      <TabsList>
+      <TabsList className="overflow-x-auto flex-nowrap w-full">
         <TabsTrigger value="overview">Pamja e Përgjithshme</TabsTrigger>
         <TabsTrigger value="daily">Raportet Ditore</TabsTrigger>
       </TabsList>
@@ -766,7 +762,7 @@ const ReportsView: React.FC = () => {
 
       {/* Charts Tabs */}
       <Tabs defaultValue="revenue" className="space-y-4">
-        <TabsList>
+        <TabsList className="overflow-x-auto flex-nowrap w-full">
           <TabsTrigger value="revenue">Të Ardhura</TabsTrigger>
           {!isSales && <TabsTrigger value="expenses">Shpenzime</TabsTrigger>}
           <TabsTrigger value="leads">Lead Funnel</TabsTrigger>
@@ -898,7 +894,7 @@ const ReportsView: React.FC = () => {
             <h3 className="text-lg font-semibold">Performanca e Projekteve</h3>
             <Badge variant="secondary">{activeProjects} aktive</Badge>
           </div>
-          <div className="grid grid-cols-2 xl:grid-cols-4 gap-2.5">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2.5">
             <div className="rounded-md border p-2.5 bg-muted/30">
               <p className="text-[11px] text-muted-foreground">Arkëtimi</p>
               <p className="text-sm font-semibold text-green-600">{projectPortfolioSummary.collectionRate}%</p>

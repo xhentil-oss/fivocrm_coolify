@@ -26,7 +26,7 @@ import DetailDrawer from '../components/DetailDrawer';
 import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
 import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
-import { safeHref, phoneKeyDown, normalizeAlbanianPhone } from '../lib/utils';
+import { safeHref, phoneKeyDown, normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember, Quote } from '../types';
 
 const CRMView: React.FC = () => {
@@ -606,7 +606,7 @@ const CRMView: React.FC = () => {
               </Button>
             </DialogTrigger>
             <DialogContent
-              className="max-w-2xl"
+              className="w-full max-w-full sm:max-w-2xl"
               onInteractOutside={(e) => {
                 if (isDirtyRef.current) {
                   e.preventDefault();
@@ -1376,7 +1376,7 @@ const CRMView: React.FC = () => {
         else requestClose(() => setEditLead(null));
       }}>
         <DialogContent
-          className="max-w-2xl"
+          className="w-full max-w-full sm:max-w-2xl"
           onInteractOutside={(e) => {
             if (isDirtyRef.current) {
               e.preventDefault();

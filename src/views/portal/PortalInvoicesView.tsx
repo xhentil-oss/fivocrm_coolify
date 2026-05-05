@@ -324,7 +324,7 @@ const PortalInvoicesView: React.FC = () => {
 
       {/* Invoice Detail Dialog */}
       <Dialog open={!!selectedInvoice} onOpenChange={(open) => !open && setSelectedInvoice(null)}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="w-full max-w-full sm:max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>
               Fatura {selectedInvoice?.invoiceNumber || `INV-${selectedInvoice?.id?.slice(0, 6)}`}
