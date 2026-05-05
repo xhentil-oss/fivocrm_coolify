@@ -114,6 +114,27 @@ const teamScopedCollections = new Set([
   'roleTemplates', 'standups', 'quotes',
 ]);
 
+// Module-level cache: reuse listeners for identical queries across components.
+// Key = "{collectionName}|{whereKey}|{orderKey}|{limit}|{skipTeamFilter}|{teamId}"
+interface CacheEntry {
+  data: (DocumentData & { id: string })[];
+  listeners: Set<(data: (DocumentData & { id: string })[]) => void>;
+  unsubscribe: () => void;
+  refCount: number;
+}
+const _collectionCache = new Map<string, CacheEntry>();
+
+function buildCacheKey(
+  collectionName: string,
+  whereKey: string,
+  orderKey: string,
+  limit: number | undefined,
+  skipTeamFilter: boolean,
+  teamId: string | null
+): string {
+  return `${collectionName}|${whereKey}|${orderKey}|${limit ?? ''}|${skipTeamFilter}|${teamId ?? ''}`;
+}
+
 // Convert Firestore timestamps to Date
 function convertTimestamps(data: DocumentData): DocumentData {
   const converted: DocumentData = { ...data };
@@ -138,126 +159,103 @@ export function useCollection<T = DocumentData>(
   const { user } = useAuth();
   const reactiveTeamId = useGlobalTeamId();
   const superAdmin = useIsSuperAdmin();
-  // Super admin bypasses all team filters — treat every collection as non-team-scoped
   const isTeamScoped = teamScopedCollections.has(collectionName) && !options?.skipTeamFilter && !superAdmin;
-
-  // For non-team-scoped collections (teamMembers, teams, notifications, etc.) use a stable
-  // null sentinel so that changes to globalTeamId don't cause their effects to re-run and
-  // re-subscribe. This prevents a cascade where globalTeamId being set causes the
-  // usePermissions Firestore subscriptions to recreate, which briefly re-evaluates permissions,
-  // which can call setGlobalTeamId again, creating an oscillation loop.
   const globalTeamId = isTeamScoped ? reactiveTeamId : null;
 
-  // Stable dependency keys to avoid excessive re-renders from new object references
   const whereKey = JSON.stringify(options?.where || null);
   const orderKey = JSON.stringify(options?.orderBy || null);
   const skipTeamFilter = options?.skipTeamFilter || false;
+  const limitVal = options?.limit;
 
   useEffect(() => {
-    // Skip the query entirely when caller says so (e.g. user not yet loaded)
-    if (options?.skip) {
-      setData([]);
+    if (options?.skip) { setData([]); setLoading(false); return; }
+    if (!user) { setData([]); setLoading(false); return; }
+    if (isTeamScoped && !globalTeamId) { setData([]); setLoading(true); return; }
+
+    const cacheKey = buildCacheKey(collectionName, whereKey, orderKey, limitVal, skipTeamFilter, globalTeamId);
+
+    // Register listener on existing cache entry
+    if (_collectionCache.has(cacheKey)) {
+      const entry = _collectionCache.get(cacheKey)!;
+      entry.refCount++;
+      const listener = (d: (DocumentData & { id: string })[]) => {
+        setData(d as (T & { id: string })[]);
+        setLoading(false);
+      };
+      entry.listeners.add(listener);
+      // Deliver current data immediately
+      setData(entry.data as (T & { id: string })[]);
       setLoading(false);
-      return;
+      return () => {
+        entry.listeners.delete(listener);
+        entry.refCount--;
+        if (entry.refCount <= 0) {
+          entry.unsubscribe();
+          _collectionCache.delete(cacheKey);
+        }
+      };
     }
 
-    // Don't open any Firestore listener until the user is authenticated
-    if (!user) {
-      setData([]);
-      setLoading(false);
-      return;
-    }
-
-    // For team-scoped collections, don't query until teamId is available
-    if (isTeamScoped && !globalTeamId) {
-      setData([]);
-      setLoading(true);
-      return;
-    }
-
-    // Ensure the auth token is fresh before opening the listener.
-    // With persistentLocalCache the Firestore SDK may open an internal sync
-    // connection immediately; if the cached token is expired the sync fails with
-    // "Missing or insufficient permissions" as an uncaught promise rejection.
-    // Calling getIdToken() first forces a refresh when needed.
     let cancelled = false;
-    let unsubscribe: (() => void) | undefined;
+    let unsubFn: (() => void) | undefined;
+
+    // Placeholder so concurrent mounts share the same entry
+    const entry: CacheEntry = {
+      data: [],
+      listeners: new Set(),
+      unsubscribe: () => { unsubFn?.(); },
+      refCount: 1,
+    };
+    const selfListener = (d: (DocumentData & { id: string })[]) => {
+      setData(d as (T & { id: string })[]);
+      setLoading(false);
+    };
+    entry.listeners.add(selfListener);
+    _collectionCache.set(cacheKey, entry);
 
     (auth.currentUser?.getIdToken() ?? Promise.resolve()).then(() => {
       if (cancelled) return;
 
-    const constraints: QueryConstraint[] = [];
-
-    // For team-scoped collections: fetch ALL docs, then filter client-side.
-    // This ensures legacy documents (created before data-isolation, without teamId field)
-    // still appear. Also avoids ALL composite index requirements.
-    if (isTeamScoped && globalTeamId) {
-      // No server-side constraints — everything handled client-side
-    } else {
-      // Non-team-scoped: use all constraints server-side as before
-      if (options?.where) {
-        options.where.forEach((w) => {
-          constraints.push(where(w.field, w.operator as any, w.value));
-        });
+      const constraints: QueryConstraint[] = [];
+      if (isTeamScoped && globalTeamId) {
+        // no server-side constraints — client-side filtering
+      } else {
+        if (options?.where) options.where.forEach(w => constraints.push(where(w.field, w.operator as any, w.value)));
+        if (options?.orderBy) constraints.push(orderBy(options.orderBy.field, options.orderBy.direction || 'asc'));
+        if (options?.limit && options.limit > 0) constraints.push(firestoreLimit(options.limit));
       }
-      if (options?.orderBy) {
-        constraints.push(orderBy(options.orderBy.field, options.orderBy.direction || 'asc'));
-      }
-      if (options?.limit && options.limit > 0) {
-        constraints.push(firestoreLimit(options.limit));
-      }
-    }
 
-    const q = query(collection(db, collectionName), ...constraints);
-
-    unsubscribe = onSnapshot(
-      q,
-      (snapshot) => {
-        let items = snapshot.docs.map((doc) => ({
-          id: doc.id,
-          ...convertTimestamps(doc.data())
-        })) as (T & { id: string })[];
-
-        // Client-side teamId filtering: only include docs belonging to this team
+      const q = query(collection(db, collectionName), ...constraints);
+      unsubFn = onSnapshot(q, (snapshot) => {
+        let items = snapshot.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as (DocumentData & { id: string })[];
         if (isTeamScoped && globalTeamId) {
-          items = items.filter(item => {
-            const docTeamId = (item as any).teamId;
-            return docTeamId === globalTeamId;
-          });
+          items = items.filter(item => (item as any).teamId === globalTeamId);
         }
-
-        // Client-side where filtering for team-scoped collections
         if (isTeamScoped && globalTeamId && options?.where) {
-          items = items.filter(item => {
-            return options.where!.every(w => {
-              const val = (item as any)[w.field];
-              switch (w.operator) {
-                case '==': return val === w.value;
-                case '!=': return val !== w.value;
-                case '<': return val < w.value;
-                case '<=': return val <= w.value;
-                case '>': return val > w.value;
-                case '>=': return val >= w.value;
-                case 'in': return Array.isArray(w.value) && w.value.includes(val);
-                case 'not-in': return Array.isArray(w.value) && !w.value.includes(val);
-                case 'array-contains': return Array.isArray(val) && val.includes(w.value);
-                case 'array-contains-any': return Array.isArray(val) && Array.isArray(w.value) && w.value.some((v: any) => val.includes(v));
-                default: return true;
-              }
-            });
-          });
+          items = items.filter(item => options.where!.every(w => {
+            const val = (item as any)[w.field];
+            switch (w.operator) {
+              case '==': return val === w.value;
+              case '!=': return val !== w.value;
+              case '<': return val < w.value;
+              case '<=': return val <= w.value;
+              case '>': return val > w.value;
+              case '>=': return val >= w.value;
+              case 'in': return Array.isArray(w.value) && w.value.includes(val);
+              case 'not-in': return Array.isArray(w.value) && !w.value.includes(val);
+              case 'array-contains': return Array.isArray(val) && val.includes(w.value);
+              case 'array-contains-any': return Array.isArray(val) && Array.isArray(w.value) && w.value.some((v: any) => val.includes(v));
+              default: return true;
+            }
+          }));
         }
-
-        // Client-side sorting for team-scoped collections
         if (isTeamScoped && globalTeamId && options?.orderBy) {
           const field = options.orderBy.field;
           const dir = options.orderBy.direction || 'asc';
           items = [...items].sort((a, b) => {
-            const va = (a as any)[field];
-            const vb = (b as any)[field];
+            const va = (a as any)[field]; const vb = (b as any)[field];
             if (va == null && vb == null) return 0;
-            if (va == null) return 1;
-            if (vb == null) return -1;
+            if (va == null) return 1; if (vb == null) return -1;
             const ta = va instanceof Date ? va.getTime() : typeof va === 'string' ? va : Number(va);
             const tb = vb instanceof Date ? vb.getTime() : typeof vb === 'string' ? vb : Number(vb);
             if (ta < tb) return dir === 'asc' ? -1 : 1;
@@ -265,25 +263,33 @@ export function useCollection<T = DocumentData>(
             return 0;
           });
         }
-
-        setData(items);
-        setLoading(false);
-      },
-      (err) => {
+        // Update cache and notify all listeners
+        if (_collectionCache.has(cacheKey)) {
+          const e = _collectionCache.get(cacheKey)!;
+          e.data = items;
+          e.listeners.forEach(l => l(items));
+        }
+        setError(null);
+      }, (err) => {
         console.error(`Error fetching ${collectionName}:`, err);
         setError(err);
         setLoading(false);
+      });
+    }).catch(() => { setData([]); setLoading(false); });
+
+    return () => {
+      cancelled = true;
+      if (_collectionCache.has(cacheKey)) {
+        const e = _collectionCache.get(cacheKey)!;
+        e.listeners.delete(selfListener);
+        e.refCount--;
+        if (e.refCount <= 0) {
+          e.unsubscribe();
+          _collectionCache.delete(cacheKey);
+        }
       }
-    );
-
-    }).catch(() => {
-      // Token refresh failed — user will be signed out by Firebase Auth
-      setData([]);
-      setLoading(false);
-    });
-
-    return () => { cancelled = true; unsubscribe?.(); };
-  }, [collectionName, whereKey, orderKey, skipTeamFilter, globalTeamId, superAdmin, options?.skip, user?.uid]);
+    };
+  }, [collectionName, whereKey, orderKey, skipTeamFilter, limitVal, globalTeamId, superAdmin, options?.skip, user?.uid]);
 
   return { data, loading, error };
 }

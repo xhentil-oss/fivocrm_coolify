@@ -143,3 +143,13 @@ export function ibanChange(
 ) {
   setter(value.toUpperCase().replace(/[^A-Z0-9\s]/g, ''));
 }
+
+/** Converts a Firestore Timestamp, Date, or any date-like value to milliseconds. */
+export function getTimestampMs(ts: any): number {
+  if (!ts) return 0;
+  if (ts instanceof Date) return ts.getTime();
+  if (typeof ts.toMillis === 'function') return ts.toMillis();
+  if (typeof ts.toDate === 'function') return ts.toDate().getTime();
+  if (typeof ts === 'number') return ts;
+  return new Date(ts).getTime() || 0;
+}

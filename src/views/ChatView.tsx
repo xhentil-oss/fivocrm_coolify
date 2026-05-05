@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
-import { normalizeAlbanianPhone } from '../lib/utils';
+import { normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import { auth, db } from '../lib/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, WhatsAppMessage, ClientRequest, Team, Lead } from '../types';
@@ -159,11 +159,6 @@ const ChatView: React.FC = () => {
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
   const { data: userProfiles } = useCollection<UserProfile>('userProfiles');
   const { data: teams } = useCollection<Team>('teams');
-  const { data: allMessages } = useCollection<ChatMessage>('messages', {
-    orderBy: { field: 'createdAt', direction: 'desc' as const },
-    limit: 500,
-    skipTeamFilter: true,
-  });
   const { data: requests, } = useCollection<ClientRequest>('clientRequests', {
     orderBy: { field: 'createdAt', direction: 'desc' },
     skipTeamFilter: true,
@@ -283,11 +278,7 @@ const ChatView: React.FC = () => {
     if (!messages) return [];
     const visible = messages.filter(m => !(m as any).deletedAt);
     const ordered = chatMode === 'channel'
-      ? [...visible].sort((a, b) => {
-          const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
-          const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toMillis?.() ?? 0;
-          return ta - tb;
-        })
+      ? [...visible].sort((a, b) => getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt))
       : visible;
     if (!searchQuery.trim()) return ordered;
     const q = searchQuery.toLowerCase();
@@ -330,17 +321,14 @@ const ChatView: React.FC = () => {
 
   const channelUnreadMap = useMemo(() => {
     const map = new Map<string, number>();
-    if (!user || !allMessages) return map;
-    allMessages.forEach(m => {
-      // Exclude messages from other teams (regular channels share IDs across teams)
-      const msgTeamId = (m as any).teamId;
-      if (msgTeamId && msgTeamId !== waTeamId) return;
+    if (!user || !channelMessages) return map;
+    channelMessages.forEach(m => {
       if (m.channelId && !m.isRead && m.senderId !== user.uid && !(m as any).deletedAt) {
         map.set(m.channelId, (map.get(m.channelId) || 0) + 1);
       }
     });
     return map;
-  }, [allMessages, user, waTeamId]);
+  }, [channelMessages, user]);
 
   const otherMembers = useMemo(() => {
     if (!teamMembers) return [];
@@ -369,7 +357,7 @@ const ChatView: React.FC = () => {
     const channelOrDm = chatMode === 'channel' ? activeChannel : `dm-${activeDirectUserId}`;
     return typingIndicators.filter((t: any) =>
       t.channelId === channelOrDm && t.userId !== user.uid && t.timestamp &&
-      (now - (t.timestamp instanceof Date ? t.timestamp.getTime() : t.timestamp?.toMillis?.() ?? 0)) < 5000
+      (now - getTimestampMs(t.timestamp)) < 5000
     );
   }, [typingIndicators, user, chatMode, activeChannel, activeDirectUserId]);
 
@@ -598,8 +586,8 @@ const ChatView: React.FC = () => {
         if (msg.jid?.endsWith('@s.whatsapp.net') && !existing.jid?.endsWith('@s.whatsapp.net')) existing.jid = msg.jid;
         if (msg.direction === 'inbound' && msg.status === 'received') existing.unread++;
         // Track the latest message per conversation
-        const msgTime = msg.createdAt instanceof Date ? msg.createdAt.getTime() : (msg.createdAt as any)?.toMillis?.() ?? 0;
-        const existTime = existing.lastDate instanceof Date ? existing.lastDate.getTime() : existing.lastDate?.toMillis?.() ?? 0;
+        const msgTime = getTimestampMs(msg.createdAt);
+        const existTime = getTimestampMs(existing.lastDate);
         if (msgTime > existTime) {
           existing.lastDate = msg.createdAt;
           existing.lastMessage = msg.message;
@@ -607,11 +595,7 @@ const ChatView: React.FC = () => {
       }
     }
     return Array.from(map.values())
-      .sort((a, b) => {
-      const ta = a.lastDate instanceof Date ? a.lastDate.getTime() : a.lastDate?.toMillis?.() ?? 0;
-      const tb = b.lastDate instanceof Date ? b.lastDate.getTime() : b.lastDate?.toMillis?.() ?? 0;
-      return tb - ta;
-    });
+      .sort((a, b) => getTimestampMs(b.lastDate) - getTimestampMs(a.lastDate));
   }, [allWaMessages]);
 
   const waActiveMessages = useMemo(() => {
@@ -623,11 +607,7 @@ const ChatView: React.FC = () => {
           : (m.phone || '')
       );
       return key === activeWaPhone;
-    }).sort((a, b) => {
-      const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
-      const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toMillis?.() ?? 0;
-      return ta - tb;
-    });
+    }).sort((a, b) => getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt));
   }, [allWaMessages, activeWaPhone]);
 
   const waTotalUnread = useMemo(

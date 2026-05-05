@@ -448,7 +448,7 @@ const ProjectsView: React.FC = () => {
                 Krijo projekt
               </Button>
             </DialogTrigger>
-            <DialogContent>
+            <DialogContent className="w-full max-w-full sm:max-w-2xl max-h-[90vh] overflow-y-auto">
               <DialogHeader>
                 <DialogTitle>Krijo Projekt të Ri</DialogTitle>
               </DialogHeader>
@@ -806,7 +806,7 @@ const ProjectsView: React.FC = () => {
 
       {/* Edit Project Dialog */}
       <Dialog open={!!projectToEdit} onOpenChange={(open) => { if (!open) setProjectToEdit(null); }}>
-        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="w-full max-w-full sm:max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Modifiko Projektin</DialogTitle>
           </DialogHeader>

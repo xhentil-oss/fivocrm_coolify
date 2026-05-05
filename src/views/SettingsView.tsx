@@ -365,11 +365,11 @@ const SettingsView: React.FC = () => {
               </div>
             </div>
             <Separator />
-            <div className="flex justify-end gap-3">
-              <Button variant="outline" className="bg-background text-foreground border-border hover:bg-muted">
+            <div className="flex flex-col sm:flex-row sm:justify-end gap-2 sm:gap-3">
+              <Button variant="outline" className="bg-background text-foreground border-border hover:bg-muted w-full sm:w-auto">
                 Anulo
               </Button>
-              <Button className="bg-primary text-primary-foreground hover:bg-primary-hover">
+              <Button className="bg-primary text-primary-foreground hover:bg-primary-hover w-full sm:w-auto">
                 Ruaj Ndryshimet
               </Button>
             </div>
@@ -480,11 +480,11 @@ const SettingsView: React.FC = () => {
               <Switch />
             </div>
             <Separator />
-            <div className="flex justify-end gap-3">
-              <Button variant="outline" className="bg-background text-foreground border-border hover:bg-muted">
+            <div className="flex flex-col sm:flex-row sm:justify-end gap-2 sm:gap-3">
+              <Button variant="outline" className="bg-background text-foreground border-border hover:bg-muted w-full sm:w-auto">
                 Anulo
               </Button>
-              <Button className="bg-primary text-primary-foreground hover:bg-primary-hover">
+              <Button className="bg-primary text-primary-foreground hover:bg-primary-hover w-full sm:w-auto">
                 Përditëso Fjalëkalimin
               </Button>
             </div>
@@ -528,11 +528,11 @@ const SettingsView: React.FC = () => {
               </div>
             </div>
             <Separator />
-            <div className="flex justify-end gap-3">
-              <Button variant="outline" className="bg-background text-foreground border-border hover:bg-muted">
+            <div className="flex flex-col sm:flex-row sm:justify-end gap-2 sm:gap-3">
+              <Button variant="outline" className="bg-background text-foreground border-border hover:bg-muted w-full sm:w-auto">
                 Anulo
               </Button>
-              <Button className="bg-primary text-primary-foreground hover:bg-primary-hover">
+              <Button className="bg-primary text-primary-foreground hover:bg-primary-hover w-full sm:w-auto">
                 Ruaj Preferencat
               </Button>
             </div>
@@ -571,7 +571,7 @@ const SettingsView: React.FC = () => {
             {/* Mode Selection */}
             <div className="space-y-3">
               <label className="text-body-sm text-foreground font-medium">Mënyra</label>
-              <div className="flex gap-4">
+              <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
                 <label className={`flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-all ${stripeMode === 'test' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground'}`}>
                   <input
                     type="radio"
@@ -657,7 +657,7 @@ const SettingsView: React.FC = () => {
 
             <Separator />
 
-            <div className="flex items-center justify-between">
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
               <div className="flex items-center gap-2">
                 {stripeSaved && (
                   <div className="flex items-center gap-2 text-success">
@@ -666,7 +666,7 @@ const SettingsView: React.FC = () => {
                   </div>
                 )}
               </div>
-              <div className="flex gap-3">
+              <div className="flex gap-3 flex-wrap">
                 <Button 
                   variant="outline" 
                   className="bg-background text-foreground border-border hover:bg-muted"
@@ -879,14 +879,16 @@ const SettingsView: React.FC = () => {
                   </div>
                 </div>
                 <Separator />
-                <div className="flex items-center justify-between">
-                  {whatsappSaved && (
-                    <div className="flex items-center gap-2 text-success">
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span className="text-sm">Cilësimet u ruajtën!</span>
-                    </div>
-                  )}
-                  <div className="ml-auto flex gap-3">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    {whatsappSaved && (
+                      <div className="flex items-center gap-2 text-success">
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span className="text-sm">Cilësimet u ruajtën!</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
                     <Button
                       variant="outline"
                       className="bg-background text-foreground border-border hover:bg-muted"
@@ -1062,14 +1064,16 @@ const SettingsView: React.FC = () => {
                 </div>
 
                 <Separator />
-                <div className="flex items-center justify-between">
-                  {metaSaved && (
-                    <div className="flex items-center gap-2 text-success">
-                      <CheckCircle2 className="w-4 h-4" />
-                      <span className="text-sm">Cilësimet Meta u ruajtën!</span>
-                    </div>
-                  )}
-                  <div className="ml-auto flex gap-3">
+                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+                  <div className="flex items-center gap-2">
+                    {metaSaved && (
+                      <div className="flex items-center gap-2 text-success">
+                        <CheckCircle2 className="w-4 h-4" />
+                        <span className="text-sm">Cilësimet Meta u ruajtën!</span>
+                      </div>
+                    )}
+                  </div>
+                  <div className="flex flex-col sm:flex-row gap-2 sm:gap-3">
                     <Button
                       variant="outline"
                       className="bg-background text-foreground border-border hover:bg-muted"

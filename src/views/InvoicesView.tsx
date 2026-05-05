@@ -418,7 +418,7 @@ const InvoicesView: React.FC = () => {
             <div className="h-10 w-32 skeleton rounded" />
           </div>
         </div>
-        <div className="grid grid-cols-3 gap-3 sm:gap-6">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-6">
           {[1, 2, 3].map((i) => (
             <div key={i} className="p-6 bg-card rounded-lg border space-y-3">
               <div className="flex justify-between">
@@ -468,7 +468,7 @@ const InvoicesView: React.FC = () => {
                 </Button>
               </DialogTrigger>
               <DialogContent
-                className="max-w-4xl max-h-[90vh] overflow-y-auto"
+                className="w-full max-w-full sm:max-w-4xl max-h-[90vh] overflow-y-auto"
                 onInteractOutside={(e) => {
                   if (isDirtyRef.current) {
                     e.preventDefault();
@@ -499,7 +499,7 @@ const InvoicesView: React.FC = () => {
           else requestClose(() => setEditInvoice(null));
         }}>
           <DialogContent
-            className="max-w-4xl max-h-[90vh] overflow-y-auto"
+            className="w-full max-w-full sm:max-w-4xl max-h-[90vh] overflow-y-auto"
             onInteractOutside={(e) => {
               if (isDirtyRef.current) {
                 e.preventDefault();
@@ -521,7 +521,7 @@ const InvoicesView: React.FC = () => {
         </Dialog>
       )}
 
-      <div className="grid grid-cols-3 gap-3 sm:gap-6 stagger-children">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-6 stagger-children">
         <Card className="p-3 sm:p-6 space-y-1 sm:space-y-2 card-hover metric-card-success border-l-4 border-l-success">
           <div className="flex items-center justify-between">
             <p className="text-[10px] sm:text-body-sm text-muted-foreground">Të Ardhura</p>
@@ -961,7 +961,7 @@ const InvoicesView: React.FC = () => {
 
       {selectedInvoice && (
         <Dialog open={!!selectedInvoice} onOpenChange={() => setSelectedInvoice(null)}>
-          <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="w-full max-w-full sm:max-w-4xl max-h-[90vh] overflow-y-auto">
             <DialogHeader>
               <DialogTitle>Detajet e Faturës</DialogTitle>
             </DialogHeader>
