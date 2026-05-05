@@ -694,10 +694,11 @@ const ChatView: React.FC = () => {
                 try {
                   const token = await auth.currentUser?.getIdToken();
                   if (token) {
-                    fetch('/api/notify-client', {
+                    fetch('/api/send-invoice-email', {
                       method: 'POST',
                       headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
                       body: JSON.stringify({
+                        type: 'notify-client',
                         recipientEmail: (pa as any).email,
                         recipientName: customer?.name,
                         channelId: activeChannel,
