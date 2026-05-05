@@ -28,6 +28,7 @@ const ServiceInquiriesView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [convertingId, setConvertingId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   const { toast } = useToast();
 
@@ -67,10 +68,18 @@ const ServiceInquiriesView: React.FC = () => {
   }, [inquiries]);
 
   const handleDelete = async (id: string) => {
-    await inquiryMutation.remove(id);
-    setDeleteConfirmId(null);
-    if (selectedInquiry?.id === id) setSelectedInquiry(null);
-    toast({ title: 'Kërkesa u fshi' });
+    setDeleting(true);
+    try {
+      await inquiryMutation.remove(id);
+      setDeleteConfirmId(null);
+      if (selectedInquiry?.id === id) setSelectedInquiry(null);
+      toast({ title: 'Kërkesa u fshi' });
+    } catch {
+      toast({ title: 'Gabim', description: 'Kërkesa nuk u fshi. Provoni përsëri.', variant: 'destructive' });
+    } finally {
+      setDeleting(false);
+      setDeleteConfirmId(null);
+    }
   };
 
   const handleStatusChange = async (id: string, status: string) => {
@@ -343,10 +352,11 @@ const ServiceInquiriesView: React.FC = () => {
             <Button
               variant="destructive"
               size="sm"
+              disabled={deleting}
               onClick={() => deleteConfirmId && handleDelete(deleteConfirmId)}
             >
               <Trash2 className="w-3.5 h-3.5 mr-1" />
-              Fshi
+              {deleting ? 'Duke fshirë...' : 'Fshi'}
             </Button>
           </div>
         </DialogContent>
