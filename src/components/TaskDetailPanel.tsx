@@ -1720,8 +1720,11 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
                         <div className={`max-w-[75%] ${isCurrentUser ? 'items-end' : 'items-start'} flex flex-col gap-0.5`}>
                           {showName && (
-                            <span className={`text-[11px] font-medium text-muted-foreground px-1 ${isCurrentUser ? 'text-right' : 'text-left'}`}>
+                            <span className={`text-[11px] font-medium text-muted-foreground px-1 flex items-center gap-1 ${isCurrentUser ? 'justify-end' : 'justify-start'}`}>
                               {isCurrentUser ? 'Ti' : commenterName}
+                              {(comment as any).senderType === 'client' && (
+                                <span className="text-[9px] bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 px-1 py-0.5 rounded font-medium">Klient</span>
+                              )}
                             </span>
                           )}
                           <div className={`px-3 py-2 rounded-2xl text-sm leading-relaxed

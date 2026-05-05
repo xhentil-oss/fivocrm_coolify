@@ -19,10 +19,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import {
   FolderKanban, ArrowLeft, CheckCircle2, Clock, Circle,
   MessageSquare, Send, ClipboardList, Plus, DollarSign,
-  CalendarDays,
+  CalendarDays, ChevronDown, ChevronRight,
 } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
-import type { Project, Task, ClientRequest, Team, TeamMember } from '../../types';
+import type { Project, Task, TaskComment, ClientRequest, Team, TeamMember } from '../../types';
 
 interface ProjectComment {
   id: string;
@@ -60,6 +60,9 @@ const PortalProjectDetailView: React.FC = () => {
   const [commentText, setCommentText] = useState('');
   const [isRequestOpen, setIsRequestOpen] = useState(false);
   const commentScrollRef = useRef<HTMLDivElement>(null);
+  const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
+  const [taskCommentTexts, setTaskCommentTexts] = useState<Record<string, string>>({});
+  const [sendingTaskComment, setSendingTaskComment] = useState<string | null>(null);
 
   // Fetch project
   const { data: project } = useDocument<Project>('projects', projectId || '');
@@ -76,6 +79,20 @@ const PortalProjectDetailView: React.FC = () => {
       return (statusOrder[a.status] ?? 4) - (statusOrder[b.status] ?? 4);
     });
   }, [rawTasks]);
+
+  // Task comments — fetch all, filter client-side to this project's tasks
+  const { data: rawTaskComments } = useCollection<TaskComment>('taskComments', {
+    skipTeamFilter: true,
+  });
+  const projectTaskIds = React.useMemo(() => new Set(tasks.map(t => t.id)), [tasks]);
+  const taskComments = React.useMemo(() => {
+    if (!rawTaskComments) return [];
+    return rawTaskComments.filter(c => projectTaskIds.has(c.taskId)).sort((a, b) => {
+      const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
+      const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
+      return ta - tb;
+    });
+  }, [rawTaskComments, projectTaskIds]);
 
   // Project comments
   const { data: rawComments } = useCollection<ProjectComment>('projectComments', {
@@ -234,6 +251,58 @@ const PortalProjectDetailView: React.FC = () => {
       toast({ title: 'Komenti u dërgua' });
     } catch {
       toast({ title: 'Gabim', description: 'Komenti nuk u dërgua.', variant: 'destructive' });
+    }
+  };
+
+  // Add a comment to a specific task
+  const handleAddTaskComment = async (taskId: string) => {
+    const text = (taskCommentTexts[taskId] || '').trim();
+    if (!text || !user || !projectId) return;
+
+    setSendingTaskComment(taskId);
+    try {
+      const resolvedTeamId = allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
+      await addDoc(collection(db, 'taskComments'), {
+        taskId,
+        content: text,
+        userId: user.uid,
+        senderType: 'client',
+        createdByUserId: user.uid,
+        ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+      });
+
+      // Notify task assignee + project team members
+      const task = tasks.find(t => t.id === taskId);
+      if (project?.teamId && allTeamMembers) {
+        const notifyIds = new Set<string>();
+        // Task assignee
+        if (task?.assignedToUserId) notifyIds.add(task.assignedToUserId);
+        // All active team members of the project
+        allTeamMembers
+          .filter(m => m.teamId === project.teamId && m.status === 'Active')
+          .forEach(m => notifyIds.add(m.userId));
+
+        for (const uid of notifyIds) {
+          notificationMutation.create({
+            userId: uid,
+            type: 'project_comment',
+            title: `Koment klienti — ${task?.title || 'Detyrë'}`,
+            message: text.length > 100 ? text.slice(0, 100) + '...' : text,
+            isRead: false,
+            actionUrl: `/app/tasks?task=${taskId}`,
+            actionLabel: 'Shiko Detyrën',
+          } as any).catch(() => {});
+        }
+      }
+
+      setTaskCommentTexts(prev => ({ ...prev, [taskId]: '' }));
+      toast({ title: 'Komenti u dërgua' });
+    } catch {
+      toast({ title: 'Gabim', description: 'Komenti nuk u dërgua.', variant: 'destructive' });
+    } finally {
+      setSendingTaskComment(null);
     }
   };
 
@@ -466,44 +535,140 @@ const PortalProjectDetailView: React.FC = () => {
             </Card>
           ) : (
             <div className="space-y-2">
-              {tasks.map(task => (
-                <Card key={task.id}>
-                  <CardContent className="py-3 px-4">
-                    <div className="flex items-center gap-3">
-                      {getTaskStatusIcon(task.status)}
-                      <div className="flex-1 min-w-0">
-                        <p className={`font-medium text-sm ${task.status === 'Done' ? 'line-through text-muted-foreground' : ''}`}>
-                          {task.title}
-                        </p>
-                        <div className="flex items-center gap-2 mt-0.5 flex-wrap">
-                          <span className="text-xs text-muted-foreground">
-                            {getTaskStatusLabel(task.status)}
-                          </span>
-                          {task.priority && (
-                            <Badge
-                              variant="secondary"
-                              className={`text-[10px] ${
-                                task.priority === 'urgent' ? 'bg-red-100 text-red-800' :
-                                task.priority === 'high' ? 'bg-orange-100 text-orange-800' :
-                                task.priority === 'medium' ? 'bg-blue-100 text-blue-800' :
-                                'bg-gray-100 text-gray-800'
-                              }`}
-                            >
-                              {task.priority}
-                            </Badge>
-                          )}
-                          {task.dueDate && (
-                            <span className="text-xs text-muted-foreground flex items-center gap-1">
-                              <CalendarDays className="h-3 w-3" />
-                              {task.dueDate instanceof Date ? task.dueDate.toLocaleDateString('sq-AL') : ''}
+              {tasks.map(task => {
+                const taskCommentList = taskComments.filter(c => c.taskId === task.id);
+                const isExpanded = expandedTaskId === task.id;
+                const commentCount = taskCommentList.length;
+
+                return (
+                  <Card key={task.id} className={isExpanded ? 'border-primary/30 shadow-sm' : ''}>
+                    {/* Task header — clickable to expand/collapse comments */}
+                    <CardContent
+                      className="py-3 px-4 cursor-pointer select-none"
+                      onClick={() => setExpandedTaskId(isExpanded ? null : task.id)}
+                    >
+                      <div className="flex items-center gap-3">
+                        {getTaskStatusIcon(task.status)}
+                        <div className="flex-1 min-w-0">
+                          <p className={`font-medium text-sm ${task.status === 'Done' ? 'line-through text-muted-foreground' : ''}`}>
+                            {task.title}
+                          </p>
+                          <div className="flex items-center gap-2 mt-0.5 flex-wrap">
+                            <span className="text-xs text-muted-foreground">
+                              {getTaskStatusLabel(task.status)}
+                            </span>
+                            {task.priority && (
+                              <Badge
+                                variant="secondary"
+                                className={`text-[10px] ${
+                                  task.priority === 'urgent' ? 'bg-red-100 text-red-800' :
+                                  task.priority === 'high' ? 'bg-orange-100 text-orange-800' :
+                                  task.priority === 'medium' ? 'bg-blue-100 text-blue-800' :
+                                  'bg-gray-100 text-gray-800'
+                                }`}
+                              >
+                                {task.priority}
+                              </Badge>
+                            )}
+                            {task.dueDate && (
+                              <span className="text-xs text-muted-foreground flex items-center gap-1">
+                                <CalendarDays className="h-3 w-3" />
+                                {task.dueDate instanceof Date ? task.dueDate.toLocaleDateString('sq-AL') : ''}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                        {/* Comment count + expand chevron */}
+                        <div className="flex items-center gap-1.5 flex-shrink-0 text-muted-foreground">
+                          {commentCount > 0 && (
+                            <span className="flex items-center gap-1 text-xs bg-muted rounded-full px-2 py-0.5">
+                              <MessageSquare className="h-3 w-3" />
+                              {commentCount}
                             </span>
                           )}
+                          {isExpanded
+                            ? <ChevronDown className="h-4 w-4" />
+                            : <ChevronRight className="h-4 w-4" />
+                          }
                         </div>
                       </div>
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
+                    </CardContent>
+
+                    {/* Expanded comments section */}
+                    {isExpanded && (
+                      <div className="border-t px-4 pb-4 pt-3 space-y-3">
+                        {/* Existing comments */}
+                        {taskCommentList.length === 0 ? (
+                          <p className="text-xs text-muted-foreground text-center py-2 italic">
+                            Ende nuk ka komente për këtë detyrë
+                          </p>
+                        ) : (
+                          <div className="space-y-2 max-h-52 overflow-y-auto pr-1">
+                            {taskCommentList.map(comment => {
+                              const isOwn = comment.userId === user?.uid;
+                              const isClient = comment.senderType === 'client';
+                              const profile = userProfiles?.find((p: any) => p.userId === comment.userId);
+                              const name = isOwn ? 'Ju' : (profile?.displayName || (isClient ? 'Klienti' : 'Ekipi'));
+                              const createdAt = comment.createdAt instanceof Date
+                                ? comment.createdAt
+                                : new Date(comment.createdAt as any);
+
+                              return (
+                                <div key={comment.id} className={`flex gap-2 ${isOwn ? 'flex-row-reverse' : 'flex-row'}`}>
+                                  <div className={`w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-[9px] font-bold
+                                    ${isOwn ? 'bg-primary text-primary-foreground' : isClient ? 'bg-emerald-100 text-emerald-700' : 'bg-muted text-muted-foreground'}`}>
+                                    {name.slice(0, 2).toUpperCase()}
+                                  </div>
+                                  <div className={`max-w-[75%] flex flex-col gap-0.5 ${isOwn ? 'items-end' : 'items-start'}`}>
+                                    <span className="text-[10px] text-muted-foreground px-1 flex items-center gap-1">
+                                      {name}
+                                      {!isOwn && !isClient && (
+                                        <span className="text-[9px] bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 px-1 rounded">Ekipi</span>
+                                      )}
+                                    </span>
+                                    <div className={`px-3 py-2 rounded-2xl text-sm
+                                      ${isOwn
+                                        ? 'bg-primary text-primary-foreground rounded-tr-sm'
+                                        : 'bg-muted text-foreground rounded-tl-sm'}`}>
+                                      {comment.content}
+                                    </div>
+                                    <span className="text-[10px] text-muted-foreground px-1">
+                                      {createdAt.toLocaleString('sq-AL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                                    </span>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
+                        {/* New comment input */}
+                        <form
+                          onSubmit={e => { e.preventDefault(); handleAddTaskComment(task.id); }}
+                          className="flex gap-2"
+                          onClick={e => e.stopPropagation()}
+                        >
+                          <Input
+                            value={taskCommentTexts[task.id] || ''}
+                            onChange={e => setTaskCommentTexts(prev => ({ ...prev, [task.id]: e.target.value }))}
+                            placeholder="Shkruani koment për këtë detyrë..."
+                            className="flex-1 text-sm"
+                            onClick={e => e.stopPropagation()}
+                          />
+                          <Button
+                            type="submit"
+                            size="icon"
+                            disabled={!(taskCommentTexts[task.id] || '').trim() || sendingTaskComment === task.id}
+                            onClick={e => e.stopPropagation()}
+                          >
+                            <Send className="h-4 w-4" />
+                          </Button>
+                        </form>
+                      </div>
+                    )}
+                  </Card>
+                );
+              })}
             </div>
           )}
         </TabsContent>

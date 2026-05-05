@@ -125,7 +125,11 @@ service cloud.firestore {
 
     match /taskComments/{docId} {
       allow read: if isAuth();
-      allow create: if canCreateForTeam();
+      // Staff create with teamId; portal clients create with senderType == 'client' (no teamId required)
+      allow create: if isAuth() && (
+        request.resource.data.teamId is string ||
+        request.resource.data.senderType == 'client'
+      );
       allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
     }
 

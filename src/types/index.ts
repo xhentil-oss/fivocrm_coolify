@@ -411,6 +411,8 @@ export interface TaskComment {
   taskId: string;
   content: string;
   userId: string;
+  teamId?: string;
+  senderType?: 'client' | 'team';
   createdByUserId?: string;
   createdAt: Date;
   updatedAt: Date;
