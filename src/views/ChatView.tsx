@@ -236,6 +236,24 @@ const ChatView: React.FC = () => {
   }), [activeChannel, isClientChannel]);
   const { data: channelMessages, loading: channelPending, error: channelError } = useCollection<ChatMessage>('messages', channelMsgQuery);
 
+  // Background query: ALL unread client messages — drives per-channel unread badges
+  const allUnreadClientQuery = useMemo(() => ({
+    where: [
+      { field: 'senderType', operator: '==' as const, value: 'client' },
+      { field: 'isRead', operator: '==' as const, value: false },
+    ],
+    skipTeamFilter: true,
+  }), []);
+  const { data: allUnreadClientMsgs } = useCollection<ChatMessage>('messages', allUnreadClientQuery);
+
+  const clientUnreadMap = useMemo(() => {
+    const map = new Map<string, number>();
+    allUnreadClientMsgs?.forEach(m => {
+      if (m.channelId) map.set(m.channelId, (map.get(m.channelId) || 0) + 1);
+    });
+    return map;
+  }, [allUnreadClientMsgs]);
+
   const directMsgQuery = useMemo(() => ({
     skip: !user?.uid || chatMode !== 'direct',
     where: user?.uid ? [{ field: 'senderId', operator: '==', value: user.uid }] : undefined,
@@ -1039,7 +1057,20 @@ const ChatView: React.FC = () => {
           {portalAccess && portalAccess.length > 0 && (
             <>
               <div className="h-px bg-border/50 mx-2 my-2" />
-              <p className="px-2 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Klientët</p>
+              <div className="flex items-center justify-between px-2 pt-1 pb-1">
+                <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Klientët</p>
+                {allUnreadClientMsgs && allUnreadClientMsgs.length > 0 && (
+                  <button
+                    onClick={async () => {
+                      await Promise.all(allUnreadClientMsgs.map(m => messageMutation.update(m.id, { isRead: true })));
+                    }}
+                    className="text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+                    title="Shëno të gjitha si të lexuara"
+                  >
+                    Pastro {allUnreadClientMsgs.length}
+                  </button>
+                )}
+              </div>
               <div className="relative px-1 mb-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
                 <Input
@@ -1061,12 +1092,12 @@ const ChatView: React.FC = () => {
                   const c = customers?.find(cu => cu.id === a.customerId);
                   return c?.name?.toLowerCase().includes(q) || c?.email?.toLowerCase().includes(q) || a.email?.toLowerCase().includes(q);
                 }).sort((a, b) => {
-                  const ua = (channelUnreadMap.get(`client-${a.customerId}`) || 0)
+                  const ua = (clientUnreadMap.get(`client-${a.customerId}`) || 0)
                     + (projects?.filter(p => p.customerId === a.customerId) || [])
-                        .reduce((s, p) => s + (channelUnreadMap.get(`client-${a.customerId}-project-${p.id}`) || 0), 0);
-                  const ub = (channelUnreadMap.get(`client-${b.customerId}`) || 0)
+                        .reduce((s, p) => s + (clientUnreadMap.get(`client-${a.customerId}-project-${p.id}`) || 0), 0);
+                  const ub = (clientUnreadMap.get(`client-${b.customerId}`) || 0)
                     + (projects?.filter(p => p.customerId === b.customerId) || [])
-                        .reduce((s, p) => s + (channelUnreadMap.get(`client-${b.customerId}-project-${p.id}`) || 0), 0);
+                        .reduce((s, p) => s + (clientUnreadMap.get(`client-${b.customerId}-project-${p.id}`) || 0), 0);
                   if (ua > 0 && ub === 0) return -1;
                   if (ub > 0 && ua === 0) return 1;
                   return 0;
@@ -1074,7 +1105,7 @@ const ChatView: React.FC = () => {
                   const customer = customers?.find(c => c.id === access.customerId);
                   const clientChannelId = `client-${access.customerId}`;
                   const isActive = chatMode === 'channel' && activeChannel === clientChannelId;
-                  const unread = channelUnreadMap.get(clientChannelId) || 0;
+                  const unread = clientUnreadMap.get(clientChannelId) || 0;
                   const clientProjects = projects?.filter(p => p.customerId === access.customerId) || [];
                   return (
                     <div key={access.id}>
@@ -1099,7 +1130,7 @@ const ChatView: React.FC = () => {
                           {clientProjects.map(proj => {
                             const projChannelId = `client-${access.customerId}-project-${proj.id}`;
                             const isProjActive = chatMode === 'channel' && activeChannel === projChannelId;
-                            const projUnread = channelUnreadMap.get(projChannelId) || 0;
+                            const projUnread = clientUnreadMap.get(projChannelId) || 0;
                             return (
                               <button
                                 key={proj.id}
