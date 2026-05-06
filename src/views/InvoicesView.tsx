@@ -1309,6 +1309,9 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       paymentUrl,
       isRecurring,
       recurringFrequency: isRecurring ? recurringFrequency : undefined,
+      // nextRecurringDate drives the cron — set to dueDate so the next invoice
+      // is generated on/after the current invoice's due date.
+      nextRecurringDate: isRecurring ? (dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000)) : undefined,
     };
 
     if (isEditing) {
