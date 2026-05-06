@@ -77,50 +77,6 @@ interface MassagePackage {
 
 const PACKAGES: MassagePackage[] = [
   {
-    id: 'starter',
-    title: 'Starter',
-    subtitle: 'Prezencë profesionale në social media',
-    price: '500€',
-    priceNote: '/ muaj + ad spend',
-    targetAudience: [
-      'Qendra masazhesh të reja',
-      'Terapistë individualë',
-      'Biznese që duan prezencë bazë online',
-    ],
-    features: [
-      {
-        category: 'Social Media',
-        items: [
-          'Menaxhim Facebook + Instagram',
-          '12 postime / muaj',
-          '8 reels / muaj',
-          'Design grafik & copywriting',
-          'Publikim sipas kalendarit',
-          '1 content session / muaj',
-          'Raport mujor bazë',
-        ],
-      },
-      {
-        category: 'Reklamë',
-        items: [
-          'Setup i Meta Ads (1 fushatë)',
-          'Targeting lokal (qytet, rreze)',
-          'Optimizim bazë',
-        ],
-      },
-    ],
-    notIncluded: [
-      'SEO & Google',
-      'Xhirime shtesë',
-      'Community management aktiv',
-      'Blog artikuj',
-    ],
-    color: 'from-teal-400 to-emerald-500',
-    border: 'border-teal-200 hover:border-teal-400',
-    headerBg: 'bg-gradient-to-br from-teal-50 to-emerald-50',
-    cta: 'Fillo me Starter',
-  },
-  {
     id: 'essential',
     title: 'Essential',
     subtitle: 'SEO + Social Media — gjithçka në një paketë',
@@ -606,7 +562,7 @@ export default function MassageLandingPage() {
             </div>
           </FadeIn>
 
-          <div className="grid lg:grid-cols-3 gap-8 mt-12">
+          <div className="grid lg:grid-cols-2 gap-8 mt-12 max-w-5xl mx-auto">
             {PACKAGES.map((pkg, i) => {
               const isExpanded = expandedCard === pkg.id;
               return (
