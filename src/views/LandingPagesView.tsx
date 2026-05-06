@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2 } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -102,6 +102,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Share2,
     color: 'text-pink-600',
     gradient: 'from-pink-500 to-purple-600',
+    status: 'active',
+  },
+  {
+    id: 'masazh',
+    title: 'Qendra Masazhesh',
+    description: 'Paketa SEO + Social Media për qendra masazhesh dhe wellness — nga 800€/muaj.',
+    path: '/masazh',
+    category: 'SEO + Social Media',
+    icon: Leaf,
+    color: 'text-teal-600',
+    gradient: 'from-teal-500 to-emerald-600',
     status: 'active',
   },
 ];
