@@ -29,6 +29,7 @@ const ServiceInquiriesView: React.FC = () => {
   const [convertingId, setConvertingId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
 
   const { toast } = useToast();
 
@@ -41,7 +42,7 @@ const ServiceInquiriesView: React.FC = () => {
 
   const filtered = React.useMemo(() => {
     if (!inquiries) return [];
-    let result = inquiries;
+    let result = inquiries.filter(i => !deletedIds.has(i.id));
     if (statusFilter !== 'all') {
       result = result.filter(i => i.status === statusFilter);
     }
@@ -55,7 +56,7 @@ const ServiceInquiriesView: React.FC = () => {
       );
     }
     return result;
-  }, [inquiries, statusFilter, searchQuery]);
+  }, [inquiries, deletedIds, statusFilter, searchQuery]);
 
   const stats = React.useMemo(() => {
     if (!inquiries) return { total: 0, new: 0, reviewed: 0, converted: 0 };
@@ -69,16 +70,19 @@ const ServiceInquiriesView: React.FC = () => {
 
   const handleDelete = async (id: string) => {
     setDeleting(true);
+    // Optimistic: hide immediately so user sees instant feedback
+    setDeletedIds(prev => new Set([...prev, id]));
+    setDeleteConfirmId(null);
+    if (selectedInquiry?.id === id) setSelectedInquiry(null);
     try {
       await inquiryMutation.remove(id);
-      setDeleteConfirmId(null);
-      if (selectedInquiry?.id === id) setSelectedInquiry(null);
       toast({ title: 'Kërkesa u fshi' });
     } catch {
+      // Revert optimistic update on failure
+      setDeletedIds(prev => { const s = new Set(prev); s.delete(id); return s; });
       toast({ title: 'Gabim', description: 'Kërkesa nuk u fshi. Provoni përsëri.', variant: 'destructive' });
     } finally {
       setDeleting(false);
-      setDeleteConfirmId(null);
     }
   };
 
