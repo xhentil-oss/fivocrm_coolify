@@ -178,6 +178,78 @@ async function persistLidMapping(lid: string, phoneJid: string): Promise<void> {
  *  for fast processing when mapping arrives. Messages are ALWAYS saved to Firestore (with isLid: true). */
 const pendingLidMessages = new Map<string, string[]>(); // LID JID → array of Firestore doc IDs
 
+/** In-memory lead phone cache — avoids N+1 Firestore queries on every incoming message */
+const leadPhoneCache = new Map<string, { leadId: string; leadName: string | null }>();
+
+async function lookupLeadByPhone(phone: string): Promise<{ leadId: string | null; leadName: string | null }> {
+  const cached = leadPhoneCache.get(phone);
+  if (cached) return cached;
+  try {
+    let snap = await db.collection('leads')
+      .where('teamId', '==', TEAM_ID)
+      .where('phoneNumber', '==', phone)
+      .limit(1)
+      .get();
+    if (!snap.empty) {
+      const result = { leadId: snap.docs[0].id, leadName: snap.docs[0].data().name || null };
+      leadPhoneCache.set(phone, result);
+      return result;
+    }
+    snap = await db.collection('leads')
+      .where('teamId', '==', TEAM_ID)
+      .where('phone', '==', phone)
+      .limit(1)
+      .get();
+    if (!snap.empty) {
+      const result = { leadId: snap.docs[0].id, leadName: snap.docs[0].data().name || null };
+      leadPhoneCache.set(phone, result);
+      return result;
+    }
+  } catch { /* non-critical */ }
+  return { leadId: null, leadName: null };
+}
+
+/** On startup: rebuild pendingLidMessages from Firestore isLid docs + immediately resolve known mappings */
+async function loadPendingLidMessages(): Promise<void> {
+  try {
+    const snap = await db.collection('whatsappMessages')
+      .where('teamId', '==', TEAM_ID)
+      .where('isLid', '==', true)
+      .get();
+
+    for (const doc of snap.docs) {
+      const jid: string = doc.data().jid || '';
+      if (jid.endsWith('@lid')) {
+        const queue = pendingLidMessages.get(jid) || [];
+        queue.push(doc.id);
+        pendingLidMessages.set(jid, queue);
+      }
+    }
+    console.log(`[WA] Recovered ${pendingLidMessages.size} pending LID queues (${snap.size} docs)`);
+
+    // Immediately resolve any LIDs we already have mappings for
+    for (const [lid, docIds] of Array.from(pendingLidMessages.entries())) {
+      const phoneJid = lidToPhoneMap.get(lid);
+      if (!phoneJid) continue;
+      const phone = normalizePhone(phoneJid.split('@')[0]);
+      const batch = db.batch();
+      for (const docId of docIds) {
+        batch.update(db.collection('whatsappMessages').doc(docId), {
+          phone,
+          jid: phoneJid,
+          isLid: false,
+          updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+        });
+      }
+      await batch.commit();
+      pendingLidMessages.delete(lid);
+      console.log(`[WA] Startup resolved ${docIds.length} LID docs: ${lid} → ${phone}`);
+    }
+  } catch (e) {
+    console.error('[WA] Error loading pending LID messages:', e);
+  }
+}
+
 /** Register a LID→phone mapping and trigger backfill + queue processing */
 async function registerLidMapping(lid: string, phoneJid: string): Promise<void> {
   if (!lid || !phoneJid || lidToPhoneMap.has(lid)) return;
@@ -233,8 +305,7 @@ async function backfillLidMessages(lidJid: string, phoneJid: string): Promise<vo
         updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
       });
       count++;
-      // Firestore batch limit is 500
-      if (count >= 499) break;
+      if (count >= 500) break;
     }
     await batch.commit();
     console.log(`[WA] Backfill: ${lidPhone} → ${realPhone} (${count} mesazhe u përditësuan)`);
@@ -350,6 +421,14 @@ async function reverseLookupLeads(): Promise<void> {
     }
 
     console.log(`[WA] Reverse lookup complete: ${resolved} new mappings from ${phones.size} phones`);
+
+    // Refresh lead cache with fresh data from this query
+    leadPhoneCache.clear();
+    for (const doc of leadsSnap.docs) {
+      const d = doc.data();
+      const p = normalizePhone(String(d.phoneNumber || d.phone || ''));
+      if (p) leadPhoneCache.set(p, { leadId: doc.id, leadName: d.name || null });
+    }
   } catch (e) {
     console.error('[WA] Reverse lookup error:', e);
   }
@@ -585,33 +664,8 @@ async function connectWhatsApp(): Promise<void> {
         if (existing.exists) continue;
       }
 
-      // Try to find the lead by phone for auto-linking
-      let autoLeadId: string | null = null;
-      let autoLeadName: string | null = null;
-      try {
-        const leadsSnap = await db.collection('leads')
-          .where('teamId', '==', TEAM_ID)
-          .where('phoneNumber', '==', phone)
-          .limit(1)
-          .get();
-        if (!leadsSnap.empty) {
-          const leadDoc = leadsSnap.docs[0];
-          autoLeadId = leadDoc.id;
-          autoLeadName = leadDoc.data().name || null;
-        }
-        // fallback: check 'phone' field
-        if (!autoLeadId) {
-          const snap2 = await db.collection('leads')
-            .where('teamId', '==', TEAM_ID)
-            .where('phone', '==', phone)
-            .limit(1)
-            .get();
-          if (!snap2.empty) {
-            autoLeadId = snap2.docs[0].id;
-            autoLeadName = snap2.docs[0].data().name || null;
-          }
-        }
-      } catch { /* non-critical */ }
+      // Try to find the lead by phone for auto-linking (cached to avoid N+1 queries)
+      const { leadId: autoLeadId, leadName: autoLeadName } = await lookupLeadByPhone(phone);
 
       try {
         await db.collection('whatsappMessages').doc(docId).set({
@@ -826,5 +880,7 @@ app.listen(PORT, () => {
   console.log(`\n[VPS Server] ✅ Aktiv në port ${PORT}`);
   console.log(`[VPS Server]  → Status: http://localhost:${PORT}/status`);
   console.log(`[VPS Server]  → QR:     http://localhost:${PORT}/qr\n`);
-  loadLidMappings().then(() => connectWhatsApp());
+  loadLidMappings()
+    .then(() => loadPendingLidMessages())
+    .then(() => connectWhatsApp());
 });
