@@ -47,7 +47,7 @@ function simulateRole(role: PreviewRole, base: UserPermissions): UserPermissions
         canAccessGoals: false, canAccessTeams: false, canAccessChat: true,
         canAccessCustomers: true, canAccessServices: true, canAccessExpenses: false,
         canAccessProfile: true, canAccessTimeTracking: true,
-        canEdit: true, canComment: true, canAssignTasks: false, canManageMembers: false,
+        canEdit: true, canComment: true, canAssignTasks: true, canManageMembers: false,
         role: 'SalesAgent', dataScope: 'assigned', isAdmin: false, isOwner: false, isManager: false, isGuest: false,
       };
     case 'Manager':

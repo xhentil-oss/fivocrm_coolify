@@ -195,13 +195,14 @@ export function usePermissions(): UserPermissions {
 
     // OWNER: User who created a team gets full admin access.
     if (isOwner) {
-      const ownerMembership = teamMembers.length > 0 ? teamMembers[0] : null;
-      let ownerTeamId = ownerMembership?.teamId || null;
-      let ownerTeam = ownerTeamId ? teams?.find((t: any) => t.id === ownerTeamId) : null;
-      if (!ownerTeamId && teams && teams.length > 0) {
-        const ownedTeam = teams.find((t: any) => t.createdByUserId === user?.uid);
-        if (ownedTeam) { ownerTeamId = ownedTeam.id; ownerTeam = ownedTeam; }
-      }
+      // Find the team this user owns, then its membership record — avoids picking a
+      // membership from a different team when the user belongs to multiple teams.
+      const ownedTeam = teams?.find((t: any) => t.createdByUserId === user?.uid);
+      const ownerMembership = ownedTeam
+        ? (teamMembers.find(m => m.teamId === ownedTeam.id) || teamMembers[0])
+        : teamMembers[0] || null;
+      const ownerTeamId = ownedTeam?.id || ownerMembership?.teamId || null;
+      const ownerTeam = ownedTeam || (ownerTeamId ? teams?.find((t: any) => t.id === ownerTeamId) : null);
       return {
         ...fullAccessPermissions,
         role: ownerMembership?.role || 'Admin',
@@ -421,7 +422,7 @@ export function usePermissions(): UserPermissions {
       canAccessTasks: !isViewer ? true : membership.canAccessTasks === true,
       canAccessCRM: membership.canAccessCRM === true,
       canAccessInvoices: membership.canAccessInvoices === true,
-      canAccessReports: true,
+      canAccessReports: false,
       canAccessSettings: membership.canAccessSettings === true,
       canAccessGoals: membership.canAccessGoals === true || !isViewer,
       canAccessTeams: false,
