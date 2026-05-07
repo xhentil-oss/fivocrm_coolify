@@ -1581,7 +1581,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
                   />
                 </div>
                 <div className="w-20 sm:w-24 text-right text-sm font-medium">
-                  {toInvoiceCurrency((services?.find(s => s.id === item.serviceId)?.price || 0) * item.quantity).toFixed(2)} {currency === 'EUR' ? '€' : 'L'}
+                  {(() => { const svc = services?.find(s => s.id === item.serviceId); return toInvoiceCurrency((svc?.price || 0) * item.quantity, svc?.currency).toFixed(2); })()} {currency === 'EUR' ? '€' : 'L'}
                 </div>
                 <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(index)}>
                   <Trash2 className="w-4 h-4" />
