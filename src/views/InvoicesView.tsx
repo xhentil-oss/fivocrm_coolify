@@ -186,7 +186,7 @@ const InvoicesView: React.FC = () => {
           invoiceId: invoice.id,
           invoiceNumber: invoice.invoiceNumber || invoice.id.slice(0, 8),
           amount,
-          currency: 'eur',
+          currency: ((invoice as any).currency || 'EUR').toLowerCase(),
           customerEmail: customer?.email || undefined,
           customerName: customer?.name || undefined,
           successUrl: `${window.location.origin}/app/invoices?payment=success&invoice=${invoice.id}`,
@@ -703,9 +703,9 @@ const InvoicesView: React.FC = () => {
                   </div>
                   <p className="text-xs text-muted-foreground truncate">{customer?.name || 'Unknown'}</p>
                   <div className="flex items-center gap-3 mt-1.5">
-                    <span className="text-sm font-semibold">{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} L</span>
+                    <span className="text-sm font-semibold">{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}</span>
                     {invoice.status === 'Partial' && invoice.paidAmount != null && (
-                      <span className="text-[10px] text-cyan-600 font-medium">Paguar: {invoice.paidAmount.toLocaleString()} L</span>
+                      <span className="text-[10px] text-cyan-600 font-medium">Paguar: {invoice.paidAmount.toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}</span>
                     )}
                     <span className="text-[10px] text-muted-foreground">Afati: {invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : 'Pa afat'}</span>
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0">
@@ -834,10 +834,10 @@ const InvoicesView: React.FC = () => {
                           onClick={() => startEditing(invoice.id, 'total', invoice.total ?? invoice.amount ?? 0)}
                         >
                           <div>
-                            <div>{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} L</div>
+                            <div>{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}</div>
                             {invoice.status === 'Partial' && invoice.paidAmount != null && (
                               <div className="text-[10px] text-cyan-600 font-medium">
-                                {invoice.paidAmount.toLocaleString()} / {(invoice.total ?? invoice.amount ?? 0).toLocaleString()} L
+                                {invoice.paidAmount.toLocaleString()} / {(invoice.total ?? invoice.amount ?? 0).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}
                               </div>
                             )}
                           </div>
@@ -997,7 +997,9 @@ const InvoicesView: React.FC = () => {
             </DialogHeader>
             {(() => {
               const inv = partialPaymentInvoice;
-              const total = toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
+              const invCur = (inv as any).currency || 'ALL';
+              const curSymbol = invCur === 'EUR' ? '€' : 'L';
+              const total = inv.total ?? inv.amount ?? 0;
               const alreadyPaid = inv.paidAmount ?? 0;
               const remaining = total - alreadyPaid;
               return (
@@ -1005,17 +1007,17 @@ const InvoicesView: React.FC = () => {
                   <div className="bg-muted rounded-lg p-3 space-y-1 text-sm">
                     <div className="flex justify-between">
                       <span className="text-muted-foreground">Totali i faturës</span>
-                      <span className="font-semibold">{total.toLocaleString()} L</span>
+                      <span className="font-semibold">{total.toLocaleString()} {curSymbol}</span>
                     </div>
                     {alreadyPaid > 0 && (
                       <div className="flex justify-between">
                         <span className="text-muted-foreground">Paguar deri tani</span>
-                        <span className="font-semibold text-green-600">{alreadyPaid.toLocaleString()} L</span>
+                        <span className="font-semibold text-green-600">{alreadyPaid.toLocaleString()} {curSymbol}</span>
                       </div>
                     )}
                     <div className="flex justify-between border-t pt-1 mt-1">
                       <span className="text-muted-foreground">Mbetet për t'u paguar</span>
-                      <span className="font-bold text-amber-600">{remaining.toLocaleString()} L</span>
+                      <span className="font-bold text-amber-600">{remaining.toLocaleString()} {curSymbol}</span>
                     </div>
                     {/* Progress bar */}
                     {alreadyPaid > 0 && (
@@ -1030,7 +1032,7 @@ const InvoicesView: React.FC = () => {
                       {inv.partialPayments.map((p, i) => (
                         <div key={i} className="flex justify-between text-xs border rounded px-2 py-1">
                           <span className="text-muted-foreground">{new Date(p.paidAt).toLocaleDateString()} · {p.method || '-'}{p.note ? ` · ${p.note}` : ''}</span>
-                          <span className="font-medium text-green-600">+{p.amount.toLocaleString()} L</span>
+                          <span className="font-medium text-green-600">+{p.amount.toLocaleString()} {curSymbol}</span>
                         </div>
                       ))}
                     </div>
@@ -1310,10 +1312,10 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     }
 
     const subtotal = calculateSubtotal();
-    // When editing and calculated subtotal is 0 (no items loaded or services deleted),
-    // preserve original invoice value to avoid overwriting with 0
-    const resolvedSubtotal = (isEditing && subtotal === 0)
-      ? (editInvoice?.total || editInvoice?.subtotal || editInvoice?.amount || 0)
+    // When editing and items haven't loaded yet, preserve the original subtotal
+    // to avoid overwriting with 0 before line items are populated.
+    const resolvedSubtotal = (isEditing && !loadedExistingItems && subtotal === 0)
+      ? (editInvoice?.subtotal || editInvoice?.total || editInvoice?.amount || 0)
       : subtotal;
     const discountAmount = calculateDiscountAmount(resolvedSubtotal);
     const total = resolvedSubtotal - discountAmount + tax;
@@ -1338,7 +1340,6 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       discountType,
       tax,
       total,
-      amount: total,
       paymentUrl,
       isRecurring,
       isRecurringPaused: isRecurring ? isRecurringPaused : false,
