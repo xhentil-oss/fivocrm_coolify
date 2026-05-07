@@ -2114,181 +2114,234 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             const { default: jsPDF } = await import('jspdf');
             const doc = new jsPDF({ unit: 'mm', format: 'a4' });
             const w = doc.internal.pageSize.getWidth();
+            const h = doc.internal.pageSize.getHeight();
             const margin = 20;
-            let y = 20;
-            const cur = (invoice as any).currency === 'EUR' ? '€' : 'L';
-            const invCurrency: 'EUR' | 'ALL' = (invoice as any).currency === 'EUR' ? 'EUR' : 'ALL';
-            const eurRate = getEurToAllRate();
-            // Helper: format a value in both currencies
-            const fmtBoth = (amount: number) => {
-              if (invCurrency === 'EUR') {
-                return { primary: `${amount.toFixed(2)} €`, secondary: `${(amount * eurRate).toFixed(0)} L` };
-              }
-              return { primary: `${amount.toFixed(2)} L`, secondary: `${(amount / eurRate).toFixed(2)} €` };
-            };
+            const isEUR = (invoice as any).currency === 'EUR';
+            const cur = isEUR ? '€' : 'L';
+            const fmt = (n: number) => `${n.toFixed(2)} ${cur}`;
 
-            // Header
-            doc.setFontSize(22);
+            // ── Accent bar ──────────────────────────────────────────────────
+            doc.setFillColor(13, 148, 136); // teal-600
+            doc.rect(0, 0, w, 5, 'F');
+
+            // ── Header ──────────────────────────────────────────────────────
+            let y = 18;
+            doc.setFontSize(26);
             doc.setFont('helvetica', 'bold');
+            doc.setTextColor(13, 148, 136);
             doc.text('FATURË', margin, y);
-            doc.setFontSize(10);
-            doc.setFont('helvetica', 'normal');
-            doc.text(`# ${invoice.invoiceNumber || invoice.id.slice(0, 8)}`, w - margin, y, { align: 'right' });
-            y += 6;
-            doc.text(`Data: ${invoice.invoiceDate ? new Date(invoice.invoiceDate).toLocaleDateString('sq-AL') : new Date(invoice.createdAt).toLocaleDateString('sq-AL')}`, w - margin, y, { align: 'right' });
-            y += 5;
-            doc.text(`Afati: ${invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('sq-AL') : 'Pa afat'}`, w - margin, y, { align: 'right' });
-            y += 5;
-            doc.text(`Statusi: ${invoice.status}`, w - margin, y, { align: 'right' });
 
-            // Divider
+            // Issuer name below title
+            const pdfBankHolder = (invoice as any).bankAccountHolder || localStorage.getItem('default_bank_holder') || '';
+            if (pdfBankHolder) {
+              doc.setFontSize(10);
+              doc.setFont('helvetica', 'normal');
+              doc.setTextColor(80, 80, 80);
+              doc.text(pdfBankHolder, margin, y + 7);
+            }
+
+            // Invoice meta (top right)
+            doc.setTextColor(50, 50, 50);
+            doc.setFontSize(10);
+            doc.setFont('helvetica', 'bold');
+            doc.text(`# ${invoice.invoiceNumber || invoice.id.slice(0, 8)}`, w - margin, y - 2, { align: 'right' });
+            doc.setFont('helvetica', 'normal');
+            doc.setFontSize(9);
+            doc.setTextColor(100, 100, 100);
+            y += 14;
+            doc.text(`Data:   ${invoice.invoiceDate ? new Date(invoice.invoiceDate).toLocaleDateString('sq-AL') : new Date(invoice.createdAt).toLocaleDateString('sq-AL')}`, w - margin, y - 11, { align: 'right' });
+            doc.text(`Afati:  ${invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString('sq-AL') : 'Pa afat'}`, w - margin, y - 6, { align: 'right' });
+
+            // Status badge
+            const statusColors: Record<string, [number, number, number]> = {
+              Paid: [22, 163, 74], Pending: [234, 179, 8], Overdue: [220, 38, 38],
+              Draft: [107, 114, 128], Partial: [59, 130, 246],
+            };
+            const [sr, sg, sb] = statusColors[invoice.status] || [100, 100, 100];
+            doc.setFillColor(sr, sg, sb);
+            doc.roundedRect(w - margin - 28, y - 3, 28, 6, 1, 1, 'F');
+            doc.setTextColor(255, 255, 255);
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'bold');
+            doc.text(invoice.status, w - margin - 14, y + 1, { align: 'center' });
+            doc.setTextColor(50, 50, 50);
+
+            // ── Divider ─────────────────────────────────────────────────────
             y += 8;
-            doc.setDrawColor(200);
+            doc.setDrawColor(13, 148, 136);
+            doc.setLineWidth(0.4);
             doc.line(margin, y, w - margin, y);
+            doc.setLineWidth(0.2);
             y += 10;
 
-            // Customer info
-            doc.setFontSize(11);
+            // ── Client + Bank (two columns) ──────────────────────────────────
+            const colMid = w / 2 + 5;
+
+            doc.setFontSize(8);
             doc.setFont('helvetica', 'bold');
-            doc.text('Klienti', margin, y);
-            y += 6;
-            doc.setFontSize(10);
+            doc.setTextColor(13, 148, 136);
+            doc.text('KLIENTI', margin, y);
+            y += 5;
             doc.setFont('helvetica', 'normal');
-            if (customer?.name) { doc.text(customer.name, margin, y); y += 5; }
+            doc.setTextColor(50, 50, 50);
+            doc.setFontSize(9);
+            if (customer?.name) { doc.setFont('helvetica', 'bold'); doc.text(customer.name, margin, y); doc.setFont('helvetica', 'normal'); y += 5; }
             if (customer?.company) { doc.text(customer.company, margin, y); y += 5; }
             if (customer?.email) { doc.text(customer.email, margin, y); y += 5; }
             if (customer?.phone) { doc.text(customer.phone, margin, y); y += 5; }
             if (customer?.address) { doc.text(customer.address, margin, y); y += 5; }
 
-            // Bank info (right side) — use invoice fields, fall back to localStorage defaults
+            // Bank info — right column
             const pdfBankIBAN = (invoice as any).bankIBAN || localStorage.getItem('default_bank_iban') || '';
             const pdfBankName = (invoice as any).bankName || localStorage.getItem('default_bank_name') || '';
-            const pdfBankHolder = (invoice as any).bankAccountHolder || localStorage.getItem('default_bank_holder') || '';
             const pdfBankSwift = (invoice as any).bankSWIFT || localStorage.getItem('default_bank_swift') || '';
             if (pdfBankIBAN) {
-              let by = 58;
-              const bx = w / 2 + 10;
+              let by = y - (5 * ([customer?.name, customer?.company, customer?.email, customer?.phone, customer?.address].filter(Boolean).length));
+              doc.setFontSize(8);
               doc.setFont('helvetica', 'bold');
-              doc.setFontSize(10);
-              doc.text('Detajet Bankare', bx, by); by += 6;
+              doc.setTextColor(13, 148, 136);
+              doc.text('DETAJET BANKARE', colMid, by); by += 5;
               doc.setFont('helvetica', 'normal');
+              doc.setTextColor(50, 50, 50);
               doc.setFontSize(9);
-              if (pdfBankName) { doc.text(`Banka: ${pdfBankName}`, bx, by); by += 5; }
-              if (pdfBankHolder) { doc.text(`Mbajtësi: ${pdfBankHolder}`, bx, by); by += 5; }
-              doc.text(`IBAN: ${pdfBankIBAN}`, bx, by); by += 5;
-              if (pdfBankSwift) { doc.text(`SWIFT: ${pdfBankSwift}`, bx, by); by += 5; }
-              doc.setFontSize(10);
+              if (pdfBankName) { doc.text(pdfBankName, colMid, by); by += 5; }
+              if (pdfBankHolder) { doc.text(`Mbajtësi: ${pdfBankHolder}`, colMid, by); by += 5; }
+              doc.setFont('helvetica', 'bold');
+              doc.text(`IBAN: ${pdfBankIBAN}`, colMid, by); by += 5;
+              doc.setFont('helvetica', 'normal');
+              if (pdfBankSwift) { doc.text(`SWIFT: ${pdfBankSwift}`, colMid, by); }
             }
 
-            y = Math.max(y, 100);
+            y = Math.max(y + 5, 90);
 
-            // Items table header
-            doc.setFillColor(245, 245, 245);
+            // ── Items table ──────────────────────────────────────────────────
+            // Table header
+            doc.setFillColor(13, 148, 136);
             doc.rect(margin, y, w - margin * 2, 8, 'F');
             doc.setFont('helvetica', 'bold');
             doc.setFontSize(9);
-            doc.text('Shërbimi', margin + 2, y + 5.5);
-            doc.text('Sasia', w - margin - 60, y + 5.5, { align: 'right' });
-            doc.text('Çmimi', w - margin - 30, y + 5.5, { align: 'right' });
+            doc.setTextColor(255, 255, 255);
+            doc.text('Shërbimi', margin + 3, y + 5.5);
+            doc.text('Sasia', w - margin - 58, y + 5.5, { align: 'right' });
+            doc.text('Çmimi', w - margin - 28, y + 5.5, { align: 'right' });
             doc.text('Totali', w - margin - 2, y + 5.5, { align: 'right' });
             y += 10;
 
-            // Items
+            // Rows
             doc.setFont('helvetica', 'normal');
+            doc.setFontSize(9);
+            let rowAlt = false;
             for (const item of invoiceItems || []) {
               const svc = services[item.serviceId];
-              const unitFmt = fmtBoth(item.unitPrice ?? 0);
-              const lineFmt = fmtBoth(item.totalPrice ?? 0);
-              doc.text(svc?.title || 'Shërbim', margin + 2, y + 4);
-              doc.text(String(item.quantity), w - margin - 60, y + 4, { align: 'right' });
-              doc.text(unitFmt.primary, w - margin - 30, y + 4, { align: 'right' });
-              doc.text(lineFmt.primary, w - margin - 2, y + 4, { align: 'right' });
-              // secondary row (other currency, smaller)
-              doc.setFontSize(7);
-              doc.setTextColor(130);
-              doc.text(unitFmt.secondary, w - margin - 30, y + 8, { align: 'right' });
-              doc.text(lineFmt.secondary, w - margin - 2, y + 8, { align: 'right' });
-              doc.setTextColor(0);
-              doc.setFontSize(10);
-              doc.setDrawColor(230);
-              doc.line(margin, y + 11, w - margin, y + 11);
-              y += 13;
-            }
-
-            // Totals
-            y += 5;
-            doc.setDrawColor(200);
-            doc.line(w - margin - 70, y, w - margin, y);
-            y += 7;
-            const subtotalFmt = fmtBoth(invoice.subtotal || 0);
-            doc.text('Nëntotali:', w - margin - 40, y, { align: 'right' });
-            doc.text(subtotalFmt.primary, w - margin - 2, y, { align: 'right' });
-            y += 5;
-            doc.setFontSize(8);
-            doc.setTextColor(130);
-            doc.text(subtotalFmt.secondary, w - margin - 2, y, { align: 'right' });
-            doc.setTextColor(0);
-            doc.setFontSize(10);
-            y += 4;
-            if (invoice.discount != null && invoice.discount > 0) {
-              const discAmt = invoice.discountType === 'percent'
-                ? (invoice.subtotal || 0) * (invoice.discount / 100)
-                : invoice.discount;
-              const discLabel = invoice.discountType === 'percent' ? `Zbritje (${invoice.discount}%):` : 'Zbritje:';
-              const discFmt = fmtBoth(discAmt);
-              doc.setTextColor(220, 50, 50);
-              doc.text(discLabel, w - margin - 40, y, { align: 'right' });
-              doc.text(`-${discFmt.primary}`, w - margin - 2, y, { align: 'right' });
-              y += 5;
-              doc.setFontSize(8);
-              doc.text(`-${discFmt.secondary}`, w - margin - 2, y, { align: 'right' });
-              doc.setFontSize(10);
-              doc.setTextColor(0);
-              y += 4;
-            }
-            if (invoice.tax) {
-              const taxFmt = fmtBoth(invoice.tax);
-              doc.text('Taksa:', w - margin - 40, y, { align: 'right' });
-              doc.text(taxFmt.primary, w - margin - 2, y, { align: 'right' });
-              y += 5;
-              doc.setFontSize(8);
-              doc.setTextColor(130);
-              doc.text(taxFmt.secondary, w - margin - 2, y, { align: 'right' });
-              doc.setTextColor(0);
-              doc.setFontSize(10);
-              y += 4;
-            }
-            const totalFmt = fmtBoth(invoice.total || 0);
-            doc.setFont('helvetica', 'bold');
-            doc.setFontSize(12);
-            doc.text('TOTALI:', w - margin - 40, y, { align: 'right' });
-            doc.text(totalFmt.primary, w - margin - 2, y, { align: 'right' });
-            y += 6;
-            doc.setFontSize(10);
-            doc.setTextColor(80);
-            doc.text(totalFmt.secondary, w - margin - 2, y, { align: 'right' });
-            doc.setTextColor(0);
-
-            // Notes
-            if (invoice.notes) {
-              y += 15;
-              doc.setFontSize(9);
+              if (rowAlt) { doc.setFillColor(245, 253, 251); doc.rect(margin, y - 1, w - margin * 2, 9, 'F'); }
+              doc.setTextColor(30, 30, 30);
+              doc.text(svc?.title || svc?.name || 'Shërbim', margin + 3, y + 5);
+              doc.text(String(item.quantity), w - margin - 58, y + 5, { align: 'right' });
+              doc.text(fmt(item.unitPrice ?? 0), w - margin - 28, y + 5, { align: 'right' });
               doc.setFont('helvetica', 'bold');
-              doc.text('Shënime:', margin, y);
-              y += 5;
+              doc.text(fmt(item.totalPrice ?? 0), w - margin - 2, y + 5, { align: 'right' });
               doc.setFont('helvetica', 'normal');
-              const lines = doc.splitTextToSize(invoice.notes, w - margin * 2);
-              doc.text(lines, margin, y);
+              doc.setDrawColor(220, 220, 220);
+              doc.line(margin, y + 8, w - margin, y + 8);
+              y += 9;
+              rowAlt = !rowAlt;
             }
 
-            // Payment info
-            if (invoice.paymentMethod) {
-              y += 15;
-              doc.setFontSize(8);
-              doc.setTextColor(130);
-              doc.text(`Mënyra e pagesës: ${invoice.paymentMethod === 'Bank' ? 'Transfer Bankar' : invoice.paymentMethod === 'Cash' ? 'Kesh' : invoice.paymentMethod}`, margin, y);
-              doc.setTextColor(0);
+            // ── Totals box ───────────────────────────────────────────────────
+            y += 6;
+            const totBoxX = w - margin - 80;
+            const totBoxW = 80;
+
+            const subtotal = invoice.subtotal || invoice.total || 0;
+            const discAmt = invoice.discount != null && invoice.discount > 0
+              ? (invoice.discountType === 'percent' ? subtotal * (invoice.discount / 100) : invoice.discount)
+              : 0;
+            const taxAmt = invoice.tax || 0;
+            const totalVal = invoice.total || 0;
+
+            // Calculate box height
+            let boxLines = 1; // subtotal
+            if (discAmt > 0) boxLines++;
+            if (taxAmt > 0) boxLines++;
+            boxLines++; // total
+            const boxH = boxLines * 8 + 8;
+
+            doc.setFillColor(240, 253, 250);
+            doc.setDrawColor(13, 148, 136);
+            doc.setLineWidth(0.3);
+            doc.roundedRect(totBoxX, y, totBoxW, boxH, 2, 2, 'FD');
+            doc.setLineWidth(0.2);
+
+            let ty = y + 7;
+            doc.setFontSize(9);
+            doc.setFont('helvetica', 'normal');
+            doc.setTextColor(80, 80, 80);
+            doc.text('Nëntotali:', totBoxX + 4, ty);
+            doc.setTextColor(30, 30, 30);
+            doc.text(fmt(subtotal), totBoxX + totBoxW - 4, ty, { align: 'right' });
+            ty += 8;
+
+            if (discAmt > 0) {
+              doc.setTextColor(220, 38, 38);
+              const discLabel = invoice.discountType === 'percent' ? `Zbritje (${invoice.discount}%):` : 'Zbritje:';
+              doc.text(discLabel, totBoxX + 4, ty);
+              doc.text(`-${fmt(discAmt)}`, totBoxX + totBoxW - 4, ty, { align: 'right' });
+              doc.setTextColor(80, 80, 80);
+              ty += 8;
             }
+
+            if (taxAmt > 0) {
+              doc.setTextColor(80, 80, 80);
+              doc.text('Taksa (TVSh):', totBoxX + 4, ty);
+              doc.setTextColor(30, 30, 30);
+              doc.text(fmt(taxAmt), totBoxX + totBoxW - 4, ty, { align: 'right' });
+              ty += 8;
+            }
+
+            // Total line
+            doc.setDrawColor(13, 148, 136);
+            doc.line(totBoxX + 4, ty - 2, totBoxX + totBoxW - 4, ty - 2);
+            doc.setFont('helvetica', 'bold');
+            doc.setFontSize(11);
+            doc.setTextColor(13, 148, 136);
+            doc.text('TOTALI:', totBoxX + 4, ty + 4);
+            doc.text(fmt(totalVal), totBoxX + totBoxW - 4, ty + 4, { align: 'right' });
+
+            // ── Notes ────────────────────────────────────────────────────────
+            if (invoice.notes) {
+              y = ty + 16;
+              doc.setFontSize(8);
+              doc.setFont('helvetica', 'bold');
+              doc.setTextColor(100, 100, 100);
+              doc.text('SHËNIME', margin, y);
+              y += 4;
+              doc.setFont('helvetica', 'normal');
+              doc.setTextColor(60, 60, 60);
+              const noteLines = doc.splitTextToSize(invoice.notes, w - margin * 2);
+              doc.text(noteLines, margin, y);
+            }
+
+            // ── Footer ───────────────────────────────────────────────────────
+            const footerY = h - 18;
+            doc.setDrawColor(13, 148, 136);
+            doc.setLineWidth(0.3);
+            doc.line(margin, footerY - 4, w - margin, footerY - 4);
+            doc.setLineWidth(0.2);
+            doc.setFontSize(8);
+            doc.setFont('helvetica', 'italic');
+            doc.setTextColor(100, 100, 100);
+            doc.text('Faleminderit për besimin tuaj!', w / 2, footerY, { align: 'center' });
+            if (invoice.paymentMethod) {
+              const payLabel = invoice.paymentMethod === 'Bank' ? 'Transfer Bankar' : invoice.paymentMethod === 'Cash' ? 'Kesh' : invoice.paymentMethod;
+              doc.setFont('helvetica', 'normal');
+              doc.text(`Mënyra e pagesës: ${payLabel}`, margin, footerY);
+            }
+            doc.setFont('helvetica', 'normal');
+            doc.text(`Faqe 1 / 1`, w - margin, footerY, { align: 'right' });
+
+            // Bottom accent bar
+            doc.setFillColor(13, 148, 136);
+            doc.rect(0, h - 4, w, 4, 'F');
 
             doc.save(`Fatura-${invoice.invoiceNumber || invoice.id.slice(0, 8)}.pdf`);
             toast({ title: 'PDF u shkarkua' });
