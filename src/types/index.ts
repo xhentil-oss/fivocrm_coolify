@@ -266,13 +266,14 @@ export interface Lead {
   jobTitle?: string;
   address?: string;
   website?: string;
-  status: 'New' | 'Contacted' | 'Qualified' | 'Proposal' | 'Won' | 'Lost';
+  status: 'New' | 'Contacted' | 'Qualified' | 'Follow-up' | 'Proposal' | 'Won' | 'Converted' | 'Lost';
   source?: string;
   value?: number;
   score?: number;
   probability?: number;
   estimatedValue?: number;
   lostReason?: string;
+  convertedAt?: Date;
   businessCategory?: string;
   notes?: string;
   lastFollowUpDate?: Date;

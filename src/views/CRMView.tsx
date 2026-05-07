@@ -44,6 +44,7 @@ const CRMView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [scoreFilter, setScoreFilter] = useState('all');
   const [assignedFilter, setAssignedFilter] = useState('all');
+  const [sourceFilter, setSourceFilter] = useState('all');
   const { toast } = useToast();
 
   // Follow-up / re-contact state (synced with selectedLead)
@@ -317,7 +318,7 @@ const CRMView: React.FC = () => {
     let score = 0;
     if (lead.name) score += 10;
     if (lead.email) score += 15;
-    if (lead.phoneNumber) score += 10;
+    if (lead.phoneNumber || lead.phone) score += 10;
     if (lead.company) score += 15;
     if (lead.website) score += 5;
     if (lead.source) score += 5;
@@ -352,6 +353,8 @@ const CRMView: React.FC = () => {
   const handleFollowUp = async (leadId: string) => {
     await leadMutation.update(leadId, {
       lastFollowUpDate: new Date(),
+      nextFollowUpDate: null,
+      followUpNote: null,
       status: 'Follow-up',
     });
   };
@@ -451,13 +454,14 @@ const CRMView: React.FC = () => {
         customerDoc = await customerMutation.create({
           name: lead.name,
           email: lead.email,
-          phone: lead.phoneNumber,
+          phone: lead.phoneNumber || lead.phone,
           address: lead.address,
           company: lead.company,
           website: lead.website,
           notes: lead.notes,
           status: 'Active',
           leadId: lead.id,
+          convertedAt: new Date(),
           assignedToUserId: lead.assignedToUserId || undefined,
         });
 
@@ -528,7 +532,9 @@ const CRMView: React.FC = () => {
       result = result.filter(l =>
         l.name.toLowerCase().includes(q) ||
         l.email?.toLowerCase().includes(q) ||
-        l.company?.toLowerCase().includes(q)
+        l.company?.toLowerCase().includes(q) ||
+        l.phoneNumber?.toLowerCase().includes(q) ||
+        l.phone?.toLowerCase().includes(q)
       );
     }
     if (scoreFilter !== 'all') result = result.filter(l => {
@@ -540,8 +546,9 @@ const CRMView: React.FC = () => {
     });
     if (assignedFilter === 'mine') result = result.filter(l => l.assignedToUserId === user?.uid);
     if (assignedFilter === 'unassigned') result = result.filter(l => !l.assignedToUserId);
+    if (sourceFilter !== 'all') result = result.filter(l => l.source === sourceFilter);
     return result;
-  }, [leads, activeTab, searchQuery, scoreFilter, assignedFilter, user]);
+  }, [leads, activeTab, searchQuery, scoreFilter, assignedFilter, sourceFilter, user]);
 
   const needsFollowUp = React.useMemo(() => {
     if (!leads) return [];
@@ -549,6 +556,7 @@ const CRMView: React.FC = () => {
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
     
     return leads.filter(lead => {
+      if (lead.status === 'Lost' || lead.status === 'Converted') return false;
       if (!lead.lastFollowUpDate) return true;
       return new Date(lead.lastFollowUpDate) < thirtyDaysAgo;
     });
@@ -637,7 +645,7 @@ const CRMView: React.FC = () => {
           <Input
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Kërko sipas emrit, email, kompanisë..."
+            placeholder="Kërko sipas emrit, email, telefonit, kompanisë..."
             className="pl-9 h-9"
           />
           {searchQuery && (
@@ -666,6 +674,21 @@ const CRMView: React.FC = () => {
             <SelectItem value="all">Të gjitha</SelectItem>
             <SelectItem value="mine">Të miat</SelectItem>
             <SelectItem value="unassigned">Pa asignuar</SelectItem>
+          </SelectContent>
+        </Select>
+        <Select value={sourceFilter} onValueChange={setSourceFilter}>
+          <SelectTrigger className="w-full sm:w-[140px] h-9">
+            <SelectValue placeholder="Burimi" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="all">Të gjitha burimet</SelectItem>
+            <SelectItem value="Website">Website</SelectItem>
+            <SelectItem value="Referral">Referim</SelectItem>
+            <SelectItem value="Cold Call">Cold Call</SelectItem>
+            <SelectItem value="Social Media">Social Media</SelectItem>
+            <SelectItem value="Email">Email</SelectItem>
+            <SelectItem value="Event">Event</SelectItem>
+            <SelectItem value="Other">Tjetër</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -705,7 +728,7 @@ const CRMView: React.FC = () => {
             </div>
           </div>
           <p className="text-lg sm:text-h2 text-foreground font-medium animate-count-up">
-            {leads?.filter(l => l.status === 'Converted').length || 0}
+            {customers?.filter(c => (c as any).leadId).length || 0}
           </p>
           <p className="text-xs text-accent hidden sm:block">Të konvertuara</p>
         </Card>
