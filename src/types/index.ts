@@ -163,6 +163,7 @@ export interface Invoice {
   reminder25Sent?: boolean;
   reminderLastDaySent?: boolean;
   isRecurring?: boolean;
+  isRecurringPaused?: boolean;
   recurringFrequency?: 'weekly' | 'monthly' | 'quarterly' | 'yearly';
   nextRecurringDate?: Date;
   parentInvoiceId?: string;
