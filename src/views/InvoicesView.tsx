@@ -1181,7 +1181,9 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
   const [loadedExistingItems, setLoadedExistingItems] = useState(false);
 
   const teamId = useGlobalTeamId();
-  const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
+  const { data: rawFormCustomers } = useCollection<Customer>('customers', { skipTeamFilter: true });
+  // SalesAgent/Member see only their assigned customers in the dropdown
+  const customers = useFilteredByOwner(rawFormCustomers);
   const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
   const { data: portalAccessList } = useCollection<ClientPortalAccess>('clientPortalAccess', { skipTeamFilter: true });
