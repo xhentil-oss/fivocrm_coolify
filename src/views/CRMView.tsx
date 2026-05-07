@@ -458,6 +458,7 @@ const CRMView: React.FC = () => {
           notes: lead.notes,
           status: 'Active',
           leadId: lead.id,
+          assignedToUserId: lead.assignedToUserId || undefined,
         });
 
         // Auto-create client portal access if customer has an email

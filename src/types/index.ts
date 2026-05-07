@@ -117,6 +117,7 @@ export interface Customer {
   address?: string;
   teamId?: string;
   leadId?: string;
+  assignedToUserId?: string;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

@@ -12,7 +12,7 @@ import {
   Building2, Plus, Mail, Phone, Search, Filter, X,
   CheckCircle2, XCircle, AlertCircle, Star, Users,
   ShieldCheck, ClipboardList, UserPlus, Ban, Clock,
-  ExternalLink, Globe, Trash2, MoreVertical, PlusCircle,
+  ExternalLink, Globe, Trash2, MoreVertical, PlusCircle, UserCheck,
 } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -27,8 +27,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Separator } from '../components/ui/separator';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
 import { useToast } from '../hooks/use-toast';
-import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
-import type { Customer, ClientPortalAccess, ClientRequest, Team, Lead } from '../types';
+import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
+import { useUserNames } from '../hooks/useUserNames';
+import type { Customer, ClientPortalAccess, ClientRequest, Team, Lead, TeamMember } from '../types';
 
 const STATUS_OPTIONS = [
   { value: 'Active', label: 'Aktiv', color: 'bg-success text-success-foreground', icon: CheckCircle2 },
@@ -90,6 +91,9 @@ const CustomersView: React.FC = () => {
     orderBy: { field: 'name', direction: 'asc' },
     skipTeamFilter: true,
   });
+  const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
+  const teamMembers = useUniqueTeamMembers(rawTeamMembers);
+  const { getName } = useUserNames(teamMembers || []);
 
   const customerMutation = useMutation<Customer>('customers');
   const customIndustryMutation = useMutation<any>('customIndustries');
@@ -181,6 +185,8 @@ const CustomersView: React.FC = () => {
     });
     const creditLimit = formData.get('creditLimit') as string;
     if (creditLimit) data.creditLimit = parseFloat(creditLimit);
+    const assignedTo = formData.get('assignedToUserId') as string;
+    data.assignedToUserId = assignedTo && assignedTo !== 'unassigned' ? assignedTo : null;
 
     // Duplicate check: email vs existing customers + leads
     const normEmail = data.email?.toLowerCase().trim();
@@ -279,6 +285,8 @@ const CustomersView: React.FC = () => {
     });
     const creditLimit = formData.get('creditLimit') as string;
     data.creditLimit = creditLimit ? parseFloat(creditLimit) : null;
+    const assignedTo = formData.get('assignedToUserId') as string;
+    data.assignedToUserId = assignedTo && assignedTo !== 'unassigned' ? assignedTo : null;
 
     const normEmail = (data.email as string | undefined)?.toLowerCase().trim();
     const normPhone = (data.phone as string | undefined)?.replace(/\D/g, '');
@@ -469,7 +477,7 @@ const CustomersView: React.FC = () => {
               <DialogHeader>
                 <DialogTitle>Krijo Klient te Ri</DialogTitle>
               </DialogHeader>
-              <CustomerForm onSubmit={(data) => { setDirty(false); handleCreateCustomer(data); }} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} onDirtyChange={setDirty} />
+              <CustomerForm onSubmit={(data) => { setDirty(false); handleCreateCustomer(data); }} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} onDirtyChange={setDirty} teamMembers={teamMembers || []} getName={getName} canAssign={permissions.canManageMembers || permissions.role === 'Admin' || permissions.role === 'Manager'} />
             </DialogContent>
           </Dialog>
         )}
@@ -772,6 +780,11 @@ const CustomersView: React.FC = () => {
                             <div className="space-y-1">
                               {customer.company && <p className="font-normal">{customer.company}</p>}
                               {cust.industry && <Badge variant="outline" className="text-xs">{cust.industry}</Badge>}
+                              {cust.assignedToUserId && (
+                                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                                  <UserCheck className="w-3 h-3" />{getName(cust.assignedToUserId)}
+                                </div>
+                              )}
                             </div>
                           </td>
                           <td className="px-3 sm:px-6 py-3 sm:py-4">
@@ -831,7 +844,7 @@ const CustomersView: React.FC = () => {
                 <DialogHeader>
                   <DialogTitle>Ndrysho Klientin</DialogTitle>
                 </DialogHeader>
-                <CustomerForm onSubmit={(data) => { setDirty(false); handleUpdateCustomer(data); }} initialData={selectedCustomer} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} onDirtyChange={setDirty} />
+                <CustomerForm onSubmit={(data) => { setDirty(false); handleUpdateCustomer(data); }} initialData={selectedCustomer} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} onDirtyChange={setDirty} teamMembers={teamMembers || []} getName={getName} canAssign={permissions.canManageMembers || permissions.role === 'Admin' || permissions.role === 'Manager'} />
               </DialogContent>
             </Dialog>
           )}
@@ -1174,16 +1187,21 @@ const CustomerForm: React.FC<{
   industries?: string[];
   onAddIndustry?: () => void;
   onDirtyChange?: (dirty: boolean) => void;
-}> = ({ onSubmit, initialData, industries = INDUSTRY_OPTIONS, onAddIndustry, onDirtyChange }) => {
+  teamMembers?: TeamMember[];
+  getName?: (userId: string | null | undefined, fallback?: string) => string;
+  canAssign?: boolean;
+}> = ({ onSubmit, initialData, industries = INDUSTRY_OPTIONS, onAddIndustry, onDirtyChange, teamMembers = [], getName, canAssign }) => {
   const init = initialData as any;
   const [status, setStatus] = useState(init?.status || 'Active');
   const [industry, setIndustry] = useState(init?.industry || '');
+  const [assignedTo, setAssignedTo] = useState(init?.assignedToUserId || 'unassigned');
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     formData.set('status', status);
     formData.set('industry', industry);
+    formData.set('assignedToUserId', assignedTo);
     onSubmit(formData);
   };
 
@@ -1265,6 +1283,23 @@ const CustomerForm: React.FC<{
           </Select>
         </div>
       </div>
+
+      {canAssign && teamMembers.length > 0 && (
+        <div>
+          <Label>Asigno tek</Label>
+          <Select value={assignedTo} onValueChange={(v) => { setAssignedTo(v); onDirtyChange?.(true); }}>
+            <SelectTrigger><SelectValue placeholder="Pa asignuar" /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="unassigned">Pa asignuar</SelectItem>
+              {teamMembers.filter(m => m.status === 'Active').map(m => (
+                <SelectItem key={m.userId} value={m.userId}>
+                  {getName ? getName(m.userId, m.email || m.userId) : (m.email || m.userId)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
 
       <div>
         <Label htmlFor="address">Adresa</Label>
