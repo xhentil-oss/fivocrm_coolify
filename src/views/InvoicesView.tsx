@@ -1278,10 +1278,14 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     onDirtyChange?.(true);
   };
 
+  // Service prices are stored in ALL. Convert to invoice currency before any calculation.
+  const toInvoiceCurrency = (priceInAll: number) =>
+    currency === 'EUR' ? priceInAll / getEurToAllRate() : priceInAll;
+
   const calculateSubtotal = () => {
     return lineItems.reduce((sum, item) => {
       const service = services?.find(s => s.id === item.serviceId);
-      return sum + (service?.price || 0) * item.quantity;
+      return sum + toInvoiceCurrency(service?.price || 0) * item.quantity;
     }, 0);
   };
 
@@ -1372,8 +1376,8 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
             invoiceId: editInvoice!.id,
             serviceId: item.serviceId,
             quantity: item.quantity,
-            unitPrice: service.price,
-            totalPrice: service.price * item.quantity,
+            unitPrice: toInvoiceCurrency(service.price),
+            totalPrice: toInvoiceCurrency(service.price * item.quantity),
           });
         }
       }
@@ -1427,8 +1431,8 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
             invoiceId: invoice.id,
             serviceId: item.serviceId,
             quantity: item.quantity,
-            unitPrice: service.price,
-            totalPrice: service.price * item.quantity,
+            unitPrice: toInvoiceCurrency(service.price),
+            totalPrice: toInvoiceCurrency(service.price * item.quantity),
           });
         }
       }
@@ -1568,7 +1572,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
                   />
                 </div>
                 <div className="w-20 sm:w-24 text-right text-sm font-medium">
-                  {((services?.find(s => s.id === item.serviceId)?.price || 0) * item.quantity).toFixed(2)} {currency === 'EUR' ? '€' : 'L'}
+                  {toInvoiceCurrency((services?.find(s => s.id === item.serviceId)?.price || 0) * item.quantity).toFixed(2)} {currency === 'EUR' ? '€' : 'L'}
                 </div>
                 <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(index)}>
                   <Trash2 className="w-4 h-4" />
