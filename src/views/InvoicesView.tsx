@@ -1282,14 +1282,20 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     onDirtyChange?.(true);
   };
 
-  // Service prices are stored in ALL. Convert to invoice currency before any calculation.
-  const toInvoiceCurrency = (priceInAll: number) =>
-    currency === 'EUR' ? priceInAll / getEurToAllRate() : priceInAll;
+  // Convert a service price to the invoice currency, respecting the service's own currency.
+  const toInvoiceCurrency = (servicePrice: number, serviceCurrency?: string) => {
+    const svcCur = (serviceCurrency || 'ALL').toUpperCase();
+    const rate = getEurToAllRate();
+    if (svcCur === currency) return servicePrice;           // same currency → no conversion
+    if (svcCur === 'EUR' && currency === 'ALL') return servicePrice * rate;   // EUR → ALL
+    if (svcCur === 'ALL' && currency === 'EUR') return servicePrice / rate;   // ALL → EUR
+    return servicePrice;
+  };
 
   const calculateSubtotal = () => {
     return lineItems.reduce((sum, item) => {
       const service = services?.find(s => s.id === item.serviceId);
-      return sum + toInvoiceCurrency(service?.price || 0) * item.quantity;
+      return sum + toInvoiceCurrency(service?.price || 0, service?.currency) * item.quantity;
     }, 0);
   };
 
@@ -1379,8 +1385,8 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
             invoiceId: editInvoice!.id,
             serviceId: item.serviceId,
             quantity: item.quantity,
-            unitPrice: toInvoiceCurrency(service.price),
-            totalPrice: toInvoiceCurrency(service.price * item.quantity),
+            unitPrice: toInvoiceCurrency(service.price, service.currency),
+            totalPrice: toInvoiceCurrency(service.price * item.quantity, service.currency),
           });
         }
       }
@@ -1434,8 +1440,8 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
             invoiceId: invoice.id,
             serviceId: item.serviceId,
             quantity: item.quantity,
-            unitPrice: toInvoiceCurrency(service.price),
-            totalPrice: toInvoiceCurrency(service.price * item.quantity),
+            unitPrice: toInvoiceCurrency(service.price, service.currency),
+            totalPrice: toInvoiceCurrency(service.price * item.quantity, service.currency),
           });
         }
       }
@@ -1557,7 +1563,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
                     <SelectItem value="placeholder" disabled>Zgjidh shërbimin</SelectItem>
                     {services?.map(service => (
                       <SelectItem key={service.id} value={service.id}>
-                        {service.title || service.name} - {service.price} L
+                        {service.title || service.name} - {service.price} {(service.currency || 'ALL') === 'EUR' ? '€' : 'L'}
                       </SelectItem>
                     ))}
                   </SelectContent>
