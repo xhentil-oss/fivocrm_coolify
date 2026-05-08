@@ -98,6 +98,7 @@ async function loadLidMappings(): Promise<void> {
 /** Read LID mappings from Baileys' internal key store (lid-mapping entries in auth_info) */
 async function readBaileysLidMappings(): Promise<void> {
   if (!authKeys) return;
+  if (!existsSync('./auth_info')) return;
   try {
     // Read all session files to find LID user IDs, then check for their reverse mappings
     const { readdirSync, readFileSync: readF } = await import('fs');
@@ -180,6 +181,8 @@ const pendingLidMessages = new Map<string, string[]>(); // LID JID → array of 
 
 /** In-memory lead phone cache — avoids N+1 Firestore queries on every incoming message */
 const leadPhoneCache = new Map<string, { leadId: string; leadName: string | null }>();
+// Evict cache every 6 hours to prevent unbounded memory growth and pick up new leads
+setInterval(() => { leadPhoneCache.clear(); }, 6 * 60 * 60 * 1000);
 
 async function lookupLeadByPhone(phone: string): Promise<{ leadId: string | null; leadName: string | null }> {
   const cached = leadPhoneCache.get(phone);
@@ -276,10 +279,10 @@ async function registerLidMapping(lid: string, phoneJid: string): Promise<void> 
     }
     try {
       await batch.commit();
+      pendingLidMessages.delete(lid);
     } catch (e) {
       console.error(`[WA] Error updating queued LID docs:`, e);
     }
-    pendingLidMessages.delete(lid);
   }
 }
 
@@ -523,10 +526,10 @@ async function connectWhatsApp(): Promise<void> {
       const isLoggedOut = code === DisconnectReason.loggedOut;
       console.log(`[WA] Lidhja u ndërpre (kod: ${code}).`);
       if (isLoggedOut) {
-        // Clear stale session so next manual start generates a fresh QR
-        try { rmSync('auth_info_baileys', { recursive: true, force: true }); } catch {}
-        console.log('[WA] Sesion i vjetër u fshi. Rinis serverin manualisht për QR të ri.');
-        // Do NOT auto-retry on loggedOut — avoids hammering WhatsApp and getting IP-banned
+        // Clear stale session (correct dir is auth_info) so next connect generates a fresh QR
+        try { rmSync('./auth_info', { recursive: true, force: true }); } catch {}
+        console.log('[WA] Sesion i vjetër u fshi. Gjenerohet QR i ri...');
+        reconnectTimer = setTimeout(connectWhatsApp, 3000);
         return;
       }
       reconnectTimer = setTimeout(connectWhatsApp, 5000);
@@ -782,12 +785,19 @@ app.get('/qr', (_req, res) => {
   `);
 });
 
+let isSyncing = false;
+
 /** Sync: reconnect WhatsApp to trigger fresh history + LID mappings */
 app.post('/sync', requireApiKey, async (_req, res) => {
   if (!sock) {
     res.status(503).json({ error: 'WhatsApp jo i inicializuar' });
     return;
   }
+  if (isSyncing) {
+    res.status(409).json({ error: 'Sync tashmë në progres' });
+    return;
+  }
+  isSyncing = true;
   console.log('[WA] Sync requested — rilidh për sinkronizim...');
   const beforeMappings = lidToPhoneMap.size;
   try {
@@ -813,6 +823,8 @@ app.post('/sync', requireApiKey, async (_req, res) => {
     const msg = err instanceof Error ? err.message : 'Sync dështoi';
     console.error('[WA] Sync error:', err);
     res.status(500).json({ error: msg });
+  } finally {
+    isSyncing = false;
   }
 });
 
