@@ -25,8 +25,9 @@ if (!API_SECRET) { console.error('[VPS] ERROR: API_SECRET env variable mungon!')
 
 // ── Firebase Admin ────────────────────────────────────────────────────────────
 let saJson: object;
-if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
-  saJson = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
+const _saEnv = process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_SERVICE_ACCOUNT;
+if (_saEnv) {
+  saJson = JSON.parse(_saEnv);
 } else if (existsSync('./firebase-service-account.json')) {
   saJson = JSON.parse(readFileSync('./firebase-service-account.json', 'utf8'));
 } else { console.error('[VPS] ERROR: Firebase credentials nuk u gjetën!'); process.exit(1); }
@@ -89,7 +90,11 @@ function requireApiKey(req: express.Request, res: express.Response, next: expres
   next();
 }
 
-const authDir = (agentId: string) => `./auth_info_${agentId}`;
+const authDir = (agentId: string) => {
+  // backward compat: if default agent and old auth_info exists, keep using it
+  if (agentId === 'default' && existsSync('./auth_info')) return './auth_info';
+  return `./auth_info_${agentId}`;
+};
 
 // ── Per-agent functions ───────────────────────────────────────────────────────
 
@@ -318,7 +323,8 @@ async function connectAgent(agent: AgentState): Promise<void> {
 
   const dir = authDir(agent.config.id);
   const { state, saveCreds } = await useMultiFileAuthState(dir);
-  const { version } = await fetchLatestBaileysVersion();
+  let version: [number, number, number] = [2, 3000, 1015901307];
+  try { const v = await fetchLatestBaileysVersion(); version = v.version; } catch (e) { console.warn(`[${agent.config.id}] fetchLatestBaileysVersion dështoi, duke përdorur version fallback:`, e); }
   agent.authKeys = state.keys as any;
 
   agent.sock = makeWASocket({
@@ -346,10 +352,10 @@ async function connectAgent(agent: AgentState): Promise<void> {
       if (isLoggedOut) {
         try { rmSync(dir, { recursive: true, force: true }); } catch {}
         console.log(`[${agent.config.id}] Sesion u fshi — QR i ri në 3s...`);
-        agent.reconnectTimer = setTimeout(() => connectAgent(agent), 3000);
+        agent.reconnectTimer = setTimeout(() => connectAgent(agent).catch(e => console.error(`[${agent.config.id}] reconnect error:`, e)), 3000);
         return;
       }
-      agent.reconnectTimer = setTimeout(() => connectAgent(agent), 5000);
+      agent.reconnectTimer = setTimeout(() => connectAgent(agent).catch(e => console.error(`[${agent.config.id}] reconnect error:`, e)), 5000);
     }
     if (connection === 'open') {
       agent.connectionStatus = 'connected'; agent.qrDataUrl = null;
@@ -626,6 +632,6 @@ app.listen(PORT, async () => {
   for (const agent of agents.values()) {
     await loadLidMappings(agent);
     await loadPendingLidMessages(agent);
-    connectAgent(agent); // fire and forget per agent
+    connectAgent(agent).catch(e => console.error(`[${agent.config.id}] connectAgent error:`, e));
   }
 });
