@@ -1,14 +1,18 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
+    "module": "Node16",
+    "moduleResolution": "node16",
     "esModuleInterop": true,
     "allowSyntheticDefaultImports": true,
-    "strict": true,
+    "strict": false,
     "outDir": "./dist",
     "skipLibCheck": true,
     "resolveJsonModule": true
+  },
+  "ts-node": {
+    "transpileOnly": true,
+    "esm": true
   },
   "include": ["server.ts"],
   "exclude": ["node_modules", "dist", "auth_info"]
