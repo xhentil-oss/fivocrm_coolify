@@ -547,6 +547,32 @@ app.get('/qr-data/:agentId', requireApiKey, (req: any, res: any) => {
   });
 });
 
+// Hot-reload: load new agents from Firestore without restarting
+app.post('/reload', requireApiKey, async (_req: any, res: any) => {
+  try {
+    const snap = await db.collection('whatsappAccounts').where('enabled', '==', true).get();
+    let added = 0;
+    for (const doc of snap.docs) {
+      if (agents.has(doc.id)) continue; // already running
+      const data = doc.data();
+      const config: AgentConfig = {
+        id: doc.id, teamId: data.teamId || DEFAULT_TEAM_ID,
+        label: data.label || doc.id, assignedToUserId: data.assignedToUserId, enabled: true,
+      };
+      const agent = createAgentState(config);
+      agent.cacheEvictTimer = setInterval(() => agent.leadPhoneCache.clear(), 6 * 60 * 60 * 1000);
+      agents.set(doc.id, agent);
+      await loadLidMappings(agent);
+      connectAgent(agent).catch(e => console.error(`[${agent.config.id}] connectAgent error:`, e));
+      added++;
+      console.log(`[VPS] Hot-reload: agent i ri ngarkuar ${config.id} (${config.label})`);
+    }
+    res.json({ ok: true, added, total: agents.size });
+  } catch (e: any) {
+    res.status(500).json({ error: e?.message || 'Gabim' });
+  }
+});
+
 // QR per agent
 app.get('/qr/:agentId', (req: any, res: any) => {
   const agent = agents.get(req.params.agentId);

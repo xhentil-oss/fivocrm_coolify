@@ -192,6 +192,14 @@ const SettingsView: React.FC = () => {
     setQrDialogAccount(acc);
     setQrData(null);
     setQrLoading(true);
+    // trigger hot-reload so VPS picks up newly-created agents
+    try {
+      const token = await user?.getIdToken();
+      await fetch('/api/whatsapp-qr?action=reload', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+    } catch { /* non-critical */ }
     await fetchQrData(acc);
     setQrLoading(false);
     if (qrPollRef.current) clearInterval(qrPollRef.current);
@@ -390,18 +398,24 @@ const SettingsView: React.FC = () => {
             <Palette className="w-4 h-4 sm:mr-2" />
             <span className="hidden sm:inline">Pamja</span>
           </TabsTrigger>
-          <TabsTrigger value="integrations" className="data-[state=active]:bg-background data-[state=active]:text-primary min-w-fit">
-            <CreditCard className="w-4 h-4 sm:mr-2" />
-            <span className="hidden sm:inline">Integrimet</span>
-          </TabsTrigger>
-          <TabsTrigger value="automation" className="data-[state=active]:bg-background data-[state=active]:text-primary min-w-fit">
-            <Zap className="w-4 h-4 sm:mr-2" />
-            <span className="hidden sm:inline">Automatizimi</span>
-          </TabsTrigger>
-          <TabsTrigger value="roles" className="data-[state=active]:bg-background data-[state=active]:text-primary min-w-fit">
-            <Shield className="w-4 h-4 sm:mr-2" />
-            <span className="hidden sm:inline">Rolet & Lejet</span>
-          </TabsTrigger>
+          {(isAdmin || isOwner) && (
+            <TabsTrigger value="integrations" className="data-[state=active]:bg-background data-[state=active]:text-primary min-w-fit">
+              <CreditCard className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">Integrimet</span>
+            </TabsTrigger>
+          )}
+          {(isAdmin || isOwner) && (
+            <TabsTrigger value="automation" className="data-[state=active]:bg-background data-[state=active]:text-primary min-w-fit">
+              <Zap className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">Automatizimi</span>
+            </TabsTrigger>
+          )}
+          {(isAdmin || isOwner) && (
+            <TabsTrigger value="roles" className="data-[state=active]:bg-background data-[state=active]:text-primary min-w-fit">
+              <Shield className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">Rolet & Lejet</span>
+            </TabsTrigger>
+          )}
         </TabsList>
 
         <TabsContent value="profile" className="space-y-6">
@@ -455,6 +469,39 @@ const SettingsView: React.FC = () => {
               </Button>
             </div>
           </Card>
+
+          {/* WhatsApp personal connection — shown to any user with an assigned account */}
+          {(() => {
+            const myWaAccount = whatsappAccounts?.find(a => a.assignedToUserId === user?.uid);
+            if (!myWaAccount) return null;
+            const connected = Boolean(myWaAccount.connectedPhone);
+            return (
+              <Card className="p-6 space-y-4">
+                <div className="flex items-center gap-4">
+                  <div className="p-3 bg-[#25D366]/10 rounded-lg">
+                    <MessageSquare className="w-6 h-6 text-[#25D366]" />
+                  </div>
+                  <div className="flex-1">
+                    <h3 className="text-h4 text-foreground">WhatsApp Personal</h3>
+                    <p className="text-body-sm text-muted-foreground">
+                      {connected ? `Lidhur: +${myWaAccount.connectedPhone}` : 'Llogaria jote WhatsApp — skano QR-in për t\'u lidhur'}
+                    </p>
+                  </div>
+                  {connected
+                    ? <div className="flex items-center gap-2 text-[#25D366]"><Wifi className="w-4 h-4" /><span className="text-sm font-medium">Aktiv</span></div>
+                    : <Button className="bg-[#25D366] text-white hover:bg-[#1da851] gap-2" onClick={() => openQrDialog(myWaAccount)}>
+                        <QrCode className="w-4 h-4" />Lidho WhatsApp
+                      </Button>
+                  }
+                </div>
+                {connected && (
+                  <Button variant="outline" size="sm" className="gap-2" onClick={() => openQrDialog(myWaAccount)}>
+                    <QrCode className="w-3.5 h-3.5" />Shiko Status
+                  </Button>
+                )}
+              </Card>
+            );
+          })()}
         </TabsContent>
 
         <TabsContent value="notifications" className="space-y-6">
