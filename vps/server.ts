@@ -532,8 +532,23 @@ app.get('/agents', requireApiKey, (_req, res) => {
   res.json({ agents: Array.from(agents.values()).map(a => ({ id: a.config.id, label: a.config.label, teamId: a.config.teamId, assignedToUserId: a.config.assignedToUserId, status: a.connectionStatus })) });
 });
 
+// QR data JSON (used by FivoCRM UI via Vercel proxy)
+app.get('/qr-data/:agentId', requireApiKey, (req: any, res: any) => {
+  const agent = agents.get(req.params.agentId);
+  if (!agent) { res.status(404).json({ error: 'Agent nuk u gjet' }); return; }
+  res.json({
+    agentId: agent.config.id,
+    label: agent.config.label,
+    status: agent.connectionStatus,
+    qrDataUrl: agent.qrDataUrl || null,
+    connectedPhone: agent.connectionStatus === 'connected'
+      ? ((agent.sock as any)?.user?.id?.split(':')[0] || null)
+      : null,
+  });
+});
+
 // QR per agent
-app.get('/qr/:agentId', (req, res) => {
+app.get('/qr/:agentId', (req: any, res: any) => {
   const agent = agents.get(req.params.agentId);
   if (!agent) return res.status(404).send('<html><body style="font-family:sans-serif;padding:40px"><h2>Agent nuk u gjet</h2></body></html>');
   if (agent.connectionStatus === 'connected') {

@@ -10,6 +10,7 @@ import { Input } from '../components/ui/input';
 import { Switch } from '../components/ui/switch';
 import { Separator } from '../components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Checkbox } from '../components/ui/checkbox';
 import { Badge } from '../components/ui/badge';
 import { useCollection, useMutation, setGlobalWaEnabled } from '../hooks/useFirestore';
@@ -163,6 +164,48 @@ const SettingsView: React.FC = () => {
   const [newWaLabel, setNewWaLabel] = useState('');
   const [newWaUserId, setNewWaUserId] = useState('');
   const [waAdding, setWaAdding] = useState(false);
+
+  // QR dialog state
+  const [qrDialogAccount, setQrDialogAccount] = useState<WhatsAppAccount | null>(null);
+  const [qrData, setQrData] = useState<{ status: string; qrDataUrl: string | null; connectedPhone: string | null } | null>(null);
+  const [qrLoading, setQrLoading] = useState(false);
+  const qrPollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
+  const { user } = useAuth();
+
+  const fetchQrData = async (acc: WhatsAppAccount) => {
+    try {
+      const token = await user?.getIdToken();
+      const res = await fetch(`/api/whatsapp-qr?agentId=${enc(acc.id)}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) return;
+      const d = await res.json();
+      setQrData({ status: d.status, qrDataUrl: d.qrDataUrl || null, connectedPhone: d.connectedPhone || null });
+      if (d.status === 'connected') {
+        if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; }
+        await waMutation.update(acc.id, { connectedPhone: d.connectedPhone });
+      }
+    } catch { /* ignore */ }
+  };
+
+  const openQrDialog = async (acc: WhatsAppAccount) => {
+    setQrDialogAccount(acc);
+    setQrData(null);
+    setQrLoading(true);
+    await fetchQrData(acc);
+    setQrLoading(false);
+    if (qrPollRef.current) clearInterval(qrPollRef.current);
+    qrPollRef.current = setInterval(() => fetchQrData(acc), 4000);
+  };
+
+  const closeQrDialog = () => {
+    setQrDialogAccount(null);
+    setQrData(null);
+    if (qrPollRef.current) { clearInterval(qrPollRef.current); qrPollRef.current = null; }
+  };
+
+  // helper to avoid import
+  const enc = encodeURIComponent;
 
   const handleAddWaAccount = async () => {
     if (!newWaLabel.trim() || !teamId) return;
@@ -969,7 +1012,6 @@ const SettingsView: React.FC = () => {
                 <div className="space-y-3">
                   {whatsappAccounts.map(acc => {
                     const isConnected = Boolean(acc.connectedPhone);
-                    const qrUrl = whatsappVpsUrl ? `${whatsappVpsUrl}/qr/${acc.id}` : null;
                     return (
                       <div key={acc.id} className="flex items-center gap-3 p-3 border border-border rounded-lg bg-muted/30">
                         <div className={`p-1.5 rounded-full ${isConnected ? 'bg-[#25D366]/10' : 'bg-muted'}`}>
@@ -989,26 +1031,15 @@ const SettingsView: React.FC = () => {
                           </p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
-                          {qrUrl && !isConnected && (
+                          {whatsappVpsUrl && (
                             <Button
                               size="sm"
-                              variant="outline"
-                              className="gap-1.5 text-xs h-7"
-                              onClick={() => window.open(qrUrl, '_blank')}
+                              variant={isConnected ? 'outline' : 'default'}
+                              className={`gap-1.5 text-xs h-7 ${isConnected ? '' : 'bg-[#25D366] text-white hover:bg-[#1da851]'}`}
+                              onClick={() => openQrDialog(acc)}
                             >
                               <QrCode className="w-3 h-3" />
-                              QR
-                            </Button>
-                          )}
-                          {qrUrl && isConnected && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="gap-1.5 text-xs h-7"
-                              onClick={() => copyToClipboard(qrUrl)}
-                            >
-                              <Copy className="w-3 h-3" />
-                              Link
+                              {isConnected ? 'Status' : 'Lidhu'}
                             </Button>
                           )}
                           <Switch
@@ -1078,6 +1109,64 @@ const SettingsView: React.FC = () => {
               </div>
             </Card>
           )}
+
+          {/* QR Dialog */}
+          <Dialog open={!!qrDialogAccount} onOpenChange={open => { if (!open) closeQrDialog(); }}>
+            <DialogContent className="sm:max-w-sm">
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <MessageSquare className="w-4 h-4 text-[#25D366]" />
+                  {qrDialogAccount?.label}
+                </DialogTitle>
+              </DialogHeader>
+              <div className="flex flex-col items-center gap-4 py-2">
+                {qrLoading && (
+                  <div className="flex flex-col items-center gap-2 py-8">
+                    <RefreshCw className="w-6 h-6 animate-spin text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground">Duke ngarkuar...</p>
+                  </div>
+                )}
+                {!qrLoading && qrData?.status === 'connected' && (
+                  <div className="flex flex-col items-center gap-3 py-6">
+                    <div className="p-4 bg-[#25D366]/10 rounded-full">
+                      <CheckCircle2 className="w-10 h-10 text-[#25D366]" />
+                    </div>
+                    <p className="text-base font-semibold text-foreground">I lidhur!</p>
+                    {qrData.connectedPhone && (
+                      <p className="text-sm text-muted-foreground">+{qrData.connectedPhone}</p>
+                    )}
+                  </div>
+                )}
+                {!qrLoading && qrData?.status === 'qr_ready' && qrData.qrDataUrl && (
+                  <>
+                    <img src={qrData.qrDataUrl} alt="QR Code" className="w-56 h-56 rounded-xl border border-border p-1" />
+                    <div className="text-center space-y-1">
+                      <p className="text-sm font-medium text-foreground">Skano me WhatsApp</p>
+                      <p className="text-xs text-muted-foreground">
+                        WhatsApp → <strong>Cilësimet</strong> → <strong>Pajisjet e lidhura</strong> → <strong>Lidh pajisje</strong>
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                      Duke pritur skanim...
+                    </div>
+                  </>
+                )}
+                {!qrLoading && (qrData?.status === 'connecting' || qrData?.status === 'disconnected' || !qrData) && (
+                  <div className="flex flex-col items-center gap-2 py-6">
+                    <WifiOff className="w-8 h-8 text-muted-foreground" />
+                    <p className="text-sm text-muted-foreground text-center">
+                      {qrData?.status === 'connecting' ? 'Duke u lidhur, prit...' : 'QR nuk është gati. Kontrollo VPS-in.'}
+                    </p>
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <RefreshCw className="w-3 h-3 animate-spin" />
+                      Duke provuar...
+                    </div>
+                  </div>
+                )}
+              </div>
+            </DialogContent>
+          </Dialog>
 
           {/* Meta WhatsApp Cloud API */}
           <Card className="p-6 space-y-6">
