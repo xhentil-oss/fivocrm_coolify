@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare, Copy, Phone, Cloud } from 'lucide-react';
+import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare, Copy, Phone, Cloud, UserCircle, QrCode, Wifi, WifiOff } from 'lucide-react';
+import { WhatsAppAccount, TeamMember } from '../types';
 import { MetaChannel } from '../hooks/useTeamSettings';
 import { swiftKeyDown, ibanChange } from '../lib/utils';
 import { Card } from '../components/ui/card';
@@ -91,7 +92,7 @@ const CronJobCard: React.FC<CronJobCardProps> = ({
 
 // ─── SettingsView ──────────────────────────────────────────────────────────────
 const SettingsView: React.FC = () => {
-  const { teamId } = usePermissions();
+  const { teamId, isAdmin, isOwner } = usePermissions();
   const firestoreSettings = useTeamSettingsData();
   const [breakReminderOn, setBreakReminderOn] = useState(isBreakReminderEnabled);
   const [stripePublishableKey, setStripePublishableKey] = useState('');
@@ -154,6 +155,43 @@ const SettingsView: React.FC = () => {
   const [whatsappVpsUrl, setWhatsappVpsUrl] = useState(() => localStorage.getItem('whatsapp_vps_url') || '');
   const [whatsappVpsSecret, setWhatsappVpsSecret] = useState(() => localStorage.getItem('whatsapp_vps_secret') || '');
   const [whatsappSaved, setWhatsappSaved] = useState(false);
+
+  // ── WhatsApp Accounts (multi-agent Baileys) ──
+  const { data: whatsappAccounts } = useCollection<WhatsAppAccount>('whatsappAccounts');
+  const { data: teamMembersForWa } = useCollection<TeamMember>('teamMembers');
+  const waMutation = useMutation<WhatsAppAccount>('whatsappAccounts');
+  const [newWaLabel, setNewWaLabel] = useState('');
+  const [newWaUserId, setNewWaUserId] = useState('');
+  const [waAdding, setWaAdding] = useState(false);
+
+  const handleAddWaAccount = async () => {
+    if (!newWaLabel.trim() || !teamId) return;
+    setWaAdding(true);
+    try {
+      const assignedMember = teamMembersForWa?.find(m => m.userId === newWaUserId);
+      await waMutation.create({
+        teamId,
+        label: newWaLabel.trim(),
+        assignedToUserId: newWaUserId || null,
+        assignedToName: assignedMember?.displayName || assignedMember?.email || null,
+        enabled: true,
+        connectedPhone: null,
+      } as any);
+      setNewWaLabel('');
+      setNewWaUserId('');
+    } catch {
+      toast({ title: 'Gabim', description: 'Nuk u shtua llogaria.', variant: 'destructive' });
+    }
+    setWaAdding(false);
+  };
+
+  const handleToggleWaAccount = async (acc: WhatsAppAccount) => {
+    await waMutation.update(acc.id, { enabled: !acc.enabled });
+  };
+
+  const handleDeleteWaAccount = async (id: string) => {
+    await waMutation.delete(id);
+  };
 
   // ── Meta WhatsApp Cloud API settings ──
   const [metaEnabled, setMetaEnabled] = useState(false);
@@ -908,6 +946,138 @@ const SettingsView: React.FC = () => {
               </>
             )}
           </Card>
+
+          {/* WhatsApp Agents — multi-account Baileys */}
+          {whatsappEnabled && (isAdmin || isOwner) && (
+            <Card className="p-6 space-y-6">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-[#25D366]/10 rounded-lg">
+                  <QrCode className="w-6 h-6 text-[#25D366]" />
+                </div>
+                <div>
+                  <h3 className="text-h4 text-foreground">Llogaritë WhatsApp (Agjentët)</h3>
+                  <p className="text-body-sm text-muted-foreground">
+                    Çdo agjent shitjesh mund të ketë sesionin e tij WhatsApp
+                  </p>
+                </div>
+              </div>
+
+              <Separator />
+
+              {/* Existing accounts list */}
+              {whatsappAccounts && whatsappAccounts.length > 0 ? (
+                <div className="space-y-3">
+                  {whatsappAccounts.map(acc => {
+                    const isConnected = Boolean(acc.connectedPhone);
+                    const qrUrl = whatsappVpsUrl ? `${whatsappVpsUrl}/qr/${acc.id}` : null;
+                    return (
+                      <div key={acc.id} className="flex items-center gap-3 p-3 border border-border rounded-lg bg-muted/30">
+                        <div className={`p-1.5 rounded-full ${isConnected ? 'bg-[#25D366]/10' : 'bg-muted'}`}>
+                          {isConnected
+                            ? <Wifi className="w-4 h-4 text-[#25D366]" />
+                            : <WifiOff className="w-4 h-4 text-muted-foreground" />
+                          }
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-foreground truncate">{acc.label}</p>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {isConnected
+                              ? `Lidhur: +${acc.connectedPhone}`
+                              : 'Jo i lidhur'
+                            }
+                            {acc.assignedToName && ` · ${acc.assignedToName}`}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0">
+                          {qrUrl && !isConnected && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1.5 text-xs h-7"
+                              onClick={() => window.open(qrUrl, '_blank')}
+                            >
+                              <QrCode className="w-3 h-3" />
+                              QR
+                            </Button>
+                          )}
+                          {qrUrl && isConnected && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="gap-1.5 text-xs h-7"
+                              onClick={() => copyToClipboard(qrUrl)}
+                            >
+                              <Copy className="w-3 h-3" />
+                              Link
+                            </Button>
+                          )}
+                          <Switch
+                            checked={acc.enabled}
+                            onCheckedChange={() => handleToggleWaAccount(acc)}
+                          />
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            className="h-7 w-7 p-0 text-destructive hover:text-destructive hover:bg-destructive/10"
+                            onClick={() => handleDeleteWaAccount(acc.id)}
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </Button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground text-center py-4">
+                  Nuk ka llogari WhatsApp. Shto një llogari më poshtë.
+                </p>
+              )}
+
+              <Separator />
+
+              {/* Add new account form */}
+              <div className="space-y-3">
+                <p className="text-sm font-medium text-foreground">Shto Llogari të Re</p>
+                <div className="flex flex-col sm:flex-row gap-2">
+                  <input
+                    type="text"
+                    value={newWaLabel}
+                    onChange={e => setNewWaLabel(e.target.value)}
+                    placeholder="Emri i llogarisë (p.sh. Dori - Sales)"
+                    className="flex-1 h-9 px-3 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                  />
+                  <select
+                    value={newWaUserId}
+                    onChange={e => setNewWaUserId(e.target.value)}
+                    className="sm:w-48 h-9 px-3 bg-background border border-border rounded-md text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                  >
+                    <option value="">Pa caktim</option>
+                    {teamMembersForWa?.filter(m => m.status === 'Active').map(m => (
+                      <option key={m.userId} value={m.userId}>
+                        {m.displayName || m.email || m.userId}
+                      </option>
+                    ))}
+                  </select>
+                  <Button
+                    size="sm"
+                    className="bg-[#25D366] text-white hover:bg-[#1da851] gap-1.5 h-9"
+                    onClick={handleAddWaAccount}
+                    disabled={waAdding || !newWaLabel.trim()}
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    Shto
+                  </Button>
+                </div>
+                {!whatsappVpsUrl && (
+                  <p className="text-xs text-amber-600 flex items-center gap-1">
+                    <AlertCircle className="w-3 h-3" />
+                    Ruaj URL-në e VPS sipër për të shfaqur linqet QR
+                  </p>
+                )}
+              </div>
+            </Card>
+          )}
 
           {/* Meta WhatsApp Cloud API */}
           <Card className="p-6 space-y-6">

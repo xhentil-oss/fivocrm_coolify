@@ -1,5 +1,18 @@
 // Firebase/Firestore type definitions for the application
 
+export interface WhatsAppAccount {
+  id: string;
+  teamId: string;
+  label: string;
+  assignedToUserId?: string | null;
+  assignedToName?: string | null;
+  enabled: boolean;
+  connectedPhone?: string | null;
+  lastConnectedAt?: Date | null;
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
 export interface WhatsAppMessage {
   id: string;
   phone: string;
