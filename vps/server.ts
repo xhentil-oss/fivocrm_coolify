@@ -10,13 +10,8 @@ import QRCode from 'qrcode';
 import { readFileSync, existsSync, rmSync } from 'fs';
 import pino from 'pino';
 
-// Prevent crash on unhandled rejections/exceptions (e.g. Baileys internal errors)
-process.on('unhandledRejection', (err) => {
-  console.error('[WA] Unhandled rejection (caught):', err);
-});
-process.on('uncaughtException', (err) => {
-  console.error('[WA] Uncaught exception (caught):', err);
-});
+process.on('unhandledRejection', (err) => { console.error('[WA] Unhandled rejection:', err); });
+process.on('uncaughtException', (err) => { console.error('[WA] Uncaught exception:', err); });
 
 const app = express();
 app.use(express.json());
@@ -24,12 +19,9 @@ app.use(express.json());
 // ── Config ────────────────────────────────────────────────────────────────────
 const API_SECRET = process.env.API_SECRET;
 const PORT = parseInt(process.env.PORT || '3001');
-const TEAM_ID = process.env.TEAM_ID || '';
+const DEFAULT_TEAM_ID = process.env.TEAM_ID || '';
 
-if (!API_SECRET) {
-  console.error('[VPS] ERROR: API_SECRET env variable mungon!');
-  process.exit(1);
-}
+if (!API_SECRET) { console.error('[VPS] ERROR: API_SECRET env variable mungon!'); process.exit(1); }
 
 // ── Firebase Admin ────────────────────────────────────────────────────────────
 let saJson: object;
@@ -37,867 +29,603 @@ if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
   saJson = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
 } else if (existsSync('./firebase-service-account.json')) {
   saJson = JSON.parse(readFileSync('./firebase-service-account.json', 'utf8'));
-} else {
-  console.error('[VPS] ERROR: Firebase credentials nuk u gjetën!');
-  process.exit(1);
-}
+} else { console.error('[VPS] ERROR: Firebase credentials nuk u gjetën!'); process.exit(1); }
 
 admin.initializeApp({ credential: admin.credential.cert(saJson as admin.ServiceAccount) });
 const db = admin.firestore();
 
+// ── Types ─────────────────────────────────────────────────────────────────────
+type ConnectionStatus = 'disconnected' | 'connecting' | 'qr_ready' | 'connected';
+
+interface AgentConfig {
+  id: string;
+  teamId: string;
+  label: string;
+  assignedToUserId?: string;
+  enabled: boolean;
+}
+
+interface AgentState {
+  config: AgentConfig;
+  sock: ReturnType<typeof makeWASocket> | null;
+  authKeys: any | null;
+  connectionStatus: ConnectionStatus;
+  qrDataUrl: string | null;
+  reconnectTimer: ReturnType<typeof setTimeout> | null;
+  lidResyncTimer: ReturnType<typeof setInterval> | null;
+  cacheEvictTimer: ReturnType<typeof setInterval> | null;
+  isSyncing: boolean;
+  lidToPhoneMap: Map<string, string>;
+  pendingLidMessages: Map<string, string[]>;
+  leadPhoneCache: Map<string, { leadId: string; leadName: string | null }>;
+  syncedContactNames: Map<string, string>;
+}
+
+function createAgentState(config: AgentConfig): AgentState {
+  return {
+    config, sock: null, authKeys: null,
+    connectionStatus: 'disconnected', qrDataUrl: null,
+    reconnectTimer: null, lidResyncTimer: null, cacheEvictTimer: null,
+    isSyncing: false,
+    lidToPhoneMap: new Map(),
+    pendingLidMessages: new Map(),
+    leadPhoneCache: new Map(),
+    syncedContactNames: new Map(),
+  };
+}
+
+const agents = new Map<string, AgentState>();
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
-/** Strip all non-digit characters for consistent phone storage */
 const normalizePhone = (phone: string): string => {
   const digits = phone.replace(/[^\d]/g, '');
-  // Albanian trunk-prefix: "3550[6-9]…" → strip the extra zero
   if (/^3550[6-9]/.test(digits)) return '355' + digits.slice(4);
-  // Local Albanian: "0[6-9]…" → prepend country code
   if (/^0[6-9]/.test(digits)) return '355' + digits.slice(1);
   return digits;
 };
 
-function requireApiKey(
-  req: express.Request,
-  res: express.Response,
-  next: express.NextFunction,
-): void {
-  if (req.headers['x-api-key'] !== API_SECRET) {
-    res.status(401).json({ error: 'Unauthorized' });
-    return;
-  }
+function requireApiKey(req: express.Request, res: express.Response, next: express.NextFunction): void {
+  if (req.headers['x-api-key'] !== API_SECRET) { res.status(401).json({ error: 'Unauthorized' }); return; }
   next();
 }
 
-// ── WhatsApp state ────────────────────────────────────────────────────────────
-type ConnectionStatus = 'disconnected' | 'connecting' | 'qr_ready' | 'connected';
-let sock: ReturnType<typeof makeWASocket> | null = null;
-let qrDataUrl: string | null = null;
-let connectionStatus: ConnectionStatus = 'disconnected';
-let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
-let lidResyncTimer: ReturnType<typeof setInterval> | null = null;
-/** Reference to the auth state keys store — used to read Baileys' internal lid-mapping entries */
-let authKeys: { get: (type: string, ids: string[]) => Promise<Record<string, any>> } | null = null;
+const authDir = (agentId: string) => `./auth_info_${agentId}`;
 
-/** Maps LID JID (e.g. "123456789@lid") → phone JID (e.g. "355691234567@s.whatsapp.net") */
-const lidToPhoneMap = new Map<string, string>();
+// ── Per-agent functions ───────────────────────────────────────────────────────
 
-/** Load persisted LID mappings from Firestore on startup */
-async function loadLidMappings(): Promise<void> {
-  try {
-    const snap = await db.collection('lidMappings').where('teamId', '==', TEAM_ID).get();
-    for (const doc of snap.docs) {
-      const { lid, phoneJid } = doc.data();
-      if (lid && phoneJid) lidToPhoneMap.set(lid, phoneJid);
-    }
-    console.log(`[WA] Loaded ${lidToPhoneMap.size} persisted LID mappings`);
-  } catch (e) {
-    console.error('[WA] Error loading LID mappings:', e);
-  }
-}
-
-/** Read LID mappings from Baileys' internal key store (lid-mapping entries in auth_info) */
-async function readBaileysLidMappings(): Promise<void> {
-  if (!authKeys) return;
-  if (!existsSync('./auth_info')) return;
-  try {
-    // Read all session files to find LID user IDs, then check for their reverse mappings
-    const { readdirSync, readFileSync: readF } = await import('fs');
-    const files = readdirSync('./auth_info');
-
-    // Collect LID user IDs from session files (sessions with LID-like long numbers)
-    const lidUsers = new Set<string>();
-    for (const f of files) {
-      const match = f.match(/^session-(\d+)\.\d+\.json$/);
-      if (match) {
-        const user = match[1];
-        // LID numbers are typically 15+ digits; phone numbers are 7-15
-        if (user.length >= 15) lidUsers.add(user);
-      }
-    }
-
-    // Check for lid-mapping files
-    const lidMappingFiles = files.filter(f => f.startsWith('lid-mapping-'));
-    if (lidMappingFiles.length) {
-      console.log(`[WA] Found ${lidMappingFiles.length} Baileys lid-mapping files`);
-
-      // Read reverse entries: lid-mapping-{lidUser}_reverse.json → pnUser
-      const reverseKeys = lidMappingFiles
-        .filter(f => f.includes('_reverse'))
-        .map(f => f.replace('lid-mapping-', '').replace('.json', ''));
-      if (reverseKeys.length) {
-        const stored = await authKeys.get('lid-mapping', reverseKeys);
-        for (const [key, pnUser] of Object.entries(stored)) {
-          if (!pnUser || typeof pnUser !== 'string') continue;
-          const lidUser = key.replace('_reverse', '');
-          const lid = `${lidUser}@lid`;
-          const pn = `${pnUser}@s.whatsapp.net`;
-          if (!lidToPhoneMap.has(lid)) {
-            console.log(`[WA] Baileys store: ${lid} → ${pn}`);
-            registerLidMapping(lid, pn);
-          }
-        }
-      }
-
-      // Read forward entries: lid-mapping-{pnUser}.json → lidUser
-      const forwardKeys = lidMappingFiles
-        .filter(f => !f.includes('_reverse'))
-        .map(f => f.replace('lid-mapping-', '').replace('.json', ''));
-      if (forwardKeys.length) {
-        const stored = await authKeys.get('lid-mapping', forwardKeys);
-        for (const [pnUser, lidUser] of Object.entries(stored)) {
-          if (!lidUser || typeof lidUser !== 'string') continue;
-          const lid = `${lidUser}@lid`;
-          const pn = `${pnUser}@s.whatsapp.net`;
-          if (!lidToPhoneMap.has(lid)) {
-            console.log(`[WA] Baileys store (fwd): ${lid} → ${pn}`);
-            registerLidMapping(lid, pn);
-          }
-        }
-      }
-    }
-
-    console.log(`[WA] Baileys key store: ${lidMappingFiles.length} lid-mapping files, ${lidUsers.size} LID sessions found`);
-  } catch (e) {
-    console.error('[WA] Error reading Baileys LID mappings:', e);
-  }
-}
-
-/** Persist a LID mapping to Firestore */
-async function persistLidMapping(lid: string, phoneJid: string): Promise<void> {
-  try {
-    const docId = lid.replace(/[@.]/g, '_');
-    await db.collection('lidMappings').doc(docId).set({
-      lid, phoneJid, teamId: TEAM_ID,
-      updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
-    }, { merge: true });
-  } catch (e) {
-    console.error('[WA] Error persisting LID mapping:', e);
-  }
-}
-
-/** Queue of messages that arrived with unresolved LID JIDs — kept only as in-memory index
- *  for fast processing when mapping arrives. Messages are ALWAYS saved to Firestore (with isLid: true). */
-const pendingLidMessages = new Map<string, string[]>(); // LID JID → array of Firestore doc IDs
-
-/** In-memory lead phone cache — avoids N+1 Firestore queries on every incoming message */
-const leadPhoneCache = new Map<string, { leadId: string; leadName: string | null }>();
-// Evict cache every 6 hours to prevent unbounded memory growth and pick up new leads
-setInterval(() => { leadPhoneCache.clear(); }, 6 * 60 * 60 * 1000);
-
-async function lookupLeadByPhone(phone: string): Promise<{ leadId: string | null; leadName: string | null }> {
-  const cached = leadPhoneCache.get(phone);
+async function lookupLeadByPhone(agent: AgentState, phone: string): Promise<{ leadId: string | null; leadName: string | null }> {
+  const cached = agent.leadPhoneCache.get(phone);
   if (cached) return cached;
   try {
-    let snap = await db.collection('leads')
-      .where('teamId', '==', TEAM_ID)
-      .where('phoneNumber', '==', phone)
-      .limit(1)
-      .get();
+    let snap = await db.collection('leads').where('teamId', '==', agent.config.teamId).where('phoneNumber', '==', phone).limit(1).get();
     if (!snap.empty) {
       const result = { leadId: snap.docs[0].id, leadName: snap.docs[0].data().name || null };
-      leadPhoneCache.set(phone, result);
-      return result;
+      agent.leadPhoneCache.set(phone, result); return result;
     }
-    snap = await db.collection('leads')
-      .where('teamId', '==', TEAM_ID)
-      .where('phone', '==', phone)
-      .limit(1)
-      .get();
+    snap = await db.collection('leads').where('teamId', '==', agent.config.teamId).where('phone', '==', phone).limit(1).get();
     if (!snap.empty) {
       const result = { leadId: snap.docs[0].id, leadName: snap.docs[0].data().name || null };
-      leadPhoneCache.set(phone, result);
-      return result;
+      agent.leadPhoneCache.set(phone, result); return result;
     }
   } catch { /* non-critical */ }
   return { leadId: null, leadName: null };
 }
 
-/** On startup: rebuild pendingLidMessages from Firestore isLid docs + immediately resolve known mappings */
-async function loadPendingLidMessages(): Promise<void> {
+async function persistLidMapping(agent: AgentState, lid: string, phoneJid: string): Promise<void> {
   try {
-    const snap = await db.collection('whatsappMessages')
-      .where('teamId', '==', TEAM_ID)
-      .where('isLid', '==', true)
-      .get();
+    const docId = `${agent.config.id}_${lid.replace(/[@.]/g, '_')}`;
+    await db.collection('lidMappings').doc(docId).set({
+      lid, phoneJid, teamId: agent.config.teamId, agentId: agent.config.id,
+      updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+    }, { merge: true });
+  } catch (e) { console.error(`[${agent.config.id}] Error persisting LID:`, e); }
+}
 
+async function backfillLidMessages(agent: AgentState, lidJid: string, phoneJid: string): Promise<void> {
+  const lidPhone = normalizePhone(lidJid.split('@')[0]);
+  const realPhone = normalizePhone(phoneJid.split('@')[0]);
+  if (!lidPhone || !realPhone || lidPhone === realPhone) return;
+  try {
+    const snap = await db.collection('whatsappMessages').where('teamId', '==', agent.config.teamId).where('phone', '==', lidPhone).get();
+    if (snap.empty) return;
+    const batch = db.batch(); let count = 0;
+    for (const doc of snap.docs) {
+      batch.update(doc.ref, { phone: realPhone, jid: phoneJid, updatedAt: admin.firestore.Timestamp.fromDate(new Date()) });
+      if (++count >= 500) break;
+    }
+    await batch.commit();
+    console.log(`[${agent.config.id}] Backfill: ${lidPhone} → ${realPhone} (${count} msgs)`);
+  } catch (e) { console.error(`[${agent.config.id}] Backfill error:`, e); }
+}
+
+async function registerLidMapping(agent: AgentState, lid: string, phoneJid: string): Promise<void> {
+  if (!lid || !phoneJid || agent.lidToPhoneMap.has(lid)) return;
+  agent.lidToPhoneMap.set(lid, phoneJid);
+  console.log(`[${agent.config.id}] LID: ${lid} → ${phoneJid} (${agent.lidToPhoneMap.size} total)`);
+  persistLidMapping(agent, lid, phoneJid);
+  backfillLidMessages(agent, lid, phoneJid);
+
+  const queuedDocIds = agent.pendingLidMessages.get(lid);
+  if (queuedDocIds?.length) {
+    const phone = normalizePhone(phoneJid.split('@')[0]);
+    const batch = db.batch();
+    for (const docId of queuedDocIds) {
+      batch.update(db.collection('whatsappMessages').doc(docId), {
+        phone, jid: phoneJid, isLid: false, updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+      });
+    }
+    try { await batch.commit(); agent.pendingLidMessages.delete(lid); }
+    catch (e) { console.error(`[${agent.config.id}] Error updating queued LID docs:`, e); }
+  }
+}
+
+async function syncContactName(agent: AgentState, jid: string, displayName: string): Promise<void> {
+  const phone = normalizePhone(jid.split('@')[0]);
+  if (!phone || !displayName || agent.syncedContactNames.get(phone) === displayName) return;
+  agent.syncedContactNames.set(phone, displayName);
+  try {
+    const snap = await db.collection('whatsappMessages').where('teamId', '==', agent.config.teamId).where('phone', '==', phone).limit(500).get();
+    if (snap.empty) return;
+    const batch = db.batch(); let count = 0;
+    for (const doc of snap.docs) {
+      const data = doc.data();
+      if (!data.leadId && (!data.pushName || data.pushName !== displayName)) {
+        batch.update(doc.ref, { pushName: displayName, leadName: displayName, updatedAt: admin.firestore.Timestamp.fromDate(new Date()) });
+        count++;
+      }
+    }
+    if (count > 0) await batch.commit();
+  } catch (e) { console.error(`[${agent.config.id}] Contact sync error:`, e); }
+}
+
+async function readBaileysLidMappings(agent: AgentState): Promise<void> {
+  if (!agent.authKeys) return;
+  const dir = authDir(agent.config.id);
+  if (!existsSync(dir)) return;
+  try {
+    const { readdirSync } = await import('fs');
+    const files = readdirSync(dir);
+    const lidMappingFiles = files.filter(f => f.startsWith('lid-mapping-'));
+    if (!lidMappingFiles.length) return;
+
+    const reverseKeys = lidMappingFiles.filter(f => f.includes('_reverse')).map(f => f.replace('lid-mapping-', '').replace('.json', ''));
+    if (reverseKeys.length) {
+      const stored = await agent.authKeys.get('lid-mapping', reverseKeys);
+      for (const [key, pnUser] of Object.entries(stored)) {
+        if (!pnUser || typeof pnUser !== 'string') continue;
+        registerLidMapping(agent, `${key.replace('_reverse', '')}@lid`, `${pnUser}@s.whatsapp.net`);
+      }
+    }
+    const forwardKeys = lidMappingFiles.filter(f => !f.includes('_reverse')).map(f => f.replace('lid-mapping-', '').replace('.json', ''));
+    if (forwardKeys.length) {
+      const stored = await agent.authKeys.get('lid-mapping', forwardKeys);
+      for (const [pnUser, lidUser] of Object.entries(stored)) {
+        if (!lidUser || typeof lidUser !== 'string') continue;
+        registerLidMapping(agent, `${lidUser}@lid`, `${pnUser}@s.whatsapp.net`);
+      }
+    }
+  } catch (e) { console.error(`[${agent.config.id}] Error reading Baileys LID mappings:`, e); }
+}
+
+async function loadLidMappings(agent: AgentState): Promise<void> {
+  try {
+    // Load agent-specific mappings first
+    let snap = await db.collection('lidMappings').where('teamId', '==', agent.config.teamId).where('agentId', '==', agent.config.id).get();
+    // Fallback to legacy mappings (no agentId) for backward compatibility
+    if (snap.empty) snap = await db.collection('lidMappings').where('teamId', '==', agent.config.teamId).get();
+    for (const doc of snap.docs) {
+      const { lid, phoneJid } = doc.data();
+      if (lid && phoneJid) agent.lidToPhoneMap.set(lid, phoneJid);
+    }
+    console.log(`[${agent.config.id}] Loaded ${agent.lidToPhoneMap.size} LID mappings`);
+  } catch (e) { console.error(`[${agent.config.id}] Error loading LID mappings:`, e); }
+}
+
+async function loadPendingLidMessages(agent: AgentState): Promise<void> {
+  try {
+    const snap = await db.collection('whatsappMessages').where('teamId', '==', agent.config.teamId).where('isLid', '==', true).get();
     for (const doc of snap.docs) {
       const jid: string = doc.data().jid || '';
       if (jid.endsWith('@lid')) {
-        const queue = pendingLidMessages.get(jid) || [];
+        const queue = agent.pendingLidMessages.get(jid) || [];
         queue.push(doc.id);
-        pendingLidMessages.set(jid, queue);
+        agent.pendingLidMessages.set(jid, queue);
       }
     }
-    console.log(`[WA] Recovered ${pendingLidMessages.size} pending LID queues (${snap.size} docs)`);
-
-    // Immediately resolve any LIDs we already have mappings for
-    for (const [lid, docIds] of Array.from(pendingLidMessages.entries())) {
-      const phoneJid = lidToPhoneMap.get(lid);
+    // Resolve any known LIDs immediately
+    for (const [lid, docIds] of Array.from(agent.pendingLidMessages.entries())) {
+      const phoneJid = agent.lidToPhoneMap.get(lid);
       if (!phoneJid) continue;
       const phone = normalizePhone(phoneJid.split('@')[0]);
       const batch = db.batch();
       for (const docId of docIds) {
         batch.update(db.collection('whatsappMessages').doc(docId), {
-          phone,
-          jid: phoneJid,
-          isLid: false,
-          updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+          phone, jid: phoneJid, isLid: false, updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
         });
       }
       await batch.commit();
-      pendingLidMessages.delete(lid);
-      console.log(`[WA] Startup resolved ${docIds.length} LID docs: ${lid} → ${phone}`);
+      agent.pendingLidMessages.delete(lid);
+      console.log(`[${agent.config.id}] Startup resolved ${docIds.length} LID docs for ${lid}`);
     }
-  } catch (e) {
-    console.error('[WA] Error loading pending LID messages:', e);
-  }
+    console.log(`[${agent.config.id}] ${agent.pendingLidMessages.size} pending LID queues remaining`);
+  } catch (e) { console.error(`[${agent.config.id}] Error loading pending LID messages:`, e); }
 }
 
-/** Register a LID→phone mapping and trigger backfill + queue processing */
-async function registerLidMapping(lid: string, phoneJid: string): Promise<void> {
-  if (!lid || !phoneJid || lidToPhoneMap.has(lid)) return;
-  lidToPhoneMap.set(lid, phoneJid);
-  console.log(`[WA] LID mapping: ${lid} → ${phoneJid} (total: ${lidToPhoneMap.size})`);
-  persistLidMapping(lid, phoneJid);
-
-  // Backfill old messages stored with LID number
-  backfillLidMessages(lid, phoneJid);
-
-  // Update queued messages (already in Firestore with isLid: true) with the real phone
-  const queuedDocIds = pendingLidMessages.get(lid);
-  if (queuedDocIds?.length) {
-    const phone = normalizePhone(phoneJid.split('@')[0]);
-    console.log(`[WA] Updating ${queuedDocIds.length} queued LID docs for ${lid} → ${phone}`);
-    const batch = db.batch();
-    for (const docId of queuedDocIds) {
-      batch.update(db.collection('whatsappMessages').doc(docId), {
-        phone,
-        jid: phoneJid,
-        isLid: false,
-        updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
-      });
-    }
-    try {
-      await batch.commit();
-      pendingLidMessages.delete(lid);
-    } catch (e) {
-      console.error(`[WA] Error updating queued LID docs:`, e);
-    }
-  }
-}
-
-/** When a new LID→phone mapping is discovered, backfill old messages stored with the LID number */
-async function backfillLidMessages(lidJid: string, phoneJid: string): Promise<void> {
-  const lidPhone = normalizePhone(lidJid.split('@')[0]);
-  const realPhone = normalizePhone(phoneJid.split('@')[0]);
-  if (!lidPhone || !realPhone || lidPhone === realPhone) return;
-
-  try {
-    const snap = await db.collection('whatsappMessages')
-      .where('teamId', '==', TEAM_ID)
-      .where('phone', '==', lidPhone)
-      .get();
-    if (snap.empty) return;
-
-    const batch = db.batch();
-    let count = 0;
-    for (const doc of snap.docs) {
-      batch.update(doc.ref, {
-        phone: realPhone,
-        jid: phoneJid,
-        updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
-      });
-      count++;
-      if (count >= 500) break;
-    }
-    await batch.commit();
-    console.log(`[WA] Backfill: ${lidPhone} → ${realPhone} (${count} mesazhe u përditësuan)`);
-  } catch (e) {
-    console.error(`[WA] Backfill error for ${lidPhone}:`, e);
-  }
-}
-
-/** Sync contact display name from device to existing WhatsApp messages in Firestore.
- *  Updates pushName on messages that have no leadName (not yet linked to a CRM lead). */
-const syncedContactNames = new Map<string, string>(); // phone → last synced name (dedup)
-async function syncContactName(jid: string, displayName: string): Promise<void> {
-  const phone = normalizePhone(jid.split('@')[0]);
-  if (!phone || !displayName) return;
-  // Skip if we already synced this exact name for this phone
-  if (syncedContactNames.get(phone) === displayName) return;
-  syncedContactNames.set(phone, displayName);
-
-  try {
-    // Update messages that have no leadName or still show just the phone number
-    const snap = await db.collection('whatsappMessages')
-      .where('teamId', '==', TEAM_ID)
-      .where('phone', '==', phone)
-      .limit(500)
-      .get();
-    if (snap.empty) return;
-
-    const batch = db.batch();
-    let count = 0;
-    for (const doc of snap.docs) {
-      const data = doc.data();
-      // Only update if there's no CRM lead linked and pushName is missing or different
-      if (!data.leadId && (!data.pushName || data.pushName !== displayName)) {
-        batch.update(doc.ref, {
-          pushName: displayName,
-          leadName: displayName,
-          updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
-        });
-        count++;
-      }
-    }
-    if (count > 0) {
-      await batch.commit();
-      console.log(`[WA] Contact sync: ${phone} → "${displayName}" (${count} mesazhe u përditësuan)`);
-    }
-  } catch (e) {
-    console.error(`[WA] Contact sync error for ${phone}:`, e);
-  }
-}
-
-/** Reverse-resolve known leads: query phone→LID via USyncQuery */
-async function reverseLookupLeads(): Promise<void> {
-  if (!sock) return;
+async function reverseLookupLeads(agent: AgentState): Promise<void> {
+  if (!agent.sock) return;
   try {
     const { USyncQuery, USyncUser } = await import('baileys');
-
-    // 1. Collect all unique phone numbers from leads
-    const leadsSnap = await db.collection('leads')
-      .where('teamId', '==', TEAM_ID)
-      .select('phoneNumber', 'phone')
-      .get();
-
+    const leadsSnap = await db.collection('leads').where('teamId', '==', agent.config.teamId).select('phoneNumber', 'phone', 'name').get();
     const phones = new Set<string>();
     for (const doc of leadsSnap.docs) {
       const d = doc.data();
       const p = normalizePhone(String(d.phoneNumber || d.phone || ''));
       if (p && p.length >= 7 && p.length <= 15) phones.add(p);
     }
-
-    // 2. Also collect phones from LID messages (unresolved)
-    const lidSnap = await db.collection('whatsappMessages')
-      .where('teamId', '==', TEAM_ID)
-      .where('isLid', '==', true)
-      .select('jid')
-      .limit(200)
-      .get();
-
-    const unresolvedLids = new Set<string>();
-    for (const doc of lidSnap.docs) {
-      const jid = doc.data().jid;
-      if (jid?.endsWith('@lid')) unresolvedLids.add(jid);
-    }
-
-    console.log(`[WA] Reverse lookup: ${phones.size} lead phones, ${unresolvedLids.size} unresolved LIDs`);
-
-    // 3. Query leads' phones via USyncQuery (batch of 20)
-    const phoneArr = Array.from(phones);
-    let resolved = 0;
+    const phoneArr = Array.from(phones); let resolved = 0;
     for (let i = 0; i < phoneArr.length; i += 20) {
-      const batch = phoneArr.slice(i, i + 20);
       try {
         const query = new USyncQuery();
         query.withMode('query').withContext('interactive');
-        for (const phone of batch) {
-          const user = new USyncUser();
-          user.withPhone('+' + phone);
-          query.withUser(user);
-        }
-        query.withLIDProtocol();
-        query.withContactProtocol();
-        const result = await sock!.executeUSyncQuery(query);
+        for (const phone of phoneArr.slice(i, i + 20)) { const u = new USyncUser(); u.withPhone('+' + phone); query.withUser(u); }
+        query.withLIDProtocol().withContactProtocol();
+        const result = await agent.sock!.executeUSyncQuery(query);
         for (const item of (result?.list) || []) {
-          const lid = (item as any).lid;
-          const id = (item as any).id;
-          if (lid && id && id !== 'undefined') {
-            registerLidMapping(lid, id);
-            resolved++;
-          }
+          const lid = (item as any).lid; const id = (item as any).id;
+          if (lid && id && id !== 'undefined') { registerLidMapping(agent, lid, id); resolved++; }
         }
-      } catch (e) {
-        console.error(`[WA] USyncQuery batch error:`, e);
-      }
+      } catch (e) { console.error(`[${agent.config.id}] USyncQuery batch error:`, e); }
     }
-
-    console.log(`[WA] Reverse lookup complete: ${resolved} new mappings from ${phones.size} phones`);
-
-    // Refresh lead cache with fresh data from this query
-    leadPhoneCache.clear();
+    // Refresh lead cache
+    agent.leadPhoneCache.clear();
     for (const doc of leadsSnap.docs) {
       const d = doc.data();
       const p = normalizePhone(String(d.phoneNumber || d.phone || ''));
-      if (p) leadPhoneCache.set(p, { leadId: doc.id, leadName: d.name || null });
+      if (p) agent.leadPhoneCache.set(p, { leadId: doc.id, leadName: d.name || null });
     }
-  } catch (e) {
-    console.error('[WA] Reverse lookup error:', e);
-  }
+    console.log(`[${agent.config.id}] Reverse lookup: ${resolved} new mappings from ${phones.size} phones`);
+  } catch (e) { console.error(`[${agent.config.id}] Reverse lookup error:`, e); }
 }
 
-/** Resolve LIDs from group participant metadata — most powerful method.
- *  Group participants carry BOTH phone JID and LID, even for non-contacts. */
-async function resolveFromGroups(): Promise<void> {
-  if (!sock) return;
+async function resolveFromGroups(agent: AgentState): Promise<void> {
+  if (!agent.sock) return;
   try {
-    console.log('[WA] Fetching group participants for LID resolution...');
-    const groups = await sock.groupFetchAllParticipating();
-    const groupCount = Object.keys(groups).length;
+    const groups = await agent.sock.groupFetchAllParticipating();
     let newMappings = 0;
-
     for (const group of Object.values(groups)) {
-      for (const participant of group.participants) {
-        // Case 1: id is phone JID, lid field has the LID
-        if (participant.lid && participant.id && !participant.id.endsWith('@lid')) {
-          const lid = participant.lid.endsWith('@lid')
-            ? participant.lid
-            : `${participant.lid}@lid`;
-          const phoneJid = participant.id.endsWith('@s.whatsapp.net')
-            ? participant.id
-            : `${participant.id}@s.whatsapp.net`;
-          if (!lidToPhoneMap.has(lid)) {
-            registerLidMapping(lid, phoneJid);
-            newMappings++;
-          }
+      for (const p of group.participants) {
+        if (p.lid && p.id && !p.id.endsWith('@lid')) {
+          const lid = p.lid.endsWith('@lid') ? p.lid : `${p.lid}@lid`;
+          const pjid = p.id.endsWith('@s.whatsapp.net') ? p.id : `${p.id}@s.whatsapp.net`;
+          if (!agent.lidToPhoneMap.has(lid)) { registerLidMapping(agent, lid, pjid); newMappings++; }
         }
-        // Case 2: id is LID, phoneNumber field has the real phone
-        if ((participant as any).phoneNumber && participant.id?.endsWith('@lid')) {
-          const lid = participant.id;
-          const pn = (participant as any).phoneNumber;
-          const phoneJid = pn.endsWith('@s.whatsapp.net')
-            ? pn
-            : `${pn}@s.whatsapp.net`;
-          if (!lidToPhoneMap.has(lid)) {
-            registerLidMapping(lid, phoneJid);
-            newMappings++;
-          }
+        if ((p as any).phoneNumber && p.id?.endsWith('@lid')) {
+          const pn = (p as any).phoneNumber;
+          const pjid = pn.endsWith('@s.whatsapp.net') ? pn : `${pn}@s.whatsapp.net`;
+          if (!agent.lidToPhoneMap.has(p.id)) { registerLidMapping(agent, p.id, pjid); newMappings++; }
         }
       }
     }
-
-    console.log(`[WA] Groups: ${groupCount} groups scanned, ${newMappings} new LID mappings (total: ${lidToPhoneMap.size})`);
-  } catch (e) {
-    console.error('[WA] Group LID resolution error:', e);
-  }
+    console.log(`[${agent.config.id}] Groups: ${Object.keys(groups).length} scanned, ${newMappings} new mappings`);
+  } catch (e) { console.error(`[${agent.config.id}] Group resolution error:`, e); }
 }
 
-// ── Connect WhatsApp ──────────────────────────────────────────────────────────
-async function connectWhatsApp(): Promise<void> {
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
-  }
+// ── Connect per agent ─────────────────────────────────────────────────────────
+async function connectAgent(agent: AgentState): Promise<void> {
+  if (agent.reconnectTimer) { clearTimeout(agent.reconnectTimer); agent.reconnectTimer = null; }
+  agent.connectionStatus = 'connecting';
+  console.log(`[${agent.config.id}] Duke u lidhur...`);
 
-  connectionStatus = 'connecting';
-  console.log('[WA] Duke u lidhur...');
-
-  const { state, saveCreds } = await useMultiFileAuthState('./auth_info');
+  const dir = authDir(agent.config.id);
+  const { state, saveCreds } = await useMultiFileAuthState(dir);
   const { version } = await fetchLatestBaileysVersion();
+  agent.authKeys = state.keys as any;
 
-  // Save keys reference so we can read Baileys' internal lid-mapping store
-  authKeys = state.keys as any;
-
-  sock = makeWASocket({
-    version,
-    auth: state,
+  agent.sock = makeWASocket({
+    version, auth: state,
     logger: pino({ level: 'silent' }),
     browser: ['Business CRM', 'Chrome', '1.0.0'],
-    printQRInTerminal: true,
+    printQRInTerminal: false,
     shouldSyncHistoryMessage: () => true,
   });
 
-  sock.ev.on('creds.update', saveCreds);
+  agent.sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('connection.update', async (update) => {
+  agent.sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
-
     if (qr) {
-      qrDataUrl = await QRCode.toDataURL(qr);
-      connectionStatus = 'qr_ready';
-      console.log(`[WA] QR i gatshëm — hap http://your-vps-ip:${PORT}/qr`);
+      agent.qrDataUrl = await QRCode.toDataURL(qr);
+      agent.connectionStatus = 'qr_ready';
+      console.log(`[${agent.config.id}] QR gati → http://your-vps-ip:${PORT}/qr/${agent.config.id}`);
     }
-
     if (connection === 'close') {
-      connectionStatus = 'disconnected';
-      qrDataUrl = null;
+      agent.connectionStatus = 'disconnected'; agent.qrDataUrl = null;
       const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const isLoggedOut = code === DisconnectReason.loggedOut;
-      console.log(`[WA] Lidhja u ndërpre (kod: ${code}).`);
+      console.log(`[${agent.config.id}] Lidhja u ndërpre (${code})`);
       if (isLoggedOut) {
-        // Clear stale session (correct dir is auth_info) so next connect generates a fresh QR
-        try { rmSync('./auth_info', { recursive: true, force: true }); } catch {}
-        console.log('[WA] Sesion i vjetër u fshi. Gjenerohet QR i ri...');
-        reconnectTimer = setTimeout(connectWhatsApp, 3000);
+        try { rmSync(dir, { recursive: true, force: true }); } catch {}
+        console.log(`[${agent.config.id}] Sesion u fshi — QR i ri në 3s...`);
+        agent.reconnectTimer = setTimeout(() => connectAgent(agent), 3000);
         return;
       }
-      reconnectTimer = setTimeout(connectWhatsApp, 5000);
+      agent.reconnectTimer = setTimeout(() => connectAgent(agent), 5000);
     }
-
     if (connection === 'open') {
-      connectionStatus = 'connected';
-      qrDataUrl = null;
-      console.log('[WA] ✅ I lidhur me sukses!');
-
-      // Read any LID mappings from Baileys' internal key store
-      setTimeout(() => readBaileysLidMappings(), 3000);
-      // After connection opens, resolve known leads via USyncQuery (phone→LID)
-      setTimeout(() => reverseLookupLeads(), 8000);
-      // Then scan group participants for additional LID→phone mappings
-      setTimeout(() => resolveFromGroups(), 20000);
-
-      // Schedule periodic re-sync every 30 minutes
-      if (lidResyncTimer) clearInterval(lidResyncTimer);
-      lidResyncTimer = setInterval(async () => {
-        if (connectionStatus === 'connected' && sock) {
-          console.log('[WA] Periodic LID re-sync starting...');
-          await reverseLookupLeads();
-          await resolveFromGroups();
+      agent.connectionStatus = 'connected'; agent.qrDataUrl = null;
+      console.log(`[${agent.config.id}] ✅ I lidhur!`);
+      // Save connected phone to Firestore for UI display
+      try {
+        const myPhone = (agent.sock as any)?.user?.id?.split(':')[0] || '';
+        if (myPhone) await db.collection('whatsappAccounts').doc(agent.config.id).update({ connectedPhone: myPhone, lastConnectedAt: admin.firestore.Timestamp.fromDate(new Date()) }).catch(() => {});
+      } catch {}
+      setTimeout(() => readBaileysLidMappings(agent), 3000);
+      setTimeout(() => reverseLookupLeads(agent), 8000);
+      setTimeout(() => resolveFromGroups(agent), 20000);
+      if (agent.lidResyncTimer) clearInterval(agent.lidResyncTimer);
+      agent.lidResyncTimer = setInterval(async () => {
+        if (agent.connectionStatus === 'connected' && agent.sock) {
+          await reverseLookupLeads(agent); await resolveFromGroups(agent);
         }
       }, 30 * 60 * 1000);
     }
   });
 
-  // ── Build LID → phone map from all available sources ─────────────────────────
+  (agent.sock.ev as any).on('lid-mapping.update', ({ lid, pn }: { lid: string; pn: string }) => { registerLidMapping(agent, lid, pn); });
 
-  // 🔑 PRIMARY: LID migration mapping sync from the connected phone
-  // Fires when WhatsApp syncs LID↔phone pairs from the device's contact database
-  // Cast to any because older Baileys type defs may not include this event
-  (sock.ev as any).on('lid-mapping.update', ({ lid, pn }: { lid: string; pn: string }) => {
-    console.log(`[WA] 📱 lid-mapping.update: ${lid} → ${pn}`);
-    registerLidMapping(lid, pn);
-  });
-
-  sock.ev.on('contacts.upsert', (contacts) => {
-    for (const contact of contacts) {
-      const lid = (contact as any).lid as string | undefined;
-      if (lid && contact.id) registerLidMapping(lid, contact.id);
-      // Sync display name from device contacts
-      const displayName = (contact as any).notify || (contact as any).name || null;
-      if (displayName && contact.id?.endsWith('@s.whatsapp.net')) {
-        syncContactName(contact.id, displayName);
-      }
-    }
-  });
-
-  sock.ev.on('contacts.update', (updates) => {
-    for (const update of updates) {
-      const lid = (update as any).lid as string | undefined;
-      if (lid && update.id) registerLidMapping(lid, update.id);
-      // Sync display name from device contacts
-      const displayName = (update as any).notify || (update as any).name || null;
-      if (displayName && update.id?.endsWith('@s.whatsapp.net')) {
-        syncContactName(update.id, displayName);
-      }
-    }
-  });
-
-  // History sync provides the richest source of LID mappings at connection time
-  sock.ev.on('messaging-history.set', (data: any) => {
-    // Explicit LID→PN pairs from sync
-    const mappings = data.lidPnMappings || data.phoneNumberToLidMappings || [];
-    for (const m of mappings) {
-      const lid = m.lid || m.lidJid;
-      const pn = m.pn || m.pnJid;
-      if (lid && pn) registerLidMapping(lid, pn);
-    }
-    // Also extract from synced contacts
-    const contacts = data.contacts || [];
+  agent.sock.ev.on('contacts.upsert', (contacts) => {
     for (const c of contacts) {
       const lid = (c as any).lid as string | undefined;
-      const pn = c.id || (c as any).phoneNumber;
-      if (lid && pn) registerLidMapping(lid, pn);
-      // Sync display name from history contacts
-      const displayName = (c as any).notify || (c as any).name || null;
-      const jid = c.id as string | undefined;
-      if (displayName && jid?.endsWith('@s.whatsapp.net')) {
-        syncContactName(jid, displayName);
-      }
+      if (lid && c.id) registerLidMapping(agent, lid, c.id);
+      const name = (c as any).notify || (c as any).name || null;
+      if (name && c.id?.endsWith('@s.whatsapp.net')) syncContactName(agent, c.id, name);
     }
-    // Also check chats for LID references
-    const chats = data.chats || [];
-    for (const ch of chats) {
-      const lid = (ch as any).lid || (ch as any).lidJid;
-      const pn = ch.id || (ch as any).pnJid;
-      if (lid && pn && !pn.endsWith('@g.us')) registerLidMapping(lid, pn);
-    }
-    console.log(`[WA] History sync: ${mappings.length} LID mappings, ${contacts.length} contacts, ${chats.length} chats`);
   });
 
-  // ── Incoming messages → save to Firestore ──────────────────────────────────
-  sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
+  agent.sock.ev.on('contacts.update', (updates) => {
+    for (const u of updates) {
+      const lid = (u as any).lid as string | undefined;
+      if (lid && u.id) registerLidMapping(agent, lid, u.id);
+      const name = (u as any).notify || (u as any).name || null;
+      if (name && u.id?.endsWith('@s.whatsapp.net')) syncContactName(agent, u.id, name);
+    }
+  });
 
+  agent.sock.ev.on('messaging-history.set', (data: any) => {
+    for (const m of (data.lidPnMappings || data.phoneNumberToLidMappings || [])) {
+      const lid = m.lid || m.lidJid; const pn = m.pn || m.pnJid;
+      if (lid && pn) registerLidMapping(agent, lid, pn);
+    }
+    for (const c of (data.contacts || [])) {
+      const lid = (c as any).lid as string | undefined; const pn = c.id || (c as any).phoneNumber;
+      if (lid && pn) registerLidMapping(agent, lid, pn);
+      const name = (c as any).notify || (c as any).name || null;
+      if (name && c.id?.endsWith('@s.whatsapp.net')) syncContactName(agent, c.id, name);
+    }
+    for (const ch of (data.chats || [])) {
+      const lid = (ch as any).lid || (ch as any).lidJid; const pn = ch.id || (ch as any).pnJid;
+      if (lid && pn && !pn.endsWith('@g.us')) registerLidMapping(agent, lid, pn);
+    }
+  });
+
+  agent.sock.ev.on('messages.upsert', async ({ messages, type }) => {
+    if (type !== 'notify') return;
     for (const msg of messages) {
       if (!msg.message) continue;
-
       const rawJid = msg.key.remoteJid || '';
-      if (rawJid.endsWith('@g.us')) continue; // skip group messages
+      if (rawJid.endsWith('@g.us')) continue;
 
-      // Resolve LID to real phone JID if we have the mapping
-      let resolvedJid = rawJid;
-      let isLid = false;
+      let resolvedJid = rawJid; let isLid = false;
       if (rawJid.endsWith('@lid')) {
-        const phoneJid = lidToPhoneMap.get(rawJid);
-        if (phoneJid) {
-          resolvedJid = phoneJid;
-          console.log(`[WA] LID resolved: ${rawJid} → ${phoneJid}`);
-        } else {
-          // Save with LID as phone — will be updated when mapping arrives
-          isLid = true;
-        }
+        const phoneJid = agent.lidToPhoneMap.get(rawJid);
+        if (phoneJid) { resolvedJid = phoneJid; } else { isLid = true; }
       }
 
       const phone = normalizePhone(resolvedJid.split('@')[0]);
       if (!phone) continue;
 
-      const body =
-        msg.message.conversation ||
-        msg.message.extendedTextMessage?.text ||
-        '[Media]';
-
+      const body = msg.message.conversation || msg.message.extendedTextMessage?.text || '[Media]';
       const ts = new Date(Number(msg.messageTimestamp) * 1000);
       const waMessageId = msg.key.id || null;
       const isFromMe = !!msg.key.fromMe;
       const pushName = (msg as any).pushName || null;
-
-      // Use waMessageId as doc ID to prevent duplicates
       const docId = waMessageId || db.collection('whatsappMessages').doc().id;
 
-      // Skip fromMe messages that were already saved via /send route
-      // (identify by checking if doc already exists)
       if (isFromMe && waMessageId) {
         const existing = await db.collection('whatsappMessages').doc(docId).get();
         if (existing.exists) continue;
       }
 
-      // Try to find the lead by phone for auto-linking (cached to avoid N+1 queries)
-      const { leadId: autoLeadId, leadName: autoLeadName } = await lookupLeadByPhone(phone);
-
+      const { leadId: autoLeadId, leadName: autoLeadName } = await lookupLeadByPhone(agent, phone);
       try {
         await db.collection('whatsappMessages').doc(docId).set({
-          phone,
-          jid: resolvedJid,
+          phone, jid: resolvedJid,
           direction: isFromMe ? 'outbound' : 'inbound',
-          message: body,
-          waMessageId,
-          leadId: autoLeadId,
-          leadName: autoLeadName || pushName,
-          pushName,
-          teamId: TEAM_ID,
+          message: body, waMessageId,
+          leadId: autoLeadId, leadName: autoLeadName || pushName, pushName,
+          teamId: agent.config.teamId,
+          agentId: agent.config.id,
+          channelPhone: agent.config.id,
           status: isFromMe ? 'sent' : 'received',
-          channel: 'baileys',
-          isLid,
+          channel: 'baileys', isLid,
           createdAt: admin.firestore.Timestamp.fromDate(ts),
           updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
         }, { merge: true });
 
-        // Track LID docs so we can update them when mapping arrives
         if (isLid) {
-          const queue = pendingLidMessages.get(rawJid) || [];
+          const queue = agent.pendingLidMessages.get(rawJid) || [];
           queue.push(docId);
-          pendingLidMessages.set(rawJid, queue);
-          console.log(`[WA] LID saved (${queue.length}): ${rawJid} → doc ${docId}`);
+          agent.pendingLidMessages.set(rawJid, queue);
         } else {
-          console.log(`[WA] ${isFromMe ? '→ (telefon)' : '←'} ${phone}: ${body.slice(0, 80)}`);
+          console.log(`[${agent.config.id}] ${isFromMe ? '→' : '←'} ${phone}: ${body.slice(0, 80)}`);
         }
-      } catch (e) {
-        console.error('[WA] Gabim gjatë ruajtjes së mesazhit:', e);
-      }
+      } catch (e) { console.error(`[${agent.config.id}] Error saving message:`, e); }
     }
   });
 
-  // ── Delivery / read receipts → update status in Firestore ─────────────────
-  sock.ev.on('messages.update', async (updates) => {
+  agent.sock.ev.on('messages.update', async (updates) => {
     for (const update of updates) {
-      const waMessageId = update.key?.id;
-      if (!waMessageId) continue;
-
-      // Map Baileys receipt status to our status field
-      const receiptMap: Record<number, string> = {
-        2: 'sent',       // MESSAGE_SENT
-        3: 'delivered',  // MESSAGE_DELIVERED
-        4: 'read',       // MESSAGE_READ
-      };
-      const newStatus = receiptMap[(update.update as any)?.status];
-      if (!newStatus) continue;
-
+      const waMessageId = update.key?.id; if (!waMessageId) continue;
+      const receiptMap: Record<number, string> = { 2: 'sent', 3: 'delivered', 4: 'read' };
+      const newStatus = receiptMap[(update.update as any)?.status]; if (!newStatus) continue;
       try {
-        const snap = await db.collection('whatsappMessages')
-          .where('waMessageId', '==', waMessageId)
-          .limit(1).get();
-        if (!snap.empty) {
-          await snap.docs[0].ref.update({
-            status: newStatus,
-            updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
-          });
-          console.log(`[WA] Receipt: ${waMessageId} → ${newStatus}`);
-        }
-      } catch (e) {
-        console.error('[WA] Gabim gjatë update receipt:', e);
-      }
+        const snap = await db.collection('whatsappMessages').where('waMessageId', '==', waMessageId).limit(1).get();
+        if (!snap.empty) await snap.docs[0].ref.update({ status: newStatus, updatedAt: admin.firestore.Timestamp.fromDate(new Date()) });
+      } catch (e) { console.error(`[${agent.config.id}] Error updating receipt:`, e); }
     }
   });
 }
 
+// ── Agent loading from Firestore ──────────────────────────────────────────────
+async function loadAgents(): Promise<void> {
+  try {
+    const snap = await db.collection('whatsappAccounts').where('enabled', '==', true).get();
+    for (const doc of snap.docs) {
+      const data = doc.data();
+      const config: AgentConfig = {
+        id: doc.id,
+        teamId: data.teamId || DEFAULT_TEAM_ID,
+        label: data.label || doc.id,
+        assignedToUserId: data.assignedToUserId,
+        enabled: true,
+      };
+      const agent = createAgentState(config);
+      agent.cacheEvictTimer = setInterval(() => agent.leadPhoneCache.clear(), 6 * 60 * 60 * 1000);
+      agents.set(doc.id, agent);
+      console.log(`[VPS] Agent ngarkuar: ${config.id} (${config.label})`);
+    }
+  } catch (e) { console.error('[VPS] Error loading agents:', e); }
+
+  // Backward compat: if no agents in Firestore, use env TEAM_ID as default
+  if (agents.size === 0) {
+    console.log('[VPS] Asnjë agent në Firestore — duke përdorur default nga env');
+    const config: AgentConfig = { id: 'default', teamId: DEFAULT_TEAM_ID, label: 'Default', enabled: true };
+    const agent = createAgentState(config);
+    agent.cacheEvictTimer = setInterval(() => agent.leadPhoneCache.clear(), 6 * 60 * 60 * 1000);
+    agents.set('default', agent);
+  }
+}
+
+function getAgent(agentId?: string): AgentState | null {
+  if (agentId && agents.has(agentId)) return agents.get(agentId)!;
+  for (const agent of agents.values()) { if (agent.connectionStatus === 'connected') return agent; }
+  return agents.size > 0 ? agents.values().next().value : null;
+}
+
 // ── Routes ────────────────────────────────────────────────────────────────────
 
-/** Health check + connection status */
 app.get('/status', (_req, res) => {
-  res.json({ status: connectionStatus });
+  const statuses: Record<string, any> = {};
+  for (const [id, a] of agents) {
+    statuses[id] = { label: a.config.label, status: a.connectionStatus, teamId: a.config.teamId, assignedToUserId: a.config.assignedToUserId, lidMappings: a.lidToPhoneMap.size, pendingLids: a.pendingLidMessages.size };
+  }
+  res.json({ agents: statuses });
 });
 
-/** QR code page for initial WhatsApp link */
+app.get('/agents', requireApiKey, (_req, res) => {
+  res.json({ agents: Array.from(agents.values()).map(a => ({ id: a.config.id, label: a.config.label, teamId: a.config.teamId, assignedToUserId: a.config.assignedToUserId, status: a.connectionStatus })) });
+});
+
+// QR per agent
+app.get('/qr/:agentId', (req, res) => {
+  const agent = agents.get(req.params.agentId);
+  if (!agent) return res.status(404).send('<html><body style="font-family:sans-serif;padding:40px"><h2>Agent nuk u gjet</h2></body></html>');
+  if (agent.connectionStatus === 'connected') {
+    return res.send(`<html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;background:#f0fdf4"><h2 style="color:#16a34a">✅ ${agent.config.label} — I lidhur!</h2><p style="color:#555">WhatsApp është aktiv.</p></body></html>`);
+  }
+  if (!agent.qrDataUrl) {
+    return res.send(`<html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column"><h2>⏳ Duke pritur QR — ${agent.config.label}...</h2><p style="color:#666">Prit disa sekonda dhe rifresko faqen.</p><script>setTimeout(() => location.reload(), 3000)</script></body></html>`);
+  }
+  res.send(`<html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;flex-direction:column;gap:16px"><h2 style="color:#111">📱 ${agent.config.label}</h2><img src="${agent.qrDataUrl}" style="width:260px;border:1px solid #eee;border-radius:12px;padding:8px"/><p style="color:#666;text-align:center;max-width:300px">Hap <strong>WhatsApp</strong> → <strong>Cilësimet</strong> → <strong>Pajisjet e lidhura</strong> → <strong>Lidh pajisje</strong></p><script>setTimeout(() => location.reload(), 30000)</script></body></html>`);
+});
+
+// Backward compat /qr
 app.get('/qr', (_req, res) => {
-  if (connectionStatus === 'connected') {
-    return res.send(`
-      <html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;
-        height:100vh;flex-direction:column;background:#f0fdf4">
-        <h2 style="color:#16a34a">✅ WhatsApp është i lidhur!</h2>
-        <p style="color:#555">Sistemi është aktiv dhe gati për mesazhe.</p>
-      </body></html>
-    `);
-  }
-
-  if (!qrDataUrl) {
-    return res.send(`
-      <html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;
-        height:100vh;flex-direction:column">
-        <h2>⏳ Duke pritur QR code...</h2>
-        <p style="color:#666">Prit disa sekonda dhe rifresko faqen.</p>
-        <script>setTimeout(() => location.reload(), 3000)</script>
-      </body></html>
-    `);
-  }
-
-  res.send(`
-    <html><body style="font-family:sans-serif;display:flex;align-items:center;justify-content:center;
-      height:100vh;flex-direction:column;gap:16px">
-      <h2 style="color:#111">Skano me WhatsApp</h2>
-      <img src="${qrDataUrl}" style="width:260px;border:1px solid #eee;border-radius:12px;padding:8px"/>
-      <p style="color:#666;text-align:center;max-width:300px">
-        Hap <strong>WhatsApp</strong> → <strong>Cilësimet</strong> →
-        <strong>Pajisjet e lidhura</strong> → <strong>Lidh pajisje</strong>
-      </p>
-      <script>setTimeout(() => location.reload(), 30000)</script>
-    </body></html>
-  `);
+  const agent = getAgent();
+  if (!agent) return res.status(503).send('No agents configured');
+  res.redirect(`/qr/${agent.config.id}`);
 });
 
-let isSyncing = false;
-
-/** Sync: reconnect WhatsApp to trigger fresh history + LID mappings */
-app.post('/sync', requireApiKey, async (_req, res) => {
-  if (!sock) {
-    res.status(503).json({ error: 'WhatsApp jo i inicializuar' });
-    return;
-  }
-  if (isSyncing) {
-    res.status(409).json({ error: 'Sync tashmë në progres' });
-    return;
-  }
-  isSyncing = true;
-  console.log('[WA] Sync requested — rilidh për sinkronizim...');
-  const beforeMappings = lidToPhoneMap.size;
+// Sync per agent
+app.post('/sync/:agentId', requireApiKey, async (req, res) => {
+  const agent = agents.get(req.params.agentId);
+  if (!agent) { res.status(404).json({ error: 'Agent nuk u gjet' }); return; }
+  if (!agent.sock) { res.status(503).json({ error: 'WhatsApp jo i inicializuar' }); return; }
+  if (agent.isSyncing) { res.status(409).json({ error: 'Sync tashmë në progres' }); return; }
+  agent.isSyncing = true;
+  const before = agent.lidToPhoneMap.size;
   try {
-    // Close and reconnect — triggers full history sync with LID mappings
-    sock.end(undefined);
+    agent.sock.end(undefined);
     await new Promise(r => setTimeout(r, 2000));
-    await connectWhatsApp();
-    // Wait for history sync to arrive (typically 5-15s)
+    await connectAgent(agent);
     await new Promise(r => setTimeout(r, 12000));
-    // Run all resolution strategies
-    await reverseLookupLeads();
-    await resolveFromGroups();
-    const newMappings = lidToPhoneMap.size - beforeMappings;
-    console.log(`[WA] Sync complete: ${newMappings} new LID mappings (total: ${lidToPhoneMap.size})`);
-    res.json({
-      success: true,
-      status: connectionStatus,
-      lidMappings: lidToPhoneMap.size,
-      newMappings,
-      pendingLids: pendingLidMessages.size,
-    });
+    await reverseLookupLeads(agent);
+    await resolveFromGroups(agent);
+    res.json({ success: true, status: agent.connectionStatus, lidMappings: agent.lidToPhoneMap.size, newMappings: agent.lidToPhoneMap.size - before });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Sync dështoi';
-    console.error('[WA] Sync error:', err);
-    res.status(500).json({ error: msg });
-  } finally {
-    isSyncing = false;
-  }
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Sync dështoi' });
+  } finally { agent.isSyncing = false; }
 });
 
-/** Send a WhatsApp message */
-app.post('/send', requireApiKey, async (req, res) => {
-  if (connectionStatus !== 'connected' || !sock) {
-    res.status(503).json({ error: 'WhatsApp jo i lidhur. Hap /qr dhe skano kodin.' });
-    return;
-  }
+// Backward compat /sync
+app.post('/sync', requireApiKey, async (req, res) => {
+  const agent = getAgent(); if (!agent) { res.status(503).json({ error: 'No agents' }); return; }
+  res.redirect(307, `/sync/${agent.config.id}`);
+});
 
-  const { to, message, leadId, leadName, teamId, jid: rawJidFromBody } = req.body as {
-    to: string;
-    message: string;
-    leadId?: string;
-    leadName?: string;
-    teamId?: string;
-    jid?: string;
+// Send message
+app.post('/send', requireApiKey, async (req, res) => {
+  const { to, message, leadId, leadName, teamId, jid: rawJidFromBody, agentId } = req.body as {
+    to: string; message: string; leadId?: string; leadName?: string;
+    teamId?: string; jid?: string; agentId?: string;
   };
 
-  if (!to || !message) {
-    res.status(400).json({ error: 'Fushat "to" dhe "message" janë të detyrueshme' });
+  const agent = getAgent(agentId);
+  if (!agent || agent.connectionStatus !== 'connected' || !agent.sock) {
+    res.status(503).json({ error: 'WhatsApp jo i lidhur. Hap /qr/:agentId dhe skano.', agentId });
     return;
   }
+  if (!to || !message) { res.status(400).json({ error: 'Fushat "to" dhe "message" janë të detyrueshme' }); return; }
 
   const cleanPhone = normalizePhone(String(to));
-
-  // Use the provided jid directly (handles LID contacts), or construct from phone
-  const isValidJid = rawJidFromBody &&
-    (rawJidFromBody.endsWith('@s.whatsapp.net') || rawJidFromBody.endsWith('@lid'));
+  const isValidJid = rawJidFromBody && (rawJidFromBody.endsWith('@s.whatsapp.net') || rawJidFromBody.endsWith('@lid'));
   const jid = isValidJid ? rawJidFromBody : `${cleanPhone}@s.whatsapp.net`;
-
   if (!isValidJid && (cleanPhone.length < 7 || cleanPhone.length > 15)) {
-    res.status(400).json({ error: 'Numri i telefonit është i pavlefshëm' });
-    return;
+    res.status(400).json({ error: 'Numri i telefonit është i pavlefshëm' }); return;
   }
 
   try {
-    const sent = await sock.sendMessage(jid, { text: message });
-    const resolvedTeamId = teamId || TEAM_ID;
+    const sent = await agent.sock.sendMessage(jid, { text: message });
+    const resolvedTeamId = teamId || agent.config.teamId;
     const waMessageId = sent?.key?.id || null;
     const docId = waMessageId || db.collection('whatsappMessages').doc().id;
-
-    const docRef = db.collection('whatsappMessages').doc(docId);
-    await docRef.set({
-      phone: cleanPhone,
-      jid,
-      direction: 'outbound',
-      message,
-      leadId: leadId || null,
-      leadName: leadName || null,
-      waMessageId,
-      teamId: resolvedTeamId,
-      status: 'sent',
-      channel: 'baileys',
+    await db.collection('whatsappMessages').doc(docId).set({
+      phone: cleanPhone, jid, direction: 'outbound', message,
+      leadId: leadId || null, leadName: leadName || null, waMessageId,
+      teamId: resolvedTeamId, agentId: agent.config.id, channelPhone: agent.config.id,
+      status: 'sent', channel: 'baileys',
       createdAt: admin.firestore.Timestamp.fromDate(new Date()),
       updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
     });
-
-    console.log(`[WA] → ${cleanPhone}: ${message.slice(0, 80)}`);
-    res.json({ success: true, id: docRef.id });
+    console.log(`[${agent.config.id}] → ${cleanPhone}: ${message.slice(0, 80)}`);
+    res.json({ success: true, id: docId, agentId: agent.config.id });
   } catch (err: unknown) {
-    const msg = err instanceof Error ? err.message : 'Dërgimi dështoi';
-    console.error('[WA] Gabim gjatë dërgimit:', err);
-    res.status(500).json({ error: msg });
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Dërgimi dështoi' });
   }
 });
 
 // ── Start ─────────────────────────────────────────────────────────────────────
-app.listen(PORT, () => {
+app.listen(PORT, async () => {
   console.log(`\n[VPS Server] ✅ Aktiv në port ${PORT}`);
-  console.log(`[VPS Server]  → Status: http://localhost:${PORT}/status`);
-  console.log(`[VPS Server]  → QR:     http://localhost:${PORT}/qr\n`);
-  loadLidMappings()
-    .then(() => loadPendingLidMessages())
-    .then(() => connectWhatsApp());
+  console.log(`[VPS Server]  → Status:  http://localhost:${PORT}/status`);
+  console.log(`[VPS Server]  → Agents:  http://localhost:${PORT}/agents`);
+  console.log(`[VPS Server]  → QR:      http://localhost:${PORT}/qr/{agentId}\n`);
+
+  await loadAgents();
+
+  for (const agent of agents.values()) {
+    await loadLidMappings(agent);
+    await loadPendingLidMessages(agent);
+    connectAgent(agent); // fire and forget per agent
+  }
 });

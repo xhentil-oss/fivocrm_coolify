@@ -31,7 +31,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 
-  const { to, message, leadId, leadName, teamId, jid } = req.body || {};
+  const { to, message, leadId, leadName, teamId, jid, agentId } = req.body || {};
 
   if (!to || typeof to !== 'string') {
     return res.status(400).json({ error: 'Fusha "to" (numri i telefonit) është e detyrueshme' });
@@ -71,6 +71,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         leadName: leadName || null,
         teamId: teamId || null,
         jid: hasValidJid ? jid : undefined,
+        agentId: agentId || undefined,
       }),
       signal: controller.signal,
     });
