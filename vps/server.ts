@@ -7,7 +7,7 @@ import makeWASocket, {
 import { Boom } from '@hapi/boom';
 import admin from 'firebase-admin';
 import QRCode from 'qrcode';
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, rmSync } from 'fs';
 import pino from 'pino';
 
 // Prevent crash on unhandled rejections/exceptions (e.g. Baileys internal errors)
@@ -520,11 +520,14 @@ async function connectWhatsApp(): Promise<void> {
       connectionStatus = 'disconnected';
       qrDataUrl = null;
       const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
-      const shouldReconnect = code !== DisconnectReason.loggedOut;
-      console.log(`[WA] Lidhja u ndërpre (kod: ${code}). Rilidh: ${shouldReconnect}`);
-      if (shouldReconnect) {
-        reconnectTimer = setTimeout(connectWhatsApp, 5000);
+      const isLoggedOut = code === DisconnectReason.loggedOut;
+      console.log(`[WA] Lidhja u ndërpre (kod: ${code}). Rilidh: true`);
+      if (isLoggedOut) {
+        // Clear stale session so next connect generates a fresh QR
+        try { rmSync('auth_info_baileys', { recursive: true, force: true }); } catch {}
+        console.log('[WA] Sesion i vjetër u fshi — do gjenerohet QR i ri');
       }
+      reconnectTimer = setTimeout(connectWhatsApp, 5000);
     }
 
     if (connection === 'open') {
