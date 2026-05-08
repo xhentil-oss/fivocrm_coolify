@@ -292,6 +292,18 @@ service cloud.firestore {
       allow update, delete: if isAuth();
     }
 
+    match /whatsappAccounts/{docId} {
+      allow read: if isAuth();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth();
+    }
+
+    match /lidMappings/{docId} {
+      allow read: if isAuth();
+      allow create, update: if isAuth();
+      allow delete: if false;
+    }
+
     // ── teamSettings: one doc per team, keyed by teamId ──
     // Stores bank accounts, EUR rate, WhatsApp config, cron settings.
     match /teamSettings/{teamId} {
