@@ -521,11 +521,13 @@ async function connectWhatsApp(): Promise<void> {
       qrDataUrl = null;
       const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const isLoggedOut = code === DisconnectReason.loggedOut;
-      console.log(`[WA] Lidhja u ndërpre (kod: ${code}). Rilidh: true`);
+      console.log(`[WA] Lidhja u ndërpre (kod: ${code}).`);
       if (isLoggedOut) {
-        // Clear stale session so next connect generates a fresh QR
+        // Clear stale session so next manual start generates a fresh QR
         try { rmSync('auth_info_baileys', { recursive: true, force: true }); } catch {}
-        console.log('[WA] Sesion i vjetër u fshi — do gjenerohet QR i ri');
+        console.log('[WA] Sesion i vjetër u fshi. Rinis serverin manualisht për QR të ri.');
+        // Do NOT auto-retry on loggedOut — avoids hammering WhatsApp and getting IP-banned
+        return;
       }
       reconnectTimer = setTimeout(connectWhatsApp, 5000);
     }
