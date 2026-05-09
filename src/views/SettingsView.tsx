@@ -241,7 +241,7 @@ const SettingsView: React.FC = () => {
   };
 
   const handleDeleteWaAccount = async (id: string) => {
-    await waMutation.delete(id);
+    await waMutation.remove(id);
   };
 
   // ── Meta WhatsApp Cloud API settings ──
