@@ -4,11 +4,12 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import {
   AlertTriangle, CheckCircle2, CircleDot, Play, Clock, Loader2,
-  ChevronDown, ChevronUp, User,
+  ChevronDown, ChevronUp, User, FolderKanban,
 } from 'lucide-react';
-import type { Task, TeamMember, UserProfile } from '../types';
+import type { Task, TeamMember, UserProfile, Project } from '../types';
 
 /** Deterministic colour from a string */
 function hashColor(name: string): string {
@@ -22,11 +23,11 @@ const WorkloadView: React.FC = () => {
   const { user } = useAuth();
   const permissions = usePermissions();
   const [expandedMember, setExpandedMember] = useState<string | null>(null);
+  const [filterProject, setFilterProject] = useState<string>('__all__');
 
   const { data: rawTasks, loading: tasksLoading } = useCollection<Task>('tasks', {
     skip: !permissions.teamId,
     orderBy: { field: 'createdAt', direction: 'desc' },
-    skipTeamFilter: true,
   });
 
   const { data: teamMembers, loading: membersLoading } = useCollection<TeamMember>('teamMembers', {
@@ -36,13 +37,15 @@ const WorkloadView: React.FC = () => {
 
   const { data: userProfiles } = useCollection<UserProfile>('userProfiles');
 
-  // Filter tasks to this team, exclude subtasks
+  const { data: projects } = useCollection<Project>('projects');
+
+  // Exclude subtasks
   const tasks = useMemo(() => {
-    if (!rawTasks || !permissions.teamId) return [];
-    return rawTasks.filter(
-      (t) => (!t.parentTaskId) && ((t as any).teamId === permissions.teamId || !(t as any).teamId)
-    );
-  }, [rawTasks, permissions.teamId]);
+    if (!rawTasks) return [];
+    const filtered = rawTasks.filter((t) => !t.parentTaskId);
+    if (filterProject === '__all__') return filtered;
+    return filtered.filter((t) => (t as any).projectId === filterProject);
+  }, [rawTasks, filterProject]);
 
   // Filter team members to this team
   const members = useMemo(() => {
@@ -59,6 +62,11 @@ const WorkloadView: React.FC = () => {
     if (member?.displayName) return member.displayName;
     if (member?.email) return member.email.split('@')[0];
     return userId.slice(0, 8);
+  };
+
+  const getProjectName = (projectId?: string): string | null => {
+    if (!projectId) return null;
+    return projects?.find((p) => p.id === projectId)?.name || null;
   };
 
   // Per-member workload data
@@ -82,6 +90,17 @@ const WorkloadView: React.FC = () => {
       else if (active <= 10) workloadLevel = 'high';
       else workloadLevel = 'critical';
 
+      // Per-project breakdown for this member
+      const projectBreakdown = new Map<string, { name: string; active: number; done: number }>();
+      for (const t of memberTasks) {
+        const pid = (t as any).projectId;
+        if (!pid) continue;
+        const entry = projectBreakdown.get(pid) ?? { name: getProjectName(pid) || pid.slice(0, 8), active: 0, done: 0 };
+        if (t.status === 'Done') entry.done++;
+        else entry.active++;
+        projectBreakdown.set(pid, entry);
+      }
+
       return {
         member: m,
         name: getDisplayName(m.userId),
@@ -94,9 +113,10 @@ const WorkloadView: React.FC = () => {
         active,
         total,
         workloadLevel,
+        projectBreakdown: Array.from(projectBreakdown.values()).sort((a, b) => b.active - a.active),
       };
     });
-  }, [members, tasks, userProfiles, user]);
+  }, [members, tasks, userProfiles, user, projects]);
 
   // Unassigned tasks
   const unassignedTasks = useMemo(
@@ -148,11 +168,27 @@ const WorkloadView: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Header */}
-      <div>
-        <h1 className="text-xl font-semibold text-foreground">Ngarkesa e Ekipit</h1>
-        <p className="text-sm text-muted-foreground mt-0.5">
-          {members.length} anëtarë · {totalActive} detyra aktive · {totalDone} përfunduara
-        </p>
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-xl font-semibold text-foreground">Ngarkesa e Ekipit</h1>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            {members.length} anëtarë · {totalActive} detyra aktive · {totalDone} përfunduara
+          </p>
+        </div>
+
+        {/* Project filter */}
+        <Select value={filterProject} onValueChange={setFilterProject}>
+          <SelectTrigger className="w-48 h-9 text-sm">
+            <FolderKanban className="w-4 h-4 mr-2 flex-shrink-0 text-muted-foreground" />
+            <SelectValue placeholder="Të gjitha projektet" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__all__">Të gjitha projektet</SelectItem>
+            {(projects || []).map((p) => (
+              <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
       </div>
 
       {/* Summary Cards */}
@@ -265,9 +301,31 @@ const WorkloadView: React.FC = () => {
                 </div>
               </div>
 
-              {/* Expanded task list */}
+              {/* Expanded content */}
               {isExpanded && (
                 <div className="border-t bg-muted/20">
+                  {/* Per-project breakdown */}
+                  {filterProject === '__all__' && wd.projectBreakdown.length > 0 && (
+                    <div className="px-4 py-2.5 border-b flex flex-wrap gap-2">
+                      {wd.projectBreakdown.map((pb) => (
+                        <span
+                          key={pb.name}
+                          className="inline-flex items-center gap-1.5 text-xs bg-background border rounded-full px-2.5 py-1"
+                        >
+                          <FolderKanban className="w-3 h-3 text-primary" />
+                          <span className="font-medium">{pb.name}</span>
+                          {pb.active > 0 && (
+                            <span className="text-muted-foreground">{pb.active} aktive</span>
+                          )}
+                          {pb.done > 0 && (
+                            <span className="text-emerald-600">· {pb.done} ✓</span>
+                          )}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+
+                  {/* Active task list */}
                   {wd.tasks.filter((t) => t.status !== 'Done').length === 0 ? (
                     <p className="px-4 py-3 text-sm text-muted-foreground italic">
                       Asnjë detyrë aktive
@@ -279,6 +337,7 @@ const WorkloadView: React.FC = () => {
                         .map((t) => {
                           const isOverdue =
                             t.endDate && new Date(t.endDate) < new Date();
+                          const projName = getProjectName((t as any).projectId);
                           return (
                             <div
                               key={t.id}
@@ -302,6 +361,11 @@ const WorkloadView: React.FC = () => {
                               <span className="text-sm text-foreground flex-1 min-w-0 truncate">
                                 {t.title}
                               </span>
+                              {projName && filterProject === '__all__' && (
+                                <span className="text-[10px] text-muted-foreground bg-muted rounded px-1.5 py-0.5 flex-shrink-0 hidden md:block truncate max-w-[100px]">
+                                  {projName}
+                                </span>
+                              )}
                               {isOverdue && (
                                 <AlertTriangle className="w-3.5 h-3.5 text-destructive flex-shrink-0" />
                               )}
@@ -363,26 +427,34 @@ const WorkloadView: React.FC = () => {
           </div>
           {expandedMember === '__unassigned__' && (
             <div className="border-t bg-muted/20 divide-y">
-              {unassignedTasks.map((t) => (
-                <div key={t.id} className="flex items-center gap-3 px-4 py-2.5">
-                  <span
-                    className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium flex-shrink-0 ${
-                      t.status === 'In Progress'
-                        ? 'bg-blue-100 text-blue-700'
+              {unassignedTasks.map((t) => {
+                const projName = getProjectName((t as any).projectId);
+                return (
+                  <div key={t.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <span
+                      className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium flex-shrink-0 ${
+                        t.status === 'In Progress'
+                          ? 'bg-blue-100 text-blue-700'
+                          : t.status === 'Review'
+                          ? 'bg-amber-100 text-amber-700'
+                          : 'bg-slate-100 text-slate-600'
+                      }`}
+                    >
+                      {t.status === 'In Progress'
+                        ? 'Në progres'
                         : t.status === 'Review'
-                        ? 'bg-amber-100 text-amber-700'
-                        : 'bg-slate-100 text-slate-600'
-                    }`}
-                  >
-                    {t.status === 'In Progress'
-                      ? 'Në progres'
-                      : t.status === 'Review'
-                      ? 'Rishikim'
-                      : 'Për të bërë'}
-                  </span>
-                  <span className="text-sm text-foreground flex-1 min-w-0 truncate">{t.title}</span>
-                </div>
-              ))}
+                        ? 'Rishikim'
+                        : 'Për të bërë'}
+                    </span>
+                    <span className="text-sm text-foreground flex-1 min-w-0 truncate">{t.title}</span>
+                    {projName && (
+                      <span className="text-[10px] text-muted-foreground bg-muted rounded px-1.5 py-0.5 flex-shrink-0 hidden md:block">
+                        {projName}
+                      </span>
+                    )}
+                  </div>
+                );
+              })}
             </div>
           )}
         </Card>

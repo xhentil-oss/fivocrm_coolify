@@ -476,7 +476,7 @@ export default function SeoLandingPage() {
                   <div className="p-8">
                     <h3 className="text-2xl font-bold">{pkg.title}</h3>
                     {pkg.description && (
-                      <p className="text-sm text-gray-500 mt-1" dangerouslySetInnerHTML={{ __html: pkg.description.replace(/<[^>]*>/g, '').slice(0, 120) }} />
+                      <p className="text-sm text-gray-500 mt-1">{pkg.description.replace(/<[^>]*>/g, '').slice(0, 120)}</p>
                     )}
 
                     <div className="mt-6">

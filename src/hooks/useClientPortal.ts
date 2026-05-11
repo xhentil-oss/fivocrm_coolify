@@ -29,6 +29,12 @@ export function useClientPortal() {
   const [createdCustomerId, setCreatedCustomerId] = useState<string | null>(null);
   const didAutoCreate = useRef(false);
   const didAutoLink = useRef(false);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   // Query portal access by userId only (single where = no composite index needed)
   const { data: byUserId, loading: byUserIdLoading } = useCollection<ClientPortalAccess>(
@@ -166,7 +172,7 @@ export function useClientPortal() {
 
         if (existingCustomer) {
           // Customer was already created (likely by RegisterView) — just create portal access
-          setCreatedCustomerId(existingCustomer.id);
+          if (mountedRef.current) setCreatedCustomerId(existingCustomer.id);
           createDoc('clientPortalAccess', {
             customerId: existingCustomer.id,
             userId: user.uid,
@@ -175,10 +181,12 @@ export function useClientPortal() {
           }).then(() => {
             _moduleCreatedForUid = user.uid;
             _moduleCreatingForUid = null;
+            if (!mountedRef.current) return;
             setAutoCreated(true);
             setAutoCreating(false);
           }).catch(() => {
             _moduleCreatingForUid = null;
+            if (!mountedRef.current) return;
             setAutoCreating(false);
             setCreatedCustomerId(null);
             didAutoCreate.current = false;
@@ -193,7 +201,7 @@ export function useClientPortal() {
         email: user.email?.toLowerCase(),
         status: 'Pending',
       }).then(async (newCustomer) => {
-        setCreatedCustomerId(newCustomer.id);
+        if (mountedRef.current) setCreatedCustomerId(newCustomer.id);
 
         // Create portal access
         await createDoc('clientPortalAccess', {
@@ -215,7 +223,6 @@ export function useClientPortal() {
         const admins = allTeamMembers?.filter(
           (m: any) => m.role === 'Admin'
         ) || [];
-        // Also check for team owners
         for (const admin of admins) {
           createDoc('notifications', {
             userId: admin.userId,
@@ -228,10 +235,12 @@ export function useClientPortal() {
       }).then(() => {
         _moduleCreatedForUid = user.uid;
         _moduleCreatingForUid = null;
+        if (!mountedRef.current) return;
         setAutoCreated(true);
         setAutoCreating(false);
       }).catch(() => {
         _moduleCreatingForUid = null;
+        if (!mountedRef.current) return;
         setAutoCreating(false);
         setCreatedCustomerId(null);
         didAutoCreate.current = false;

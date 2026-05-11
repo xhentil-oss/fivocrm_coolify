@@ -8,7 +8,7 @@ import { useCollection, useMutation, useDocument } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useToast } from '../hooks/use-toast';
-import { ArrowLeft, Plus, LayoutGrid, List, Calendar as CalendarIcon, Users, Settings, MoreVertical, Upload, Download, Trash2, FileText, MessageSquare, CheckSquare, Filter, Search, UserPlus, X, Eye } from 'lucide-react';
+import { ArrowLeft, Plus, LayoutGrid, List, Calendar as CalendarIcon, Users, Settings, MoreVertical, Upload, Download, Trash2, FileText, MessageSquare, CheckSquare, Filter, Search, UserPlus, X, Eye, Clock } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -31,7 +31,7 @@ import TaskDetailPanel from '../components/TaskDetailPanel';
 import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
 import { buildNextRecurringTask } from '../lib/recurringUtils';
-import type { Task, Project, Team, TeamMember } from '../types';
+import type { Task, Project, Team, TeamMember, TimeEntry } from '../types';
 
 const ProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -71,6 +71,30 @@ const ProjectDetailView: React.FC = () => {
   const taskMutation = useMutation<Task>('tasks');
   const commentMutation = useMutation<any>('taskComments');
   const notificationMutation = useMutation<any>('notifications');
+
+  // Time entries for this project — used to show logged hours
+  const { data: timeEntries } = useCollection<TimeEntry>('timeEntries', {
+    where: projectId ? [{ field: 'projectId', operator: '==', value: projectId }] : undefined,
+    skip: !projectId,
+    skipTeamFilter: true,
+  });
+
+  // Total hours logged for the project and per task
+  const { totalHours, hoursByTask } = React.useMemo(() => {
+    if (!timeEntries) return { totalHours: 0, hoursByTask: new Map<string, number>() };
+    let total = 0;
+    const byTask = new Map<string, number>();
+    for (const e of timeEntries) {
+      const mins = e.duration
+        ? e.duration / 60
+        : e.startTime && e.endTime
+          ? (new Date(e.endTime).getTime() - new Date(e.startTime).getTime()) / 60000
+          : 0;
+      total += mins;
+      if (e.taskId) byTask.set(e.taskId, (byTask.get(e.taskId) || 0) + mins);
+    }
+    return { totalHours: total / 60, hoursByTask: byTask };
+  }, [timeEntries]);
 
   const { getName, getInitials } = useUserNames(teamMembers || []);
 
@@ -438,9 +462,11 @@ const ProjectDetailView: React.FC = () => {
                 </div>
               )}
             </div>
-            <Button variant="outline" size="sm">
-              <Plus className="w-4 h-4" />
-            </Button>
+            {!isGuestOnProject && permissions.canEdit && (
+              <Button variant="outline" size="sm" onClick={() => setIsSettingsOpen(true)} title="Menaxho anëtarët">
+                <Plus className="w-4 h-4" />
+              </Button>
+            )}
           </div>
 
           <DropdownMenu>
@@ -479,7 +505,7 @@ const ProjectDetailView: React.FC = () => {
         <div className="px-6 pb-4">
           <div className="flex items-center gap-4">
             <div className="flex-1 h-2 bg-muted rounded-full overflow-hidden">
-              <div 
+              <div
                 className="h-full bg-gradient-primary transition-all duration-300"
                 style={{ width: `${progress}%` }}
               />
@@ -487,6 +513,14 @@ const ProjectDetailView: React.FC = () => {
             <span className="text-sm text-muted-foreground">
               {completedTasks}/{totalTasks} detyra ({progress}%)
             </span>
+            {totalHours > 0 && (
+              <span className="text-sm text-muted-foreground flex items-center gap-1 flex-shrink-0">
+                <Clock className="w-3.5 h-3.5" />
+                {totalHours < 1
+                  ? `${Math.round(totalHours * 60)}m`
+                  : `${totalHours.toFixed(1)}h`}
+              </span>
+            )}
           </div>
         </div>
 
@@ -550,11 +584,11 @@ const ProjectDetailView: React.FC = () => {
                 <DialogHeader>
                   <DialogTitle>Krijo Detyrë të Re</DialogTitle>
                 </DialogHeader>
-                <TaskForm 
-                  onSubmit={handleCreateTask} 
-                  projects={project ? [project] : []} 
+                <TaskForm
+                  onSubmit={handleCreateTask}
+                  projects={project ? [project] : []}
                   defaultProjectId={projectId}
-                  teamMembers={teamMembers || []}
+                  teamMembers={projectMembers.length > 0 ? projectMembers : (teamMembers || [])}
                 />
               </DialogContent>
             </Dialog>
@@ -668,6 +702,14 @@ const ProjectDetailView: React.FC = () => {
                           <Users className="w-4 h-4 text-warning" />
                           <span className="text-xs text-warning">Pa caktuar</span>
                         </div>
+                      )}
+                      {hoursByTask.has(task.id) && (
+                        <span className="text-xs text-muted-foreground flex items-center gap-0.5 flex-shrink-0">
+                          <Clock className="w-3 h-3" />
+                          {(hoursByTask.get(task.id)! / 60) < 1
+                            ? `${Math.round(hoursByTask.get(task.id)!)}m`
+                            : `${(hoursByTask.get(task.id)! / 60).toFixed(1)}h`}
+                        </span>
                       )}
                       <span className={`text-xs ${dateInfo.className}`}>
                         {dateInfo.text}

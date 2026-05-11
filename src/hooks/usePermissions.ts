@@ -110,7 +110,7 @@ export function usePermissions(): UserPermissions {
   // Fallback query: by email field — catches members added manually where userId wasn't set to the Firebase UID
   const { data: rawTeamMembersByEmail, loading: membersByEmailLoading, error: membersByEmailError } = useCollection<any>('teamMembers', {
     where: user?.email
-      ? [{ field: 'email', operator: '==', value: user.email }]
+      ? [{ field: 'email', operator: '==', value: user.email.toLowerCase() }]
       : [{ field: 'email', operator: '==', value: '__never__' }],
     skipTeamFilter: true,
   });

@@ -218,7 +218,9 @@ export function useCollection<T = DocumentData>(
 
       const constraints: QueryConstraint[] = [];
       if (isTeamScoped && globalTeamId) {
-        // no server-side constraints — client-side filtering
+        // Server-side teamId filter — reduces Firestore reads to this team's documents only.
+        // Additional where/orderBy/limit are applied client-side to avoid composite index requirements.
+        constraints.push(where('teamId', '==', globalTeamId));
       } else {
         if (options?.where) options.where.forEach(w => constraints.push(where(w.field, w.operator as any, w.value)));
         if (options?.orderBy) constraints.push(orderBy(options.orderBy.field, options.orderBy.direction || 'asc'));
@@ -435,9 +437,11 @@ export function usePaginatedCollection<T = DocumentData>(
   const totalItems = allData.length;
   const totalPages = Math.max(1, Math.ceil(totalItems / pageSize));
 
-  // Clamp page to valid range
+  // Clamp page to valid range — done in useEffect to avoid setState during render
   const safePage = Math.min(page, totalPages - 1);
-  if (safePage !== page) setPage(safePage);
+  useEffect(() => {
+    if (page >= totalPages && totalPages > 0) setPage(totalPages - 1);
+  }, [totalPages, page]);
 
   const paginatedData = useMemo(() => {
     const start = safePage * pageSize;
