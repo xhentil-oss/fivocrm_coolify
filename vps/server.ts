@@ -415,9 +415,20 @@ async function connectAgent(agent: AgentState): Promise<void> {
   });
 
   agent.sock.ev.on('messages.upsert', async ({ messages, type }) => {
-    if (type !== 'notify') return;
     for (const msg of messages) {
       if (!msg.message) continue;
+      const isFromMe = !!msg.key.fromMe;
+
+      // Process 'notify' (live) messages for both directions.
+      // Also process recent inbound 'append' messages — these are messages that arrived
+      // while the VPS was briefly offline and are replayed on reconnect.
+      if (type !== 'notify') {
+        if (type !== 'append') continue;
+        if (isFromMe) continue;
+        const msgTs = Number(msg.messageTimestamp) * 1000;
+        if (Date.now() - msgTs > 24 * 60 * 60 * 1000) continue;
+      }
+
       const rawJid = msg.key.remoteJid || '';
       if (rawJid.endsWith('@g.us')) continue;
 
@@ -433,7 +444,6 @@ async function connectAgent(agent: AgentState): Promise<void> {
       const body = msg.message.conversation || msg.message.extendedTextMessage?.text || '[Media]';
       const ts = new Date(Number(msg.messageTimestamp) * 1000);
       const waMessageId = msg.key.id || null;
-      const isFromMe = !!msg.key.fromMe;
       const pushName = (msg as any).pushName || null;
       const docId = waMessageId || db.collection('whatsappMessages').doc().id;
 

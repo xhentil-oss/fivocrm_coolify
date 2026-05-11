@@ -1,10 +1,10 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
 import { X, Send, MessageSquare, Loader2, Phone } from 'lucide-react';
 import { Button } from './ui/button';
-import { normalizeAlbanianPhone } from '../lib/utils';
+import { normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import type { WhatsAppMessage } from '../types';
 
 interface Props {
@@ -25,12 +25,18 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
 
   const normalizedPhone = normalizeAlbanianPhone(phone);
 
-  const { data: messages, loading } = useCollection<WhatsAppMessage>('whatsappMessages', {
+  const { data: rawMessages, loading } = useCollection<WhatsAppMessage>('whatsappMessages', {
     skip: !normalizedPhone,
     where: [{ field: 'phone', operator: '==', value: normalizedPhone }],
-    orderBy: { field: 'createdAt', direction: 'asc' },
+    // No orderBy — avoids composite index requirement; sorting done client-side
     skipTeamFilter: true,
   });
+
+  // Sort client-side so we don't need a composite (phone + createdAt) Firestore index
+  const messages = useMemo(() => {
+    if (!rawMessages) return null;
+    return [...rawMessages].sort((a, b) => getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt));
+  }, [rawMessages]);
 
   // Derive jid from messages if not passed as prop (handles LID contacts in CRM panel)
   const jid = jidProp || messages?.find(m => m.jid)?.jid || null;
