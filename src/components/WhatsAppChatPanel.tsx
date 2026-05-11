@@ -57,7 +57,7 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
     setText('');
     try {
       const token = await user.getIdToken();
-      const res = await fetch('/api/send-whatsapp', {
+      const res = await fetch('/api/whatsapp', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

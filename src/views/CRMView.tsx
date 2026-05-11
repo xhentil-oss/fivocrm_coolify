@@ -393,7 +393,7 @@ const CRMView: React.FC = () => {
     try {
       const token = await user?.getIdToken();
       const normalized = normalizeAlbanianPhone(selectedLead.phoneNumber);
-      const res = await fetch('/api/send-whatsapp', {
+      const res = await fetch('/api/whatsapp', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
         body: JSON.stringify({ to: normalized, message: recontactMsg, leadId: selectedLead.id, leadName: selectedLead.name, teamId: waTeamId }),

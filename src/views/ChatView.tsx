@@ -863,7 +863,7 @@ const ChatView: React.FC = () => {
     try {
       const token = await user.getIdToken();
       const isMeta = activeWaChannel === 'meta';
-      const endpoint = isMeta ? '/api/meta-send' : '/api/send-whatsapp';
+      const endpoint = isMeta ? '/api/meta-send' : '/api/whatsapp';
       const payload = isMeta
         ? { to: activeWaPhone, message: body, leadName: activeWaLeadName, teamId: getGlobalTeamId() }
         : { to: activeWaPhone, message: body, leadName: activeWaLeadName, teamId: getGlobalTeamId(), jid: activeWaJid || undefined };

@@ -175,7 +175,7 @@ const SettingsView: React.FC = () => {
   const fetchQrData = async (acc: WhatsAppAccount) => {
     try {
       const token = await user?.getIdToken();
-      const res = await fetch(`/api/whatsapp-qr?agentId=${enc(acc.id)}`, {
+      const res = await fetch(`/api/whatsapp?agentId=${enc(acc.id)}`, {
         headers: { Authorization: `Bearer ${token}` },
       });
       if (!res.ok) return;
@@ -195,7 +195,7 @@ const SettingsView: React.FC = () => {
     // trigger hot-reload so VPS picks up newly-created agents
     try {
       const token = await user?.getIdToken();
-      await fetch('/api/whatsapp-qr?action=reload', {
+      await fetch('/api/whatsapp?action=reload', {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
       });
