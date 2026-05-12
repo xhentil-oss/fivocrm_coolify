@@ -12,6 +12,7 @@ import {
   ClipboardList,
   FolderKanban,
   Calculator,
+  ScrollText,
   LogOut,
   Menu,
   X,
@@ -23,6 +24,7 @@ import { Loader2 } from 'lucide-react';
 const navItems = [
   { to: '/portal', icon: LayoutDashboard, label: 'Paneli Kryesor', end: true },
   { to: '/portal/invoices', icon: FileText, label: 'Faturat' },
+  { to: '/portal/contracts', icon: ScrollText, label: 'Kontratat' },
   { to: '/portal/services', icon: ShoppingBag, label: 'Shërbimet' },
   { to: '/portal/projects', icon: FolderKanban, label: 'Projektet' },
   { to: '/portal/chat', icon: MessageSquare, label: 'Biseda' },

@@ -111,7 +111,7 @@ const teamScopedCollections = new Set([
   'taskCollaborators', 'customIndustries', 'typingIndicators',
   'directMessages', 'milestones', 'serviceInquiries', 'projectComments',
   'workspaceFolders', 'workspaceDriveFiles', 'projects', 'dailyReports',
-  'roleTemplates', 'standups', 'quotes',
+  'roleTemplates', 'standups', 'quotes', 'contracts',
 ]);
 
 // Module-level cache: reuse listeners for identical queries across components.

@@ -136,6 +136,43 @@ export interface Customer {
   createdByUserId: string | null;
 }
 
+export interface Contract {
+  id: string;
+  teamId: string;
+  customerId?: string;
+  leadId?: string;
+  invoiceId?: string;
+  quoteId?: string;
+  clientName: string;
+  clientEmail?: string;
+  title: string;
+  body: string;
+  packageSummary?: {
+    label: string;
+    currency: string;
+    categories: { category: string; oneTime: number; monthly: number }[];
+    totalOneTime: number;
+    totalMonthly: number;
+    grandTotal: number;
+    discountLabel?: string;
+    discountAmount?: number;
+  };
+  status: 'Draft' | 'Sent' | 'Signed' | 'Rejected' | 'Expired';
+  sentAt?: Date;
+  expiresAt?: Date;
+  signedAt?: Date;
+  signedByUserId?: string;
+  signedByEmail?: string;
+  signatureData?: string;
+  signatureType?: 'drawn' | 'typed';
+  rejectedAt?: Date;
+  rejectionReason?: string;
+  notes?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
 export interface BankAccount {
   id: string;
   bankName: string;

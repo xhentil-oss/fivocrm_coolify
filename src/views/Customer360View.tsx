@@ -20,7 +20,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Separator } from '../components/ui/separator';
 import { safeHref, toAll } from '../lib/utils';
-import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead } from '../types';
+import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract } from '../types';
 
 const Customer360View: React.FC = () => {
   const { customerId } = useParams<{ customerId: string }>();
@@ -32,6 +32,7 @@ const Customer360View: React.FC = () => {
   const [activityTitle, setActivityTitle] = useState('');
   const [activityDesc, setActivityDesc] = useState('');
   const [sendingQuoteId, setSendingQuoteId] = useState<string | null>(null);
+  const [sendingContractId, setSendingContractId] = useState<string | null>(null);
   const [selectedRequestIds, setSelectedRequestIds] = useState<Set<string>>(new Set());
   const [showArchivedRequests, setShowArchivedRequests] = useState(false);
 
@@ -44,8 +45,10 @@ const Customer360View: React.FC = () => {
   const { data: tasks } = useCollection<Task>('tasks', { skipTeamFilter: true });
   const { data: quotes } = useCollection<Quote>('quotes', { skipTeamFilter: true });
   const { data: allLeads } = useCollection<Lead>('leads', { skipTeamFilter: true });
+  const { data: allContracts } = useCollection<Contract>('contracts', { skipTeamFilter: true });
   const activityMutation = useMutation<Activity>('activities');
   const quoteMutation = useMutation<Quote>('quotes');
+  const contractMutation = useMutation<Contract>('contracts');
   const requestMutation = useMutation<ClientRequest>('clientRequests');
 
   const customer = customers?.find(c => c.id === customerId);
@@ -150,6 +153,15 @@ const Customer360View: React.FC = () => {
       return tb - ta;
     });
   }, [quotes, customerId, linkedLeadIds]);
+
+  const customerContracts = useMemo(() => {
+    if (!allContracts) return [];
+    return allContracts.filter(c => c.customerId === customerId).sort((a, b) => {
+      const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
+      const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toMillis?.() ?? 0;
+      return tb - ta;
+    });
+  }, [allContracts, customerId]);
 
   // Stats
   const totalRevenue = customerInvoices.reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
@@ -284,6 +296,7 @@ const Customer360View: React.FC = () => {
           <TabsTrigger value="requests">Kërkesat ({allCustomerRequests.filter(r => r.status !== 'Archived').length})</TabsTrigger>
           <TabsTrigger value="activities">Aktivitete ({customerActivities.length})</TabsTrigger>
           <TabsTrigger value="quotes">Preventiva ({customerQuotes.length})</TabsTrigger>
+          <TabsTrigger value="contracts">Kontratat ({customerContracts.length})</TabsTrigger>
         </TabsList>
 
         {/* Overview Tab */}
@@ -697,6 +710,109 @@ const Customer360View: React.FC = () => {
                       })}
                     </tbody>
                   </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Contracts Tab */}
+        <TabsContent value="contracts">
+          <Card>
+            <CardContent className="pt-6">
+              {customerContracts.length === 0 ? (
+                <div className="text-center py-8 space-y-3">
+                  <FileText className="w-10 h-10 mx-auto text-muted-foreground/40" />
+                  <p className="text-sm text-muted-foreground">Nuk ka kontratat për këtë klient.</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => navigate('/app/contracts')}
+                  >
+                    <Send className="w-4 h-4 mr-1.5" />
+                    Krijo Kontratë
+                  </Button>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  <div className="flex justify-end">
+                    <Button variant="outline" size="sm" onClick={() => navigate('/app/contracts')}>
+                      <Send className="w-3.5 h-3.5 mr-1.5" /> Krijo Kontratë të Re
+                    </Button>
+                  </div>
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-muted">
+                        <tr>
+                          <th className="px-4 py-2 text-left">Titulli</th>
+                          <th className="px-4 py-2 text-left">Data</th>
+                          <th className="px-4 py-2 text-left">Statusi</th>
+                          <th className="px-4 py-2 text-left">Dërguar</th>
+                          <th className="px-4 py-2 text-left">Nënshkruar</th>
+                          <th className="px-4 py-2 text-center">Veprime</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {customerContracts.map(c => {
+                          const fmtDate = (d: any) => {
+                            if (!d) return '—';
+                            const date = d instanceof Date ? d : d?.toDate?.();
+                            return date ? date.toLocaleDateString('sq-AL') : '—';
+                          };
+                          return (
+                            <tr key={c.id} className="hover:bg-muted/50">
+                              <td className="px-4 py-2.5 font-medium max-w-[200px] truncate">{c.title}</td>
+                              <td className="px-4 py-2.5">{fmtDate(c.createdAt)}</td>
+                              <td className="px-4 py-2.5">
+                                <Badge variant="secondary" className={
+                                  c.status === 'Signed' ? 'bg-green-100 text-green-700' :
+                                  c.status === 'Rejected' ? 'bg-red-100 text-red-700' :
+                                  c.status === 'Sent' ? 'bg-blue-100 text-blue-700' :
+                                  c.status === 'Expired' ? 'bg-orange-100 text-orange-700' :
+                                  'bg-gray-100 text-gray-700'
+                                }>
+                                  {c.status === 'Draft' ? 'Draft' :
+                                   c.status === 'Sent' ? 'Dërguar' :
+                                   c.status === 'Signed' ? 'Nënshkruar' :
+                                   c.status === 'Rejected' ? 'Refuzuar' : 'Skaduar'}
+                                </Badge>
+                              </td>
+                              <td className="px-4 py-2.5">{fmtDate(c.sentAt)}</td>
+                              <td className="px-4 py-2.5">
+                                {c.signedAt ? (
+                                  <span className="text-green-600 font-medium">{fmtDate(c.signedAt)}</span>
+                                ) : '—'}
+                              </td>
+                              <td className="px-4 py-2.5 text-center">
+                                {c.status === 'Draft' && (
+                                  <Button
+                                    size="sm"
+                                    variant="outline"
+                                    className="text-xs h-7 gap-1 text-blue-600 border-blue-200 hover:bg-blue-50"
+                                    disabled={sendingContractId === c.id}
+                                    onClick={async () => {
+                                      setSendingContractId(c.id);
+                                      try {
+                                        await contractMutation.update(c.id, { status: 'Sent', sentAt: new Date(), updatedAt: new Date() } as any);
+                                        toast({ title: '✅ Kontrata u dërgua te klienti!' });
+                                      } catch {
+                                        toast({ title: 'Gabim', variant: 'destructive' });
+                                      } finally {
+                                        setSendingContractId(null);
+                                      }
+                                    }}
+                                  >
+                                    <Send className="w-3 h-3" />
+                                    Dërgo
+                                  </Button>
+                                )}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 </div>
               )}
             </CardContent>

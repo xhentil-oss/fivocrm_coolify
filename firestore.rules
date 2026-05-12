@@ -190,6 +190,12 @@ service cloud.firestore {
       allow update, delete: if isAuth();
     }
 
+    match /contracts/{docId} {
+      allow read: if isAuth();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth();
+    }
+
     // ── Global Collections (not team-scoped) ──
 
     match /teams/{docId} {

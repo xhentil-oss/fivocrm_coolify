@@ -85,6 +85,8 @@ const SocialMediaLandingPage = lazyRetry(() => import('./views/landing/SocialMed
 const MassageLandingPage = lazyRetry(() => import('./views/landing/MassageLandingPage'));
 const PriceCalculatorView = lazyRetry(() => import('./views/PriceCalculatorView'));
 const LandingPagesView = lazyRetry(() => import('./views/LandingPagesView'));
+const ContractsView = lazyRetry(() => import('./views/ContractsView'));
+const PortalContractsView = React.lazy(() => import('./views/portal/PortalContractsView'));
 
 function LazyFallback() {
   return (
@@ -214,6 +216,7 @@ function AppContent() {
         <Route path="projects" element={<Suspense fallback={<LazyFallback />}><PortalProjectsView /></Suspense>} />
         <Route path="projects/:projectId" element={<Suspense fallback={<LazyFallback />}><PortalProjectDetailView /></Suspense>} />
         <Route path="preventiva" element={<Suspense fallback={<LazyFallback />}><PortalQuotesView /></Suspense>} />
+        <Route path="contracts" element={<Suspense fallback={<LazyFallback />}><PortalContractsView /></Suspense>} />
       </Route>
       
       {/* Protected routes */}
@@ -283,6 +286,7 @@ function AppContent() {
                       <Route path="/app/workload" element={<PermissionGate permissionKey="canAccessReports"><WorkloadView /></PermissionGate>} />
                       <Route path="/app/price-calculator" element={<PermissionGate permissionKey="canAccessServices"><Suspense fallback={<div className="p-8 text-center"><span className="animate-spin">⏳</span></div>}><PriceCalculatorView /></Suspense></PermissionGate>} />
                       <Route path="/app/landing-pages" element={<PermissionGate permissionKey="canAccessServices"><Suspense fallback={<div className="p-8 text-center"><span className="animate-spin">⏳</span></div>}><LandingPagesView /></Suspense></PermissionGate>} />
+                      <Route path="/app/contracts" element={<PermissionGate permissionKey="canAccessInvoices"><ContractsView /></PermissionGate>} />
                       <Route path="/app/settings" element={<PermissionGate permissionKey="canAccessProfile"><SettingsView /></PermissionGate>} />
                       <Route path="*" element={
                       <div className="text-center py-20">
