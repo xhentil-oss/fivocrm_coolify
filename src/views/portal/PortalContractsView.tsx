@@ -214,8 +214,12 @@ const PortalContractsView: React.FC = () => {
                     {/* Contract body */}
                     <div className="px-5 py-4">
                       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Teksti i Kontratës</p>
-                      <div className="bg-white border rounded-lg p-4 max-h-64 overflow-y-auto">
-                        <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed text-foreground">{c.body}</pre>
+                      <div className="bg-white border rounded-lg p-4 max-h-72 overflow-y-auto">
+                        {c.body.includes('<') ? (
+                          <div className="contract-body" dangerouslySetInnerHTML={{ __html: c.body }} />
+                        ) : (
+                          <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed text-foreground">{c.body}</pre>
+                        )}
                       </div>
                     </div>
 

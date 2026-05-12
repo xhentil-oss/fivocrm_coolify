@@ -1,21 +1,22 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useRef } from 'react';
 import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
 import {
   ScrollText, Plus, Send, Eye, Pencil, Trash2, Loader2, FileText,
-  User, Calendar, ChevronDown, ChevronUp, Download,
+  User, GripVertical, LayoutTemplate, Package,
 } from 'lucide-react';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
+import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Separator } from '../components/ui/separator';
-import type { Contract, Customer, Quote, Invoice } from '../types';
+import ContractEditor, { ContractEditorHandle } from '../components/ContractEditor';
+import { CONTRACT_TEMPLATES } from '../lib/contractTemplates';
+import type { Contract, Customer, Quote, Invoice, Service } from '../types';
 
 const STATUS_COLORS: Record<string, string> = {
   Draft: 'bg-gray-100 text-gray-700',
@@ -24,42 +25,20 @@ const STATUS_COLORS: Record<string, string> = {
   Rejected: 'bg-red-100 text-red-700',
   Expired: 'bg-orange-100 text-orange-700',
 };
-
 const STATUS_LABELS: Record<string, string> = {
-  Draft: 'Draft',
-  Sent: 'Dërguar',
-  Signed: 'Nënshkruar',
-  Rejected: 'Refuzuar',
-  Expired: 'Skaduar',
+  Draft: 'Draft', Sent: 'Dërguar', Signed: 'Nënshkruar', Rejected: 'Refuzuar', Expired: 'Skaduar',
 };
 
-function defaultBody(clientName: string): string {
-  return `Kjo kontratë shërbimi lidhet ndërmjet palëve:
+function isBodyEmpty(html: string) {
+  return !html || html === '<p></p>' || html.replace(/<[^>]*>/g, '').trim() === '';
+}
 
-OFRUESI I SHËRBIMIT: [Emri i Kompanisë]
-KLIENTI: ${clientName}
-
-SHËRBIMET E OFRUARA:
-Sipas paketës së zgjedhur dhe çmimeve të aprovuara.
-
-KUSHTET E PAGESËS:
-Pagesat kryhen sipas faturave të lëshuara, brenda 15 ditëve nga data e faturës.
-
-AFATI I KONTRATËS:
-Kjo kontratë hyn në fuqi nga data e nënshkrimit dhe qëndron e vlefshme deri sa njëra palë ta ndërpresë me njoftim 30-ditor me shkrim.
-
-DETYRIMET E PALËVE:
-• Ofruesi zotohet të ofrojë shërbimet sipas cilësisë dhe afateve të dakordësuara.
-• Klienti zotohet të kryejë pagesat sipas afateve dhe të ofrojë materialet e nevojshme në kohë.
-
-KONFIDENCIALITETI:
-Të dyja palët bien dakord të mbajnë konfidenciale të gjitha informacionet e ndarë gjatë bashkëpunimit.
-
-NDËRPRERJA:
-Secila palë ka të drejtë ta ndërpresë kontratën me njoftim 30-ditor me shkrim.
-
-PRANIMI I KUSHTEVE:
-Duke nënshkruar këtë kontratë, klienti konfirmon se ka lexuar, kuptuar dhe pranuar të gjitha kushtet e mësipërme.`;
+function buildServiceHTML(svc: Service): string {
+  const name = svc.name || svc.title || 'Shërbim';
+  const cur = svc.currency || 'EUR';
+  const price = svc.price > 0 ? ` — <strong>${svc.price.toLocaleString()} ${cur}/muaj</strong>` : '';
+  const desc = svc.description ? `<p><em>${svc.description}</em></p>` : '';
+  return `<p><strong>${name}</strong>${price}</p>${desc}`;
 }
 
 const ContractsView: React.FC = () => {
@@ -67,20 +46,25 @@ const ContractsView: React.FC = () => {
   const { toast } = useToast();
 
   const { data: contracts, loading } = useCollection<Contract>('contracts');
-  const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
-  const { data: quotes } = useCollection<Quote>('quotes', { skipTeamFilter: true });
-  const { data: invoices } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
+  const { data: customers } = useCollection<Customer>('customers');
+  const { data: quotes } = useCollection<Quote>('quotes');
+  const { data: invoices } = useCollection<Invoice>('invoices');
+  const { data: services } = useCollection<Service>('services');
   const contractMutation = useMutation<Contract>('contracts');
 
-  const [statusFilter, setStatusFilter] = useState<string>('__all__');
+  const editorRef = useRef<ContractEditorHandle>(null);
+  const draggedService = useRef<Service | null>(null);
+
+  const [statusFilter, setStatusFilter] = useState('__all__');
   const [searchQ, setSearchQ] = useState('');
   const [showCreate, setShowCreate] = useState(false);
   const [viewContract, setViewContract] = useState<Contract | null>(null);
   const [editContract, setEditContract] = useState<Contract | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
 
-  // Create form state
+  // Form state
   const [formCustomerId, setFormCustomerId] = useState('');
   const [formQuoteId, setFormQuoteId] = useState('__none__');
   const [formInvoiceId, setFormInvoiceId] = useState('__none__');
@@ -98,7 +82,7 @@ const ContractsView: React.FC = () => {
       list = list.filter(c =>
         c.title.toLowerCase().includes(q) ||
         c.clientName.toLowerCase().includes(q) ||
-        (c.clientEmail || '').toLowerCase().includes(q)
+        (c.clientEmail || '').toLowerCase().includes(q),
       );
     }
     return [...list].sort((a, b) => {
@@ -108,24 +92,39 @@ const ContractsView: React.FC = () => {
     });
   }, [contracts, statusFilter, searchQ]);
 
-  const customerQuotes = useMemo(() => {
-    if (!formCustomerId || !quotes) return [];
-    return quotes.filter(q => q.customerId === formCustomerId || q.leadId);
-  }, [formCustomerId, quotes]);
+  const customerInvoices = useMemo(
+    () => invoices?.filter(inv => inv.customerId === formCustomerId) ?? [],
+    [formCustomerId, invoices],
+  );
 
-  const customerInvoices = useMemo(() => {
-    if (!formCustomerId || !invoices) return [];
-    return invoices.filter(inv => inv.customerId === formCustomerId);
-  }, [formCustomerId, invoices]);
+  const stats = useMemo(() => ({
+    total: contracts?.length ?? 0,
+    pending: contracts?.filter(c => c.status === 'Draft').length ?? 0,
+    sent: contracts?.filter(c => c.status === 'Sent').length ?? 0,
+    signed: contracts?.filter(c => c.status === 'Signed').length ?? 0,
+  }), [contracts]);
+
+  const applyTemplate = (templateId: string) => {
+    const tpl = CONTRACT_TEMPLATES.find(t => t.id === templateId);
+    if (!tpl) return;
+    const custName = customers?.find(c => c.id === formCustomerId)?.name || 'Klienti';
+    const html = tpl.getHTML(custName);
+    setFormBody(html);
+    editorRef.current?.setContent(html);
+    if (!formTitle) setFormTitle(`${tpl.label} — ${custName}`);
+  };
 
   const onCustomerChange = (cid: string) => {
     setFormCustomerId(cid);
     setFormQuoteId('__none__');
     setFormInvoiceId('__none__');
     const cust = customers?.find(c => c.id === cid);
-    if (cust) {
+    if (cust && !formTitle) {
+      const tpl = CONTRACT_TEMPLATES[0];
+      const html = tpl.getHTML(cust.name);
       setFormTitle(`Kontratë Shërbimi — ${cust.name}`);
-      setFormBody(defaultBody(cust.name));
+      setFormBody(html);
+      editorRef.current?.setContent(html);
     }
   };
 
@@ -137,16 +136,16 @@ const ContractsView: React.FC = () => {
     const cur = q.currency === 'EUR' ? '€' : q.currency === 'USD' ? '$' : 'L';
     const pkgLines = (q.result?.categories || [])
       .filter(c => c.oneTime > 0 || c.monthly > 0)
-      .map(c => `  • ${c.category}: ${c.oneTime > 0 ? `${c.oneTime.toLocaleString()}${cur} (one-time)` : ''} ${c.monthly > 0 ? `${c.monthly.toLocaleString()}${cur}/muaj` : ''}`.trim())
-      .join('\n');
-
-    const custName = customers?.find(c => c.id === formCustomerId)?.name || formCustomerId;
+      .map(c => `<li><strong>${c.category}</strong>: ${c.oneTime > 0 ? `${c.oneTime.toLocaleString()}${cur} (one-time)` : ''}${c.oneTime > 0 && c.monthly > 0 ? ' + ' : ''}${c.monthly > 0 ? `${c.monthly.toLocaleString()}${cur}/muaj` : ''}</li>`)
+      .join('');
     const label = q.label || q.result?.suggestedLabel || 'Paketa';
+    const custName = customers?.find(c => c.id === formCustomerId)?.name || 'Klienti';
     setFormTitle(`Kontratë — ${label} — ${custName}`);
-    setFormBody(
-      defaultBody(custName) +
-      `\n\n---\nPAKETA E ZGJEDHUR: ${label}\n${pkgLines}\n\nTotali One-time: ${(q.result?.totalOneTime ?? 0).toLocaleString()} ${cur}\nTotali Mujor: ${(q.result?.totalMonthly ?? 0).toLocaleString()} ${cur}/muaj${q.result?.grandTotal ? `\nGrand Total: ${q.result.grandTotal.toLocaleString()} ${cur}` : ''}`
-    );
+    const pkgBlock = `<hr><h2>PAKETA E ZGJEDHUR: ${label}</h2><ul>${pkgLines}</ul><p><strong>Total One-time:</strong> ${(q.result?.totalOneTime ?? 0).toLocaleString()} ${cur}</p><p><strong>Total Mujor:</strong> ${(q.result?.totalMonthly ?? 0).toLocaleString()} ${cur}/muaj</p>${q.result?.grandTotal ? `<p><strong>Grand Total:</strong> ${q.result.grandTotal.toLocaleString()} ${cur}</p>` : ''}`;
+    const base = CONTRACT_TEMPLATES[0].getHTML(custName);
+    const html = base + pkgBlock;
+    setFormBody(html);
+    editorRef.current?.setContent(html);
   };
 
   const resetForm = () => {
@@ -166,19 +165,22 @@ const ContractsView: React.FC = () => {
     setFormInvoiceId(c.invoiceId || '__none__');
     setFormTitle(c.title);
     setFormBody(c.body);
-    setFormExpiry(c.expiresAt instanceof Date ? c.expiresAt.toISOString().split('T')[0] : (c.expiresAt as any)?.toDate?.()?.toISOString().split('T')[0] || '');
+    setFormExpiry(
+      c.expiresAt instanceof Date
+        ? c.expiresAt.toISOString().split('T')[0]
+        : (c.expiresAt as any)?.toDate?.()?.toISOString().split('T')[0] || '',
+    );
     setFormNotes(c.notes || '');
   };
 
   const handleSave = async () => {
-    if (!formCustomerId || !formTitle.trim() || !formBody.trim()) {
+    if (!formCustomerId || !formTitle.trim() || isBodyEmpty(formBody)) {
       toast({ title: 'Plotëso fushat e detyrueshme', variant: 'destructive' });
       return;
     }
     setSaving(true);
     const cust = customers?.find(c => c.id === formCustomerId);
     const q = formQuoteId !== '__none__' ? quotes?.find(x => x.id === formQuoteId) : null;
-    const inv = formInvoiceId !== '__none__' ? invoices?.find(x => x.id === formInvoiceId) : null;
     const teamId = getGlobalTeamId() || '';
 
     const packageSummary = q ? {
@@ -205,7 +207,7 @@ const ContractsView: React.FC = () => {
           quoteId: formQuoteId !== '__none__' ? formQuoteId : undefined,
           invoiceId: formInvoiceId !== '__none__' ? formInvoiceId : undefined,
           title: formTitle.trim(),
-          body: formBody.trim(),
+          body: formBody,
           notes: formNotes.trim() || undefined,
           expiresAt: formExpiry ? new Date(formExpiry) : undefined,
           packageSummary,
@@ -219,11 +221,11 @@ const ContractsView: React.FC = () => {
           customerId: formCustomerId,
           clientName: cust?.name || formCustomerId,
           clientEmail: cust?.email || undefined,
-          leadId: cust?.leadId || undefined,
+          leadId: (cust as any)?.leadId || undefined,
           quoteId: formQuoteId !== '__none__' ? formQuoteId : undefined,
           invoiceId: formInvoiceId !== '__none__' ? formInvoiceId : undefined,
           title: formTitle.trim(),
-          body: formBody.trim(),
+          body: formBody,
           notes: formNotes.trim() || undefined,
           expiresAt: formExpiry ? new Date(formExpiry) : undefined,
           packageSummary,
@@ -276,13 +278,6 @@ const ContractsView: React.FC = () => {
   };
 
   const isFormOpen = showCreate || !!editContract;
-
-  const stats = useMemo(() => ({
-    total: contracts?.length ?? 0,
-    sent: contracts?.filter(c => c.status === 'Sent').length ?? 0,
-    signed: contracts?.filter(c => c.status === 'Signed').length ?? 0,
-    pending: contracts?.filter(c => c.status === 'Draft').length ?? 0,
-  }), [contracts]);
 
   return (
     <div className="space-y-6">
@@ -341,7 +336,7 @@ const ContractsView: React.FC = () => {
         </Select>
       </div>
 
-      {/* Contract List */}
+      {/* Contract list */}
       <Card>
         <CardContent className="p-0">
           {loading ? (
@@ -352,7 +347,7 @@ const ContractsView: React.FC = () => {
             <div className="text-center py-16 space-y-3">
               <FileText className="w-12 h-12 mx-auto text-muted-foreground/30" />
               <p className="text-sm text-muted-foreground">
-                {contracts?.length === 0 ? 'Nuk ka kontratat ende. Krijoni të parën!' : 'Nuk u gjet asnjë kontratë.'}
+                {!contracts?.length ? 'Nuk ka kontratat ende. Krijoni të parën!' : 'Nuk u gjet asnjë kontratë.'}
               </p>
             </div>
           ) : (
@@ -363,7 +358,7 @@ const ContractsView: React.FC = () => {
                     <th className="px-4 py-3 text-left font-medium">Titulli</th>
                     <th className="px-4 py-3 text-left font-medium">Klienti</th>
                     <th className="px-4 py-3 text-left font-medium">Statusi</th>
-                    <th className="px-4 py-3 text-left font-medium">Data</th>
+                    <th className="px-4 py-3 text-left font-medium">Krijuar</th>
                     <th className="px-4 py-3 text-left font-medium">Dërguar</th>
                     <th className="px-4 py-3 text-left font-medium">Nënshkruar</th>
                     <th className="px-4 py-3 text-center font-medium">Veprime</th>
@@ -394,7 +389,7 @@ const ContractsView: React.FC = () => {
                       </td>
                       <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{formatDate(c.createdAt)}</td>
                       <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">{c.sentAt ? formatDate(c.sentAt) : '—'}</td>
-                      <td className="px-4 py-3 text-muted-foreground whitespace-nowrap">
+                      <td className="px-4 py-3 whitespace-nowrap">
                         {c.signedAt ? (
                           <span className="text-green-600 font-medium">{formatDate(c.signedAt)}</span>
                         ) : '—'}
@@ -410,8 +405,7 @@ const ContractsView: React.FC = () => {
                                 <Pencil className="w-3.5 h-3.5" />
                               </Button>
                               <Button
-                                size="sm"
-                                variant="ghost"
+                                size="sm" variant="ghost"
                                 className="h-7 w-7 p-0 text-blue-600 hover:text-blue-700"
                                 onClick={() => handleSend(c)}
                                 disabled={sendingId === c.id}
@@ -420,8 +414,7 @@ const ContractsView: React.FC = () => {
                                 {sendingId === c.id ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                               </Button>
                               <Button
-                                size="sm"
-                                variant="ghost"
+                                size="sm" variant="ghost"
                                 className="h-7 w-7 p-0 text-red-500 hover:text-red-600"
                                 onClick={() => handleDelete(c)}
                                 disabled={deletingId === c.id}
@@ -442,101 +435,206 @@ const ContractsView: React.FC = () => {
         </CardContent>
       </Card>
 
-      {/* Create / Edit Dialog */}
-      <Dialog open={isFormOpen} onOpenChange={(open) => { if (!open) { setShowCreate(false); setEditContract(null); resetForm(); } }}>
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{editContract ? 'Edito Kontratën' : 'Kontratë e Re'}</DialogTitle>
+      {/* ─── CREATE / EDIT DIALOG ─────────────────────────────────── */}
+      <Dialog
+        open={isFormOpen}
+        onOpenChange={(open) => { if (!open) { setShowCreate(false); setEditContract(null); resetForm(); } }}
+      >
+        <DialogContent className="max-w-[1180px] w-[96vw] h-[90vh] flex flex-col p-0 gap-0">
+          {/* Header */}
+          <DialogHeader className="px-6 pt-5 pb-4 border-b shrink-0">
+            <DialogTitle className="flex items-center gap-2">
+              <ScrollText className="w-4 h-4" />
+              {editContract ? 'Edito Kontratën' : 'Kontratë e Re'}
+            </DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 pt-2">
-            {/* Customer */}
-            <div className="space-y-1.5">
-              <Label>Klienti <span className="text-red-500">*</span></Label>
-              <Select value={formCustomerId} onValueChange={onCustomerChange} disabled={!!editContract}>
-                <SelectTrigger>
-                  <SelectValue placeholder="Zgjidh klientin..." />
-                </SelectTrigger>
-                <SelectContent>
-                  {customers?.map(c => (
-                    <SelectItem key={c.id} value={c.id}>{c.name}{c.email ? ` — ${c.email}` : ''}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
 
-            {/* Quote link */}
-            {formCustomerId && (
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label>Lidhja me Preventivë (opsionale)</Label>
-                  <Select value={formQuoteId} onValueChange={onQuoteChange}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Asnjë" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">Asnjë</SelectItem>
-                      {quotes?.filter(q => q.customerId === formCustomerId || q.leadId).map(q => (
-                        <SelectItem key={q.id} value={q.id}>
-                          {q.label || q.result?.suggestedLabel || q.id} ({q.status})
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Lidhja me Faturë (opsionale)</Label>
-                  <Select value={formInvoiceId} onValueChange={setFormInvoiceId}>
-                    <SelectTrigger>
-                      <SelectValue placeholder="Asnjë" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="__none__">Asnjë</SelectItem>
-                      {customerInvoices.map(inv => (
-                        <SelectItem key={inv.id} value={inv.id}>
-                          {inv.invoiceNumber || inv.id} — {inv.amount?.toLocaleString()} {inv.currency}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+          {/* Top controls */}
+          <div className="px-6 py-3 border-b shrink-0 space-y-3 bg-muted/20">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {/* Customer */}
+              <div className="space-y-1">
+                <Label className="text-xs">Klienti <span className="text-red-500">*</span></Label>
+                <Select value={formCustomerId} onValueChange={onCustomerChange} disabled={!!editContract}>
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue placeholder="Zgjidh klientin..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {customers?.map(c => (
+                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
-            )}
+
+              {/* Template picker */}
+              <div className="space-y-1">
+                <Label className="text-xs flex items-center gap-1">
+                  <LayoutTemplate className="w-3 h-3" /> Template
+                </Label>
+                <Select onValueChange={applyTemplate}>
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue placeholder="Zgjidh template..." />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {CONTRACT_TEMPLATES.map(t => (
+                      <SelectItem key={t.id} value={t.id}>
+                        <div>
+                          <div className="font-medium">{t.label}</div>
+                          <div className="text-xs text-muted-foreground">{t.description}</div>
+                        </div>
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Quote */}
+              <div className="space-y-1">
+                <Label className="text-xs">Preventivë (opsionale)</Label>
+                <Select value={formQuoteId} onValueChange={onQuoteChange} disabled={!formCustomerId}>
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue placeholder="Asnjë" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Asnjë</SelectItem>
+                    {quotes?.filter(q => q.customerId === formCustomerId).map(q => (
+                      <SelectItem key={q.id} value={q.id}>
+                        {q.label || q.result?.suggestedLabel || q.id} ({q.status})
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+
+              {/* Invoice */}
+              <div className="space-y-1">
+                <Label className="text-xs">Faturë (opsionale)</Label>
+                <Select value={formInvoiceId} onValueChange={setFormInvoiceId} disabled={!formCustomerId}>
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue placeholder="Asnjë" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Asnjë</SelectItem>
+                    {customerInvoices.map(inv => (
+                      <SelectItem key={inv.id} value={inv.id}>
+                        {inv.invoiceNumber || inv.id}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
 
             {/* Title */}
-            <div className="space-y-1.5">
-              <Label>Titulli i Kontratës <span className="text-red-500">*</span></Label>
-              <Input value={formTitle} onChange={e => setFormTitle(e.target.value)} placeholder="Kontratë Shërbimi — Emri i Klientit" />
-            </div>
-
-            {/* Body */}
-            <div className="space-y-1.5">
-              <Label>Teksti i Kontratës <span className="text-red-500">*</span></Label>
-              <Textarea
-                value={formBody}
-                onChange={e => setFormBody(e.target.value)}
-                rows={14}
-                className="font-mono text-xs"
-                placeholder="Shkruani tekstin e kontratës..."
+            <div className="space-y-1">
+              <Label className="text-xs">Titulli <span className="text-red-500">*</span></Label>
+              <Input
+                value={formTitle}
+                onChange={e => setFormTitle(e.target.value)}
+                placeholder="Kontratë Shërbimi — Emri i Klientit"
+                className="h-8 text-sm"
               />
             </div>
+          </div>
 
-            <div className="grid grid-cols-2 gap-3">
-              {/* Expiry */}
-              <div className="space-y-1.5">
-                <Label>Data e Skadimit (opsionale)</Label>
-                <Input type="date" value={formExpiry} onChange={e => setFormExpiry(e.target.value)} />
+          {/* Main: services panel + editor */}
+          <div className="flex flex-1 overflow-hidden">
+            {/* Services drag panel */}
+            <div className="w-56 border-r flex flex-col shrink-0 bg-muted/10">
+              <div className="px-3 pt-3 pb-2 border-b shrink-0">
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                  <Package className="w-3.5 h-3.5" /> Shërbime
+                </p>
+                <p className="text-[10px] text-muted-foreground mt-0.5">Tërhiq ose kliko për të shtuar</p>
               </div>
-              {/* Notes */}
-              <div className="space-y-1.5">
-                <Label>Shënime (opsionale)</Label>
-                <Input value={formNotes} onChange={e => setFormNotes(e.target.value)} placeholder="Shënime interne..." />
+              <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                {!services?.length ? (
+                  <p className="text-xs text-muted-foreground px-1 py-2">Nuk ka shërbime.</p>
+                ) : (
+                  services.map(svc => (
+                    <div
+                      key={svc.id}
+                      draggable
+                      onDragStart={() => { draggedService.current = svc; }}
+                      onDragEnd={() => { draggedService.current = null; }}
+                      className="flex items-start gap-1.5 px-2 py-1.5 rounded-md border bg-white hover:bg-primary/5 hover:border-primary/30 cursor-grab active:cursor-grabbing transition-colors group select-none"
+                    >
+                      <GripVertical className="w-3.5 h-3.5 text-muted-foreground/40 group-hover:text-muted-foreground shrink-0 mt-0.5" />
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-medium truncate">{svc.name || svc.title}</p>
+                        {svc.price > 0 && (
+                          <p className="text-[10px] text-muted-foreground">
+                            {svc.price.toLocaleString()} {svc.currency || 'EUR'}/muaj
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        type="button"
+                        className="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity font-medium shrink-0"
+                        onClick={() => editorRef.current?.insertContent(buildServiceHTML(svc))}
+                        title="Shto në kontratë"
+                      >
+                        +
+                      </button>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
 
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => { setShowCreate(false); setEditContract(null); resetForm(); }}>Anulo</Button>
-              <Button onClick={handleSave} disabled={saving}>
-                {saving ? <Loader2 className="w-4 h-4 animate-spin mr-1.5" /> : null}
+            {/* Editor drop zone */}
+            <div
+              className={`flex-1 overflow-hidden p-3 transition-colors ${isDragOver ? 'bg-primary/5 ring-2 ring-primary/30 ring-inset' : ''}`}
+              onDragOver={(e) => { e.preventDefault(); setIsDragOver(true); }}
+              onDragLeave={() => setIsDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault();
+                setIsDragOver(false);
+                if (draggedService.current) {
+                  editorRef.current?.insertContent(buildServiceHTML(draggedService.current));
+                  draggedService.current = null;
+                }
+              }}
+            >
+              <ContractEditor
+                ref={editorRef}
+                content={formBody}
+                onChange={setFormBody}
+                minHeight="100%"
+              />
+            </div>
+          </div>
+
+          {/* Footer */}
+          <div className="px-6 py-3 border-t shrink-0 flex items-center justify-between gap-4 bg-muted/10">
+            <div className="flex items-center gap-3 flex-wrap">
+              <div className="flex items-center gap-1.5">
+                <Label className="text-xs text-muted-foreground whitespace-nowrap">Skadon:</Label>
+                <Input
+                  type="date"
+                  value={formExpiry}
+                  onChange={e => setFormExpiry(e.target.value)}
+                  className="h-7 text-xs w-36"
+                />
+              </div>
+              <Input
+                value={formNotes}
+                onChange={e => setFormNotes(e.target.value)}
+                placeholder="Shënime interne..."
+                className="h-7 text-xs w-48"
+              />
+            </div>
+            <div className="flex gap-2 shrink-0">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => { setShowCreate(false); setEditContract(null); resetForm(); }}
+              >
+                Anulo
+              </Button>
+              <Button size="sm" onClick={handleSave} disabled={saving}>
+                {saving && <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />}
                 {editContract ? 'Ruaj Ndryshimet' : 'Krijo Kontratën'}
               </Button>
             </div>
@@ -544,7 +642,7 @@ const ContractsView: React.FC = () => {
         </DialogContent>
       </Dialog>
 
-      {/* View / Preview Dialog */}
+      {/* ─── VIEW / PREVIEW DIALOG ───────────────────────────────── */}
       <Dialog open={!!viewContract} onOpenChange={(open) => { if (!open) setViewContract(null); }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           {viewContract && (
@@ -556,33 +654,16 @@ const ContractsView: React.FC = () => {
                 </DialogTitle>
               </DialogHeader>
               <div className="space-y-4 pt-2">
-                {/* Meta */}
                 <div className="flex flex-wrap gap-3 text-sm">
-                  <div>
-                    <span className="text-muted-foreground">Klienti: </span>
-                    <span className="font-medium">{viewContract.clientName}</span>
-                  </div>
+                  <div><span className="text-muted-foreground">Klienti: </span><span className="font-medium">{viewContract.clientName}</span></div>
                   <div>
                     <span className="text-muted-foreground">Statusi: </span>
-                    <Badge variant="secondary" className={STATUS_COLORS[viewContract.status] || ''}>
-                      {STATUS_LABELS[viewContract.status]}
-                    </Badge>
+                    <Badge variant="secondary" className={STATUS_COLORS[viewContract.status] || ''}>{STATUS_LABELS[viewContract.status]}</Badge>
                   </div>
-                  {viewContract.sentAt && (
-                    <div>
-                      <span className="text-muted-foreground">Dërguar: </span>
-                      <span>{formatDate(viewContract.sentAt)}</span>
-                    </div>
-                  )}
-                  {viewContract.signedAt && (
-                    <div>
-                      <span className="text-muted-foreground">Nënshkruar: </span>
-                      <span className="text-green-600 font-medium">{formatDate(viewContract.signedAt)}</span>
-                    </div>
-                  )}
+                  {viewContract.sentAt && <div><span className="text-muted-foreground">Dërguar: </span><span>{formatDate(viewContract.sentAt)}</span></div>}
+                  {viewContract.signedAt && <div><span className="text-muted-foreground">Nënshkruar: </span><span className="text-green-600 font-medium">{formatDate(viewContract.signedAt)}</span></div>}
                 </div>
 
-                {/* Package summary */}
                 {viewContract.packageSummary && (
                   <>
                     <Separator />
@@ -611,12 +692,18 @@ const ContractsView: React.FC = () => {
 
                 <Separator />
 
-                {/* Contract body */}
-                <div className="bg-muted/30 rounded-lg p-4">
-                  <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed">{viewContract.body}</pre>
+                {/* HTML body */}
+                <div className="bg-white border rounded-lg p-5">
+                  {viewContract.body.includes('<') ? (
+                    <div
+                      className="contract-body"
+                      dangerouslySetInnerHTML={{ __html: viewContract.body }}
+                    />
+                  ) : (
+                    <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed">{viewContract.body}</pre>
+                  )}
                 </div>
 
-                {/* Signature display */}
                 {viewContract.status === 'Signed' && viewContract.signatureData && (
                   <>
                     <Separator />

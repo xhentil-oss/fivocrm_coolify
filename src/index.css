@@ -88,6 +88,21 @@
   }
 }
 
+/* Contract rich-text body — used by ContractEditor (TipTap) and portal HTML rendering */
+.contract-body { font-size: 0.875rem; line-height: 1.7; color: #1a1a2e; }
+.contract-body h1 { font-size: 1.35rem; font-weight: 700; margin: 0 0 0.75rem; letter-spacing: -0.01em; }
+.contract-body h2 { font-size: 1.05rem; font-weight: 600; margin: 1.25rem 0 0.5rem; border-bottom: 1px solid #e5e7eb; padding-bottom: 0.2rem; }
+.contract-body p { margin: 0 0 0.6rem; }
+.contract-body ul, .contract-body ol { padding-left: 1.5rem; margin: 0 0 0.6rem; }
+.contract-body ul { list-style: disc; }
+.contract-body ol { list-style: decimal; }
+.contract-body li { margin-bottom: 0.2rem; }
+.contract-body hr { border: none; border-top: 2px solid #e5e7eb; margin: 1.25rem 0; }
+.contract-body strong { font-weight: 600; }
+.contract-body em { font-style: italic; }
+.contract-body mark { background: rgba(254, 240, 138, 0.7); border-radius: 2px; padding: 0 2px; }
+.contract-body .is-editor-empty:first-child::before { color: #9ca3af; content: attr(data-placeholder); float: left; height: 0; pointer-events: none; }
+
 @layer utilities {
   .text-gradient-primary {
     background: linear-gradient(135deg, hsl(258, 80%, 55%) 0%, hsl(218, 70%, 54%) 100%);
