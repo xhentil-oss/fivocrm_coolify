@@ -382,7 +382,7 @@ export function usePermissions(): UserPermissions {
     // SalesAgent: access to CRM, Customers, Invoices, Services — only own data
     if (membership.role === 'SalesAgent') {
       return {
-        canAccessProjects: false,
+        canAccessProjects: true,
         canAccessTasks: true,
         canAccessCRM: true,
         canAccessInvoices: true,
