@@ -274,6 +274,22 @@ const ChatView: React.FC = () => {
     orderBy: { field: 'createdAt', direction: 'desc' as const },
     limit: 100,
   }), [user?.uid]);
+
+  // Always-on background query: sent DMs (for last-message preview in sidebar)
+  const bgSentDMsQuery = useMemo(() => ({
+    skip: !user?.uid,
+    where: user?.uid ? [{ field: 'senderId', operator: '==', value: user.uid }] : undefined,
+    orderBy: { field: 'createdAt', direction: 'desc' as const },
+    limit: 100,
+  }), [user?.uid]);
+  const { data: bgSentDMs } = useCollection<ChatMessage>('messages', bgSentDMsQuery);
+
+  // Always-on background query: ALL unread team-channel messages (drives sidebar channel badges)
+  const allUnreadChannelQuery = useMemo(() => ({
+    skip: !user?.uid,
+    where: [{ field: 'isRead', operator: '==', value: false }],
+  }), [user?.uid]);
+  const { data: allUnreadTeamMsgs } = useCollection<ChatMessage>('messages', allUnreadChannelQuery);
   const { data: bgReceivedDMs } = useCollection<ChatMessage>('messages', bgDmQuery);
 
   const { data: sentDirectMessages, loading: sentPending } = useCollection<ChatMessage>('messages', directMsgQuery);
@@ -315,17 +331,25 @@ const ChatView: React.FC = () => {
   const directConversations = useMemo(() => {
     if (!user) return [];
     const userIds = new Set<string>();
-    // From active query (when in direct mode)
     allDirectMessages.forEach(m => {
       if (m.senderId !== user.uid) userIds.add(m.senderId);
       if (m.receiverId && m.receiverId !== user.uid) userIds.add(m.receiverId);
     });
-    // From background received DMs (always active) — shows recent conversations in any mode
     bgReceivedDMs?.forEach(m => {
       if (!(m as any).channelId) userIds.add(m.senderId);
     });
-    return Array.from(userIds);
-  }, [allDirectMessages, bgReceivedDMs, user]);
+    bgSentDMs?.forEach(m => {
+      if (!(m as any).channelId && m.receiverId && m.receiverId !== user.uid) userIds.add(m.receiverId);
+    });
+    // Sort by last message time (most recent first), then unread on top
+    return Array.from(userIds).sort((a, b) => {
+      const aLast = bgReceivedDMs?.find(m => !(m as any).channelId && m.senderId === a)?.createdAt
+        ?? bgSentDMs?.find(m => !(m as any).channelId && m.receiverId === a)?.createdAt;
+      const bLast = bgReceivedDMs?.find(m => !(m as any).channelId && m.senderId === b)?.createdAt
+        ?? bgSentDMs?.find(m => !(m as any).channelId && m.receiverId === b)?.createdAt;
+      return getTimestampMs(bLast) - getTimestampMs(aLast);
+    });
+  }, [allDirectMessages, bgReceivedDMs, bgSentDMs, user]);
 
   const directUnreadMap = useMemo(() => {
     const map = new Map<string, number>();
@@ -342,14 +366,17 @@ const ChatView: React.FC = () => {
 
   const channelUnreadMap = useMemo(() => {
     const map = new Map<string, number>();
-    if (!user || !channelMessages) return map;
-    channelMessages.forEach(m => {
-      if (m.channelId && !m.isRead && m.senderId !== user.uid && !(m as any).deletedAt) {
+    if (!user) return map;
+    const standardIds = new Set(CHANNELS.map(c => c.id));
+    // Use background all-unread query so non-active channels show correct badges
+    const source = allUnreadTeamMsgs ?? [];
+    source.forEach(m => {
+      if (m.channelId && standardIds.has(m.channelId) && m.senderId !== user.uid && !(m as any).deletedAt) {
         map.set(m.channelId, (map.get(m.channelId) || 0) + 1);
       }
     });
     return map;
-  }, [channelMessages, user]);
+  }, [allUnreadTeamMsgs, user]);
 
   const otherMembers = useMemo(() => {
     if (!teamMembers) return [];
@@ -511,6 +538,36 @@ const ChatView: React.FC = () => {
     for (let i = 0; i < id.length; i++) hash = id.charCodeAt(i) + ((hash << 5) - hash);
     return colors[Math.abs(hash) % colors.length];
   }, []);
+
+  const formatShortTime = useCallback((date: any) => {
+    if (!date) return '';
+    const d = date instanceof Date ? date : date.toDate ? date.toDate() : new Date(date);
+    if (isNaN(d.getTime())) return '';
+    const now = new Date();
+    const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+    if (diffDays === 0) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    if (diffDays === 1) return 'Dje';
+    if (diffDays < 7) return d.toLocaleDateString('sq-AL', { weekday: 'short' });
+    return d.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' });
+  }, []);
+
+  const dmLastMessageMap = useMemo(() => {
+    const map = new Map<string, { content: string; isOwn: boolean; createdAt: any }>();
+    const process = (m: ChatMessage, peerId: string) => {
+      if ((m as any).channelId || (m as any).deletedAt) return;
+      const existing = map.get(peerId);
+      if (!existing || getTimestampMs(m.createdAt) > getTimestampMs(existing.createdAt)) {
+        map.set(peerId, {
+          content: m.attachmentUrl ? '📎 Skedar' : (m.content || ''),
+          isOwn: m.senderId === user?.uid,
+          createdAt: m.createdAt,
+        });
+      }
+    };
+    bgReceivedDMs?.forEach(m => process(m, m.senderId));
+    bgSentDMs?.forEach(m => { if (m.receiverId) process(m, m.receiverId); });
+    return map;
+  }, [bgReceivedDMs, bgSentDMs, user?.uid]);
 
   const highlightText = useCallback((text: string, query: string) => {
     if (!query.trim()) return <>{text}</>;
@@ -1252,24 +1309,34 @@ const ChatView: React.FC = () => {
             const unread = directUnreadMap.get(userId) || 0;
             const isActive = chatMode === 'direct' && activeDirectUserId === userId;
             const name = getUserDisplayName(userId);
+            const lastMsg = dmLastMessageMap.get(userId);
             return (
               <button
                 key={userId}
                 onClick={() => handleSelectDirectMessage(userId)}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-left ${
+                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-left ${
                   isActive ? 'bg-primary/8 text-primary font-medium shadow-sm border border-primary/10' : 'hover:bg-accent/50 text-foreground/70'
                 }`}
               >
                 <div className="relative flex-shrink-0">
-                  <div className={`h-8 w-8 rounded-lg ${getAvatarColor(userId)} flex items-center justify-center`}>
-                    <span className="text-[10px] font-bold text-white">{name.slice(0, 2).toUpperCase()}</span>
+                  <div className={`h-9 w-9 rounded-xl ${getAvatarColor(userId)} flex items-center justify-center`}>
+                    <span className="text-[11px] font-bold text-white">{name.slice(0, 2).toUpperCase()}</span>
                   </div>
-                  <div className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 border-2 border-background" />
+                  {unread > 0 && !isActive && (
+                    <span className="absolute -top-1 -right-1 h-4 min-w-4 px-1 flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[9px] font-bold">{unread > 9 ? '9+' : unread}</span>
+                  )}
                 </div>
-                <span className="flex-1 truncate text-sm">{name}</span>
-                {unread > 0 && !isActive && (
-                  <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold">{unread}</span>
-                )}
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className={`truncate text-sm ${unread > 0 && !isActive ? 'font-semibold text-foreground' : ''}`}>{name}</span>
+                    {lastMsg && <span className="text-[10px] text-muted-foreground/50 flex-shrink-0">{formatShortTime(lastMsg.createdAt)}</span>}
+                  </div>
+                  {lastMsg && (
+                    <p className={`text-[11px] truncate mt-0.5 ${unread > 0 && !isActive ? 'text-foreground/80 font-medium' : 'text-muted-foreground/60'}`}>
+                      {lastMsg.isOwn && <span className="text-muted-foreground/50">Ti: </span>}{lastMsg.content}
+                    </p>
+                  )}
+                </div>
               </button>
             );
           })}
