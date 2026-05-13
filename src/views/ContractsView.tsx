@@ -84,14 +84,15 @@ const ContractsView: React.FC = () => {
   const [formAssignedToUserId, setFormAssignedToUserId] = useState('');
   const [saving, setSaving] = useState(false);
 
-  // Role-scoped base list: SalesAgent/Member only see their own contracts
+  // Role-scoped base list: SalesAgent/Member only see their own contracts.
+  // Guard: while permissions are loading dataScope defaults to 'assigned' — don't filter yet.
   const roleFilteredContracts = useMemo(() => {
     const list = contracts || [];
-    if (permissions.dataScope === 'assigned' && user?.uid) {
+    if (!permissions.isLoading && permissions.dataScope === 'assigned' && user?.uid) {
       return list.filter(c => c.assignedToUserId === user.uid || c.createdByUserId === user.uid);
     }
     return list;
-  }, [contracts, permissions.dataScope, user?.uid]);
+  }, [contracts, permissions.dataScope, permissions.isLoading, user?.uid]);
 
   const filteredContracts = useMemo(() => {
     let list = roleFilteredContracts;
