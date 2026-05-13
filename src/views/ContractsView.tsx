@@ -2,11 +2,11 @@ import React, { useState, useMemo, useRef } from 'react';
 import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
-import { usePermissions } from '../hooks/usePermissions';
+import { usePermissions } from '../contexts/PermissionsContext';
 import { useToast } from '../hooks/use-toast';
 import {
   ScrollText, Plus, Send, Eye, Pencil, Trash2, Loader2, FileText,
-  User, GripVertical, LayoutTemplate, Package, UserCheck,
+  User, GripVertical, LayoutTemplate, Package, UserCheck, ChevronsUpDown, Check,
 } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -15,6 +15,8 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
+import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '../components/ui/command';
 import { Separator } from '../components/ui/separator';
 import ContractEditor, { ContractEditorHandle } from '../components/ContractEditor';
 import { CONTRACT_TEMPLATES, ContractParties } from '../lib/contractTemplates';
@@ -53,7 +55,7 @@ const ContractsView: React.FC = () => {
   const { data: customers } = useCollection<Customer>('customers');
   const { data: quotes } = useCollection<Quote>('quotes');
   const { data: invoices } = useCollection<Invoice>('invoices');
-  const { data: services } = useCollection<Service>('services');
+  const { data: services, loading: servicesLoading } = useCollection<Service>('services');
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers');
   const contractMutation = useMutation<Contract>('contracts');
 
@@ -68,6 +70,8 @@ const ContractsView: React.FC = () => {
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [deletingId, setDeletingId] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [customerOpen, setCustomerOpen] = useState(false);
+  const [customerSearch, setCustomerSearch] = useState('');
 
   // Form state
   const [formCustomerId, setFormCustomerId] = useState('');
@@ -194,6 +198,7 @@ const ContractsView: React.FC = () => {
     setFormExpiry('');
     setFormNotes('');
     setFormAssignedToUserId('');
+    setCustomerSearch('');
   };
 
   const openEdit = (c: Contract) => {
@@ -506,19 +511,66 @@ const ContractsView: React.FC = () => {
           {/* Top controls */}
           <div className="px-6 py-3 border-b shrink-0 space-y-3 bg-muted/20">
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {/* Customer */}
+              {/* Customer — searchable combobox */}
               <div className="space-y-1">
                 <Label className="text-xs">Klienti <span className="text-red-500">*</span></Label>
-                <Select value={formCustomerId} onValueChange={onCustomerChange} disabled={!!editContract}>
-                  <SelectTrigger className="h-8 text-sm">
-                    <SelectValue placeholder="Zgjidh klientin..." />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {customers?.map(c => (
-                      <SelectItem key={c.id} value={c.id}>{c.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {editContract ? (
+                  <div className="h-8 px-3 flex items-center border rounded-md bg-muted/40 text-sm text-muted-foreground">
+                    {customers?.find(c => c.id === formCustomerId)?.name || formCustomerId || '—'}
+                  </div>
+                ) : (
+                  <Popover open={customerOpen} onOpenChange={setCustomerOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        role="combobox"
+                        className="h-8 w-full justify-between text-sm font-normal px-3"
+                      >
+                        <span className="truncate">
+                          {formCustomerId
+                            ? (customers?.find(c => c.id === formCustomerId)?.name || '...')
+                            : 'Zgjidh klientin...'}
+                        </span>
+                        <ChevronsUpDown className="w-3 h-3 ml-1 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent className="p-0 w-[220px]" align="start">
+                      <Command>
+                        <CommandInput
+                          placeholder="Kërko klient..."
+                          value={customerSearch}
+                          onValueChange={setCustomerSearch}
+                        />
+                        <CommandList className="max-h-52">
+                          <CommandEmpty>Nuk u gjet asnjë klient.</CommandEmpty>
+                          {customers
+                            ?.filter(c =>
+                              !customerSearch ||
+                              c.name.toLowerCase().includes(customerSearch.toLowerCase()) ||
+                              (c.company || '').toLowerCase().includes(customerSearch.toLowerCase()),
+                            )
+                            .map(c => (
+                              <CommandItem
+                                key={c.id}
+                                value={c.id}
+                                onSelect={() => {
+                                  onCustomerChange(c.id);
+                                  setCustomerOpen(false);
+                                  setCustomerSearch('');
+                                }}
+                              >
+                                <Check className={`w-3.5 h-3.5 mr-2 shrink-0 ${formCustomerId === c.id ? 'opacity-100' : 'opacity-0'}`} />
+                                <div className="min-w-0">
+                                  <div className="truncate">{c.name}</div>
+                                  {c.company && <div className="text-[10px] text-muted-foreground truncate">{c.company}</div>}
+                                </div>
+                              </CommandItem>
+                            ))}
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                )}
               </div>
 
               {/* Template picker */}
@@ -623,7 +675,11 @@ const ContractsView: React.FC = () => {
                 <p className="text-[10px] text-muted-foreground mt-0.5">Tërhiq ose kliko për të shtuar</p>
               </div>
               <div className="flex-1 overflow-y-auto p-2 space-y-1">
-                {!services?.length ? (
+                {servicesLoading ? (
+                  <div className="flex justify-center py-4">
+                    <Loader2 className="w-4 h-4 animate-spin text-muted-foreground" />
+                  </div>
+                ) : !services?.length ? (
                   <p className="text-xs text-muted-foreground px-1 py-2">Nuk ka shërbime.</p>
                 ) : (
                   services.map(svc => (
