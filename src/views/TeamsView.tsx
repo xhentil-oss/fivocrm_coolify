@@ -106,6 +106,13 @@ const TeamsView: React.FC = () => {
         canAccessInvoices: true,
         canAccessReports: true,
         canAccessSettings: true,
+        canAccessGoals: true,
+        canAccessTeams: true,
+        canAccessChat: true,
+        canAccessCustomers: true,
+        canAccessServices: true,
+        canAccessExpenses: true,
+        canAccessProfile: true,
         invitedByUserId: user.uid,
         invitedAt: new Date(),
         status: 'Active',
@@ -126,6 +133,13 @@ const TeamsView: React.FC = () => {
     const canAccessInvoices = formData.get('canAccessInvoices') === 'on';
     const canAccessReports = formData.get('canAccessReports') === 'on';
     const canAccessSettings = formData.get('canAccessSettings') === 'on';
+    const canAccessGoals = formData.get('canAccessGoals') === 'on';
+    const canAccessTeams = formData.get('canAccessTeams') === 'on';
+    const canAccessChat = formData.get('canAccessChat') === 'on';
+    const canAccessCustomers = formData.get('canAccessCustomers') === 'on';
+    const canAccessServices = formData.get('canAccessServices') === 'on';
+    const canAccessExpenses = formData.get('canAccessExpenses') === 'on';
+    const canAccessProfile = formData.get('canAccessProfile') === 'on';
 
     // Prevent duplicate pending invite for same email + team (case-insensitive)
     const normalizedEmail = email.toLowerCase().trim();
@@ -163,6 +177,13 @@ const TeamsView: React.FC = () => {
       canAccessInvoices,
       canAccessReports,
       canAccessSettings,
+      canAccessGoals,
+      canAccessTeams,
+      canAccessChat,
+      canAccessCustomers,
+      canAccessServices,
+      canAccessExpenses,
+      canAccessProfile,
       status: 'Pending',
     });
 
@@ -216,6 +237,13 @@ const TeamsView: React.FC = () => {
     const canAccessInvoices = formData.get('canAccessInvoices') === 'on';
     const canAccessReports = formData.get('canAccessReports') === 'on';
     const canAccessSettings = formData.get('canAccessSettings') === 'on';
+    const canAccessGoals = formData.get('canAccessGoals') === 'on';
+    const canAccessTeams = formData.get('canAccessTeams') === 'on';
+    const canAccessChat = formData.get('canAccessChat') === 'on';
+    const canAccessCustomers = formData.get('canAccessCustomers') === 'on';
+    const canAccessServices = formData.get('canAccessServices') === 'on';
+    const canAccessExpenses = formData.get('canAccessExpenses') === 'on';
+    const canAccessProfile = formData.get('canAccessProfile') === 'on';
 
     await memberMutation.create({
       userId,
@@ -228,6 +256,13 @@ const TeamsView: React.FC = () => {
       canAccessInvoices,
       canAccessReports,
       canAccessSettings,
+      canAccessGoals,
+      canAccessTeams,
+      canAccessChat,
+      canAccessCustomers,
+      canAccessServices,
+      canAccessExpenses,
+      canAccessProfile,
       invitedByUserId: user.uid,
       invitedAt: new Date(),
       status: 'Active',
@@ -896,6 +931,34 @@ const AddMemberForm: React.FC<{
             <Checkbox id="addCanAccessSettings" name="canAccessSettings" />
             <Label htmlFor="addCanAccessSettings" className="font-normal">Cilësimet</Label>
           </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="addCanAccessGoals" name="canAccessGoals" />
+            <Label htmlFor="addCanAccessGoals" className="font-normal">Qëllimet</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="addCanAccessChat" name="canAccessChat" defaultChecked />
+            <Label htmlFor="addCanAccessChat" className="font-normal">Chat</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="addCanAccessCustomers" name="canAccessCustomers" />
+            <Label htmlFor="addCanAccessCustomers" className="font-normal">Klientët</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="addCanAccessServices" name="canAccessServices" />
+            <Label htmlFor="addCanAccessServices" className="font-normal">Shërbimet</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="addCanAccessExpenses" name="canAccessExpenses" />
+            <Label htmlFor="addCanAccessExpenses" className="font-normal">Shpenzimet</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="addCanAccessProfile" name="canAccessProfile" defaultChecked />
+            <Label htmlFor="addCanAccessProfile" className="font-normal">Profili</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="addCanAccessTeams" name="canAccessTeams" />
+            <Label htmlFor="addCanAccessTeams" className="font-normal">Ekipi</Label>
+          </div>
         </div>
       </div>
 
@@ -955,7 +1018,7 @@ const InviteMemberForm: React.FC<{
 
       <div className="space-y-3">
         <Label>Lejet e Aksesit</Label>
-        <div className="space-y-2">
+        <div className="grid grid-cols-2 gap-2">
           <div className="flex items-center gap-2">
             <Checkbox id="canAccessProjects" name="canAccessProjects" defaultChecked />
             <Label htmlFor="canAccessProjects" className="font-normal">Projektet</Label>
@@ -979,6 +1042,34 @@ const InviteMemberForm: React.FC<{
           <div className="flex items-center gap-2">
             <Checkbox id="canAccessSettings" name="canAccessSettings" />
             <Label htmlFor="canAccessSettings" className="font-normal">Cilësimet</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="canAccessGoals" name="canAccessGoals" />
+            <Label htmlFor="canAccessGoals" className="font-normal">Qëllimet</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="canAccessChat" name="canAccessChat" defaultChecked />
+            <Label htmlFor="canAccessChat" className="font-normal">Chat</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="canAccessCustomers" name="canAccessCustomers" />
+            <Label htmlFor="canAccessCustomers" className="font-normal">Klientët</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="canAccessServices" name="canAccessServices" />
+            <Label htmlFor="canAccessServices" className="font-normal">Shërbimet</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="canAccessExpenses" name="canAccessExpenses" />
+            <Label htmlFor="canAccessExpenses" className="font-normal">Shpenzimet</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="canAccessProfile" name="canAccessProfile" defaultChecked />
+            <Label htmlFor="canAccessProfile" className="font-normal">Profili</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="canAccessTeams" name="canAccessTeams" />
+            <Label htmlFor="canAccessTeams" className="font-normal">Ekipi</Label>
           </div>
         </div>
       </div>

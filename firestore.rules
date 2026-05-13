@@ -207,11 +207,13 @@ service cloud.firestore {
     match /teamMembers/{docId} {
       allow read: if isAuth();
       allow create: if isAuth();
-      // Prevent role self-escalation: users can update own record but cannot change role
+      // Prevent role self-escalation: users can update own record but only safe fields
       allow update: if isAuth() && (
-        // Self-update: role must remain the same
+        // Self-update: only displayName/email/updatedAt, role must not change
         (resource.data.userId == request.auth.uid &&
-         request.resource.data.role == resource.data.role) ||
+         request.resource.data.role == resource.data.role &&
+         request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['displayName', 'email', 'updatedAt'])) ||
         // Non-self update: admins manage other members (admin check enforced client-side)
         resource.data.userId != request.auth.uid
       );
@@ -246,7 +248,9 @@ service cloud.firestore {
       // Portal user can only update their own safe fields — NOT accessLevel/role.
       allow update: if isAuth() && (
         resource.data.userId == request.auth.uid ||
-        resource.data.userId == '' ||
+        // Initial claim: doc has no userId yet, but email must match to prevent hijacking
+        (resource.data.userId == '' &&
+         resource.data.email.lower() == request.auth.token.email.lower()) ||
         (
           resource.data.email.lower() == request.auth.token.email.lower() &&
           !request.resource.data.diff(resource.data).affectedKeys()

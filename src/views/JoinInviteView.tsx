@@ -6,7 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
-import { Loader2, CheckCircle, XCircle, Users, Shield } from 'lucide-react';
+import { Loader2, CheckCircle, XCircle, Users, AlertTriangle } from 'lucide-react';
 
 interface InviteData {
   id: string;
@@ -22,6 +22,13 @@ interface InviteData {
   canAccessInvoices?: boolean;
   canAccessReports?: boolean;
   canAccessSettings?: boolean;
+  canAccessGoals?: boolean;
+  canAccessTeams?: boolean;
+  canAccessChat?: boolean;
+  canAccessCustomers?: boolean;
+  canAccessServices?: boolean;
+  canAccessExpenses?: boolean;
+  canAccessProfile?: boolean;
   status: string;
 }
 
@@ -142,6 +149,13 @@ const JoinInviteView: React.FC = () => {
         canAccessInvoices: invite.canAccessInvoices ?? false,
         canAccessReports: invite.canAccessReports ?? false,
         canAccessSettings: invite.canAccessSettings ?? false,
+        canAccessGoals: invite.canAccessGoals ?? false,
+        canAccessTeams: invite.canAccessTeams ?? false,
+        canAccessChat: invite.canAccessChat ?? false,
+        canAccessCustomers: invite.canAccessCustomers ?? false,
+        canAccessServices: invite.canAccessServices ?? false,
+        canAccessExpenses: invite.canAccessExpenses ?? false,
+        canAccessProfile: invite.canAccessProfile ?? false,
         invitedByUserId: invite.invitedByUserId,
         invitedAt: Timestamp.now(),
         status: 'Active',
@@ -277,17 +291,35 @@ const JoinInviteView: React.FC = () => {
             <span className="text-sm font-medium">{invite?.email}</span>
           </div>
 
+          {/* Email mismatch warning */}
+          {invite && user && user.email?.toLowerCase() !== invite.email?.toLowerCase() && (
+            <div className="flex items-start gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <AlertTriangle className="w-4 h-4 text-yellow-600 shrink-0 mt-0.5" />
+              <p className="text-xs text-yellow-700">
+                Ftesa është dërguar për <strong>{invite.email}</strong>, por jeni i kyçur si <strong>{user.email}</strong>.
+                Mund të pranoni po dëshironi, por verifikoni me administratorin nëse ka gabim.
+              </p>
+            </div>
+          )}
+
           {/* Permission summary */}
           <div className="p-3 bg-muted rounded-lg">
             <p className="text-sm text-muted-foreground mb-2">Akses në module:</p>
             <div className="flex flex-wrap gap-1">
+              {invite?.role === 'Admin' && <Badge variant="outline" className="text-xs">Akses i plotë</Badge>}
               {invite?.canAccessProjects && <Badge variant="outline" className="text-xs">Projektet</Badge>}
               {invite?.canAccessTasks && <Badge variant="outline" className="text-xs">Detyrat</Badge>}
               {invite?.canAccessCRM && <Badge variant="outline" className="text-xs">CRM</Badge>}
               {invite?.canAccessInvoices && <Badge variant="outline" className="text-xs">Faturat</Badge>}
               {invite?.canAccessReports && <Badge variant="outline" className="text-xs">Raportet</Badge>}
               {invite?.canAccessSettings && <Badge variant="outline" className="text-xs">Cilësimet</Badge>}
-              {invite?.role === 'Admin' && <Badge variant="outline" className="text-xs">Akses i plotë</Badge>}
+              {invite?.canAccessGoals && <Badge variant="outline" className="text-xs">Qëllimet</Badge>}
+              {invite?.canAccessChat && <Badge variant="outline" className="text-xs">Chat</Badge>}
+              {invite?.canAccessCustomers && <Badge variant="outline" className="text-xs">Klientët</Badge>}
+              {invite?.canAccessServices && <Badge variant="outline" className="text-xs">Shërbimet</Badge>}
+              {invite?.canAccessExpenses && <Badge variant="outline" className="text-xs">Shpenzimet</Badge>}
+              {invite?.canAccessProfile && <Badge variant="outline" className="text-xs">Profili</Badge>}
+              {invite?.canAccessTeams && <Badge variant="outline" className="text-xs">Ekipi</Badge>}
             </div>
           </div>
         </div>

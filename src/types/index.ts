@@ -543,6 +543,13 @@ export interface TeamInvite {
   canAccessInvoices?: boolean;
   canAccessReports?: boolean;
   canAccessSettings?: boolean;
+  canAccessGoals?: boolean;
+  canAccessTeams?: boolean;
+  canAccessChat?: boolean;
+  canAccessCustomers?: boolean;
+  canAccessServices?: boolean;
+  canAccessExpenses?: boolean;
+  canAccessProfile?: boolean;
   status: 'Pending' | 'Accepted' | 'Rejected' | 'Cancelled';
   createdAt: Date;
   updatedAt: Date;

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { collection, addDoc, Timestamp, query, onSnapshot, getDocs, where } from 'firebase/firestore';
-import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
+import { createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from 'firebase/auth';
 import { db, auth } from '../lib/firebase';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -88,6 +88,9 @@ const RegisterView: React.FC = () => {
 
       // Set display name
       await updateProfile(user, { displayName: fullName });
+
+      // Send email verification (non-blocking — don't fail registration if this errors)
+      sendEmailVerification(user).catch(() => {});
 
       // Resolve teamId from existing team members so new documents are visible
       // to admins (team-scoped views filter by teamId).
