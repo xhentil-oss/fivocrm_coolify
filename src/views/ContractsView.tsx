@@ -2,10 +2,11 @@ import React, { useState, useMemo, useRef } from 'react';
 import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
+import { usePermissions } from '../hooks/usePermissions';
 import { useToast } from '../hooks/use-toast';
 import {
   ScrollText, Plus, Send, Eye, Pencil, Trash2, Loader2, FileText,
-  User, GripVertical, LayoutTemplate, Package,
+  User, GripVertical, LayoutTemplate, Package, UserCheck,
 } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -17,7 +18,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Separator } from '../components/ui/separator';
 import ContractEditor, { ContractEditorHandle } from '../components/ContractEditor';
 import { CONTRACT_TEMPLATES, ContractParties } from '../lib/contractTemplates';
-import type { Contract, Customer, Quote, Invoice, Service } from '../types';
+import type { Contract, Customer, Quote, Invoice, Service, TeamMember } from '../types';
 
 const STATUS_COLORS: Record<string, string> = {
   Draft: 'bg-gray-100 text-gray-700',
@@ -45,6 +46,7 @@ function buildServiceHTML(svc: Service): string {
 const ContractsView: React.FC = () => {
   const { user } = useAuth();
   const { toast } = useToast();
+  const permissions = usePermissions();
 
   const teamSettings = useTeamSettingsData();
   const { data: contracts, loading } = useCollection<Contract>('contracts');
@@ -52,6 +54,7 @@ const ContractsView: React.FC = () => {
   const { data: quotes } = useCollection<Quote>('quotes');
   const { data: invoices } = useCollection<Invoice>('invoices');
   const { data: services } = useCollection<Service>('services');
+  const { data: teamMembers } = useCollection<TeamMember>('teamMembers');
   const contractMutation = useMutation<Contract>('contracts');
 
   const editorRef = useRef<ContractEditorHandle>(null);
@@ -74,10 +77,15 @@ const ContractsView: React.FC = () => {
   const [formBody, setFormBody] = useState('');
   const [formExpiry, setFormExpiry] = useState('');
   const [formNotes, setFormNotes] = useState('');
+  const [formAssignedToUserId, setFormAssignedToUserId] = useState('');
   const [saving, setSaving] = useState(false);
 
   const filteredContracts = useMemo(() => {
     let list = contracts || [];
+    // SalesAgent / Member only see contracts assigned to or created by them
+    if (permissions.dataScope === 'assigned' && user?.uid) {
+      list = list.filter(c => c.assignedToUserId === user.uid || c.createdByUserId === user.uid);
+    }
     if (statusFilter !== '__all__') list = list.filter(c => c.status === statusFilter);
     if (searchQ.trim()) {
       const q = searchQ.toLowerCase();
@@ -179,6 +187,7 @@ const ContractsView: React.FC = () => {
     setFormBody('');
     setFormExpiry('');
     setFormNotes('');
+    setFormAssignedToUserId('');
   };
 
   const openEdit = (c: Contract) => {
@@ -194,6 +203,7 @@ const ContractsView: React.FC = () => {
         : (c.expiresAt as any)?.toDate?.()?.toISOString().split('T')[0] || '',
     );
     setFormNotes(c.notes || '');
+    setFormAssignedToUserId(c.assignedToUserId || '');
     // Dialog opens after state updates — give it a tick to mount the editor
     setTimeout(() => editorRef.current?.setContent(c.body), 50);
   };
@@ -207,6 +217,9 @@ const ContractsView: React.FC = () => {
     const cust = customers?.find(c => c.id === formCustomerId);
     const q = formQuoteId !== '__none__' ? quotes?.find(x => x.id === formQuoteId) : null;
     const teamId = getGlobalTeamId() || '';
+    const assignedMember = formAssignedToUserId
+      ? teamMembers?.find(m => m.userId === formAssignedToUserId)
+      : null;
 
     const packageSummary = q ? {
       label: q.label || q.result?.suggestedLabel || 'Paketa',
@@ -236,6 +249,8 @@ const ContractsView: React.FC = () => {
           notes: formNotes.trim() || undefined,
           expiresAt: formExpiry ? new Date(formExpiry) : undefined,
           packageSummary,
+          assignedToUserId: formAssignedToUserId || undefined,
+          assignedToName: assignedMember?.displayName || assignedMember?.email || undefined,
           updatedAt: new Date(),
         } as any);
         toast({ title: '✅ Kontrata u përditësua!' });
@@ -254,6 +269,8 @@ const ContractsView: React.FC = () => {
           notes: formNotes.trim() || undefined,
           expiresAt: formExpiry ? new Date(formExpiry) : undefined,
           packageSummary,
+          assignedToUserId: formAssignedToUserId || undefined,
+          assignedToName: assignedMember?.displayName || assignedMember?.email || undefined,
           status: 'Draft',
           createdByUserId: user?.uid || null,
           createdAt: new Date(),
@@ -382,6 +399,7 @@ const ContractsView: React.FC = () => {
                   <tr>
                     <th className="px-4 py-3 text-left font-medium">Titulli</th>
                     <th className="px-4 py-3 text-left font-medium">Klienti</th>
+                    <th className="px-4 py-3 text-left font-medium">Agjent</th>
                     <th className="px-4 py-3 text-left font-medium">Statusi</th>
                     <th className="px-4 py-3 text-left font-medium">Krijuar</th>
                     <th className="px-4 py-3 text-left font-medium">Dërguar</th>
@@ -406,6 +424,11 @@ const ContractsView: React.FC = () => {
                         {c.clientEmail && (
                           <div className="text-xs text-muted-foreground truncate max-w-[160px]">{c.clientEmail}</div>
                         )}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-muted-foreground whitespace-nowrap">
+                        {c.assignedToName || (c.assignedToUserId ? (
+                          <span className="text-xs font-mono">{c.assignedToUserId.slice(0, 8)}</span>
+                        ) : '—')}
                       </td>
                       <td className="px-4 py-3">
                         <Badge variant="secondary" className={STATUS_COLORS[c.status] || ''}>
@@ -551,15 +574,35 @@ const ContractsView: React.FC = () => {
               </div>
             </div>
 
-            {/* Title */}
-            <div className="space-y-1">
-              <Label className="text-xs">Titulli <span className="text-red-500">*</span></Label>
-              <Input
-                value={formTitle}
-                onChange={e => setFormTitle(e.target.value)}
-                placeholder="Kontratë Shërbimi — Emri i Klientit"
-                className="h-8 text-sm"
-              />
+            {/* Title + Agent */}
+            <div className="flex gap-3">
+              <div className="flex-1 space-y-1">
+                <Label className="text-xs">Titulli <span className="text-red-500">*</span></Label>
+                <Input
+                  value={formTitle}
+                  onChange={e => setFormTitle(e.target.value)}
+                  placeholder="Kontratë Shërbimi — Emri i Klientit"
+                  className="h-8 text-sm"
+                />
+              </div>
+              <div className="w-44 space-y-1">
+                <Label className="text-xs flex items-center gap-1">
+                  <UserCheck className="w-3 h-3" /> Agjent
+                </Label>
+                <Select value={formAssignedToUserId || '__none__'} onValueChange={v => setFormAssignedToUserId(v === '__none__' ? '' : v)}>
+                  <SelectTrigger className="h-8 text-sm">
+                    <SelectValue placeholder="Pa agjent" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none__">Pa agjent</SelectItem>
+                    {teamMembers?.filter(m => m.status === 'Active').map(m => (
+                      <SelectItem key={m.id} value={m.userId}>
+                        {m.displayName || m.email || m.userId}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </div>
 

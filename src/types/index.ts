@@ -168,6 +168,8 @@ export interface Contract {
   rejectedAt?: Date;
   rejectionReason?: string;
   notes?: string;
+  assignedToUserId?: string;
+  assignedToName?: string;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
