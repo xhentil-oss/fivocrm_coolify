@@ -1,4 +1,4 @@
-import React, { forwardRef, useImperativeHandle } from 'react';
+import React, { forwardRef, useImperativeHandle, useEffect, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Underline from '@tiptap/extension-underline';
@@ -47,6 +47,17 @@ const ContractEditor = forwardRef<ContractEditorHandle, Props>(
       insertContent: (html) => editor?.chain().focus().insertContent(html).run(),
       setContent: (html) => editor?.commands.setContent(html),
     }), [editor]);
+
+    // Sync external content changes (e.g. template applied, quote selected)
+    // Track the last content we set so we don't fight with the user's own typing
+    const lastExternalContent = useRef(content);
+    useEffect(() => {
+      if (!editor || content === lastExternalContent.current) return;
+      lastExternalContent.current = content;
+      if (content !== editor.getHTML()) {
+        editor.commands.setContent(content);
+      }
+    }, [content, editor]);
 
     if (!editor) return null;
 

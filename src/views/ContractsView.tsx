@@ -127,10 +127,15 @@ const ContractsView: React.FC = () => {
   const applyTemplate = (templateId: string) => {
     const tpl = CONTRACT_TEMPLATES.find(t => t.id === templateId);
     if (!tpl) return;
+    if (!formCustomerId) {
+      toast({ title: 'Zgjidh klientin fillimisht', variant: 'destructive' });
+      return;
+    }
     const parties = buildParties(formCustomerId);
     const html = tpl.getHTML(parties);
     setFormBody(html);
-    editorRef.current?.setContent(html);
+    // setTimeout ensures the editor is mounted before we call setContent
+    setTimeout(() => editorRef.current?.setContent(html), 0);
     if (!formTitle) setFormTitle(`${tpl.label} — ${parties.clientName}`);
   };
 
@@ -143,7 +148,7 @@ const ContractsView: React.FC = () => {
     const html = tpl.getHTML(parties);
     setFormTitle(`Kontratë Shërbimi — ${parties.clientName}`);
     setFormBody(html);
-    editorRef.current?.setContent(html);
+    setTimeout(() => editorRef.current?.setContent(html), 0);
   };
 
   const onQuoteChange = (qid: string) => {
@@ -163,7 +168,7 @@ const ContractsView: React.FC = () => {
     const base = CONTRACT_TEMPLATES[0].getHTML(parties);
     const html = base + pkgBlock;
     setFormBody(html);
-    editorRef.current?.setContent(html);
+    setTimeout(() => editorRef.current?.setContent(html), 0);
   };
 
   const resetForm = () => {
@@ -189,6 +194,8 @@ const ContractsView: React.FC = () => {
         : (c.expiresAt as any)?.toDate?.()?.toISOString().split('T')[0] || '',
     );
     setFormNotes(c.notes || '');
+    // Dialog opens after state updates — give it a tick to mount the editor
+    setTimeout(() => editorRef.current?.setContent(c.body), 50);
   };
 
   const handleSave = async () => {
@@ -456,7 +463,7 @@ const ContractsView: React.FC = () => {
       {/* ─── CREATE / EDIT DIALOG ─────────────────────────────────── */}
       <Dialog
         open={isFormOpen}
-        onOpenChange={(open) => { if (!open) { setShowCreate(false); setEditContract(null); resetForm(); } }}
+        onOpenChange={(open) => { if (!open) { editorRef.current?.setContent(''); setShowCreate(false); setEditContract(null); resetForm(); } }}
       >
         <DialogContent className="max-w-[1180px] w-[96vw] h-[90vh] flex flex-col p-0 gap-0">
           {/* Header */}
