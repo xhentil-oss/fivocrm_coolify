@@ -80,12 +80,17 @@ const ContractsView: React.FC = () => {
   const [formAssignedToUserId, setFormAssignedToUserId] = useState('');
   const [saving, setSaving] = useState(false);
 
-  const filteredContracts = useMemo(() => {
-    let list = contracts || [];
-    // SalesAgent / Member only see contracts assigned to or created by them
+  // Role-scoped base list: SalesAgent/Member only see their own contracts
+  const roleFilteredContracts = useMemo(() => {
+    const list = contracts || [];
     if (permissions.dataScope === 'assigned' && user?.uid) {
-      list = list.filter(c => c.assignedToUserId === user.uid || c.createdByUserId === user.uid);
+      return list.filter(c => c.assignedToUserId === user.uid || c.createdByUserId === user.uid);
     }
+    return list;
+  }, [contracts, permissions.dataScope, user?.uid]);
+
+  const filteredContracts = useMemo(() => {
+    let list = roleFilteredContracts;
     if (statusFilter !== '__all__') list = list.filter(c => c.status === statusFilter);
     if (searchQ.trim()) {
       const q = searchQ.toLowerCase();
@@ -100,19 +105,20 @@ const ContractsView: React.FC = () => {
       const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toDate?.()?.getTime() ?? 0;
       return tb - ta;
     });
-  }, [contracts, statusFilter, searchQ]);
+  }, [roleFilteredContracts, statusFilter, searchQ]);
 
   const customerInvoices = useMemo(
     () => invoices?.filter(inv => inv.customerId === formCustomerId) ?? [],
     [formCustomerId, invoices],
   );
 
+  // Stats reflect the same role-filtered list so SalesAgent sees accurate counts
   const stats = useMemo(() => ({
-    total: contracts?.length ?? 0,
-    pending: contracts?.filter(c => c.status === 'Draft').length ?? 0,
-    sent: contracts?.filter(c => c.status === 'Sent').length ?? 0,
-    signed: contracts?.filter(c => c.status === 'Signed').length ?? 0,
-  }), [contracts]);
+    total: roleFilteredContracts.length,
+    pending: roleFilteredContracts.filter(c => c.status === 'Draft').length,
+    sent: roleFilteredContracts.filter(c => c.status === 'Sent').length,
+    signed: roleFilteredContracts.filter(c => c.status === 'Signed').length,
+  }), [roleFilteredContracts]);
 
   const buildParties = (cid: string): ContractParties => {
     const cust = customers?.find(c => c.id === cid);
@@ -249,8 +255,8 @@ const ContractsView: React.FC = () => {
           notes: formNotes.trim() || undefined,
           expiresAt: formExpiry ? new Date(formExpiry) : undefined,
           packageSummary,
-          assignedToUserId: formAssignedToUserId || undefined,
-          assignedToName: assignedMember?.displayName || assignedMember?.email || undefined,
+          assignedToUserId: formAssignedToUserId || null,
+          assignedToName: formAssignedToUserId ? (assignedMember?.displayName || assignedMember?.email || null) : null,
           updatedAt: new Date(),
         } as any);
         toast({ title: '✅ Kontrata u përditësua!' });
@@ -595,7 +601,7 @@ const ContractsView: React.FC = () => {
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="__none__">Pa agjent</SelectItem>
-                    {teamMembers?.filter(m => m.status === 'Active').map(m => (
+                    {teamMembers?.filter(m => m.status === 'Active' && m.teamId === getGlobalTeamId()).map(m => (
                       <SelectItem key={m.id} value={m.userId}>
                         {m.displayName || m.email || m.userId}
                       </SelectItem>
