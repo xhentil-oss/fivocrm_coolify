@@ -88,6 +88,10 @@ const ChatView: React.FC = () => {
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null);
   const [clientSearch, setClientSearch] = useState('');
+  // Pagination state
+  const [channelLimit, setChannelLimit] = useState(100);
+  const [waDisplayLimit, setWaDisplayLimit] = useState(50);
+
   // WhatsApp state
   const [activeWaPhone, setActiveWaPhone] = useState<string | null>(null);
   const [activeWaJid, setActiveWaJid] = useState<string | null>(null);
@@ -231,9 +235,9 @@ const ChatView: React.FC = () => {
   const isClientChannel = activeChannel.startsWith('client-');
   const channelMsgQuery = useMemo(() => ({
     where: [{ field: 'channelId', operator: '==', value: activeChannel }],
-    limit: 100,
+    limit: channelLimit,
     ...(isClientChannel ? { skipTeamFilter: true } : {}),
-  }), [activeChannel, isClientChannel]);
+  }), [activeChannel, isClientChannel, channelLimit]);
   const { data: channelMessages, loading: channelPending, error: channelError } = useCollection<ChatMessage>('messages', channelMsgQuery);
 
   // Background query: ALL unread client messages — drives per-channel unread badges
@@ -295,13 +299,12 @@ const ChatView: React.FC = () => {
   const filteredMessages = useMemo(() => {
     if (!messages) return [];
     const visible = messages.filter(m => !(m as any).deletedAt);
-    const ordered = chatMode === 'channel'
-      ? [...visible].sort((a, b) => getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt))
-      : visible;
+    // Always sort by time — DMs have no server-side orderBy to avoid composite index
+    const ordered = [...visible].sort((a, b) => getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt));
     if (!searchQuery.trim()) return ordered;
     const q = searchQuery.toLowerCase();
     return ordered.filter(m => m.content.toLowerCase().includes(q));
-  }, [messages, searchQuery, chatMode]);
+  }, [messages, searchQuery]);
 
   const profileMap = useMemo(() => {
     const map = new Map<string, UserProfile>();
@@ -368,6 +371,7 @@ const ChatView: React.FC = () => {
   const typingMutation = useMutation<any>('typingIndicators');
   const { data: typingIndicators } = useCollection<any>('typingIndicators', { skipTeamFilter: true });
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const lastTypingWriteRef = useRef<number>(0);
 
   const activeTypingUsers = useMemo(() => {
     if (!typingIndicators || !user) return [];
@@ -383,11 +387,16 @@ const ChatView: React.FC = () => {
     if (!user) return;
     const channelOrDm = chatMode === 'channel' ? activeChannel : `dm-${activeDirectUserId}`;
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-    const existing = typingIndicators?.find((t: any) => t.userId === user.uid && t.channelId === channelOrDm);
-    if (existing) {
-      typingMutation.update(existing.id, { timestamp: new Date() }).catch(() => {});
-    } else {
-      typingMutation.create({ userId: user.uid, channelId: channelOrDm, timestamp: new Date() } as any).catch(() => {});
+    // Debounce: only write to Firestore at most once per second
+    const now = Date.now();
+    if (now - lastTypingWriteRef.current >= 1000) {
+      lastTypingWriteRef.current = now;
+      const existing = typingIndicators?.find((t: any) => t.userId === user.uid && t.channelId === channelOrDm);
+      if (existing) {
+        typingMutation.update(existing.id, { timestamp: new Date() }).catch(() => {});
+      } else {
+        typingMutation.create({ userId: user.uid, channelId: channelOrDm, timestamp: new Date() } as any).catch(() => {});
+      }
     }
     typingTimeoutRef.current = setTimeout(() => {
       const ex = typingIndicators?.find((t: any) => t.userId === user.uid && t.channelId === channelOrDm);
@@ -453,11 +462,17 @@ const ChatView: React.FC = () => {
     }
   }, [aiMessages]);
 
-  // Reset incoming message tracking when conversation changes
+  // Reset incoming message tracking and pagination when conversation changes
   useEffect(() => {
     prevSeenMsgIdsRef.current = new Set();
     isInitialMsgLoadRef.current = true;
+    setChannelLimit(100);
   }, [activeChannel, activeDirectUserId, chatMode]);
+
+  // Reset WA display limit when switching WA conversation
+  useEffect(() => {
+    setWaDisplayLimit(50);
+  }, [activeWaPhone]);
 
   // Bird chirp notification on new incoming messages from others (active conversation)
   useEffect(() => {
@@ -495,6 +510,30 @@ const ChatView: React.FC = () => {
     let hash = 0;
     for (let i = 0; i < id.length; i++) hash = id.charCodeAt(i) + ((hash << 5) - hash);
     return colors[Math.abs(hash) % colors.length];
+  }, []);
+
+  const highlightText = useCallback((text: string, query: string) => {
+    if (!query.trim()) return <>{text}</>;
+    const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
+    return (
+      <>
+        {parts.map((part, i) =>
+          part.toLowerCase() === query.toLowerCase()
+            ? <mark key={i} className="bg-yellow-200 dark:bg-yellow-700 text-inherit rounded-sm px-0.5">{part}</mark>
+            : part
+        )}
+      </>
+    );
+  }, []);
+
+  const getFilename = useCallback((url: string) => {
+    try {
+      const pathname = new URL(url).pathname;
+      return decodeURIComponent(pathname.split('/').pop() || '') || 'Skedar';
+    } catch {
+      return url.split('/').pop() || 'Skedar';
+    }
   }, []);
 
   // Background DM notifications — fires when a DM arrives in any conversation
@@ -616,7 +655,7 @@ const ChatView: React.FC = () => {
       .sort((a, b) => getTimestampMs(b.lastDate) - getTimestampMs(a.lastDate));
   }, [allWaMessages]);
 
-  const waActiveMessages = useMemo(() => {
+  const waActiveMessagesAll = useMemo(() => {
     if (!allWaMessages || !activeWaPhone) return [];
     return [...allWaMessages].filter(m => {
       const key = normalizeAlbanianPhone(
@@ -627,6 +666,12 @@ const ChatView: React.FC = () => {
       return key === activeWaPhone;
     }).sort((a, b) => getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt));
   }, [allWaMessages, activeWaPhone]);
+
+  const waActiveMessages = useMemo(
+    () => waActiveMessagesAll.slice(-waDisplayLimit),
+    [waActiveMessagesAll, waDisplayLimit]
+  );
+  const waHasMore = waActiveMessagesAll.length > waDisplayLimit;
 
   const waTotalUnread = useMemo(
     () => waConversations.reduce((s, c) => s + c.unread, 0),
@@ -659,7 +704,7 @@ const ChatView: React.FC = () => {
   // Message Handlers
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if ((!messageText.trim() && !attachmentUrl.trim()) || !user) return;
+    if ((!messageText.trim() && !attachmentUrl.trim()) || !user || isSending) return;
 
     try {
       const isClientChannel = activeChannel.startsWith('client-');
@@ -671,7 +716,7 @@ const ChatView: React.FC = () => {
         ...(isClientChannel && chatMode === 'channel' ? { senderType: 'staff' as const } : {}),
         ...(replyingTo ? {
           replyToId: replyingTo.id,
-          replyToContent: replyingTo.content.slice(0, 100),
+          replyToContent: replyingTo.content.length > 100 ? replyingTo.content.slice(0, 100) + '…' : replyingTo.content,
           replyToSender: getUserDisplayName(replyingTo.senderId),
         } : {}),
       };
@@ -743,11 +788,15 @@ const ChatView: React.FC = () => {
   };
 
   const handleDeleteMessage = async (msgId: string) => {
-    try { await messageMutation.update(msgId, { deletedAt: new Date(), content: 'Ky mesazh u fshi.', attachmentUrl: null } as any); } catch { /* skip */ }
+    try {
+      await messageMutation.update(msgId, { deletedAt: new Date(), content: 'Ky mesazh u fshi.', attachmentUrl: null } as any);
+    } catch {
+      toast({ title: 'Fshirja dështoi', description: 'Provo përsëri.', variant: 'destructive' });
+    }
   };
 
   const handleReaction = async (msgId: string, emoji: string) => {
-    if (!user) return;
+    if (!user || !EMOJI_REACTIONS.includes(emoji)) return;
     const msg = messages?.find(m => m.id === msgId);
     if (!msg) return;
     const reactions = { ...((msg as any).reactions || {}) };
@@ -755,8 +804,12 @@ const ChatView: React.FC = () => {
     const idx = users.indexOf(user.uid);
     if (idx >= 0) users.splice(idx, 1); else users.push(user.uid);
     if (users.length === 0) delete reactions[emoji]; else reactions[emoji] = users;
-    try { await messageMutation.update(msgId, { reactions } as any); } catch { /* skip */ }
     setShowEmojiPicker(null);
+    try {
+      await messageMutation.update(msgId, { reactions } as any);
+    } catch {
+      toast({ title: 'Reaksioni dështoi', description: 'Provo përsëri.', variant: 'destructive' });
+    }
   };
 
   // AI Chat
@@ -914,7 +967,7 @@ const ChatView: React.FC = () => {
         probability: 10,
       } as any);
 
-      // Update all whatsappMessages for this phone with the new leadId
+      // Update all whatsappMessages for this phone with the new leadId (atomic: rollback lead on failure)
       if (newLead?.id) {
         const msgs = allWaMessages?.filter(m => {
           const key = m.jid?.endsWith('@s.whatsapp.net')
@@ -922,7 +975,13 @@ const ChatView: React.FC = () => {
             : normalizeAlbanianPhone(m.phone || '');
           return key === activeWaPhone;
         }) || [];
-        await Promise.all(msgs.map(m => waMutation.update(m.id, { leadId: newLead.id, leadName: leadName })));
+        try {
+          await Promise.all(msgs.map(m => waMutation.update(m.id, { leadId: newLead.id, leadName: leadName })));
+        } catch (linkErr) {
+          // Rollback: delete the created lead so no orphaned record remains
+          try { await leadsMutation.remove(newLead.id); } catch { /* best-effort */ }
+          throw new Error('Lidhja e mesazheve dështoi — Lead nuk u ruajt.');
+        }
         setActiveWaLeadId(newLead.id);
         setActiveWaLeadName(leadName);
       }
@@ -943,8 +1002,16 @@ const ChatView: React.FC = () => {
 
   useEffect(() => {
     if (!activeDirectUserId || !user || chatMode !== 'direct') return;
-    const unread = allDirectMessages.filter(m => m.senderId === activeDirectUserId && m.receiverId === user.uid && !m.isRead && !markedAsReadRef.current.has(m.id));
-    unread.forEach(m => { markedAsReadRef.current.add(m.id); messageMutation.update(m.id, { isRead: true }); });
+    // Snapshot the current conversation — guard against rapid switches
+    const snapshotDmUserId = activeDirectUserId;
+    const unread = allDirectMessages.filter(m => m.senderId === snapshotDmUserId && m.receiverId === user.uid && !m.isRead && !markedAsReadRef.current.has(m.id));
+    unread.forEach(m => {
+      markedAsReadRef.current.add(m.id);
+      // Only commit if the user hasn't switched conversations
+      if (activeDirectUserId === snapshotDmUserId) {
+        messageMutation.update(m.id, { isRead: true }).catch(() => {});
+      }
+    });
   }, [activeDirectUserId, allDirectMessages, user, chatMode]);
 
   useEffect(() => {
@@ -1538,6 +1605,16 @@ const ChatView: React.FC = () => {
                 </div>
               ) : (
                 <div className="space-y-2.5">
+                  {waHasMore && (
+                    <div className="flex justify-center py-2">
+                      <button
+                        onClick={() => setWaDisplayLimit(l => l + 50)}
+                        className="text-xs text-[#25D366] underline hover:opacity-80"
+                      >
+                        Ngarko mesazhe më të vjetra ({waActiveMessagesAll.length - waDisplayLimit} mbetur)
+                      </button>
+                    </div>
+                  )}
                   {waActiveMessages.map((msg) => {
                     const isOut = msg.direction === 'outbound';
                     const timeStr = (() => {
@@ -1598,6 +1675,17 @@ const ChatView: React.FC = () => {
           <>
             <ScrollArea className="flex-1" ref={scrollRef}>
               <div className="px-2 sm:px-5 py-3 sm:py-4 space-y-0">
+                {/* Load more — shown when we're at the Firestore limit */}
+                {chatMode === 'channel' && filteredMessages.length >= channelLimit && !searchQuery && (
+                  <div className="flex justify-center py-3">
+                    <button
+                      onClick={() => setChannelLimit(l => l + 100)}
+                      className="text-xs text-primary underline hover:opacity-80"
+                    >
+                      Ngarko mesazhe më të vjetra
+                    </button>
+                  </div>
+                )}
                 {filteredMessages.length > 0 ? (
                   (() => {
                     let lastDateKey = '';
@@ -1677,7 +1765,9 @@ const ChatView: React.FC = () => {
                                     </Button>
                                   </div>
                                 ) : (
-                                  <p className="text-[13.5px] leading-relaxed break-words whitespace-pre-wrap">{message.content}</p>
+                                  <p className="text-[13.5px] leading-relaxed break-words whitespace-pre-wrap">
+                                    {searchQuery.trim() ? highlightText(message.content, searchQuery) : message.content}
+                                  </p>
                                 )}
 
                                 {message.attachmentUrl && (
@@ -1685,7 +1775,7 @@ const ChatView: React.FC = () => {
                                     className={`inline-flex items-center gap-1.5 text-xs mt-2 px-2.5 py-1 rounded-lg transition-colors ${
                                       isOwn ? 'bg-primary-foreground/15 hover:bg-primary-foreground/25' : 'bg-background hover:bg-accent text-primary'
                                     }`}>
-                                    <FileIcon className="h-3 w-3" /><span className="truncate max-w-[140px]">{message.attachmentUrl.split('/').pop() || 'Skedar'}</span>
+                                    <FileIcon className="h-3 w-3" /><span className="truncate max-w-[140px]">{getFilename(message.attachmentUrl)}</span>
                                   </a>
                                 )}
 
