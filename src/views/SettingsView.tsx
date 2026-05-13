@@ -1790,7 +1790,7 @@ const RoleTemplatesSection: React.FC = () => {
       </Card>
 
       {/* Configurable roles */}
-      {(['Manager', 'Member', 'Viewer'] as RoleKey[]).map(role => {
+      {(['Sales', 'SalesAgent', 'Manager', 'Member', 'Viewer'] as RoleKey[]).map(role => {
         const meta = ROLE_DESCRIPTIONS[role];
         return (
           <Card key={role} className="p-6 space-y-5">
