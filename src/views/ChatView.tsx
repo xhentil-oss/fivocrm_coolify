@@ -17,7 +17,8 @@ import {
   FolderOpen, ArrowLeft, Search, Pencil, Trash2, Reply,
   SmilePlus, Check, Plus, Link2,
   Bot, Sparkles, Loader2, Copy, RefreshCw, Phone, Smartphone,
-  ClipboardList, ExternalLink, UserPlus,
+  ClipboardList, ExternalLink, UserPlus, ChevronDown, CheckCheck,
+  ImageIcon, Circle,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
@@ -53,7 +54,7 @@ const CHANNELS = [
   { id: 'support' as const, name: 'Mbështetja', icon: MessageSquare, description: 'Mbështetje klienti' },
 ] as const;
 
-const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '💯', '✅', '🙏', '😎', '🤔'];
 
 const ACTIVE_MEMBERS_QUERY = {
   where: [{ field: 'status', operator: '==', value: 'Active' }],
@@ -91,6 +92,12 @@ const ChatView: React.FC = () => {
   // Pagination state
   const [channelLimit, setChannelLimit] = useState(100);
   const [waDisplayLimit, setWaDisplayLimit] = useState(50);
+
+  // UX state
+  const [showJumpToBottom, setShowJumpToBottom] = useState(false);
+  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
+  const bottomSentinelRef = useRef<HTMLDivElement>(null);
+  const sessionUnreadIdsRef = useRef<Set<string>>(new Set());
 
   // WhatsApp state
   const [activeWaPhone, setActiveWaPhone] = useState<string | null>(null);
@@ -392,6 +399,7 @@ const ChatView: React.FC = () => {
   const notificationMutation = useMutation<any>('notifications');
   const waMutation = useMutation<WhatsAppMessage>('whatsappMessages');
   const leadsMutation = useMutation<Lead>('leads');
+  const userProfileMutation = useMutation<UserProfile>('userProfiles');
   const isSending = messageMutation.loading;
 
   // Typing indicators
@@ -441,6 +449,44 @@ const ChatView: React.FC = () => {
       }
     };
   }, [chatMode, activeChannel, activeDirectUserId]);
+
+  // Presence heartbeat — write lastSeen to my userProfile every 60 seconds
+  useEffect(() => {
+    if (!user || !userProfiles) return;
+    const myProfile = userProfiles.find(p => p.userId === user.uid);
+    if (!myProfile) return;
+    const profileId = myProfile.id;
+    userProfileMutation.update(profileId, { lastSeen: new Date() } as any).catch(() => {});
+    const interval = setInterval(() => {
+      userProfileMutation.update(profileId, { lastSeen: new Date() } as any).catch(() => {});
+    }, 60000);
+    return () => clearInterval(interval);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [user?.uid, userProfiles?.length]);
+
+  // Capture unread message IDs when conversation changes (for "New messages" divider)
+  useEffect(() => {
+    if (!user) return;
+    sessionUnreadIdsRef.current = new Set(
+      filteredMessages
+        .filter(m => m.senderId !== user.uid && !m.isRead && !(m as any).deletedAt)
+        .map(m => m.id)
+    );
+  // Only re-run when conversation identity changes, not on every message update
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatMode, activeChannel, activeDirectUserId]);
+
+  // IntersectionObserver — show jump-to-bottom when sentinel is out of view
+  useEffect(() => {
+    const sentinel = bottomSentinelRef.current;
+    if (!sentinel) return;
+    const observer = new IntersectionObserver(
+      ([entry]) => { if (entry) setShowJumpToBottom(!entry.isIntersecting); },
+      { threshold: 1.0 }
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  });
 
   // Auto-scroll — on new messages AND when switching conversations
   useEffect(() => {
@@ -593,6 +639,33 @@ const ChatView: React.FC = () => {
     }
   }, []);
 
+  const isImageUrl = useCallback((url: string) =>
+    /\.(jpg|jpeg|png|gif|webp|svg|bmp)(\?.*)?$/i.test(url), []);
+
+  const isOnline = useCallback((userId: string) => {
+    const profile = profileMap.get(userId);
+    if (!profile) return false;
+    const ls = (profile as any).lastSeen;
+    if (!ls) return false;
+    const d = ls instanceof Date ? ls : ls?.toDate?.();
+    return d && (Date.now() - d.getTime()) < 3 * 60 * 1000;
+  }, [profileMap]);
+
+  const getLastSeenText = useCallback((userId: string) => {
+    if (isOnline(userId)) return 'Aktiv tani';
+    const profile = profileMap.get(userId);
+    const ls = (profile as any)?.lastSeen;
+    if (!ls) return 'Joaktiv';
+    const d = ls instanceof Date ? ls : ls?.toDate?.();
+    if (!d) return 'Joaktiv';
+    const diff = Date.now() - d.getTime();
+    const min = Math.floor(diff / 60000);
+    if (min < 60) return `Parë ${min} min më parë`;
+    const h = Math.floor(min / 60);
+    if (h < 24) return `Parë ${h}h më parë`;
+    return `Parë ${Math.floor(h / 24)} ditë më parë`;
+  }, [isOnline, profileMap]);
+
   // Background DM notifications — fires when a DM arrives in any conversation
   useEffect(() => {
     if (!user || !bgReceivedDMs) return;
@@ -660,6 +733,20 @@ const ChatView: React.FC = () => {
     directConversations.forEach(uid => { count += directUnreadMap.get(uid) || 0; });
     return count;
   }, [channelUnreadMap, directUnreadMap, directConversations]);
+
+  // Last own message in current DM — for read receipt display
+  const lastOwnMsgId = useMemo(() => {
+    if (chatMode !== 'direct') return null;
+    const own = filteredMessages.filter(m => m.senderId === user?.uid && !(m as any).deletedAt);
+    return own.length > 0 ? own[own.length - 1].id : null;
+  }, [filteredMessages, chatMode, user?.uid]);
+
+  // Unread count in currently open conversation (used for jump-to-bottom badge)
+  const currentConvUnread = useMemo(() => {
+    if (chatMode === 'channel') return channelUnreadMap.get(activeChannel) || 0;
+    if (chatMode === 'direct') return directUnreadMap.get(activeDirectUserId || '') || 0;
+    return 0;
+  }, [chatMode, activeChannel, activeDirectUserId, channelUnreadMap, directUnreadMap]);
 
   const waConversations = useMemo(() => {
     if (!allWaMessages) return [];
@@ -1322,6 +1409,9 @@ const ChatView: React.FC = () => {
                   <div className={`h-9 w-9 rounded-xl ${getAvatarColor(userId)} flex items-center justify-center`}>
                     <span className="text-[11px] font-bold text-white">{name.slice(0, 2).toUpperCase()}</span>
                   </div>
+                  {isOnline(userId) && (
+                    <span className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 border-2 border-background" />
+                  )}
                   {unread > 0 && !isActive && (
                     <span className="absolute -top-1 -right-1 h-4 min-w-4 px-1 flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[9px] font-bold">{unread > 9 ? '9+' : unread}</span>
                   )}
@@ -1356,8 +1446,13 @@ const ChatView: React.FC = () => {
                       isActive ? 'bg-primary/8 text-primary font-medium' : 'hover:bg-accent/50 text-foreground/70'
                     }`}
                   >
-                    <div className={`h-8 w-8 rounded-lg ${getAvatarColor(member.userId)} flex items-center justify-center`}>
-                      <span className="text-[10px] font-bold text-white">{name.slice(0, 2).toUpperCase()}</span>
+                    <div className="relative flex-shrink-0">
+                      <div className={`h-8 w-8 rounded-lg ${getAvatarColor(member.userId)} flex items-center justify-center`}>
+                        <span className="text-[10px] font-bold text-white">{name.slice(0, 2).toUpperCase()}</span>
+                      </div>
+                      {isOnline(member.userId) && (
+                        <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-500 border-2 border-background" />
+                      )}
                     </div>
                     <span className="flex-1 truncate text-sm">{name}</span>
                   </button>
@@ -1518,7 +1613,13 @@ const ChatView: React.FC = () => {
                     </div>
                     <div className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 border-2 border-background" />
                   </div>
-                  <div><p className="font-semibold text-sm">{getUserDisplayName(activeDirectUserId)}</p><p className="text-[11px] text-emerald-600">Aktiv</p></div>
+                  <div>
+                    <p className="font-semibold text-sm">{getUserDisplayName(activeDirectUserId)}</p>
+                    <p className={`text-[11px] flex items-center gap-1 ${isOnline(activeDirectUserId) ? 'text-emerald-600' : 'text-muted-foreground'}`}>
+                      <Circle className={`h-1.5 w-1.5 fill-current ${isOnline(activeDirectUserId) ? 'text-emerald-500' : 'text-muted-foreground/50'}`} />
+                      {getLastSeenText(activeDirectUserId)}
+                    </p>
+                  </div>
                 </>
               ) : <p className="text-sm text-muted-foreground">Zgjidh një person</p>}
             </div>
@@ -1740,7 +1841,8 @@ const ChatView: React.FC = () => {
         ) : (
           /* Regular Chat Area */
           <>
-            <ScrollArea className="flex-1" ref={scrollRef}>
+            <div className="relative flex-1 min-h-0">
+            <ScrollArea className="h-full" ref={scrollRef}>
               <div className="px-2 sm:px-5 py-3 sm:py-4 space-y-0">
                 {/* Load more — shown when we're at the Firestore limit */}
                 {chatMode === 'channel' && filteredMessages.length >= channelLimit && !searchQuery && (
@@ -1762,10 +1864,24 @@ const ChatView: React.FC = () => {
                       const showDateSep = dateKey !== lastDateKey;
                       lastDateKey = dateKey;
                       const prevMsg = idx > 0 ? filteredMessages[idx - 1] : null;
-                      const sameSender = prevMsg && prevMsg.senderId === message.senderId && !showDateSep;
+                      // Slack-style: group messages within 5-minute window from same sender
+                      const sameSender = !!(prevMsg &&
+                        prevMsg.senderId === message.senderId &&
+                        !showDateSep &&
+                        getTimestampMs(message.createdAt) - getTimestampMs(prevMsg.createdAt) < 5 * 60 * 1000);
                       const isDeleted = !!(message as any).deletedAt;
                       const isEditing = editingMessageId === message.id;
                       const senderName = getUserDisplayName(message.senderId);
+                      // New messages divider: show before the first message that was unread when we opened
+                      const isFirstUnread = sessionUnreadIdsRef.current.has(message.id) &&
+                        (idx === 0 || !sessionUnreadIdsRef.current.has(filteredMessages[idx - 1].id));
+                      // Read receipt: last own message in DM that has been read
+                      const showReadReceipt = isOwn &&
+                        chatMode === 'direct' &&
+                        message.id === lastOwnMsgId &&
+                        message.isRead;
+                      // Image attachment
+                      const hasImage = !!(message.attachmentUrl && isImageUrl(message.attachmentUrl));
 
                       return (
                         <React.Fragment key={message.id}>
@@ -1774,6 +1890,16 @@ const ChatView: React.FC = () => {
                               <div className="flex-1 h-px bg-border/50" />
                               <span className="text-[11px] font-medium text-muted-foreground/60 bg-background px-3 py-1 rounded-full border border-border/30">{formatDate(message.createdAt)}</span>
                               <div className="flex-1 h-px bg-border/50" />
+                            </div>
+                          )}
+                          {/* New messages divider */}
+                          {isFirstUnread && (
+                            <div className="flex items-center gap-3 py-2">
+                              <div className="flex-1 h-px bg-primary/40" />
+                              <span className="text-[10px] font-semibold text-primary bg-primary/8 px-3 py-1 rounded-full border border-primary/20 flex items-center gap-1.5">
+                                <Circle className="h-1.5 w-1.5 fill-primary" /> Mesazhe të reja
+                              </span>
+                              <div className="flex-1 h-px bg-primary/40" />
                             </div>
                           )}
                           <div className={`flex group ${isOwn ? 'justify-end' : 'justify-start'} ${sameSender ? 'mt-0.5' : 'mt-3'}`}>
@@ -1837,7 +1963,22 @@ const ChatView: React.FC = () => {
                                   </p>
                                 )}
 
-                                {message.attachmentUrl && (
+                                {/* Inline image preview */}
+                                {message.attachmentUrl && hasImage && (
+                                  <a href={message.attachmentUrl} target="_blank" rel="noopener noreferrer" className="block mt-2">
+                                    <img
+                                      src={message.attachmentUrl}
+                                      alt="attachment"
+                                      className="max-w-[240px] max-h-[200px] rounded-xl object-cover border border-white/10 hover:opacity-90 transition-opacity"
+                                      onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; (e.currentTarget.nextElementSibling as HTMLElement | null)?.removeAttribute('hidden'); }}
+                                    />
+                                    <span hidden className="inline-flex items-center gap-1.5 text-xs mt-1">
+                                      <ImageIcon className="h-3 w-3" /> Shiko foton
+                                    </span>
+                                  </a>
+                                )}
+                                {/* Non-image attachment */}
+                                {message.attachmentUrl && !hasImage && (
                                   <a href={message.attachmentUrl} target="_blank" rel="noopener noreferrer"
                                     className={`inline-flex items-center gap-1.5 text-xs mt-2 px-2.5 py-1 rounded-lg transition-colors ${
                                       isOwn ? 'bg-primary-foreground/15 hover:bg-primary-foreground/25' : 'bg-background hover:bg-accent text-primary'
@@ -1862,7 +2003,7 @@ const ChatView: React.FC = () => {
                                   </div>
                                 )}
 
-                                {/* Hover actions — desktop hover, mobile long-press hint */}
+                                {/* Hover actions — desktop hover */}
                                 {!isDeleted && !isEditing && (
                                   <div className={`absolute -top-3.5 ${isOwn ? 'left-1' : 'right-1'} opacity-0 group-hover:opacity-100 active:opacity-100 transition-all flex items-center bg-background border rounded-xl shadow-lg px-1 py-0.5 z-10 gap-0.5`}>
                                     <div className="relative">
@@ -1871,7 +2012,7 @@ const ChatView: React.FC = () => {
                                         <SmilePlus className="h-3.5 w-3.5" />
                                       </button>
                                       {showEmojiPicker === message.id && (
-                                        <div className={`absolute bottom-full ${isOwn ? 'left-0' : 'right-0'} mb-1 flex gap-0.5 bg-popover border rounded-xl shadow-lg px-2 py-1.5 z-50`}>
+                                        <div className={`absolute bottom-full ${isOwn ? 'left-0' : 'right-0'} mb-1 flex flex-wrap gap-0.5 bg-popover border rounded-xl shadow-lg px-2 py-1.5 z-50 max-w-[200px]`}>
                                           {EMOJI_REACTIONS.map(emoji => (
                                             <button key={emoji} onClick={() => handleReaction(message.id, emoji)} className="hover:scale-125 transition-transform p-0.5 text-base">{emoji}</button>
                                           ))}
@@ -1880,6 +2021,18 @@ const ChatView: React.FC = () => {
                                     </div>
                                     <button className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors" onClick={() => setReplyingTo(message)}>
                                       <Reply className="h-3.5 w-3.5" />
+                                    </button>
+                                    <button
+                                      className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors"
+                                      onClick={() => {
+                                        navigator.clipboard.writeText(message.content).catch(() => {});
+                                        setCopiedMsgId(message.id);
+                                        setTimeout(() => setCopiedMsgId(null), 1500);
+                                      }}
+                                    >
+                                      {copiedMsgId === message.id
+                                        ? <CheckCheck className="h-3.5 w-3.5 text-emerald-500" />
+                                        : <Copy className="h-3.5 w-3.5" />}
                                     </button>
                                     {isOwn && (
                                       <>
@@ -1895,6 +2048,14 @@ const ChatView: React.FC = () => {
                                 )}
                               </div>
 
+                              {/* DM read receipt under last own message */}
+                              {showReadReceipt && (
+                                <div className={`flex items-center gap-1 mt-0.5 ${isOwn ? 'justify-end' : 'justify-start'}`}>
+                                  <CheckCheck className="h-3 w-3 text-primary" />
+                                  <span className="text-[9px] text-primary/70">Lexuar</span>
+                                </div>
+                              )}
+
                               {/* Mobile-visible quick actions row */}
                               {!isDeleted && !isEditing && (
                                 <div className={`flex sm:hidden items-center gap-1 mt-1 ${isOwn ? 'justify-end' : 'justify-start'}`}>
@@ -1906,12 +2067,24 @@ const ChatView: React.FC = () => {
                                   </button>
                                   <button
                                     className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-foreground active:text-foreground"
+                                    onClick={() => {
+                                      navigator.clipboard.writeText(message.content).catch(() => {});
+                                      setCopiedMsgId(message.id);
+                                      setTimeout(() => setCopiedMsgId(null), 1500);
+                                    }}
+                                  >
+                                    {copiedMsgId === message.id
+                                      ? <CheckCheck className="h-3.5 w-3.5 text-emerald-500" />
+                                      : <Copy className="h-3.5 w-3.5" />}
+                                  </button>
+                                  <button
+                                    className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-foreground active:text-foreground"
                                     onClick={() => setShowEmojiPicker(showEmojiPicker === message.id ? null : message.id)}
                                   >
                                     <SmilePlus className="h-3.5 w-3.5" />
                                   </button>
                                   {showEmojiPicker === message.id && (
-                                    <div className={`absolute bottom-full ${isOwn ? 'right-0' : 'left-0'} mb-1 flex gap-1 bg-popover border rounded-xl shadow-lg px-2 py-2 z-50`}>
+                                    <div className={`absolute bottom-full ${isOwn ? 'right-0' : 'left-0'} mb-1 flex flex-wrap gap-1 bg-popover border rounded-xl shadow-lg px-2 py-2 z-50 max-w-[200px]`}>
                                       {EMOJI_REACTIONS.map(emoji => (
                                         <button key={emoji} onClick={() => handleReaction(message.id, emoji)} className="text-lg p-0.5">{emoji}</button>
                                       ))}
@@ -1942,7 +2115,6 @@ const ChatView: React.FC = () => {
                                 </div>
                               )}
 
-
                             </div>
                           </div>
                         </React.Fragment>
@@ -1960,8 +2132,29 @@ const ChatView: React.FC = () => {
                     {!searchQuery && chatMode === 'channel' && <p className="text-xs text-muted-foreground/40 mt-1">Shkruaj mesazhin e parë</p>}
                   </div>
                 )}
+                {/* Bottom sentinel for jump-to-bottom detection */}
+                <div ref={bottomSentinelRef} className="h-1 w-full" />
               </div>
             </ScrollArea>
+
+            {/* Jump-to-bottom floating button */}
+            {showJumpToBottom && (chatMode === 'channel' || chatMode === 'direct') && (
+              <button
+                onClick={() => {
+                  if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+                  setShowJumpToBottom(false);
+                }}
+                className="absolute bottom-4 right-5 z-20 h-9 w-9 rounded-full bg-background border shadow-lg flex items-center justify-center hover:bg-accent transition-colors"
+              >
+                {currentConvUnread > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 h-4 min-w-4 px-1 flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[9px] font-bold">
+                    {currentConvUnread > 9 ? '9+' : currentConvUnread}
+                  </span>
+                )}
+                <ChevronDown className="h-5 w-5 text-foreground" />
+              </button>
+            )}
+            </div>
 
             {/* Typing indicator */}
             {activeTypingUsers.length > 0 && (
