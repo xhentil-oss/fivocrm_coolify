@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare, Copy, Phone, Cloud, UserCircle, QrCode, Wifi, WifiOff } from 'lucide-react';
+import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare, Copy, Phone, Cloud, UserCircle, QrCode, Wifi, WifiOff, ScrollText } from 'lucide-react';
 import { WhatsAppAccount, TeamMember } from '../types';
 import { MetaChannel } from '../hooks/useTeamSettings';
 import { swiftKeyDown, ibanChange } from '../lib/utils';
@@ -101,6 +101,13 @@ const SettingsView: React.FC = () => {
   const [stripeMode, setStripeMode] = useState<'test' | 'live'>('test');
   const [stripeSaved, setStripeSaved] = useState(false);
 
+  // ── Company info (used in contract templates) ──
+  const [companyName, setCompanyName] = useState('');
+  const [companyAddress, setCompanyAddress] = useState('');
+  const [companyNipt, setCompanyNipt] = useState('');
+  const [companyRep, setCompanyRep] = useState('');
+  const [companySaved, setCompanySaved] = useState(false);
+
   // ── Bank Transfer default settings (multi-bank) ──
   const [bankAccounts, setBankAccounts] = useState<Array<{ id: string; bankName: string; accountHolder: string; iban: string; swift: string; country: string }>>([]);
   const [bankSaved, setBankSaved] = useState(false);
@@ -133,6 +140,10 @@ const SettingsView: React.FC = () => {
     if (otherSettingsLoaded.current) return;
     if (firestoreSettings === null) return;
     otherSettingsLoaded.current = true;
+    if (firestoreSettings.companyName) setCompanyName(firestoreSettings.companyName);
+    if (firestoreSettings.companyAddress) setCompanyAddress(firestoreSettings.companyAddress);
+    if (firestoreSettings.companyNipt) setCompanyNipt(firestoreSettings.companyNipt);
+    if (firestoreSettings.companyRepresentative) setCompanyRep(firestoreSettings.companyRepresentative);
     if (firestoreSettings.eurAllRate) setEurAllRate(firestoreSettings.eurAllRate);
     if (firestoreSettings.whatsappEnabled !== undefined) setWhatsappEnabled(firestoreSettings.whatsappEnabled);
     if (firestoreSettings.whatsappVpsUrl) setWhatsappVpsUrl(firestoreSettings.whatsappVpsUrl);
@@ -294,6 +305,18 @@ const SettingsView: React.FC = () => {
     if (teamId) saveTeamSettings(teamId, { stripePublishableKey, stripeMode });
     setStripeSaved(true);
     setTimeout(() => setStripeSaved(false), 3000);
+  };
+
+  const handleSaveCompanyInfo = () => {
+    if (!teamId) return;
+    saveTeamSettings(teamId, {
+      companyName: companyName.trim(),
+      companyAddress: companyAddress.trim(),
+      companyNipt: companyNipt.trim(),
+      companyRepresentative: companyRep.trim(),
+    });
+    setCompanySaved(true);
+    setTimeout(() => setCompanySaved(false), 2500);
   };
 
   const handleSaveBankSettings = () => {
@@ -668,6 +691,61 @@ const SettingsView: React.FC = () => {
         </TabsContent>
 
         <TabsContent value="integrations" className="space-y-6">
+          {/* Company Info — used in contract templates */}
+          <Card className="p-6 space-y-5">
+            <div className="flex items-center gap-3">
+              <div className="p-2.5 bg-primary/10 rounded-lg">
+                <ScrollText className="w-5 h-5 text-primary" />
+              </div>
+              <div>
+                <h3 className="text-h4 text-foreground">Të Dhënat e Kompanisë</h3>
+                <p className="text-body-sm text-muted-foreground">
+                  Plotësohen automatikisht në çdo kontratë të re
+                </p>
+              </div>
+            </div>
+            <Separator />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label>Emri i Kompanisë</Label>
+                <Input
+                  value={companyName}
+                  onChange={e => setCompanyName(e.target.value)}
+                  placeholder="P.sh. Fivo Digital SH.P.K."
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Përfaqësuesi Ligjor</Label>
+                <Input
+                  value={companyRep}
+                  onChange={e => setCompanyRep(e.target.value)}
+                  placeholder="Emri i Drejtorit / Administratorit"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>NIPT</Label>
+                <Input
+                  value={companyNipt}
+                  onChange={e => setCompanyNipt(e.target.value)}
+                  placeholder="L12345678A"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Adresa</Label>
+                <Input
+                  value={companyAddress}
+                  onChange={e => setCompanyAddress(e.target.value)}
+                  placeholder="Rruga, Qyteti, Shqipëri"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end">
+              <Button onClick={handleSaveCompanyInfo} className="gap-2">
+                {companySaved ? <><Check className="w-4 h-4" /> Ruajtur</> : 'Ruaj të Dhënat'}
+              </Button>
+            </div>
+          </Card>
+
           {/* Stripe Integration */}
           <Card className="p-6 space-y-6">
             <div className="flex items-start justify-between">

@@ -22,6 +22,11 @@ export interface MetaChannel {
 }
 
 export interface TeamSettings {
+  // Company identity (used in contract templates)
+  companyName?: string;
+  companyAddress?: string;
+  companyNipt?: string;
+  companyRepresentative?: string;
   bankAccounts?: BankAccount[];
   eurAllRate?: string;
   whatsappEnabled?: boolean;

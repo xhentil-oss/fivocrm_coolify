@@ -1,5 +1,6 @@
 import React, { useState, useMemo, useRef } from 'react';
 import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
+import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
 import {
@@ -15,7 +16,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Separator } from '../components/ui/separator';
 import ContractEditor, { ContractEditorHandle } from '../components/ContractEditor';
-import { CONTRACT_TEMPLATES } from '../lib/contractTemplates';
+import { CONTRACT_TEMPLATES, ContractParties } from '../lib/contractTemplates';
 import type { Contract, Customer, Quote, Invoice, Service } from '../types';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -45,6 +46,7 @@ const ContractsView: React.FC = () => {
   const { user } = useAuth();
   const { toast } = useToast();
 
+  const teamSettings = useTeamSettingsData();
   const { data: contracts, loading } = useCollection<Contract>('contracts');
   const { data: customers } = useCollection<Customer>('customers');
   const { data: quotes } = useCollection<Quote>('quotes');
@@ -104,28 +106,42 @@ const ContractsView: React.FC = () => {
     signed: contracts?.filter(c => c.status === 'Signed').length ?? 0,
   }), [contracts]);
 
+  const buildParties = (cid: string): ContractParties => {
+    const cust = customers?.find(c => c.id === cid);
+    return {
+      companyName: teamSettings?.companyName || '[Emri i Kompanisë]',
+      companyAddress: teamSettings?.companyAddress || '',
+      companyNipt: teamSettings?.companyNipt || '',
+      companyRep: teamSettings?.companyRepresentative || '',
+      clientName: cust?.name || 'Klienti',
+      clientCompany: cust?.company || '',
+      clientAddress: cust?.address || '',
+      clientNipt: (cust as any)?.taxId || '',
+      clientEmail: cust?.email || '',
+      clientPhone: cust?.phone || '',
+    };
+  };
+
   const applyTemplate = (templateId: string) => {
     const tpl = CONTRACT_TEMPLATES.find(t => t.id === templateId);
     if (!tpl) return;
-    const custName = customers?.find(c => c.id === formCustomerId)?.name || 'Klienti';
-    const html = tpl.getHTML(custName);
+    const parties = buildParties(formCustomerId);
+    const html = tpl.getHTML(parties);
     setFormBody(html);
     editorRef.current?.setContent(html);
-    if (!formTitle) setFormTitle(`${tpl.label} — ${custName}`);
+    if (!formTitle) setFormTitle(`${tpl.label} — ${parties.clientName}`);
   };
 
   const onCustomerChange = (cid: string) => {
     setFormCustomerId(cid);
     setFormQuoteId('__none__');
     setFormInvoiceId('__none__');
-    const cust = customers?.find(c => c.id === cid);
-    if (cust && !formTitle) {
-      const tpl = CONTRACT_TEMPLATES[0];
-      const html = tpl.getHTML(cust.name);
-      setFormTitle(`Kontratë Shërbimi — ${cust.name}`);
-      setFormBody(html);
-      editorRef.current?.setContent(html);
-    }
+    const parties = buildParties(cid);
+    const tpl = CONTRACT_TEMPLATES[0];
+    const html = tpl.getHTML(parties);
+    setFormTitle(`Kontratë Shërbimi — ${parties.clientName}`);
+    setFormBody(html);
+    editorRef.current?.setContent(html);
   };
 
   const onQuoteChange = (qid: string) => {
@@ -139,10 +155,10 @@ const ContractsView: React.FC = () => {
       .map(c => `<li><strong>${c.category}</strong>: ${c.oneTime > 0 ? `${c.oneTime.toLocaleString()}${cur} (one-time)` : ''}${c.oneTime > 0 && c.monthly > 0 ? ' + ' : ''}${c.monthly > 0 ? `${c.monthly.toLocaleString()}${cur}/muaj` : ''}</li>`)
       .join('');
     const label = q.label || q.result?.suggestedLabel || 'Paketa';
-    const custName = customers?.find(c => c.id === formCustomerId)?.name || 'Klienti';
-    setFormTitle(`Kontratë — ${label} — ${custName}`);
+    const parties = buildParties(formCustomerId);
+    setFormTitle(`Kontratë — ${label} — ${parties.clientName}`);
     const pkgBlock = `<hr><h2>PAKETA E ZGJEDHUR: ${label}</h2><ul>${pkgLines}</ul><p><strong>Total One-time:</strong> ${(q.result?.totalOneTime ?? 0).toLocaleString()} ${cur}</p><p><strong>Total Mujor:</strong> ${(q.result?.totalMonthly ?? 0).toLocaleString()} ${cur}/muaj</p>${q.result?.grandTotal ? `<p><strong>Grand Total:</strong> ${q.result.grandTotal.toLocaleString()} ${cur}</p>` : ''}`;
-    const base = CONTRACT_TEMPLATES[0].getHTML(custName);
+    const base = CONTRACT_TEMPLATES[0].getHTML(parties);
     const html = base + pkgBlock;
     setFormBody(html);
     editorRef.current?.setContent(html);
