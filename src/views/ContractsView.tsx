@@ -113,6 +113,8 @@ const ContractsView: React.FC = () => {
       companyAddress: teamSettings?.companyAddress || '',
       companyNipt: teamSettings?.companyNipt || '',
       companyRep: teamSettings?.companyRepresentative || '',
+      companyEmail: teamSettings?.companyEmail || '',
+      companyPhone: teamSettings?.companyPhone || '',
       clientName: cust?.name || 'Klienti',
       clientCompany: cust?.company || '',
       clientAddress: cust?.address || '',

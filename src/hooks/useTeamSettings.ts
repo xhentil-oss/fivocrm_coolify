@@ -27,6 +27,8 @@ export interface TeamSettings {
   companyAddress?: string;
   companyNipt?: string;
   companyRepresentative?: string;
+  companyEmail?: string;
+  companyPhone?: string;
   bankAccounts?: BankAccount[];
   eurAllRate?: string;
   whatsappEnabled?: boolean;

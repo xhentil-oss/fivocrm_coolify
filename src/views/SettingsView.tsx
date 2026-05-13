@@ -106,6 +106,8 @@ const SettingsView: React.FC = () => {
   const [companyAddress, setCompanyAddress] = useState('');
   const [companyNipt, setCompanyNipt] = useState('');
   const [companyRep, setCompanyRep] = useState('');
+  const [companyEmail, setCompanyEmail] = useState('');
+  const [companyPhone, setCompanyPhone] = useState('');
   const [companySaved, setCompanySaved] = useState(false);
 
   // ── Bank Transfer default settings (multi-bank) ──
@@ -144,6 +146,8 @@ const SettingsView: React.FC = () => {
     if (firestoreSettings.companyAddress) setCompanyAddress(firestoreSettings.companyAddress);
     if (firestoreSettings.companyNipt) setCompanyNipt(firestoreSettings.companyNipt);
     if (firestoreSettings.companyRepresentative) setCompanyRep(firestoreSettings.companyRepresentative);
+    if (firestoreSettings.companyEmail) setCompanyEmail(firestoreSettings.companyEmail);
+    if (firestoreSettings.companyPhone) setCompanyPhone(firestoreSettings.companyPhone);
     if (firestoreSettings.eurAllRate) setEurAllRate(firestoreSettings.eurAllRate);
     if (firestoreSettings.whatsappEnabled !== undefined) setWhatsappEnabled(firestoreSettings.whatsappEnabled);
     if (firestoreSettings.whatsappVpsUrl) setWhatsappVpsUrl(firestoreSettings.whatsappVpsUrl);
@@ -314,6 +318,8 @@ const SettingsView: React.FC = () => {
       companyAddress: companyAddress.trim(),
       companyNipt: companyNipt.trim(),
       companyRepresentative: companyRep.trim(),
+      companyEmail: companyEmail.trim(),
+      companyPhone: companyPhone.trim(),
     });
     setCompanySaved(true);
     setTimeout(() => setCompanySaved(false), 2500);
@@ -736,6 +742,23 @@ const SettingsView: React.FC = () => {
                   value={companyAddress}
                   onChange={e => setCompanyAddress(e.target.value)}
                   placeholder="Rruga, Qyteti, Shqipëri"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Email Zyrtar</Label>
+                <Input
+                  type="email"
+                  value={companyEmail}
+                  onChange={e => setCompanyEmail(e.target.value)}
+                  placeholder="info@kompania.al"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Telefon</Label>
+                <Input
+                  value={companyPhone}
+                  onChange={e => setCompanyPhone(e.target.value)}
+                  placeholder="+355 6X XXX XXXX"
                 />
               </div>
             </div>
