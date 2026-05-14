@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
 import { buildInvoiceEmail } from '../_invoiceEmail.js';
-import admin, { adminDb as db, adminMessaging } from '../_firebaseAdmin.js';
+import admin, { adminDb as db, adminMessaging, adminAuth } from '../_firebaseAdmin.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 function authorize(req: VercelRequest): boolean {
@@ -10,29 +10,37 @@ function authorize(req: VercelRequest): boolean {
 }
 
 // Manual admin trigger: verify Firebase ID token + admin role
-async function authorizeManual(req: VercelRequest): Promise<boolean> {
+// Returns null on success, or an error string describing why auth failed.
+async function authorizeManual(req: VercelRequest): Promise<string | null> {
   const authHeader = req.headers.authorization as string;
-  if (!authHeader?.startsWith('Bearer ')) return false;
+  if (!authHeader?.startsWith('Bearer ')) return 'Missing Authorization header';
   const token = authHeader.slice(7);
+  let uid: string;
   try {
-    const decoded = await admin.auth().verifyIdToken(token);
+    const decoded = await adminAuth.verifyIdToken(token);
+    uid = decoded.uid;
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    console.error('[manual-auth] verifyIdToken failed:', msg);
+    return `Token invalid: ${msg}`;
+  }
+  try {
     const snap = await db.collection('teamMembers')
-      .where('userId', '==', decoded.uid)
+      .where('userId', '==', uid)
       .limit(10)
       .get();
     if (snap.empty) {
-      console.warn(`[manual-auth] No teamMember found for uid=${decoded.uid}`);
-      return false;
+      console.warn(`[manual-auth] No teamMember for uid=${uid}`);
+      return `No team membership for uid=${uid}`;
     }
-    const hasAdmin = snap.docs.some(d => d.data().role === 'Admin');
-    if (!hasAdmin) {
-      const roles = snap.docs.map(d => d.data().role).join(', ');
-      console.warn(`[manual-auth] uid=${decoded.uid} roles=[${roles}] — not Admin`);
-    }
-    return hasAdmin;
-  } catch (err) {
-    console.error('[manual-auth] token verification failed:', err);
-    return false;
+    const roles = snap.docs.map(d => d.data().role as string);
+    console.log(`[manual-auth] uid=${uid} roles=[${roles.join(', ')}]`);
+    if (!roles.includes('Admin')) return `Role not Admin (found: ${roles.join(', ')})`;
+    return null; // authorized
+  } catch (err: any) {
+    const msg = err?.message || String(err);
+    console.error('[manual-auth] Firestore query failed:', msg);
+    return `Firestore error: ${msg}`;
   }
 }
 
@@ -941,9 +949,11 @@ async function runCleanupOldNotifications() {
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const isManual = req.query.manual === '1';
-  const authorized = isManual ? await authorizeManual(req) : authorize(req);
-  if (!authorized) {
-    return res.status(401).json({ error: 'Unauthorized' });
+  if (isManual) {
+    const authError = await authorizeManual(req);
+    if (authError) return res.status(401).json({ error: `Unauthorized: ${authError}` });
+  } else {
+    if (!authorize(req)) return res.status(401).json({ error: 'Unauthorized' });
   }
 
   const job = req.query.job as string;

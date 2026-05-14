@@ -161,7 +161,7 @@ const InvoicesView: React.FC = () => {
     if (!user || triggeringRecurring) return;
     setTriggeringRecurring(true);
     try {
-      const token = await user.getIdToken();
+      const token = await user.getIdToken(/* forceRefresh */ true);
       const res = await fetch('/api/cron/run?job=recurring-invoices&manual=1', {
         method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
