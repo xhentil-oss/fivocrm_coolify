@@ -1,47 +1,50 @@
-// Firebase Messaging Service Worker — handles background push notifications
-// This file is served at /firebase-messaging-sw.js by Vite's static assets.
-//
-// Fill in FIREBASE_CONFIG below with your Firebase project values.
-// These are public values (safe to commit) — find them in Firebase Console → Project Settings.
+// Firebase Cloud Messaging Service Worker
+// Handles background push notifications when the app is not in the foreground.
+// Served at /firebase-messaging-sw.js via Vite's publicDir (static/).
 
-importScripts('https://www.gstatic.com/firebasejs/10.14.0/firebase-app-compat.js');
-importScripts('https://www.gstatic.com/firebasejs/10.14.0/firebase-messaging-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/10.13.2/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/10.13.2/firebase-messaging-compat.js');
 
-// ── Firebase config (public values — fill these in) ──────────────────────────
-const FIREBASE_CONFIG = self.__FIREBASE_CONFIG || {
-  apiKey:            '',
-  authDomain:        '',
-  projectId:         '',
-  storageBucket:     '',
-  messagingSenderId: '',
-  appId:             '',
-};
+let messagingInstance = null;
 
-firebase.initializeApp(FIREBASE_CONFIG);
-const messaging = firebase.messaging();
+function initFirebase(config) {
+  try {
+    if (!config || !config.apiKey) return;
+    const apps = firebase.getApps ? firebase.getApps() : [];
+    const app = apps.length > 0 ? apps[0] : firebase.initializeApp(config);
+    messagingInstance = firebase.messaging(app);
 
-// ── Background message handler ────────────────────────────────────────────────
-messaging.onBackgroundMessage(payload => {
-  const { title = 'FivoCRM', body = '' } = payload.notification || {};
-  const url = payload.data?.url || '/';
+    messagingInstance.onBackgroundMessage((payload) => {
+      const title = payload.notification?.title || 'FivoCRM';
+      const body  = payload.notification?.body  || '';
+      const url   = payload.data?.url || '/';
 
-  self.registration.showNotification(title, {
-    body,
-    icon: '/icon-192.png',
-    badge: '/icon-72.png',
-    data: { url },
-    requireInteraction: false,
-  });
+      self.registration.showNotification(title, {
+        body,
+        icon: '/icon-192.png',
+        badge: '/icon-72.png',
+        data: { url },
+        requireInteraction: false,
+      });
+    });
+  } catch (err) {
+    console.error('[FCM-SW] init error:', err);
+  }
+}
+
+// Accept config injected by the main app via postMessage
+self.addEventListener('message', (event) => {
+  if (event.data?.type === 'FIREBASE_CONFIG' && !messagingInstance) {
+    initFirebase(event.data.config);
+  }
 });
 
-// ── Deep-link on notification click ──────────────────────────────────────────
-self.addEventListener('notificationclick', event => {
+self.addEventListener('notificationclick', (event) => {
   event.notification.close();
   const url = event.notification.data?.url || '/';
 
   event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true }).then(windowClients => {
-      // If app is already open, focus it and navigate
+    clients.matchAll({ type: 'window', includeUncontrolled: true }).then((windowClients) => {
       for (const client of windowClients) {
         if ('focus' in client) {
           client.focus();
@@ -49,7 +52,6 @@ self.addEventListener('notificationclick', event => {
           return;
         }
       }
-      // Otherwise open a new window
       return clients.openWindow(url);
     })
   );

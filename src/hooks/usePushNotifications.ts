@@ -86,6 +86,21 @@ export function usePushNotifications(userId?: string) {
 
         // Register service worker for background messages
         const swReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
+
+        // Inject Firebase config into the SW (it can't access import.meta.env)
+        const swTarget = swReg.installing || swReg.waiting || swReg.active;
+        if (swTarget) {
+          const firebaseConfig = {
+            apiKey:            import.meta.env.VITE_FIREBASE_API_KEY as string,
+            authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN as string,
+            projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID as string,
+            storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET as string,
+            messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID as string,
+            appId:             import.meta.env.VITE_FIREBASE_APP_ID as string,
+          };
+          swTarget.postMessage({ type: 'FIREBASE_CONFIG', config: firebaseConfig });
+        }
+
         const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: swReg });
         if (token && mounted && userIdRef.current) {
           await saveToken(userIdRef.current, token, 'web');

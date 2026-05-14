@@ -121,6 +121,26 @@ const ChatView: React.FC = () => {
   const bgDmInitialRef = useRef(true);
   const mountTimeRef = useRef(new Date());
 
+  // Pre-warm AudioContext on first user gesture so Chrome autoplay policy allows it
+  useEffect(() => {
+    const init = () => {
+      const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
+      if (!Ctx) return;
+      if (!audioCtxRef.current || audioCtxRef.current.state === 'closed') {
+        audioCtxRef.current = new Ctx();
+      }
+      if (audioCtxRef.current.state === 'suspended') {
+        audioCtxRef.current.resume().catch(() => {});
+      }
+    };
+    document.addEventListener('click', init, { once: true });
+    document.addEventListener('keydown', init, { once: true });
+    return () => {
+      document.removeEventListener('click', init);
+      document.removeEventListener('keydown', init);
+    };
+  }, []);
+
   const playBirdChirp = useCallback(() => {
     try {
       const Ctx = window.AudioContext ?? (window as any).webkitAudioContext;
@@ -129,7 +149,8 @@ const ChatView: React.FC = () => {
         audioCtxRef.current = new Ctx();
       }
       const ctx = audioCtxRef.current;
-      if (ctx.state === 'suspended') ctx.resume();
+      // Skip if still suspended — browser hasn't unlocked audio yet
+      if (ctx.state === 'suspended') { ctx.resume().catch(() => {}); return; }
 
       const chirp = (t: number) => {
         const osc = ctx.createOscillator();

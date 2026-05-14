@@ -18,11 +18,20 @@ async function authorizeManual(req: VercelRequest): Promise<boolean> {
     const decoded = await admin.auth().verifyIdToken(token);
     const snap = await db.collection('teamMembers')
       .where('userId', '==', decoded.uid)
-      .where('role', '==', 'Admin')
-      .limit(1)
+      .limit(10)
       .get();
-    return !snap.empty;
-  } catch {
+    if (snap.empty) {
+      console.warn(`[manual-auth] No teamMember found for uid=${decoded.uid}`);
+      return false;
+    }
+    const hasAdmin = snap.docs.some(d => d.data().role === 'Admin');
+    if (!hasAdmin) {
+      const roles = snap.docs.map(d => d.data().role).join(', ');
+      console.warn(`[manual-auth] uid=${decoded.uid} roles=[${roles}] — not Admin`);
+    }
+    return hasAdmin;
+  } catch (err) {
+    console.error('[manual-auth] token verification failed:', err);
     return false;
   }
 }
