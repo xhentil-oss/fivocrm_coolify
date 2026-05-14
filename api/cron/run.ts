@@ -9,6 +9,24 @@ function authorize(req: VercelRequest): boolean {
   return !!(cronSecret && req.headers.authorization === `Bearer ${cronSecret}`);
 }
 
+// Manual admin trigger: verify Firebase ID token + admin role
+async function authorizeManual(req: VercelRequest): Promise<boolean> {
+  const authHeader = req.headers.authorization as string;
+  if (!authHeader?.startsWith('Bearer ')) return false;
+  const token = authHeader.slice(7);
+  try {
+    const decoded = await admin.auth().verifyIdToken(token);
+    const snap = await db.collection('teamMembers')
+      .where('userId', '==', decoded.uid)
+      .where('role', '==', 'Admin')
+      .limit(1)
+      .get();
+    return !snap.empty;
+  } catch {
+    return false;
+  }
+}
+
 // ── settleAll: Promise.allSettled with error logging ─────────────────────────
 async function settleAll(ops: Promise<any>[], jobName: string): Promise<void> {
   const results = await Promise.allSettled(ops);
@@ -913,7 +931,9 @@ async function runCleanupOldNotifications() {
 
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  if (!authorize(req)) {
+  const isManual = req.query.manual === '1';
+  const authorized = isManual ? await authorizeManual(req) : authorize(req);
+  if (!authorized) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
 
@@ -959,8 +979,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'notification-digest':
         result = await runNotificationDigest();
         break;
+      case 'run-all': {
+        // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
+        const [tasks, invoiceRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, digest] = await Promise.allSettled([
+          runTaskDeadlineAlerts(),
+          runInvoiceReminders(),
+          runRecurringTasks(),
+          runRecurringInvoices(),
+          runProjectCompletionReminder(),
+          runRecurringProjectReset(),
+          runGoalOverdueAlerts(),
+          runRecurringExpenses(),
+          runExpireInvitations(),
+          runLeadFollowUpReminders(),
+          runNotificationDigest(),
+        ]);
+        const settled = (r: PromiseSettledResult<any>) =>
+          r.status === 'fulfilled' ? r.value : { error: (r.reason as Error)?.message || 'failed' };
+        result = {
+          tasks: settled(tasks),
+          invoiceReminders: settled(invoiceRem),
+          recurringTasks: settled(recurTasks),
+          recurringInvoices: settled(recurInv),
+          projectCompletionReminder: settled(projCompl),
+          projectReset: settled(projReset),
+          goalAlerts: settled(goals),
+          recurringExpenses: settled(expenses),
+          invites: settled(invites),
+          leadReminders: settled(leads),
+          digest: settled(digest),
+        };
+        break;
+      }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest` });
     }
 
     return res.status(200).json({ success: true, job, ...result, timestamp: new Date().toISOString() });

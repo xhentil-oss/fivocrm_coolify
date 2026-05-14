@@ -6,7 +6,7 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useAuth } from '../contexts/AuthContext';
-import { DollarSign, Plus, Calendar as CalendarIcon, CreditCard, Mail, Send, Building2, ShoppingCart, Trash2, Eye, Edit2, Check, X, ExternalLink, Loader2, MoreVertical, Download, ChevronsUpDown } from 'lucide-react';
+import { DollarSign, Plus, Calendar as CalendarIcon, CreditCard, Mail, Send, Building2, ShoppingCart, Trash2, Eye, Edit2, Check, X, ExternalLink, Loader2, MoreVertical, Download, ChevronsUpDown, RefreshCw } from 'lucide-react';
 import ExportButton from '../components/ExportButton';
 import { loadStripe } from '@stripe/stripe-js';
 import { Card } from '../components/ui/card';
@@ -55,6 +55,7 @@ const InvoicesView: React.FC = () => {
   const [partialNote, setPartialNote] = useState('');
   const [partialSaving, setPartialSaving] = useState(false);
   const [paidAtDate, setPaidAtDate] = useState('');
+  const [triggeringRecurring, setTriggeringRecurring] = useState(false);
 
   const { data: rawInvoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', {
     orderBy: { field: 'createdAt', direction: 'desc' },
@@ -153,6 +154,32 @@ const InvoicesView: React.FC = () => {
       toast({ title: 'Kujtesa u dërgua me email me sukses!' });
     } catch (err: any) {
       toast({ title: 'Gabim gjatë dërgimit të kujtesës', description: err.message, variant: 'destructive' });
+    }
+  };
+
+  const handleTriggerRecurringInvoices = async () => {
+    if (!user || triggeringRecurring) return;
+    setTriggeringRecurring(true);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch('/api/cron/run?job=recurring-invoices&manual=1', {
+        method: 'GET',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gabim serveri');
+      const created = data.created ?? 0;
+      const skipped = data.skipped ?? 0;
+      toast({
+        title: created > 0 ? `✅ ${created} faturë u gjenerua!` : '✓ Nuk ka fatura për gjenerim',
+        description: created > 0
+          ? `${skipped} u kaluan (nuk e kanë arritur datën ose janë në pauzë).`
+          : 'Të gjitha faturat periodike janë aktualizuara ose nuk e kanë arritur datën e tyre.',
+      });
+    } catch (err: any) {
+      toast({ title: 'Gabim gjatë gjenerimit', description: err.message, variant: 'destructive' });
+    } finally {
+      setTriggeringRecurring(false);
     }
   };
 
@@ -451,11 +478,26 @@ const InvoicesView: React.FC = () => {
           </p>
         </div>
         <div className="flex gap-2">
-          <ExportButton 
-            data={invoices || []} 
+          <ExportButton
+            data={invoices || []}
             filename="invoices"
             columns={['invoiceNumber', 'customerId', 'total', 'status', 'dueDate', 'paymentMethod']}
           />
+          {permissions.isAdmin && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleTriggerRecurringInvoices}
+              disabled={triggeringRecurring}
+              title="Gjenero faturat periodike manualisht"
+              className="gap-1.5 border-primary/30 text-primary hover:bg-primary/5"
+            >
+              {triggeringRecurring
+                ? <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                : <RefreshCw className="w-3.5 h-3.5" />}
+              <span className="hidden sm:inline">Gjenero Periodike</span>
+            </Button>
+          )}
           {permissions.canEdit && (
             <Dialog open={isCreateDialogOpen} onOpenChange={(open) => {
               if (open) { setDirty(false); setIsCreateDialogOpen(true); }
