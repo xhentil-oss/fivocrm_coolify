@@ -10,20 +10,33 @@ if (!getApps().length) {
   const projectId = process.env.FIREBASE_PROJECT_ID;
   const clientEmail = process.env.FIREBASE_CLIENT_EMAIL;
   const privateKey = process.env.FIREBASE_PRIVATE_KEY?.replace(/\\n/g, '\n');
+  // Accept either FIREBASE_SERVICE_ACCOUNT_JSON (current) or FIREBASE_SERVICE_ACCOUNT (legacy name in docs)
+  const serviceAccountJson =
+    process.env.FIREBASE_SERVICE_ACCOUNT_JSON || process.env.FIREBASE_SERVICE_ACCOUNT;
 
   if (projectId && clientEmail && privateKey) {
     app = initializeApp({
       credential: cert({ projectId, clientEmail, privateKey }),
     });
-  } else if (process.env.FIREBASE_SERVICE_ACCOUNT_JSON) {
+    console.log('[firebaseAdmin] initialized via FIREBASE_PROJECT_ID/CLIENT_EMAIL/PRIVATE_KEY');
+  } else if (serviceAccountJson) {
+    let sa: any;
     try {
-      const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT_JSON);
-      app = initializeApp({ credential: cert(sa) });
-    } catch {
-      app = initializeApp();
+      sa = JSON.parse(serviceAccountJson);
+    } catch (e: any) {
+      console.error('[firebaseAdmin] Failed to parse service account JSON:', e?.message || e);
+      throw new Error(
+        'Invalid FIREBASE_SERVICE_ACCOUNT_JSON: not valid JSON. Make sure newlines in private_key are escaped as \\n.'
+      );
     }
+    app = initializeApp({ credential: cert(sa) });
+    console.log('[firebaseAdmin] initialized via FIREBASE_SERVICE_ACCOUNT_JSON');
   } else {
-    app = initializeApp();
+    throw new Error(
+      'Missing Firebase Admin credentials. Set either:\n' +
+      '  • FIREBASE_PROJECT_ID + FIREBASE_CLIENT_EMAIL + FIREBASE_PRIVATE_KEY, OR\n' +
+      '  • FIREBASE_SERVICE_ACCOUNT_JSON (full service account JSON as a single string).'
+    );
   }
 } else {
   app = getApps()[0]!;

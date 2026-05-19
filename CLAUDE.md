@@ -202,9 +202,13 @@ git add . && git commit -m "message" && git push
 ## Environment Variables (required)
 
 ```
-VITE_FIREBASE_*          — Firebase config (client)
-FIREBASE_SERVICE_ACCOUNT — Firebase Admin SDK (server)
-STRIPE_SECRET_KEY        — Stripe
+VITE_FIREBASE_*               — Firebase config (client)
+# Firebase Admin SDK (server) — set EITHER the three vars OR the JSON one:
+FIREBASE_PROJECT_ID           — Service account project_id
+FIREBASE_CLIENT_EMAIL         — Service account client_email
+FIREBASE_PRIVATE_KEY          — Service account private_key (use \n for newlines)
+FIREBASE_SERVICE_ACCOUNT_JSON — Full service account JSON (alternative)
+STRIPE_SECRET_KEY             — Stripe
 STRIPE_WEBHOOK_SECRET    — Stripe webhooks
 OPENAI_API_KEY           — AI chat
 META_VERIFY_TOKEN        — Meta webhook verification
