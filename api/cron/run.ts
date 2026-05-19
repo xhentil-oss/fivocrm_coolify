@@ -12,6 +12,22 @@ function authorize(req: VercelRequest): boolean {
 // Manual admin trigger: verify Firebase ID token + admin role
 // Returns null on success, or an error string describing why auth failed.
 async function authorizeManual(req: VercelRequest): Promise<string | null> {
+  // Diagnostic: print non-secret identifiers on every invocation so cold/warm don't matter.
+  {
+    const pid = process.env.FIREBASE_PROJECT_ID || '(unset)';
+    const email = process.env.FIREBASE_CLIENT_EMAIL || '(unset)';
+    const rawPk = process.env.FIREBASE_PRIVATE_KEY || '';
+    const pk = rawPk.replace(/\\n/g, '\n');
+    const emailDomain = email.includes('@') ? email.split('@')[1] : email;
+    const emailLocalSuffix = email.includes('@') ? email.split('@')[0].slice(-4) : '';
+    const pkLines = pk ? pk.split('\n').length : 0;
+    const pkStartsOK = pk.startsWith('-----BEGIN PRIVATE KEY-----');
+    const pkEndsOK = pk.trimEnd().endsWith('-----END PRIVATE KEY-----');
+    console.log(
+      `[diag] projectId=${pid} emailDomain=${emailDomain} emailLocalSuffix=...${emailLocalSuffix} ` +
+      `pkLen=${pk.length} pkLines=${pkLines} pkStartsOK=${pkStartsOK} pkEndsOK=${pkEndsOK}`
+    );
+  }
   const authHeader = req.headers.authorization as string;
   if (!authHeader?.startsWith('Bearer ')) return 'Missing Authorization header';
   const token = authHeader.slice(7);
