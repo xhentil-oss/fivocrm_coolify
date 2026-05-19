@@ -18,16 +18,7 @@ if (!getApps().length) {
     app = initializeApp({
       credential: cert({ projectId, clientEmail, privateKey }),
     });
-    // Diagnostic: log non-secret identifiers + private_key shape so mismatches are obvious.
-    const emailDomain = clientEmail.split('@')[1] || '';
-    const pkStartsOK = privateKey.startsWith('-----BEGIN PRIVATE KEY-----');
-    const pkEndsOK = privateKey.trimEnd().endsWith('-----END PRIVATE KEY-----');
-    const pkLines = privateKey.split('\n').length;
-    console.log(
-      `[firebaseAdmin] initialized via FIREBASE_PROJECT_ID/CLIENT_EMAIL/PRIVATE_KEY ` +
-      `projectId=${projectId} clientEmailDomain=${emailDomain} ` +
-      `pkLen=${privateKey.length} pkLines=${pkLines} pkStartsOK=${pkStartsOK} pkEndsOK=${pkEndsOK}`
-    );
+    console.log('[firebaseAdmin] initialized via FIREBASE_PROJECT_ID/CLIENT_EMAIL/PRIVATE_KEY');
   } else if (serviceAccountJson) {
     let sa: any;
     try {
