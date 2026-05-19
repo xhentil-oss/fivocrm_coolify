@@ -203,17 +203,18 @@ export function buildCashflowByMonth(
 }
 
 export function calculateCollectedRevenue(invoices?: Invoice[]): number {
-  return invoices?.reduce((sum, inv) => {
-    if (inv.status === 'Paid') return sum + toAll(inv.total ?? inv.amount ?? 0, inv.currency);
-    if (inv.status === 'Partial') return sum + toAll(inv.paidAmount ?? 0, inv.currency);
-    return sum;
-  }, 0) || 0;
+  // Use the canonical helper so this matches per-invoice math everywhere
+  // (partialPayments sum is preferred over the cached paidAmount field).
+  return invoices?.reduce((sum, inv) => sum + getInvoiceCollectedAll(inv), 0) || 0;
 }
 
 export function calculateProjectedRevenue(invoices?: Invoice[]): number {
   return invoices?.reduce((sum, inv) => {
-    if (inv.status === 'Pending' || inv.status === 'Draft') return sum + toAll(inv.total ?? inv.amount ?? 0, inv.currency);
-    if (inv.status === 'Partial') return sum + Math.max(0, toAll(inv.total ?? inv.amount ?? 0, inv.currency) - toAll(inv.paidAmount ?? 0, inv.currency));
+    // Drafts are not yet revenue — they haven't been issued to a customer.
+    if (inv.status === 'Pending' || inv.status === 'Overdue') {
+      return sum + getInvoiceOutstandingAll(inv);
+    }
+    if (inv.status === 'Partial') return sum + getInvoiceOutstandingAll(inv);
     return sum;
   }, 0) || 0;
 }

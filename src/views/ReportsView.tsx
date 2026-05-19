@@ -468,14 +468,18 @@ const ReportsView: React.FC = () => {
 
   // Pre-compute customer → assigned rep so invoices created by an admin
   // still flow to the rep who owns the customer relationship.
+  // IMPORTANT: customers is fetched with skipTeamFilter, so scope to the
+  // current team here to avoid leaking cross-team ownership into revenue.
   const customerOwnerById = useMemo(() => {
     const map = new Map<string, string>();
     (customers ?? []).forEach(c => {
+      const customerTeamId = (c as any).teamId;
+      if (currentTeamId && customerTeamId && customerTeamId !== currentTeamId) return;
       const owner = (c as any).assignedToUserId || (c as any).ownerUserId;
       if (c.id && owner) map.set(c.id, owner);
     });
     return map;
-  }, [customers]);
+  }, [customers, currentTeamId]);
 
   const staffRevenueComputation = useMemo(() => {
     const empty = { rows: [] as any[], unattributed: { billed: 0, collected: 0, outstanding: 0, invoiceCount: 0 } };
