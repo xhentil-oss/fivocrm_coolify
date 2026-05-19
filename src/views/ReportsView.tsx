@@ -28,8 +28,11 @@ import {
   calculateRevenueBetween,
   calculateTotalExpenses,
   getFinancialAvailableYears,
+  getInvoiceCollectedAll,
+  getInvoiceOutstandingAll,
   getInvoicePaidDate,
   getInvoiceRecognitionDate,
+  getInvoiceTotalAll,
   parseDate,
   type AccountingBasis,
 } from '../lib/finance/financialAnalytics';
@@ -138,6 +141,8 @@ const ReportsView: React.FC = () => {
   // Default to ERP-grade accrual basis (IFRS/GAAP standard).
   // Cash basis still available via the toggle for cash-flow analysis.
   const [accountingBasis, setAccountingBasis] = useState<AccountingBasis>('accrual');
+  // Period filter for "Të Ardhura sipas Stafit": current year vs all-time.
+  const [staffPeriod, setStaffPeriod] = useState<'year' | 'all'>('year');
 
   const { data: invoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
   const { data: projects, loading: projectsLoading } = useCollection<Project>('projects', { skipTeamFilter: true });
@@ -460,9 +465,21 @@ const ReportsView: React.FC = () => {
 
   const revenueByStaff = useMemo(() => {
     if (!scopedTeamMembers || !projects || !invoices) return [];
+
+    const yearStart = new Date(selectedRevenueYear, 0, 1);
+    const yearEnd = new Date(selectedRevenueYear, 11, 31, 23, 59, 59, 999);
+    const isInYear = (d: Date | null) => !!d && d >= yearStart && d <= yearEnd;
+
+    // Determine if an invoice belongs to the selected period.
+    const inSelectedPeriod = (inv: Invoice) => {
+      if (staffPeriod === 'all') return true;
+      const recDate = getInvoiceRecognitionDate(inv);
+      const paidDate = getInvoicePaidDate(inv);
+      return isInYear(recDate) || isInYear(paidDate);
+    };
+
     return scopedTeamMembers
       .map(member => {
-        // Support legacy member records that may use uid/id instead of userId.
         const memberUserId = (member as any).userId || (member as any).uid || (member as any).id;
         const memberIdentifiers = new Set<string>(
           [memberUserId, (member as any).email]
@@ -474,14 +491,17 @@ const ReportsView: React.FC = () => {
             name: member.displayName || member.email || 'Pa emër',
             role: member.role,
             revenue: 0,
+            billed: 0,
+            collected: 0,
             outstanding: 0,
+            invoiceCount: 0,
+            avgDeal: 0,
+            wonLeads: 0,
             projectCount: 0,
             taskCount: 0,
           };
         }
 
-        // Revenue is attributed to one owner only to avoid double counting.
-        // Fallbacks keep older records compatible.
         const memberOwnedProjects = projects.filter(p => {
           const responsible =
             p.responsibleUserId ||
@@ -489,8 +509,6 @@ const ReportsView: React.FC = () => {
             (p as any).assignedToUserId ||
             (p as any).createdByUserId;
           if (!responsible || !memberIdentifiers.has(responsible)) return false;
-          // Allow projects with no teamId (legacy records created before teamId field existed).
-          // If project has a teamId set, it must match the current team.
           const projectTeamId = (p as any).teamId;
           return !projectTeamId || !currentTeamId || projectTeamId === currentTeamId;
         });
@@ -513,36 +531,66 @@ const ReportsView: React.FC = () => {
           const taskTeamId = (t as any).teamId;
           return !taskTeamId || !currentTeamId || taskTeamId === currentTeamId;
         }).length;
+
         const memberInvoices = invoices.filter(inv => {
           const invoiceTeamId = (inv as any).teamId;
           const teamMatch = !invoiceTeamId || !currentTeamId || invoiceTeamId === currentTeamId;
           if (!teamMatch) return false;
-          if (inv.projectId && ownedProjectIds.has(inv.projectId)) return true;
-          const invoiceOwner = (inv as any).responsibleUserId || (inv as any).createdByUserId;
-          return !!invoiceOwner && memberIdentifiers.has(invoiceOwner);
+          // Drafts never count as revenue/AR.
+          if (inv.status === 'Draft') return false;
+          const owns =
+            (inv.projectId && ownedProjectIds.has(inv.projectId)) ||
+            (() => {
+              const invoiceOwner = (inv as any).responsibleUserId || (inv as any).createdByUserId;
+              return !!invoiceOwner && memberIdentifiers.has(invoiceOwner);
+            })();
+          if (!owns) return false;
+          return inSelectedPeriod(inv);
         });
-        const revenue = memberInvoices.reduce((s, inv) => {
-          if (inv.status === 'Paid') return s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
-          if (inv.status === 'Partial') return s + toAll(inv.paidAmount ?? 0, (inv as any).currency);
-          return s;
-        }, 0);
-        const outstanding = memberInvoices.reduce((s, inv) => {
-          if (inv.status === 'Paid') return s;
-          const total = toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
-          const paid = inv.status === 'Partial' ? toAll(inv.paidAmount ?? 0, (inv as any).currency) : 0;
-          return s + Math.max(0, total - paid);
-        }, 0);
+
+        // Centralised money math — consistent with the rest of finance reports.
+        const billed = memberInvoices.reduce((s, inv) => s + getInvoiceTotalAll(inv), 0);
+        const collected = memberInvoices.reduce((s, inv) => s + getInvoiceCollectedAll(inv), 0);
+        const outstanding = memberInvoices.reduce((s, inv) => s + getInvoiceOutstandingAll(inv), 0);
+
+        const wonLeads = (leads ?? []).filter(l => {
+          if (l.status !== 'Won') return false;
+          if (!l.assignedToUserId || !memberIdentifiers.has(l.assignedToUserId)) return false;
+          const leadTeamId = (l as any).teamId;
+          if (leadTeamId && currentTeamId && leadTeamId !== currentTeamId) return false;
+          if (staffPeriod === 'all') return true;
+          // Approximate close date by updatedAt.
+          const closeDate = parseDate((l as any).updatedAt) || parseDate((l as any).createdAt);
+          return isInYear(closeDate);
+        }).length;
+
+        // The headline number depends on basis: accrual → billed; cash → collected.
+        const revenue = accountingBasis === 'accrual' ? billed : collected;
+        const avgDeal = memberInvoices.length > 0 ? billed / memberInvoices.length : 0;
+
         return {
           name: member.displayName || member.email || 'Pa emër',
           role: member.role,
           revenue,
+          billed,
+          collected,
           outstanding,
+          invoiceCount: memberInvoices.length,
+          avgDeal,
+          wonLeads,
           projectCount: memberInvolvedProjects.length,
           taskCount: memberTaskCount,
         };
       })
       .sort((a, b) => b.revenue - a.revenue);
-  }, [scopedTeamMembers, projects, invoices, tasks, currentTeamId]);
+  }, [scopedTeamMembers, projects, invoices, tasks, leads, currentTeamId, accountingBasis, staffPeriod, selectedRevenueYear]);
+
+  // Sum totals for the staff footer.
+  const staffTotals = useMemo(() => ({
+    billed: revenueByStaff.reduce((s, m) => s + m.billed, 0),
+    collected: revenueByStaff.reduce((s, m) => s + m.collected, 0),
+    outstanding: revenueByStaff.reduce((s, m) => s + m.outstanding, 0),
+  }), [revenueByStaff]);
 
   // ── KPI Calculations ──
   const totalRevenue = calculateCollectedRevenue(invoices);
@@ -1187,28 +1235,61 @@ const ReportsView: React.FC = () => {
       {/* Revenue by Staff Member — Admin/Owner only */}
       {(permissions.isAdmin || permissions.isOwner) && revenueByStaff.length > 0 && (
         <Card className="p-6 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="text-lg font-semibold">Të Ardhura sipas Stafit</h3>
-            <Badge variant="secondary">{revenueByStaff.length} anëtarë</Badge>
+          <div className="flex items-center justify-between flex-wrap gap-3">
+            <div>
+              <h3 className="text-lg font-semibold">Të Ardhura sipas Stafit</h3>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {accountingBasis === 'accrual' ? 'Bazë akruale · data e faturës' : 'Bazë arkë · data e pagesës'}
+                {' · '}
+                {staffPeriod === 'year' ? `Viti ${selectedRevenueYear}` : 'Të gjitha kohërat'}
+              </p>
+            </div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <div className="inline-flex rounded-full border border-input bg-background p-0.5 text-[11px] font-medium">
+                <button
+                  onClick={() => setStaffPeriod('year')}
+                  className={`h-6 px-2.5 rounded-full transition-colors ${staffPeriod === 'year' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}
+                >
+                  {selectedRevenueYear}
+                </button>
+                <button
+                  onClick={() => setStaffPeriod('all')}
+                  className={`h-6 px-2.5 rounded-full transition-colors ${staffPeriod === 'all' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}
+                >
+                  Të gjitha
+                </button>
+              </div>
+              <Badge variant="secondary">{revenueByStaff.length} anëtarë</Badge>
+            </div>
           </div>
           <div className="space-y-3">
             {revenueByStaff.map((member, idx) => {
               const maxRevenue = revenueByStaff[0]?.revenue || 1;
               const revPct = maxRevenue > 0 ? (member.revenue / maxRevenue) * 100 : 0;
+              const teamTotal = accountingBasis === 'accrual' ? staffTotals.billed : staffTotals.collected;
+              const shareOfTeam = teamTotal > 0 ? (member.revenue / teamTotal) * 100 : 0;
               return (
                 <div key={`staff-${idx}`} className="space-y-1.5">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Users className="h-4 w-4 text-muted-foreground" />
-                      <span className="font-medium">{member.name}</span>
+                  <div className="flex items-center justify-between gap-3 flex-wrap">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <Users className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <span className="font-medium truncate">{member.name}</span>
                       <Badge variant="outline" className="text-xs">{member.role}</Badge>
-                      <span className="text-xs text-muted-foreground">{member.projectCount} projekte · {member.taskCount} detyra</span>
+                      <span className="text-xs text-muted-foreground whitespace-nowrap">
+                        {member.invoiceCount} fatura · {member.wonLeads} lead · {member.projectCount} projekte
+                      </span>
                     </div>
                     <div className="text-right">
-                      <span className="font-semibold text-green-700">{Math.round(member.revenue).toLocaleString()} ALL</span>
-                      {member.outstanding > 0 && (
-                        <div className="text-xs text-amber-600">+{Math.round(member.outstanding).toLocaleString()} ALL pa arkëtuar</div>
-                      )}
+                      <div className="flex items-baseline gap-2 justify-end">
+                        <span className="font-semibold text-green-700">{Math.round(member.revenue).toLocaleString()} ALL</span>
+                        <span className="text-[10px] text-muted-foreground">{shareOfTeam.toFixed(1)}%</span>
+                      </div>
+                      <div className="text-xs text-muted-foreground">
+                        Mes/faturë: {Math.round(member.avgDeal).toLocaleString()} ALL
+                        {member.outstanding > 0 && (
+                          <span className="text-amber-600"> · AR {Math.round(member.outstanding).toLocaleString()} ALL</span>
+                        )}
+                      </div>
                     </div>
                   </div>
                   <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
@@ -1217,9 +1298,19 @@ const ReportsView: React.FC = () => {
                 </div>
               );
             })}
-            <div className="pt-3 border-t flex justify-between text-sm font-semibold">
-              <span>Total i Arkëtuar (Stafi)</span>
-              <span className="text-green-700">{Math.round(revenueByStaff.reduce((s, m) => s + m.revenue, 0)).toLocaleString()} ALL</span>
+            <div className="pt-3 border-t grid grid-cols-3 gap-3 text-sm">
+              <div>
+                <p className="text-xs text-muted-foreground">Të Faturuara</p>
+                <p className="font-semibold text-foreground">{Math.round(staffTotals.billed).toLocaleString()} ALL</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Të Arkëtuara</p>
+                <p className="font-semibold text-green-700">{Math.round(staffTotals.collected).toLocaleString()} ALL</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Të Arkëtueshme</p>
+                <p className="font-semibold text-amber-600">{Math.round(staffTotals.outstanding).toLocaleString()} ALL</p>
+              </div>
             </div>
           </div>
         </Card>
