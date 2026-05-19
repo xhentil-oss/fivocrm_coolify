@@ -154,9 +154,10 @@ const ReportsView: React.FC = () => {
   const { data: leads } = useCollection<Lead>('leads', { skipTeamFilter: true });
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: activities } = useCollection<Activity>('activities', { skipTeamFilter: true });
-  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
-    where: [{ field: 'status', operator: '==', value: 'Active' }],
-  });
+  // NOTE: We deliberately do NOT filter by status here. The staff-revenue card
+  // must surface former employees too (with an "Inaktiv" badge); salary totals
+  // below explicitly restrict to Active members.
+  const { data: teamMembers } = useCollection<TeamMember>('teamMembers');
 
   // ── Personal stats for Member/Viewer ──
   const myTasks = useMemo(() => {
@@ -199,7 +200,9 @@ const ReportsView: React.FC = () => {
   // ── Monthly salary cost from all active team members ──
   const totalMonthlySalary = useMemo(() => {
     if (!teamMembers) return 0;
-    return teamMembers.reduce((sum, m) => sum + (m.monthlySalary || 0), 0);
+    return teamMembers
+      .filter(m => m.status === 'Active')
+      .reduce((sum, m) => sum + (m.monthlySalary || 0), 0);
   }, [teamMembers]);
 
   // ── Revenue by Month (all 12 months for selected year) ──
@@ -463,8 +466,20 @@ const ReportsView: React.FC = () => {
     });
   }, [teamMembers, currentTeamId]);
 
-  const revenueByStaff = useMemo(() => {
-    if (!scopedTeamMembers || !projects || !invoices) return [];
+  // Pre-compute customer → assigned rep so invoices created by an admin
+  // still flow to the rep who owns the customer relationship.
+  const customerOwnerById = useMemo(() => {
+    const map = new Map<string, string>();
+    (customers ?? []).forEach(c => {
+      const owner = (c as any).assignedToUserId || (c as any).ownerUserId;
+      if (c.id && owner) map.set(c.id, owner);
+    });
+    return map;
+  }, [customers]);
+
+  const staffRevenueComputation = useMemo(() => {
+    const empty = { rows: [] as any[], unattributed: { billed: 0, collected: 0, outstanding: 0, invoiceCount: 0 } };
+    if (!scopedTeamMembers || !projects || !invoices) return empty;
 
     const yearStart = new Date(selectedRevenueYear, 0, 1);
     const yearEnd = new Date(selectedRevenueYear, 11, 31, 23, 59, 59, 999);
@@ -478,7 +493,9 @@ const ReportsView: React.FC = () => {
       return isInYear(recDate) || isInYear(paidDate);
     };
 
-    return scopedTeamMembers
+    const attributedInvoiceIds = new Set<string>();
+
+    const rows = scopedTeamMembers
       .map(member => {
         const memberUserId = (member as any).userId || (member as any).uid || (member as any).id;
         const memberIdentifiers = new Set<string>(
@@ -490,6 +507,7 @@ const ReportsView: React.FC = () => {
           return {
             name: member.displayName || member.email || 'Pa emër',
             role: member.role,
+            status: member.status,
             revenue: 0,
             billed: 0,
             collected: 0,
@@ -538,14 +556,23 @@ const ReportsView: React.FC = () => {
           if (!teamMatch) return false;
           // Drafts never count as revenue/AR.
           if (inv.status === 'Draft') return false;
-          const owns =
-            (inv.projectId && ownedProjectIds.has(inv.projectId)) ||
-            (() => {
-              const invoiceOwner = (inv as any).responsibleUserId || (inv as any).createdByUserId;
-              return !!invoiceOwner && memberIdentifiers.has(invoiceOwner);
-            })();
-          if (!owns) return false;
-          return inSelectedPeriod(inv);
+          if (!inSelectedPeriod(inv)) return false;
+          // Attribution chain (any one match wins):
+          //  1. Member owns the invoice's project.
+          //  2. Member is explicitly set on the invoice
+          //     (responsible/assigned/createdBy).
+          //  3. Member is the rep assigned to the invoice's customer.
+          const projectOwned = !!(inv.projectId && ownedProjectIds.has(inv.projectId));
+          const invoiceOwner =
+            (inv as any).responsibleUserId ||
+            (inv as any).assignedToUserId ||
+            (inv as any).createdByUserId;
+          const explicitOwned = !!invoiceOwner && memberIdentifiers.has(invoiceOwner);
+          const customerOwner = inv.customerId ? customerOwnerById.get(inv.customerId) : undefined;
+          const customerOwned = !!customerOwner && memberIdentifiers.has(customerOwner);
+          if (!projectOwned && !explicitOwned && !customerOwned) return false;
+          attributedInvoiceIds.add(inv.id);
+          return true;
         });
 
         // Centralised money math — consistent with the rest of finance reports.
@@ -571,6 +598,7 @@ const ReportsView: React.FC = () => {
         return {
           name: member.displayName || member.email || 'Pa emër',
           role: member.role,
+          status: member.status,
           revenue,
           billed,
           collected,
@@ -583,7 +611,29 @@ const ReportsView: React.FC = () => {
         };
       })
       .sort((a, b) => b.revenue - a.revenue);
-  }, [scopedTeamMembers, projects, invoices, tasks, leads, currentTeamId, accountingBasis, staffPeriod, selectedRevenueYear]);
+
+    // Invoices that no team member claimed (e.g. customer rep deleted, no
+    // project ownership and no createdBy match). Surfacing them avoids the
+    // "where did this revenue go?" question.
+    const unattributed = { billed: 0, collected: 0, outstanding: 0, invoiceCount: 0 };
+    invoices.forEach(inv => {
+      const invoiceTeamId = (inv as any).teamId;
+      const teamMatch = !invoiceTeamId || !currentTeamId || invoiceTeamId === currentTeamId;
+      if (!teamMatch) return;
+      if (inv.status === 'Draft') return;
+      if (!inSelectedPeriod(inv)) return;
+      if (attributedInvoiceIds.has(inv.id)) return;
+      unattributed.billed += getInvoiceTotalAll(inv);
+      unattributed.collected += getInvoiceCollectedAll(inv);
+      unattributed.outstanding += getInvoiceOutstandingAll(inv);
+      unattributed.invoiceCount += 1;
+    });
+
+    return { rows, unattributed };
+  }, [scopedTeamMembers, projects, invoices, tasks, leads, customerOwnerById, currentTeamId, accountingBasis, staffPeriod, selectedRevenueYear]);
+
+  const revenueByStaff = staffRevenueComputation.rows;
+  const unattributedStaffRevenue = staffRevenueComputation.unattributed;
 
   // Sum totals for the staff footer.
   const staffTotals = useMemo(() => ({
@@ -1273,8 +1323,11 @@ const ReportsView: React.FC = () => {
                   <div className="flex items-center justify-between gap-3 flex-wrap">
                     <div className="flex items-center gap-2 min-w-0">
                       <Users className="h-4 w-4 text-muted-foreground shrink-0" />
-                      <span className="font-medium truncate">{member.name}</span>
+                      <span className={`font-medium truncate ${member.status === 'Inactive' ? 'text-muted-foreground' : ''}`}>{member.name}</span>
                       <Badge variant="outline" className="text-xs">{member.role}</Badge>
+                      {member.status === 'Inactive' && (
+                        <Badge variant="outline" className="text-xs border-muted-foreground/40 text-muted-foreground">Inaktiv</Badge>
+                      )}
                       <span className="text-xs text-muted-foreground whitespace-nowrap">
                         {member.invoiceCount} fatura · {member.wonLeads} lead · {member.projectCount} projekte
                       </span>
@@ -1298,6 +1351,32 @@ const ReportsView: React.FC = () => {
                 </div>
               );
             })}
+            {unattributedStaffRevenue.invoiceCount > 0 && (
+              <div className="space-y-1.5 rounded-md border border-dashed border-amber-300/60 bg-amber-50/40 p-2.5">
+                <div className="flex items-center justify-between gap-3 flex-wrap">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Users className="h-4 w-4 text-amber-600 shrink-0" />
+                    <span className="font-medium text-amber-900">Pa atribuim</span>
+                    <span className="text-xs text-amber-800/80 whitespace-nowrap">
+                      {unattributedStaffRevenue.invoiceCount} fatura pa shitës/pronar
+                    </span>
+                  </div>
+                  <div className="text-right">
+                    <span className="font-semibold text-amber-700">
+                      {Math.round(accountingBasis === 'accrual' ? unattributedStaffRevenue.billed : unattributedStaffRevenue.collected).toLocaleString()} ALL
+                    </span>
+                    {unattributedStaffRevenue.outstanding > 0 && (
+                      <div className="text-[11px] text-amber-700/80">
+                        AR {Math.round(unattributedStaffRevenue.outstanding).toLocaleString()} ALL
+                      </div>
+                    )}
+                  </div>
+                </div>
+                <p className="text-[11px] text-amber-800/80">
+                  Cakto një shitës te klienti ose projekti për t'i përfshirë në statistikat e stafit.
+                </p>
+              </div>
+            )}
             <div className="pt-3 border-t grid grid-cols-3 gap-3 text-sm">
               <div>
                 <p className="text-xs text-muted-foreground">Të Faturuara</p>
