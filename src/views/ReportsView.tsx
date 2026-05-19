@@ -19,13 +19,19 @@ import {
   buildCashflowByMonth,
   buildExpensesByMonth,
   buildRevenueByMonth,
+  buildRevenueByMonthByBasis,
+  buildReceivablesByMonth,
+  buildARAging,
+  calculateAccountsReceivable,
+  calculateAccrualRevenueBetween,
   calculateCollectedRevenue,
-  calculateProjectedRevenue,
   calculateRevenueBetween,
   calculateTotalExpenses,
   getFinancialAvailableYears,
   getInvoicePaidDate,
+  getInvoiceRecognitionDate,
   parseDate,
+  type AccountingBasis,
 } from '../lib/finance/financialAnalytics';
 
 const DailyReportsView = lazy(() => import('./DailyReportsView'));
@@ -129,6 +135,9 @@ const ReportsView: React.FC = () => {
   const isPersonalOnly = !isManagerOrAbove && !isSales;
 
   const [selectedRevenueYear, setSelectedRevenueYear] = useState(new Date().getFullYear());
+  // Default to ERP-grade accrual basis (IFRS/GAAP standard).
+  // Cash basis still available via the toggle for cash-flow analysis.
+  const [accountingBasis, setAccountingBasis] = useState<AccountingBasis>('accrual');
 
   const { data: invoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
   const { data: projects, loading: projectsLoading } = useCollection<Project>('projects', { skipTeamFilter: true });
@@ -195,11 +204,18 @@ const ReportsView: React.FC = () => {
   }, [invoices, expenses]);
 
   const revenueByMonth = useMemo(() => {
-    return buildRevenueByMonth(invoices, selectedRevenueYear, MONTH_LABELS_RPT);
-  }, [invoices, selectedRevenueYear]);
+    return buildRevenueByMonthByBasis(accountingBasis, invoices, selectedRevenueYear, MONTH_LABELS_RPT);
+  }, [accountingBasis, invoices, selectedRevenueYear]);
   const maxMonthRevRpt = useMemo(() => Math.max(...revenueByMonth.map(m => m.paid), 1), [revenueByMonth]);
   const yearTotalRevRpt = useMemo(() => revenueByMonth.reduce((s, m) => s + m.paid, 0), [revenueByMonth]);
   const revenueAvailableYears = financialAvailableYears;
+
+  // ── Accounts Receivable (Të Arkëtueshme) ──
+  const receivablesByMonth = useMemo(() => {
+    return buildReceivablesByMonth(invoices, selectedRevenueYear, MONTH_LABELS_RPT);
+  }, [invoices, selectedRevenueYear]);
+  const totalAR = useMemo(() => calculateAccountsReceivable(invoices), [invoices]);
+  const arAging = useMemo(() => buildARAging(invoices), [invoices]);
 
   // ── Expenses by Month ──
   const expensesByMonth = useMemo(() => {
@@ -531,7 +547,12 @@ const ReportsView: React.FC = () => {
   // ── KPI Calculations ──
   const totalRevenue = calculateCollectedRevenue(invoices);
   const paidRevenue = totalRevenue;
-  const projectedRevenue = calculateProjectedRevenue(invoices);
+  // Accrual revenue YTD (IFRS/GAAP): everything billed since Jan 1 of current year.
+  const accrualRevenueYTD = useMemo(() => {
+    const now = new Date();
+    const startOfYear = new Date(now.getFullYear(), 0, 1);
+    return calculateAccrualRevenueBetween(invoices, startOfYear, now);
+  }, [invoices]);
   const totalExpenses = calculateTotalExpenses(expenses, totalMonthlySalary);
   const profit = paidRevenue - totalExpenses;
   const activeProjects = projects?.filter(p => p.status === 'Active').length || 0;
@@ -709,10 +730,18 @@ const ReportsView: React.FC = () => {
         ) : (
     <div className="space-y-8">
       {/* KPI Cards */}
-      <div className={`grid grid-cols-1 sm:grid-cols-2 ${isSales ? 'lg:grid-cols-3' : 'lg:grid-cols-5'} gap-4 lg:gap-6`}>
+      <div className={`grid grid-cols-1 sm:grid-cols-2 ${isSales ? 'lg:grid-cols-4' : 'lg:grid-cols-3 xl:grid-cols-6'} gap-4 lg:gap-6`}>
+        <Card className="p-5 space-y-2 border-l-4 border-l-emerald-600">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">Të Faturuara (YTD)</p>
+            <FileText className="w-5 h-5 text-emerald-600" />
+          </div>
+          <p className="text-2xl font-bold">{Math.round(accrualRevenueYTD).toLocaleString()} ALL</p>
+          <p className="text-xs text-muted-foreground">Bazë Akruale (IFRS/GAAP)</p>
+        </Card>
         <Card className="p-5 space-y-2 border-l-4 border-l-green-500">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Të Ardhura (Paguar)</p>
+            <p className="text-sm text-muted-foreground">Të Arkëtuara</p>
             <DollarSign className="w-5 h-5 text-green-500" />
           </div>
           <p className="text-2xl font-bold">{totalRevenue.toLocaleString()} ALL</p>
@@ -724,11 +753,11 @@ const ReportsView: React.FC = () => {
         </Card>
         <Card className="p-5 space-y-2 border-l-4 border-l-amber-400">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Parashikuara</p>
-            <TrendingUp className="w-5 h-5 text-amber-400" />
+            <p className="text-sm text-muted-foreground">Të Arkëtueshme</p>
+            <Clock className="w-5 h-5 text-amber-400" />
           </div>
-          <p className="text-2xl font-bold text-amber-500">{projectedRevenue.toLocaleString()} ALL</p>
-          <p className="text-xs text-muted-foreground">Fatura Draft + Në Pritje</p>
+          <p className="text-2xl font-bold text-amber-500">{Math.round(totalAR).toLocaleString()} ALL</p>
+          <p className="text-xs text-muted-foreground">Pa paguar nga klientët (AR)</p>
         </Card>
         {!isSales && (
         <Card className="p-5 space-y-2 border-l-4 border-l-red-500">
@@ -764,6 +793,7 @@ const ReportsView: React.FC = () => {
       <Tabs defaultValue="revenue" className="space-y-4">
         <TabsList className="overflow-x-auto flex-nowrap w-full">
           <TabsTrigger value="revenue">Të Ardhura</TabsTrigger>
+          {!isSales && <TabsTrigger value="receivables">Të Arkëtueshme</TabsTrigger>}
           {!isSales && <TabsTrigger value="expenses">Shpenzime</TabsTrigger>}
           <TabsTrigger value="leads">Lead Funnel</TabsTrigger>
           <TabsTrigger value="invoices">Faturat</TabsTrigger>
@@ -774,25 +804,62 @@ const ReportsView: React.FC = () => {
           <Card className="p-4 sm:p-6 space-y-4">
             <div className="flex items-center justify-between flex-wrap gap-2">
               <div>
-                <h3 className="text-base font-semibold text-foreground">Të Ardhurat sipas Muajit</h3>
+                <h3 className="text-base font-semibold text-foreground">
+                  Të Ardhurat sipas Muajit
+                  <span className="ml-2 text-[10px] uppercase tracking-wide text-muted-foreground font-medium">
+                    ({accountingBasis === 'accrual' ? 'Bazë Akruale' : 'Bazë Arke'})
+                  </span>
+                </h3>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   Gjithsej {selectedRevenueYear}: <span className="font-semibold text-green-600">{yearTotalRevRpt.toLocaleString()} ALL</span>
+                  <span className="ml-2 text-[10px]">
+                    {accountingBasis === 'accrual'
+                      ? '• sipas datës së faturës (IFRS/GAAP)'
+                      : '• sipas datës së pagesës (cash flow)'}
+                  </span>
                 </p>
               </div>
-              <div className="flex gap-1">
-                {revenueAvailableYears.map(y => (
+              <div className="flex flex-wrap items-center gap-2">
+                {/* Basis toggle: Accrual vs Cash */}
+                <div className="inline-flex rounded-full border border-input bg-background p-0.5 text-[11px] font-medium">
                   <button
-                    key={y}
-                    onClick={() => setSelectedRevenueYear(y)}
-                    className={`h-7 px-3 text-xs rounded-full border font-medium transition-colors ${
-                      selectedRevenueYear === y
-                        ? 'bg-primary text-primary-foreground border-primary'
-                        : 'bg-background border-input text-muted-foreground hover:bg-muted'
+                    onClick={() => setAccountingBasis('accrual')}
+                    className={`h-6 px-2.5 rounded-full transition-colors ${
+                      accountingBasis === 'accrual'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:bg-muted'
                     }`}
+                    title="Të ardhurat njihen në muajin e faturës (standardi kontabël)"
                   >
-                    {y}
+                    Akruale
                   </button>
-                ))}
+                  <button
+                    onClick={() => setAccountingBasis('cash')}
+                    className={`h-6 px-2.5 rounded-full transition-colors ${
+                      accountingBasis === 'cash'
+                        ? 'bg-primary text-primary-foreground'
+                        : 'text-muted-foreground hover:bg-muted'
+                    }`}
+                    title="Të ardhurat njihen në muajin e pagesës (paratë reale)"
+                  >
+                    Arkë
+                  </button>
+                </div>
+                <div className="flex gap-1">
+                  {revenueAvailableYears.map(y => (
+                    <button
+                      key={y}
+                      onClick={() => setSelectedRevenueYear(y)}
+                      className={`h-7 px-3 text-xs rounded-full border font-medium transition-colors ${
+                        selectedRevenueYear === y
+                          ? 'bg-primary text-primary-foreground border-primary'
+                          : 'bg-background border-input text-muted-foreground hover:bg-muted'
+                      }`}
+                    >
+                      {y}
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
             <div className="grid grid-cols-12 gap-1.5 sm:gap-2">
@@ -832,15 +899,58 @@ const ReportsView: React.FC = () => {
             <div className="flex items-center gap-4 pt-2 border-t">
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <div className="w-3 h-3 rounded-sm bg-green-400/75" />
-                <span>E paguar</span>
+                <span>{accountingBasis === 'accrual' ? 'E faturuar' : 'E paguar'}</span>
               </div>
               <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
                 <div className="w-3 h-3 rounded-sm bg-amber-300/70" />
-                <span>Në pritje</span>
+                <span>{accountingBasis === 'accrual' ? 'E papaguar (AR)' : 'Në pritje'}</span>
               </div>
             </div>
           </Card>
         </TabsContent>
+        {!isSales && (
+        <TabsContent value="receivables">
+          <Card className="p-4 sm:p-6 space-y-6">
+            <div className="flex items-center justify-between flex-wrap gap-2">
+              <div>
+                <h3 className="text-base font-semibold text-foreground">Të Arkëtueshme (Accounts Receivable)</h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Totali që klientët na detyrojnë: <span className="font-semibold text-amber-600">{Math.round(totalAR).toLocaleString()} ALL</span>
+                </p>
+              </div>
+            </div>
+
+            {/* Aging buckets */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              {(['0-30', '31-60', '61-90', '90+'] as const).map((bucket, idx) => {
+                const value = arAging[bucket];
+                const colors = ['bg-green-50 text-green-700 border-green-200', 'bg-amber-50 text-amber-700 border-amber-200', 'bg-orange-50 text-orange-700 border-orange-200', 'bg-red-50 text-red-700 border-red-200'];
+                const labels = ['0-30 ditë', '31-60 ditë', '61-90 ditë', 'Mbi 90 ditë'];
+                return (
+                  <div key={bucket} className={`rounded-lg border p-3 ${colors[idx]}`}>
+                    <p className="text-[10px] uppercase tracking-wide font-semibold opacity-75">{labels[idx]}</p>
+                    <p className="text-lg font-bold mt-1">{Math.round(value).toLocaleString()} ALL</p>
+                    <p className="text-[10px] opacity-75 mt-0.5">
+                      {totalAR > 0 ? `${Math.round((value / totalAR) * 100)}% e totalit` : '—'}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* AR by issue month */}
+            <div>
+              <h4 className="text-sm font-semibold text-foreground mb-3">
+                Të papaguara sipas muajit të faturës ({selectedRevenueYear})
+              </h4>
+              <BarChart data={receivablesByMonth.map(d => ({ ...d, color: '#f59e0b' }))} />
+              <p className="text-[10px] text-muted-foreground mt-2">
+                Tregon shumën që klientët akoma na detyrojnë, ndarë sipas muajit kur është prerë fatura.
+              </p>
+            </div>
+          </Card>
+        </TabsContent>
+        )}
         {!isSales && (
         <TabsContent value="expenses">
           <Card className="p-6">

@@ -22,6 +22,10 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../components/ui/alert-dialog';
 import { Textarea } from '../components/ui/textarea';
 import {
+  buildRevenueByMonthByBasis,
+  type AccountingBasis,
+} from '../lib/finance/financialAnalytics';
+import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
@@ -49,6 +53,9 @@ const InvoicesView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc'>('date_desc');
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  // Accounting basis: Accrual (date of invoice) vs Cash (date of payment).
+  // Default = Accrual (IFRS/GAAP standard for proper P&L reporting).
+  const [accountingBasis, setAccountingBasis] = useState<AccountingBasis>('accrual');
   const [partialPaymentInvoice, setPartialPaymentInvoice] = useState<Invoice | null>(null);
   const [partialAmount, setPartialAmount] = useState('');
   const [partialMethod, setPartialMethod] = useState('Cash');
@@ -362,40 +369,12 @@ const InvoicesView: React.FC = () => {
   }, 0) || 0;
 
   // ── Revenue by Month ──
+  // Uses centralised helper from financialAnalytics so accrual/cash toggle
+  // stays consistent with ReportsView. Default is accrual (IFRS/GAAP).
   const MONTH_LABELS = ['Jan', 'Shk', 'Mar', 'Pri', 'Maj', 'Qer', 'Kor', 'Gus', 'Sht', 'Tet', 'Nën', 'Dhj'];
   const revenueByMonth = useMemo(() => {
-    if (!invoices) return MONTH_LABELS.map(label => ({ label, paid: 0, pending: 0, count: 0 }));
-    return MONTH_LABELS.map((label, i) => {
-      const paidInvs = invoices.filter(inv => {
-        if (inv.status !== 'Paid') return false;
-        const pd = inv.paidAt
-          ? (inv.paidAt instanceof Date ? inv.paidAt : new Date(inv.paidAt as any))
-          : (inv.updatedAt instanceof Date ? inv.updatedAt : new Date((inv.updatedAt ?? inv.createdAt) as any));
-        return pd.getMonth() === i && pd.getFullYear() === selectedYear;
-      });
-      const pendingInvs = invoices.filter(inv => {
-        if (inv.status !== 'Pending' && inv.status !== 'Overdue') return false;
-        const cd = inv.createdAt instanceof Date ? inv.createdAt : new Date(inv.createdAt as any);
-        return cd.getMonth() === i && cd.getFullYear() === selectedYear;
-      });
-      // Add partial payments that occurred in this month
-      const partialForMonth = invoices
-        .filter(inv => inv.status === 'Partial' && inv.partialPayments?.length)
-        .reduce((s, inv) => {
-          const monthPartials = (inv.partialPayments ?? []).filter(p => {
-            const pd = p.paidAt instanceof Date ? p.paidAt : new Date(p.paidAt as any);
-            return pd.getMonth() === i && pd.getFullYear() === selectedYear;
-          });
-          return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, (inv as any).currency), 0);
-        }, 0);
-      return {
-        label,
-        paid: paidInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) + partialForMonth,
-        pending: pendingInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0),
-        count: paidInvs.length,
-      };
-    });
-  }, [invoices, selectedYear]);
+    return buildRevenueByMonthByBasis(accountingBasis, invoices, selectedYear, MONTH_LABELS);
+  }, [accountingBasis, invoices, selectedYear]);
   const maxMonthRevenue = useMemo(() => Math.max(...revenueByMonth.map(m => m.paid), 1), [revenueByMonth]);
   const yearTotalRevenue = useMemo(() => revenueByMonth.reduce((s, m) => s + m.paid, 0), [revenueByMonth]);
   const currentMonth = new Date().getMonth();
@@ -613,22 +592,43 @@ const InvoicesView: React.FC = () => {
             <h3 className="text-sm sm:text-base font-semibold text-foreground">Të Ardhurat sipas Muajit</h3>
             <p className="text-xs text-muted-foreground mt-0.5">
               Gjithsej {selectedYear}: <span className="font-semibold text-green-600">{yearTotalRevenue.toLocaleString()} L</span>
+              <span className="ml-2 text-[10px] uppercase tracking-wide opacity-70">
+                ({accountingBasis === 'accrual' ? 'Akruale · data e faturës' : 'Arkë · data e pagesës'})
+              </span>
             </p>
           </div>
-          <div className="flex gap-1">
-            {availableYears.map(y => (
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="inline-flex rounded-full border border-input bg-background p-0.5 text-[11px] font-medium">
               <button
-                key={y}
-                onClick={() => setSelectedYear(y)}
-                className={`h-7 px-3 text-xs rounded-full border font-medium transition-colors ${
-                  selectedYear === y
-                    ? 'bg-primary text-primary-foreground border-primary'
-                    : 'bg-background border-input text-muted-foreground hover:bg-muted'
-                }`}
+                onClick={() => setAccountingBasis('accrual')}
+                className={`h-6 px-2.5 rounded-full transition-colors ${accountingBasis === 'accrual' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}
+                title="Të ardhurat njihen në muajin e faturës (standardi kontabël)"
               >
-                {y}
+                Akruale
               </button>
-            ))}
+              <button
+                onClick={() => setAccountingBasis('cash')}
+                className={`h-6 px-2.5 rounded-full transition-colors ${accountingBasis === 'cash' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}
+                title="Të ardhurat njihen në muajin e pagesës (paratë reale)"
+              >
+                Arkë
+              </button>
+            </div>
+            <div className="flex gap-1">
+              {availableYears.map(y => (
+                <button
+                  key={y}
+                  onClick={() => setSelectedYear(y)}
+                  className={`h-7 px-3 text-xs rounded-full border font-medium transition-colors ${
+                    selectedYear === y
+                      ? 'bg-primary text-primary-foreground border-primary'
+                      : 'bg-background border-input text-muted-foreground hover:bg-muted'
+                  }`}
+                >
+                  {y}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
         <div className="grid grid-cols-6 sm:grid-cols-12 gap-1.5 sm:gap-2">

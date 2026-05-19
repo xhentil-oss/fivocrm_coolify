@@ -33,6 +33,38 @@ export function getInvoicePaidDate(inv: Invoice): Date | null {
   return parseDate(inv.paidAt) || parseDate(inv.updatedAt) || parseDate(inv.createdAt);
 }
 
+/**
+ * Recognition date for accrual accounting:
+ * the date the invoice was ISSUED (i.e. revenue was earned), regardless
+ * of payment status. Used for IFRS/GAAP-style revenue recognition.
+ */
+export function getInvoiceRecognitionDate(inv: Invoice): Date | null {
+  return parseDate(inv.invoiceDate) || parseDate(inv.createdAt);
+}
+
+/** Gross billed amount on an invoice (in ALL). */
+export function getInvoiceTotalAll(inv: Invoice): number {
+  return toAll(inv.total ?? inv.amount ?? 0, inv.currency);
+}
+
+/** Amount already received against an invoice (full Paid OR Partial sum), in ALL. */
+export function getInvoiceCollectedAll(inv: Invoice): number {
+  if (inv.status === 'Paid') return getInvoiceTotalAll(inv);
+  if (inv.status === 'Partial') {
+    if (inv.partialPayments?.length) {
+      return inv.partialPayments.reduce((s, p) => s + toAll(p.amount ?? 0, inv.currency), 0);
+    }
+    return toAll(inv.paidAmount ?? 0, inv.currency);
+  }
+  return 0;
+}
+
+/** Amount still outstanding on an invoice (Accounts Receivable contribution), in ALL. */
+export function getInvoiceOutstandingAll(inv: Invoice): number {
+  if (inv.status === 'Paid' || inv.status === 'Draft') return 0;
+  return Math.max(0, getInvoiceTotalAll(inv) - getInvoiceCollectedAll(inv));
+}
+
 export function getExpenseDate(exp: Expense): Date | null {
   return parseDate(exp.date) || parseDate(exp.createdAt);
 }
@@ -215,3 +247,129 @@ export function calculateRevenueBetween(invoices: Invoice[] | undefined, start: 
 
   return paidTotal + partialTotal;
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// ACCRUAL ACCOUNTING (IFRS / US GAAP style)
+// Revenue is recognized on the INVOICE DATE — regardless of when payment lands.
+// This is the standard for businesses with proper bookkeeping, VAT reporting,
+// and investor-facing P&L statements.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Statuses that count as recognized revenue under accrual accounting. */
+const ACCRUAL_REVENUE_STATUSES: ReadonlyArray<Invoice['status']> = ['Paid', 'Pending', 'Overdue', 'Partial'];
+
+/**
+ * Accrual revenue by month: every issued (non-Draft, non-Cancelled) invoice
+ * is attributed to the month of its `invoiceDate`, at its FULL value.
+ * Use this for P&L / "shitje" / "of the books" reporting.
+ */
+export function buildRevenueByMonthAccrual(invoices: Invoice[] | undefined, year: number, monthLabels = MONTH_LABELS_SQ): RevenueMonthPoint[] {
+  if (!invoices) {
+    return monthLabels.map(label => ({ label, value: 0, paid: 0, pending: 0, count: 0 }));
+  }
+
+  return monthLabels.map((label, i) => {
+    const monthInvs = invoices.filter(inv => {
+      if (!ACCRUAL_REVENUE_STATUSES.includes(inv.status)) return false;
+      const rd = getInvoiceRecognitionDate(inv);
+      if (!rd) return false;
+      return rd.getMonth() === i && rd.getFullYear() === year;
+    });
+
+    const billed = monthInvs.reduce((s, inv) => s + getInvoiceTotalAll(inv), 0);
+    const collected = monthInvs.reduce((s, inv) => s + getInvoiceCollectedAll(inv), 0);
+    const outstanding = Math.max(0, billed - collected);
+
+    return { label, value: billed, paid: billed, pending: outstanding, count: monthInvs.length };
+  });
+}
+
+/**
+ * Cash inflow by month: pure payment-receipt timing.
+ * Identical semantics to the existing `buildRevenueByMonth` cash basis.
+ * Use this for cash-flow reporting (paratë reale të hyra).
+ */
+export function buildCashInflowByMonth(invoices: Invoice[] | undefined, year: number, monthLabels = MONTH_LABELS_SQ): RevenueMonthPoint[] {
+  return buildRevenueByMonth(invoices, year, monthLabels);
+}
+
+/** Total Accounts Receivable (still owed by customers) in ALL. */
+export function calculateAccountsReceivable(invoices?: Invoice[]): number {
+  return invoices?.reduce((s, inv) => s + getInvoiceOutstandingAll(inv), 0) || 0;
+}
+
+/**
+ * Accounts Receivable aged into the month each invoice was issued.
+ * Useful for visualising "old debts" — bars stay tall in months where
+ * customers still owe us money.
+ */
+export function buildReceivablesByMonth(invoices: Invoice[] | undefined, year: number, monthLabels = MONTH_LABELS_SQ): ExpenseMonthPoint[] {
+  if (!invoices) return monthLabels.map(label => ({ label, value: 0 }));
+
+  return monthLabels.map((label, i) => {
+    const monthOutstanding = invoices.reduce((s, inv) => {
+      const outstanding = getInvoiceOutstandingAll(inv);
+      if (outstanding <= 0) return s;
+      const rd = getInvoiceRecognitionDate(inv);
+      if (!rd) return s;
+      if (rd.getMonth() !== i || rd.getFullYear() !== year) return s;
+      return s + outstanding;
+    }, 0);
+    return { label, value: monthOutstanding };
+  });
+}
+
+/** Standard AR aging buckets (in days). */
+export type ARAgingBucket = '0-30' | '31-60' | '61-90' | '90+';
+export type ARAgingSummary = Record<ARAgingBucket, number>;
+
+/**
+ * Classic accounts-receivable aging report:
+ * how much is owed, bucketed by how overdue the invoice is from `asOf`.
+ */
+export function buildARAging(invoices: Invoice[] | undefined, asOf: Date = new Date()): ARAgingSummary {
+  const buckets: ARAgingSummary = { '0-30': 0, '31-60': 0, '61-90': 0, '90+': 0 };
+  if (!invoices) return buckets;
+
+  for (const inv of invoices) {
+    const outstanding = getInvoiceOutstandingAll(inv);
+    if (outstanding <= 0) continue;
+    const refDate = parseDate(inv.dueDate) || getInvoiceRecognitionDate(inv);
+    if (!refDate) continue;
+    const ageDays = Math.floor((asOf.getTime() - refDate.getTime()) / 86_400_000);
+    if (ageDays <= 30) buckets['0-30'] += outstanding;
+    else if (ageDays <= 60) buckets['31-60'] += outstanding;
+    else if (ageDays <= 90) buckets['61-90'] += outstanding;
+    else buckets['90+'] += outstanding;
+  }
+  return buckets;
+}
+
+/** Accrual revenue between two dates (IFRS/GAAP-style). */
+export function calculateAccrualRevenueBetween(invoices: Invoice[] | undefined, start: Date, end?: Date): number {
+  if (!invoices) return 0;
+  return invoices
+    .filter(inv => {
+      if (!ACCRUAL_REVENUE_STATUSES.includes(inv.status)) return false;
+      const rd = getInvoiceRecognitionDate(inv);
+      if (!rd) return false;
+      return end ? rd >= start && rd <= end : rd >= start;
+    })
+    .reduce((s, inv) => s + getInvoiceTotalAll(inv), 0);
+}
+
+/** Accounting basis selector for hybrid views. */
+export type AccountingBasis = 'accrual' | 'cash';
+
+/** Convenience: build revenue by month with either basis. */
+export function buildRevenueByMonthByBasis(
+  basis: AccountingBasis,
+  invoices: Invoice[] | undefined,
+  year: number,
+  monthLabels = MONTH_LABELS_SQ,
+): RevenueMonthPoint[] {
+  return basis === 'accrual'
+    ? buildRevenueByMonthAccrual(invoices, year, monthLabels)
+    : buildRevenueByMonth(invoices, year, monthLabels);
+}
+

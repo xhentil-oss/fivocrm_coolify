@@ -2,14 +2,20 @@ import { describe, expect, it } from 'vitest';
 import type { Expense, Invoice } from '../../types';
 import {
   MONTH_LABELS_SQ,
+  buildARAging,
   buildCashflowByMonth,
   buildExpensesByMonth,
   buildRevenueByMonth,
+  buildRevenueByMonthAccrual,
+  buildRevenueByMonthByBasis,
+  calculateAccountsReceivable,
+  calculateAccrualRevenueBetween,
   calculateCollectedRevenue,
   calculateProjectedRevenue,
   calculateRevenueBetween,
   calculateTotalExpenses,
   getFinancialAvailableYears,
+  getInvoiceOutstandingAll,
 } from './financialAnalytics';
 
 function mkInvoice(partial?: Partial<Invoice>): Invoice {
@@ -140,5 +146,163 @@ describe('financial analytics engine', () => {
       new Date('2026-03-31T23:59:59Z'),
     );
     expect(rangeRevenue).toBe(1500);
+  });
+});
+
+describe('ERP-grade accounting helpers (accrual + AR)', () => {
+  it('attributes accrual revenue to invoice month regardless of payment', () => {
+    const invoices: Invoice[] = [
+      // Invoiced in April, paid in May — should count for April under accrual.
+      mkInvoice({
+        id: 'a',
+        status: 'Paid',
+        total: 1000,
+        currency: 'ALL',
+        invoiceDate: new Date('2026-04-15T10:00:00Z'),
+        paidAt: new Date('2026-05-03T10:00:00Z'),
+      }),
+      // Pending invoice in February — counted as outstanding for Feb.
+      mkInvoice({
+        id: 'b',
+        status: 'Pending',
+        total: 500,
+        currency: 'ALL',
+        invoiceDate: new Date('2026-02-10T10:00:00Z'),
+      }),
+      // Draft — should be ignored.
+      mkInvoice({
+        id: 'c',
+        status: 'Draft',
+        total: 999,
+        currency: 'ALL',
+        invoiceDate: new Date('2026-04-20T10:00:00Z'),
+      }),
+    ];
+
+    const months = buildRevenueByMonthAccrual(invoices, 2026, MONTH_LABELS_SQ);
+    const feb = months[1];
+    const apr = months[3];
+    const may = months[4];
+
+    // Under accrual: paid = total billed for that month, pending = outstanding.
+    expect(apr.paid).toBe(1000); // April invoice billed (and fully collected)
+    expect(apr.pending).toBe(0);
+    expect(may.paid).toBe(0); // payment month is irrelevant for accrual
+    expect(feb.paid).toBe(500); // Feb invoice billed at full value
+    expect(feb.pending).toBe(500); // still outstanding
+  });
+
+  it('dispatches buildRevenueByMonthByBasis correctly', () => {
+    const invoices: Invoice[] = [
+      mkInvoice({
+        id: 'p1',
+        status: 'Paid',
+        total: 700,
+        currency: 'ALL',
+        invoiceDate: new Date('2026-04-15T10:00:00Z'),
+        paidAt: new Date('2026-05-03T10:00:00Z'),
+      }),
+    ];
+    const accrual = buildRevenueByMonthByBasis('accrual', invoices, 2026, MONTH_LABELS_SQ);
+    const cash = buildRevenueByMonthByBasis('cash', invoices, 2026, MONTH_LABELS_SQ);
+    expect(accrual[3].paid).toBe(700); // April
+    expect(accrual[4].paid).toBe(0);
+    expect(cash[3].paid).toBe(0);
+    expect(cash[4].paid).toBe(700); // May
+  });
+
+  it('computes outstanding correctly per status', () => {
+    expect(getInvoiceOutstandingAll(mkInvoice({ status: 'Paid', total: 1000, currency: 'ALL' }))).toBe(0);
+    expect(getInvoiceOutstandingAll(mkInvoice({ status: 'Draft', total: 1000, currency: 'ALL' }))).toBe(0);
+    expect(getInvoiceOutstandingAll(mkInvoice({ status: 'Pending', total: 1000, currency: 'ALL' }))).toBe(1000);
+    expect(
+      getInvoiceOutstandingAll(
+        mkInvoice({ status: 'Partial', total: 1000, paidAmount: 300, currency: 'ALL' }),
+      ),
+    ).toBe(700);
+  });
+
+  it('sums total accounts receivable across statuses', () => {
+    const invoices: Invoice[] = [
+      mkInvoice({ id: '1', status: 'Pending', total: 500, currency: 'ALL' }),
+      mkInvoice({ id: '2', status: 'Overdue', total: 300, currency: 'ALL' }),
+      mkInvoice({ id: '3', status: 'Partial', total: 1000, paidAmount: 400, currency: 'ALL' }),
+      mkInvoice({ id: '4', status: 'Paid', total: 9999, currency: 'ALL' }),
+      mkInvoice({ id: '5', status: 'Draft', total: 9999, currency: 'ALL' }),
+    ];
+    expect(calculateAccountsReceivable(invoices)).toBe(500 + 300 + 600);
+  });
+
+  it('classifies AR into aging buckets', () => {
+    const asOf = new Date('2026-06-30T12:00:00Z');
+    const invoices: Invoice[] = [
+      mkInvoice({
+        id: 'fresh',
+        status: 'Pending',
+        total: 100,
+        currency: 'ALL',
+        invoiceDate: new Date('2026-06-15T10:00:00Z'), // 15 days
+      }),
+      mkInvoice({
+        id: 'mid',
+        status: 'Pending',
+        total: 200,
+        currency: 'ALL',
+        invoiceDate: new Date('2026-05-15T10:00:00Z'), // ~46 days
+      }),
+      mkInvoice({
+        id: 'older',
+        status: 'Overdue',
+        total: 300,
+        currency: 'ALL',
+        invoiceDate: new Date('2026-04-15T10:00:00Z'), // ~76 days
+      }),
+      mkInvoice({
+        id: 'ancient',
+        status: 'Overdue',
+        total: 400,
+        currency: 'ALL',
+        invoiceDate: new Date('2026-01-15T10:00:00Z'), // ~166 days
+      }),
+    ];
+    const aging = buildARAging(invoices, asOf);
+    expect(aging['0-30']).toBe(100);
+    expect(aging['31-60']).toBe(200);
+    expect(aging['61-90']).toBe(300);
+    expect(aging['90+']).toBe(400);
+    const total = aging['0-30'] + aging['31-60'] + aging['61-90'] + aging['90+'];
+    expect(total).toBe(1000);
+  });
+
+  it('calculates accrual revenue in a date range', () => {
+    const invoices: Invoice[] = [
+      mkInvoice({
+        id: 'in-range',
+        status: 'Pending',
+        total: 500,
+        currency: 'ALL',
+        invoiceDate: new Date('2026-04-10T10:00:00Z'),
+      }),
+      mkInvoice({
+        id: 'out-of-range',
+        status: 'Pending',
+        total: 999,
+        currency: 'ALL',
+        invoiceDate: new Date('2026-07-01T10:00:00Z'),
+      }),
+      mkInvoice({
+        id: 'draft-ignored',
+        status: 'Draft',
+        total: 999,
+        currency: 'ALL',
+        invoiceDate: new Date('2026-04-10T10:00:00Z'),
+      }),
+    ];
+    const total = calculateAccrualRevenueBetween(
+      invoices,
+      new Date('2026-04-01T00:00:00Z'),
+      new Date('2026-04-30T23:59:59Z'),
+    );
+    expect(total).toBe(500);
   });
 });
