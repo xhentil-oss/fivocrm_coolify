@@ -6,7 +6,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useGoogleApi, DriveFile } from '../contexts/GoogleApiContext';
-import { Calendar as CalendarIcon, MessageSquare, Users, ChevronRight, ChevronDown, Clock, Play, Pause, Square, Paperclip, Upload, X, AtSign, Eye, Plus, Trash2, Edit2, Send, Hash, Check, Cloud, Maximize2, Minimize2 } from 'lucide-react';
+import { Calendar as CalendarIcon, MessageSquare, Users, ChevronRight, ChevronDown, Clock, Play, Pause, Square, Paperclip, Upload, X, AtSign, Eye, Plus, Trash2, Edit2, Send, Hash, Check, Cloud, Maximize2, Minimize2, ImageIcon, Loader2 } from 'lucide-react';
 import GoogleDrivePicker from './GoogleDrivePicker';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -20,6 +20,7 @@ import { ScrollArea } from './ui/scroll-area';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import RichTextEditor, { RichTextDisplay } from './RichTextEditor';
 import { toast } from '../hooks/use-toast';
+import { useFileUpload } from '../hooks/useFileUpload';
 import type { Task, TaskComment } from '../types';
 
 interface TaskDetailPanelProps {
@@ -57,6 +58,24 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const permissions = usePermissions();
   const isGuestMode = permissions.isGuest || isProjectGuest;
   const { isConnected: isGoogleConnected } = useGoogleApi();
+  const { upload: uploadCommentImage, uploading: commentImageUploading } = useFileUpload();
+  const commentFileInputRef = useRef<HTMLInputElement | null>(null);
+  const handleCommentImageUpload = async (file: File) => {
+    if (!/^image\/(png|jpe?g|gif|webp|svg\+xml)$/.test(file.type)) {
+      toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP, SVG.', variant: 'destructive' });
+      return;
+    }
+    if (file.size > 5 * 1024 * 1024) {
+      toast({ title: 'Imazhi shumë i madh', description: 'Maksimumi 5 MB.', variant: 'destructive' });
+      return;
+    }
+    try {
+      const res = await uploadCommentImage(file, 'comment-images');
+      setCommentText(prev => (prev ? prev.trimEnd() + ' ' : '') + res.url + ' ');
+    } catch (err) {
+      toast({ title: 'Ngarkimi dështoi', description: (err as Error)?.message || 'Provo përsëri.', variant: 'destructive' });
+    }
+  };
   const [commentText, setCommentText] = useState('');
   const [mentionMap, setMentionMap] = useState<Record<string, string>>({}); // displayName → uid
   const [showSubtasks, setShowSubtasks] = useState(true);
@@ -607,9 +626,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
 
   const renderCommentWithMentions = (content: string) => {
-    // Split on either @[Name](uid) or legacy @uid tokens
-    const parts = content.split(/(@\[[^\]]+\]\([^)]+\)|@\S+)/g);
+    // Split on mentions OR URLs (so we can detect image URLs and render them inline).
+    const tokenRe = /(@\[[^\]]+\]\([^)]+\)|@\S+|https?:\/\/[^\s]+)/g;
+    const parts = content.split(tokenRe);
+    const isImageUrl = (url: string) => /\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(url) || /firebasestorage\.googleapis\.com|firebasestorage\.app/i.test(url);
     return parts.map((part, i) => {
+      if (!part) return null;
       if (part.startsWith('@')) {
         // New format: @[DisplayName](userId)
         const newFmt = part.match(/^@\[([^\]]+)\]\(([^)]+)\)$/);
@@ -629,7 +651,21 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           </span>
         );
       }
-      return part;
+      if (/^https?:\/\//.test(part)) {
+        if (isImageUrl(part)) {
+          return (
+            <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="block my-1">
+              <img src={part} alt="attachment" className="max-w-[260px] max-h-[260px] rounded-lg border border-border/40 object-cover" loading="lazy" />
+            </a>
+          );
+        }
+        return (
+          <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="underline break-all">
+            {part}
+          </a>
+        );
+      }
+      return <React.Fragment key={i}>{part}</React.Fragment>;
     });
   };
 
@@ -1749,14 +1785,58 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
             {/* Comment Input */}
             <div className="relative">
-              <div className="flex items-center gap-2 bg-muted/40 border border-border/50 rounded-xl px-3 py-2 focus-within:border-primary/50 focus-within:bg-background transition-colors">
+              <div
+                className="flex items-center gap-2 bg-muted/40 border border-border/50 rounded-xl px-3 py-2 focus-within:border-primary/50 focus-within:bg-background transition-colors"
+                onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }}
+                onDrop={async (e) => {
+                  const files = Array.from(e.dataTransfer?.files || []);
+                  const imgs = files.filter(f => f.type.startsWith('image/'));
+                  if (imgs.length === 0) return;
+                  e.preventDefault();
+                  for (const f of imgs) await handleCommentImageUpload(f);
+                }}
+              >
                 <div className="w-6 h-6 rounded-full bg-primary flex items-center justify-center text-[10px] font-bold text-primary-foreground flex-shrink-0">
                   {user?.displayName?.slice(0, 2).toUpperCase() || user?.email?.slice(0, 2).toUpperCase() || 'U'}
                 </div>
+                <button
+                  type="button"
+                  onClick={() => commentFileInputRef.current?.click()}
+                  disabled={commentImageUploading}
+                  title={commentImageUploading ? 'Po ngarkohet…' : 'Shto imazh'}
+                  className="flex-shrink-0 w-6 h-6 rounded hover:bg-muted flex items-center justify-center text-muted-foreground hover:text-foreground disabled:opacity-50"
+                >
+                  {commentImageUploading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <ImageIcon className="w-3.5 h-3.5" />}
+                </button>
+                <input
+                  ref={commentFileInputRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+                  className="hidden"
+                  onChange={async (e) => {
+                    const f = e.target.files?.[0];
+                    e.target.value = '';
+                    if (f) await handleCommentImageUpload(f);
+                  }}
+                />
                 <Input
                   placeholder="Shto koment... @emri për të përmendur"
                   value={commentText}
                   onChange={handleCommentChange}
+                  onPaste={async (e) => {
+                    const items = e.clipboardData?.items;
+                    if (!items) return;
+                    for (let i = 0; i < items.length; i++) {
+                      const it = items[i];
+                      if (it.kind === 'file' && it.type.startsWith('image/')) {
+                        const f = it.getAsFile();
+                        if (!f) continue;
+                        e.preventDefault();
+                        await handleCommentImageUpload(f);
+                        return;
+                      }
+                    }
+                  }}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' && !showMentionSuggestions) {
                       handleAddCommentSubmit();
