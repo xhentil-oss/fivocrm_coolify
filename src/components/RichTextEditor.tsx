@@ -1,4 +1,4 @@
-import React, { useCallback } from 'react';
+import React, { useCallback, useRef } from 'react';
 import { useEditor, EditorContent } from '@tiptap/react';
 import StarterKit from '@tiptap/starter-kit';
 import Placeholder from '@tiptap/extension-placeholder';
@@ -10,13 +10,19 @@ import TaskList from '@tiptap/extension-task-list';
 import TaskItem from '@tiptap/extension-task-item';
 import { TextStyle } from '@tiptap/extension-text-style';
 import Color from '@tiptap/extension-color';
+import Image from '@tiptap/extension-image';
 import {
   Bold, Italic, Underline as UnderlineIcon, Strikethrough, Code,
   Heading1, Heading2, Heading3, List, ListOrdered, ListChecks,
   Quote, Minus, Link as LinkIcon, AlignLeft, AlignCenter, AlignRight,
-  Highlighter, Undo, Redo, RemoveFormatting,
+  Highlighter, Undo, Redo, RemoveFormatting, ImageIcon,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { useFileUpload } from '../hooks/useFileUpload';
+import { toast } from '../hooks/use-toast';
+
+const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
+const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
 
 interface RichTextEditorProps {
   content: string;
@@ -63,6 +69,29 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({
   className,
   autoFocus = false,
 }) => {
+  const { upload, uploading } = useFileUpload();
+  const uploadRef = useRef(upload);
+  uploadRef.current = upload;
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const handleImageFile = useCallback(async (file: File): Promise<string | null> => {
+    if (!ALLOWED_IMAGE_TYPES.includes(file.type)) {
+      toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP, SVG.', variant: 'destructive' });
+      return null;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      toast({ title: 'Imazhi shumë i madh', description: 'Madhësia maksimale 5 MB.', variant: 'destructive' });
+      return null;
+    }
+    try {
+      const res = await uploadRef.current(file, 'rte-images');
+      return res.url;
+    } catch (err) {
+      toast({ title: 'Ngarkimi dështoi', description: (err as Error)?.message || 'Provo përsëri.', variant: 'destructive' });
+      return null;
+    }
+  }, []);
+
   const editor = useEditor({
     extensions: [
       StarterKit.configure({
@@ -74,6 +103,11 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({
       }),
       Placeholder.configure({ placeholder }),
       Underline,
+      Image.configure({
+        inline: false,
+        allowBase64: false,
+        HTMLAttributes: { class: 'max-w-full h-auto rounded-md my-2' },
+      }),
       Link.configure({
         openOnClick: !editable,
         HTMLAttributes: { class: 'text-primary underline cursor-pointer' },
@@ -99,8 +133,57 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({
         class: 'outline-none prose prose-sm dark:prose-invert max-w-none',
         style: `min-height: ${minHeight}`,
       },
+      handlePaste: (view, event) => {
+        const items = event.clipboardData?.items;
+        if (!items) return false;
+        for (let i = 0; i < items.length; i++) {
+          const item = items[i];
+          if (item.kind === 'file' && item.type.startsWith('image/')) {
+            const file = item.getAsFile();
+            if (!file) continue;
+            event.preventDefault();
+            (async () => {
+              const url = await handleImageFile(file);
+              if (url && editor) editor.chain().focus().setImage({ src: url }).run();
+            })();
+            return true;
+          }
+        }
+        // Strip any pasted HTML with data:image base64 (defense in depth)
+        const html = event.clipboardData?.getData('text/html');
+        if (html && /<img[^>]+src="data:image\//i.test(html)) {
+          event.preventDefault();
+          const text = event.clipboardData?.getData('text/plain') || '';
+          editor?.chain().focus().insertContent(text).run();
+          toast({ title: 'Imazhi inline u hoq', description: 'Përdor butonin e imazhit për ta ngarkuar.' });
+          return true;
+        }
+        return false;
+      },
+      handleDrop: (view, event) => {
+        const files = Array.from(event.dataTransfer?.files || []);
+        const images = files.filter(f => f.type.startsWith('image/'));
+        if (images.length === 0) return false;
+        event.preventDefault();
+        (async () => {
+          for (const file of images) {
+            const url = await handleImageFile(file);
+            if (url && editor) editor.chain().focus().setImage({ src: url }).run();
+          }
+        })();
+        return true;
+      },
     },
   });
+
+  const onPickImage = useCallback(() => fileInputRef.current?.click(), []);
+  const onImageInputChange = useCallback(async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !editor) return;
+    const url = await handleImageFile(file);
+    if (url) editor.chain().focus().setImage({ src: url }).run();
+  }, [editor, handleImageFile]);
 
   const setLink = useCallback(() => {
     if (!editor) return;
@@ -222,6 +305,18 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({
           <LinkIcon className="w-3.5 h-3.5" />
         </MenuButton>
 
+        {/* Image */}
+        <MenuButton onClick={onPickImage} disabled={uploading} title={uploading ? 'Po ngarkohet…' : 'Shto imazh'}>
+          <ImageIcon className="w-3.5 h-3.5" />
+        </MenuButton>
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+          className="hidden"
+          onChange={onImageInputChange}
+        />
+
         {/* Clear formatting */}
         <MenuButton onClick={() => editor.chain().focus().clearNodes().unsetAllMarks().run()} title="Pastro formatin">
           <RemoveFormatting className="w-3.5 h-3.5" />
@@ -245,6 +340,7 @@ export const RichTextDisplay: React.FC<{ content: string; className?: string }> 
         link: false,
       }),
       Underline,
+      Image.configure({ inline: false, allowBase64: false, HTMLAttributes: { class: 'max-w-full h-auto rounded-md my-2' } }),
       Link.configure({ openOnClick: true, HTMLAttributes: { class: 'text-primary underline cursor-pointer', target: '_blank', rel: 'noopener noreferrer' } }),
       TextAlign.configure({ types: ['heading', 'paragraph'] }),
       Highlight,

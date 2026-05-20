@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
+import { useFileUpload } from '../hooks/useFileUpload';
 import { normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import { auth, db } from '../lib/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
@@ -867,17 +868,42 @@ const ChatView: React.FC = () => {
   }, [activeWaPhone, waActiveMessages.length]);
 
   // Message Handlers
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if ((!messageText.trim() && !attachmentUrl.trim()) || !user || isSending) return;
+  const { upload: uploadAttachment, uploading: attachmentUploading } = useFileUpload();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const ALLOWED_IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
+  const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
+
+  const handleAttachmentUpload = useCallback(async (file: File) => {
+    if (!ALLOWED_IMG_TYPES.includes(file.type)) {
+      toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP, SVG.', variant: 'destructive' });
+      return;
+    }
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      toast({ title: 'Skedari shumë i madh', description: 'Maksimumi 10 MB.', variant: 'destructive' });
+      return;
+    }
+    try {
+      const res = await uploadAttachment(file, 'chat-attachments');
+      await handleSendMessage(null, { attachmentUrl: res.url });
+    } catch (err) {
+      toast({ title: 'Ngarkimi dështoi', description: (err as Error)?.message || 'Provo përsëri.', variant: 'destructive' });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [uploadAttachment]);
+
+  const handleSendMessage = async (e?: React.FormEvent | null, override?: { content?: string; attachmentUrl?: string }) => {
+    if (e && typeof (e as any).preventDefault === 'function') (e as any).preventDefault();
+    const effectiveText = override?.content ?? messageText;
+    const effectiveAttachment = override?.attachmentUrl ?? attachmentUrl;
+    if ((!effectiveText.trim() && !effectiveAttachment.trim()) || !user || isSending) return;
 
     try {
       const isClientChannel = activeChannel.startsWith('client-');
       const baseMessage: Partial<ChatMessage> = {
-        content: messageText || '📎 Attachment',
+        content: effectiveText || '📎 Attachment',
         senderId: user.uid,
         isRead: false,
-        attachmentUrl: attachmentUrl.trim() || undefined,
+        attachmentUrl: effectiveAttachment.trim() || undefined,
         ...(isClientChannel && chatMode === 'channel' ? { senderType: 'staff' as const } : {}),
         ...(replyingTo ? {
           replyToId: replyingTo.id,
@@ -901,7 +927,7 @@ const ChatView: React.FC = () => {
               const title = projectName
                 ? `Mesazh i ri nga stafi - ${projectName}`
                 : `Mesazh i ri nga stafi - ${customer?.name || 'Biseda'}`;
-              try { await notificationMutation.create({ userId: (pa as any).userId || custId, type: 'staff_message', title, message: (messageText || '📎 Attachment').slice(0, 100), isRead: false, linkTo: activeChannel } as any); } catch { /* skip */ }
+              try { await notificationMutation.create({ userId: (pa as any).userId || custId, type: 'staff_message', title, message: (effectiveText || '📎 Attachment').slice(0, 100), isRead: false, linkTo: activeChannel } as any); } catch { /* skip */ }
               // Send email notification (rate-limited server-side)
               if ((pa as any).email) {
                 try {
@@ -916,7 +942,7 @@ const ChatView: React.FC = () => {
                         recipientName: customer?.name,
                         channelId: activeChannel,
                         senderName: 'Ekipi',
-                        messagePreview: (messageText || '📎 Bashkëngjitje').slice(0, 200),
+                        messagePreview: (effectiveText || '📎 Bashkëngjitje').slice(0, 200),
                       }),
                     }).catch(() => {});
                   }
@@ -2211,13 +2237,39 @@ const ChatView: React.FC = () => {
                   <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full" onClick={() => { setShowAttachmentInput(false); setAttachmentUrl(''); }}><X className="h-3 w-3" /></Button>
                 </div>
               )}
-              <form onSubmit={handleSendMessage}>
-                <div className="flex items-end gap-2 bg-muted/20 border rounded-2xl px-3 py-2 focus-within:border-primary/40 focus-within:bg-background focus-within:shadow-md transition-all">
+              <form onSubmit={(e) => handleSendMessage(e)}>
+                <div
+                  className="flex items-end gap-2 bg-muted/20 border rounded-2xl px-3 py-2 focus-within:border-primary/40 focus-within:bg-background focus-within:shadow-md transition-all"
+                  onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }}
+                  onDrop={async (e) => {
+                    const files = Array.from(e.dataTransfer?.files || []);
+                    const imgs = files.filter(f => f.type.startsWith('image/'));
+                    if (imgs.length === 0) return;
+                    e.preventDefault();
+                    for (const f of imgs) await handleAttachmentUpload(f);
+                  }}
+                >
                   <div className="flex items-center gap-0.5 flex-shrink-0 pb-1">
                     <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
                       onClick={() => setShowAttachmentInput(!showAttachmentInput)} disabled={isSending}>
                       <Paperclip className="h-3.5 w-3.5" />
                     </Button>
+                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
+                      onClick={() => fileInputRef.current?.click()} disabled={isSending || attachmentUploading}
+                      title={attachmentUploading ? 'Po ngarkohet…' : 'Dërgo imazh'}>
+                      {attachmentUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
+                    </Button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+                      className="hidden"
+                      onChange={async (e) => {
+                        const f = e.target.files?.[0];
+                        e.target.value = '';
+                        if (f) await handleAttachmentUpload(f);
+                      }}
+                    />
                     <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
                       disabled={isSending} onClick={() => setShowEmojiPicker(showEmojiPicker ? null : 'input')}>
                       <SmilePlus className="h-3.5 w-3.5" />
@@ -2229,6 +2281,20 @@ const ChatView: React.FC = () => {
                     value={messageText}
                     onChange={handleTextareaInput}
                     onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e as any); } }}
+                    onPaste={async (e) => {
+                      const items = e.clipboardData?.items;
+                      if (!items) return;
+                      for (let i = 0; i < items.length; i++) {
+                        const it = items[i];
+                        if (it.kind === 'file' && it.type.startsWith('image/')) {
+                          const f = it.getAsFile();
+                          if (!f) continue;
+                          e.preventDefault();
+                          await handleAttachmentUpload(f);
+                          return;
+                        }
+                      }
+                    }}
                     placeholder={`Shkruaj${chatMode === 'channel' ? ` në #${CHANNELS.find(c => c.id === activeChannel)?.name || activeChannel}` : ` te ${getUserDisplayName(activeDirectUserId || '')}`}...`}
                     disabled={isSending}
                     rows={1}

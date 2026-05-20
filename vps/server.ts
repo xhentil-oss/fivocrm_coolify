@@ -530,7 +530,7 @@ function getAgent(agentId?: string): AgentState | null {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
-app.get('/status', (_req, res) => {
+app.get('/status', requireApiKey, (_req, res) => {
   const statuses: Record<string, any> = {};
   for (const [id, a] of agents) {
     statuses[id] = { label: a.config.label, status: a.connectionStatus, teamId: a.config.teamId, assignedToUserId: a.config.assignedToUserId, lidMappings: a.lidToPhoneMap.size, pendingLids: a.pendingLidMessages.size };
@@ -584,7 +584,7 @@ app.post('/reload', requireApiKey, async (_req: any, res: any) => {
 });
 
 // QR per agent
-app.get('/qr/:agentId', (req: any, res: any) => {
+app.get('/qr/:agentId', requireApiKey, (req: any, res: any) => {
   const agent = agents.get(req.params.agentId);
   if (!agent) return res.status(404).send('<html><body style="font-family:sans-serif;padding:40px"><h2>Agent nuk u gjet</h2></body></html>');
   if (agent.connectionStatus === 'connected') {
@@ -597,7 +597,7 @@ app.get('/qr/:agentId', (req: any, res: any) => {
 });
 
 // Backward compat /qr
-app.get('/qr', (_req, res) => {
+app.get('/qr', requireApiKey, (_req, res) => {
   const agent = getAgent();
   if (!agent) return res.status(503).send('No agents configured');
   res.redirect(`/qr/${agent.config.id}`);

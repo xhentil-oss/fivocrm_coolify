@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import DOMPurify from 'dompurify';
 import { useCollection, useMutation } from '../../hooks/useFirestore';
 import { useAuth } from '../../contexts/AuthContext';
 import { useClientPortal } from '../../hooks/useClientPortal';
@@ -216,7 +217,7 @@ const PortalContractsView: React.FC = () => {
                       <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Teksti i Kontratës</p>
                       <div className="bg-white border rounded-lg p-4 max-h-72 overflow-y-auto">
                         {c.body.includes('<') ? (
-                          <div className="contract-body" dangerouslySetInnerHTML={{ __html: c.body }} />
+                          <div className="contract-body" dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(c.body) }} />
                         ) : (
                           <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed text-foreground">{c.body}</pre>
                         )}

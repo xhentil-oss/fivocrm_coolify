@@ -22,6 +22,13 @@ service cloud.firestore {
       return isAuth() && request.resource.data.teamId is string;
     }
 
+    // Check that the authenticated user created the team (team owner).
+    // Used as a guard for sensitive team-level writes (teamSettings, etc.)
+    function isTeamOwner(teamId) {
+      return isAuth() &&
+        get(/databases/$(database)/documents/teams/$(teamId)).data.createdByUserId == request.auth.uid;
+    }
+
     // ── Team-Scoped Collections ──
     // Reads: authenticated only.  The client fetches all docs and filters by
     // teamId client-side (to support legacy docs without teamId and to avoid
@@ -217,7 +224,11 @@ service cloud.firestore {
         // Non-self update: admins manage other members (admin check enforced client-side)
         resource.data.userId != request.auth.uid
       );
-      allow delete: if isAuth();
+      // Only allow deleting own membership or team owner removes a member
+      allow delete: if isAuth() && (
+        resource.data.userId == request.auth.uid ||
+        isTeamOwner(resource.data.teamId)
+      );
     }
 
     match /teamInvites/{docId} {
@@ -244,18 +255,19 @@ service cloud.firestore {
     match /clientPortalAccess/{docId} {
       allow read: if isAuth();
       allow create: if isAuth();
-      // Team admin (owns the doc) can update any field.
-      // Portal user can only update their own safe fields — NOT accessLevel/role.
+      // Portal clients may only update their own safe fields.
+      // Immutable fields (accessLevel, role, teamId, customerId, userId, email) can NEVER
+      // be changed by the portal user — only the server-side Admin SDK may do so.
       allow update: if isAuth() && (
-        resource.data.userId == request.auth.uid ||
-        // Initial claim: doc has no userId yet, but email must match to prevent hijacking
+        // Initial claim: doc has no userId yet; email must match to prevent hijacking
         (resource.data.userId == '' &&
-         resource.data.email.lower() == request.auth.token.email.lower()) ||
-        (
-          resource.data.email.lower() == request.auth.token.email.lower() &&
-          !request.resource.data.diff(resource.data).affectedKeys()
-            .hasAny(['accessLevel', 'role', 'teamId', 'customerId'])
-        )
+         resource.data.email.lower() == request.auth.token.email.lower() &&
+         !request.resource.data.diff(resource.data).affectedKeys()
+           .hasAny(['accessLevel', 'role', 'teamId', 'customerId'])) ||
+        // Existing owner: can update only safe display/state fields
+        (resource.data.userId == request.auth.uid &&
+         !request.resource.data.diff(resource.data).affectedKeys()
+           .hasAny(['accessLevel', 'role', 'teamId', 'customerId', 'userId', 'email']))
       );
       allow delete: if isAuth();
     }
@@ -315,10 +327,11 @@ service cloud.firestore {
     }
 
     // ── teamSettings: one doc per team, keyed by teamId ──
-    // Stores bank accounts, EUR rate, WhatsApp config, cron settings.
+    // Stores bank accounts, EUR rate, WhatsApp/Meta config, cron settings.
+    // Only the team owner (createdByUserId on the teams doc) may write.
     match /teamSettings/{teamId} {
       allow read: if isAuth();
-      allow write: if isAuth();
+      allow write: if isTeamOwner(teamId);
     }
 
     // ── counters: atomic invoice number sequences ──

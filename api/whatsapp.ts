@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { adminAuth } from './_firebaseAdmin.js';
+import { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 
 function isValidPhone(phone: string): boolean {
   const digits = phone.replace(/[^\d]/g, '');
@@ -31,7 +31,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     ? req.headers.authorization!.slice(7).trim()
     : null;
   if (!token) return res.status(401).json({ error: 'Missing authorization header' });
-  try { await adminAuth.verifyIdToken(token); }
+  let uid: string;
+  try { const d = await adminAuth.verifyIdToken(token); uid = d.uid; }
   catch { return res.status(401).json({ error: 'Invalid or expired token' }); }
 
   const vpsUrl = process.env.WHATSAPP_VPS_URL;
@@ -58,6 +59,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // POST (no special action) — send WhatsApp message
     if (req.method === 'POST') {
       const { to, message, leadId, leadName, teamId, jid, agentId } = req.body || {};
+
+      // Verify caller belongs to the requested team — prevents using another team's agents
+      if (teamId) {
+        const memberSnap = await db.collection('teamMembers')
+          .where('teamId', '==', teamId)
+          .where('userId', '==', uid)
+          .limit(1)
+          .get();
+        if (memberSnap.empty) {
+          return res.status(403).json({ error: 'Forbidden: nuk jeni anëtar i këtij ekipi' });
+        }
+      }
 
       if (!to || typeof to !== 'string') {
         return res.status(400).json({ error: 'Fusha "to" (numri i telefonit) është e detyrueshme' });

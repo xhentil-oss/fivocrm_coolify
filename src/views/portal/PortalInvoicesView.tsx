@@ -88,7 +88,7 @@ const PortalInvoicesView: React.FC = () => {
           invoiceId: invoice.id,
           invoiceNumber: invoice.invoiceNumber || invoice.id.slice(0, 8),
           amount,
-          currency: (invoice as any).currency === 'EUR' ? 'eur' : 'eur',
+          currency: ((invoice as any).currency as string | undefined)?.toLowerCase() || 'eur',
           customerEmail: customer?.email || undefined,
           customerName: customer?.name || undefined,
           successUrl: `${window.location.origin}/portal/invoices?payment=success`,

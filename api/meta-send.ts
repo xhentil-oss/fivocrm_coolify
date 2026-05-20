@@ -26,8 +26,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const authHeader = req.headers.authorization;
   const token = authHeader?.startsWith('Bearer ') ? authHeader.slice(7).trim() : null;
   if (!token) return res.status(401).json({ error: 'Missing authorization header' });
+  let uid: string;
   try {
-    await adminAuth.verifyIdToken(token);
+    const decoded = await adminAuth.verifyIdToken(token);
+    uid = decoded.uid;
   } catch {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
@@ -42,6 +44,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
   if (!teamId) {
     return res.status(400).json({ error: 'teamId mungon' });
+  }
+
+  // Verify the caller belongs to the requested team — prevents using another team's Meta credentials
+  const memberSnap = await adminDb.collection('teamMembers')
+    .where('teamId', '==', teamId)
+    .where('userId', '==', uid)
+    .limit(1)
+    .get();
+  if (memberSnap.empty) {
+    return res.status(403).json({ error: 'Forbidden: nuk jeni anëtar i këtij ekipi' });
   }
 
   // Load Meta credentials from team settings

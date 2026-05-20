@@ -18,38 +18,24 @@ async function verifyAuthToken(authHeader: string | undefined): Promise<string |
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  // CORS headers
   res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  if (req.method === 'OPTIONS') return res.status(200).end();
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
-
-  // Require authenticated user
   const uid = await verifyAuthToken(req.headers.authorization as string | undefined);
-  if (!uid) {
-    return res.status(401).json({ error: 'Unauthorized' });
-  }
+  if (!uid) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    const { invoiceId, invoiceNumber, amount, currency, customerEmail, customerName, successUrl, cancelUrl } = req.body;
+    const { invoiceId, invoiceNumber, currency, customerEmail, customerName, successUrl, cancelUrl } = req.body;
 
-    if (!invoiceId || !amount || !successUrl || !cancelUrl) {
-      return res.status(400).json({ error: 'Missing required fields: invoiceId, amount, successUrl, cancelUrl' });
+    if (!invoiceId || !successUrl || !cancelUrl) {
+      return res.status(400).json({ error: 'Missing required fields: invoiceId, successUrl, cancelUrl' });
     }
 
-    if (typeof amount !== 'number' || amount <= 0) {
-      return res.status(400).json({ error: 'Amount must be a positive number' });
-    }
-
-    // Validate successUrl and cancelUrl are safe origins
     try {
       const successParsed = new URL(successUrl);
       const cancelParsed = new URL(cancelUrl);
@@ -60,22 +46,41 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Invalid redirect URLs' });
     }
 
-    // Verify the caller belongs to the invoice's team
+    // Load invoice from Firestore — amount is authoritative here, never from the client
     const invoiceDoc = await db.collection('invoices').doc(invoiceId).get();
-    if (!invoiceDoc.exists) {
-      return res.status(404).json({ error: 'Invoice not found' });
-    }
-    const invoiceTeamId = invoiceDoc.data()?.teamId;
+    if (!invoiceDoc.exists) return res.status(404).json({ error: 'Invoice not found' });
+
+    const invoiceData = invoiceDoc.data()!;
+    const invoiceTeamId = invoiceData.teamId as string | undefined;
+
+    // Authorize: staff member of the invoice's team OR portal client for this invoice's customer
     if (invoiceTeamId) {
-      const memberSnap = await db.collection('teamMembers')
-        .where('teamId', '==', invoiceTeamId)
-        .where('userId', '==', uid)
-        .limit(1)
-        .get();
-      if (memberSnap.empty) {
+      const [memberSnap, portalSnap] = await Promise.all([
+        db.collection('teamMembers')
+          .where('teamId', '==', invoiceTeamId)
+          .where('userId', '==', uid)
+          .limit(1)
+          .get(),
+        db.collection('clientPortalAccess')
+          .where('userId', '==', uid)
+          .where('customerId', '==', invoiceData.customerId || '')
+          .limit(1)
+          .get(),
+      ]);
+      if (memberSnap.empty && portalSnap.empty) {
         return res.status(403).json({ error: 'Forbidden' });
       }
     }
+
+    // Use server-side amount — never trust client-supplied amount
+    const amount = invoiceData.total ?? invoiceData.amount ?? 0;
+    if (typeof amount !== 'number' || amount <= 0) {
+      return res.status(400).json({ error: 'Invoice has no payable amount' });
+    }
+
+    // Normalise currency: use invoice's stored currency, fall back to client hint, then EUR
+    const invoiceCurrency = (invoiceData.currency as string | undefined)?.toLowerCase();
+    const resolvedCurrency = invoiceCurrency === 'all' ? 'all' : (invoiceCurrency || (currency as string | undefined)?.toLowerCase() || 'eur');
 
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       payment_method_types: ['card'],
@@ -83,35 +88,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       line_items: [
         {
           price_data: {
-            currency: currency || 'eur',
+            currency: resolvedCurrency,
             product_data: {
-              name: `Fatura ${invoiceNumber || invoiceId.slice(0, 8)}`,
+              name: `Fatura ${invoiceNumber || invoiceData.invoiceNumber || invoiceId.slice(0, 8)}`,
               description: customerName ? `Pagesë nga ${customerName}` : undefined,
             },
-            unit_amount: Math.round(amount * 100), // Stripe uses cents
+            unit_amount: Math.round(amount * 100),
           },
           quantity: 1,
         },
       ],
       metadata: {
         invoiceId,
-        invoiceNumber: invoiceNumber || '',
+        invoiceNumber: invoiceNumber || invoiceData.invoiceNumber || '',
         requestedByUid: uid,
       },
       success_url: successUrl,
       cancel_url: cancelUrl,
     };
 
-    if (customerEmail) {
-      sessionParams.customer_email = customerEmail;
-    }
+    if (customerEmail) sessionParams.customer_email = customerEmail;
 
     const session = await stripe.checkout.sessions.create(sessionParams);
-
-    return res.status(200).json({
-      sessionId: session.id,
-      url: session.url,
-    });
+    return res.status(200).json({ sessionId: session.id, url: session.url });
   } catch (err: any) {
     console.error('Stripe Checkout error:', err.message);
     return res.status(500).json({ error: 'Failed to create checkout session' });

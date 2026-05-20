@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useRef } from 'react';
+import DOMPurify from 'dompurify';
 import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
@@ -828,7 +829,7 @@ const ContractsView: React.FC = () => {
                   {viewContract.body.includes('<') ? (
                     <div
                       className="contract-body"
-                      dangerouslySetInnerHTML={{ __html: viewContract.body }}
+                      dangerouslySetInnerHTML={{ __html: DOMPurify.sanitize(viewContract.body) }}
                     />
                   ) : (
                     <pre className="text-sm whitespace-pre-wrap font-sans leading-relaxed">{viewContract.body}</pre>
