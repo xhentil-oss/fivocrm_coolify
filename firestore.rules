@@ -280,6 +280,13 @@ service cloud.firestore {
       allow update, delete: if isAuth();
     }
 
+    // Personal bookmarks of chat messages — each user can only see/modify their own.
+    match /chatBookmarks/{docId} {
+      allow read: if isAuth() && resource.data.userId == request.auth.uid;
+      allow create: if isAuth() && request.resource.data.userId == request.auth.uid;
+      allow update, delete: if isAuth() && resource.data.userId == request.auth.uid;
+    }
+
     match /directMessages/{docId} {
       allow read: if isAuth();
       allow create: if canCreateForTeam();

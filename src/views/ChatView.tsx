@@ -19,6 +19,7 @@ import {
   Bot, Sparkles, Loader2, Copy, RefreshCw, Phone, Smartphone,
   ClipboardList, ExternalLink, UserPlus, ChevronDown, CheckCheck,
   ImageIcon, Circle, Pin, PinOff, Mic, Square, Filter, AtSign,
+  Bookmark, BookmarkCheck, ListChecks,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
@@ -26,7 +27,7 @@ import { useFileUpload } from '../hooks/useFileUpload';
 import { normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import { auth, db } from '../lib/firebase';
 import { collection, query, where, getDocs } from 'firebase/firestore';
-import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, WhatsAppMessage, ClientRequest, Team, Lead } from '../types';
+import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, WhatsAppMessage, ClientRequest, Team, Lead, Task } from '../types';
 
 type ChatMode = 'channel' | 'direct' | 'ai' | 'whatsapp' | 'requests';
 
@@ -483,7 +484,121 @@ const ChatView: React.FC = () => {
   const waMutation = useMutation<WhatsAppMessage>('whatsappMessages');
   const leadsMutation = useMutation<Lead>('leads');
   const userProfileMutation = useMutation<UserProfile>('userProfiles');
+  const taskMutation = useMutation<Task>('tasks');
+  const bookmarkMutation = useMutation<any>('chatBookmarks');
   const isSending = messageMutation.loading;
+
+  // ── #7 Drafts auto-save (per conversation, localStorage) ──
+  const draftKey = useMemo(() => {
+    if (!user?.uid) return null;
+    if (chatMode === 'channel' && activeChannel) return `chat:draft:${user.uid}:channel:${activeChannel}`;
+    if (chatMode === 'direct' && activeDirectUserId) return `chat:draft:${user.uid}:dm:${activeDirectUserId}`;
+    return null;
+  }, [user?.uid, chatMode, activeChannel, activeDirectUserId]);
+
+  // Load draft when conversation changes
+  useEffect(() => {
+    if (!draftKey) return;
+    try {
+      const draft = localStorage.getItem(draftKey) || '';
+      setMessageText(draft);
+    } catch { /* localStorage disabled */ }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+
+  // Save / clear draft on text change (debounced)
+  useEffect(() => {
+    if (!draftKey) return;
+    const t = setTimeout(() => {
+      try {
+        if (messageText && messageText.trim().length > 0) localStorage.setItem(draftKey, messageText);
+        else localStorage.removeItem(draftKey);
+      } catch { /* localStorage disabled */ }
+    }, 400);
+    return () => clearTimeout(t);
+  }, [messageText, draftKey]);
+
+  // ── #8 Bookmarks / Save for later ──
+  const bookmarksQuery = useMemo(() => ({
+    skip: !user?.uid,
+    where: user?.uid ? [{ field: 'userId', operator: '==' as const, value: user.uid }] : undefined,
+    skipTeamFilter: true,
+  }), [user?.uid]);
+  const { data: bookmarks } = useCollection<any>('chatBookmarks', bookmarksQuery);
+  const bookmarkedMessageIds = useMemo(() => {
+    const s = new Set<string>();
+    bookmarks?.forEach(b => { if (b.messageId) s.add(b.messageId); });
+    return s;
+  }, [bookmarks]);
+
+  const handleToggleBookmark = useCallback(async (msg: ChatMessage) => {
+    if (!user?.uid) return;
+    const existing = bookmarks?.find((b: any) => b.messageId === msg.id);
+    try {
+      if (existing) {
+        await bookmarkMutation.remove(existing.id);
+        toast({ title: 'U hoq nga të ruajturat' });
+      } else {
+        const teamId = getGlobalTeamId() || '';
+        await bookmarkMutation.create({
+          userId: user.uid,
+          teamId,
+          messageId: msg.id,
+          channelId: (msg as any).channelId || null,
+          directWith: (msg as any).channelId ? null : (msg.senderId === user.uid ? msg.receiverId : msg.senderId),
+          senderId: msg.senderId,
+          content: (msg.content || '').slice(0, 500),
+          createdAt: new Date(),
+        } as any);
+        toast({ title: 'U ruajt për më vonë', description: 'E gjen te tab-i "Të Ruajtura".' });
+      }
+    } catch (err) {
+      console.error('[ChatView] bookmark toggle failed', err);
+      toast({ title: 'Gabim', description: 'Nuk u arrit ruajtja.', variant: 'destructive' });
+    }
+  }, [user?.uid, bookmarks, bookmarkMutation, toast]);
+
+  // ── #3 Message → Task ──
+  const [taskFromMsgOpen, setTaskFromMsgOpen] = useState(false);
+  const [taskFromMsgSource, setTaskFromMsgSource] = useState<ChatMessage | null>(null);
+  const [taskFromMsgTitle, setTaskFromMsgTitle] = useState('');
+  const [taskFromMsgAssignee, setTaskFromMsgAssignee] = useState<string>('');
+  const [taskFromMsgDueDate, setTaskFromMsgDueDate] = useState<string>('');
+  const [taskFromMsgPriority, setTaskFromMsgPriority] = useState<'low' | 'medium' | 'high' | 'urgent'>('medium');
+
+  const openTaskFromMessage = useCallback((msg: ChatMessage) => {
+    setTaskFromMsgSource(msg);
+    const plain = (msg.content || '').replace(/<[^>]+>/g, '').replace(/[*_`~]/g, '').trim();
+    setTaskFromMsgTitle(plain.slice(0, 120) || 'Detyrë nga chat');
+    setTaskFromMsgAssignee(user?.uid || '');
+    setTaskFromMsgDueDate('');
+    setTaskFromMsgPriority('medium');
+    setTaskFromMsgOpen(true);
+  }, [user?.uid]);
+
+  const handleCreateTaskFromMessage = useCallback(async () => {
+    if (!taskFromMsgSource || !user?.uid) return;
+    const senderName = getUserDisplayName(taskFromMsgSource.senderId);
+    try {
+      await taskMutation.create({
+        title: taskFromMsgTitle.trim() || 'Detyrë nga chat',
+        description: `Nga ${senderName} në chat:\n\n${taskFromMsgSource.content || ''}`,
+        status: 'Todo',
+        priority: taskFromMsgPriority,
+        assignedToUserId: taskFromMsgAssignee || user.uid,
+        dueDate: taskFromMsgDueDate ? new Date(taskFromMsgDueDate) : undefined,
+        createdByUserId: user.uid,
+      } as any);
+      toast({ title: 'Detyra u krijua', description: 'U shtua në listën e detyrave.' });
+      setTaskFromMsgOpen(false);
+      setTaskFromMsgSource(null);
+    } catch (err) {
+      console.error('[ChatView] create task from message failed', err);
+      toast({ title: 'Gabim', description: 'Detyra nuk u krijua.', variant: 'destructive' });
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [taskFromMsgSource, taskFromMsgTitle, taskFromMsgAssignee, taskFromMsgDueDate, taskFromMsgPriority, user?.uid, taskMutation, toast]);
+
 
   // Typing indicators
   const typingMutation = useMutation<any>('typingIndicators');
@@ -2459,6 +2574,20 @@ const ChatView: React.FC = () => {
                                       <Reply className="h-3.5 w-3.5" />
                                     </button>
                                     <button
+                                      className={`p-1 hover:bg-accent rounded-lg transition-colors ${bookmarkedMessageIds.has(message.id) ? 'text-amber-500' : 'text-muted-foreground hover:text-foreground'}`}
+                                      onClick={() => handleToggleBookmark(message)}
+                                      title={bookmarkedMessageIds.has(message.id) ? 'Hiq nga të ruajturat' : 'Ruaj për më vonë'}
+                                    >
+                                      {bookmarkedMessageIds.has(message.id) ? <BookmarkCheck className="h-3.5 w-3.5" /> : <Bookmark className="h-3.5 w-3.5" />}
+                                    </button>
+                                    <button
+                                      className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors"
+                                      onClick={() => openTaskFromMessage(message)}
+                                      title="Krijo detyrë nga ky mesazh"
+                                    >
+                                      <ListChecks className="h-3.5 w-3.5" />
+                                    </button>
+                                    <button
                                       className={`p-1 hover:bg-accent rounded-lg transition-colors ${isPinned ? 'text-amber-500' : 'text-muted-foreground hover:text-foreground'}`}
                                       onClick={() => handleTogglePin(message)}
                                       title={isPinned ? 'Hiq fiksimin' : 'Fikso mesazhin'}
@@ -2981,6 +3110,64 @@ const ChatView: React.FC = () => {
               )}
             </div>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* Krijo Detyrë nga Mesazhi */}
+      <Dialog open={taskFromMsgOpen} onOpenChange={setTaskFromMsgOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base"><ListChecks className="h-4 w-4" /> Krijo detyrë nga mesazhi</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">Titulli</Label>
+              <Input value={taskFromMsgTitle} onChange={(e) => setTaskFromMsgTitle(e.target.value)} placeholder="Titulli i detyrës..." className="mt-1" />
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <Label className="text-xs">Caktuar</Label>
+                <Select value={taskFromMsgAssignee} onValueChange={setTaskFromMsgAssignee}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh..." /></SelectTrigger>
+                  <SelectContent>
+                    {teamMembers?.map(m => (
+                      <SelectItem key={m.userId} value={m.userId}>{m.displayName || m.email || 'Pa emër'}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-xs">Prioriteti</Label>
+                <Select value={taskFromMsgPriority} onValueChange={(v) => setTaskFromMsgPriority(v as any)}>
+                  <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="low">I ulët</SelectItem>
+                    <SelectItem value="medium">Mesatar</SelectItem>
+                    <SelectItem value="high">I lartë</SelectItem>
+                    <SelectItem value="urgent">Urgjent</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div>
+              <Label className="text-xs">Afati (opsional)</Label>
+              <Input type="date" value={taskFromMsgDueDate} onChange={(e) => setTaskFromMsgDueDate(e.target.value)} className="mt-1" />
+            </div>
+            {taskFromMsgSource && (
+              <div className="text-xs text-muted-foreground bg-muted/40 rounded-lg p-2 max-h-24 overflow-y-auto">
+                <span className="font-medium">Burimi: </span>
+                {(taskFromMsgSource.content || '').slice(0, 200).replace(/<[^>]+>/g, '')}
+                {(taskFromMsgSource.content || '').length > 200 ? '…' : ''}
+              </div>
+            )}
+            <div className="flex justify-end gap-2 pt-2">
+              <Button variant="outline" size="sm" onClick={() => setTaskFromMsgOpen(false)}>Anulo</Button>
+              <Button size="sm" onClick={handleCreateTaskFromMessage} disabled={taskMutation.loading || !taskFromMsgTitle.trim()}>
+                {taskMutation.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Check className="h-3.5 w-3.5 mr-1" />}
+                Krijo Detyrën
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
