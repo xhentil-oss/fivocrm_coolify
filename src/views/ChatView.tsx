@@ -1449,7 +1449,12 @@ const ChatView: React.FC = () => {
       markedAsReadRef.current.add(m.id);
       // Only commit if the user hasn't switched conversations
       if (activeDirectUserId === snapshotDmUserId) {
-        messageMutation.update(m.id, { isRead: true }).catch(() => {});
+        messageMutation.update(m.id, { isRead: true }).catch((err) => {
+          // Roll back ref so next pass retries; surface to console so we can
+          // see rules/permission issues instead of failing silently.
+          markedAsReadRef.current.delete(m.id);
+          console.error('[ChatView] markAsRead DM failed', m.id, err);
+        });
       }
     });
   }, [activeDirectUserId, allDirectMessages, user, chatMode]);
@@ -1458,7 +1463,13 @@ const ChatView: React.FC = () => {
     if (chatMode !== 'channel' || !user || !channelMessages) return;
     const unread = channelMessages.filter(m => m.senderId !== user.uid && !m.isRead && !markedAsReadRef.current.has(m.id));
     const extra = isClientChannel ? { readAt: new Date() } : {};
-    unread.forEach(m => { markedAsReadRef.current.add(m.id); messageMutation.update(m.id, { isRead: true, ...extra }); });
+    unread.forEach(m => {
+      markedAsReadRef.current.add(m.id);
+      messageMutation.update(m.id, { isRead: true, ...extra }).catch((err) => {
+        markedAsReadRef.current.delete(m.id);
+        console.error('[ChatView] markAsRead channel failed', m.id, err);
+      });
+    });
   }, [chatMode, channelMessages, user]);
 
   // Auto-resize textarea + @mention detection
