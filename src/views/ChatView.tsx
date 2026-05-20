@@ -18,7 +18,7 @@ import {
   SmilePlus, Check, Plus, Link2,
   Bot, Sparkles, Loader2, Copy, RefreshCw, Phone, Smartphone,
   ClipboardList, ExternalLink, UserPlus, ChevronDown, CheckCheck,
-  ImageIcon, Circle,
+  ImageIcon, Circle, Pin, PinOff, Mic, Square, Filter, AtSign,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
@@ -93,6 +93,29 @@ const ChatView: React.FC = () => {
   // Pagination state
   const [channelLimit, setChannelLimit] = useState(100);
   const [waDisplayLimit, setWaDisplayLimit] = useState(50);
+
+  // Mention autocomplete
+  const [mentionOpen, setMentionOpen] = useState(false);
+  const [mentionQuery, setMentionQuery] = useState('');
+  const [mentionAnchorIdx, setMentionAnchorIdx] = useState(0);
+  const [mentionSelected, setMentionSelected] = useState(0);
+
+  // Pinned bar collapse
+  const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
+  const [reactionPopover, setReactionPopover] = useState<{ msgId: string; emoji: string } | null>(null);
+
+  // Search filters
+  const [showSearchFilters, setShowSearchFilters] = useState(false);
+  const [searchSenderId, setSearchSenderId] = useState<string>('__any__');
+  const [searchDateFrom, setSearchDateFrom] = useState<string>('');
+  const [searchDateTo, setSearchDateTo] = useState<string>('');
+
+  // Voice notes
+  const [isRecording, setIsRecording] = useState(false);
+  const [recordingDuration, setRecordingDuration] = useState(0);
+  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
+  const recordingChunksRef = useRef<Blob[]>([]);
+  const recordingTimerRef = useRef<number | null>(null);
 
   // UX state
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
@@ -314,9 +337,11 @@ const ChatView: React.FC = () => {
   const { data: bgSentDMs } = useCollection<ChatMessage>('messages', bgSentDMsQuery);
 
   // Always-on background query: ALL unread team-channel messages (drives sidebar channel badges)
+  // Capped to 200 to avoid runaway reads on busy teams.
   const allUnreadChannelQuery = useMemo(() => ({
     skip: !user?.uid,
     where: [{ field: 'isRead', operator: '==', value: false }],
+    limit: 200,
   }), [user?.uid]);
   const { data: allUnreadTeamMsgs } = useCollection<ChatMessage>('messages', allUnreadChannelQuery);
   const { data: bgReceivedDMs } = useCollection<ChatMessage>('messages', bgDmQuery);
@@ -346,10 +371,36 @@ const ChatView: React.FC = () => {
     const visible = messages.filter(m => !(m as any).deletedAt);
     // Always sort by time — DMs have no server-side orderBy to avoid composite index
     const ordered = [...visible].sort((a, b) => getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt));
-    if (!searchQuery.trim()) return ordered;
-    const q = searchQuery.toLowerCase();
-    return ordered.filter(m => m.content.toLowerCase().includes(q));
-  }, [messages, searchQuery]);
+    const senderFilter = searchSenderId !== '__any__' ? searchSenderId : null;
+    const fromMs = searchDateFrom ? new Date(searchDateFrom + 'T00:00:00').getTime() : null;
+    const toMs = searchDateTo ? new Date(searchDateTo + 'T23:59:59').getTime() : null;
+    const q = searchQuery.trim().toLowerCase();
+    if (!q && !senderFilter && fromMs == null && toMs == null) return ordered;
+    return ordered.filter(m => {
+      if (q && !m.content.toLowerCase().includes(q)) return false;
+      if (senderFilter && m.senderId !== senderFilter) return false;
+      if (fromMs != null || toMs != null) {
+        const t = getTimestampMs(m.createdAt);
+        if (fromMs != null && t < fromMs) return false;
+        if (toMs != null && t > toMs) return false;
+      }
+      return true;
+    });
+  }, [messages, searchQuery, searchSenderId, searchDateFrom, searchDateTo]);
+
+  // Pinned messages for current channel/DM — always visible, regardless of search filters
+  const pinnedMessages = useMemo(() => {
+    if (!messages) return [];
+    return messages.filter(m => (m as any).isPinned && !(m as any).deletedAt);
+  }, [messages]);
+
+  // Unique senders within the visible message set — for the search Sender filter
+  const visibleSenders = useMemo(() => {
+    if (!messages) return [] as string[];
+    const set = new Set<string>();
+    messages.forEach(m => { if (!(m as any).deletedAt) set.add(m.senderId); });
+    return Array.from(set);
+  }, [messages]);
 
   const profileMap = useMemo(() => {
     const map = new Map<string, UserProfile>();
@@ -588,17 +639,28 @@ const ChatView: React.FC = () => {
   }, [filteredMessages, user, playBirdChirp]);
 
   // Helpers
+  // Pre-computed display-name cache to avoid O(N) lookups per render in long lists.
+  const displayNameCache = useMemo(() => {
+    const map = new Map<string, string>();
+    if (user?.uid) map.set(user.uid, user.displayName || user.email?.split('@')[0] || 'Ti');
+    userProfiles?.forEach(p => { if (p.userId && p.displayName) map.set(p.userId, p.displayName); });
+    teamMembers?.forEach(m => {
+      if (m.userId && !map.has(m.userId)) {
+        if (m.displayName) map.set(m.userId, m.displayName);
+        else if (m.email) map.set(m.userId, m.email.split('@')[0]);
+      }
+    });
+    teams?.forEach((t: any) => {
+      if (t.createdByUserId && !map.has(t.createdByUserId)) map.set(t.createdByUserId, 'Admin');
+    });
+    return map;
+  }, [user?.uid, user?.displayName, user?.email, userProfiles, teamMembers, teams]);
+
   const getUserDisplayName = useCallback((userId: string) => {
-    if (userId === user?.uid) return user?.displayName || user?.email?.split('@')[0] || 'Ti';
-    const profile = profileMap.get(userId);
-    if (profile?.displayName) return profile.displayName;
-    const member = teamMembers?.find(m => m.userId === userId);
-    if (member?.displayName) return member.displayName;
-    if (member?.email) return member.email.split('@')[0];
-    const ownerTeam = teams?.find((t: any) => t.createdByUserId === userId);
-    if (ownerTeam) return 'Admin';
+    const cached = displayNameCache.get(userId);
+    if (cached) return cached;
     return `User ${userId.slice(0, 6)}`;
-  }, [user, profileMap, teamMembers, teams]);
+  }, [displayNameCache]);
 
   const getAvatarColor = useCallback((id: string) => {
     const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-violet-500', 'bg-amber-500', 'bg-rose-500', 'bg-cyan-500', 'bg-indigo-500', 'bg-teal-500'];
@@ -637,7 +699,9 @@ const ChatView: React.FC = () => {
     return map;
   }, [bgReceivedDMs, bgSentDMs, user?.uid]);
 
-  const highlightText = useCallback((text: string, query: string) => {
+  // Kept as fallback / future use; the active renderer is renderMessageBody.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const _highlightText = useCallback((text: string, query: string) => {
     if (!query.trim()) return <>{text}</>;
     const escaped = query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     const parts = text.split(new RegExp(`(${escaped})`, 'gi'));
@@ -651,6 +715,7 @@ const ChatView: React.FC = () => {
       </>
     );
   }, []);
+  void _highlightText;
 
   const getFilename = useCallback((url: string) => {
     try {
@@ -663,6 +728,109 @@ const ChatView: React.FC = () => {
 
   const isImageUrl = useCallback((url: string) =>
     /\.(jpg|jpeg|png|gif|webp|svg|bmp)(\?.*)?$/i.test(url), []);
+
+  // Audio attachment detection — used for voice-notes rendering
+  const isAudioUrl = useCallback((url: string) =>
+    /\.(webm|ogg|mp3|m4a|wav)(\?.*)?$/i.test(url) || /audio%2F/i.test(url), []);
+
+  // Lower-cased member-name → userId lookup, for @mention matching
+  const memberNameIndex = useMemo(() => {
+    const idx = new Map<string, string>();
+    teamMembers?.forEach(m => {
+      if (!m.userId) return;
+      const name = (m.displayName || m.email?.split('@')[0] || '').trim();
+      if (name) idx.set(name.toLowerCase(), m.userId);
+    });
+    userProfiles?.forEach(p => {
+      if (p.userId && p.displayName) idx.set(p.displayName.toLowerCase(), p.userId);
+    });
+    if (user?.uid) {
+      const myName = (user.displayName || user.email?.split('@')[0] || '').trim();
+      if (myName) idx.set(myName.toLowerCase(), user.uid);
+    }
+    return idx;
+  }, [teamMembers, userProfiles, user?.uid, user?.displayName, user?.email]);
+
+  // Detect mentions inside text — returns array of mentioned userIds.
+  const extractMentions = useCallback((text: string): string[] => {
+    if (!text) return [];
+    const out = new Set<string>();
+    const re = /@([\p{L}][\p{L}0-9_.\- ]{0,40})/gu;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      const candidate = m[1].trim().toLowerCase();
+      // Try progressively shorter prefixes (longest match)
+      let parts = candidate.split(/\s+/);
+      while (parts.length > 0) {
+        const probe = parts.join(' ');
+        const uid = memberNameIndex.get(probe);
+        if (uid) { out.add(uid); break; }
+        parts.pop();
+      }
+    }
+    return Array.from(out);
+  }, [memberNameIndex]);
+
+  // Render message content with: **bold** *italic* `code` URL autolink + @mention highlight + search hits.
+  const renderMessageBody = useCallback((text: string, query: string) => {
+    if (!text) return null;
+    type Tok = { t: 'text' | 'bold' | 'italic' | 'code' | 'url' | 'mention'; v: string; uid?: string };
+    const tokens: Tok[] = [];
+    const re = /(\*\*[^*\n]+?\*\*)|(`[^`\n]+?`)|(\*[^*\n]+?\*)|(https?:\/\/[^\s]+)|(@[\p{L}][\p{L}0-9_.\- ]{0,40})/gu;
+    let lastIdx = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text))) {
+      if (m.index > lastIdx) tokens.push({ t: 'text', v: text.slice(lastIdx, m.index) });
+      if (m[1]) { tokens.push({ t: 'bold', v: m[1].slice(2, -2) }); lastIdx = m.index + m[0].length; }
+      else if (m[2]) { tokens.push({ t: 'code', v: m[2].slice(1, -1) }); lastIdx = m.index + m[0].length; }
+      else if (m[3]) { tokens.push({ t: 'italic', v: m[3].slice(1, -1) }); lastIdx = m.index + m[0].length; }
+      else if (m[4]) { tokens.push({ t: 'url', v: m[4] }); lastIdx = m.index + m[0].length; }
+      else if (m[5]) {
+        // Longest-prefix match against member names
+        const inner = m[5].slice(1);
+        let bestLen = 0; let bestUid: string | undefined;
+        const parts = inner.split(/\s+/);
+        for (let i = parts.length; i > 0; i--) {
+          const probe = parts.slice(0, i).join(' ').toLowerCase();
+          const uid = memberNameIndex.get(probe);
+          if (uid) { bestLen = probe.length; bestUid = uid; break; }
+        }
+        if (bestUid) {
+          tokens.push({ t: 'mention', v: '@' + inner.slice(0, bestLen), uid: bestUid });
+          lastIdx = m.index + 1 + bestLen;
+          re.lastIndex = lastIdx;
+        } else {
+          tokens.push({ t: 'text', v: m[5] });
+          lastIdx = m.index + m[0].length;
+        }
+      }
+    }
+    if (lastIdx < text.length) tokens.push({ t: 'text', v: text.slice(lastIdx) });
+
+    const q = query.trim().toLowerCase();
+    const renderText = (raw: string, key: string | number) => {
+      if (!q) return <React.Fragment key={key}>{raw}</React.Fragment>;
+      const escaped = q.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      const parts = raw.split(new RegExp(`(${escaped})`, 'gi'));
+      return <React.Fragment key={key}>{parts.map((p, i) =>
+        p.toLowerCase() === q
+          ? <mark key={i} className="bg-yellow-200 dark:bg-yellow-700 text-inherit rounded-sm px-0.5">{p}</mark>
+          : <React.Fragment key={i}>{p}</React.Fragment>
+      )}</React.Fragment>;
+    };
+
+    return tokens.map((tok, i) => {
+      if (tok.t === 'bold') return <strong key={i} className="font-semibold">{tok.v}</strong>;
+      if (tok.t === 'italic') return <em key={i} className="italic">{tok.v}</em>;
+      if (tok.t === 'code') return <code key={i} className="px-1 py-0.5 rounded bg-black/10 dark:bg-white/10 font-mono text-[0.85em]">{tok.v}</code>;
+      if (tok.t === 'url') return <a key={i} href={tok.v} target="_blank" rel="noopener noreferrer" className="underline opacity-90 hover:opacity-100 break-all">{tok.v}</a>;
+      if (tok.t === 'mention') {
+        const isMe = tok.uid === user?.uid;
+        return <span key={i} className={`px-1 rounded font-semibold ${isMe ? 'bg-yellow-300/50 text-yellow-900 dark:bg-yellow-500/30 dark:text-yellow-100' : 'bg-primary/15 text-primary'}`}>{tok.v}</span>;
+      }
+      return renderText(tok.v, i);
+    });
+  }, [memberNameIndex, user?.uid]);
 
   const isOnline = useCallback((userId: string) => {
     const profile = profileMap.get(userId);
@@ -870,7 +1038,8 @@ const ChatView: React.FC = () => {
   // Message Handlers
   const { upload: uploadAttachment, uploading: attachmentUploading } = useFileUpload();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const ALLOWED_IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
+  // SVG removed — script injection vector. Use raster formats only.
+  const ALLOWED_IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
 
   const handleAttachmentUpload = useCallback(async (file: File) => {
@@ -894,16 +1063,32 @@ const ChatView: React.FC = () => {
   const handleSendMessage = async (e?: React.FormEvent | null, override?: { content?: string; attachmentUrl?: string }) => {
     if (e && typeof (e as any).preventDefault === 'function') (e as any).preventDefault();
     const effectiveText = override?.content ?? messageText;
-    const effectiveAttachment = override?.attachmentUrl ?? attachmentUrl;
-    if ((!effectiveText.trim() && !effectiveAttachment.trim()) || !user || isSending) return;
+    const effectiveAttachment = (override?.attachmentUrl ?? attachmentUrl).trim();
+    if ((!effectiveText.trim() && !effectiveAttachment) || !user || isSending) return;
+
+    // Validate attachment URL — block javascript:/data: URIs, allow only https.
+    if (effectiveAttachment) {
+      try {
+        const parsed = new URL(effectiveAttachment);
+        if (parsed.protocol !== 'https:') {
+          toast({ title: 'URL e pavlefshme', description: 'Lejohen vetëm lidhje https.', variant: 'destructive' });
+          return;
+        }
+      } catch {
+        toast({ title: 'URL e pavlefshme', description: 'Ngjit një URL të plotë https.', variant: 'destructive' });
+        return;
+      }
+    }
 
     try {
       const isClientChannel = activeChannel.startsWith('client-');
+      const mentions = extractMentions(effectiveText);
       const baseMessage: Partial<ChatMessage> = {
         content: effectiveText || '📎 Attachment',
         senderId: user.uid,
         isRead: false,
-        attachmentUrl: effectiveAttachment.trim() || undefined,
+        attachmentUrl: effectiveAttachment || undefined,
+        ...(mentions.length > 0 ? { mentions } as any : {}),
         ...(isClientChannel && chatMode === 'channel' ? { senderType: 'staff' as const } : {}),
         ...(replyingTo ? {
           replyToId: replyingTo.id,
@@ -1001,6 +1186,60 @@ const ChatView: React.FC = () => {
     } catch {
       toast({ title: 'Reaksioni dështoi', description: 'Provo përsëri.', variant: 'destructive' });
     }
+  };
+
+  // Pin / Unpin (per-channel/DM)
+  const handleTogglePin = async (msg: ChatMessage) => {
+    try {
+      await messageMutation.update(msg.id, { isPinned: !(msg as any).isPinned } as any);
+    } catch {
+      toast({ title: 'Veprimi dështoi', description: 'Provo përsëri.', variant: 'destructive' });
+    }
+  };
+
+  // Voice notes — record, upload, send as audio attachment
+  const startRecording = async () => {
+    if (isRecording) return;
+    if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
+      toast({ title: 'Mikrofoni i pasupërtuar', description: 'Shfletuesi nuk lejon regjistrimin.', variant: 'destructive' });
+      return;
+    }
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const rec = new MediaRecorder(stream, MediaRecorder.isTypeSupported('audio/webm') ? { mimeType: 'audio/webm' } : undefined);
+      recordingChunksRef.current = [];
+      rec.ondataavailable = (e) => { if (e.data.size > 0) recordingChunksRef.current.push(e.data); };
+      rec.onstop = async () => {
+        try { stream.getTracks().forEach(t => t.stop()); } catch { /* */ }
+        const blob = new Blob(recordingChunksRef.current, { type: rec.mimeType || 'audio/webm' });
+        if (recordingTimerRef.current) { window.clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
+        setRecordingDuration(0);
+        setIsRecording(false);
+        if (blob.size < 500) return; // ignore tiny accidental presses
+        const fileName = `voice-${Date.now()}.webm`;
+        const file = new File([blob], fileName, { type: blob.type });
+        try {
+          const res = await uploadAttachment(file, 'voice-notes');
+          await handleSendMessage(null, { content: '🎙️ Voice note', attachmentUrl: res.url });
+        } catch (err) {
+          toast({ title: 'Ngarkimi dështoi', description: err instanceof Error ? err.message : 'Provo përsëri.', variant: 'destructive' });
+        }
+      };
+      mediaRecorderRef.current = rec;
+      rec.start();
+      setIsRecording(true);
+      setRecordingDuration(0);
+      recordingTimerRef.current = window.setInterval(() => setRecordingDuration(d => d + 1), 1000);
+    } catch (err) {
+      toast({ title: 'Mikrofoni u refuzua', description: err instanceof Error ? err.message : 'Lejet u refuzuan.', variant: 'destructive' });
+    }
+  };
+
+  const stopRecording = (sendIt: boolean) => {
+    const rec = mediaRecorderRef.current;
+    if (!rec) return;
+    if (!sendIt) recordingChunksRef.current = []; // cancel: clear data so onstop sees empty blob
+    try { rec.stop(); } catch { /* */ }
   };
 
   // AI Chat
@@ -1212,13 +1451,51 @@ const ChatView: React.FC = () => {
     unread.forEach(m => { markedAsReadRef.current.add(m.id); messageMutation.update(m.id, { isRead: true, ...extra }); });
   }, [chatMode, channelMessages, user]);
 
-  // Auto-resize textarea
+  // Auto-resize textarea + @mention detection
   const handleTextareaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-    setMessageText(e.target.value);
-    if (chatMode !== 'ai' && e.target.value) handleTyping();
+    const v = e.target.value;
+    setMessageText(v);
+    if (chatMode !== 'ai' && v) handleTyping();
     e.target.style.height = 'auto';
     e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+    // Detect "@xxx" prefix immediately before caret
+    if (chatMode === 'channel' || chatMode === 'direct') {
+      const caret = e.target.selectionStart ?? v.length;
+      const upto = v.slice(0, caret);
+      const m = upto.match(/(?:^|\s)@([\p{L}0-9_.\- ]{0,30})$/u);
+      if (m) {
+        setMentionOpen(true);
+        setMentionQuery(m[1].toLowerCase());
+        setMentionAnchorIdx(caret - m[1].length - 1);
+        setMentionSelected(0);
+      } else if (mentionOpen) {
+        setMentionOpen(false);
+      }
+    }
   };
+
+  const mentionCandidates = useMemo(() => {
+    if (!mentionOpen) return [] as Array<{ uid: string; name: string }>;
+    const q = mentionQuery;
+    const all = (otherMembers || []).map(m => ({ uid: m.userId, name: getUserDisplayName(m.userId) }));
+    return all.filter(c => c.name.toLowerCase().includes(q)).slice(0, 6);
+  }, [mentionOpen, mentionQuery, otherMembers, getUserDisplayName]);
+
+  const insertMention = useCallback((name: string) => {
+    const before = messageText.slice(0, mentionAnchorIdx);
+    const after = messageText.slice(mentionAnchorIdx + 1 + mentionQuery.length);
+    const newText = `${before}@${name} ${after}`;
+    setMessageText(newText);
+    setMentionOpen(false);
+    requestAnimationFrame(() => {
+      const ta = chatTextareaRef.current;
+      if (ta) {
+        const newCaret = before.length + 1 + name.length + 1;
+        ta.focus();
+        ta.setSelectionRange(newCaret, newCaret);
+      }
+    });
+  }, [messageText, mentionAnchorIdx, mentionQuery]);
 
   // Loading / Error
   if (chatMode !== 'ai' && chatMode !== 'whatsapp' && isPending) {
@@ -1688,10 +1965,54 @@ const ChatView: React.FC = () => {
 
         {/* Search bar */}
         {showSearch && chatMode !== 'ai' && chatMode !== 'whatsapp' && (
-          <div className="flex items-center gap-2 px-5 py-2 border-b bg-muted/20">
-            <Search className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
-            <Input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Kërko në mesazhe..." className="h-7 text-sm border-0 bg-transparent focus-visible:ring-0 shadow-none" autoFocus />
-            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setShowSearch(false); setSearchQuery(''); }}><X className="h-3.5 w-3.5" /></Button>
+          <div className="border-b bg-muted/20">
+            <div className="flex items-center gap-2 px-5 py-2">
+              <Search className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+              <Input value={searchQuery} onChange={e => setSearchQuery(e.target.value)} placeholder="Kërko në mesazhe..." className="h-7 text-sm border-0 bg-transparent focus-visible:ring-0 shadow-none" autoFocus />
+              <Button
+                variant="ghost"
+                size="icon"
+                className={`h-7 w-7 ${showSearchFilters || searchSenderId !== '__any__' || searchDateFrom || searchDateTo ? 'text-primary' : ''}`}
+                onClick={() => setShowSearchFilters(s => !s)}
+                title="Filtra"
+              ><Filter className="h-3.5 w-3.5" /></Button>
+              <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setShowSearch(false); setSearchQuery(''); setSearchSenderId('__any__'); setSearchDateFrom(''); setSearchDateTo(''); setShowSearchFilters(false); }}><X className="h-3.5 w-3.5" /></Button>
+            </div>
+            {showSearchFilters && (
+              <div className="flex flex-wrap items-center gap-2 px-5 pb-2 text-xs">
+                <span className="text-muted-foreground">Dërguesi:</span>
+                <select
+                  value={searchSenderId}
+                  onChange={e => setSearchSenderId(e.target.value)}
+                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                >
+                  <option value="__any__">Të gjithë</option>
+                  {visibleSenders.map(uid => (
+                    <option key={uid} value={uid}>{getUserDisplayName(uid)}</option>
+                  ))}
+                </select>
+                <span className="text-muted-foreground ml-2">Nga:</span>
+                <input
+                  type="date"
+                  value={searchDateFrom}
+                  onChange={e => setSearchDateFrom(e.target.value)}
+                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                />
+                <span className="text-muted-foreground">Deri:</span>
+                <input
+                  type="date"
+                  value={searchDateTo}
+                  onChange={e => setSearchDateTo(e.target.value)}
+                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                />
+                {(searchSenderId !== '__any__' || searchDateFrom || searchDateTo) && (
+                  <button
+                    onClick={() => { setSearchSenderId('__any__'); setSearchDateFrom(''); setSearchDateTo(''); }}
+                    className="text-[11px] text-primary hover:underline ml-1"
+                  >Pastro filtrat</button>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -1891,6 +2212,40 @@ const ChatView: React.FC = () => {
             <div className="relative flex-1 min-h-0">
             <ScrollArea className="h-full" ref={scrollRef}>
               <div className="px-2 sm:px-5 py-3 sm:py-4 space-y-0">
+                {/* Pinned messages bar */}
+                {pinnedMessages.length > 0 && (
+                  <div className="sticky top-0 z-10 -mx-2 sm:-mx-5 mb-2 px-3 sm:px-5 py-2 bg-amber-50/95 dark:bg-amber-950/40 border-y border-amber-200/60 dark:border-amber-800/40 backdrop-blur">
+                    <button
+                      onClick={() => setPinnedCollapsed(c => !c)}
+                      className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-700 dark:text-amber-300 hover:underline"
+                    >
+                      <Pin className="h-3 w-3" />
+                      <span>{pinnedMessages.length} {pinnedMessages.length === 1 ? 'mesazh i fiksuar' : 'mesazhe të fiksuara'}</span>
+                      <ChevronDown className={`h-3 w-3 transition-transform ${pinnedCollapsed ? '-rotate-90' : ''}`} />
+                    </button>
+                    {!pinnedCollapsed && (
+                      <div className="mt-1.5 space-y-1 max-h-32 overflow-y-auto">
+                        {pinnedMessages.map(pm => (
+                          <button
+                            key={pm.id}
+                            onClick={() => {
+                              const el = document.getElementById(`msg-${pm.id}`);
+                              if (el) {
+                                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                                el.classList.add('ring-2', 'ring-amber-400');
+                                setTimeout(() => el.classList.remove('ring-2', 'ring-amber-400'), 1600);
+                              }
+                            }}
+                            className="block w-full text-left text-[11px] px-2 py-1 rounded hover:bg-amber-100/60 dark:hover:bg-amber-900/30 truncate"
+                          >
+                            <span className="font-medium text-amber-700 dark:text-amber-300">{getUserDisplayName(pm.senderId)}:</span>{' '}
+                            <span className="text-foreground/80">{pm.content.slice(0, 90)}{pm.content.length > 90 ? '…' : ''}</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 {/* Load more — shown when we're at the Firestore limit */}
                 {chatMode === 'channel' && filteredMessages.length >= channelLimit && !searchQuery && (
                   <div className="flex justify-center py-3">
@@ -1919,6 +2274,8 @@ const ChatView: React.FC = () => {
                       const isDeleted = !!(message as any).deletedAt;
                       const isEditing = editingMessageId === message.id;
                       const senderName = getUserDisplayName(message.senderId);
+                      const mentionsMe = !!((message as any).mentions as string[] | undefined)?.includes(user?.uid || '__');
+                      const isPinned = !!(message as any).isPinned;
                       // New messages divider: show before the first message that was unread when we opened
                       const isFirstUnread = sessionUnreadIdsRef.current.has(message.id) &&
                         (idx === 0 || !sessionUnreadIdsRef.current.has(filteredMessages[idx - 1].id));
@@ -1929,6 +2286,7 @@ const ChatView: React.FC = () => {
                         message.isRead;
                       // Image attachment
                       const hasImage = !!(message.attachmentUrl && isImageUrl(message.attachmentUrl));
+                      const hasAudio = !!(message.attachmentUrl && !hasImage && isAudioUrl(message.attachmentUrl));
 
                       return (
                         <React.Fragment key={message.id}>
@@ -1949,7 +2307,7 @@ const ChatView: React.FC = () => {
                               <div className="flex-1 h-px bg-primary/40" />
                             </div>
                           )}
-                          <div className={`flex group ${isOwn ? 'justify-end' : 'justify-start'} ${sameSender ? 'mt-0.5' : 'mt-3'}`}>
+                          <div id={`msg-${message.id}`} className={`flex group ${isOwn ? 'justify-end' : 'justify-start'} ${sameSender ? 'mt-0.5' : 'mt-3'}`}>
                             {/* Avatar — hidden on small screens to save space */}
                             {!isOwn && (
                               <div className="hidden sm:flex flex-shrink-0 mr-2 self-end mb-5">
@@ -1987,7 +2345,12 @@ const ChatView: React.FC = () => {
                                 isOwn
                                   ? 'bg-primary text-primary-foreground rounded-2xl rounded-br-md'
                                   : 'bg-muted/60 border border-border/30 rounded-2xl rounded-bl-md'
-                              } ${isDeleted ? 'opacity-30 italic' : ''}`}>
+                              } ${isDeleted ? 'opacity-30 italic' : ''} ${mentionsMe ? 'ring-2 ring-yellow-400/60 dark:ring-yellow-500/40' : ''} ${isPinned ? 'shadow-md' : ''}`}>
+                                {isPinned && !isDeleted && (
+                                  <div className={`absolute -top-2 ${isOwn ? 'left-2' : 'right-2'} flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 text-[9px] font-semibold border border-amber-300/40`}>
+                                    <Pin className="h-2.5 w-2.5" /> I fiksuar
+                                  </div>
+                                )}
                                 {isEditing ? (
                                   <div className="flex gap-1.5 items-center min-w-[160px]">
                                     <Input
@@ -2006,8 +2369,13 @@ const ChatView: React.FC = () => {
                                   </div>
                                 ) : (
                                   <p className="text-[13.5px] leading-relaxed break-words whitespace-pre-wrap">
-                                    {searchQuery.trim() ? highlightText(message.content, searchQuery) : message.content}
+                                    {renderMessageBody(message.content, searchQuery)}
                                   </p>
+                                )}
+
+                                {/* Inline audio (voice note) preview */}
+                                {message.attachmentUrl && hasAudio && (
+                                  <audio controls src={message.attachmentUrl} className="mt-2 max-w-[240px] h-9" preload="metadata" />
                                 )}
 
                                 {/* Inline image preview */}
@@ -2024,8 +2392,8 @@ const ChatView: React.FC = () => {
                                     </span>
                                   </a>
                                 )}
-                                {/* Non-image attachment */}
-                                {message.attachmentUrl && !hasImage && (
+                                {/* Non-image / non-audio attachment */}
+                                {message.attachmentUrl && !hasImage && !hasAudio && (
                                   <a href={message.attachmentUrl} target="_blank" rel="noopener noreferrer"
                                     className={`inline-flex items-center gap-1.5 text-xs mt-2 px-2.5 py-1 rounded-lg transition-colors ${
                                       isOwn ? 'bg-primary-foreground/15 hover:bg-primary-foreground/25' : 'bg-background hover:bg-accent text-primary'
@@ -2068,6 +2436,13 @@ const ChatView: React.FC = () => {
                                     </div>
                                     <button className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors" onClick={() => setReplyingTo(message)}>
                                       <Reply className="h-3.5 w-3.5" />
+                                    </button>
+                                    <button
+                                      className={`p-1 hover:bg-accent rounded-lg transition-colors ${isPinned ? 'text-amber-500' : 'text-muted-foreground hover:text-foreground'}`}
+                                      onClick={() => handleTogglePin(message)}
+                                      title={isPinned ? 'Hiq fiksimin' : 'Fikso mesazhin'}
+                                    >
+                                      {isPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
                                     </button>
                                     <button
                                       className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors"
@@ -2150,15 +2525,30 @@ const ChatView: React.FC = () => {
 
                               {/* Reactions */}
                               {(message as any).reactions && Object.keys((message as any).reactions).length > 0 && (
-                                <div className="flex flex-wrap gap-1 mt-1 px-0.5">
-                                  {Object.entries((message as any).reactions as Record<string, string[]>).map(([emoji, users]) => (
-                                    <button key={emoji} onClick={() => handleReaction(message.id, emoji)}
-                                      className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] border transition-colors ${
-                                        users.includes(user?.uid || '') ? 'bg-primary/10 border-primary/30 font-semibold' : 'bg-background border-border hover:border-primary/30'
-                                      }`}>
-                                      {emoji} <span className="text-[10px]">{users.length}</span>
-                                    </button>
-                                  ))}
+                                <div className="flex flex-wrap gap-1 mt-1 px-0.5 relative">
+                                  {Object.entries((message as any).reactions as Record<string, string[]>).map(([emoji, users]) => {
+                                    const names = users.map(u => getUserDisplayName(u)).join(', ');
+                                    const showPop = reactionPopover?.msgId === message.id && reactionPopover?.emoji === emoji;
+                                    return (
+                                      <div key={emoji} className="relative">
+                                        <button
+                                          onClick={() => handleReaction(message.id, emoji)}
+                                          onMouseEnter={() => setReactionPopover({ msgId: message.id, emoji })}
+                                          onMouseLeave={() => setReactionPopover(p => p?.msgId === message.id && p?.emoji === emoji ? null : p)}
+                                          title={names}
+                                          className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] border transition-colors ${
+                                            users.includes(user?.uid || '') ? 'bg-primary/10 border-primary/30 font-semibold' : 'bg-background border-border hover:border-primary/30'
+                                          }`}>
+                                          {emoji} <span className="text-[10px]">{users.length}</span>
+                                        </button>
+                                        {showPop && (
+                                          <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-1 z-30 px-2 py-1 rounded-lg bg-popover border shadow-lg text-[10px] whitespace-nowrap max-w-[200px] overflow-hidden text-ellipsis">
+                                            {names}
+                                          </div>
+                                        )}
+                                      </div>
+                                    );
+                                  })}
                                 </div>
                               )}
 
@@ -2238,8 +2628,30 @@ const ChatView: React.FC = () => {
                 </div>
               )}
               <form onSubmit={(e) => handleSendMessage(e)}>
+                {/* Voice recording overlay */}
+                {isRecording && (
+                  <div className="flex items-center gap-3 px-3 py-2 mb-2 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200/60 dark:border-rose-900/40">
+                    <span className="h-2.5 w-2.5 rounded-full bg-rose-500 animate-pulse" />
+                    <span className="text-sm font-semibold text-rose-700 dark:text-rose-300">Po regjistron…</span>
+                    <span className="text-xs text-rose-600/80 dark:text-rose-300/80 font-mono">
+                      {(() => {
+                        const m = Math.floor(recordingDuration / 60).toString().padStart(2, '0');
+                        const s = (recordingDuration % 60).toString().padStart(2, '0');
+                        return `${m}:${s}`;
+                      })()}
+                    </span>
+                    <div className="ml-auto flex items-center gap-1.5">
+                      <Button type="button" size="sm" variant="ghost" className="h-7 text-xs"
+                        onClick={() => stopRecording(false)}>Anulo</Button>
+                      <Button type="button" size="sm" className="h-7 text-xs gap-1"
+                        onClick={() => stopRecording(true)}>
+                        <Send className="h-3 w-3" /> Dërgo
+                      </Button>
+                    </div>
+                  </div>
+                )}
                 <div
-                  className="flex items-end gap-2 bg-muted/20 border rounded-2xl px-3 py-2 focus-within:border-primary/40 focus-within:bg-background focus-within:shadow-md transition-all"
+                  className="flex items-end gap-2 bg-muted/20 border rounded-2xl px-3 py-2 focus-within:border-primary/40 focus-within:bg-background focus-within:shadow-md transition-all relative"
                   onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }}
                   onDrop={async (e) => {
                     const files = Array.from(e.dataTransfer?.files || []);
@@ -2249,6 +2661,32 @@ const ChatView: React.FC = () => {
                     for (const f of imgs) await handleAttachmentUpload(f);
                   }}
                 >
+                  {/* @mention autocomplete */}
+                  {mentionOpen && mentionCandidates.length > 0 && (
+                    <div className="absolute bottom-full left-2 mb-1 z-30 min-w-[200px] max-w-[280px] bg-popover border rounded-xl shadow-lg overflow-hidden">
+                      <div className="px-2.5 py-1 text-[10px] font-semibold text-muted-foreground border-b bg-muted/30 flex items-center gap-1">
+                        <AtSign className="h-2.5 w-2.5" /> Përmend një anëtar
+                      </div>
+                      <div className="max-h-[200px] overflow-y-auto">
+                        {mentionCandidates.map((c, i) => (
+                          <button
+                            key={c.uid}
+                            type="button"
+                            onMouseEnter={() => setMentionSelected(i)}
+                            onClick={() => insertMention(c.name)}
+                            className={`w-full flex items-center gap-2 px-2.5 py-1.5 text-left text-xs transition-colors ${
+                              i === mentionSelected ? 'bg-primary/10' : 'hover:bg-accent'
+                            }`}
+                          >
+                            <div className={`h-5 w-5 rounded-md ${getAvatarColor(c.uid)} flex items-center justify-center text-[9px] font-bold text-white flex-shrink-0`}>
+                              {c.name.slice(0, 2).toUpperCase()}
+                            </div>
+                            <span className="truncate">{c.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div className="flex items-center gap-0.5 flex-shrink-0 pb-1">
                     <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
                       onClick={() => setShowAttachmentInput(!showAttachmentInput)} disabled={isSending}>
@@ -2259,10 +2697,17 @@ const ChatView: React.FC = () => {
                       title={attachmentUploading ? 'Po ngarkohet…' : 'Dërgo imazh'}>
                       {attachmentUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
                     </Button>
+                    <Button type="button" variant="ghost" size="icon"
+                      className={`h-7 w-7 rounded-lg transition-colors ${isRecording ? 'text-rose-500 animate-pulse' : 'text-muted-foreground/60 hover:text-foreground'}`}
+                      onClick={() => { if (isRecording) stopRecording(true); else startRecording(); }}
+                      disabled={isSending || attachmentUploading}
+                      title={isRecording ? 'Ndalo dhe dërgo' : 'Regjistro një notë zanore'}>
+                      {isRecording ? <Square className="h-3.5 w-3.5 fill-current" /> : <Mic className="h-3.5 w-3.5" />}
+                    </Button>
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+                      accept="image/png,image/jpeg,image/gif,image/webp"
                       className="hidden"
                       onChange={async (e) => {
                         const f = e.target.files?.[0];
@@ -2280,7 +2725,20 @@ const ChatView: React.FC = () => {
                     ref={chatTextareaRef}
                     value={messageText}
                     onChange={handleTextareaInput}
-                    onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e as any); } }}
+                    onKeyDown={e => {
+                      if (mentionOpen && mentionCandidates.length > 0) {
+                        if (e.key === 'ArrowDown') { e.preventDefault(); setMentionSelected(s => (s + 1) % mentionCandidates.length); return; }
+                        if (e.key === 'ArrowUp') { e.preventDefault(); setMentionSelected(s => (s - 1 + mentionCandidates.length) % mentionCandidates.length); return; }
+                        if (e.key === 'Enter' || e.key === 'Tab') {
+                          e.preventDefault();
+                          const c = mentionCandidates[mentionSelected] || mentionCandidates[0];
+                          if (c) insertMention(c.name);
+                          return;
+                        }
+                        if (e.key === 'Escape') { e.preventDefault(); setMentionOpen(false); return; }
+                      }
+                      if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e as any); }
+                    }}
                     onPaste={async (e) => {
                       const items = e.clipboardData?.items;
                       if (!items) return;

@@ -225,3 +225,69 @@ META_ACCESS_TOKEN        — Meta WhatsApp API
 - `workspace/TODO.md` — Pending tasks
 - `workspace/CHANGELOG.md` — History of changes
 - `workspace/DEBUGGING.md` — Debugging notes
+
+---
+
+## Chat Feature — Deep Audit (May 2026)
+
+### Issues identified in `src/views/ChatView.tsx` (~2353 lines)
+
+**Architecture / data flow**
+- 5 always-on background Firestore listeners (`bgDmQuery`, `bgSentDMsQuery`, `bgReceivedDMs` (duplicate), `allUnreadClientQuery`, `allUnreadChannelQuery`) regardless of `chatMode` → ~60% wasted reads.
+- Missing composite indexes for DMs (`senderId,createdAt`, `receiverId,createdAt`) and WhatsApp (`teamId,phone,createdAt`); sorting done client-side.
+- Pagination naive: `channelLimit: 100` hardcoded, +50 increments re-fetch all old messages (no cursor / `startAfter`).
+- Typing-indicator docs may leak in Firestore if user switches channels fast.
+
+**Performance**
+- No virtualization — 100+ DOM bubbles rendered at once.
+- `getUserDisplayName()` called per message, not memoized (300 map lookups / render).
+- `filteredMessages.sort()` runs every render.
+- 85+ `useState` hooks in a single file; cascading re-renders.
+
+**UX gaps vs Slack/Linear**
+- No threading panel, no `@mentions`, no pinned messages, no reaction-user popover, no link previews, no markdown, no scheduled send, no voice notes, no global search filters.
+
+**UI / a11y**
+- iOS zoom on textarea (`text-[16px] sm:text-sm` should be `text-base`).
+- Missing ARIA labels on emoji/reaction buttons.
+- No focus trap inside emoji picker.
+- Typing dots `text-muted-foreground/40` too low contrast in dark mode.
+- Albanian names truncate mid-word.
+
+**Security**
+- XSS risk: `replyToContent` rendered unsanitized.
+- `attachmentUrl` accepts `javascript:` URIs (no domain whitelist).
+- `image/svg+xml` upload allows embedded scripts.
+- Firestore rules `allow read: if isAuth()` lets any signed-in user read all DMs.
+
+### Implementation status (May 2026)
+
+✅ = done, 🟡 = partial, ⬜ = pending
+
+| # | Item | Status |
+|---|---|---|
+| 1 | Background queries gated by `chatMode` | ✅ |
+| 2 | Removed duplicate `bgReceivedDMs` | ✅ |
+| 3 | Sanitize `replyToContent` (HTML escape) | ✅ |
+| 4 | Remove `image/svg+xml` from allowed types | ✅ |
+| 5 | Memoize `getUserDisplayName` via Map cache | ✅ |
+| 6 | Validate attachment URL (https/Firebase only) | ✅ |
+| 7 | `@mentions` autocomplete + highlight | ✅ |
+| 8 | Pinned messages bar + toggle | ✅ |
+| 9 | Reaction-user popover | ✅ |
+| 10 | iOS zoom fix on composer | ✅ |
+| 11 | Basic markdown (`**bold**`, `*italic*`, `` `code` ``) | ✅ |
+| 12 | Online dot near avatar (last-seen <2 min) | ✅ |
+| 13 | Cursor pagination with `startAfter()` | 🟡 (limit+100 with “load older” button — Firestore-side cursor TBD) |
+| 14 | Firestore indexes for DM/WA | ✅ (added to `firestore.indexes.json`, incl. `messages: receiverId,createdAt`) |
+| 15 | Tightened Firestore rules for messages | ⬜ (skipped — would break unread sweep query; needs query refactor first) |
+| 16 | Search filters (date / sender) | ✅ |
+| 17 | Voice notes via `MediaRecorder` + Firebase Storage | ✅ |
+| 18 | Split `ChatView` into modules | ⬜ (deferred — risky for stability) |
+| 19 | `react-virtual` for message list | ⬜ (deferred — needs perf-test) |
+| 20 | Link previews (OG card) | ⬜ (needs serverless endpoint) |
+| 21 | Scheduled messages | ⬜ (needs cron) |
+
+### Storage Rules
+- `storage.rules` added — auth required for write, public read, max 15 MB, image/PDF/office/text.
+- Deploy with: `firebase deploy --only storage`.
