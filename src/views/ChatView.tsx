@@ -59,6 +59,9 @@ const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉
 
 const ACTIVE_MEMBERS_QUERY = {
   where: [{ field: 'status', operator: '==', value: 'Active' }],
+  // Cross-team DM: list all active members across every team so people can
+  // direct-message each other regardless of team membership.
+  skipTeamFilter: true,
 };
 const ACTIVE_PORTAL_QUERY = {
   where: [{ field: 'status', operator: '==', value: 'Active' }],
@@ -313,10 +316,15 @@ const ChatView: React.FC = () => {
   const directMsgQuery = useMemo(() => ({
     skip: !user?.uid || chatMode !== 'direct',
     where: user?.uid ? [{ field: 'senderId', operator: '==', value: user.uid }] : undefined,
+    // Cross-team DM: don't restrict to current team. A user's own sent
+    // messages must be visible regardless of which team the recipient is in.
+    skipTeamFilter: true,
   }), [user?.uid, chatMode]);
   const directMsgReceivedQuery = useMemo(() => ({
     skip: !user?.uid || chatMode !== 'direct',
     where: user?.uid ? [{ field: 'receiverId', operator: '==', value: user.uid }] : undefined,
+    // Cross-team DM: receive messages from senders in any team.
+    skipTeamFilter: true,
   }), [user?.uid, chatMode]);
 
   // Always-on background query: received DMs regardless of active chat mode
@@ -325,6 +333,7 @@ const ChatView: React.FC = () => {
     where: user?.uid ? [{ field: 'receiverId', operator: '==', value: user.uid }] : undefined,
     orderBy: { field: 'createdAt', direction: 'desc' as const },
     limit: 100,
+    skipTeamFilter: true,
   }), [user?.uid]);
 
   // Always-on background query: sent DMs (for last-message preview in sidebar)
@@ -333,6 +342,7 @@ const ChatView: React.FC = () => {
     where: user?.uid ? [{ field: 'senderId', operator: '==', value: user.uid }] : undefined,
     orderBy: { field: 'createdAt', direction: 'desc' as const },
     limit: 100,
+    skipTeamFilter: true,
   }), [user?.uid]);
   const { data: bgSentDMs } = useCollection<ChatMessage>('messages', bgSentDMsQuery);
 
