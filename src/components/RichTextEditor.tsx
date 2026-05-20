@@ -87,7 +87,10 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({
       const res = await uploadRef.current(file, 'rte-images');
       return res.url;
     } catch (err) {
-      toast({ title: 'Ngarkimi dështoi', description: (err as Error)?.message || 'Provo përsëri.', variant: 'destructive' });
+      const e = err as { code?: string; message?: string };
+      console.error('[RTE] image upload failed', e);
+      const detail = e?.code ? `${e.code}: ${e.message || ''}` : (e?.message || 'Provo përsëri.');
+      toast({ title: 'Ngarkimi dështoi', description: detail, variant: 'destructive' });
       return null;
     }
   }, []);
