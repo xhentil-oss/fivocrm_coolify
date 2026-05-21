@@ -656,6 +656,76 @@ const CRMView: React.FC = () => {
     });
   }, [leads]);
 
+  // Keyboard navigation
+  const searchInputRef = React.useRef<HTMLInputElement | null>(null);
+  const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      const active = document.activeElement;
+      const tag = active?.tagName?.toLowerCase();
+      const isTyping = tag === 'input' || tag === 'textarea' || (active as HTMLElement)?.isContentEditable;
+      // Allow Escape even in inputs
+      if (e.key === 'Escape') {
+        if (highlightedIndex >= 0) {
+          setHighlightedIndex(-1);
+        }
+        return;
+      }
+      if (isTyping) return;
+      // Skip when any dialog/drawer is open
+      const anyDialogOpen = isCreateDialogOpen || !!editLead || !!selectedLead || !!leadToDelete || !!whatsappLead || !!lostReasonLead || discardOpen || shortcutsOpen;
+      if (anyDialogOpen) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      if (e.key === '/') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+        return;
+      }
+      if (e.key === 'n' || e.key === 'N') {
+        if (!permissions.canEdit) return;
+        e.preventDefault();
+        setIsCreateDialogOpen(true);
+        return;
+      }
+      if (e.key === '?') {
+        e.preventDefault();
+        setShortcutsOpen(true);
+        return;
+      }
+      if (e.key === 'j' || e.key === 'ArrowDown') {
+        if (filteredLeads.length === 0) return;
+        e.preventDefault();
+        setHighlightedIndex(i => Math.min(filteredLeads.length - 1, i + 1));
+        return;
+      }
+      if (e.key === 'k' || e.key === 'ArrowUp') {
+        if (filteredLeads.length === 0) return;
+        e.preventDefault();
+        setHighlightedIndex(i => Math.max(0, i - 1));
+        return;
+      }
+      if (e.key === 'Enter') {
+        if (highlightedIndex >= 0 && filteredLeads[highlightedIndex]) {
+          e.preventDefault();
+          setSelectedLead(filteredLeads[highlightedIndex]);
+        }
+        return;
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [filteredLeads, highlightedIndex, isCreateDialogOpen, editLead, selectedLead, leadToDelete, whatsappLead, lostReasonLead, discardOpen, shortcutsOpen, permissions.canEdit]);
+
+  // Clamp highlighted index when filtered list shrinks
+  useEffect(() => {
+    if (highlightedIndex >= filteredLeads.length) {
+      setHighlightedIndex(filteredLeads.length - 1);
+    }
+  }, [filteredLeads.length, highlightedIndex]);
+
   if (leadsLoading) {
     return (
       <div className="space-y-8">
@@ -737,9 +807,10 @@ const CRMView: React.FC = () => {
         <div className="relative flex-1">
           <Search className="w-4 h-4 absolute left-3 top-2.5 text-muted-foreground" />
           <Input
+            ref={searchInputRef}
             value={searchQuery}
             onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Kërko sipas emrit, email, telefonit, kompanisë..."
+            placeholder="Kërko sipas emrit, email, telefonit, kompanisë... (shtypni / për fokus)"
             className="pl-9 h-9"
           />
           {searchQuery && (
@@ -1135,10 +1206,10 @@ const CRMView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {filteredLeads.map((lead) => (
+                  {filteredLeads.map((lead, idx) => (
                     <tr
                       key={lead.id}
-                      className="group hover:bg-muted/50 cursor-pointer transition-colors duration-fast"
+                      className={`group hover:bg-muted/50 cursor-pointer transition-colors duration-fast ${idx === highlightedIndex ? 'bg-muted/60 ring-1 ring-inset ring-primary/40' : ''}`}
                       onClick={() => setSelectedLead(lead)}
                     >
                       <td className="px-6 py-4">
@@ -1611,6 +1682,29 @@ const CRMView: React.FC = () => {
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => setLeadToDelete(null)}>Anulo</Button>
             <Button variant="destructive" onClick={() => leadToDelete && handleDeleteLead(leadToDelete.id)}>Fshi</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Keyboard shortcuts help */}
+      <Dialog open={shortcutsOpen} onOpenChange={setShortcutsOpen}>
+        <DialogContent className="w-full max-w-md">
+          <DialogHeader><DialogTitle>Shkurtoret e tastierës</DialogTitle></DialogHeader>
+          <div className="space-y-2 text-sm">
+            {[
+              ['/', 'Fokuso kërkimin'],
+              ['n', 'Krijo lead të ri'],
+              ['j  /  ↓', 'Zgjidh rreshtin pasardhës'],
+              ['k  /  ↑', 'Zgjidh rreshtin paraprak'],
+              ['Enter', 'Hap lead-in e zgjedhur'],
+              ['Esc', 'Hiq zgjedhjen'],
+              ['?', 'Shfaq këtë listë'],
+            ].map(([key, label]) => (
+              <div key={key} className="flex items-center justify-between">
+                <span className="text-muted-foreground">{label}</span>
+                <kbd className="px-2 py-1 bg-muted border border-border rounded text-xs font-mono">{key}</kbd>
+              </div>
+            ))}
           </div>
         </DialogContent>
       </Dialog>
