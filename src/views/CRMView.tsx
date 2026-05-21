@@ -669,6 +669,39 @@ const CRMView: React.FC = () => {
     });
   }, [leads]);
 
+  // Forecast (weighted) — current value + 30d sparkline + delta vs prior 30d
+  const forecastData = React.useMemo(() => {
+    const active = (leads || []).filter(l => l.status !== 'Lost' && l.status !== 'Converted');
+    const currentValue = active.reduce((sum, l) => {
+      const prob = (l.probability ?? STAGE_PROBABILITY[l.status] ?? 0) / 100;
+      return sum + (l.estimatedValue || 0) * prob;
+    }, 0);
+
+    // Build cumulative forecast per day for the last 60 days, using createdAt as "lead became part of pipeline"
+    const today = new Date();
+    today.setHours(23, 59, 59, 999);
+    const points: number[] = [];
+    for (let i = 59; i >= 0; i--) {
+      const cutoff = new Date(today);
+      cutoff.setDate(cutoff.getDate() - i);
+      let sum = 0;
+      for (const l of leads || []) {
+        if (l.status === 'Lost' || l.status === 'Converted') continue;
+        const createdAt = l.createdAt ? new Date(l.createdAt) : null;
+        if (!createdAt || createdAt > cutoff) continue;
+        const prob = (l.probability ?? STAGE_PROBABILITY[l.status] ?? 0) / 100;
+        sum += (l.estimatedValue || 0) * prob;
+      }
+      points.push(sum);
+    }
+    const last30 = points.slice(30);
+    const prev30 = points.slice(0, 30);
+    const avgPrev = prev30.reduce((a, b) => a + b, 0) / Math.max(prev30.length, 1);
+    const avgLast = last30.reduce((a, b) => a + b, 0) / Math.max(last30.length, 1);
+    const deltaPct = avgPrev > 0 ? ((avgLast - avgPrev) / avgPrev) * 100 : 0;
+    return { currentValue, spark: last30, deltaPct };
+  }, [leads]);
+
   // Keyboard navigation
   const searchInputRef = React.useRef<HTMLInputElement | null>(null);
   const [highlightedIndex, setHighlightedIndex] = useState<number>(-1);
@@ -983,17 +1016,39 @@ const CRMView: React.FC = () => {
             <Percent className="w-3.5 h-3.5" />
             <p className="text-xs">Forecast (i ponderuar)</p>
           </div>
-          <p className="mt-1.5 text-2xl sm:text-3xl text-foreground font-semibold tabular-nums leading-none">
+          <div className="mt-1.5 flex items-end justify-between gap-2">
+            <p className="text-2xl sm:text-3xl text-foreground font-semibold tabular-nums leading-none">
+              {`${Math.round(forecastData.currentValue).toLocaleString()} L`}
+            </p>
             {(() => {
-              const val = (leads || [])
-                .filter(l => l.status !== 'Lost' && l.status !== 'Converted')
-                .reduce((sum, l) => {
-                  const prob = (l.probability ?? STAGE_PROBABILITY[l.status] ?? 0) / 100;
-                  return sum + (l.estimatedValue || 0) * prob;
-                }, 0);
-              return `${Math.round(val).toLocaleString()} L`;
+              const spark = forecastData.spark;
+              if (!spark.length) return null;
+              const max = Math.max(...spark, 1);
+              const min = Math.min(...spark);
+              const range = max - min || 1;
+              const w = 60;
+              const h = 24;
+              const step = spark.length > 1 ? w / (spark.length - 1) : 0;
+              const points = spark.map((v, i) => `${i * step},${h - ((v - min) / range) * h}`).join(' ');
+              const trendUp = forecastData.deltaPct >= 0;
+              const strokeColor = trendUp ? 'rgb(34 197 94)' : 'rgb(239 68 68)';
+              return (
+                <svg width={w} height={h} viewBox={`0 0 ${w} ${h}`} className="shrink-0" aria-hidden="true">
+                  <polyline fill="none" stroke={strokeColor} strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" points={points} />
+                </svg>
+              );
             })()}
-          </p>
+          </div>
+          {(() => {
+            const d = forecastData.deltaPct;
+            if (!isFinite(d) || d === 0) return null;
+            const up = d > 0;
+            return (
+              <p className={`mt-1 text-xs tabular-nums ${up ? 'text-success' : 'text-destructive'}`}>
+                {up ? '▲' : '▼'} {Math.abs(d).toFixed(1)}% vs 30 ditët para
+              </p>
+            );
+          })()}
         </Card>
       </div>
 
