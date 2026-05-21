@@ -8,7 +8,7 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { getStatusColor } from '../lib/statusColors';
 import { useToast } from '../hooks/use-toast';
-import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle, Edit2, Percent, MessageSquare, ExternalLink, Calculator, FileText, Clock, Bell, Send } from 'lucide-react';
+import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle, Edit2, Percent, MessageSquare, ExternalLink, Calculator, FileText, Clock, Bell, Send, ArrowUp, ArrowDown, ChevronsUpDown, Inbox } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -45,6 +45,13 @@ const CRMView: React.FC = () => {
   const [scoreFilter, setScoreFilter] = useState('all');
   const [assignedFilter, setAssignedFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
+  type SortKey = 'createdAt' | 'name' | 'value' | 'score' | 'prob' | 'follow';
+  const [sortBy, setSortBy] = useState<SortKey>('createdAt');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+  const toggleSort = (key: SortKey) => {
+    if (sortBy === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortBy(key); setSortDir(key === 'name' ? 'asc' : 'desc'); }
+  };
   const { toast } = useToast();
 
   // Follow-up / re-contact state (synced with selectedLead)
@@ -547,8 +554,40 @@ const CRMView: React.FC = () => {
     if (assignedFilter === 'mine') result = result.filter(l => l.assignedToUserId === user?.uid);
     if (assignedFilter === 'unassigned') result = result.filter(l => !l.assignedToUserId);
     if (sourceFilter !== 'all') result = result.filter(l => l.source === sourceFilter);
-    return result;
-  }, [leads, activeTab, searchQuery, scoreFilter, assignedFilter, sourceFilter, user]);
+
+    // Sort
+    const dir = sortDir === 'asc' ? 1 : -1;
+    const getFollowMs = (l: Lead) => {
+      const nd = l.nextFollowUpDate as any;
+      if (!nd) return Number.POSITIVE_INFINITY;
+      return nd instanceof Date ? nd.getTime() : (nd?.seconds ? nd.seconds * 1000 : new Date(nd).getTime());
+    };
+    const sorted = [...result].sort((a, b) => {
+      switch (sortBy) {
+        case 'name': return a.name.localeCompare(b.name, 'sq') * dir;
+        case 'value': return ((a.estimatedValue || 0) - (b.estimatedValue || 0)) * dir;
+        case 'score': {
+          const sa = (a as any).score ?? calculateLeadScore(a);
+          const sb = (b as any).score ?? calculateLeadScore(b);
+          return (sa - sb) * dir;
+        }
+        case 'prob': return ((a.probability ?? STAGE_PROBABILITY[a.status] ?? 0) - (b.probability ?? STAGE_PROBABILITY[b.status] ?? 0)) * dir;
+        case 'follow': return (getFollowMs(a) - getFollowMs(b)) * dir;
+        case 'createdAt':
+        default: return (getTimestampMs(b.createdAt) - getTimestampMs(a.createdAt)) * (sortDir === 'asc' ? -1 : 1);
+      }
+    });
+    return sorted;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, activeTab, searchQuery, scoreFilter, assignedFilter, sourceFilter, sortBy, sortDir, user]);
+
+  const hasActiveFilters = searchQuery.trim() !== '' || scoreFilter !== 'all' || assignedFilter !== 'all' || sourceFilter !== 'all';
+  const clearAllFilters = () => {
+    setSearchQuery('');
+    setScoreFilter('all');
+    setAssignedFilter('all');
+    setSourceFilter('all');
+  };
 
   const needsFollowUp = React.useMemo(() => {
     if (!leads) return [];
@@ -693,6 +732,51 @@ const CRMView: React.FC = () => {
         </Select>
       </div>
 
+      {/* Active filter chips */}
+      {hasActiveFilters && (
+        <div className="flex flex-wrap items-center gap-1.5 -mt-2">
+          <span className="text-xs text-muted-foreground">Filtra:</span>
+          {searchQuery.trim() && (
+            <Badge variant="secondary" className="gap-1 pl-2 pr-1 font-normal">
+              "{searchQuery}"
+              <button onClick={() => setSearchQuery('')} className="hover:bg-muted rounded-sm p-0.5" aria-label="Hiq kërkimin">
+                <X className="w-3 h-3" />
+              </button>
+            </Badge>
+          )}
+          {scoreFilter !== 'all' && (
+            <Badge variant="secondary" className="gap-1 pl-2 pr-1 font-normal">
+              Pikët: {scoreFilter === 'high' ? 'I lartë' : scoreFilter === 'medium' ? 'Mesatar' : 'I ulët'}
+              <button onClick={() => setScoreFilter('all')} className="hover:bg-muted rounded-sm p-0.5" aria-label="Hiq filtrin e pikëve">
+                <X className="w-3 h-3" />
+              </button>
+            </Badge>
+          )}
+          {assignedFilter !== 'all' && (
+            <Badge variant="secondary" className="gap-1 pl-2 pr-1 font-normal">
+              {assignedFilter === 'mine' ? 'Të miat' : 'Pa asignuar'}
+              <button onClick={() => setAssignedFilter('all')} className="hover:bg-muted rounded-sm p-0.5" aria-label="Hiq filtrin e asignimit">
+                <X className="w-3 h-3" />
+              </button>
+            </Badge>
+          )}
+          {sourceFilter !== 'all' && (
+            <Badge variant="secondary" className="gap-1 pl-2 pr-1 font-normal">
+              Burimi: {sourceFilter}
+              <button onClick={() => setSourceFilter('all')} className="hover:bg-muted rounded-sm p-0.5" aria-label="Hiq filtrin e burimit">
+                <X className="w-3 h-3" />
+              </button>
+            </Badge>
+          )}
+          <button
+            onClick={clearAllFilters}
+            className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 ml-1"
+          >
+            Pastro të gjithë
+          </button>
+        </div>
+      )}
+
       <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3 stagger-children">
         <Card className="p-3 sm:p-4 card-hover">
           <div className="flex items-center gap-1.5 text-muted-foreground">
@@ -767,6 +851,35 @@ const CRMView: React.FC = () => {
         </div>
 
         <TabsContent value={activeTab} className="mt-6">
+          {filteredLeads.length === 0 && (
+            <Card className="p-12 text-center">
+              <div className="mx-auto w-12 h-12 rounded-full bg-muted flex items-center justify-center mb-4">
+                <Inbox className="w-6 h-6 text-muted-foreground" />
+              </div>
+              <h3 className="text-h3 text-foreground mb-1">
+                {hasActiveFilters ? 'Asnjë lead nuk përputhet' : 'Asnjë lead ende'}
+              </h3>
+              <p className="text-body-sm text-muted-foreground mb-4">
+                {hasActiveFilters
+                  ? 'Provo të ndryshosh filtrat ose krijo një lead të ri.'
+                  : 'Filloji shtimin e lead-eve të tu të parë për të ndjekur shitjet.'}
+              </p>
+              <div className="flex items-center justify-center gap-2">
+                {hasActiveFilters && (
+                  <Button variant="outline" onClick={clearAllFilters}>
+                    Pastro filtrat
+                  </Button>
+                )}
+                {permissions.canEdit && (
+                  <Button onClick={() => setIsCreateDialogOpen(true)}>
+                    <Plus className="w-4 h-4 mr-2" />
+                    Lead i Ri
+                  </Button>
+                )}
+              </div>
+            </Card>
+          )}
+
           {/* Mobile card layout */}
           <div className="sm:hidden space-y-3">
             {filteredLeads.map((lead) => {
@@ -883,7 +996,18 @@ const CRMView: React.FC = () => {
                 <thead className="bg-muted">
                   <tr>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
-                      Kontakti
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('name')}
+                        className="flex items-center gap-1 hover:text-primary transition-colors"
+                      >
+                        Kontakti
+                        {sortBy === 'name' ? (
+                          sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                        ) : (
+                          <ChevronsUpDown className="w-3 h-3 opacity-40" />
+                        )}
+                      </button>
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
                       Kompania
@@ -895,16 +1019,60 @@ const CRMView: React.FC = () => {
                       Asignuar
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
-                      Vlera Est.
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('value')}
+                        className="flex items-center gap-1 hover:text-primary transition-colors"
+                      >
+                        Vlera Est.
+                        {sortBy === 'value' ? (
+                          sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                        ) : (
+                          <ChevronsUpDown className="w-3 h-3 opacity-40" />
+                        )}
+                      </button>
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
-                      Pikët
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('score')}
+                        className="flex items-center gap-1 hover:text-primary transition-colors"
+                      >
+                        Pikët
+                        {sortBy === 'score' ? (
+                          sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                        ) : (
+                          <ChevronsUpDown className="w-3 h-3 opacity-40" />
+                        )}
+                      </button>
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
-                      Prob.
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('prob')}
+                        className="flex items-center gap-1 hover:text-primary transition-colors"
+                      >
+                        Prob.
+                        {sortBy === 'prob' ? (
+                          sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                        ) : (
+                          <ChevronsUpDown className="w-3 h-3 opacity-40" />
+                        )}
+                      </button>
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
-                      Rikontakto
+                      <button
+                        type="button"
+                        onClick={() => toggleSort('follow')}
+                        className="flex items-center gap-1 hover:text-primary transition-colors"
+                      >
+                        Rikontakto
+                        {sortBy === 'follow' ? (
+                          sortDir === 'asc' ? <ArrowUp className="w-3 h-3" /> : <ArrowDown className="w-3 h-3" />
+                        ) : (
+                          <ChevronsUpDown className="w-3 h-3 opacity-40" />
+                        )}
+                      </button>
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
                       Veprime
