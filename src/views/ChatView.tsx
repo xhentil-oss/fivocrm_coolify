@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, Link as RouterLink } from 'react-router-dom';
 import { useCollection, useMutation, getGlobalTeamId, useGlobalTeamId, useWhatsappEnabled } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -104,6 +104,7 @@ const ChatView: React.FC = () => {
   const [mentionQuery, setMentionQuery] = useState('');
   const [mentionAnchorIdx, setMentionAnchorIdx] = useState(0);
   const [mentionSelected, setMentionSelected] = useState(0);
+  const [mentionKind, setMentionKind] = useState<'user' | 'customer'>('user');
 
   // Slash commands
   const [slashOpen, setSlashOpen] = useState(false);
@@ -1080,6 +1081,17 @@ const ChatView: React.FC = () => {
     return idx;
   }, [teamMembers, userProfiles, user?.uid, user?.displayName, user?.email]);
 
+  // Lower-cased customer-name → customerId lookup, for @@Customer mention matching
+  const customerNameIndex = useMemo(() => {
+    const idx = new Map<string, string>();
+    customers?.forEach(c => {
+      if (!c.id) return;
+      const name = (c.name || c.company || '').trim();
+      if (name) idx.set(name.toLowerCase(), c.id);
+    });
+    return idx;
+  }, [customers]);
+
   // Detect mentions inside text — returns array of mentioned userIds.
   const extractMentions = useCallback((text: string): string[] => {
     if (!text) return [];
@@ -1103,9 +1115,9 @@ const ChatView: React.FC = () => {
   // Render message content with: **bold** *italic* `code` URL autolink + @mention highlight + search hits.
   const renderMessageBody = useCallback((text: string, query: string) => {
     if (!text) return null;
-    type Tok = { t: 'text' | 'bold' | 'italic' | 'code' | 'url' | 'mention'; v: string; uid?: string };
+    type Tok = { t: 'text' | 'bold' | 'italic' | 'code' | 'url' | 'mention' | 'cmention'; v: string; uid?: string; cid?: string };
     const tokens: Tok[] = [];
-    const re = /(\*\*[^*\n]+?\*\*)|(`[^`\n]+?`)|(\*[^*\n]+?\*)|(https?:\/\/[^\s]+)|(@[\p{L}][\p{L}0-9_.\- ]{0,40})/gu;
+    const re = /(\*\*[^*\n]+?\*\*)|(`[^`\n]+?`)|(\*[^*\n]+?\*)|(https?:\/\/[^\s]+)|(@@[\p{L}][\p{L}0-9_.\- ]{0,40})|(@[\p{L}][\p{L}0-9_.\- ]{0,40})/gu;
     let lastIdx = 0;
     let m: RegExpExecArray | null;
     while ((m = re.exec(text))) {
@@ -1115,8 +1127,27 @@ const ChatView: React.FC = () => {
       else if (m[3]) { tokens.push({ t: 'italic', v: m[3].slice(1, -1) }); lastIdx = m.index + m[0].length; }
       else if (m[4]) { tokens.push({ t: 'url', v: m[4] }); lastIdx = m.index + m[0].length; }
       else if (m[5]) {
+        // @@Customer mention — longest prefix match against customer names
+        const inner = m[5].slice(2);
+        let bestLen = 0; let bestCid: string | undefined;
+        const parts = inner.split(/\s+/);
+        for (let i = parts.length; i > 0; i--) {
+          const probe = parts.slice(0, i).join(' ').toLowerCase();
+          const cid = customerNameIndex.get(probe);
+          if (cid) { bestLen = probe.length; bestCid = cid; break; }
+        }
+        if (bestCid) {
+          tokens.push({ t: 'cmention', v: '@@' + inner.slice(0, bestLen), cid: bestCid });
+          lastIdx = m.index + 2 + bestLen;
+          re.lastIndex = lastIdx;
+        } else {
+          tokens.push({ t: 'text', v: m[5] });
+          lastIdx = m.index + m[0].length;
+        }
+      }
+      else if (m[6]) {
         // Longest-prefix match against member names
-        const inner = m[5].slice(1);
+        const inner = m[6].slice(1);
         let bestLen = 0; let bestUid: string | undefined;
         const parts = inner.split(/\s+/);
         for (let i = parts.length; i > 0; i--) {
@@ -1129,7 +1160,7 @@ const ChatView: React.FC = () => {
           lastIdx = m.index + 1 + bestLen;
           re.lastIndex = lastIdx;
         } else {
-          tokens.push({ t: 'text', v: m[5] });
+          tokens.push({ t: 'text', v: m[6] });
           lastIdx = m.index + m[0].length;
         }
       }
@@ -1157,9 +1188,12 @@ const ChatView: React.FC = () => {
         const isMe = tok.uid === user?.uid;
         return <span key={i} className={`px-1 rounded font-semibold ${isMe ? 'bg-yellow-300/50 text-yellow-900 dark:bg-yellow-500/30 dark:text-yellow-100' : 'bg-primary/15 text-primary'}`}>{tok.v}</span>;
       }
+      if (tok.t === 'cmention') {
+        return <RouterLink key={i} to={`/app/customers/${tok.cid}`} className="px-1 rounded font-semibold bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 hover:underline">{tok.v}</RouterLink>;
+      }
       return renderText(tok.v, i);
     });
-  }, [memberNameIndex, user?.uid]);
+  }, [memberNameIndex, customerNameIndex, user?.uid]);
 
   const isOnline = useCallback((userId: string) => {
     const profile = profileMap.get(userId);
@@ -1811,11 +1845,20 @@ const ChatView: React.FC = () => {
     if (chatMode === 'channel' || chatMode === 'direct') {
       const caret = e.target.selectionStart ?? v.length;
       const upto = v.slice(0, caret);
-      const m = upto.match(/(?:^|\s)@([\p{L}0-9_.\- ]{0,30})$/u);
-      if (m) {
+      // @@Customer first (longer prefix wins)
+      const mc = upto.match(/(?:^|\s)@@([\p{L}0-9_.\- ]{0,40})$/u);
+      const mu = upto.match(/(?:^|\s)@([\p{L}0-9_.\- ]{0,30})$/u);
+      if (mc) {
+        setMentionKind('customer');
         setMentionOpen(true);
-        setMentionQuery(m[1].toLowerCase());
-        setMentionAnchorIdx(caret - m[1].length - 1);
+        setMentionQuery(mc[1].toLowerCase());
+        setMentionAnchorIdx(caret - mc[1].length - 2);
+        setMentionSelected(0);
+      } else if (mu && !mu[0].includes('@@')) {
+        setMentionKind('user');
+        setMentionOpen(true);
+        setMentionQuery(mu[1].toLowerCase());
+        setMentionAnchorIdx(caret - mu[1].length - 1);
         setMentionSelected(0);
       } else if (mentionOpen) {
         setMentionOpen(false);
@@ -1833,27 +1876,34 @@ const ChatView: React.FC = () => {
   };
 
   const mentionCandidates = useMemo(() => {
-    if (!mentionOpen) return [] as Array<{ uid: string; name: string }>;
+    if (!mentionOpen) return [] as Array<{ uid: string; name: string; kind: 'user' | 'customer' }>;
     const q = mentionQuery;
-    const all = (otherMembers || []).map(m => ({ uid: m.userId, name: getUserDisplayName(m.userId) }));
+    if (mentionKind === 'customer') {
+      const all = (customers || []).map(c => ({ uid: c.id, name: (c.name || c.company || '').trim(), kind: 'customer' as const }))
+        .filter(c => c.name);
+      return all.filter(c => c.name.toLowerCase().includes(q)).slice(0, 6);
+    }
+    const all = (otherMembers || []).map(m => ({ uid: m.userId, name: getUserDisplayName(m.userId), kind: 'user' as const }));
     return all.filter(c => c.name.toLowerCase().includes(q)).slice(0, 6);
-  }, [mentionOpen, mentionQuery, otherMembers, getUserDisplayName]);
+  }, [mentionOpen, mentionQuery, mentionKind, otherMembers, getUserDisplayName, customers]);
 
   const insertMention = useCallback((name: string) => {
+    const prefixLen = mentionKind === 'customer' ? 2 : 1;
+    const prefix = mentionKind === 'customer' ? '@@' : '@';
     const before = messageText.slice(0, mentionAnchorIdx);
-    const after = messageText.slice(mentionAnchorIdx + 1 + mentionQuery.length);
-    const newText = `${before}@${name} ${after}`;
+    const after = messageText.slice(mentionAnchorIdx + prefixLen + mentionQuery.length);
+    const newText = `${before}${prefix}${name} ${after}`;
     setMessageText(newText);
     setMentionOpen(false);
     requestAnimationFrame(() => {
       const ta = chatTextareaRef.current;
       if (ta) {
-        const newCaret = before.length + 1 + name.length + 1;
+        const newCaret = before.length + prefixLen + name.length + 1;
         ta.focus();
         ta.setSelectionRange(newCaret, newCaret);
       }
     });
-  }, [messageText, mentionAnchorIdx, mentionQuery]);
+  }, [messageText, mentionAnchorIdx, mentionQuery, mentionKind]);
 
   // Slash commands registry
   const SLASH_COMMANDS = useMemo(() => ([
@@ -3132,7 +3182,7 @@ const ChatView: React.FC = () => {
                   {mentionOpen && mentionCandidates.length > 0 && (
                     <div className="absolute bottom-full left-2 mb-1 z-30 min-w-[200px] max-w-[280px] bg-popover border rounded-xl shadow-lg overflow-hidden">
                       <div className="px-2.5 py-1 text-[10px] font-semibold text-muted-foreground border-b bg-muted/30 flex items-center gap-1">
-                        <AtSign className="h-2.5 w-2.5" /> Përmend një anëtar
+                        <AtSign className="h-2.5 w-2.5" /> {mentionKind === 'customer' ? 'Përmend një klient' : 'Përmend një anëtar'}
                       </div>
                       <div className="max-h-[200px] overflow-y-auto">
                         {mentionCandidates.map((c, i) => (
