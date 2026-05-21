@@ -793,6 +793,106 @@ const ChatView: React.FC = () => {
     }
   }, [smartRepliesLoading, chatMode, directMessages, channelMessages, user, toast, getUserDisplayName]);
 
+  // ── #24 Action extraction: AI proposes tasks from recent messages ──
+  const [actionExtractOpen, setActionExtractOpen] = useState(false);
+  const [actionExtractLoading, setActionExtractLoading] = useState(false);
+  const [proposedActions, setProposedActions] = useState<Array<{ title: string; priority: 'low' | 'medium' | 'high'; assignee?: string; selected: boolean }>>([]);
+  const handleExtractActions = useCallback(async () => {
+    if (actionExtractLoading) return;
+    const pool: any[] = chatMode === 'direct' ? directMessages : channelMessages;
+    if (!pool || pool.length === 0) {
+      toast({ title: 'Asnjë mesazh për të analizuar' });
+      return;
+    }
+    setActionExtractOpen(true);
+    setActionExtractLoading(true);
+    setProposedActions([]);
+    try {
+      const recent = pool.slice(-50);
+      const transcript = recent.map((m: any) => {
+        const name = getUserDisplayName(m.senderId) || 'Përdorues';
+        const plain = String(m.content || '').replace(/<[^>]+>/g, '').replace(/[*_`~]/g, '');
+        return `${name}: ${plain}`;
+      }).join('\n');
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Not authenticated');
+      const res = await fetch('/api/ai-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          messages: [{
+            role: 'user',
+            content: `Lexo këtë bisedë dhe nxirr VETËM detyrat konkrete që dikush duhet të kryejë (action items). Ktheji si JSON array, pa shpjegim, formati:\n[{"title":"...","priority":"low|medium|high","assignee":"emri ose null"}]\nNëse nuk ka detyra, kthe [].\n\nBiseda:\n${transcript}`,
+          }],
+          context: { userRole: 'staff' },
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const raw = String(data.reply || '').trim();
+      let parsed: any[] = [];
+      try {
+        const match = raw.match(/\[[\s\S]*\]/);
+        parsed = JSON.parse(match ? match[0] : raw);
+      } catch { parsed = []; }
+      const cleaned = (Array.isArray(parsed) ? parsed : [])
+        .filter((p: any) => p && typeof p.title === 'string' && p.title.trim())
+        .slice(0, 15)
+        .map((p: any) => ({
+          title: String(p.title).trim().slice(0, 200),
+          priority: (['low', 'medium', 'high'].includes(p.priority) ? p.priority : 'medium') as 'low' | 'medium' | 'high',
+          assignee: typeof p.assignee === 'string' && p.assignee !== 'null' ? p.assignee : undefined,
+          selected: true,
+        }));
+      setProposedActions(cleaned);
+      if (cleaned.length === 0) toast({ title: 'Nuk u gjetën detyra konkrete' });
+    } catch (err: any) {
+      console.error('[ChatView] action extract failed', err);
+      toast({ title: 'Gabim', description: err.message || 'Nxjerrja dështoi', variant: 'destructive' });
+    } finally {
+      setActionExtractLoading(false);
+    }
+  }, [actionExtractLoading, chatMode, directMessages, channelMessages, toast, getUserDisplayName]);
+
+  const handleCreateProposedActions = useCallback(async () => {
+    if (!user?.uid) return;
+    const selected = proposedActions.filter(a => a.selected && a.title.trim());
+    if (selected.length === 0) {
+      toast({ title: 'Asnjë detyrë e zgjedhur' });
+      return;
+    }
+    let created = 0;
+    for (const a of selected) {
+      // Try to match assignee name to teamMember.userId
+      let assigneeUid: string | undefined;
+      if (a.assignee) {
+        const needle = a.assignee.toLowerCase();
+        const match = teamMembers?.find((m: any) =>
+          (m.displayName || '').toLowerCase().includes(needle) ||
+          (m.email || '').toLowerCase().includes(needle)
+        );
+        assigneeUid = (match as any)?.userId;
+      }
+      try {
+        await taskMutation.create({
+          title: a.title.trim(),
+          description: `Krijuar automatikisht nga AI bazuar në bisedë.`,
+          status: 'Todo',
+          priority: a.priority,
+          assignedToUserId: assigneeUid || user.uid,
+          createdByUserId: user.uid,
+        } as any);
+        created++;
+      } catch (err) {
+        console.error('[ChatView] create proposed task failed', err);
+      }
+    }
+    toast({ title: `${created} detyra u krijuan` });
+    setActionExtractOpen(false);
+    setProposedActions([]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [proposedActions, user?.uid, teamMembers, taskMutation, toast]);
+
   // ── #5 Snooze / Remind me ──
   const reminderMutation = useMutation<any>('chatReminders');
   const { data: reminders } = useCollection<any>('chatReminders', {
@@ -2669,6 +2769,11 @@ const ChatView: React.FC = () => {
               </Button>
             )}
             {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleExtractActions} disabled={actionExtractLoading} title="Nxirr detyrat nga biseda (AI)">
+                {actionExtractLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
+              </Button>
+            )}
+            {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
               <Button
                 variant="ghost"
                 size="icon"
@@ -4219,6 +4324,84 @@ const ChatView: React.FC = () => {
               </div>
             );
           })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* #24 Action extraction dialog */}
+      <Dialog open={actionExtractOpen} onOpenChange={setActionExtractOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="text-base flex items-center gap-2">
+              <ListChecks className="h-4 w-4" /> Detyra të propozuara nga AI
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            {actionExtractLoading && (
+              <div className="flex items-center justify-center py-8 text-muted-foreground">
+                <Loader2 className="h-5 w-5 animate-spin mr-2" /> Po analizoj bisedën...
+              </div>
+            )}
+            {!actionExtractLoading && proposedActions.length === 0 && (
+              <p className="text-sm text-muted-foreground text-center py-6">Nuk u gjetën detyra konkrete në bisedë.</p>
+            )}
+            {!actionExtractLoading && proposedActions.length > 0 && (
+              <>
+                <p className="text-xs text-muted-foreground">Zgjidh detyrat që do të krijohen:</p>
+                <div className="space-y-2 max-h-[50vh] overflow-y-auto pr-1">
+                  {proposedActions.map((a, i) => (
+                    <div key={i} className={`rounded-lg border p-2.5 transition-colors ${a.selected ? 'bg-primary/5 border-primary/30' : 'bg-muted/30'}`}>
+                      <div className="flex items-start gap-2">
+                        <input
+                          type="checkbox"
+                          checked={a.selected}
+                          onChange={(e) => setProposedActions(prev => prev.map((x, j) => j === i ? { ...x, selected: e.target.checked } : x))}
+                          className="mt-1"
+                        />
+                        <div className="flex-1 space-y-1.5">
+                          <Input
+                            value={a.title}
+                            onChange={(e) => setProposedActions(prev => prev.map((x, j) => j === i ? { ...x, title: e.target.value } : x))}
+                            className="h-8 text-sm"
+                          />
+                          <div className="flex items-center gap-2 text-xs">
+                            <Select
+                              value={a.priority}
+                              onValueChange={(v) => setProposedActions(prev => prev.map((x, j) => j === i ? { ...x, priority: v as any } : x))}
+                            >
+                              <SelectTrigger className="h-7 w-28 text-xs">
+                                <SelectValue />
+                              </SelectTrigger>
+                              <SelectContent>
+                                <SelectItem value="low">I ulët</SelectItem>
+                                <SelectItem value="medium">Mesatar</SelectItem>
+                                <SelectItem value="high">I lartë</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            {a.assignee && (
+                              <span className="text-muted-foreground flex items-center gap-1">
+                                <Users className="h-3 w-3" /> {a.assignee}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+            <div className="flex justify-end gap-2 border-t pt-3">
+              <Button variant="outline" size="sm" onClick={() => setActionExtractOpen(false)}>Mbyll</Button>
+              <Button
+                size="sm"
+                onClick={handleCreateProposedActions}
+                disabled={actionExtractLoading || proposedActions.filter(a => a.selected).length === 0 || taskMutation.loading}
+              >
+                {taskMutation.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Check className="h-3.5 w-3.5 mr-1" />}
+                Krijo {proposedActions.filter(a => a.selected).length} detyra
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
     </div>
