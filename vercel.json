@@ -4,6 +4,10 @@
     { "path": "/api/cron/run?job=cleanup-old-notifications", "schedule": "0 3 * * 0" }
   ],
   "rewrites": [
+    { "source": "/api/send-invite",              "destination": "/api/email?type=invite" },
+    { "source": "/api/send-invoice-email",       "destination": "/api/email?type=invoice" },
+    { "source": "/api/send-lead-reminder-email", "destination": "/api/email?type=lead-reminder" },
+    { "source": "/api/send-welcome-email",       "destination": "/api/email?type=welcome" },
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/((?!api).*)", "destination": "/" }
   ],
