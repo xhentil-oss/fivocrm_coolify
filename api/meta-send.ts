@@ -4,7 +4,8 @@ import { adminAuth, adminDb, Timestamp } from './_firebaseAdmin.js';
 /**
  * Send a WhatsApp message via Meta Cloud API.
  *
- * POST body: { to, message, leadId?, leadName?, teamId, channelPhone? }
+ * POST body (text):     { to, message, leadId?, leadName?, teamId, channelPhone? }
+ * POST body (template): { to, template: { name, language?, components? }, teamId, channelPhone? }
  *
  * Reads Meta credentials from teamSettings/{teamId}:
  *   metaAccessToken, metaPhoneNumberId
@@ -14,7 +15,37 @@ function normalizePhone(raw: string): string {
   const digits = raw.replace(/[^\d]/g, '');
   if (/^3550[6-9]/.test(digits)) return '355' + digits.slice(4);
   if (/^0[6-9]/.test(digits)) return '355' + digits.slice(1);
+  if (/^[6-9]\d{8}$/.test(digits)) return '355' + digits;
   return digits;
+}
+
+function validatePhoneStrict(raw: string): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const n = normalizePhone(raw);
+  if (!/^\d+$/.test(n) || n.length < 8 || n.length > 15) return null;
+  if (n.startsWith('355')) {
+    if (!/^3556[6-9]\d{7}$/.test(n) && !/^3557\d{7,8}$/.test(n)) return null;
+  } else if (n.startsWith('0')) {
+    return null;
+  }
+  return n;
+}
+
+// Per-uid rate limiter (10 / min)
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX = 10;
+const rateBuckets: Map<string, number[]> = new Map();
+function checkRateLimit(uid: string): boolean {
+  const now = Date.now();
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  const recent = (rateBuckets.get(uid) || []).filter((t) => t > cutoff);
+  if (recent.length >= RATE_LIMIT_MAX) {
+    rateBuckets.set(uid, recent);
+    return false;
+  }
+  recent.push(now);
+  rateBuckets.set(uid, recent);
+  return true;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -34,16 +65,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 
-  const { to, message, leadId, leadName, teamId, channelPhone } = req.body || {};
+  if (!checkRateLimit(uid)) {
+    return res.status(429).json({ error: 'Limiti i dërgimeve u arrit. Provoni përsëri pas pak.' });
+  }
+
+  const { to, message, template, leadId, leadName, teamId, channelPhone } = req.body || {};
 
   if (!to || typeof to !== 'string') {
     return res.status(400).json({ error: 'Fusha "to" është e detyrueshme' });
   }
-  if (!message || typeof message !== 'string' || !message.trim()) {
-    return res.status(400).json({ error: 'Fusha "message" është e detyrueshme' });
+  // Either text message or template required
+  const hasTemplate = template && typeof template === 'object' && typeof template.name === 'string';
+  if (!hasTemplate && (!message || typeof message !== 'string' || !message.trim())) {
+    return res.status(400).json({ error: 'Fusha "message" ose "template" është e detyrueshme' });
+  }
+  if (message && typeof message === 'string' && message.length > 4096) {
+    return res.status(400).json({ error: 'Mesazhi është shumë i gjatë (max 4096 karaktere)' });
   }
   if (!teamId) {
     return res.status(400).json({ error: 'teamId mungon' });
+  }
+
+  const strict = validatePhoneStrict(to);
+  if (!strict) {
+    return res.status(400).json({ error: 'Numri i telefonit është i pavlefshëm' });
   }
 
   // Verify the caller belongs to the requested team — prevents using another team's Meta credentials
@@ -88,9 +133,65 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(503).json({ error: 'Meta WhatsApp API nuk është konfiguruar për këtë ekip' });
   }
 
-  const cleanPhone = normalizePhone(String(to));
+  const cleanPhone = strict;
 
   try {
+    // ── 24-hour customer-service window awareness ─────────────────────────
+    // For free-text (non-template) sends, look up the last inbound timestamp
+    // and refuse if we're outside the 24h window — outside the window Meta
+    // requires an approved template.
+    let lastInboundAt: Date | null = null;
+    if (!hasTemplate) {
+      try {
+        const convSnap = await adminDb.collection('whatsappConversations')
+          .doc(`${teamId}_${cleanPhone}`)
+          .get();
+        if (convSnap.exists) {
+          const li = convSnap.data()?.lastInboundAt;
+          if (li && typeof li.toDate === 'function') lastInboundAt = li.toDate();
+        }
+      } catch { /* non-critical */ }
+
+      if (lastInboundAt) {
+        const ageMs = Date.now() - lastInboundAt.getTime();
+        if (ageMs > 24 * 60 * 60 * 1000) {
+          return res.status(409).json({
+            error: 'Jashtë dritares 24-orëshe të Meta-s. Përdorni një template të aprovuar.',
+            code: 'WINDOW_EXPIRED',
+            lastInboundAt: lastInboundAt.toISOString(),
+          });
+        }
+      } else {
+        // No inbound on record at all — first contact, requires template
+        return res.status(409).json({
+          error: 'Klienti s\'ka shkruar më parë. Përdorni një template të aprovuar për kontaktin e parë.',
+          code: 'NO_INBOUND',
+        });
+      }
+    }
+
+    // Build Meta payload — either text or template
+    let metaPayload: any;
+    if (hasTemplate) {
+      metaPayload = {
+        messaging_product: 'whatsapp',
+        to: cleanPhone,
+        type: 'template',
+        template: {
+          name: String(template.name),
+          language: { code: String(template.language?.code || 'sq') },
+          ...(Array.isArray(template.components) ? { components: template.components } : {}),
+        },
+      };
+    } else {
+      metaPayload = {
+        messaging_product: 'whatsapp',
+        to: cleanPhone,
+        type: 'text',
+        text: { body: (message as string).trim() },
+      };
+    }
+
     // Send via Meta Cloud API
     const metaRes = await fetch(
       `https://graph.facebook.com/v21.0/${phoneNumberId}/messages`,
@@ -100,12 +201,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           'Authorization': `Bearer ${accessToken}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          to: cleanPhone,
-          type: 'text',
-          text: { body: message.trim() },
-        }),
+        body: JSON.stringify(metaPayload),
       }
     );
 
@@ -120,11 +216,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const waMessageId = metaData.messages?.[0]?.id || null;
     const docId = waMessageId || adminDb.collection('whatsappMessages').doc().id;
 
+    const messageText = hasTemplate
+      ? `[Template: ${template.name}]`
+      : (message as string).trim();
+
     await adminDb.collection('whatsappMessages').doc(docId).set({
       phone: cleanPhone,
       jid: `${cleanPhone}@s.whatsapp.net`,
       direction: 'outbound',
-      message: message.trim(),
+      message: messageText,
       waMessageId,
       leadId: leadId || null,
       leadName: leadName || null,
@@ -134,11 +234,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       channelPhone: normalizePhone(senderPhone),
       metaPhoneNumberId: phoneNumberId,
       isLid: false,
+      isTemplate: hasTemplate,
+      templateName: hasTemplate ? String(template.name) : null,
+      sentByUid: uid,
       createdAt: Timestamp.fromDate(new Date()),
       updatedAt: Timestamp.fromDate(new Date()),
     });
 
-    console.log(`[meta-send] → ${cleanPhone}: ${message.trim().slice(0, 80)}`);
+    console.log(`[meta-send] → ${cleanPhone}: ${messageText.slice(0, 80)}`);
     return res.status(200).json({ success: true, id: docId });
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'Dërgimi dështoi';

@@ -60,6 +60,8 @@ interface AgentState {
   pendingLidMessages: Map<string, string[]>;
   leadPhoneCache: Map<string, { leadId: string; leadName: string | null }>;
   syncedContactNames: Map<string, string>;
+  /** The actual WhatsApp number connected to this agent (digits-only, e.g. "35569…"). Set on connection.open. */
+  connectedPhone: string | null;
 }
 
 function createAgentState(config: AgentConfig): AgentState {
@@ -72,10 +74,28 @@ function createAgentState(config: AgentConfig): AgentState {
     pendingLidMessages: new Map(),
     leadPhoneCache: new Map(),
     syncedContactNames: new Map(),
+    connectedPhone: null,
   };
 }
 
 const agents = new Map<string, AgentState>();
+
+// ── Rate limit (per-agent) ──────────────────────────────────────────────────
+const SEND_RATE_WINDOW_MS = 60_000;
+const SEND_RATE_MAX = 30;
+const sendRateBuckets: Map<string, number[]> = new Map();
+function checkSendRate(agentId: string): boolean {
+  const now = Date.now();
+  const cutoff = now - SEND_RATE_WINDOW_MS;
+  const recent = (sendRateBuckets.get(agentId) || []).filter((t) => t > cutoff);
+  if (recent.length >= SEND_RATE_MAX) {
+    sendRateBuckets.set(agentId, recent);
+    return false;
+  }
+  recent.push(now);
+  sendRateBuckets.set(agentId, recent);
+  return true;
+}
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 const normalizePhone = (phone: string): string => {
@@ -362,8 +382,12 @@ async function connectAgent(agent: AgentState): Promise<void> {
       console.log(`[${agent.config.id}] ✅ I lidhur!`);
       // Save connected phone to Firestore for UI display
       try {
-        const myPhone = (agent.sock as any)?.user?.id?.split(':')[0] || '';
-        if (myPhone) await db.collection('whatsappAccounts').doc(agent.config.id).update({ connectedPhone: myPhone, lastConnectedAt: admin.firestore.Timestamp.fromDate(new Date()) }).catch(() => {});
+        const rawId = (agent.sock as any)?.user?.id?.split(':')[0]?.split('@')[0] || '';
+        const myPhone = normalizePhone(rawId);
+        if (myPhone) {
+          agent.connectedPhone = myPhone;
+          await db.collection('whatsappAccounts').doc(agent.config.id).update({ connectedPhone: myPhone, lastConnectedAt: admin.firestore.Timestamp.fromDate(new Date()) }).catch(() => {});
+        }
       } catch {}
       setTimeout(() => readBaileysLidMappings(agent), 3000);
       setTimeout(() => reverseLookupLeads(agent), 8000);
@@ -461,12 +485,26 @@ async function connectAgent(agent: AgentState): Promise<void> {
           leadId: autoLeadId, leadName: autoLeadName || pushName, pushName,
           teamId: agent.config.teamId,
           agentId: agent.config.id,
-          channelPhone: agent.config.id,
+          channelPhone: agent.connectedPhone || agent.config.id,
           status: isFromMe ? 'sent' : 'received',
           channel: 'baileys', isLid,
           createdAt: admin.firestore.Timestamp.fromDate(ts),
           updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
         }, { merge: true });
+
+        // Track last inbound for 24h-window awareness (baileys side).
+        if (!isFromMe && agent.config.teamId) {
+          try {
+            const convId = `${agent.config.teamId}_${phone}`;
+            await db.collection('whatsappConversations').doc(convId).set({
+              teamId: agent.config.teamId,
+              phone,
+              lastInboundAt: admin.firestore.Timestamp.fromDate(ts),
+              channel: 'baileys',
+              updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
+            }, { merge: true });
+          } catch (e) { /* non-critical */ }
+        }
 
         if (isLid) {
           const queue = agent.pendingLidMessages.get(rawJid) || [];
@@ -637,6 +675,15 @@ app.post('/send', requireApiKey, async (req, res) => {
     teamId?: string; jid?: string; agentId?: string;
   };
 
+  // Defence-in-depth rate limit: max 30 sends/min per agent (VPS-side guard
+  // in addition to the per-user limit on Vercel).
+  if (agentId) {
+    if (!checkSendRate(agentId)) {
+      res.status(429).json({ error: 'Limiti i dërgimeve nga ky agent u arrit. Provoni pas pak.' });
+      return;
+    }
+  }
+
   const agent = getAgent(agentId);
   if (!agent || agent.connectionStatus !== 'connected' || !agent.sock) {
     res.status(503).json({ error: 'WhatsApp jo i lidhur. Hap /qr/:agentId dhe skano.', agentId });
@@ -659,7 +706,7 @@ app.post('/send', requireApiKey, async (req, res) => {
     await db.collection('whatsappMessages').doc(docId).set({
       phone: cleanPhone, jid, direction: 'outbound', message,
       leadId: leadId || null, leadName: leadName || null, waMessageId,
-      teamId: resolvedTeamId, agentId: agent.config.id, channelPhone: agent.config.id,
+      teamId: resolvedTeamId, agentId: agent.config.id, channelPhone: agent.connectedPhone || agent.config.id,
       status: 'sent', channel: 'baileys',
       createdAt: admin.firestore.Timestamp.fromDate(new Date()),
       updatedAt: admin.firestore.Timestamp.fromDate(new Date()),

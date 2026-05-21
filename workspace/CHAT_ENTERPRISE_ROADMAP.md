@@ -43,11 +43,11 @@ Legjenda: ✅ done · 🟡 partial · ⬜ pending
 | # | Item | Status |
 |---|---|---|
 | 19 | AI summary i bisedës (OpenAI) | ✅ |
-| 24 | Action extraction → propozim Task | ⬜ |
-| 21 | Smart Reply suggestions | ⬜ |
+| 24 | Action extraction → propozim Task | ✅ |
+| 21 | Smart Reply suggestions | ✅ |
 | 25 | Daily digest mëngjesi (cron) | ⬜ |
 | 23 | Tone polish ("më formal / më miqësor") | ✅ |
-| 22 | Auto-translate sq ↔ en ↔ it | ⬜ |
+| 22 | Auto-translate sq ↔ en ↔ it | ✅ |
 
 ## Wave 5 — Polish & Enterprise
 
@@ -66,10 +66,10 @@ Legjenda: ✅ done · 🟡 partial · ⬜ pending
 | 30 | Offline queue | ⬜ |
 | 40 | Drag & drop kudo në dritare | ⬜ |
 | 41 | Multi-file paste (screenshots) | 🟡 |
-| 42 | Inline edit me histori versionesh | ⬜ |
-| 43 | Reaction shortcuts | ⬜ |
-| 44 | Compact mode | ⬜ |
-| 45 | Status custom (OOO, In meeting) | ⬜ |
+| 42 | Inline edit me histori versionesh | ✅ |
+| 43 | Reaction shortcuts | ✅ |
+| 44 | Compact mode | ✅ |
+| 45 | Status custom (OOO, In meeting) | ✅ |
 | 46 | Huddles / Quick voice (WebRTC) | ⬜ |
 | 47 | Meta Ads alerts në kanal | ⬜ |
 | 48 | Google Analytics weekly digest | ⬜ |

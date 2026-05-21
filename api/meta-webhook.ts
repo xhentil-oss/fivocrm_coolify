@@ -1,4 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
+import crypto from 'crypto';
 import { adminDb, Timestamp } from './_firebaseAdmin.js';
 
 /**
@@ -9,16 +10,43 @@ import { adminDb, Timestamp } from './_firebaseAdmin.js';
  *
  * Requires env vars:
  *   META_WEBHOOK_VERIFY_TOKEN — a secret string you choose during webhook setup
+ *   META_APP_SECRET           — Meta App Secret used to HMAC-sign POST bodies
  *
  * Per-team settings (from Firestore teamSettings):
  *   metaAccessToken, metaPhoneNumberId, metaBusinessAccountId
  */
+
+// Disable Vercel's automatic body parser — we need the raw bytes to verify HMAC.
+export const config = {
+  api: { bodyParser: false },
+};
 
 function normalizePhone(raw: string): string {
   const digits = raw.replace(/[^\d]/g, '');
   if (/^3550[6-9]/.test(digits)) return '355' + digits.slice(4);
   if (/^0[6-9]/.test(digits)) return '355' + digits.slice(1);
   return digits;
+}
+
+async function readRawBody(req: VercelRequest): Promise<Buffer> {
+  return await new Promise<Buffer>((resolve, reject) => {
+    const chunks: Buffer[] = [];
+    req.on('data', (c: Buffer) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(c)));
+    req.on('end', () => resolve(Buffer.concat(chunks)));
+    req.on('error', reject);
+  });
+}
+
+function verifyMetaSignature(raw: Buffer, signatureHeader: string | undefined, appSecret: string): boolean {
+  if (!signatureHeader || !signatureHeader.startsWith('sha256=')) return false;
+  const expected = crypto.createHmac('sha256', appSecret).update(raw).digest('hex');
+  const provided = signatureHeader.slice(7);
+  if (expected.length !== provided.length) return false;
+  try {
+    return crypto.timingSafeEqual(Buffer.from(expected, 'hex'), Buffer.from(provided, 'hex'));
+  } catch {
+    return false;
+  }
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -46,11 +74,40 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(405).json({ error: 'Method not allowed' });
   }
 
+  // Read raw body for HMAC verification (bodyParser is disabled above).
+  let raw: Buffer;
+  try {
+    raw = await readRawBody(req);
+  } catch (e) {
+    console.error('[meta-webhook] Failed to read body:', e);
+    return res.status(400).send('Bad body');
+  }
+
+  // Verify Meta's X-Hub-Signature-256. If META_APP_SECRET is missing we reject
+  // outright — webhook MUST be authenticated to prevent fake message injection.
+  const appSecret = process.env.META_APP_SECRET;
+  if (!appSecret) {
+    console.error('[meta-webhook] META_APP_SECRET not configured — rejecting POST');
+    return res.status(500).send('Server not configured');
+  }
+  const sigHeader = (req.headers['x-hub-signature-256'] as string | undefined) ||
+    (req.headers['X-Hub-Signature-256'] as unknown as string | undefined);
+  if (!verifyMetaSignature(raw, sigHeader, appSecret)) {
+    console.warn('[meta-webhook] Invalid or missing X-Hub-Signature-256 — rejecting');
+    return res.status(403).send('Invalid signature');
+  }
+
+  let body: any;
+  try {
+    body = JSON.parse(raw.toString('utf8'));
+  } catch {
+    return res.status(400).send('Invalid JSON');
+  }
+
   // Always respond 200 quickly to Meta (they retry on non-2xx)
   res.status(200).json({ status: 'ok' });
 
   try {
-    const body = req.body;
     if (body?.object !== 'whatsapp_business_account') return;
 
     for (const entry of body.entry || []) {
@@ -105,22 +162,42 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           const ts = msg.timestamp ? new Date(Number(msg.timestamp) * 1000) : new Date();
 
           let text = '';
+          let mediaType: string | null = null;
+          let metaMediaId: string | null = null;
+          let mediaMimeType: string | null = null;
+          let mediaFilename: string | null = null;
           if (msg.type === 'text') {
             text = msg.text?.body || '';
           } else if (msg.type === 'image') {
             text = msg.image?.caption || '[Foto]';
+            mediaType = 'image';
+            metaMediaId = msg.image?.id || null;
+            mediaMimeType = msg.image?.mime_type || null;
           } else if (msg.type === 'video') {
             text = msg.video?.caption || '[Video]';
+            mediaType = 'video';
+            metaMediaId = msg.video?.id || null;
+            mediaMimeType = msg.video?.mime_type || null;
           } else if (msg.type === 'audio') {
             text = '[Audio]';
+            mediaType = 'audio';
+            metaMediaId = msg.audio?.id || null;
+            mediaMimeType = msg.audio?.mime_type || null;
           } else if (msg.type === 'document') {
             text = msg.document?.filename || '[Dokument]';
+            mediaType = 'document';
+            metaMediaId = msg.document?.id || null;
+            mediaMimeType = msg.document?.mime_type || null;
+            mediaFilename = msg.document?.filename || null;
           } else if (msg.type === 'location') {
             text = '[Vendndodhje]';
           } else if (msg.type === 'contacts') {
             text = '[Kontakt]';
           } else if (msg.type === 'sticker') {
             text = '[Sticker]';
+            mediaType = 'sticker';
+            metaMediaId = msg.sticker?.id || null;
+            mediaMimeType = msg.sticker?.mime_type || null;
           } else if (msg.type === 'reaction') {
             continue; // Skip reactions
           } else {
@@ -173,9 +250,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             channelPhone: normalizePhone(displayPhone || ''),
             metaPhoneNumberId,
             isLid: false,
+            mediaType,
+            metaMediaId,
+            mediaMimeType,
+            mediaFilename,
             createdAt: Timestamp.fromDate(ts),
             updatedAt: Timestamp.fromDate(new Date()),
           }, { merge: true });
+
+          // ── 24-hour customer-service window tracking ────────────────────
+          // Keep a per-(team,phone) doc with the timestamp of the last inbound
+          // message so the UI can warn before sending premium messages outside
+          // the 24h window.
+          try {
+            const convId = `${teamId}_${from}`;
+            await adminDb.collection('whatsappConversations').doc(convId).set({
+              teamId,
+              phone: from,
+              lastInboundAt: Timestamp.fromDate(ts),
+              channel: 'meta',
+              updatedAt: Timestamp.fromDate(new Date()),
+            }, { merge: true });
+          } catch (e) {
+            console.warn('[meta-webhook] conv tracker update failed:', e);
+          }
 
           console.log(`[meta-webhook] ← ${from}: ${text.slice(0, 80)}`);
         }

@@ -216,23 +216,6 @@
       "collectionGroup": "whatsappMessages",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "teamId", "order": "ASCENDING" },
-        { "fieldPath": "timestamp", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "whatsappMessages",
-      "queryScope": "COLLECTION",
-      "fields": [
-        { "fieldPath": "teamId", "order": "ASCENDING" },
-        { "fieldPath": "phone", "order": "ASCENDING" },
-        { "fieldPath": "timestamp", "order": "ASCENDING" }
-      ]
-    },
-    {
-      "collectionGroup": "whatsappMessages",
-      "queryScope": "COLLECTION",
-      "fields": [
         { "fieldPath": "phone", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "ASCENDING" }
       ]
@@ -244,6 +227,14 @@
         { "fieldPath": "teamId", "order": "ASCENDING" },
         { "fieldPath": "phone", "order": "ASCENDING" },
         { "fieldPath": "createdAt", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "whatsappConversations",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "teamId", "order": "ASCENDING" },
+        { "fieldPath": "lastInboundAt", "order": "DESCENDING" }
       ]
     },
     {

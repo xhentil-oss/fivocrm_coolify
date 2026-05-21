@@ -24,11 +24,16 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
   const waMutation = useMutation<WhatsAppMessage>('whatsappMessages');
 
   const normalizedPhone = normalizeAlbanianPhone(phone);
+  const teamId = getGlobalTeamId();
 
   const { data: rawMessages, loading } = useCollection<WhatsAppMessage>('whatsappMessages', {
-    skip: !normalizedPhone,
-    where: [{ field: 'phone', operator: '==', value: normalizedPhone }],
-    // No orderBy — avoids composite index requirement; sorting done client-side
+    skip: !normalizedPhone || !teamId,
+    // Scope by both teamId AND phone so we never load other teams' messages.
+    where: [
+      { field: 'teamId', operator: '==', value: teamId },
+      { field: 'phone', operator: '==', value: normalizedPhone },
+    ],
+    // Skip the auto team-filter because we already include it explicitly above.
     skipTeamFilter: true,
   });
 
@@ -37,6 +42,20 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
     if (!rawMessages) return null;
     return [...rawMessages].sort((a, b) => getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt));
   }, [rawMessages]);
+
+  // ── 24-hour Meta window awareness ────────────────────────────────────────
+  // For Meta-channel chats: if the last inbound message is older than 24h,
+  // free-text sends will be rejected (Meta requires a pre-approved template).
+  // We surface this as a warning banner so the user knows ahead of time.
+  const windowState = useMemo(() => {
+    if (!messages || messages.length === 0) return { isMeta: false, withinWindow: true, lastInboundMs: 0 };
+    const isMeta = messages.some(m => (m as any).channel === 'meta');
+    if (!isMeta) return { isMeta: false, withinWindow: true, lastInboundMs: 0 };
+    const lastInbound = [...messages].reverse().find(m => m.direction === 'inbound');
+    if (!lastInbound) return { isMeta: true, withinWindow: false, lastInboundMs: 0 };
+    const ms = getTimestampMs(lastInbound.createdAt);
+    return { isMeta: true, withinWindow: Date.now() - ms < 24 * 60 * 60 * 1000, lastInboundMs: ms };
+  }, [messages]);
 
   // Derive jid from messages if not passed as prop (handles LID contacts in CRM panel)
   const jid = jidProp || messages?.find(m => m.jid)?.jid || null;
@@ -175,6 +194,11 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
 
       {/* Input area */}
       <div className="px-3 py-3 border-t border-border bg-background">
+        {windowState.isMeta && !windowState.withinWindow && (
+          <div className="mb-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-700 dark:text-amber-400 leading-snug">
+            ⚠️ Jashtë dritares 24-orëshe të Meta. Mesazhet me tekst të lirë do refuzohen — duhet të përdorni një template të aprovuar.
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <textarea
             value={text}

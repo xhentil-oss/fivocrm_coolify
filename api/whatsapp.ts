@@ -10,7 +10,39 @@ function normalizeAlbanianPhone(raw: string): string {
   const digits = raw.replace(/[^\d]/g, '');
   if (/^3550[6-9]/.test(digits)) return '355' + digits.slice(4);
   if (/^0[6-9]/.test(digits)) return '355' + digits.slice(1);
+  if (/^[6-9]\d{8}$/.test(digits)) return '355' + digits;
   return digits;
+}
+
+function validatePhoneStrict(raw: string): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const n = normalizeAlbanianPhone(raw);
+  if (!/^\d+$/.test(n) || n.length < 8 || n.length > 15) return null;
+  if (n.startsWith('355')) {
+    if (!/^3556[6-9]\d{7}$/.test(n) && !/^3557\d{7,8}$/.test(n)) return null;
+  } else if (n.startsWith('0')) {
+    return null;
+  }
+  return n;
+}
+
+// ── Simple in-memory per-uid rate limiter ──
+// 10 messages / minute per authenticated user.  Resets on cold-start, which
+// is acceptable for an abuse limiter (and Vercel functions are short-lived).
+const RATE_LIMIT_WINDOW_MS = 60_000;
+const RATE_LIMIT_MAX = 10;
+const rateBuckets: Map<string, number[]> = new Map();
+function checkRateLimit(uid: string): boolean {
+  const now = Date.now();
+  const cutoff = now - RATE_LIMIT_WINDOW_MS;
+  const recent = (rateBuckets.get(uid) || []).filter((t) => t > cutoff);
+  if (recent.length >= RATE_LIMIT_MAX) {
+    rateBuckets.set(uid, recent);
+    return false;
+  }
+  recent.push(now);
+  rateBuckets.set(uid, recent);
+  return true;
 }
 
 async function vpsCall(vpsUrl: string, vpsSecret: string, path: string, method = 'GET') {
@@ -41,6 +73,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(503).json({ error: 'WhatsApp nuk është konfiguruar. Shto WHATSAPP_VPS_URL dhe WHATSAPP_VPS_SECRET në Vercel.' });
   }
 
+  // Enforce HTTPS for the VPS URL unless explicitly running against localhost
+  // (dev convenience).  Prevents accidental plaintext transmission of API key.
+  const allowInsecure = /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(vpsUrl);
+  if (!vpsUrl.startsWith('https://') && !allowInsecure) {
+    console.error('[whatsapp] Refusing to call non-HTTPS VPS URL:', vpsUrl);
+    return res.status(500).json({ error: 'WHATSAPP_VPS_URL duhet të jetë HTTPS' });
+  }
+
   try {
     // POST ?action=reload — hot-reload VPS
     if (req.method === 'POST' && req.query.action === 'reload') {
@@ -58,6 +98,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     // POST (no special action) — send WhatsApp message
     if (req.method === 'POST') {
+      // Per-uid rate limit (anti-spam guard)
+      if (!checkRateLimit(uid)) {
+        return res.status(429).json({ error: 'Limiti i dërgimeve u arrit. Provoni përsëri pas pak.' });
+      }
+
       const { to, message, leadId, leadName, teamId, jid, agentId } = req.body || {};
 
       // Verify caller belongs to the requested team — prevents using another team's agents
@@ -78,19 +123,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!message || typeof message !== 'string' || !message.trim()) {
         return res.status(400).json({ error: 'Fusha "message" është e detyrueshme' });
       }
+      // Cap message length to prevent absurdly large payloads
+      if (message.length > 4096) {
+        return res.status(400).json({ error: 'Mesazhi është shumë i gjatë (max 4096 karaktere)' });
+      }
 
       const hasValidJid = typeof jid === 'string' &&
         (jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid'));
 
-      if (!hasValidJid && !isValidPhone(to)) {
-        return res.status(400).json({ error: 'Numri i telefonit është i pavlefshëm' });
+      let normalizedTo = '';
+      if (hasValidJid) {
+        // JID path is trusted (came from Baileys) — still normalize phone for logging
+        normalizedTo = normalizeAlbanianPhone(to);
+      } else {
+        const strict = validatePhoneStrict(to);
+        if (!strict) {
+          return res.status(400).json({ error: 'Numri i telefonit është i pavlefshëm' });
+        }
+        if (!isValidPhone(strict)) {
+          return res.status(400).json({ error: 'Numri i telefonit është i pavlefshëm' });
+        }
+        normalizedTo = strict;
       }
 
       const r = await fetch(`${vpsUrl}/send`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'x-api-key': vpsSecret },
         body: JSON.stringify({
-          to: normalizeAlbanianPhone(to),
+          to: normalizedTo,
           message: message.trim(),
           leadId: leadId || null,
           leadName: leadName || null,

@@ -110,7 +110,36 @@ export function normalizeAlbanianPhone(raw: string): string {
   if (/^3550[6-9]/.test(digits)) return '355' + digits.slice(4);
   // "0[6-9]…" → local format, prepend country code
   if (/^0[6-9]/.test(digits)) return '355' + digits.slice(1);
+  // Bare local mobile "6[6-9]…" / "7[6-9]…" (9 digits) → prepend 355
+  if (/^[6-9]\d{8}$/.test(digits)) return '355' + digits;
   return digits;
+}
+
+/**
+ * Strict variant: returns `null` if the input cannot be confidently parsed as
+ * an Albanian mobile number (or any reasonable international number).  Used
+ * before sending WhatsApp messages so we don't waste API quota on garbage.
+ *
+ * Rules:
+ *   - Albanian mobile prefixes: 06[6-9], 06[7-9], 067, 068, 069 → normalized to 3556…
+ *   - Bare 9-digit local: 6[6-9]……… (rare) accepted
+ *   - International: any 8–15 digit string starting with a non-zero digit
+ */
+export function validatePhone(raw: string): string | null {
+  if (!raw || typeof raw !== 'string') return null;
+  const normalized = normalizeAlbanianPhone(raw);
+  if (!/^\d+$/.test(normalized)) return null;
+  if (normalized.length < 8 || normalized.length > 15) return null;
+  // Albanian numbers MUST start with 3556[6-9] or 3557 (mobile / VOIP)
+  if (normalized.startsWith('355')) {
+    if (!/^3556[6-9]\d{7}$/.test(normalized) && !/^3557\d{7,8}$/.test(normalized)) {
+      return null;
+    }
+  } else if (normalized.startsWith('0')) {
+    // Leading zero after normalization means we couldn't strip it → invalid
+    return null;
+  }
+  return normalized;
 }
 
 /**

@@ -347,6 +347,14 @@ service cloud.firestore {
       allow update, delete: if isAuth();
     }
 
+    match /whatsappConversations/{docId} {
+      // Per-(team,phone) doc used to track lastInboundAt for the 24h window.
+      // Reads gated on auth only (client filters by teamId).  Writes happen
+      // server-side from the webhook / VPS, so we lock client writes down.
+      allow read: if isAuth();
+      allow create, update, delete: if false;
+    }
+
     match /whatsappAccounts/{docId} {
       allow read: if isAuth();
       allow create: if canCreateForTeam();
