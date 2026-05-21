@@ -133,6 +133,9 @@ const ChatView: React.FC = () => {
   const [statusTextInput, setStatusTextInput] = useState('');
   const [statusHoursInput, setStatusHoursInput] = useState<number>(2);
 
+  // #42 Edit history viewer
+  const [editHistoryMessageId, setEditHistoryMessageId] = useState<string | null>(null);
+
   // Search filters
   const [showSearchFilters, setShowSearchFilters] = useState(false);
   const [searchSenderId, setSearchSenderId] = useState<string>('__any__');
@@ -1677,7 +1680,13 @@ const ChatView: React.FC = () => {
   const handleEditMessage = async (msgId: string) => {
     if (!editText.trim()) return;
     try {
-      await messageMutation.update(msgId, { content: editText, editedAt: new Date() } as any);
+      const current = messages?.find(m => m.id === msgId);
+      const prevHistory: any[] = ((current as any)?.editHistory as any[]) || [];
+      const prevContent = current?.content;
+      const nextHistory = prevContent
+        ? [...prevHistory, { content: prevContent, editedAt: new Date() }].slice(-20) // keep last 20 versions
+        : prevHistory;
+      await messageMutation.update(msgId, { content: editText, editedAt: new Date(), editHistory: nextHistory } as any);
       setEditingMessageId(null);
       setEditText('');
     } catch { toast({ title: 'Gabim', variant: 'destructive' }); }
@@ -3089,7 +3098,16 @@ const ChatView: React.FC = () => {
                                   <div className={`flex items-center gap-1 mt-1.5 ${isOwn ? 'justify-end' : 'justify-start'}`}>
                                     <span className={`text-[10px] flex items-center gap-1 ${isOwn ? 'text-primary-foreground/55' : 'text-muted-foreground/50'}`}>
                                       {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
-                                      {(message as any).editedAt && <span className="opacity-80"> · ndryshuar</span>}
+                                      {(message as any).editedAt && (
+                                        <button
+                                          type="button"
+                                          onClick={(e) => { e.stopPropagation(); setEditHistoryMessageId(message.id); }}
+                                          className="opacity-80 hover:opacity-100 hover:underline cursor-pointer"
+                                          title="Shiko historikun e ndryshimeve"
+                                        >
+                                          {' '}· ndryshuar
+                                        </button>
+                                      )}
                                       {isOwn && <Check className="h-2.5 w-2.5 opacity-70" />}
                                       {isOwn && isClientChannel && (message as any).readAt && (
                                         <span className="opacity-80 text-[9px]">
@@ -4082,6 +4100,40 @@ const ChatView: React.FC = () => {
               </div>
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+      {/* #42 Edit history viewer */}
+      <Dialog open={!!editHistoryMessageId} onOpenChange={(o) => !o && setEditHistoryMessageId(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base">Historiku i ndryshimeve</DialogTitle>
+          </DialogHeader>
+          {(() => {
+            const m = messages?.find(x => x.id === editHistoryMessageId) as any;
+            if (!m) return <p className="text-sm text-muted-foreground">Nuk u gjet.</p>;
+            const history: any[] = Array.isArray(m.editHistory) ? m.editHistory : [];
+            const fmt = (d: any) => {
+              const dt = d?.toDate?.() ?? d;
+              return dt instanceof Date ? dt.toLocaleString('sq-AL') : '';
+            };
+            return (
+              <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+                <div className="rounded-lg border p-3 bg-primary/5">
+                  <div className="text-[10px] text-muted-foreground mb-1">Aktual {m.editedAt ? `· ${fmt(m.editedAt)}` : ''}</div>
+                  <div className="text-sm whitespace-pre-wrap break-words">{m.content}</div>
+                </div>
+                {history.length === 0 && (
+                  <p className="text-xs text-muted-foreground">Nuk ka versione të mëparshme të ruajtura.</p>
+                )}
+                {[...history].reverse().map((h, i) => (
+                  <div key={i} className="rounded-lg border p-3">
+                    <div className="text-[10px] text-muted-foreground mb-1">Version i mëparshëm {h.editedAt ? `· ${fmt(h.editedAt)}` : ''}</div>
+                    <div className="text-sm whitespace-pre-wrap break-words opacity-80">{h.content}</div>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
         </DialogContent>
       </Dialog>
     </div>
