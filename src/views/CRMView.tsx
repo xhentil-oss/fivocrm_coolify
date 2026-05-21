@@ -1422,6 +1422,9 @@ const CRMView: React.FC = () => {
                       </button>
                     </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
+                      Aktiviteti i fundit
+                    </th>
+                    <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
                       Veprime
                     </th>
                   </tr>
@@ -1591,6 +1594,29 @@ const CRMView: React.FC = () => {
                               <Clock className="w-3 h-3" />
                               {isDueToday ? 'Sot' : d.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}
                             </div>
+                          );
+                        })()}
+                      </td>
+                      <td className="px-6 py-4 text-xs text-muted-foreground">
+                        {(() => {
+                          const raw = lead.lastFollowUpDate;
+                          if (!raw) return <span>—</span>;
+                          const d = raw instanceof Date ? raw : new Date((raw as any)?.seconds ? (raw as any).seconds * 1000 : (raw as any));
+                          if (isNaN(d.getTime())) return <span>—</span>;
+                          const now = Date.now();
+                          const diffMs = now - d.getTime();
+                          const days = Math.floor(diffMs / 86400000);
+                          let label: string;
+                          if (days <= 0) label = 'Sot';
+                          else if (days === 1) label = 'Dje';
+                          else if (days < 7) label = `${days} ditë më parë`;
+                          else if (days < 30) label = `${Math.floor(days / 7)} javë më parë`;
+                          else label = d.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short', year: days > 365 ? 'numeric' : undefined });
+                          const stale = days > 14;
+                          return (
+                            <span className={stale ? 'text-warning' : ''} title={d.toLocaleString('sq-AL')}>
+                              {label}
+                            </span>
                           );
                         })()}
                       </td>
