@@ -6,6 +6,8 @@ import { X, Send, MessageSquare, Loader2, Phone, FileText, Paperclip } from 'luc
 import { Button } from './ui/button';
 import { normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import { useFileUpload } from '../hooks/useFileUpload';
+import { useWhatsAppStatus } from '../hooks/useWhatsAppStatus';
+import WhatsAppStatusBadge from './WhatsAppStatusBadge';
 import type { WhatsAppMessage } from '../types';
 
 interface Props {
@@ -32,6 +34,7 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
   const scrollRef = useRef<HTMLDivElement>(null);
   const waMutation = useMutation<WhatsAppMessage>('whatsappMessages');
   const { upload } = useFileUpload();
+  const waStatus = useWhatsAppStatus();
 
   const normalizedPhone = normalizeAlbanianPhone(phone);
   const teamId = getGlobalTeamId();
@@ -291,9 +294,10 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
         </div>
         <div className="flex-1 min-w-0">
           <p className="font-semibold text-foreground text-sm truncate">{leadName}</p>
-          <div className="flex items-center gap-1">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <Phone className="w-3 h-3 text-muted-foreground" />
             <p className="text-xs text-muted-foreground">{phone}</p>
+            {!windowState.isMeta && <WhatsAppStatusBadge variant="pill" />}
           </div>
         </div>
         <Button variant="ghost" size="sm" onClick={onClose} className="shrink-0 h-8 w-8 p-0">
@@ -402,6 +406,11 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
 
       {/* Input area */}
       <div className="px-3 py-3 border-t border-border bg-background">
+        {!windowState.isMeta && !waStatus.loading && (!waStatus.serverOnline || !waStatus.anyConnected) && (
+          <div className="mb-2">
+            <WhatsAppStatusBadge variant="banner" />
+          </div>
+        )}
         {windowState.isMeta && !windowState.withinWindow && (
           <div className="mb-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-700 dark:text-amber-400 leading-snug">
             ⚠️ Jashtë dritares 24-orëshe të Meta. Mesazhet me tekst të lirë do refuzohen — duhet të përdorni një template të aprovuar.

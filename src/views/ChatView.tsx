@@ -12,6 +12,7 @@ import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Separator } from '../components/ui/separator';
+import WhatsAppStatusBadge from '../components/WhatsAppStatusBadge';
 import {
   Send, MessageSquare, Users, Hash, Paperclip, X, FileIcon,
   FolderOpen, ArrowLeft, Search, Pencil, Trash2, Reply,
@@ -2757,7 +2758,10 @@ const ChatView: React.FC = () => {
                 <Smartphone className="h-4 w-4 text-[#25D366]" />
               </div>
               <div className="min-w-0 flex-1">
-                <p className="font-semibold text-sm truncate">{activeWaLeadName || (activeWaPhone && activeWaPhone.length <= 13 ? `+${activeWaPhone}` : 'Numër i panjohur')}</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-semibold text-sm truncate">{activeWaLeadName || (activeWaPhone && activeWaPhone.length <= 13 ? `+${activeWaPhone}` : 'Numër i panjohur')}</p>
+                  <WhatsAppStatusBadge variant="pill" />
+                </div>
                 {activeWaPhone && activeWaPhone.length <= 13 && (
                   <p className="text-[11px] text-muted-foreground flex items-center gap-1">
                     <Phone className="h-3 w-3" /> +{activeWaPhone}
@@ -3004,6 +3008,9 @@ const ChatView: React.FC = () => {
         ) : chatMode === 'whatsapp' ? (
           /* WhatsApp Chat Area */
           <>
+            <div className="px-3 pt-2 bg-background">
+              <WhatsAppStatusBadge variant="banner" />
+            </div>
             <div
               ref={waScrollRef}
               className="flex-1 overflow-y-auto p-4"

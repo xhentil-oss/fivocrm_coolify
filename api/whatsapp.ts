@@ -88,6 +88,50 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(r.ok ? 200 : r.status).json(await r.json());
     }
 
+    // GET ?action=status[&teamId=xxx] — health + per-agent connection state.
+    // Returns { serverOnline, agents: [{id,label,status,teamId,connectedPhone?}], anyConnected, fetchedAt }
+    // Never throws on VPS failure — that's the point of a status check.
+    if (req.method === 'GET' && req.query.action === 'status') {
+      const teamId = (req.query.teamId as string) || null;
+      try {
+        const r = await vpsCall(vpsUrl, vpsSecret, '/status');
+        if (!r.ok) {
+          return res.status(200).json({
+            serverOnline: false,
+            agents: [],
+            anyConnected: false,
+            error: `VPS status ${r.status}`,
+            fetchedAt: Date.now(),
+          });
+        }
+        const data: any = await r.json();
+        const statuses = data?.statuses && typeof data.statuses === 'object' ? data.statuses : {};
+        const all = Object.entries(statuses).map(([id, v]: [string, any]) => ({
+          id,
+          label: v?.label || id,
+          status: v?.status || 'disconnected',
+          teamId: v?.teamId || null,
+          assignedToUserId: v?.assignedToUserId || null,
+        }));
+        const filtered = teamId ? all.filter((a) => a.teamId === teamId) : all;
+        return res.status(200).json({
+          serverOnline: true,
+          agents: filtered,
+          anyConnected: filtered.some((a) => a.status === 'connected'),
+          fetchedAt: Date.now(),
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : 'VPS unreachable';
+        return res.status(200).json({
+          serverOnline: false,
+          agents: [],
+          anyConnected: false,
+          error: msg,
+          fetchedAt: Date.now(),
+        });
+      }
+    }
+
     // GET ?agentId=xxx — fetch QR data for one agent
     if (req.method === 'GET') {
       const agentId = req.query.agentId as string;
