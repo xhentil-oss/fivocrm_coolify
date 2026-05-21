@@ -20,7 +20,7 @@ import {
   ClipboardList, ExternalLink, UserPlus, ChevronDown, CheckCheck,
   ImageIcon, Circle, Pin, PinOff, Mic, Square, Filter, AtSign,
   Bookmark, BookmarkCheck, ListChecks,
-  Zap, BellRing, AlarmClock, Wand2, Clock, CalendarClock, Rows3,
+  Zap, BellRing, AlarmClock, Wand2, Clock, CalendarClock, Rows3, Languages,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
@@ -792,6 +792,45 @@ const ChatView: React.FC = () => {
       setSmartRepliesLoading(false);
     }
   }, [smartRepliesLoading, chatMode, directMessages, channelMessages, user, toast, getUserDisplayName]);
+
+  // ── #22 Auto-translate inline ──
+  const [translations, setTranslations] = useState<Record<string, string>>({});
+  const [translatingId, setTranslatingId] = useState<string | null>(null);
+  const handleTranslateMessage = useCallback(async (msgId: string, content: string) => {
+    if (translatingId) return;
+    if (translations[msgId]) {
+      // Toggle off
+      setTranslations(prev => { const next = { ...prev }; delete next[msgId]; return next; });
+      return;
+    }
+    const plain = String(content || '').replace(/<[^>]+>/g, '').trim();
+    if (!plain) return;
+    setTranslatingId(msgId);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Not authenticated');
+      const res = await fetch('/api/ai-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          messages: [{
+            role: 'user',
+            content: `Përkthe këtë tekst në shqip (nëse është tashmë në shqip, përktheje në anglisht). Ktheji VETËM tekstin e përkthyer, pa shpjegim ose thonjëza.\n\nTeksti:\n${plain}`,
+          }],
+          context: { userRole: 'staff' },
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const translated = String(data.reply || '').trim().replace(/^["']|["']$/g, '');
+      if (translated) setTranslations(prev => ({ ...prev, [msgId]: translated }));
+    } catch (err: any) {
+      console.error('[ChatView] translate failed', err);
+      toast({ title: 'Përkthimi dështoi', description: err.message, variant: 'destructive' });
+    } finally {
+      setTranslatingId(null);
+    }
+  }, [translatingId, translations, toast]);
 
   // ── #24 Action extraction: AI proposes tasks from recent messages ──
   const [actionExtractOpen, setActionExtractOpen] = useState(false);
@@ -3223,6 +3262,14 @@ const ChatView: React.FC = () => {
                                   </p>
                                 )}
 
+                                {/* #22 Inline translation */}
+                                {!isEditing && translations[message.id] && (
+                                  <div className={`mt-1.5 pt-1.5 border-t ${isOwn ? 'border-primary-foreground/20' : 'border-border/40'} text-[12.5px] italic opacity-90 leading-relaxed whitespace-pre-wrap break-words flex items-start gap-1.5`}>
+                                    <Languages className="h-3 w-3 mt-0.5 flex-shrink-0 opacity-70" />
+                                    <span className="flex-1">{translations[message.id]}</span>
+                                  </div>
+                                )}
+
                                 {/* Inline audio (voice note) preview */}
                                 {message.attachmentUrl && hasAudio && (
                                   <audio controls src={message.attachmentUrl} className="mt-2 max-w-[240px] h-9" preload="metadata" />
@@ -3356,6 +3403,14 @@ const ChatView: React.FC = () => {
                                       {copiedMsgId === message.id
                                         ? <CheckCheck className="h-3.5 w-3.5 text-emerald-500" />
                                         : <Copy className="h-3.5 w-3.5" />}
+                                    </button>
+                                    <button
+                                      className={`p-1 hover:bg-accent rounded-lg transition-colors ${translations[message.id] ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
+                                      onClick={() => handleTranslateMessage(message.id, message.content)}
+                                      disabled={translatingId === message.id}
+                                      title={translations[message.id] ? 'Fshih përkthimin' : 'Përkthe me AI'}
+                                    >
+                                      {translatingId === message.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Languages className="h-3.5 w-3.5" />}
                                     </button>
                                     {isOwn && (
                                       <>
