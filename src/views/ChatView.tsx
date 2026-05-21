@@ -20,7 +20,7 @@ import {
   ClipboardList, ExternalLink, UserPlus, ChevronDown, CheckCheck,
   ImageIcon, Circle, Pin, PinOff, Mic, Square, Filter, AtSign,
   Bookmark, BookmarkCheck, ListChecks,
-  Zap, BellRing, AlarmClock, Wand2, Clock, CalendarClock,
+  Zap, BellRing, AlarmClock, Wand2, Clock, CalendarClock, Rows3,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
@@ -114,6 +114,15 @@ const ChatView: React.FC = () => {
   // Pinned bar collapse
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
   const [reactionPopover, setReactionPopover] = useState<{ msgId: string; emoji: string } | null>(null);
+
+  // #44 Compact mode (persisted in localStorage)
+  const [compactMode, setCompactMode] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return localStorage.getItem('chat-compact-mode') === '1';
+  });
+  useEffect(() => {
+    try { localStorage.setItem('chat-compact-mode', compactMode ? '1' : '0'); } catch { /* ignore */ }
+  }, [compactMode]);
 
   // Search filters
   const [showSearchFilters, setShowSearchFilters] = useState(false);
@@ -2525,6 +2534,11 @@ const ChatView: React.FC = () => {
               </Button>
             )}
             {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
+              <Button variant="ghost" size="icon" className={`h-8 w-8 ${compactMode ? 'text-primary' : ''}`} onClick={() => setCompactMode(c => !c)} title={compactMode ? 'Pamje normale' : 'Pamje kompakte'}>
+                <Rows3 className="h-4 w-4" />
+              </Button>
+            )}
+            {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setShowSearch(!showSearch); setSearchQuery(''); }}>
                 <Search className="h-4 w-4" />
               </Button>
@@ -2780,7 +2794,7 @@ const ChatView: React.FC = () => {
           <>
             <div className="relative flex-1 min-h-0">
             <ScrollArea className="h-full" ref={scrollRef}>
-              <div className="px-2 sm:px-5 py-3 sm:py-4 space-y-0">
+              <div className={`px-2 sm:px-5 ${compactMode ? 'py-1 sm:py-2 text-[13px]' : 'py-3 sm:py-4'} space-y-0`}>
                 {/* Pinned messages bar */}
                 {pinnedMessages.length > 0 && (
                   <div className="sticky top-0 z-10 -mx-2 sm:-mx-5 mb-2 px-3 sm:px-5 py-2 bg-amber-50/95 dark:bg-amber-950/40 border-y border-amber-200/60 dark:border-amber-800/40 backdrop-blur">
@@ -2876,7 +2890,7 @@ const ChatView: React.FC = () => {
                               <div className="flex-1 h-px bg-primary/40" />
                             </div>
                           )}
-                          <div id={`msg-${message.id}`} className={`flex group ${isOwn ? 'justify-end' : 'justify-start'} ${sameSender ? 'mt-0.5' : 'mt-3'}`}>
+                          <div id={`msg-${message.id}`} className={`flex group ${isOwn ? 'justify-end' : 'justify-start'} ${sameSender ? (compactMode ? 'mt-0' : 'mt-0.5') : (compactMode ? 'mt-1' : 'mt-3')}`}>
                             {/* Avatar — hidden on small screens to save space */}
                             {!isOwn && (
                               <div className="hidden sm:flex flex-shrink-0 mr-2 self-end mb-5">
