@@ -10,6 +10,7 @@ import { getStatusColor } from '../lib/statusColors';
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
 import { Checkbox } from '../components/ui/checkbox';
+import { PipelineBoard } from './crm/PipelineBoard';
 import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle, Edit2, Percent, MessageSquare, ExternalLink, Calculator, FileText, Clock, Bell, Send, ArrowUp, ArrowDown, ChevronsUpDown, Inbox } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -59,6 +60,14 @@ const CRMView: React.FC = () => {
   // Bulk selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  // View mode (table | pipeline) — persisted
+  const [viewMode, setViewMode] = useState<'table' | 'pipeline'>(() => {
+    if (typeof window === 'undefined') return 'table';
+    return (window.localStorage.getItem('crm_view_mode') as 'table' | 'pipeline') || 'table';
+  });
+  useEffect(() => {
+    if (typeof window !== 'undefined') window.localStorage.setItem('crm_view_mode', viewMode);
+  }, [viewMode]);
   const { toast } = useToast();
 
   // Follow-up / re-contact state (synced with selectedLead)
@@ -771,7 +780,27 @@ const CRMView: React.FC = () => {
             {leads?.length || 0} lead total {needsFollowUp.length > 0 ? `· ${needsFollowUp.length} kërkojnë ndjekje` : ''}
           </p>
         </div>
-        {permissions.canEdit && (
+        <div className="flex items-center gap-2">
+          {/* View toggle */}
+          <div className="hidden sm:inline-flex items-center rounded-md border border-border bg-card p-0.5">
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`px-3 py-1 text-xs font-medium rounded transition-colors ${viewMode === 'table' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+              aria-pressed={viewMode === 'table'}
+            >
+              Tabelë
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('pipeline')}
+              className={`px-3 py-1 text-xs font-medium rounded transition-colors ${viewMode === 'pipeline' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+              aria-pressed={viewMode === 'pipeline'}
+            >
+              Pipeline
+            </button>
+          </div>
+          {permissions.canEdit && (
           <Dialog open={isCreateDialogOpen} onOpenChange={(open) => {
             if (open) { setDirty(false); setIsCreateDialogOpen(true); }
             else requestClose(() => setIsCreateDialogOpen(false));
@@ -804,6 +833,7 @@ const CRMView: React.FC = () => {
             </DialogContent>
           </Dialog>
         )}
+        </div>
       </div>
 
       {/* Search & Filter bar */}
@@ -967,6 +997,18 @@ const CRMView: React.FC = () => {
         </Card>
       </div>
 
+      {viewMode === 'pipeline' ? (
+        <PipelineBoard
+          leads={
+            (Object.keys(optimisticStatus).length === 0
+              ? (leads || [])
+              : (leads || []).map(l => optimisticStatus[l.id] ? { ...l, status: optimisticStatus[l.id] } : l))
+          }
+          onStatusChange={handleStatusChange}
+          onCardClick={setSelectedLead}
+          calculateLeadScore={calculateLeadScore}
+        />
+      ) : (
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <div className="overflow-x-auto">
           <TabsList className="min-w-max">
@@ -1551,6 +1593,7 @@ const CRMView: React.FC = () => {
           </Card>
         </TabsContent>
       </Tabs>
+      )}
 
       <DetailDrawer
         open={!!selectedLead}
