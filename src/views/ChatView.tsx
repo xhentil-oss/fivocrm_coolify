@@ -447,6 +447,30 @@ const ChatView: React.FC = () => {
     return map;
   }, [userProfiles]);
 
+  // Hoisted above AI callbacks (summarize / polish / suggest / extract / translate / reminder)
+  // to avoid TDZ when their dependency arrays reference `getUserDisplayName` before declaration.
+  const displayNameCache = useMemo(() => {
+    const map = new Map<string, string>();
+    if (user?.uid) map.set(user.uid, user.displayName || user.email?.split('@')[0] || 'Ti');
+    userProfiles?.forEach(p => { if (p.userId && p.displayName) map.set(p.userId, p.displayName); });
+    teamMembers?.forEach(m => {
+      if (m.userId && !map.has(m.userId)) {
+        if (m.displayName) map.set(m.userId, m.displayName);
+        else if (m.email) map.set(m.userId, m.email.split('@')[0]);
+      }
+    });
+    teams?.forEach((t: any) => {
+      if (t.createdByUserId && !map.has(t.createdByUserId)) map.set(t.createdByUserId, 'Admin');
+    });
+    return map;
+  }, [user?.uid, user?.displayName, user?.email, userProfiles, teamMembers, teams]);
+
+  const getUserDisplayName = useCallback((userId: string) => {
+    const cached = displayNameCache.get(userId);
+    if (cached) return cached;
+    return `User ${userId.slice(0, 6)}`;
+  }, [displayNameCache]);
+
   // #45 Custom status — returns active (non-expired) status for a user, or null.
   const getUserStatus = useCallback((uid: string): { emoji: string; text: string } | null => {
     const p = profileMap.get(uid);
@@ -1314,28 +1338,7 @@ const ChatView: React.FC = () => {
   }, [filteredMessages, user, playBirdChirp]);
 
   // Helpers
-  // Pre-computed display-name cache to avoid O(N) lookups per render in long lists.
-  const displayNameCache = useMemo(() => {
-    const map = new Map<string, string>();
-    if (user?.uid) map.set(user.uid, user.displayName || user.email?.split('@')[0] || 'Ti');
-    userProfiles?.forEach(p => { if (p.userId && p.displayName) map.set(p.userId, p.displayName); });
-    teamMembers?.forEach(m => {
-      if (m.userId && !map.has(m.userId)) {
-        if (m.displayName) map.set(m.userId, m.displayName);
-        else if (m.email) map.set(m.userId, m.email.split('@')[0]);
-      }
-    });
-    teams?.forEach((t: any) => {
-      if (t.createdByUserId && !map.has(t.createdByUserId)) map.set(t.createdByUserId, 'Admin');
-    });
-    return map;
-  }, [user?.uid, user?.displayName, user?.email, userProfiles, teamMembers, teams]);
-
-  const getUserDisplayName = useCallback((userId: string) => {
-    const cached = displayNameCache.get(userId);
-    if (cached) return cached;
-    return `User ${userId.slice(0, 6)}`;
-  }, [displayNameCache]);
+  // (displayNameCache + getUserDisplayName hoisted above near profileMap to fix TDZ.)
 
   const getAvatarColor = useCallback((id: string) => {
     const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-violet-500', 'bg-amber-500', 'bg-rose-500', 'bg-cyan-500', 'bg-indigo-500', 'bg-teal-500'];
