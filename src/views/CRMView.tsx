@@ -598,9 +598,9 @@ const CRMView: React.FC = () => {
     <div className="space-y-8">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-h2 text-foreground">CRM - Leads</h1>
+          <h1 className="text-h2 text-foreground">Leads</h1>
           <p className="text-body text-muted-foreground mt-1">
-            {leads?.length || 0} lead total · {needsFollowUp.length} kanë nevojë për ndjekje
+            {leads?.length || 0} lead total {needsFollowUp.length > 0 ? `· ${needsFollowUp.length} kërkojnë ndjekje` : ''}
           </p>
         </div>
         {permissions.canEdit && (
@@ -693,67 +693,53 @@ const CRMView: React.FC = () => {
         </Select>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-3 sm:gap-6 stagger-children">
-        <Card className="p-3 sm:p-6 space-y-1 sm:space-y-2 card-hover metric-card-primary border-l-4 border-l-primary">
-          <div className="flex items-center justify-between">
-            <p className="text-xs sm:text-body-sm text-muted-foreground">Lead Totale</p>
-            <div className="p-1.5 sm:p-2 bg-primary/10 rounded-lg">
-              <Building className="w-4 h-4 sm:w-5 sm:h-5 text-primary" />
-            </div>
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3 stagger-children">
+        <Card className="p-3 sm:p-4 card-hover">
+          <div className="flex items-center gap-1.5 text-muted-foreground">
+            <Building className="w-3.5 h-3.5" />
+            <p className="text-xs">Lead Totale</p>
           </div>
-          <p className="text-lg sm:text-h2 text-foreground font-medium animate-count-up">
+          <p className="mt-1.5 text-2xl sm:text-3xl text-foreground font-semibold tabular-nums leading-none">
             {leads?.length || 0}
           </p>
-          <p className="text-xs text-muted-foreground hidden sm:block">Të gjitha lead-et</p>
         </Card>
 
-        <Card className="p-3 sm:p-6 space-y-1 sm:space-y-2 card-hover metric-card-success border-l-4 border-l-success">
-          <div className="flex items-center justify-between">
-            <p className="text-xs sm:text-body-sm text-muted-foreground">Kualifikuara</p>
-            <div className="p-1.5 sm:p-2 bg-success/10 rounded-lg">
-              <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5 text-success" />
-            </div>
+        <Card className="p-3 sm:p-4 card-hover">
+          <div className="flex items-center gap-1.5 text-muted-foreground">
+            <TrendingUp className="w-3.5 h-3.5" />
+            <p className="text-xs">Kualifikuara</p>
           </div>
-          <p className="text-lg sm:text-h2 text-foreground font-medium animate-count-up">
+          <p className="mt-1.5 text-2xl sm:text-3xl text-foreground font-semibold tabular-nums leading-none">
             {leads?.filter(l => l.status === 'Qualified').length || 0}
           </p>
-          <p className="text-xs text-success hidden sm:block">Të kualifikuara</p>
         </Card>
 
-        <Card className="p-3 sm:p-6 space-y-1 sm:space-y-2 card-hover metric-card-info border-l-4 border-l-accent">
-          <div className="flex items-center justify-between">
-            <p className="text-xs sm:text-body-sm text-muted-foreground">Konvertuara</p>
-            <div className="p-1.5 sm:p-2 bg-accent/10 rounded-lg">
-              <DollarSign className="w-4 h-4 sm:w-5 sm:h-5 text-accent" />
-            </div>
+        <Card className="p-3 sm:p-4 card-hover">
+          <div className="flex items-center gap-1.5 text-muted-foreground">
+            <DollarSign className="w-3.5 h-3.5" />
+            <p className="text-xs">Konvertuara</p>
           </div>
-          <p className="text-lg sm:text-h2 text-foreground font-medium animate-count-up">
+          <p className="mt-1.5 text-2xl sm:text-3xl text-foreground font-semibold tabular-nums leading-none">
             {customers?.filter(c => (c as any).leadId).length || 0}
           </p>
-          <p className="text-xs text-accent hidden sm:block">Të konvertuara</p>
         </Card>
 
-        <Card className="p-3 sm:p-6 space-y-1 sm:space-y-2 card-hover metric-card-warning border-l-4 border-l-warning">
-          <div className="flex items-center justify-between">
-            <p className="text-xs sm:text-body-sm text-muted-foreground">Për ndjekje</p>
-            <div className="p-1.5 sm:p-2 bg-warning/10 rounded-lg">
-              <CalendarIcon className="w-4 h-4 sm:w-5 sm:h-5 text-warning" />
-            </div>
+        <Card className={`p-3 sm:p-4 card-hover ${needsFollowUp.length > 0 ? 'border-l-2 border-l-warning' : ''}`}>
+          <div className="flex items-center gap-1.5 text-muted-foreground">
+            <CalendarIcon className="w-3.5 h-3.5" />
+            <p className="text-xs">Për ndjekje</p>
           </div>
-          <p className="text-lg sm:text-h2 text-foreground font-medium animate-count-up">
+          <p className={`mt-1.5 text-2xl sm:text-3xl font-semibold tabular-nums leading-none ${needsFollowUp.length > 0 ? 'text-warning' : 'text-foreground'}`}>
             {needsFollowUp.length}
           </p>
-          <p className="text-xs text-warning hidden sm:block">Kërkojnë ndjekje</p>
         </Card>
 
-        <Card className="p-3 sm:p-6 space-y-1 sm:space-y-2 card-hover border-l-4 border-l-tertiary">
-          <div className="flex items-center justify-between">
-            <p className="text-xs sm:text-body-sm text-muted-foreground">Forecast</p>
-            <div className="p-1.5 sm:p-2 bg-tertiary/10 rounded-lg">
-              <Percent className="w-4 h-4 sm:w-5 sm:h-5 text-tertiary" />
-            </div>
+        <Card className="p-3 sm:p-4 card-hover border-l-2 border-l-primary">
+          <div className="flex items-center gap-1.5 text-muted-foreground">
+            <Percent className="w-3.5 h-3.5" />
+            <p className="text-xs">Forecast (i ponderuar)</p>
           </div>
-          <p className="text-lg sm:text-h2 text-foreground font-medium animate-count-up">
+          <p className="mt-1.5 text-2xl sm:text-3xl text-foreground font-semibold tabular-nums leading-none">
             {(() => {
               const val = (leads || [])
                 .filter(l => l.status !== 'Lost' && l.status !== 'Converted')
@@ -764,7 +750,6 @@ const CRMView: React.FC = () => {
               return `${Math.round(val).toLocaleString()} L`;
             })()}
           </p>
-          <p className="text-xs text-tertiary hidden sm:block">Vlera e ponderuar</p>
         </Card>
       </div>
 
@@ -930,7 +915,7 @@ const CRMView: React.FC = () => {
                   {filteredLeads.map((lead) => (
                     <tr
                       key={lead.id}
-                      className="hover:bg-muted/50 cursor-pointer transition-colors duration-fast"
+                      className="group hover:bg-muted/50 cursor-pointer transition-colors duration-fast"
                       onClick={() => setSelectedLead(lead)}
                     >
                       <td className="px-6 py-4">
@@ -940,16 +925,24 @@ const CRMView: React.FC = () => {
                             <p className="text-body-sm text-muted-foreground">{lead.jobTitle}</p>
                           )}
                           {lead.email && (
-                            <div className="flex items-center gap-1 text-body-sm text-muted-foreground">
+                            <a
+                              href={`mailto:${lead.email}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex items-center gap-1 text-body-sm text-muted-foreground hover:text-primary hover:underline w-fit"
+                            >
                               <Mail className="w-3 h-3" />
                               {lead.email}
-                            </div>
+                            </a>
                           )}
                           {lead.phoneNumber && (
-                            <div className="flex items-center gap-1 text-body-sm text-muted-foreground">
+                            <a
+                              href={`tel:${lead.phoneNumber.replace(/\s+/g, '')}`}
+                              onClick={(e) => e.stopPropagation()}
+                              className="flex items-center gap-1 text-body-sm text-muted-foreground hover:text-primary hover:underline w-fit tabular-nums"
+                            >
                               <Phone className="w-3 h-3" />
                               {lead.phoneNumber}
-                            </div>
+                            </a>
                           )}
                         </div>
                       </td>
@@ -1026,7 +1019,7 @@ const CRMView: React.FC = () => {
                           </span>
                         )}
                       </td>
-                      <td className="px-6 py-4 text-body text-foreground">
+                      <td className="px-6 py-4 text-body text-foreground tabular-nums">
                         {lead.estimatedValue 
                           ? `${lead.estimatedValue.toLocaleString()} L`
                           : '-'}
@@ -1038,7 +1031,7 @@ const CRMView: React.FC = () => {
                           return (
                             <div className="flex items-center gap-1">
                               <Zap className={`w-3.5 h-3.5 ${color}`} />
-                              <span className={`font-semibold ${color}`}>{s}</span>
+                              <span className={`font-semibold tabular-nums ${color}`}>{s}</span>
                             </div>
                           );
                         })()}
@@ -1048,7 +1041,7 @@ const CRMView: React.FC = () => {
                           const prob = lead.probability ?? STAGE_PROBABILITY[lead.status] ?? 0;
                           const color = prob >= 60 ? 'text-green-600' : prob >= 30 ? 'text-yellow-600' : 'text-red-500';
                           return (
-                            <span className={`font-semibold ${color}`}>{prob}%</span>
+                            <span className={`font-semibold tabular-nums ${color}`}>{prob}%</span>
                           );
                         })()}
                       </td>
@@ -1073,40 +1066,45 @@ const CRMView: React.FC = () => {
                         })()}
                       </td>
                       <td className="px-6 py-4">
-                        <div className="flex gap-2">
+                        <div className="flex gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
                           {lead.phoneNumber && waEnabled && (
                             <Button
-                              variant="outline"
+                              variant="ghost"
                               size="sm"
-                              className="text-[#25D366] border-[#25D366]/30 hover:bg-[#25D366]/10"
+                              className="text-[#25D366] hover:bg-[#25D366]/10 h-8 w-8 p-0"
                               onClick={(e) => { e.stopPropagation(); setWhatsappLead(lead); }}
                               title="WhatsApp"
+                              aria-label="Dërgo WhatsApp"
                             >
                               <MessageSquare className="w-4 h-4" />
                             </Button>
                           )}
                           {permissions.canEdit && (
                             <Button
-                              variant="outline"
+                              variant="ghost"
                               size="sm"
+                              className="h-8 w-8 p-0"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setEditLead(lead);
                               }}
                               title="Ndrysho"
+                              aria-label="Ndrysho lead"
                             >
                               <Edit2 className="w-4 h-4" />
                             </Button>
                           )}
                           {permissions.canEdit && (
                             <Button
-                              variant="outline"
+                              variant="ghost"
                               size="sm"
-                              className="text-destructive hover:text-destructive"
+                              className="text-destructive hover:text-destructive hover:bg-destructive/10 h-8 w-8 p-0"
                               onClick={(e) => {
                                 e.stopPropagation();
                                 setLeadToDelete(lead);
                               }}
+                              title="Fshi"
+                              aria-label="Fshi lead"
                             >
                               <Trash2 className="w-4 h-4" />
                             </Button>
