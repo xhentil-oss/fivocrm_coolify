@@ -27,7 +27,7 @@ import { ToastAction } from '../components/ui/toast';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import { auth, db } from '../lib/firebase';
-import { collection, query, where, getDocs } from 'firebase/firestore';
+import { collection, query, where, getDocs, writeBatch, doc } from 'firebase/firestore';
 import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, WhatsAppMessage, ClientRequest, Team, Lead, Task } from '../types';
 
 type ChatMode = 'channel' | 'direct' | 'ai' | 'whatsapp' | 'requests';
@@ -619,6 +619,52 @@ const ChatView: React.FC = () => {
       console.error('[ChatView] delete snippet failed', err);
     }
   }, [snippetMutation, toast]);
+
+  // ── #19 AI Summary of conversation ──
+  const [summaryOpen, setSummaryOpen] = useState(false);
+  const [summaryLoading, setSummaryLoading] = useState(false);
+  const [summaryText, setSummaryText] = useState('');
+
+  const handleSummarizeChat = useCallback(async () => {
+    if (!user || summaryLoading) return;
+    const source = chatMode === 'channel' ? channelMessages : directMessages;
+    const recent = (source || []).slice(-60).filter((m: any) => !m.deletedAt && (m.content || '').trim());
+    if (recent.length === 0) {
+      toast({ title: 'Asnjë mesazh për të përmbledhur' });
+      return;
+    }
+    setSummaryOpen(true);
+    setSummaryLoading(true);
+    setSummaryText('');
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Not authenticated');
+      const transcript = recent.map((m: any) => {
+        const name = getUserDisplayName(m.senderId) || 'Përdorues';
+        const plain = String(m.content || '').replace(/<[^>]+>/g, '').replace(/[*_`~]/g, '');
+        return `${name}: ${plain}`;
+      }).join('\n');
+      const res = await fetch('/api/ai-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          messages: [{
+            role: 'user',
+            content: `Përmblidh shkurt këtë bisedë në shqip. Jep:\n1. Tema kryesore (1 fjali)\n2. Vendimet e marra (lista)\n3. Hapat e ardhshëm / detyrat (lista me përgjegjësin nëse përmendet)\n4. Pyetjet e hapura (nëse ka)\n\nBiseda:\n\n${transcript}`,
+          }],
+          context: { userRole: 'staff' },
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      setSummaryText(data.reply || 'Pa përgjigje.');
+    } catch (err: any) {
+      console.error('[ChatView] summarize failed', err);
+      setSummaryText(`⚠️ ${err.message || 'Gabim gjatë përmbledhjes.'}`);
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, [user, summaryLoading, chatMode, channelMessages, directMessages, toast, getUserDisplayName]);
 
   // ── #3 Message → Task ──
   const [taskFromMsgOpen, setTaskFromMsgOpen] = useState(false);
@@ -1633,30 +1679,31 @@ const ChatView: React.FC = () => {
     // Snapshot the current conversation — guard against rapid switches
     const snapshotDmUserId = activeDirectUserId;
     const unread = allDirectMessages.filter(m => m.senderId === snapshotDmUserId && m.receiverId === user.uid && !m.isRead && !markedAsReadRef.current.has(m.id));
-    unread.forEach(m => {
-      markedAsReadRef.current.add(m.id);
-      // Only commit if the user hasn't switched conversations
-      if (activeDirectUserId === snapshotDmUserId) {
-        messageMutation.update(m.id, { isRead: true }).catch((err) => {
-          // Roll back ref so next pass retries; surface to console so we can
-          // see rules/permission issues instead of failing silently.
-          markedAsReadRef.current.delete(m.id);
-          console.error('[ChatView] markAsRead DM failed', m.id, err);
-        });
-      }
+    if (unread.length === 0) return;
+    // ── #32 Batched read receipts ──
+    const ids = unread.map(m => m.id);
+    ids.forEach(id => markedAsReadRef.current.add(id));
+    if (activeDirectUserId !== snapshotDmUserId) return;
+    const batch = writeBatch(db);
+    ids.forEach(id => batch.update(doc(db, 'messages', id), { isRead: true }));
+    batch.commit().catch((err) => {
+      ids.forEach(id => markedAsReadRef.current.delete(id));
+      console.error('[ChatView] markAsRead DM batch failed', err);
     });
   }, [activeDirectUserId, allDirectMessages, user, chatMode]);
 
   useEffect(() => {
     if (chatMode !== 'channel' || !user || !channelMessages) return;
     const unread = channelMessages.filter(m => m.senderId !== user.uid && !m.isRead && !markedAsReadRef.current.has(m.id));
-    const extra = isClientChannel ? { readAt: new Date() } : {};
-    unread.forEach(m => {
-      markedAsReadRef.current.add(m.id);
-      messageMutation.update(m.id, { isRead: true, ...extra }).catch((err) => {
-        markedAsReadRef.current.delete(m.id);
-        console.error('[ChatView] markAsRead channel failed', m.id, err);
-      });
+    if (unread.length === 0) return;
+    const ids = unread.map(m => m.id);
+    ids.forEach(id => markedAsReadRef.current.add(id));
+    const batch = writeBatch(db);
+    const extra: any = isClientChannel ? { readAt: new Date() } : {};
+    ids.forEach(id => batch.update(doc(db, 'messages', id), { isRead: true, ...extra }));
+    batch.commit().catch((err) => {
+      ids.forEach(id => markedAsReadRef.current.delete(id));
+      console.error('[ChatView] markAsRead channel batch failed', err);
     });
   }, [chatMode, channelMessages, user]);
 
@@ -2233,6 +2280,11 @@ const ChatView: React.FC = () => {
             {chatMode === 'ai' && aiMessages.length > 0 && (
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={resetAiChat} title="Bisedë e re">
                 <RefreshCw className="h-4 w-4" />
+              </Button>
+            )}
+            {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleSummarizeChat} disabled={summaryLoading} title="Përmblidh bisedën me AI">
+                {summaryLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               </Button>
             )}
             {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
@@ -3415,6 +3467,40 @@ const ChatView: React.FC = () => {
                 </Button>
               </div>
             </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* AI Summary of conversation */}
+      <Dialog open={summaryOpen} onOpenChange={setSummaryOpen}>
+        <DialogContent className="max-w-xl">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <Sparkles className="h-4 w-4 text-primary" /> Përmbledhje e bisedës
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            {summaryLoading && (
+              <div className="flex items-center justify-center py-10 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin mr-2" /> Po analizoj bisedën...
+              </div>
+            )}
+            {!summaryLoading && summaryText && (
+              <div className="text-sm whitespace-pre-wrap text-foreground/90 leading-relaxed max-h-[60vh] overflow-y-auto rounded-lg bg-muted/30 p-3 border">
+                {summaryText}
+              </div>
+            )}
+            {!summaryLoading && summaryText && (
+              <div className="flex justify-end gap-2">
+                <Button variant="outline" size="sm" onClick={() => { navigator.clipboard.writeText(summaryText); toast({ title: 'U kopjua' }); }}>
+                  <Copy className="h-3.5 w-3.5 mr-1" /> Kopjo
+                </Button>
+                <Button variant="outline" size="sm" onClick={handleSummarizeChat}>
+                  <RefreshCw className="h-3.5 w-3.5 mr-1" /> Rigjenero
+                </Button>
+                <Button size="sm" onClick={() => setSummaryOpen(false)}>Mbyll</Button>
+              </div>
+            )}
           </div>
         </DialogContent>
       </Dialog>
