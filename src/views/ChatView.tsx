@@ -104,6 +104,11 @@ const ChatView: React.FC = () => {
   const [mentionAnchorIdx, setMentionAnchorIdx] = useState(0);
   const [mentionSelected, setMentionSelected] = useState(0);
 
+  // Slash commands
+  const [slashOpen, setSlashOpen] = useState(false);
+  const [slashQuery, setSlashQuery] = useState('');
+  const [slashSelected, setSlashSelected] = useState(0);
+
   // Pinned bar collapse
   const [pinnedCollapsed, setPinnedCollapsed] = useState(false);
   const [reactionPopover, setReactionPopover] = useState<{ msgId: string; emoji: string } | null>(null);
@@ -1190,7 +1195,6 @@ const ChatView: React.FC = () => {
     const effectiveText = override?.content ?? messageText;
     const effectiveAttachment = (override?.attachmentUrl ?? attachmentUrl).trim();
     if ((!effectiveText.trim() && !effectiveAttachment) || !user || isSending) return;
-
     // Validate attachment URL — block javascript:/data: URIs, allow only https.
     if (effectiveAttachment) {
       try {
@@ -1207,9 +1211,18 @@ const ChatView: React.FC = () => {
 
     try {
       const isClientChannel = activeChannel.startsWith('client-');
-      const mentions = extractMentions(effectiveText);
+      // Handle /me action command — render as italic third-person action
+      let finalText = effectiveText;
+      if (finalText.startsWith('/me ')) {
+        const action = finalText.slice(4).trim();
+        if (action) {
+          const who = getUserDisplayName(user.uid) || 'Dikush';
+          finalText = `_* ${who} ${action} *_`;
+        }
+      }
+      const mentions = extractMentions(finalText);
       const baseMessage: Partial<ChatMessage> = {
-        content: effectiveText || '📎 Attachment',
+        content: finalText || '📎 Attachment',
         senderId: user.uid,
         isRead: false,
         attachmentUrl: effectiveAttachment || undefined,
@@ -1608,6 +1621,15 @@ const ChatView: React.FC = () => {
         setMentionOpen(false);
       }
     }
+    // Detect "/xxx" as start of textarea (no spaces yet)
+    const slashMatch = v.match(/^\/(\w{0,20})$/);
+    if (slashMatch && (chatMode === 'channel' || chatMode === 'direct')) {
+      setSlashOpen(true);
+      setSlashQuery(slashMatch[1]);
+      setSlashSelected(0);
+    } else if (slashOpen) {
+      setSlashOpen(false);
+    }
   };
 
   const mentionCandidates = useMemo(() => {
@@ -1632,6 +1654,61 @@ const ChatView: React.FC = () => {
       }
     });
   }, [messageText, mentionAnchorIdx, mentionQuery]);
+
+  // Slash commands registry
+  const SLASH_COMMANDS = useMemo(() => ([
+    { cmd: 'task', label: '/task', desc: 'Krijo një detyrë nga ky tekst' },
+    { cmd: 'remind', label: '/remind', desc: 'Vendos një kujtues' },
+    { cmd: 'me', label: '/me', desc: 'Dërgo si veprim (italic)' },
+    { cmd: 'shrug', label: '/shrug', desc: 'Fut ¯\\_(\u30c4)_/¯' },
+    { cmd: 'tableflip', label: '/tableflip', desc: 'Fut (\u256f\u00b0\u25a1\u00b0)\u256f\ufe35 \u253b\u2501\u253b' },
+    { cmd: 'clear', label: '/clear', desc: 'Pastro tekstin' },
+  ]), []);
+
+  const slashCandidates = useMemo(() => {
+    if (!slashOpen) return [] as typeof SLASH_COMMANDS;
+    const q = slashQuery.toLowerCase();
+    return SLASH_COMMANDS.filter(c => c.cmd.startsWith(q));
+  }, [slashOpen, slashQuery, SLASH_COMMANDS]);
+
+  const executeSlash = useCallback((cmd: string) => {
+    setSlashOpen(false);
+    switch (cmd) {
+      case 'task': {
+        setTaskFromMsgSource(null);
+        setTaskFromMsgTitle('');
+        setTaskFromMsgAssignee(user?.uid || '');
+        setTaskFromMsgDueDate('');
+        setTaskFromMsgPriority('medium');
+        setTaskFromMsgOpen(true);
+        setMessageText('');
+        return;
+      }
+      case 'remind': {
+        // Prefill text for the user to type their reminder details
+        setMessageText('/remind ');
+        requestAnimationFrame(() => chatTextareaRef.current?.focus());
+        return;
+      }
+      case 'me': {
+        setMessageText('/me ');
+        requestAnimationFrame(() => chatTextareaRef.current?.focus());
+        return;
+      }
+      case 'shrug': {
+        setMessageText('\u00af\\_(\u30c4)_/\u00af');
+        return;
+      }
+      case 'tableflip': {
+        setMessageText('(\u256f\u00b0\u25a1\u00b0)\u256f\ufe35 \u253b\u2501\u253b');
+        return;
+      }
+      case 'clear': {
+        setMessageText('');
+        return;
+      }
+    }
+  }, [user]);
 
   // Loading / Error
   if (chatMode !== 'ai' && chatMode !== 'whatsapp' && isPending) {
@@ -2837,6 +2914,30 @@ const ChatView: React.FC = () => {
                       </div>
                     </div>
                   )}
+                  {/* Slash commands popover */}
+                  {slashOpen && slashCandidates.length > 0 && (
+                    <div className="absolute bottom-full left-2 mb-1 z-30 min-w-[260px] max-w-[340px] bg-popover border rounded-xl shadow-lg overflow-hidden">
+                      <div className="px-2.5 py-1 text-[10px] font-semibold text-muted-foreground border-b bg-muted/30">
+                        Komanda
+                      </div>
+                      <div className="max-h-[240px] overflow-y-auto">
+                        {slashCandidates.map((c, i) => (
+                          <button
+                            key={c.cmd}
+                            type="button"
+                            onMouseEnter={() => setSlashSelected(i)}
+                            onClick={() => executeSlash(c.cmd)}
+                            className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 text-left text-xs transition-colors ${
+                              i === slashSelected ? 'bg-primary/10' : 'hover:bg-accent'
+                            }`}
+                          >
+                            <span className="font-mono font-semibold text-primary">{c.label}</span>
+                            <span className="text-[10px] text-muted-foreground truncate">{c.desc}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div className="flex items-center gap-0.5 flex-shrink-0 pb-1">
                     <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
                       onClick={() => setShowAttachmentInput(!showAttachmentInput)} disabled={isSending}>
@@ -2886,6 +2987,17 @@ const ChatView: React.FC = () => {
                           return;
                         }
                         if (e.key === 'Escape') { e.preventDefault(); setMentionOpen(false); return; }
+                      }
+                      if (slashOpen && slashCandidates.length > 0) {
+                        if (e.key === 'ArrowDown') { e.preventDefault(); setSlashSelected(s => (s + 1) % slashCandidates.length); return; }
+                        if (e.key === 'ArrowUp') { e.preventDefault(); setSlashSelected(s => (s - 1 + slashCandidates.length) % slashCandidates.length); return; }
+                        if (e.key === 'Enter' || e.key === 'Tab') {
+                          e.preventDefault();
+                          const c = slashCandidates[slashSelected] || slashCandidates[0];
+                          if (c) executeSlash(c.cmd);
+                          return;
+                        }
+                        if (e.key === 'Escape') { e.preventDefault(); setSlashOpen(false); return; }
                       }
                       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(e as any); }
                     }}
