@@ -124,6 +124,9 @@ const ChatView: React.FC = () => {
     try { localStorage.setItem('chat-compact-mode', compactMode ? '1' : '0'); } catch { /* ignore */ }
   }, [compactMode]);
 
+  // #43 Reaction shortcuts — keys 1..5 react with EMOJI_REACTIONS[0..4] on hovered message
+  const hoveredMessageIdRef = useRef<string | null>(null);
+
   // Search filters
   const [showSearchFilters, setShowSearchFilters] = useState(false);
   const [searchSenderId, setSearchSenderId] = useState<string>('__any__');
@@ -1671,6 +1674,26 @@ const ChatView: React.FC = () => {
     }
   };
 
+  // #43 Keyboard reaction shortcuts: digits 1..5 react on currently hovered message.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable) return;
+      const n = parseInt(e.key, 10);
+      if (!Number.isFinite(n) || n < 1 || n > 5) return;
+      const msgId = hoveredMessageIdRef.current;
+      if (!msgId) return;
+      const emoji = EMOJI_REACTIONS[n - 1];
+      if (!emoji) return;
+      e.preventDefault();
+      handleReaction(msgId, emoji);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   // Voice notes — record, upload, send as audio attachment
   const startRecording = async () => {
     if (isRecording) return;
@@ -2794,7 +2817,14 @@ const ChatView: React.FC = () => {
           <>
             <div className="relative flex-1 min-h-0">
             <ScrollArea className="h-full" ref={scrollRef}>
-              <div className={`px-2 sm:px-5 ${compactMode ? 'py-1 sm:py-2 text-[13px]' : 'py-3 sm:py-4'} space-y-0`}>
+              <div
+                className={`px-2 sm:px-5 ${compactMode ? 'py-1 sm:py-2 text-[13px]' : 'py-3 sm:py-4'} space-y-0`}
+                onMouseOver={(e) => {
+                  const el = (e.target as HTMLElement | null)?.closest?.('[id^="msg-"]');
+                  hoveredMessageIdRef.current = el ? (el as HTMLElement).id.replace(/^msg-/, '') : null;
+                }}
+                onMouseLeave={() => { hoveredMessageIdRef.current = null; }}
+              >
                 {/* Pinned messages bar */}
                 {pinnedMessages.length > 0 && (
                   <div className="sticky top-0 z-10 -mx-2 sm:-mx-5 mb-2 px-3 sm:px-5 py-2 bg-amber-50/95 dark:bg-amber-950/40 border-y border-amber-200/60 dark:border-amber-800/40 backdrop-blur">
