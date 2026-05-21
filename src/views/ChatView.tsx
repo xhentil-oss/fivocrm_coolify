@@ -20,7 +20,7 @@ import {
   ClipboardList, ExternalLink, UserPlus, ChevronDown, CheckCheck,
   ImageIcon, Circle, Pin, PinOff, Mic, Square, Filter, AtSign,
   Bookmark, BookmarkCheck, ListChecks,
-  Zap, BellRing, AlarmClock, Wand2,
+  Zap, BellRing, AlarmClock, Wand2, Clock, CalendarClock,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
@@ -707,7 +707,7 @@ const ChatView: React.FC = () => {
   const reminderMutation = useMutation<any>('chatReminders');
   const { data: reminders } = useCollection<any>('chatReminders', {
     skipTeamFilter: true,
-    where: user ? [['userId', '==', user.uid]] : [],
+    where: user?.uid ? [{ field: 'userId', operator: '==' as const, value: user.uid }] : undefined,
   });
   const [reminderPickerFor, setReminderPickerFor] = useState<string | null>(null);
   const firedRemindersRef = useRef<Set<string>>(new Set());
@@ -759,6 +759,100 @@ const ChatView: React.FC = () => {
     const id = setInterval(check, 30000);
     return () => clearInterval(id);
   }, [user, reminders, reminderMutation, toast]);
+
+  // ── #4 Scheduled messages ──
+  const scheduledMutation = useMutation<any>('chatScheduledMessages');
+  const { data: scheduledMessages } = useCollection<any>('chatScheduledMessages', {
+    skipTeamFilter: true,
+    where: user?.uid ? [{ field: 'senderId', operator: '==' as const, value: user.uid }] : undefined,
+  });
+  const [scheduleOpen, setScheduleOpen] = useState(false);
+  const [scheduleDate, setScheduleDate] = useState('');
+  const [scheduleTime, setScheduleTime] = useState('');
+  const firedScheduledRef = useRef<Set<string>>(new Set());
+
+  const pendingScheduledForCurrent = useMemo(() => {
+    if (!scheduledMessages) return [];
+    return scheduledMessages.filter((s: any) => !s.sent && (
+      (chatMode === 'channel' && s.channelId === activeChannel) ||
+      (chatMode === 'direct' && s.directUserId === activeDirectUserId)
+    ));
+  }, [scheduledMessages, chatMode, activeChannel, activeDirectUserId]);
+
+  const handleScheduleMessage = useCallback(async (whenMs: number) => {
+    if (!user) return;
+    const content = messageText.trim();
+    if (!content && !attachmentUrl.trim()) {
+      toast({ title: 'Mesazh bosh', variant: 'destructive' });
+      return;
+    }
+    try {
+      await scheduledMutation.create({
+        senderId: user.uid,
+        channelId: chatMode === 'channel' ? activeChannel : null,
+        directUserId: chatMode === 'direct' ? activeDirectUserId : null,
+        content,
+        attachmentUrl: attachmentUrl || null,
+        scheduledAt: new Date(whenMs).toISOString(),
+        sent: false,
+      });
+      setMessageText('');
+      setAttachmentUrl('');
+      setScheduleOpen(false);
+      setScheduleDate('');
+      setScheduleTime('');
+      const mins = Math.round((whenMs - Date.now()) / 60000);
+      const label = mins < 60 ? `${mins} min` : mins < 1440 ? `${Math.round(mins / 60)} orë` : `${Math.round(mins / 1440)} ditë`;
+      toast({ title: 'Mesazhi u programua', description: `Do të dërgohet pas ${label}` });
+    } catch (err: any) {
+      console.error('[ChatView] schedule failed', err);
+      toast({ title: 'Gabim', description: err.message || 'Programimi dështoi', variant: 'destructive' });
+    }
+  }, [user, messageText, attachmentUrl, scheduledMutation, chatMode, activeChannel, activeDirectUserId, toast]);
+
+  const handleCancelScheduled = useCallback(async (id: string) => {
+    try {
+      await scheduledMutation.remove(id);
+      toast({ title: 'Mesazhi u anulua' });
+    } catch (err) {
+      console.error('[ChatView] cancel scheduled failed', err);
+    }
+  }, [scheduledMutation, toast]);
+
+  // Poll scheduled messages every 30s; send and remove when due.
+  useEffect(() => {
+    if (!user || !scheduledMessages) return;
+    const fire = async () => {
+      const now = Date.now();
+      for (const s of (scheduledMessages || [])) {
+        if (!s || s.sent || firedScheduledRef.current.has(s.id)) continue;
+        const t = s.scheduledAt ? new Date(s.scheduledAt).getTime() : 0;
+        if (!t || t > now) continue;
+        firedScheduledRef.current.add(s.id);
+        try {
+          const base: any = {
+            content: s.content || '📎 Bashkëngjitje',
+            senderId: user.uid,
+            isRead: false,
+          };
+          if (s.attachmentUrl) base.attachmentUrl = s.attachmentUrl;
+          if (s.channelId) {
+            await messageMutation.create({ ...base, channelId: s.channelId });
+          } else if (s.directUserId) {
+            await messageMutation.create({ ...base, receiverId: s.directUserId });
+          }
+          await scheduledMutation.remove(s.id);
+          toast({ title: '📨 Mesazhi i programuar u dërgua' });
+        } catch (err) {
+          console.error('[ChatView] scheduled send failed', err);
+          firedScheduledRef.current.delete(s.id);
+        }
+      }
+    };
+    fire();
+    const id = setInterval(fire, 30000);
+    return () => clearInterval(id);
+  }, [user, scheduledMessages, messageMutation, scheduledMutation, toast]);
 
   // ── #3 Message → Task ──
   const [taskFromMsgOpen, setTaskFromMsgOpen] = useState(false);
@@ -3145,6 +3239,23 @@ const ChatView: React.FC = () => {
                 </div>
               )}
               <form onSubmit={(e) => handleSendMessage(e)}>
+                {/* Pending scheduled messages banner */}
+                {pendingScheduledForCurrent.length > 0 && (
+                  <div className="flex items-center gap-2 px-3 py-1.5 mb-2 rounded-xl bg-amber-50 dark:bg-amber-950/20 border border-amber-200/60 dark:border-amber-900/40 text-xs">
+                    <Clock className="h-3.5 w-3.5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+                    <span className="text-amber-700 dark:text-amber-300 truncate flex-1">
+                      {pendingScheduledForCurrent.length} mesazh{pendingScheduledForCurrent.length === 1 ? '' : 'e'} i programuar
+                      {pendingScheduledForCurrent[0]?.scheduledAt && ` · ${new Date(pendingScheduledForCurrent[0].scheduledAt).toLocaleString('sq-AL', { dateStyle: 'short', timeStyle: 'short' })}`}
+                    </span>
+                    <button
+                      type="button"
+                      className="text-amber-700 dark:text-amber-300 hover:underline text-xs font-medium"
+                      onClick={() => handleCancelScheduled(pendingScheduledForCurrent[0].id)}
+                    >
+                      Anulo
+                    </button>
+                  </div>
+                )}
                 {/* Voice recording overlay */}
                 {isRecording && (
                   <div className="flex items-center gap-3 px-3 py-2 mb-2 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200/60 dark:border-rose-900/40">
@@ -3320,6 +3431,23 @@ const ChatView: React.FC = () => {
                     rows={1}
                     className="flex-1 min-w-0 bg-transparent border-0 outline-none text-[16px] sm:text-sm resize-none py-1.5 placeholder:text-muted-foreground/40 max-h-[120px]"
                   />
+
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-9 w-9 rounded-full flex-shrink-0 mb-0.5 text-muted-foreground hover:text-foreground"
+                    disabled={isSending || (!messageText.trim() && !attachmentUrl.trim()) || chatMode === 'ai' || chatMode === 'whatsapp'}
+                    onClick={() => {
+                      const d = new Date(Date.now() + 60 * 60 * 1000);
+                      setScheduleDate(d.toISOString().slice(0, 10));
+                      setScheduleTime(d.toTimeString().slice(0, 5));
+                      setScheduleOpen(true);
+                    }}
+                    title="Programo mesazhin"
+                  >
+                    <CalendarClock className="h-4 w-4" />
+                  </Button>
 
                   <Button
                     type="submit"
@@ -3677,6 +3805,88 @@ const ChatView: React.FC = () => {
                 <Button size="sm" onClick={() => setSummaryOpen(false)}>Mbyll</Button>
               </div>
             )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* #4 Schedule message dialog */}
+      <Dialog open={scheduleOpen} onOpenChange={setScheduleOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base">
+              <CalendarClock className="h-4 w-4 text-primary" /> Programo mesazhin
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { label: 'Pas 1 ore', m: 60 },
+                { label: 'Pas 3 orësh', m: 180 },
+                { label: 'Nesër 09:00', custom: 'tomorrow9' },
+                { label: 'Të hënën 09:00', custom: 'mon9' },
+              ].map(opt => (
+                <Button
+                  key={opt.label}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="justify-start"
+                  onClick={() => {
+                    let when = Date.now();
+                    if (opt.m) when += opt.m * 60 * 1000;
+                    else if (opt.custom === 'tomorrow9') {
+                      const d = new Date();
+                      d.setDate(d.getDate() + 1);
+                      d.setHours(9, 0, 0, 0);
+                      when = d.getTime();
+                    } else if (opt.custom === 'mon9') {
+                      const d = new Date();
+                      const diff = (8 - d.getDay()) % 7 || 7;
+                      d.setDate(d.getDate() + diff);
+                      d.setHours(9, 0, 0, 0);
+                      when = d.getTime();
+                    }
+                    handleScheduleMessage(when);
+                  }}
+                >
+                  <AlarmClock className="h-3.5 w-3.5 mr-1.5" />{opt.label}
+                </Button>
+              ))}
+            </div>
+            <div className="border-t pt-3">
+              <Label className="text-xs text-muted-foreground">Ose zgjidh datën dhe orën</Label>
+              <div className="flex gap-2 mt-1.5">
+                <Input
+                  type="date"
+                  value={scheduleDate}
+                  onChange={(e) => setScheduleDate(e.target.value)}
+                  className="flex-1"
+                />
+                <Input
+                  type="time"
+                  value={scheduleTime}
+                  onChange={(e) => setScheduleTime(e.target.value)}
+                  className="w-32"
+                />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setScheduleOpen(false)}>Anulo</Button>
+              <Button
+                size="sm"
+                disabled={!scheduleDate || !scheduleTime}
+                onClick={() => {
+                  const when = new Date(`${scheduleDate}T${scheduleTime}`).getTime();
+                  if (isNaN(when) || when <= Date.now()) {
+                    toast({ title: 'Koha e pavlefshme', description: 'Zgjidh një kohë në të ardhmen', variant: 'destructive' });
+                    return;
+                  }
+                  handleScheduleMessage(when);
+                }}
+              >
+                <CalendarClock className="h-3.5 w-3.5 mr-1" /> Programo
+              </Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>

@@ -9,24 +9,24 @@ Legjenda: ✅ done · 🟡 partial · ⬜ pending
 | # | Item | Status |
 |---|---|---|
 | 33 | Firestore rules: DM lexohet vetëm nga sender/receiver | ⬜ |
-| 32 | Batched read receipts me `writeBatch()` | ⬜ |
+| 32 | Batched read receipts me `writeBatch()` | ✅ |
 | 27 | Virtual scrolling (react-virtual) | ⬜ |
-| 28 | Cursor pagination me `startAfter()` | ⬜ |
+| 28 | Cursor pagination me `startAfter()` | 🟡 |
 | 31 | Split `ChatView.tsx` në `<MessageList>`, `<Composer>`, etc. | ⬜ |
 
 ## Wave 2 — Workflow Wins (high impact, low risk)
 
 | # | Item | Status |
 |---|---|---|
-| 7 | Drafts auto-save per conversation (localStorage) | ⬜ |
-| 6 | Saved replies / Snippets | ⬜ |
-| 8 | Bookmarks / Save for later | ⬜ |
-| 5 | Snooze / Remind me | ⬜ |
-| 3 | Message → Task në një klik | ⬜ |
-| 2 | Slash commands `/task` `/quote` `/remind` `/invoice` | ⬜ |
-| 4 | Scheduled messages | ⬜ |
+| 7 | Drafts auto-save per conversation (localStorage) | ✅ |
+| 6 | Saved replies / Snippets | ✅ |
+| 8 | Bookmarks / Save for later | ✅ |
+| 5 | Snooze / Remind me | ✅ |
+| 3 | Message → Task në një klik | ✅ |
+| 2 | Slash commands `/task` `/quote` `/remind` `/invoice` | ✅ |
+| 4 | Scheduled messages | ✅ |
 | 1 | Threads | ⬜ |
-| 13 | `@@Customer` mention → lidh me Customer360 | ⬜ |
+| 13 | `@@Customer` mention → lidh me Customer360 | ✅ |
 
 ## Wave 3 — Marketing Agency Magic
 
@@ -42,11 +42,11 @@ Legjenda: ✅ done · 🟡 partial · ⬜ pending
 
 | # | Item | Status |
 |---|---|---|
-| 19 | AI summary i bisedës (OpenAI) | ⬜ |
+| 19 | AI summary i bisedës (OpenAI) | ✅ |
 | 24 | Action extraction → propozim Task | ⬜ |
 | 21 | Smart Reply suggestions | ⬜ |
 | 25 | Daily digest mëngjesi (cron) | ⬜ |
-| 23 | Tone polish ("më formal / më miqësor") | ⬜ |
+| 23 | Tone polish ("më formal / më miqësor") | ✅ |
 | 22 | Auto-translate sq ↔ en ↔ it | ⬜ |
 
 ## Wave 5 — Polish & Enterprise
@@ -54,7 +54,7 @@ Legjenda: ✅ done · 🟡 partial · ⬜ pending
 | # | Item | Status |
 |---|---|---|
 | 17 | Search filters (from:, in:, has:link, date) | ✅ (basic) |
-| 39 | Keyboard nav + `Cmd+K` channel switcher | ⬜ |
+| 39 | Keyboard nav + `Cmd+K` channel switcher | ✅ |
 | 35 | Audit log (delete/edit) | ⬜ |
 | 37 | PDF export i bisedës me klient | ⬜ |
 | 36 | Retention policy (auto-delete DM >90d) | ⬜ |
