@@ -739,6 +739,60 @@ const ChatView: React.FC = () => {
     }
   }, [polishLoading, messageText, toast]);
 
+  // ── #21 Smart Reply suggestions ──
+  const [smartReplies, setSmartReplies] = useState<string[]>([]);
+  const [smartRepliesLoading, setSmartRepliesLoading] = useState(false);
+  const handleSuggestReplies = useCallback(async () => {
+    if (smartRepliesLoading) return;
+    const pool: any[] = chatMode === 'direct' ? directMessages : channelMessages;
+    if (!pool || pool.length === 0) return;
+    // Find the last incoming (non-own) message
+    const lastIncoming = [...pool].reverse().find(m => m.senderId !== user?.uid && !(m as any).deletedAt);
+    if (!lastIncoming) {
+      toast({ title: 'Nuk ka mesazh për t\u2019iu përgjigjur' });
+      return;
+    }
+    const lastFew = pool.slice(-8).map((m: any) => {
+      const who = m.senderId === user?.uid ? 'Unë' : (getUserDisplayName(m.senderId) || 'Përdorues');
+      const plain = String(m.content || '').replace(/<[^>]+>/g, '').replace(/[*_`~]/g, '');
+      return `${who}: ${plain}`;
+    }).join('\n');
+    setSmartRepliesLoading(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Not authenticated');
+      const res = await fetch('/api/ai-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          messages: [{
+            role: 'user',
+            content: `Bazuar në këtë bisedë, sugjero 3 përgjigje TË SHKURTRA e profesionale në shqip (maksimum 12 fjalë secila), si "Unë" do të përgjigjej te mesazhi i fundit i marrë. Ktheji VETËM si JSON array me 3 stringje, pa shpjegim. Shembull: ["Po, dakord", "Mund të flasim nesër?", "Faleminderit, e mora"].\n\nBiseda:\n${lastFew}`,
+          }],
+          context: { userRole: 'staff' },
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const raw = String(data.reply || '').trim();
+      let parsed: string[] = [];
+      try {
+        const match = raw.match(/\[[\s\S]*\]/);
+        parsed = JSON.parse(match ? match[0] : raw);
+      } catch {
+        parsed = raw.split(/\n+/).map(s => s.replace(/^[\d.\-*\s"'`]+|["'`]+$/g, '').trim()).filter(Boolean).slice(0, 3);
+      }
+      const cleaned = parsed.filter(s => typeof s === 'string' && s.trim()).slice(0, 3);
+      if (cleaned.length === 0) throw new Error('Pa sugjerime');
+      setSmartReplies(cleaned);
+    } catch (err: any) {
+      console.error('[ChatView] smart replies failed', err);
+      toast({ title: 'Gabim', description: err.message || 'Sugjerimet dështuan', variant: 'destructive' });
+    } finally {
+      setSmartRepliesLoading(false);
+    }
+  }, [smartRepliesLoading, chatMode, directMessages, channelMessages, user, toast, getUserDisplayName]);
+
   // ── #5 Snooze / Remind me ──
   const reminderMutation = useMutation<any>('chatReminders');
   const { data: reminders } = useCollection<any>('chatReminders', {
@@ -3409,6 +3463,32 @@ const ChatView: React.FC = () => {
                     </div>
                   </div>
                 )}
+                {/* #21 Smart Reply suggestions */}
+                {smartReplies.length > 0 && (
+                  <div className="flex items-center gap-2 flex-wrap mb-2 px-1">
+                    <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                      <Sparkles className="h-3 w-3" /> Sugjerime AI:
+                    </span>
+                    {smartReplies.map((s, i) => (
+                      <button
+                        key={i}
+                        type="button"
+                        onClick={() => { setMessageText(prev => prev ? `${prev} ${s}` : s); setSmartReplies([]); chatTextareaRef.current?.focus(); }}
+                        className="text-xs px-2.5 py-1 rounded-full bg-primary/10 hover:bg-primary/20 text-primary border border-primary/20 transition-colors"
+                      >
+                        {s}
+                      </button>
+                    ))}
+                    <button
+                      type="button"
+                      onClick={() => setSmartReplies([])}
+                      className="text-[10px] text-muted-foreground hover:text-foreground ml-auto"
+                      title="Mbyll sugjerimet"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
                 <div
                   className="flex items-end gap-2 bg-muted/20 border rounded-2xl px-3 py-2 focus-within:border-primary/40 focus-within:bg-background focus-within:shadow-md transition-all relative"
                   onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }}
@@ -3511,6 +3591,11 @@ const ChatView: React.FC = () => {
                       disabled={isSending || polishLoading || !messageText.trim()} onClick={handlePolishMessage}
                       title="Përmirëso tekstin me AI">
                       {polishLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
+                    </Button>
+                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
+                      disabled={isSending || smartRepliesLoading} onClick={handleSuggestReplies}
+                      title="Sugjero përgjigje me AI">
+                      {smartRepliesLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                     </Button>
                   </div>
 
