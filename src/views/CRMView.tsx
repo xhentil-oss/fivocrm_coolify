@@ -68,6 +68,9 @@ const CRMView: React.FC = () => {
   useEffect(() => {
     if (typeof window !== 'undefined') window.localStorage.setItem('crm_view_mode', viewMode);
   }, [viewMode]);
+  // Windowing — render at most N rows; "Shfaq më shumë" reveals more
+  const PAGE_SIZE = 100;
+  const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
   const { toast } = useToast();
 
   // Follow-up / re-contact state (synced with selectedLead)
@@ -649,6 +652,11 @@ const CRMView: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [leads, activeTab, searchQuery, scoreFilter, assignedFilter, sourceFilter, sortBy, sortDir, user, optimisticStatus]);
 
+  // Reset window when filters/sort change
+  useEffect(() => {
+    setVisibleLimit(PAGE_SIZE);
+  }, [activeTab, searchQuery, scoreFilter, assignedFilter, sourceFilter, sortBy, sortDir]);
+
   const hasActiveFilters = searchQuery.trim() !== '' || scoreFilter !== 'all' || assignedFilter !== 'all' || sourceFilter !== 'all';
   const clearAllFilters = () => {
     setSearchQuery('');
@@ -1109,7 +1117,7 @@ const CRMView: React.FC = () => {
 
           {/* Mobile card layout */}
           <div className="sm:hidden space-y-3">
-            {filteredLeads.map((lead) => {
+            {filteredLeads.slice(0, visibleLimit).map((lead) => {
               const s = (lead as any).score ?? calculateLeadScore(lead);
               const scoreColor = s >= 70 ? 'text-green-600' : s >= 40 ? 'text-yellow-600' : 'text-red-500';
               const leadPhone = normalizeAlbanianPhone(lead.phoneNumber || lead.phone || '');
@@ -1214,6 +1222,20 @@ const CRMView: React.FC = () => {
                 </Card>
               );
             })}
+            {filteredLeads.length > visibleLimit && (
+              <div className="flex items-center justify-between gap-2 px-1 pt-1">
+                <span className="text-xs text-muted-foreground tabular-nums">
+                  {visibleLimit} nga {filteredLeads.length}
+                </span>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setVisibleLimit(v => v + PAGE_SIZE)}
+                >
+                  Shfaq më shumë
+                </Button>
+              </div>
+            )}
           </div>
 
           {/* Bulk actions bar (desktop) */}
@@ -1430,7 +1452,7 @@ const CRMView: React.FC = () => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
-                  {filteredLeads.map((lead, idx) => (
+                  {filteredLeads.slice(0, visibleLimit).map((lead, idx) => (
                     <tr
                       key={lead.id}
                       className={`group hover:bg-muted/50 cursor-pointer transition-colors duration-fast ${idx === highlightedIndex ? 'bg-muted/60 ring-1 ring-inset ring-primary/40' : ''} ${selectedIds.has(lead.id) ? 'bg-primary/5' : ''}`}
@@ -1671,6 +1693,20 @@ const CRMView: React.FC = () => {
                 </tbody>
               </table>
             </div>
+            {filteredLeads.length > visibleLimit && (
+              <div className="border-t border-border p-3 flex items-center justify-between text-xs text-muted-foreground">
+                <span className="tabular-nums">
+                  Po shfaqen {visibleLimit} nga {filteredLeads.length} lead
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setVisibleLimit(v => v + PAGE_SIZE)}
+                >
+                  Shfaq edhe {Math.min(PAGE_SIZE, filteredLeads.length - visibleLimit)}
+                </Button>
+              </div>
+            )}
           </Card>
         </TabsContent>
       </Tabs>
