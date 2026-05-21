@@ -9,6 +9,7 @@ import { useActivityLogger } from '../hooks/useActivityLogger';
 import { getStatusColor } from '../lib/statusColors';
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
+import { Checkbox } from '../components/ui/checkbox';
 import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle, Edit2, Percent, MessageSquare, ExternalLink, Calculator, FileText, Clock, Bell, Send, ArrowUp, ArrowDown, ChevronsUpDown, Inbox } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -55,6 +56,9 @@ const CRMView: React.FC = () => {
   };
   // Optimistic status overrides (cleared automatically as Firestore subscription updates)
   const [optimisticStatus, setOptimisticStatus] = useState<Record<string, string>>({});
+  // Bulk selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const { toast } = useToast();
 
   // Follow-up / re-contact state (synced with selectedLead)
@@ -1115,12 +1119,132 @@ const CRMView: React.FC = () => {
             })}
           </div>
 
+          {/* Bulk actions bar (desktop) */}
+          {selectedIds.size > 0 && (
+            <div className="hidden sm:flex sticky top-0 z-20 items-center gap-2 bg-primary/10 border border-primary/30 rounded-lg px-4 py-2 mb-3 backdrop-blur">
+              <Checkbox
+                checked
+                onCheckedChange={() => setSelectedIds(new Set())}
+                aria-label="Hiq zgjedhjen"
+              />
+              <span className="text-sm font-medium text-foreground">
+                {selectedIds.size} të zgjedhura
+              </span>
+              <div className="flex-1" />
+              {permissions.canEdit && (
+                <>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm">
+                        Ndrysho status
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      {(['New', 'Contacted', 'Qualified', 'Follow-up', 'Lost'] as const).map(s => (
+                        <DropdownMenuItem
+                          key={s}
+                          onClick={async () => {
+                            const ids = Array.from(selectedIds);
+                            setOptimisticStatus(prev => {
+                              const next = { ...prev };
+                              ids.forEach(id => { next[id] = s; });
+                              return next;
+                            });
+                            try {
+                              await Promise.all(ids.map(id => leadMutation.update(id, {
+                                status: s,
+                                probability: STAGE_PROBABILITY[s] ?? undefined,
+                              })));
+                              toast({ title: `${ids.length} lead u përditësuan`, description: `Status i ri: ${getStatusLabel(s)}` });
+                              setSelectedIds(new Set());
+                            } catch {
+                              toast({ title: 'Gabim', description: 'Disa përditësime dështuan', variant: 'destructive' });
+                            } finally {
+                              setOptimisticStatus(prev => {
+                                const next = { ...prev };
+                                ids.forEach(id => { delete next[id]; });
+                                return next;
+                              });
+                            }
+                          }}
+                        >
+                          {getStatusLabel(s)}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button variant="outline" size="sm">
+                        Asigno te
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end" className="max-h-80 overflow-y-auto">
+                      <DropdownMenuItem
+                        onClick={async () => {
+                          const ids = Array.from(selectedIds);
+                          try {
+                            await Promise.all(ids.map(id => leadMutation.update(id, { assignedToUserId: null as any })));
+                            toast({ title: `${ids.length} lead u zhasignuan` });
+                            setSelectedIds(new Set());
+                          } catch {
+                            toast({ title: 'Gabim', variant: 'destructive' });
+                          }
+                        }}
+                      >
+                        Pa asignuar
+                      </DropdownMenuItem>
+                      {teamMembers?.map(m => (
+                        <DropdownMenuItem
+                          key={m.userId}
+                          onClick={async () => {
+                            const ids = Array.from(selectedIds);
+                            try {
+                              await Promise.all(ids.map(id => leadMutation.update(id, { assignedToUserId: m.userId })));
+                              toast({ title: `${ids.length} lead u asignuan`, description: getName(m.userId, m.name) });
+                              setSelectedIds(new Set());
+                            } catch {
+                              toast({ title: 'Gabim', variant: 'destructive' });
+                            }
+                          }}
+                        >
+                          {getName(m.userId, m.name)}
+                        </DropdownMenuItem>
+                      ))}
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => setBulkDeleteOpen(true)}
+                  >
+                    <Trash2 className="w-4 h-4 mr-1" />
+                    Fshi
+                  </Button>
+                </>
+              )}
+            </div>
+          )}
+
           {/* Desktop table */}
           <Card className="overflow-hidden hidden sm:block">
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-muted">
                   <tr>
+                    <th className="px-4 py-4 w-10">
+                      <Checkbox
+                        checked={filteredLeads.length > 0 && filteredLeads.every(l => selectedIds.has(l.id))}
+                        onCheckedChange={(v) => {
+                          if (v) setSelectedIds(new Set(filteredLeads.map(l => l.id)));
+                          else setSelectedIds(new Set());
+                        }}
+                        aria-label="Zgjidh të gjitha"
+                      />
+                    </th>
                     <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
                       <button
                         type="button"
@@ -1209,9 +1333,23 @@ const CRMView: React.FC = () => {
                   {filteredLeads.map((lead, idx) => (
                     <tr
                       key={lead.id}
-                      className={`group hover:bg-muted/50 cursor-pointer transition-colors duration-fast ${idx === highlightedIndex ? 'bg-muted/60 ring-1 ring-inset ring-primary/40' : ''}`}
+                      className={`group hover:bg-muted/50 cursor-pointer transition-colors duration-fast ${idx === highlightedIndex ? 'bg-muted/60 ring-1 ring-inset ring-primary/40' : ''} ${selectedIds.has(lead.id) ? 'bg-primary/5' : ''}`}
                       onClick={() => setSelectedLead(lead)}
                     >
+                      <td className="px-4 py-4 w-10" onClick={(e) => e.stopPropagation()}>
+                        <Checkbox
+                          checked={selectedIds.has(lead.id)}
+                          onCheckedChange={(v) => {
+                            setSelectedIds(prev => {
+                              const next = new Set(prev);
+                              if (v) next.add(lead.id);
+                              else next.delete(lead.id);
+                              return next;
+                            });
+                          }}
+                          aria-label={`Zgjidh ${lead.name}`}
+                        />
+                      </td>
                       <td className="px-6 py-4">
                         <div className="space-y-1">
                           <p className="text-body font-normal text-foreground">{lead.name}</p>
@@ -1682,6 +1820,35 @@ const CRMView: React.FC = () => {
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => setLeadToDelete(null)}>Anulo</Button>
             <Button variant="destructive" onClick={() => leadToDelete && handleDeleteLead(leadToDelete.id)}>Fshi</Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Bulk delete confirm */}
+      <Dialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
+        <DialogContent className="w-full max-w-md">
+          <DialogHeader><DialogTitle>Fshi {selectedIds.size} lead</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Je i sigurt që dëshiron të fshish <span className="font-semibold text-foreground">{selectedIds.size}</span> lead? Ky veprim nuk mund të zhbëhet menjëherë.
+          </p>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setBulkDeleteOpen(false)}>Anulo</Button>
+            <Button
+              variant="destructive"
+              onClick={async () => {
+                const ids = Array.from(selectedIds);
+                setBulkDeleteOpen(false);
+                try {
+                  await Promise.all(ids.map(id => leadMutation.remove(id)));
+                  toast({ title: `${ids.length} lead u fshinë` });
+                  setSelectedIds(new Set());
+                } catch {
+                  toast({ title: 'Gabim', description: 'Disa fshirje dështuan', variant: 'destructive' });
+                }
+              }}
+            >
+              Fshi {selectedIds.size}
+            </Button>
           </div>
         </DialogContent>
       </Dialog>
