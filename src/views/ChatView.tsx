@@ -20,7 +20,7 @@ import {
   ClipboardList, ExternalLink, UserPlus, ChevronDown, CheckCheck,
   ImageIcon, Circle, Pin, PinOff, Mic, Square, Filter, AtSign,
   Bookmark, BookmarkCheck, ListChecks,
-  Zap,
+  Zap, BellRing, AlarmClock, Wand2,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
@@ -665,6 +665,99 @@ const ChatView: React.FC = () => {
       setSummaryLoading(false);
     }
   }, [user, summaryLoading, chatMode, channelMessages, directMessages, toast, getUserDisplayName]);
+
+  // ── #23 Tone polish with AI ──
+  const [polishLoading, setPolishLoading] = useState(false);
+  const handlePolishMessage = useCallback(async () => {
+    if (polishLoading) return;
+    const raw = messageText.trim();
+    if (!raw) return;
+    setPolishLoading(true);
+    try {
+      const token = await auth.currentUser?.getIdToken();
+      if (!token) throw new Error('Not authenticated');
+      const res = await fetch('/api/ai-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({
+          messages: [{
+            role: 'user',
+            content: `Përmirëso këtë mesazh në shqip për një bisedë profesionale (qartë, e sjellshme, pa gabime, pa shtuar informacione të reja, ruaj kuptimin dhe gjatësinë e ngjashme). Ktheji VETËM tekstin e përmirësuar, pa shpjegime ose thonjëza.\n\nMesazhi:\n${raw}`,
+          }],
+          context: { userRole: 'staff' },
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const polished = String(data.reply || '').trim().replace(/^["']|["']$/g, '');
+      if (polished) {
+        setMessageText(polished);
+        toast({ title: 'Teksti u përmirësua' });
+      }
+    } catch (err: any) {
+      console.error('[ChatView] polish failed', err);
+      toast({ title: 'Gabim', description: err.message || 'Përmirësimi dështoi', variant: 'destructive' });
+    } finally {
+      setPolishLoading(false);
+    }
+  }, [polishLoading, messageText, toast]);
+
+  // ── #5 Snooze / Remind me ──
+  const reminderMutation = useMutation<any>('chatReminders');
+  const { data: reminders } = useCollection<any>('chatReminders', {
+    skipTeamFilter: true,
+    where: user ? [['userId', '==', user.uid]] : [],
+  });
+  const [reminderPickerFor, setReminderPickerFor] = useState<string | null>(null);
+  const firedRemindersRef = useRef<Set<string>>(new Set());
+
+  const scheduleReminder = useCallback(async (msg: ChatMessage, minutes: number) => {
+    if (!user) return;
+    const remindAt = new Date(Date.now() + minutes * 60 * 1000);
+    const plain = (msg.content || '').replace(/<[^>]+>/g, '').trim().slice(0, 200);
+    try {
+      await reminderMutation.create({
+        userId: user.uid,
+        messageId: msg.id,
+        channelId: msg.channelId || null,
+        senderId: msg.senderId,
+        senderName: getUserDisplayName(msg.senderId) || 'Përdorues',
+        content: plain,
+        remindAt: remindAt.toISOString(),
+        sent: false,
+      });
+      setReminderPickerFor(null);
+      const label = minutes < 60 ? `${minutes} min` : minutes < 1440 ? `${Math.round(minutes / 60)} orë` : 'nesër';
+      toast({ title: 'Kujtues u vendos', description: `Do të kujtohesh pas ${label}` });
+    } catch (err: any) {
+      console.error('[ChatView] reminder create failed', err);
+      toast({ title: 'Gabim', description: 'Kujtuesi nuk u ruajt', variant: 'destructive' });
+    }
+  }, [user, reminderMutation, toast, getUserDisplayName]);
+
+  // Poll reminders every 30s; fire toast and mark sent.
+  useEffect(() => {
+    if (!user || !reminders) return;
+    const check = () => {
+      const now = Date.now();
+      (reminders || []).forEach((r: any) => {
+        if (!r || r.sent || firedRemindersRef.current.has(r.id)) return;
+        const t = r.remindAt ? new Date(r.remindAt).getTime() : 0;
+        if (t && t <= now) {
+          firedRemindersRef.current.add(r.id);
+          toast({
+            title: `🔔 Kujtues: ${r.senderName || 'Mesazh'}`,
+            description: r.content || '(pa tekst)',
+            duration: 10000,
+          });
+          reminderMutation.update(r.id, { sent: true }).catch(() => {});
+        }
+      });
+    };
+    check();
+    const id = setInterval(check, 30000);
+    return () => clearInterval(id);
+  }, [user, reminders, reminderMutation, toast]);
 
   // ── #3 Message → Task ──
   const [taskFromMsgOpen, setTaskFromMsgOpen] = useState(false);
@@ -2783,6 +2876,34 @@ const ChatView: React.FC = () => {
                                     >
                                       <ListChecks className="h-3.5 w-3.5" />
                                     </button>
+                                    <div className="relative">
+                                      <button
+                                        className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors"
+                                        onClick={() => setReminderPickerFor(reminderPickerFor === message.id ? null : message.id)}
+                                        title="Kujtomë për këtë mesazh"
+                                      >
+                                        <BellRing className="h-3.5 w-3.5" />
+                                      </button>
+                                      {reminderPickerFor === message.id && (
+                                        <div className={`absolute bottom-full ${isOwn ? 'left-0' : 'right-0'} mb-1 bg-popover border rounded-xl shadow-lg py-1 z-50 min-w-[160px]`}>
+                                          {[
+                                            { label: 'Pas 15 minutash', m: 15 },
+                                            { label: 'Pas 1 ore', m: 60 },
+                                            { label: 'Pas 3 orësh', m: 180 },
+                                            { label: 'Nesër', m: 60 * 24 },
+                                            { label: 'Javën tjetër', m: 60 * 24 * 7 },
+                                          ].map(opt => (
+                                            <button
+                                              key={opt.m}
+                                              onClick={() => scheduleReminder(message, opt.m)}
+                                              className="block w-full text-left px-3 py-1.5 text-xs hover:bg-accent text-foreground"
+                                            >
+                                              <AlarmClock className="inline h-3 w-3 mr-1.5 text-muted-foreground" />{opt.label}
+                                            </button>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
                                     <button
                                       className={`p-1 hover:bg-accent rounded-lg transition-colors ${isPinned ? 'text-amber-500' : 'text-muted-foreground hover:text-foreground'}`}
                                       onClick={() => handleTogglePin(message)}
@@ -3093,6 +3214,11 @@ const ChatView: React.FC = () => {
                       disabled={isSending} onClick={() => { setSnippetSearch(''); setSnippetPickerOpen(true); }}
                       title="Përgjigje të ruajtura">
                       <Zap className="h-3.5 w-3.5" />
+                    </Button>
+                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
+                      disabled={isSending || polishLoading || !messageText.trim()} onClick={handlePolishMessage}
+                      title="Përmirëso tekstin me AI">
+                      {polishLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
                     </Button>
                   </div>
 
