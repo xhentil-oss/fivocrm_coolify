@@ -8,6 +8,7 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { getStatusColor } from '../lib/statusColors';
 import { useToast } from '../hooks/use-toast';
+import { ToastAction } from '../components/ui/toast';
 import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle, Edit2, Percent, MessageSquare, ExternalLink, Calculator, FileText, Clock, Bell, Send, ArrowUp, ArrowDown, ChevronsUpDown, Inbox } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -52,6 +53,8 @@ const CRMView: React.FC = () => {
     if (sortBy === key) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
     else { setSortBy(key); setSortDir(key === 'name' ? 'asc' : 'desc'); }
   };
+  // Optimistic status overrides (cleared automatically as Firestore subscription updates)
+  const [optimisticStatus, setOptimisticStatus] = useState<Record<string, string>>({});
   const { toast } = useToast();
 
   // Follow-up / re-contact state (synced with selectedLead)
@@ -353,8 +356,40 @@ const CRMView: React.FC = () => {
   };
 
   const handleDeleteLead = async (id: string) => {
-    await leadMutation.remove(id);
+    // Capture full snapshot for Undo
+    const snapshot = leads?.find(l => l.id === id);
+    if (!snapshot) {
+      await leadMutation.remove(id);
+      setLeadToDelete(null);
+      return;
+    }
     setLeadToDelete(null);
+    try {
+      await leadMutation.remove(id);
+      toast({
+        title: 'Lead u fshi',
+        description: snapshot.name,
+        action: (
+          <ToastAction
+            altText="Anulo"
+            onClick={async () => {
+              try {
+                // Strip id and re-create — Firestore will assign a new id
+                const { id: _omit, ...data } = snapshot as any;
+                await leadMutation.create(data);
+                toast({ title: 'Lead u rikthye', description: snapshot.name });
+              } catch {
+                toast({ title: 'Gabim', description: 'Rikthimi dështoi', variant: 'destructive' });
+              }
+            }}
+          >
+            Anulo
+          </ToastAction>
+        ),
+      });
+    } catch (err) {
+      toast({ title: 'Gabim', description: 'Fshirja dështoi', variant: 'destructive' });
+    }
   };
 
   const handleFollowUp = async (leadId: string) => {
@@ -515,7 +550,23 @@ const CRMView: React.FC = () => {
     // Normal status change (not conversion)
     const update: Record<string, any> = { status: newStatus, probability: STAGE_PROBABILITY[newStatus] ?? undefined };
     if (newStatus === 'Follow-up') update.lastFollowUpDate = new Date();
-    await leadMutation.update(lead.id, update);
+    // Optimistic UI: reflect new status immediately
+    setOptimisticStatus(prev => ({ ...prev, [lead.id]: newStatus }));
+    try {
+      await leadMutation.update(lead.id, update);
+      // Clear optimistic entry once Firestore confirms (next snapshot will carry it)
+      setOptimisticStatus(prev => {
+        const { [lead.id]: _, ...rest } = prev;
+        return rest;
+      });
+    } catch (err) {
+      // Roll back
+      setOptimisticStatus(prev => {
+        const { [lead.id]: _, ...rest } = prev;
+        return rest;
+      });
+      toast({ title: 'Gabim', description: 'Statusi nuk u ndryshua', variant: 'destructive' });
+    }
   };
 
   const handleConfirmLost = async () => {
@@ -532,7 +583,11 @@ const CRMView: React.FC = () => {
 
   const filteredLeads = React.useMemo(() => {
     if (!leads) return [];
-    let result = leads;
+    // Apply optimistic status overrides
+    const base = Object.keys(optimisticStatus).length === 0
+      ? leads
+      : leads.map(l => optimisticStatus[l.id] ? { ...l, status: optimisticStatus[l.id] } : l);
+    let result = base;
     if (activeTab !== 'all') result = result.filter(l => l.status === activeTab);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
@@ -579,7 +634,7 @@ const CRMView: React.FC = () => {
     });
     return sorted;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, activeTab, searchQuery, scoreFilter, assignedFilter, sourceFilter, sortBy, sortDir, user]);
+  }, [leads, activeTab, searchQuery, scoreFilter, assignedFilter, sourceFilter, sortBy, sortDir, user, optimisticStatus]);
 
   const hasActiveFilters = searchQuery.trim() !== '' || scoreFilter !== 'all' || assignedFilter !== 'all' || sourceFilter !== 'all';
   const clearAllFilters = () => {
