@@ -9,6 +9,7 @@ import { Label } from '../components/ui/label';
 import { Input } from '../components/ui/input';
 import { Switch } from '../components/ui/switch';
 import { Separator } from '../components/ui/separator';
+import WhatsAppStatusBadge from '../components/WhatsAppStatusBadge';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Checkbox } from '../components/ui/checkbox';
@@ -1069,6 +1070,14 @@ const SettingsView: React.FC = () => {
             {whatsappEnabled && (
               <>
                 <Separator />
+                <div className="flex items-center justify-between gap-3 p-3 bg-background border border-border rounded-lg">
+                  <div className="min-w-0">
+                    <p className="text-body-sm font-medium text-foreground">Statusi i serverit Baileys</p>
+                    <p className="text-xs text-muted-foreground">Po kontrollohet çdo 30 sekonda — kliko për rifreskim</p>
+                  </div>
+                  <WhatsAppStatusBadge variant="pill" />
+                </div>
+                <WhatsAppStatusBadge variant="banner" />
                 <div className="flex items-start gap-2 p-3 bg-amber-50 dark:bg-amber-500/10 border border-amber-200 dark:border-amber-500/20 rounded-lg">
                   <AlertCircle className="w-4 h-4 text-amber-600 mt-0.5 shrink-0" />
                   <p className="text-xs text-amber-700 dark:text-amber-400">
