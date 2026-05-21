@@ -287,6 +287,16 @@ service cloud.firestore {
       allow update, delete: if isAuth() && resource.data.userId == request.auth.uid;
     }
 
+    // Team-wide saved replies / snippets — any team member can read, only creator can edit/delete.
+    match /chatSnippets/{docId} {
+      allow read: if isAuth();
+      allow create: if canCreateForTeam();
+      allow update, delete: if isAuth() && (
+        resource.data.createdByUserId == request.auth.uid ||
+        isTeamOwner(resource.data.teamId)
+      );
+    }
+
     match /directMessages/{docId} {
       allow read: if isAuth();
       allow create: if canCreateForTeam();

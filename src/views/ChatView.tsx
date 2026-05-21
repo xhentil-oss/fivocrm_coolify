@@ -20,6 +20,7 @@ import {
   ClipboardList, ExternalLink, UserPlus, ChevronDown, CheckCheck,
   ImageIcon, Circle, Pin, PinOff, Mic, Square, Filter, AtSign,
   Bookmark, BookmarkCheck, ListChecks,
+  Zap,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
@@ -563,6 +564,62 @@ const ChatView: React.FC = () => {
     }
   }, [user?.uid, bookmarks, bookmarkMutation, toast]);
 
+  // ── #6 Saved Replies / Snippets ──
+  const snippetMutation = useMutation<any>('chatSnippets');
+  const { data: snippets } = useCollection<any>('chatSnippets');
+  const [snippetPickerOpen, setSnippetPickerOpen] = useState(false);
+  const [snippetSearch, setSnippetSearch] = useState('');
+  const [newSnippetShortcut, setNewSnippetShortcut] = useState('');
+  const [newSnippetContent, setNewSnippetContent] = useState('');
+
+  const filteredSnippets = useMemo(() => {
+    const q = snippetSearch.trim().toLowerCase();
+    const list = snippets || [];
+    if (!q) return list;
+    return list.filter((s: any) =>
+      (s.shortcut || '').toLowerCase().includes(q) ||
+      (s.content || '').toLowerCase().includes(q)
+    );
+  }, [snippets, snippetSearch]);
+
+  const insertSnippet = useCallback((content: string) => {
+    setMessageText(prev => {
+      const text = (prev || '').trim();
+      // If composer starts with `/snippet` slash, replace whole text
+      if (/^\/(snippet|sn)\b/.test(text)) return content;
+      return text ? `${text} ${content}` : content;
+    });
+    setSnippetPickerOpen(false);
+    requestAnimationFrame(() => chatTextareaRef.current?.focus());
+  }, []);
+
+  const handleCreateSnippet = useCallback(async () => {
+    if (!user?.uid || !newSnippetContent.trim()) return;
+    try {
+      await snippetMutation.create({
+        shortcut: newSnippetShortcut.trim().toLowerCase().replace(/\s+/g, '-') || `snippet-${Date.now()}`,
+        content: newSnippetContent.trim(),
+        createdByUserId: user.uid,
+        createdAt: new Date(),
+      } as any);
+      setNewSnippetShortcut('');
+      setNewSnippetContent('');
+      toast({ title: 'Përgjigja u ruajt' });
+    } catch (err) {
+      console.error('[ChatView] create snippet failed', err);
+      toast({ title: 'Gabim', description: 'Përgjigja nuk u ruajt.', variant: 'destructive' });
+    }
+  }, [user?.uid, newSnippetShortcut, newSnippetContent, snippetMutation, toast]);
+
+  const handleDeleteSnippet = useCallback(async (id: string) => {
+    try {
+      await snippetMutation.remove(id);
+      toast({ title: 'U fshi' });
+    } catch (err) {
+      console.error('[ChatView] delete snippet failed', err);
+    }
+  }, [snippetMutation, toast]);
+
   // ── #3 Message → Task ──
   const [taskFromMsgOpen, setTaskFromMsgOpen] = useState(false);
   const [taskFromMsgSource, setTaskFromMsgSource] = useState<ChatMessage | null>(null);
@@ -582,12 +639,15 @@ const ChatView: React.FC = () => {
   }, [user?.uid]);
 
   const handleCreateTaskFromMessage = useCallback(async () => {
-    if (!taskFromMsgSource || !user?.uid) return;
-    const senderName = getUserDisplayName(taskFromMsgSource.senderId);
+    if (!user?.uid) return;
+    const senderName = taskFromMsgSource ? getUserDisplayName(taskFromMsgSource.senderId) : '';
+    const description = taskFromMsgSource
+      ? `Nga ${senderName} në chat:\n\n${taskFromMsgSource.content || ''}`
+      : '';
     try {
       await taskMutation.create({
         title: taskFromMsgTitle.trim() || 'Detyrë nga chat',
-        description: `Nga ${senderName} në chat:\n\n${taskFromMsgSource.content || ''}`,
+        description,
         status: 'Todo',
         priority: taskFromMsgPriority,
         assignedToUserId: taskFromMsgAssignee || user.uid,
@@ -1658,6 +1718,7 @@ const ChatView: React.FC = () => {
   // Slash commands registry
   const SLASH_COMMANDS = useMemo(() => ([
     { cmd: 'task', label: '/task', desc: 'Krijo një detyrë nga ky tekst' },
+    { cmd: 'snippet', label: '/snippet', desc: 'Fut një përgjigje të ruajtur' },
     { cmd: 'remind', label: '/remind', desc: 'Vendos një kujtues' },
     { cmd: 'me', label: '/me', desc: 'Dërgo si veprim (italic)' },
     { cmd: 'shrug', label: '/shrug', desc: 'Fut ¯\\_(\u30c4)_/¯' },
@@ -1682,6 +1743,12 @@ const ChatView: React.FC = () => {
         setTaskFromMsgPriority('medium');
         setTaskFromMsgOpen(true);
         setMessageText('');
+        return;
+      }
+      case 'snippet': {
+        setMessageText('');
+        setSnippetSearch('');
+        setSnippetPickerOpen(true);
         return;
       }
       case 'remind': {
@@ -2970,6 +3037,11 @@ const ChatView: React.FC = () => {
                       disabled={isSending} onClick={() => setShowEmojiPicker(showEmojiPicker ? null : 'input')}>
                       <SmilePlus className="h-3.5 w-3.5" />
                     </Button>
+                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
+                      disabled={isSending} onClick={() => { setSnippetSearch(''); setSnippetPickerOpen(true); }}
+                      title="Përgjigje të ruajtura">
+                      <Zap className="h-3.5 w-3.5" />
+                    </Button>
                   </div>
 
                   <textarea
@@ -3278,6 +3350,70 @@ const ChatView: React.FC = () => {
                 {taskMutation.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Check className="h-3.5 w-3.5 mr-1" />}
                 Krijo Detyrën
               </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Saved Replies / Snippets picker */}
+      <Dialog open={snippetPickerOpen} onOpenChange={setSnippetPickerOpen}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base"><Zap className="h-4 w-4" /> Përgjigje të ruajtura</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <Input
+              value={snippetSearch}
+              onChange={(e) => setSnippetSearch(e.target.value)}
+              placeholder="Kërko shkurtore ose tekst..."
+              className="h-9"
+            />
+            <div className="max-h-[260px] overflow-y-auto space-y-1.5 -mx-1 px-1">
+              {filteredSnippets.length === 0 && (
+                <div className="text-xs text-muted-foreground py-6 text-center">
+                  {snippets && snippets.length === 0 ? 'Asnjë përgjigje e ruajtur. Krijo një më poshtë.' : 'Asnjë rezultat.'}
+                </div>
+              )}
+              {filteredSnippets.map((s: any) => (
+                <div key={s.id} className="group flex items-start gap-2 p-2 rounded-lg border bg-card hover:bg-accent/50 transition-colors">
+                  <button type="button" className="flex-1 text-left min-w-0" onClick={() => insertSnippet(s.content)}>
+                    {s.shortcut && (
+                      <div className="text-[10px] font-mono font-semibold text-primary mb-0.5">/{s.shortcut}</div>
+                    )}
+                    <div className="text-xs text-foreground/90 whitespace-pre-wrap break-words line-clamp-3">{s.content}</div>
+                  </button>
+                  {s.createdByUserId === user?.uid && (
+                    <Button variant="ghost" size="icon" className="h-6 w-6 opacity-0 group-hover:opacity-100"
+                      onClick={() => handleDeleteSnippet(s.id)}
+                      title="Fshi">
+                      <Trash2 className="h-3 w-3 text-rose-500" />
+                    </Button>
+                  )}
+                </div>
+              ))}
+            </div>
+            <Separator />
+            <div className="space-y-2">
+              <div className="text-xs font-semibold text-muted-foreground">Krijo përgjigje të re</div>
+              <Input
+                value={newSnippetShortcut}
+                onChange={(e) => setNewSnippetShortcut(e.target.value)}
+                placeholder="Shkurtore (p.sh. faleminderit)"
+                className="h-8 text-xs"
+              />
+              <Textarea
+                value={newSnippetContent}
+                onChange={(e) => setNewSnippetContent(e.target.value)}
+                placeholder="Teksti i përgjigjes..."
+                rows={3}
+                className="text-xs resize-none"
+              />
+              <div className="flex justify-end">
+                <Button size="sm" onClick={handleCreateSnippet} disabled={snippetMutation.loading || !newSnippetContent.trim()}>
+                  {snippetMutation.loading ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Plus className="h-3.5 w-3.5 mr-1" />}
+                  Ruaj
+                </Button>
+              </div>
             </div>
           </div>
         </DialogContent>
