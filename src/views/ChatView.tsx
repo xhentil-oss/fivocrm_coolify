@@ -127,6 +127,12 @@ const ChatView: React.FC = () => {
   // #43 Reaction shortcuts — keys 1..5 react with EMOJI_REACTIONS[0..4] on hovered message
   const hoveredMessageIdRef = useRef<string | null>(null);
 
+  // #45 Custom status dialog
+  const [statusDialogOpen, setStatusDialogOpen] = useState(false);
+  const [statusEmojiInput, setStatusEmojiInput] = useState('💬');
+  const [statusTextInput, setStatusTextInput] = useState('');
+  const [statusHoursInput, setStatusHoursInput] = useState<number>(2);
+
   // Search filters
   const [showSearchFilters, setShowSearchFilters] = useState(false);
   const [searchSenderId, setSearchSenderId] = useState<string>('__any__');
@@ -437,6 +443,21 @@ const ChatView: React.FC = () => {
     userProfiles?.forEach(p => map.set(p.userId, p));
     return map;
   }, [userProfiles]);
+
+  // #45 Custom status — returns active (non-expired) status for a user, or null.
+  const getUserStatus = useCallback((uid: string): { emoji: string; text: string } | null => {
+    const p = profileMap.get(uid);
+    if (!p) return null;
+    const status = (p as any).customStatus as string | undefined;
+    const emoji = (p as any).customStatusEmoji as string | undefined;
+    if (!status && !emoji) return null;
+    const expires = (p as any).customStatusExpiresAt;
+    if (expires) {
+      const exp = expires instanceof Date ? expires.getTime() : new Date(expires).getTime();
+      if (Number.isFinite(exp) && exp <= Date.now()) return null;
+    }
+    return { emoji: emoji || '💬', text: status || '' };
+  }, [profileMap]);
 
   const directConversations = useMemo(() => {
     if (!user) return [];
@@ -830,6 +851,28 @@ const ChatView: React.FC = () => {
       console.error('[ChatView] cancel scheduled failed', err);
     }
   }, [scheduledMutation, toast]);
+
+  // #45 Set or clear my custom status
+  const handleSetMyStatus = useCallback(async (emoji: string | null, text: string | null, hours: number) => {
+    if (!user || !userProfiles) return;
+    const myProfile = userProfiles.find(p => p.userId === user.uid);
+    if (!myProfile) {
+      toast({ title: 'Profili mungon', variant: 'destructive' });
+      return;
+    }
+    const patch: any = {
+      customStatus: text || null,
+      customStatusEmoji: emoji || null,
+      customStatusExpiresAt: hours > 0 ? new Date(Date.now() + hours * 3600 * 1000) : null,
+    };
+    try {
+      await userProfileMutation.update(myProfile.id, patch);
+      setStatusDialogOpen(false);
+      toast({ title: emoji ? `${emoji} Statusi u përditësua` : 'Statusi u pastrua' });
+    } catch (err: any) {
+      toast({ title: 'Gabim', description: err.message, variant: 'destructive' });
+    }
+  }, [user, userProfiles, userProfileMutation, toast]);
 
   // Poll scheduled messages every 30s; send and remove when due.
   useEffect(() => {
@@ -2358,6 +2401,7 @@ const ChatView: React.FC = () => {
               {otherMembers.filter(m => !directConversations.includes(m.userId)).map(member => {
                 const name = getUserDisplayName(member.userId);
                 const isActive = chatMode === 'direct' && activeDirectUserId === member.userId;
+                const status = getUserStatus(member.userId);
                 return (
                   <button
                     key={member.id}
@@ -2374,7 +2418,12 @@ const ChatView: React.FC = () => {
                         <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-500 border-2 border-background" />
                       )}
                     </div>
-                    <span className="flex-1 truncate text-sm">{name}</span>
+                    <span className="flex-1 truncate text-sm flex items-center gap-1.5">
+                      <span className="truncate">{name}</span>
+                      {status && (
+                        <span className="flex-shrink-0 text-xs opacity-75" title={status.text}>{status.emoji}</span>
+                      )}
+                    </span>
                   </button>
                 );
               })}
@@ -2554,6 +2603,26 @@ const ChatView: React.FC = () => {
             {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleSummarizeChat} disabled={summaryLoading} title="Përmblidh bisedën me AI">
                 {summaryLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
+              </Button>
+            )}
+            {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 relative"
+                onClick={() => {
+                  const cur = user ? getUserStatus(user.uid) : null;
+                  setStatusEmojiInput(cur?.emoji || '💬');
+                  setStatusTextInput(cur?.text || '');
+                  setStatusHoursInput(2);
+                  setStatusDialogOpen(true);
+                }}
+                title="Statusi im"
+              >
+                {(() => {
+                  const s = user ? getUserStatus(user.uid) : null;
+                  return s ? <span className="text-base leading-none">{s.emoji}</span> : <Circle className="h-4 w-4" />;
+                })()}
               </Button>
             )}
             {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
@@ -3930,6 +3999,87 @@ const ChatView: React.FC = () => {
               >
                 <CalendarClock className="h-3.5 w-3.5 mr-1" /> Programo
               </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* #45 Custom status dialog */}
+      <Dialog open={statusDialogOpen} onOpenChange={setStatusDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-base">Statusi im</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-2">
+              {[
+                { emoji: '🤝', text: 'Në mbledhje', h: 1 },
+                { emoji: '🍽️', text: 'Në drekë', h: 1 },
+                { emoji: '🎧', text: 'Fokus i thellë', h: 3 },
+                { emoji: '🏖️', text: 'Jashtë zyre', h: 8 },
+                { emoji: '🤒', text: 'I sëmurë sot', h: 24 },
+                { emoji: '✈️', text: 'Në udhëtim', h: 24 },
+              ].map(p => (
+                <Button
+                  key={p.text}
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="justify-start text-xs"
+                  onClick={() => handleSetMyStatus(p.emoji, p.text, p.h)}
+                >
+                  <span className="text-base mr-1.5">{p.emoji}</span>{p.text}
+                </Button>
+              ))}
+            </div>
+            <div className="border-t pt-3 space-y-2">
+              <Label className="text-xs text-muted-foreground">Status i personalizuar</Label>
+              <div className="flex gap-2">
+                <Input
+                  value={statusEmojiInput}
+                  onChange={(e) => setStatusEmojiInput(e.target.value.slice(0, 2))}
+                  className="w-14 text-center text-lg"
+                  maxLength={2}
+                />
+                <Input
+                  value={statusTextInput}
+                  onChange={(e) => setStatusTextInput(e.target.value.slice(0, 60))}
+                  placeholder="Çfarë po bën?"
+                  className="flex-1"
+                  maxLength={60}
+                />
+              </div>
+              <div className="flex items-center gap-2 text-xs">
+                <Label className="text-muted-foreground">Skadon pas:</Label>
+                <Select value={String(statusHoursInput)} onValueChange={(v) => setStatusHoursInput(Number(v))}>
+                  <SelectTrigger className="h-8 w-32 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">1 orë</SelectItem>
+                    <SelectItem value="2">2 orë</SelectItem>
+                    <SelectItem value="4">4 orë</SelectItem>
+                    <SelectItem value="8">8 orë</SelectItem>
+                    <SelectItem value="24">24 orë</SelectItem>
+                    <SelectItem value="0">Pa skadim</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="flex justify-between gap-2">
+              <Button variant="ghost" size="sm" onClick={() => handleSetMyStatus(null, null, 0)}>
+                Pastro statusin
+              </Button>
+              <div className="flex gap-2">
+                <Button variant="outline" size="sm" onClick={() => setStatusDialogOpen(false)}>Anulo</Button>
+                <Button
+                  size="sm"
+                  disabled={!statusTextInput.trim() && !statusEmojiInput.trim()}
+                  onClick={() => handleSetMyStatus(statusEmojiInput || '💬', statusTextInput, statusHoursInput)}
+                >
+                  Cakto
+                </Button>
+              </div>
             </div>
           </div>
         </DialogContent>

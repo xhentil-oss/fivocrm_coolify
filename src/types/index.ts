@@ -561,6 +561,10 @@ export interface UserProfile {
   displayName?: string;
   avatarUrl?: string;
   bio?: string;
+  lastSeen?: Date;
+  customStatus?: string;
+  customStatusEmoji?: string;
+  customStatusExpiresAt?: Date | null;
   createdAt: Date;
   updatedAt: Date;
 }
