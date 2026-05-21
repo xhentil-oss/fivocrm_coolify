@@ -1122,19 +1122,40 @@ const CRMView: React.FC = () => {
               const scoreColor = s >= 70 ? 'text-green-600' : s >= 40 ? 'text-yellow-600' : 'text-red-500';
               const leadPhone = normalizeAlbanianPhone(lead.phoneNumber || lead.phone || '');
               const waUnread = leadPhone ? (waUnreadByPhone.get(leadPhone) || 0) : 0;
+              const nd = lead.nextFollowUpDate;
+              let followBadge: React.ReactNode = null;
+              if (nd) {
+                const d = nd instanceof Date ? new Date(nd) : new Date((nd as any)?.seconds ? (nd as any).seconds * 1000 : nd);
+                const today = new Date(); today.setHours(0,0,0,0); d.setHours(0,0,0,0);
+                const isOverdue = d < today;
+                const isDueToday = d.getTime() === today.getTime();
+                followBadge = (
+                  <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full ${
+                    isOverdue ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
+                    isDueToday ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
+                    'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
+                  }`}>
+                    <Clock className="w-3 h-3" />
+                    {isOverdue ? 'Vonuar' : isDueToday ? 'Sot' : d.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}
+                  </span>
+                );
+              }
               return (
-                <Card key={lead.id} className="p-4 space-y-3" onClick={() => setSelectedLead(lead)}>
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1 min-w-0">
+                <Card key={lead.id} className="p-3 active:bg-muted/40 transition-colors" onClick={() => setSelectedLead(lead)}>
+                  {/* Tier 1 — name + status + score + menu */}
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex-1 min-w-0 flex items-center gap-2">
                       <p className="font-medium text-foreground truncate">{lead.name}</p>
-                      {lead.company && <p className="text-sm text-muted-foreground">{lead.company}</p>}
-                      {lead.jobTitle && <p className="text-xs text-muted-foreground">{lead.jobTitle}</p>}
+                      <Badge className={`${getStatusColor(lead.status)} text-[10px] py-0 px-1.5 shrink-0`}>
+                        {getStatusLabel(lead.status)}
+                      </Badge>
                     </div>
-                    <div className="flex items-center gap-2 shrink-0 ml-2">
+                    <div className="flex items-center gap-1 shrink-0">
                       {waUnread > 0 && waEnabled && (
                         <button
                           onClick={(e) => { e.stopPropagation(); setWhatsappLead(lead); }}
-                          className="flex items-center gap-1 bg-[#25D366] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full hover:bg-[#1da851] transition-colors"
+                          className="flex items-center gap-0.5 bg-[#25D366] text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full"
+                          aria-label={`${waUnread} mesazhe të palexuara`}
                         >
                           <MessageSquare className="w-3 h-3" />
                           {waUnread}
@@ -1142,11 +1163,11 @@ const CRMView: React.FC = () => {
                       )}
                       <div className="flex items-center gap-0.5">
                         <Zap className={`w-3 h-3 ${scoreColor}`} />
-                        <span className={`text-xs font-semibold ${scoreColor}`}>{s}</span>
+                        <span className={`text-xs font-semibold tabular-nums ${scoreColor}`}>{s}</span>
                       </div>
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
-                          <Button variant="ghost" size="sm" className="h-8 w-8 p-0" onClick={(e) => e.stopPropagation()}>
+                          <Button variant="ghost" size="sm" className="h-7 w-7 p-0" onClick={(e) => e.stopPropagation()} aria-label="Veprime">
                             <MoreVertical className="w-4 h-4" />
                           </Button>
                         </DropdownMenuTrigger>
@@ -1170,54 +1191,61 @@ const CRMView: React.FC = () => {
                       </DropdownMenu>
                     </div>
                   </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <Badge className={getStatusColor(lead.status)}>
-                      {getStatusLabel(lead.status)}
-                    </Badge>
-                    <Badge variant="outline" className="text-xs">
-                      <Percent className="w-3 h-3 mr-0.5" />
-                      {lead.probability ?? STAGE_PROBABILITY[lead.status] ?? 0}%
-                    </Badge>
+
+                  {/* Tier 2 — company · value · follow-up */}
+                  <div className="mt-1.5 flex items-center gap-2 text-xs text-muted-foreground min-w-0">
+                    {lead.company && (
+                      <span className="truncate">{lead.company}</span>
+                    )}
                     {lead.estimatedValue ? (
-                      <span className="text-xs font-medium text-foreground">{lead.estimatedValue.toLocaleString()} L</span>
+                      <>
+                        {lead.company && <span className="opacity-50">·</span>}
+                        <span className="text-foreground font-medium tabular-nums shrink-0">{lead.estimatedValue.toLocaleString()} L</span>
+                      </>
                     ) : null}
-                  </div>
-                  {lead.status === 'Lost' && lead.lostReason && (
-                    <p className="text-xs text-destructive">Arsyeja: {lead.lostReason}</p>
-                  )}
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-muted-foreground">
-                    {lead.email && (
-                      <div className="flex items-center gap-1"><Mail className="w-3 h-3" />{lead.email}</div>
-                    )}
-                    {lead.phoneNumber && (
-                      <div className="flex items-center gap-1"><Phone className="w-3 h-3" />{lead.phoneNumber}</div>
+                    {followBadge && (
+                      <>
+                        <span className="ml-auto">{followBadge}</span>
+                      </>
                     )}
                   </div>
-                  {(() => {
-                    const nd = lead.nextFollowUpDate;
-                    if (!nd) return null;
-                    const d = nd instanceof Date ? new Date(nd) : new Date((nd as any)?.seconds ? (nd as any).seconds * 1000 : nd);
-                    const today = new Date(); today.setHours(0,0,0,0); d.setHours(0,0,0,0);
-                    const isOverdue = d < today;
-                    const isDueToday = d.getTime() === today.getTime();
-                    return (
-                      <div className={`inline-flex items-center gap-1 text-xs font-medium px-2 py-0.5 rounded-full ${
-                        isOverdue ? 'bg-red-100 text-red-700' :
-                        isDueToday ? 'bg-amber-100 text-amber-700' :
-                        'bg-blue-100 text-blue-700'
-                      }`}>
-                        <Clock className="w-3 h-3" />
-                        {isOverdue ? `Vonuar · ${d.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}` :
-                         isDueToday ? 'Rikontakto sot' :
-                         d.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}
-                      </div>
-                    );
-                  })()}
-                  {lead.assignedToUserId && (
-                    <div className="flex items-center gap-1 text-xs text-muted-foreground">
-                      <UserCircle className="w-3 h-3" />
-                      {getName(lead.assignedToUserId, 'Pa emër')}
+
+                  {/* Tier 3 — quick contact actions */}
+                  {(lead.email || lead.phoneNumber || lead.assignedToUserId) && (
+                    <div className="mt-2 flex items-center gap-1.5 text-xs">
+                      {lead.email && (
+                        <a
+                          href={`mailto:${lead.email}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted hover:bg-muted/70 text-foreground"
+                          aria-label={`Email ${lead.email}`}
+                        >
+                          <Mail className="w-3 h-3" />
+                          <span className="truncate max-w-[140px]">{lead.email}</span>
+                        </a>
+                      )}
+                      {lead.phoneNumber && (
+                        <a
+                          href={`tel:${lead.phoneNumber.replace(/\s/g, '')}`}
+                          onClick={(e) => e.stopPropagation()}
+                          className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-muted hover:bg-muted/70 text-foreground tabular-nums shrink-0"
+                          aria-label={`Telefono ${lead.phoneNumber}`}
+                        >
+                          <Phone className="w-3 h-3" />
+                          {lead.phoneNumber}
+                        </a>
+                      )}
+                      {lead.assignedToUserId && (
+                        <span className="ml-auto inline-flex items-center gap-1 text-muted-foreground">
+                          <UserCircle className="w-3 h-3" />
+                          <span className="truncate max-w-[80px]">{getName(lead.assignedToUserId, '…')}</span>
+                        </span>
+                      )}
                     </div>
+                  )}
+
+                  {lead.status === 'Lost' && lead.lostReason && (
+                    <p className="mt-1.5 text-[11px] text-destructive">Arsyeja: {lead.lostReason}</p>
                   )}
                 </Card>
               );
