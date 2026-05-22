@@ -21,6 +21,7 @@ export type UserPermissions = {
   canAccessGoals: boolean;
   canAccessTeams: boolean;
   canAccessChat: boolean;
+  canAccessWhatsapp: boolean;
   canAccessCustomers: boolean;
   canAccessServices: boolean;
   canAccessExpenses: boolean;
@@ -53,6 +54,7 @@ const fullAccessPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canAccessGoals: true,
   canAccessTeams: true,
   canAccessChat: true,
+  canAccessWhatsapp: true,
   canAccessCustomers: true,
   canAccessServices: true,
   canAccessExpenses: true,
@@ -76,6 +78,7 @@ const restrictedPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canAccessGoals: false,
   canAccessTeams: false,
   canAccessChat: false,
+  canAccessWhatsapp: false,
   canAccessCustomers: false,
   canAccessServices: false,
   canAccessExpenses: false,
@@ -391,6 +394,7 @@ export function usePermissions(): UserPermissions {
         canAccessGoals: false,
         canAccessTeams: false,
         canAccessChat: true,
+        canAccessWhatsapp: true,
         canAccessCustomers: true,
         canAccessServices: true,
         canAccessExpenses: false,
@@ -427,6 +431,7 @@ export function usePermissions(): UserPermissions {
       canAccessGoals: membership.canAccessGoals === true || !isViewer,
       canAccessTeams: false,
       canAccessChat: true,
+      canAccessWhatsapp: membership.canAccessWhatsapp === true || membership.canAccessChat === true,
       canAccessCustomers: membership.canAccessCustomers === true || membership.canAccessCRM === true,
       canAccessServices: membership.canAccessServices === true || membership.canAccessInvoices === true,
       canAccessExpenses: membership.canAccessExpenses === true || membership.canAccessInvoices === true,

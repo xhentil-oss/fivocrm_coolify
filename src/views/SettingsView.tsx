@@ -1634,6 +1634,7 @@ const MODULES: { key: string; label: string }[] = [
   { key: 'canAccessReports',     label: 'Raportet' },
   { key: 'canAccessTimeTracking',label: 'Orari' },
   { key: 'canAccessChat',        label: 'Chat' },
+  { key: 'canAccessWhatsapp',    label: 'WhatsApp' },
   { key: 'canAccessSettings',    label: 'Cilësimet' },
 ];
 
@@ -1673,31 +1674,31 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
     canAccessProjects: false, canAccessTasks: false, canAccessGoals: false,
     canAccessCRM: true, canAccessCustomers: true, canAccessInvoices: true,
     canAccessServices: true, canAccessExpenses: false, canAccessReports: true,
-    canAccessTimeTracking: true, canAccessChat: true, canAccessSettings: false,
+    canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
   },
   SalesAgent: {
     canAccessProjects: false, canAccessTasks: true, canAccessGoals: false,
     canAccessCRM: true, canAccessCustomers: true, canAccessInvoices: true,
     canAccessServices: true, canAccessExpenses: false, canAccessReports: false,
-    canAccessTimeTracking: true, canAccessChat: true, canAccessSettings: false,
+    canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
   },
   Manager: {
     canAccessProjects: true, canAccessTasks: true, canAccessGoals: true,
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
     canAccessServices: false, canAccessExpenses: false, canAccessReports: true,
-    canAccessTimeTracking: true, canAccessChat: true, canAccessSettings: false,
+    canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
   },
   Member: {
     canAccessProjects: true, canAccessTasks: true, canAccessGoals: true,
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
     canAccessServices: false, canAccessExpenses: false, canAccessReports: false,
-    canAccessTimeTracking: true, canAccessChat: true, canAccessSettings: false,
+    canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
   },
   Viewer: {
     canAccessProjects: true, canAccessTasks: true, canAccessGoals: false,
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
     canAccessServices: false, canAccessExpenses: false, canAccessReports: false,
-    canAccessTimeTracking: false, canAccessChat: true, canAccessSettings: false,
+    canAccessTimeTracking: false, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
   },
 };
 

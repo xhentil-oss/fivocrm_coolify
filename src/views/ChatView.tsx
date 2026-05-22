@@ -2637,7 +2637,7 @@ const ChatView: React.FC = () => {
           )}
 
           {/* WhatsApp Conversations */}
-          {waEnabled && (
+          {waEnabled && permissions.canAccessWhatsapp && (
           <>
             <div className="h-px bg-border/50 mx-2 my-2" />
             <button

@@ -77,6 +77,7 @@ export interface TeamMember {
   canAccessInvoices?: boolean;
   canAccessReports?: boolean;
   canAccessSettings?: boolean;
+  canAccessWhatsapp?: boolean;
   canAccessGoals?: boolean;
   canAccessTeams?: boolean;
   canAccessChat?: boolean;
