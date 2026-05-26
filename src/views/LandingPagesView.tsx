@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -113,6 +113,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Leaf,
     color: 'text-teal-600',
     gradient: 'from-teal-500 to-emerald-600',
+    status: 'active',
+  },
+  {
+    id: 'agroturizem',
+    title: 'Agroturizëm',
+    description: 'Paketa SEO + Social Media për agroturizme dhe ferma — me 2 fotoshooting profesionale/muaj, nga 800€/muaj.',
+    path: '/agroturizem',
+    category: 'SEO + Social Media',
+    icon: Trees,
+    color: 'text-emerald-700',
+    gradient: 'from-amber-500 to-emerald-600',
     status: 'active',
   },
 ];
