@@ -1,0 +1,26 @@
+[
+  {
+    "origin": [
+      "https://fivocrm.com",
+      "https://www.fivocrm.com",
+      "https://fivocrm.vercel.app",
+      "http://localhost:5173",
+      "http://localhost:5174",
+      "http://localhost:3000",
+      "capacitor://localhost",
+      "http://localhost"
+    ],
+    "method": ["GET", "POST", "PUT", "DELETE", "HEAD"],
+    "maxAgeSeconds": 3600,
+    "responseHeader": [
+      "Content-Type",
+      "Authorization",
+      "Content-Length",
+      "User-Agent",
+      "x-goog-resumable",
+      "x-firebase-storage-version",
+      "x-firebase-gmpid",
+      "x-firebase-appcheck"
+    ]
+  }
+]
