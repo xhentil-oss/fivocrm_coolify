@@ -1754,23 +1754,43 @@ const ChatView: React.FC = () => {
   const ALLOWED_IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
 
-  const handleAttachmentUpload = useCallback(async (file: File) => {
+  const handleAttachmentUpload = async (file: File) => {
     if (!ALLOWED_IMG_TYPES.includes(file.type)) {
-      toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP, SVG.', variant: 'destructive' });
+      toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP.', variant: 'destructive' });
       return;
     }
     if (file.size > MAX_ATTACHMENT_BYTES) {
       toast({ title: 'Skedari shumë i madh', description: 'Maksimumi 10 MB.', variant: 'destructive' });
       return;
     }
+    // Guard: must have a valid send target before consuming the upload.
+    if (chatMode === 'channel' && !activeChannel) {
+      toast({ title: 'Zgjidh një kanal', description: 'Hap një kanal për të dërguar imazhin.', variant: 'destructive' });
+      return;
+    }
+    if (chatMode === 'direct' && !activeDirectUserId) {
+      toast({ title: 'Zgjidh një bisedë', description: 'Hap një DM për të dërguar imazhin.', variant: 'destructive' });
+      return;
+    }
+    if (chatMode !== 'channel' && chatMode !== 'direct') {
+      toast({ title: 'Nuk mund të dërgohet', description: 'Imazhet dërgohen vetëm në kanale ose DM.', variant: 'destructive' });
+      return;
+    }
     try {
       const res = await uploadAttachment(file, 'chat-attachments');
       await handleSendMessage(null, { attachmentUrl: res.url });
     } catch (err) {
-      toast({ title: 'Ngarkimi dështoi', description: (err as Error)?.message || 'Provo përsëri.', variant: 'destructive' });
+      // eslint-disable-next-line no-console
+      console.error('[chat] image upload failed', err);
+      const code = (err as any)?.code as string | undefined;
+      const detail = code === 'storage/unauthorized'
+        ? 'Nuk keni leje për këtë bucket. Verifikoni rregullat e Storage.'
+        : code === 'storage/canceled'
+          ? 'Ngarkimi u anulua.'
+          : (err as Error)?.message || 'Provo përsëri.';
+      toast({ title: 'Ngarkimi dështoi', description: detail, variant: 'destructive' });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [uploadAttachment]);
+  };
 
   const handleSendMessage = async (e?: React.FormEvent | null, override?: { content?: string; attachmentUrl?: string }) => {
     if (e && typeof (e as any).preventDefault === 'function') (e as any).preventDefault();
@@ -1816,6 +1836,19 @@ const ChatView: React.FC = () => {
           replyToSender: getUserDisplayName(replyingTo.senderId),
         } : {}),
       };
+
+      if (chatMode === 'channel' && !activeChannel) {
+        toast({ title: 'Zgjidh një kanal', description: 'Asnjë kanal aktiv për të dërguar.', variant: 'destructive' });
+        return;
+      }
+      if (chatMode === 'direct' && !activeDirectUserId) {
+        toast({ title: 'Zgjidh një bisedë', description: 'Hap një DM për të dërguar.', variant: 'destructive' });
+        return;
+      }
+      if (chatMode !== 'channel' && chatMode !== 'direct') {
+        toast({ title: 'Modaliteti nuk lejon dërgim', description: 'Përdor kanal ose DM për mesazhe me imazh.', variant: 'destructive' });
+        return;
+      }
 
       if (chatMode === 'channel') {
         await messageMutation.create({ ...baseMessage, channelId: activeChannel } as Omit<ChatMessage, 'id'>);
@@ -3244,7 +3277,7 @@ const ChatView: React.FC = () => {
                                 isOwn
                                   ? 'bg-primary text-primary-foreground rounded-2xl rounded-br-md'
                                   : 'bg-muted/60 border border-border/30 rounded-2xl rounded-bl-md'
-                              } ${isDeleted ? 'opacity-30 italic' : ''} ${mentionsMe ? 'ring-2 ring-yellow-400/60 dark:ring-yellow-500/40' : ''} ${isPinned ? 'shadow-md' : ''}`}>
+                              } ${isDeleted ? 'opacity-30 italic pointer-events-none select-none' : ''} ${mentionsMe ? 'ring-2 ring-yellow-400/60 dark:ring-yellow-500/40' : ''} ${isPinned ? 'shadow-md' : ''}`}>
                                 {isPinned && !isDeleted && (
                                   <div className={`absolute -top-2 ${isOwn ? 'left-2' : 'right-2'} flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 text-[9px] font-semibold border border-amber-300/40`}>
                                     <Pin className="h-2.5 w-2.5" /> I fiksuar
@@ -3291,6 +3324,8 @@ const ChatView: React.FC = () => {
                                     <img
                                       src={message.attachmentUrl}
                                       alt="attachment"
+                                      loading="lazy"
+                                      decoding="async"
                                       className="max-w-[240px] max-h-[200px] rounded-xl object-cover border border-white/10 hover:opacity-90 transition-opacity"
                                       onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; (e.currentTarget.nextElementSibling as HTMLElement | null)?.removeAttribute('hidden'); }}
                                     />
@@ -3726,7 +3761,14 @@ const ChatView: React.FC = () => {
                       <Paperclip className="h-3.5 w-3.5" />
                     </Button>
                     <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
-                      onClick={() => fileInputRef.current?.click()} disabled={isSending || attachmentUploading}
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={
+                        isSending ||
+                        attachmentUploading ||
+                        (chatMode === 'channel' && !activeChannel) ||
+                        (chatMode === 'direct' && !activeDirectUserId) ||
+                        (chatMode !== 'channel' && chatMode !== 'direct')
+                      }
                       title={attachmentUploading ? 'Po ngarkohet…' : 'Dërgo imazh'}>
                       {attachmentUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
                     </Button>
@@ -3815,7 +3857,7 @@ const ChatView: React.FC = () => {
                     placeholder={`Shkruaj${chatMode === 'channel' ? ` në #${CHANNELS.find(c => c.id === activeChannel)?.name || activeChannel}` : ` te ${getUserDisplayName(activeDirectUserId || '')}`}...`}
                     disabled={isSending}
                     rows={1}
-                    className="flex-1 min-w-0 bg-transparent border-0 outline-none text-[16px] sm:text-sm resize-none py-1.5 placeholder:text-muted-foreground/40 max-h-[120px]"
+                    className="flex-1 min-w-0 bg-transparent border-0 outline-none text-base sm:text-sm resize-none py-1.5 placeholder:text-muted-foreground/40 max-h-[120px]"
                   />
 
                   <Button
