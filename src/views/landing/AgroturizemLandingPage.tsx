@@ -479,17 +479,17 @@ export default function AgroturizemLandingPage() {
 
             <FadeIn delay={100}>
               <h1 className="text-4xl sm:text-5xl lg:text-7xl font-bold tracking-tight leading-[1.1]">
-                Agroturizmi yt meriton{' '}
+                Restoranti yt meriton{' '}
                 <span className="relative">
                   <span className="bg-gradient-to-r from-amber-500 via-emerald-500 to-green-600 bg-clip-text text-transparent">
-                    dhoma të plota
+                    të jetë plot
                   </span>
                   <svg className="absolute -bottom-2 left-0 w-full" viewBox="0 0 300 12" fill="none">
                     <path d="M2 8 C60 2, 120 2, 150 6 S240 10, 298 4" stroke="url(#agro-underline)" strokeWidth="3" strokeLinecap="round" />
                     <defs><linearGradient id="agro-underline" x1="0" y1="0" x2="300" y2="0"><stop offset="0%" stopColor="#d97706"/><stop offset="100%" stopColor="#059669"/></linearGradient></defs>
                   </svg>
                 </span>
-                {' '}gjatë gjithë sezonit.
+                .
                 <br />
                 <span className="text-gray-400">Po ndodh kjo te ti?</span>
               </h1>
