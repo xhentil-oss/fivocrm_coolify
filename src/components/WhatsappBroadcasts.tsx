@@ -43,7 +43,9 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
   });
   const { data: templates } = useCollection<WhatsAppTemplate>('waTemplates');
   const { data: leads } = useCollection<Lead>('leads');
-  const { data: customers } = useCollection<Customer>('customers');
+  // Customers are loaded app-wide with skipTeamFilter (many legacy/portal
+  // customers have no teamId); we guard by teamId client-side below.
+  const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
   });
@@ -92,13 +94,15 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
     }
     if (audience.includes('customers')) {
       for (const c of customers || []) {
+        // Skip other teams' customers; allow legacy customers without a teamId.
+        if (c.teamId && permissions.teamId && c.teamId !== permissions.teamId) continue;
         if (assignedTo && c.assignedToUserId !== assignedTo) continue;
         matched++;
         if (hasPhone(c.phone)) phones.add(norm(c.phone));
       }
     }
     return { matched, withPhone: phones.size };
-  }, [leads, customers, audience, statuses, tag, assignedTo]);
+  }, [leads, customers, audience, statuses, tag, assignedTo, permissions.teamId]);
   const targetCount = segmentStats.withPhone;
 
   const toggleAudience = (a: 'leads' | 'customers') =>
