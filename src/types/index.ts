@@ -46,7 +46,9 @@ export interface WhatsAppBroadcast {
   teamId: string;
   name: string;
   templateId: string;
-  channelPhoneNumberId: string;       // which Meta channel sends
+  channel?: 'meta' | 'baileys';       // send channel (default 'meta')
+  channelPhoneNumberId?: string;      // Meta: which channel sends
+  agentId?: string;                   // Baileys: which agent sends
   segment: {
     statuses?: string[];              // Lead.status values
     tag?: string;                     // Lead.tags contains
@@ -56,6 +58,7 @@ export interface WhatsAppBroadcast {
   status: 'draft' | 'queued' | 'sending' | 'completed' | 'failed';
   totalTargets?: number;
   sentCount?: number;
+  sentPhones?: string[];              // idempotency: recipients already sent
   error?: string | null;
   createdAt?: Date;
   updatedAt?: Date;

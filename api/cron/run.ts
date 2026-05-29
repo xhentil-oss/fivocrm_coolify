@@ -1056,8 +1056,43 @@ async function sendMetaBroadcastMessage(
   }
 }
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Render a template body's {{n}} placeholders with the given params (free text,
+// used for Baileys which has no template concept).
+function renderTemplateBody(body: string, params: string[]): string {
+  return (body || '').replace(/\{\{(\d+)\}\}/g, (_m, n: string) => params[Number(n) - 1] || '');
+}
+
+// Send one Baileys broadcast message via the team's VPS /send endpoint.  The
+// VPS writes its own whatsappMessages doc (channel:'baileys'), so we don't.
+// Returns true on success.
+async function sendBaileysBroadcastMessage(
+  vpsUrl: string,
+  vpsSecret: string,
+  agentId: string,
+  phone: string,
+  message: string,
+  teamId: string,
+  lead: { id: string; name?: string }
+): Promise<boolean> {
+  try {
+    const resp = await fetch(`${vpsUrl.replace(/\/$/, '')}/send`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-api-key': vpsSecret },
+      body: JSON.stringify({ to: phone, message, teamId, agentId, leadId: lead.id, leadName: lead.name || null }),
+      signal: AbortSignal.timeout(15_000),
+    });
+    return resp.ok;
+  } catch (e) {
+    console.error('[broadcast-baileys] send failed', e);
+    return false;
+  }
+}
+
 async function runWhatsappBroadcasts() {
-  const PER_RUN = 200; // max sends per broadcast per invocation
+  const PER_RUN_META = 200;     // Meta: high throughput, parallel, safe
+  const PER_RUN_BAILEYS = 8;    // Baileys: tiny batch + paced to limit ban risk
   const now = new Date();
   const snap = await db.collection('waBroadcasts')
     .where('status', 'in', ['queued', 'sending'])
@@ -1078,11 +1113,26 @@ async function runWhatsappBroadcasts() {
 
       const tsDoc = await db.collection('teamSettings').doc(b.teamId).get();
       const settings = (tsDoc.data() as any) || {};
-      const channels: any[] = settings.metaChannels || [];
-      const channel = channels.find((c) => c.phoneNumberId === b.channelPhoneNumberId) || channels[0];
-      if (!channel?.accessToken || !channel?.phoneNumberId) {
-        await bDoc.ref.update({ status: 'failed', error: 'Kanali Meta mungon', updatedAt: now });
-        continue;
+      const useBaileys = b.channel === 'baileys';
+
+      // Resolve channel credentials up front.
+      let metaChannel: any = null;
+      let vpsUrl = '';
+      let vpsSecret = '';
+      if (useBaileys) {
+        vpsUrl = settings.whatsappVpsUrl || '';
+        vpsSecret = settings.whatsappVpsSecret || '';
+        if (!vpsUrl || !vpsSecret || !b.agentId) {
+          await bDoc.ref.update({ status: 'failed', error: 'Konfigurimi i Baileys/VPS mungon', updatedAt: now });
+          continue;
+        }
+      } else {
+        const channels: any[] = settings.metaChannels || [];
+        metaChannel = channels.find((c) => c.phoneNumberId === b.channelPhoneNumberId) || channels[0];
+        if (!metaChannel?.accessToken || !metaChannel?.phoneNumberId) {
+          await bDoc.ref.update({ status: 'failed', error: 'Kanali Meta mungon', updatedAt: now });
+          continue;
+        }
       }
 
       // Resolve segment → leads (filtered in memory to avoid composite indexes).
@@ -1099,28 +1149,54 @@ async function runWhatsappBroadcasts() {
           return true;
         });
 
-      // Idempotency: skip phones already sent for this broadcast.
-      const sentSnap = await db.collection('whatsappMessages').where('broadcastId', '==', bDoc.id).get();
-      const sentPhones = new Set(sentSnap.docs.map((d) => normalizeWaPhone((d.data() as any).phone)));
-      const total = targets.length + sentPhones.size;
-      targets = targets.filter((t) => !sentPhones.has(normalizeWaPhone(t.phone || t.phoneNumber)));
+      // Idempotency: skip recipients already sent (tracked on the broadcast doc,
+      // channel-agnostic so it works for both Meta and Baileys).
+      const alreadySent = new Set<string>((b.sentPhones || []).map((p: string) => normalizeWaPhone(p)));
+      const total = targets.length + alreadySent.size;
+      targets = targets.filter((t) => !alreadySent.has(normalizeWaPhone(t.phone || t.phoneNumber)));
 
-      const batch = targets.slice(0, PER_RUN);
-      const ops: Promise<any>[] = [];
-      for (const t of batch) {
-        const phone = normalizeWaPhone(t.phone || t.phoneNumber);
-        const params: string[] = (tpl.paramFields || []).map((f: string) =>
-          f && f !== 'custom' && t[f] != null ? String(t[f]) : ''
+      const perRun = useBaileys ? PER_RUN_BAILEYS : PER_RUN_META;
+      const batch = targets.slice(0, perRun);
+      const succeeded: string[] = [];
+
+      if (useBaileys) {
+        // Sequential + randomized pacing to look human and respect the VPS
+        // 30/min per-agent limit (reduces — does not eliminate — ban risk).
+        for (const t of batch) {
+          const phone = normalizeWaPhone(t.phone || t.phoneNumber);
+          const params: string[] = (tpl.paramFields || []).map((f: string) =>
+            f && f !== 'custom' && t[f] != null ? String(t[f]) : ''
+          );
+          const ok = await sendBaileysBroadcastMessage(
+            vpsUrl, vpsSecret, b.agentId, phone, renderTemplateBody(tpl.body, params), b.teamId, { id: t.id, name: t.name }
+          );
+          if (ok) { succeeded.push(phone); sent++; }
+          await sleep(1500 + Math.floor(Math.random() * 2500)); // 1.5–4s between sends
+        }
+      } else {
+        // Meta: parallel template sends; collect the ones that succeeded.
+        const results = await Promise.allSettled(
+          batch.map((t) => {
+            const phone = normalizeWaPhone(t.phone || t.phoneNumber);
+            const params: string[] = (tpl.paramFields || []).map((f: string) =>
+              f && f !== 'custom' && t[f] != null ? String(t[f]) : ''
+            );
+            return sendMetaBroadcastMessage(metaChannel, phone, tpl, params, b.teamId, bDoc.id, { id: t.id, name: t.name })
+              .then(() => phone);
+          })
         );
-        ops.push(sendMetaBroadcastMessage(channel, phone, tpl, params, b.teamId, bDoc.id, { id: t.id, name: t.name }));
-        sent++;
+        for (const r of results) {
+          if (r.status === 'fulfilled') { succeeded.push(r.value); sent++; }
+        }
       }
-      await settleAll(ops, 'whatsapp-broadcasts');
 
-      const remaining = targets.length - batch.length;
+      const newSentTotal = alreadySent.size + succeeded.length;
+      const remaining = total - newSentTotal;
       await bDoc.ref.update({
         totalTargets: total,
-        sentCount: sentPhones.size + batch.length,
+        sentCount: newSentTotal,
+        // arrayUnion requires ≥1 element — only include when something succeeded.
+        ...(succeeded.length ? { sentPhones: admin.firestore.FieldValue.arrayUnion(...succeeded) } : {}),
         status: remaining > 0 ? 'sending' : 'completed',
         error: null,
         updatedAt: new Date(),

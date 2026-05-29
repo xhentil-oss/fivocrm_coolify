@@ -4,10 +4,10 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { useToast } from '../hooks/use-toast';
-import { X, Megaphone, Send, Loader2, Clock } from 'lucide-react';
+import { X, Megaphone, Send, Loader2, Clock, AlertTriangle } from 'lucide-react';
 import { Button } from './ui/button';
 import { Timestamp } from 'firebase/firestore';
-import type { WhatsAppBroadcast, WhatsAppTemplate, Lead, TeamMember } from '../types';
+import type { WhatsAppBroadcast, WhatsAppTemplate, Lead, TeamMember, WhatsAppAccount } from '../types';
 
 interface Props {
   onClose: () => void;
@@ -36,14 +36,19 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
   });
+  const { data: waAccounts } = useCollection<WhatsAppAccount>('whatsappAccounts');
   const mutation = useMutation<WhatsAppBroadcast>('waBroadcasts');
 
   const channels = settings?.metaChannels || [];
   const metaEnabled = !!settings?.metaEnabled && channels.length > 0;
+  const vpsConfigured = !!settings?.whatsappVpsUrl && !!settings?.whatsappVpsSecret;
+  const connectedAgents = (waAccounts || []).filter((a) => a.enabled);
 
+  const [sendChannel, setSendChannel] = useState<'meta' | 'baileys'>('meta');
   const [name, setName] = useState('');
   const [templateId, setTemplateId] = useState('');
   const [channelId, setChannelId] = useState('');
+  const [agentId, setAgentId] = useState('');
   const [statuses, setStatuses] = useState<string[]>([]);
   const [tag, setTag] = useState('');
   const [assignedTo, setAssignedTo] = useState('');
@@ -74,7 +79,9 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
   const buildPayload = (status: WhatsAppBroadcast['status']) => ({
     name: name.trim(),
     templateId,
-    channelPhoneNumberId: channelId || channels[0]?.phoneNumberId || '',
+    channel: sendChannel,
+    channelPhoneNumberId: sendChannel === 'meta' ? (channelId || channels[0]?.phoneNumberId || '') : '',
+    agentId: sendChannel === 'baileys' ? (agentId || connectedAgents[0]?.id || '') : '',
     segment: {
       ...(statuses.length ? { statuses } : {}),
       ...(tag ? { tag } : {}),
@@ -88,7 +95,8 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
   });
 
   const validate = () => {
-    if (!metaEnabled) { toast({ title: 'Meta s’është konfiguruar', description: 'Broadcast-et kërkojnë një kanal Meta të aktivizuar.', variant: 'destructive' }); return false; }
+    if (sendChannel === 'meta' && !metaEnabled) { toast({ title: 'Meta s’është konfiguruar', description: 'Zgjidh Baileys ose aktivizo një kanal Meta.', variant: 'destructive' }); return false; }
+    if (sendChannel === 'baileys' && (!vpsConfigured || connectedAgents.length === 0)) { toast({ title: 'Baileys s’është gati', description: 'Konfiguro VPS-në dhe një agjent te Cilësimet.', variant: 'destructive' }); return false; }
     if (!name.trim() || !templateId) { toast({ title: 'Mungojnë fushat', description: 'Emri dhe template-i janë të detyrueshëm.', variant: 'destructive' }); return false; }
     if (targetCount === 0) { toast({ title: 'Asnjë target', description: 'Segmenti nuk përmban asnjë lead me numër.', variant: 'destructive' }); return false; }
     return true;
@@ -149,15 +157,39 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {!metaEnabled && (
-            <div className="px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-700 dark:text-amber-400">
-              Broadcast-et dërgohen vetëm përmes Meta Cloud API me template të aprovuara. Aktivizo një kanal Meta te Cilësimet.
-            </div>
-          )}
-
           {/* New campaign form */}
           <div className="border border-border rounded-lg p-3 space-y-3">
             <h3 className="text-xs font-semibold uppercase text-muted-foreground">Fushatë e re</h3>
+
+            {/* Channel selector */}
+            <div className="flex gap-2">
+              <button
+                onClick={() => setSendChannel('meta')}
+                className={`flex-1 text-xs px-3 py-2 rounded-md border ${sendChannel === 'meta' ? 'bg-[#25D366] text-white border-[#25D366]' : 'border-border hover:bg-muted'}`}>
+                Meta (zyrtar)
+              </button>
+              <button
+                onClick={() => setSendChannel('baileys')}
+                className={`flex-1 text-xs px-3 py-2 rounded-md border ${sendChannel === 'baileys' ? 'bg-amber-500 text-white border-amber-500' : 'border-border hover:bg-muted'}`}>
+                Baileys (jozyrtar)
+              </button>
+            </div>
+
+            {sendChannel === 'baileys' && (
+              <div className="flex gap-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/40 text-[11px] text-amber-700 dark:text-amber-400">
+                <AlertTriangle className="w-4 h-4 shrink-0 mt-0.5" />
+                <span>
+                  <strong>Kujdes:</strong> dërgimi masiv përmes një numri personal (Baileys) mund të çojë në
+                  <strong> bllokim të numrit nga WhatsApp</strong>. Dërgimi është i ngadaltë me qëllim (≈8 mesazhe/ekzekutim, me vonesa)
+                  për të zvogëluar rrezikun — por nuk e eliminon. Përdore vetëm për lista të vogla e kontakte që të presin.
+                </span>
+              </div>
+            )}
+            {sendChannel === 'meta' && !metaEnabled && (
+              <div className="px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-700 dark:text-amber-400">
+                Aktivizo një kanal Meta te Cilësimet, ose zgjidh Baileys.
+              </div>
+            )}
             <div className="grid grid-cols-2 gap-3">
               <div>
                 <label className="text-xs font-medium block mb-1">Emri *</label>
@@ -172,12 +204,22 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
                   {templates?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                 </select>
               </div>
-              {channels.length > 1 && (
+              {sendChannel === 'meta' && channels.length > 1 && (
                 <div>
                   <label className="text-xs font-medium block mb-1">Kanali Meta</label>
                   <select value={channelId} onChange={(e) => setChannelId(e.target.value)}
                     className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/40">
                     {channels.map((c) => <option key={c.phoneNumberId} value={c.phoneNumberId}>{c.label || c.phone}</option>)}
+                  </select>
+                </div>
+              )}
+              {sendChannel === 'baileys' && (
+                <div>
+                  <label className="text-xs font-medium block mb-1">Agjenti Baileys</label>
+                  <select value={agentId} onChange={(e) => setAgentId(e.target.value)}
+                    className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/40">
+                    <option value="">{connectedAgents[0] ? 'I pari' : '— Asnjë agjent —'}</option>
+                    {connectedAgents.map((a) => <option key={a.id} value={a.id}>{a.label}{a.connectedPhone ? ` (${a.connectedPhone})` : ''}</option>)}
                   </select>
                 </div>
               )}
@@ -245,7 +287,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
                 <div className="min-w-0">
                   <p className="text-sm font-medium truncate">{b.name}</p>
                   <p className="text-[11px] text-muted-foreground truncate">
-                    {tplName(b.templateId)} · {b.sentCount || 0}/{b.totalTargets ?? '?'} dërguar
+                    {tplName(b.templateId)} · {(b.channel || 'meta') === 'baileys' ? 'Baileys' : 'Meta'} · {b.sentCount || 0}/{b.totalTargets ?? '?'} dërguar
                   </p>
                 </div>
                 <span className={`text-[10px] font-semibold px-2 py-0.5 rounded-full shrink-0 ${STATUS_BADGE[b.status] || ''}`}>

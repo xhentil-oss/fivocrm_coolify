@@ -3,6 +3,9 @@
     { "path": "/api/cron/run?job=run-all",                   "schedule": "0 8 * * *" },
     { "path": "/api/cron/run?job=cleanup-old-notifications", "schedule": "0 3 * * 0" }
   ],
+  "functions": {
+    "api/cron/run.ts": { "maxDuration": 60 }
+  },
   "rewrites": [
     { "source": "/api/send-invite",              "destination": "/api/email?type=invite" },
     { "source": "/api/send-invoice-email",       "destination": "/api/email?type=invoice" },
