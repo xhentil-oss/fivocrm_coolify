@@ -1155,13 +1155,11 @@ async function runWhatsappBroadcasts() {
         }
       }
       if (audience.includes('customers')) {
-        // Customers often lack a teamId (legacy/portal-created), so we can't use
-        // a server-side teamId filter without dropping them.  Fetch all and keep
-        // those matching this team or with no teamId at all.
+        // Customers aren't team-isolated in this app (read: isAuth, no reliable
+        // teamId), so we include them all — matching the /app/customers view.
         const custSnap = await db.collection('customers').get();
         for (const d of custSnap.docs) {
           const c = d.data() as any;
-          if (c.teamId && c.teamId !== b.teamId) continue;
           if (!c.phone) continue;
           if (seg.assignedToUserId && c.assignedToUserId !== seg.assignedToUserId) continue;
           const phone = normalizeWaPhone(c.phone);

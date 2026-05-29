@@ -93,16 +93,16 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
       }
     }
     if (audience.includes('customers')) {
+      // Customers aren't team-isolated in this app (read: isAuth, loaded with
+      // skipTeamFilter everywhere), so we count them all — matching /app/customers.
       for (const c of customers || []) {
-        // Skip other teams' customers; allow legacy customers without a teamId.
-        if (c.teamId && permissions.teamId && c.teamId !== permissions.teamId) continue;
         if (assignedTo && c.assignedToUserId !== assignedTo) continue;
         matched++;
         if (hasPhone(c.phone)) phones.add(norm(c.phone));
       }
     }
     return { matched, withPhone: phones.size };
-  }, [leads, customers, audience, statuses, tag, assignedTo, permissions.teamId]);
+  }, [leads, customers, audience, statuses, tag, assignedTo]);
   const targetCount = segmentStats.withPhone;
 
   const toggleAudience = (a: 'leads' | 'customers') =>
