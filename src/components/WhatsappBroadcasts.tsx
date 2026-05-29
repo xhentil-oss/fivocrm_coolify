@@ -71,16 +71,22 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
     return Array.from(s).sort();
   }, [leads]);
 
-  const targetCount = useMemo(() => {
-    return (leads || []).filter((l) => {
+  // Two counts: leads matching the segment (regardless of phone) and the subset
+  // that actually has a phone number (the real WhatsApp target).
+  const segmentStats = useMemo(() => {
+    let matched = 0;
+    let withPhone = 0;
+    for (const l of leads || []) {
+      if (statuses.length && !statuses.includes(l.status)) continue;
+      if (tag && !(l.tags || []).includes(tag)) continue;
+      if (assignedTo && l.assignedToUserId !== assignedTo) continue;
+      matched++;
       const phone = l.phone || (l as any).phoneNumber;
-      if (!phone) return false;
-      if (statuses.length && !statuses.includes(l.status)) return false;
-      if (tag && !(l.tags || []).includes(tag)) return false;
-      if (assignedTo && l.assignedToUserId !== assignedTo) return false;
-      return true;
-    }).length;
+      if (phone && String(phone).replace(/\D/g, '').length >= 7) withPhone++;
+    }
+    return { matched, withPhone };
   }, [leads, statuses, tag, assignedTo]);
+  const targetCount = segmentStats.withPhone;
 
   const resetForm = () => {
     setName(''); setTemplateId(''); setStatuses([]); setTag(''); setAssignedTo(''); setScheduledAt('');
@@ -271,7 +277,13 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
                 </div>
               </div>
               <p className="text-xs text-muted-foreground">
-                Target: <span className="font-semibold text-foreground">{targetCount}</span> lead me numër telefoni.
+                Target: <span className="font-semibold text-foreground">{segmentStats.withPhone}</span> me numër telefoni
+                {' '}nga <span className="font-semibold text-foreground">{segmentStats.matched}</span> gjithsej në segment.
+                {segmentStats.matched > segmentStats.withPhone && (
+                  <span className="block text-[11px] text-amber-600 mt-0.5">
+                    {segmentStats.matched - segmentStats.withPhone} lead s’kanë numër telefoni dhe nuk dërgohen dot.
+                  </span>
+                )}
               </p>
             </div>
 
