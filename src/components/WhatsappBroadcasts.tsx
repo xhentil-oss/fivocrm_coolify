@@ -13,7 +13,17 @@ interface Props {
   onClose: () => void;
 }
 
-const LEAD_STATUSES = ['New', 'Contacted', 'Qualified', 'Follow-up', 'Proposal', 'Won', 'Converted', 'Lost'];
+// Mirror the exact statuses the CRM uses (tabs in CRMView / PipelineBoard).
+// 'Proposal'/'Won' exist in the type but are never assigned in the UI, so they
+// are intentionally excluded here.
+const LEAD_STATUSES: { value: string; label: string }[] = [
+  { value: 'New', label: 'Të reja' },
+  { value: 'Contacted', label: 'Kontaktuara' },
+  { value: 'Qualified', label: 'Kualifikuara' },
+  { value: 'Follow-up', label: 'Në ndjekje' },
+  { value: 'Converted', label: 'Konvertuara' },
+  { value: 'Lost', label: 'Humbura' },
+];
 const STATUS_BADGE: Record<string, string> = {
   draft: 'bg-muted text-muted-foreground',
   queued: 'bg-amber-500/15 text-amber-600',
@@ -235,11 +245,11 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
               <label className="text-xs font-medium block">Segmenti</label>
               <div className="flex flex-wrap gap-1.5">
                 {LEAD_STATUSES.map((s) => {
-                  const on = statuses.includes(s);
+                  const on = statuses.includes(s.value);
                   return (
-                    <button key={s} onClick={() => setStatuses((p) => on ? p.filter((x) => x !== s) : [...p, s])}
+                    <button key={s.value} onClick={() => setStatuses((p) => on ? p.filter((x) => x !== s.value) : [...p, s.value])}
                       className={`text-xs px-2 py-1 rounded-full border ${on ? 'bg-[#25D366] text-white border-[#25D366]' : 'border-border text-muted-foreground hover:bg-muted'}`}>
-                      {s}
+                      {s.label}
                     </button>
                   );
                 })}
