@@ -112,7 +112,10 @@ const teamScopedCollections = new Set([
   'directMessages', 'milestones', 'serviceInquiries', 'projectComments',
   'workspaceFolders', 'workspaceDriveFiles', 'projects', 'dailyReports',
   'roleTemplates', 'standups', 'quotes', 'contracts',
-  'chatSnippets',
+  'chatSnippets', 'whatsappAccounts', 'whatsappThreads', 'waTemplates', 'waBroadcasts',
+  // whatsappMessages reads pass skipTeamFilter (they scope by teamId+phone
+  // explicitly), so being in this set only enforces teamId on create.
+  'whatsappMessages',
 ]);
 
 // Module-level cache: reuse listeners for identical queries across components.

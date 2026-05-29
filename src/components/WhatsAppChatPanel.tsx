@@ -2,13 +2,14 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
-import { X, Send, MessageSquare, Loader2, Phone, FileText, Paperclip } from 'lucide-react';
+import { X, Send, MessageSquare, Loader2, Phone, FileText, Paperclip, Zap } from 'lucide-react';
 import { Button } from './ui/button';
 import { normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { useWhatsAppStatus } from '../hooks/useWhatsAppStatus';
 import WhatsAppStatusBadge from './WhatsAppStatusBadge';
-import type { WhatsAppMessage } from '../types';
+import { resolveLeadParams } from '../lib/whatsappTemplates';
+import type { WhatsAppMessage, WhatsAppTemplate, Lead } from '../types';
 
 interface Props {
   phone: string;
@@ -16,9 +17,11 @@ interface Props {
   leadName: string;
   leadId?: string;
   onClose: () => void;
+  /** When true, render inline (fills its container) instead of as a fixed right-side drawer. */
+  embedded?: boolean;
 }
 
-const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, leadId, onClose }) => {
+const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, leadId, onClose, embedded }) => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [text, setText] = useState('');
@@ -35,6 +38,23 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
   const waMutation = useMutation<WhatsAppMessage>('whatsappMessages');
   const { upload } = useFileUpload();
   const waStatus = useWhatsAppStatus();
+
+  // Quick replies (shared "chatSnippets" saved-replies, team-scoped)
+  const { data: snippets } = useCollection<any>('chatSnippets');
+  const [quickOpen, setQuickOpen] = useState(false);
+
+  // Saved templates + the linked lead (for auto-filling template variables)
+  const { data: savedTemplates } = useCollection<WhatsAppTemplate>('waTemplates');
+  const { data: leadsForTpl } = useCollection<Lead>('leads', { skip: !leadId });
+  const linkedLead = leadId ? leadsForTpl?.find((l) => l.id === leadId) : undefined;
+
+  const applySavedTemplate = (id: string) => {
+    const t = savedTemplates?.find((x) => x.id === id);
+    if (!t) return;
+    setTplName(t.metaTemplateName);
+    setTplLang(t.language || 'sq');
+    setTplParams(resolveLeadParams(t.paramFields, linkedLead).join(', '));
+  };
 
   const normalizedPhone = normalizeAlbanianPhone(phone);
   const teamId = getGlobalTeamId();
@@ -286,7 +306,13 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
   };
 
   return (
-    <div className="fixed inset-y-0 right-0 w-full sm:w-[400px] bg-background border-l border-border shadow-2xl z-50 flex flex-col overflow-hidden">
+    <div
+      className={
+        embedded
+          ? 'relative w-full h-full bg-background flex flex-col overflow-hidden'
+          : 'fixed inset-y-0 right-0 w-full sm:w-[400px] bg-background border-l border-border shadow-2xl z-50 flex flex-col overflow-hidden'
+      }
+    >
       {/* Header */}
       <div className="flex items-center gap-3 px-4 py-3.5 border-b border-border bg-[#25D366]/5">
         <div className="p-2 bg-[#25D366]/15 rounded-full shrink-0">
@@ -416,6 +442,25 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
             ⚠️ Jashtë dritares 24-orëshe të Meta. Mesazhet me tekst të lirë do refuzohen — duhet të përdorni një template të aprovuar.
           </div>
         )}
+        {quickOpen && (snippets?.length || 0) > 0 && (
+          <div className="mb-2 max-h-48 overflow-y-auto rounded-md border border-border bg-popover shadow-lg">
+            {snippets!.map((s: any) => (
+              <button
+                key={s.id}
+                onClick={() => {
+                  setText((prev) => (prev.trim() ? `${prev.trim()} ${s.content}` : s.content));
+                  setQuickOpen(false);
+                }}
+                className="w-full text-left px-3 py-2 hover:bg-muted border-b border-border/50 last:border-0"
+              >
+                {s.shortcut && (
+                  <span className="text-[10px] font-medium text-[#25D366] mr-1">/{s.shortcut}</span>
+                )}
+                <span className="text-xs text-foreground line-clamp-2">{s.content}</span>
+              </button>
+            ))}
+          </div>
+        )}
         <div className="flex items-end gap-2">
           <input
             ref={fileInputRef}
@@ -424,6 +469,18 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
             accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
             onChange={handleFileChange}
           />
+          {(snippets?.length || 0) > 0 && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="h-[42px] w-[42px] p-0 rounded-full shrink-0 text-muted-foreground hover:text-foreground"
+              onClick={() => setQuickOpen((o) => !o)}
+              title="Përgjigje të shpejta"
+              aria-label="Përgjigje të shpejta"
+            >
+              <Zap className="w-4 h-4" />
+            </Button>
+          )}
           {windowState.isMeta && (
             <Button
               size="sm"
@@ -494,6 +551,27 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
                 <X className="w-4 h-4" />
               </button>
             </div>
+            {(savedTemplates?.length || 0) > 0 && (
+              <div className="space-y-2">
+                <label className="text-xs font-medium text-foreground block">
+                  Zgjidh nga template-t e ruajtura
+                </label>
+                <select
+                  defaultValue=""
+                  onChange={(e) => { if (e.target.value) applySavedTemplate(e.target.value); }}
+                  className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/40"
+                  disabled={tplSending}
+                >
+                  <option value="">— Manual —</option>
+                  {savedTemplates!.map((t) => (
+                    <option key={t.id} value={t.id}>{t.name}</option>
+                  ))}
+                </select>
+                <p className="text-[10px] text-muted-foreground">
+                  Variablat plotësohen automatikisht nga Lead-i; mund t'i ndryshosh më poshtë.
+                </p>
+              </div>
+            )}
             <div className="space-y-2">
               <label className="text-xs font-medium text-foreground block">
                 Emri i template-it <span className="text-destructive">*</span>

@@ -29,6 +29,20 @@ service cloud.firestore {
         get(/databases/$(database)/documents/teams/$(teamId)).data.createdByUserId == request.auth.uid;
     }
 
+    // Verify the requesting user's active team matches the given teamId.
+    // usePermissions writes the active teamId to users/{uid} on every
+    // authenticated load (src/hooks/usePermissions.ts).  Because teamMember docs
+    // use random IDs, a direct membership exists() check isn't possible — this
+    // self-written users doc gives rules a deterministic path to scope by team.
+    // NOTE: super-admins (teamId=null) and not-yet-migrated sessions won't match;
+    // deploy the frontend (which writes the teamId) before deploying these rules.
+    function isTeamMember(teamId) {
+      return isAuth()
+        && teamId is string
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.teamId == teamId;
+    }
+
     // ── Team-Scoped Collections ──
     // Reads: authenticated only.  The client fetches all docs and filters by
     // teamId client-side (to support legacy docs without teamId and to avoid
@@ -342,23 +356,53 @@ service cloud.firestore {
     }
 
     match /whatsappMessages/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
-      allow update, delete: if isAuth();
+      // Team-scoped: a user may only touch messages belonging to their team.
+      // Client list queries always filter by teamId (see CRMView/ChatView/
+      // WhatsAppChatPanel), so these per-doc rules hold for queries too.
+      // Server writes use the Admin SDK and bypass rules.
+      allow read: if isTeamMember(resource.data.teamId);
+      allow create: if isTeamMember(request.resource.data.teamId);
+      allow update, delete: if isTeamMember(resource.data.teamId);
     }
 
     match /whatsappConversations/{docId} {
       // Per-(team,phone) doc used to track lastInboundAt for the 24h window.
-      // Reads gated on auth only (client filters by teamId).  Writes happen
-      // server-side from the webhook / VPS, so we lock client writes down.
-      allow read: if isAuth();
+      // Reads scoped to the user's team.  Writes happen server-side from the
+      // webhook / VPS (Admin SDK), so client writes stay locked down.
+      allow read: if isTeamMember(resource.data.teamId);
       allow create, update, delete: if false;
     }
 
     match /whatsappAccounts/{docId} {
-      allow read: if isAuth();
-      allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      // Team-scoped Baileys agent config (labels, assignment, connected phone).
+      allow read: if isTeamMember(resource.data.teamId);
+      allow create: if isTeamMember(request.resource.data.teamId);
+      allow update, delete: if isTeamMember(resource.data.teamId);
+    }
+
+    match /whatsappThreads/{docId} {
+      // Team-scoped per-conversation metadata managed from the Inbox UI:
+      // assignment, internal notes, status (open/pending/closed).  Keyed
+      // {teamId}_{phone}.  Client-writable (unlike whatsappConversations).
+      allow read: if isTeamMember(resource.data.teamId);
+      allow create: if isTeamMember(request.resource.data.teamId);
+      allow update, delete: if isTeamMember(resource.data.teamId);
+    }
+
+    match /waTemplates/{docId} {
+      // Team-scoped saved WhatsApp templates (Meta HSM mappings).
+      allow read: if isTeamMember(resource.data.teamId);
+      allow create: if isTeamMember(request.resource.data.teamId);
+      allow update, delete: if isTeamMember(resource.data.teamId);
+    }
+
+    match /waBroadcasts/{docId} {
+      // Team-scoped broadcast campaigns.  Created/edited from the UI; the
+      // cron processor advances status/sentCount via the Admin SDK (bypasses
+      // these rules).  Clients may read and manage their team's broadcasts.
+      allow read: if isTeamMember(resource.data.teamId);
+      allow create: if isTeamMember(request.resource.data.teamId);
+      allow update, delete: if isTeamMember(resource.data.teamId);
     }
 
     match /lidMappings/{docId} {

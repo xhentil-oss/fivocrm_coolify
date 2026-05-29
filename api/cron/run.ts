@@ -782,7 +782,28 @@ async function runLeadFollowUpReminders() {
   if (leadsSnap.empty) return { notified: 0 };
 
   let notified = 0;
+  let waSent = 0;
   const ops: Promise<any>[] = [];
+
+  // Per-run caches so we read each team's settings / template only once.
+  const tsCache = new Map<string, any>();
+  const tplCache = new Map<string, any>();
+  const getTeamSettings = async (teamId: string) => {
+    if (!teamId) return null;
+    if (tsCache.has(teamId)) return tsCache.get(teamId);
+    const doc = await db.collection('teamSettings').doc(teamId).get();
+    const data = doc.exists ? doc.data() : null;
+    tsCache.set(teamId, data);
+    return data;
+  };
+  const getTemplate = async (id: string) => {
+    if (!id) return null;
+    if (tplCache.has(id)) return tplCache.get(id);
+    const doc = await db.collection('waTemplates').doc(id).get();
+    const data = doc.exists ? doc.data() : null;
+    tplCache.set(id, data);
+    return data;
+  };
 
   for (const leadDoc of leadsSnap.docs) {
     const lead = leadDoc.data();
@@ -840,10 +861,31 @@ async function runLeadFollowUpReminders() {
     );
 
     notified++;
+
+    // Optional: send a WhatsApp follow-up template if the team enabled it.
+    const phone = lead.phone || lead.phoneNumber;
+    if (phone && lead.teamId) {
+      const settings = await getTeamSettings(lead.teamId);
+      if (settings?.waFollowUpEnabled && settings?.waFollowUpTemplateId && settings?.metaEnabled) {
+        const tpl = await getTemplate(settings.waFollowUpTemplateId);
+        const channels: any[] = settings.metaChannels || [];
+        const channel = channels.find((c) => c.phoneNumberId === settings.waFollowUpChannelPhoneNumberId) || channels[0];
+        if (tpl && channel?.accessToken && channel?.phoneNumberId) {
+          const params: string[] = (tpl.paramFields || []).map((f: string) =>
+            f && f !== 'custom' && lead[f] != null ? String(lead[f]) : ''
+          );
+          ops.push(
+            sendMetaBroadcastMessage(channel, normalizeWaPhone(phone), tpl, params, lead.teamId, null, { id: leadDoc.id, name: lead.name })
+              .catch((e) => console.error('[follow-up-wa]', e))
+          );
+          waSent++;
+        }
+      }
+    }
   }
 
   await settleAll(ops, 'lead-follow-up-reminders');
-  return { notified };
+  return { notified, waSent };
 }
 
 // ── JOB: notification-digest ─────────────────────────────────────────────────
@@ -949,6 +991,150 @@ async function runCleanupOldNotifications() {
   return { deleted };
 }
 
+// ── JOB: whatsapp-broadcasts ─────────────────────────────────────────────────
+// Template-only bulk sends via Meta Cloud API.  Idempotent & resumable: each
+// send is logged to whatsappMessages tagged with broadcastId; already-sent
+// phones are skipped, so re-runs continue where they left off.  Processes up to
+// PER_RUN targets per broadcast per invocation (function-timeout safety).
+function normalizeWaPhone(p: string): string {
+  return (p || '').replace(/\D/g, '');
+}
+
+async function sendMetaBroadcastMessage(
+  channel: any,
+  phone: string,
+  tpl: any,
+  params: string[],
+  teamId: string,
+  broadcastId: string | null,
+  lead: { id: string; name?: string }
+): Promise<void> {
+  const components = params.length
+    ? [{ type: 'body', parameters: params.map((p) => ({ type: 'text', text: p && p.trim() ? p : '-' })) }]
+    : [];
+  const payload = {
+    messaging_product: 'whatsapp',
+    to: phone,
+    type: 'template',
+    template: {
+      name: tpl.metaTemplateName,
+      language: { code: tpl.language || 'sq' },
+      ...(components.length ? { components } : {}),
+    },
+  };
+  const resp = await fetch(`https://graph.facebook.com/v21.0/${channel.phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${channel.accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const data: any = await resp.json().catch(() => ({}));
+  const waMessageId = data?.messages?.[0]?.id || null;
+  const ok = resp.ok && !!waMessageId;
+  // Render a display body by filling {{n}} placeholders for the inbox.
+  const display = (tpl.body || tpl.metaTemplateName || '').replace(/\{\{(\d+)\}\}/g, (_m: string, n: string) => params[Number(n) - 1] || `{{${n}}}`);
+  await db.collection('whatsappMessages').add({
+    phone,
+    jid: `${phone}@s.whatsapp.net`,
+    direction: 'outbound',
+    message: display,
+    leadId: lead.id,
+    leadName: lead.name || null,
+    teamId,
+    status: ok ? 'sent' : 'failed',
+    channel: 'meta',
+    channelPhone: channel.phone || null,
+    metaPhoneNumberId: channel.phoneNumberId,
+    isTemplate: true,
+    templateName: tpl.metaTemplateName,
+    ...(broadcastId ? { broadcastId } : {}),
+    waMessageId,
+    createdAt: admin.firestore.Timestamp.now(),
+    updatedAt: admin.firestore.Timestamp.now(),
+  });
+  if (!ok) {
+    throw new Error(`Meta send failed for ${phone}: ${data?.error?.message || resp.status}`);
+  }
+}
+
+async function runWhatsappBroadcasts() {
+  const PER_RUN = 200; // max sends per broadcast per invocation
+  const now = new Date();
+  const snap = await db.collection('waBroadcasts')
+    .where('status', 'in', ['queued', 'sending'])
+    .get();
+
+  let processed = 0;
+  let sent = 0;
+
+  for (const bDoc of snap.docs) {
+    const b = bDoc.data() as any;
+    try {
+      // Respect scheduling.
+      if (b.scheduledAt?.toDate && b.scheduledAt.toDate() > now) continue;
+
+      const tplDoc = await db.collection('waTemplates').doc(b.templateId).get();
+      if (!tplDoc.exists) { await bDoc.ref.update({ status: 'failed', error: 'Template mungon', updatedAt: now }); continue; }
+      const tpl = tplDoc.data() as any;
+
+      const tsDoc = await db.collection('teamSettings').doc(b.teamId).get();
+      const settings = (tsDoc.data() as any) || {};
+      const channels: any[] = settings.metaChannels || [];
+      const channel = channels.find((c) => c.phoneNumberId === b.channelPhoneNumberId) || channels[0];
+      if (!channel?.accessToken || !channel?.phoneNumberId) {
+        await bDoc.ref.update({ status: 'failed', error: 'Kanali Meta mungon', updatedAt: now });
+        continue;
+      }
+
+      // Resolve segment → leads (filtered in memory to avoid composite indexes).
+      const leadsSnap = await db.collection('leads').where('teamId', '==', b.teamId).get();
+      const seg = b.segment || {};
+      let targets = leadsSnap.docs
+        .map((d) => ({ id: d.id, ...(d.data() as any) }))
+        .filter((l) => {
+          const phone = l.phone || l.phoneNumber;
+          if (!phone) return false;
+          if (seg.statuses?.length && !seg.statuses.includes(l.status)) return false;
+          if (seg.tag && !(l.tags || []).includes(seg.tag)) return false;
+          if (seg.assignedToUserId && l.assignedToUserId !== seg.assignedToUserId) return false;
+          return true;
+        });
+
+      // Idempotency: skip phones already sent for this broadcast.
+      const sentSnap = await db.collection('whatsappMessages').where('broadcastId', '==', bDoc.id).get();
+      const sentPhones = new Set(sentSnap.docs.map((d) => normalizeWaPhone((d.data() as any).phone)));
+      const total = targets.length + sentPhones.size;
+      targets = targets.filter((t) => !sentPhones.has(normalizeWaPhone(t.phone || t.phoneNumber)));
+
+      const batch = targets.slice(0, PER_RUN);
+      const ops: Promise<any>[] = [];
+      for (const t of batch) {
+        const phone = normalizeWaPhone(t.phone || t.phoneNumber);
+        const params: string[] = (tpl.paramFields || []).map((f: string) =>
+          f && f !== 'custom' && t[f] != null ? String(t[f]) : ''
+        );
+        ops.push(sendMetaBroadcastMessage(channel, phone, tpl, params, b.teamId, bDoc.id, { id: t.id, name: t.name }));
+        sent++;
+      }
+      await settleAll(ops, 'whatsapp-broadcasts');
+
+      const remaining = targets.length - batch.length;
+      await bDoc.ref.update({
+        totalTargets: total,
+        sentCount: sentPhones.size + batch.length,
+        status: remaining > 0 ? 'sending' : 'completed',
+        error: null,
+        updatedAt: new Date(),
+      });
+      processed++;
+    } catch (err: any) {
+      console.error(`[CRON:whatsapp-broadcasts] broadcast ${bDoc.id} dështoi:`, err);
+      await bDoc.ref.update({ status: 'failed', error: err?.message || 'Gabim', updatedAt: new Date() }).catch(() => {});
+    }
+  }
+
+  return { processed, sent };
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const isManual = req.query.manual === '1';
@@ -995,6 +1181,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'lead-follow-up-reminders':
         result = await runLeadFollowUpReminders();
         break;
+      case 'whatsapp-broadcasts':
+        result = await runWhatsappBroadcasts();
+        break;
       case 'cleanup-old-notifications':
         result = await runCleanupOldNotifications();
         break;
@@ -1003,7 +1192,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, digest] = await Promise.allSettled([
+        const [tasks, invoiceRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, digest, waBroadcasts] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
           runRecurringTasks(),
@@ -1015,6 +1204,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           runExpireInvitations(),
           runLeadFollowUpReminders(),
           runNotificationDigest(),
+          runWhatsappBroadcasts(),
         ]);
         const settled = (r: PromiseSettledResult<any>) =>
           r.status === 'fulfilled' ? r.value : { error: (r.reason as Error)?.message || 'failed' };
@@ -1030,11 +1220,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           invites: settled(invites),
           leadReminders: settled(leads),
           digest: settled(digest),
+          whatsappBroadcasts: settled(waBroadcasts),
         };
         break;
       }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts` });
     }
 
     return res.status(200).json({ success: true, job, ...result, timestamp: new Date().toISOString() });
