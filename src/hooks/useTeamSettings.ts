@@ -38,6 +38,14 @@ export interface TeamSettings {
   metaChannels?: MetaChannel[];
   metaWebhookVerifyToken?: string;
   metaPhoneNumberIds?: string[];
+  // WhatsApp automation (Faza 4)
+  waAutoReplyEnabled?: boolean;
+  waAutoReplyText?: string;
+  waBusinessStart?: string;          // "HH:MM" (Europe/Tirane)
+  waBusinessEnd?: string;            // "HH:MM"
+  waFollowUpEnabled?: boolean;
+  waFollowUpTemplateId?: string;     // ref → waTemplates
+  waFollowUpChannelPhoneNumberId?: string;
   cronSettings?: Record<string, any>;
   cronLastRuns?: Record<string, any>;
   stripePublishableKey?: string;

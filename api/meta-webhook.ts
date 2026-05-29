@@ -28,6 +28,37 @@ function normalizePhone(raw: string): string {
   return digits;
 }
 
+// Is `now` outside the configured business hours (Europe/Tirane)?
+// start/end are "HH:MM" strings; an empty config means always-open (no reply).
+function isOutsideBusinessHours(startStr?: string, endStr?: string): boolean {
+  if (!startStr || !endStr) return false;
+  const hhmm = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Tirane', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date());
+  const [h, m] = hhmm.split(':').map(Number);
+  const cur = h * 60 + m;
+  const [sh, sm] = startStr.split(':').map(Number);
+  const [eh, em] = endStr.split(':').map(Number);
+  const start = sh * 60 + sm;
+  const end = eh * 60 + em;
+  // Normal daytime window (start < end): outside = before start OR at/after end.
+  if (start <= end) return cur < start || cur >= end;
+  // Overnight window (e.g. 22:00–06:00): outside = between end and start.
+  return cur >= end && cur < start;
+}
+
+// Send a free-text WhatsApp message via Meta (used for auto-replies; valid only
+// inside the 24h window, which a fresh inbound message guarantees).
+async function sendMetaText(channel: any, to: string, bodyText: string): Promise<string | null> {
+  const resp = await fetch(`https://graph.facebook.com/v21.0/${channel.phoneNumberId}/messages`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${channel.accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'text', text: { body: bodyText } }),
+  });
+  const data: any = await resp.json().catch(() => ({}));
+  return resp.ok ? (data?.messages?.[0]?.id || null) : null;
+}
+
 async function readRawBody(req: VercelRequest): Promise<Buffer> {
   return await new Promise<Buffer>((resolve, reject) => {
     const chunks: Buffer[] = [];
@@ -155,6 +186,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           continue;
         }
 
+        // Load team settings once (used for auto-reply automation).
+        const teamSettings = (await adminDb.collection('teamSettings').doc(teamId).get()).data() as any || {};
+        const autoReplyChannel = (teamSettings.metaChannels || []).find((c: any) => c.phoneNumberId === metaPhoneNumberId);
+
         // ── Process incoming messages ─────────────────────────────────────
         for (const msg of value.messages || []) {
           const from = normalizePhone(msg.from); // sender phone
@@ -273,6 +308,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             }, { merge: true });
           } catch (e) {
             console.warn('[meta-webhook] conv tracker update failed:', e);
+          }
+
+          // ── Auto-reply outside business hours ───────────────────────────
+          // Sends a one-off welcome text when a customer writes outside hours.
+          // Debounced to once per 6h per phone so we never spam a conversation.
+          try {
+            if (
+              teamSettings.waAutoReplyEnabled &&
+              teamSettings.waAutoReplyText &&
+              autoReplyChannel?.accessToken &&
+              msg.type !== 'reaction' &&
+              isOutsideBusinessHours(teamSettings.waBusinessStart, teamSettings.waBusinessEnd)
+            ) {
+              const convId = `${teamId}_${from}`;
+              const convSnap = await adminDb.collection('whatsappConversations').doc(convId).get();
+              const lastAuto = convSnap.data()?.lastAutoReplyAt?.toDate?.();
+              const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
+              if (!lastAuto || lastAuto < sixHoursAgo) {
+                const replyId = await sendMetaText(autoReplyChannel, from, teamSettings.waAutoReplyText);
+                if (replyId) {
+                  await adminDb.collection('whatsappMessages').doc(replyId).set({
+                    phone: from,
+                    jid: `${from}@s.whatsapp.net`,
+                    direction: 'outbound' as const,
+                    message: teamSettings.waAutoReplyText,
+                    waMessageId: replyId,
+                    leadId: autoLeadId,
+                    leadName: autoLeadName || contactName,
+                    teamId,
+                    status: 'sent',
+                    channel: 'meta',
+                    channelPhone: normalizePhone(displayPhone || ''),
+                    metaPhoneNumberId,
+                    isAutoReply: true,
+                    createdAt: Timestamp.fromDate(new Date()),
+                    updatedAt: Timestamp.fromDate(new Date()),
+                  }, { merge: true });
+                  await adminDb.collection('whatsappConversations').doc(convId).set(
+                    { lastAutoReplyAt: Timestamp.fromDate(new Date()) },
+                    { merge: true }
+                  );
+                }
+              }
+            }
+          } catch (e) {
+            console.warn('[meta-webhook] auto-reply failed:', e);
           }
 
           console.log(`[meta-webhook] ← ${from}: ${text.slice(0, 80)}`);

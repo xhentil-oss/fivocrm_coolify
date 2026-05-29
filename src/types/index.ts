@@ -27,8 +27,71 @@ export interface WhatsAppMessage {
   status: 'sent' | 'delivered' | 'read' | 'received' | 'failed';
   channel?: 'baileys' | 'meta';
   channelPhone?: string;
+  metaPhoneNumberId?: string;
+  isTemplate?: boolean;
+  templateName?: string;
+  broadcastId?: string;          // set when sent as part of a broadcast campaign
+  sentByUid?: string;
+  mediaType?: 'image' | 'video' | 'audio' | 'document' | 'sticker';
+  mediaUrl?: string;
   createdAt: Date;
   updatedAt: Date;
+}
+
+// A bulk WhatsApp campaign (template-only, Meta channel).  The cron processor
+// resolves the segment to leads at send time and logs each send to
+// whatsappMessages tagged with broadcastId (for idempotency / resume).
+export interface WhatsAppBroadcast {
+  id: string;
+  teamId: string;
+  name: string;
+  templateId: string;
+  channelPhoneNumberId: string;       // which Meta channel sends
+  segment: {
+    statuses?: string[];              // Lead.status values
+    tag?: string;                     // Lead.tags contains
+    assignedToUserId?: string;        // Lead.assignedToUserId
+  };
+  scheduledAt?: Date | null;
+  status: 'draft' | 'queued' | 'sending' | 'completed' | 'failed';
+  totalTargets?: number;
+  sentCount?: number;
+  error?: string | null;
+  createdAt?: Date;
+  updatedAt?: Date;
+  createdByUserId?: string | null;
+}
+
+// Per-conversation metadata managed from the WhatsApp Inbox (assignment,
+// internal notes, status).  Doc id = `${teamId}_${phone}`.  Distinct from the
+// server-owned `whatsappConversations` (which tracks the 24h window).
+export interface WhatsAppThread {
+  id: string;
+  teamId: string;
+  phone: string;
+  assignedToUserId?: string | null;
+  assignedToName?: string | null;
+  internalNote?: string | null;
+  status?: 'open' | 'pending' | 'closed';
+  updatedAt?: Date;
+  updatedByUserId?: string | null;
+}
+
+// Saved WhatsApp template (maps to a Meta-approved HSM template).  The body
+// holds {{1}}, {{2}}… positional placeholders; paramFields maps each positional
+// param to a Lead field key (e.g. 'name', 'company') or 'custom' for free input.
+export interface WhatsAppTemplate {
+  id: string;
+  teamId: string;
+  name: string;                 // human label shown in the picker
+  metaTemplateName: string;     // the approved name registered in Meta
+  language: string;             // e.g. 'sq', 'en_US'
+  category?: string;            // MARKETING | UTILITY | etc. (informational)
+  body: string;                 // preview text with {{1}}.. placeholders
+  paramFields?: string[];       // per-positional-param Lead field key or 'custom'
+  createdAt?: Date;
+  updatedAt?: Date;
+  createdByUserId?: string | null;
 }
 
 export interface Project {

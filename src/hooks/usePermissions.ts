@@ -1,7 +1,7 @@
 import { useCollection, setGlobalTeamId, setSuperAdmin } from './useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useMemo, useEffect, useRef } from 'react';
-import { doc, updateDoc, Timestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
+import { doc, updateDoc, setDoc, Timestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 // Data scope determines what data a user can see
@@ -495,12 +495,25 @@ export function usePermissions(): UserPermissions {
   // Guard 2: only update with a non-null teamId — a usePermissions instance that resolves
   //   with teamId=null (e.g. a non-member component that loaded before its data arrived)
   //   must NOT reset globalTeamId back to null and wipe out team-scoped collection data.
+  const persistedTeamIdRef = useRef<string | null>(null);
   useEffect(() => {
     setSuperAdmin(isSuperAdmin);
     if (!permissions.isLoading && permissions.teamId !== null) {
       setGlobalTeamId(permissions.teamId);
+      // Persist the active teamId to users/{uid} so Firestore rules can scope
+      // team-sensitive reads (e.g. WhatsApp messages/accounts) to the user's team.
+      // teamMember docs use random IDs, so rules can't do a direct membership
+      // lookup; this self-write gives them a deterministic path to check.
+      if (user && persistedTeamIdRef.current !== permissions.teamId) {
+        persistedTeamIdRef.current = permissions.teamId;
+        setDoc(
+          doc(db, 'users', user.uid),
+          { teamId: permissions.teamId, updatedAt: Timestamp.now() },
+          { merge: true }
+        ).catch(() => {});
+      }
     }
-  }, [isSuperAdmin, permissions.isLoading, permissions.teamId]);
+  }, [isSuperAdmin, permissions.isLoading, permissions.teamId, user]);
 
   return permissions;
 }
