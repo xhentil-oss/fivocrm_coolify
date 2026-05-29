@@ -1135,25 +1135,41 @@ async function runWhatsappBroadcasts() {
         }
       }
 
-      // Resolve segment → leads (filtered in memory to avoid composite indexes).
-      const leadsSnap = await db.collection('leads').where('teamId', '==', b.teamId).get();
+      // Resolve segment → recipients from leads and/or customers (filtered in
+      // memory to avoid composite indexes), then merge + dedupe by phone.
       const seg = b.segment || {};
-      let targets = leadsSnap.docs
-        .map((d) => ({ id: d.id, ...(d.data() as any) }))
-        .filter((l) => {
-          const phone = l.phone || l.phoneNumber;
-          if (!phone) return false;
-          if (seg.statuses?.length && !seg.statuses.includes(l.status)) return false;
-          if (seg.tag && !(l.tags || []).includes(seg.tag)) return false;
-          if (seg.assignedToUserId && l.assignedToUserId !== seg.assignedToUserId) return false;
-          return true;
-        });
+      const audience: string[] = seg.audience?.length ? seg.audience : ['leads'];
+      const byPhone = new Map<string, { id: string; name?: string; phone: string; [k: string]: any }>();
+
+      if (audience.includes('leads')) {
+        const leadsSnap = await db.collection('leads').where('teamId', '==', b.teamId).get();
+        for (const d of leadsSnap.docs) {
+          const l = d.data() as any;
+          const rawPhone = l.phone || l.phoneNumber;
+          if (!rawPhone) continue;
+          if (seg.statuses?.length && !seg.statuses.includes(l.status)) continue;
+          if (seg.tag && !(l.tags || []).includes(seg.tag)) continue;
+          if (seg.assignedToUserId && l.assignedToUserId !== seg.assignedToUserId) continue;
+          const phone = normalizeWaPhone(rawPhone);
+          if (phone.length >= 7 && !byPhone.has(phone)) byPhone.set(phone, { ...l, id: d.id, phone });
+        }
+      }
+      if (audience.includes('customers')) {
+        const custSnap = await db.collection('customers').where('teamId', '==', b.teamId).get();
+        for (const d of custSnap.docs) {
+          const c = d.data() as any;
+          if (!c.phone) continue;
+          if (seg.assignedToUserId && c.assignedToUserId !== seg.assignedToUserId) continue;
+          const phone = normalizeWaPhone(c.phone);
+          if (phone.length >= 7 && !byPhone.has(phone)) byPhone.set(phone, { ...c, id: d.id, phone });
+        }
+      }
 
       // Idempotency: skip recipients already sent (tracked on the broadcast doc,
       // channel-agnostic so it works for both Meta and Baileys).
       const alreadySent = new Set<string>((b.sentPhones || []).map((p: string) => normalizeWaPhone(p)));
-      const total = targets.length + alreadySent.size;
-      targets = targets.filter((t) => !alreadySent.has(normalizeWaPhone(t.phone || t.phoneNumber)));
+      const total = byPhone.size;
+      let targets = Array.from(byPhone.values()).filter((t) => !alreadySent.has(t.phone));
 
       const perRun = useBaileys ? PER_RUN_BAILEYS : PER_RUN_META;
       const batch = targets.slice(0, perRun);

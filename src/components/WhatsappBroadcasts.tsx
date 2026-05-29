@@ -7,7 +7,7 @@ import { useToast } from '../hooks/use-toast';
 import { X, Megaphone, Send, Loader2, Clock, AlertTriangle } from 'lucide-react';
 import { Button } from './ui/button';
 import { Timestamp } from 'firebase/firestore';
-import type { WhatsAppBroadcast, WhatsAppTemplate, Lead, TeamMember, WhatsAppAccount } from '../types';
+import type { WhatsAppBroadcast, WhatsAppTemplate, Lead, Customer, TeamMember, WhatsAppAccount } from '../types';
 
 interface Props {
   onClose: () => void;
@@ -43,6 +43,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
   });
   const { data: templates } = useCollection<WhatsAppTemplate>('waTemplates');
   const { data: leads } = useCollection<Lead>('leads');
+  const { data: customers } = useCollection<Customer>('customers');
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
   });
@@ -55,6 +56,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
   const connectedAgents = (waAccounts || []).filter((a) => a.enabled);
 
   const [sendChannel, setSendChannel] = useState<'meta' | 'baileys'>('meta');
+  const [audience, setAudience] = useState<('leads' | 'customers')[]>(['leads']);
   const [name, setName] = useState('');
   const [templateId, setTemplateId] = useState('');
   const [channelId, setChannelId] = useState('');
@@ -71,22 +73,36 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
     return Array.from(s).sort();
   }, [leads]);
 
-  // Two counts: leads matching the segment (regardless of phone) and the subset
-  // that actually has a phone number (the real WhatsApp target).
+  // Counts across the selected audiences (leads + customers), deduped by phone.
+  // `matched` = recipients in the segment; `withPhone` = the real WhatsApp target.
   const segmentStats = useMemo(() => {
+    const hasPhone = (p?: string) => !!p && String(p).replace(/\D/g, '').length >= 7;
+    const norm = (p?: string) => String(p || '').replace(/\D/g, '');
     let matched = 0;
-    let withPhone = 0;
-    for (const l of leads || []) {
-      if (statuses.length && !statuses.includes(l.status)) continue;
-      if (tag && !(l.tags || []).includes(tag)) continue;
-      if (assignedTo && l.assignedToUserId !== assignedTo) continue;
-      matched++;
-      const phone = l.phone || (l as any).phoneNumber;
-      if (phone && String(phone).replace(/\D/g, '').length >= 7) withPhone++;
+    const phones = new Set<string>();
+    if (audience.includes('leads')) {
+      for (const l of leads || []) {
+        if (statuses.length && !statuses.includes(l.status)) continue;
+        if (tag && !(l.tags || []).includes(tag)) continue;
+        if (assignedTo && l.assignedToUserId !== assignedTo) continue;
+        matched++;
+        const phone = l.phone || (l as any).phoneNumber;
+        if (hasPhone(phone)) phones.add(norm(phone));
+      }
     }
-    return { matched, withPhone };
-  }, [leads, statuses, tag, assignedTo]);
+    if (audience.includes('customers')) {
+      for (const c of customers || []) {
+        if (assignedTo && c.assignedToUserId !== assignedTo) continue;
+        matched++;
+        if (hasPhone(c.phone)) phones.add(norm(c.phone));
+      }
+    }
+    return { matched, withPhone: phones.size };
+  }, [leads, customers, audience, statuses, tag, assignedTo]);
   const targetCount = segmentStats.withPhone;
+
+  const toggleAudience = (a: 'leads' | 'customers') =>
+    setAudience((prev) => (prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]));
 
   const resetForm = () => {
     setName(''); setTemplateId(''); setStatuses([]); setTag(''); setAssignedTo(''); setScheduledAt('');
@@ -99,6 +115,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
     channelPhoneNumberId: sendChannel === 'meta' ? (channelId || channels[0]?.phoneNumberId || '') : '',
     agentId: sendChannel === 'baileys' ? (agentId || connectedAgents[0]?.id || '') : '',
     segment: {
+      audience,
       ...(statuses.length ? { statuses } : {}),
       ...(tag ? { tag } : {}),
       ...(assignedTo ? { assignedToUserId: assignedTo } : {}),
@@ -114,7 +131,8 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
     if (sendChannel === 'meta' && !metaEnabled) { toast({ title: 'Meta s’është konfiguruar', description: 'Zgjidh Baileys ose aktivizo një kanal Meta.', variant: 'destructive' }); return false; }
     if (sendChannel === 'baileys' && (!vpsConfigured || connectedAgents.length === 0)) { toast({ title: 'Baileys s’është gati', description: 'Konfiguro VPS-në dhe një agjent te Cilësimet.', variant: 'destructive' }); return false; }
     if (!name.trim() || !templateId) { toast({ title: 'Mungojnë fushat', description: 'Emri dhe template-i janë të detyrueshëm.', variant: 'destructive' }); return false; }
-    if (targetCount === 0) { toast({ title: 'Asnjë target', description: 'Segmenti nuk përmban asnjë lead me numër.', variant: 'destructive' }); return false; }
+    if (audience.length === 0) { toast({ title: 'Zgjidh audiencën', description: 'Zgjidh të paktën Lead-et ose Klientët.', variant: 'destructive' }); return false; }
+    if (targetCount === 0) { toast({ title: 'Asnjë target', description: 'Asnjë kontakt me numër telefoni në këtë segment.', variant: 'destructive' }); return false; }
     return true;
   };
 
@@ -248,18 +266,39 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
 
             {/* Segment */}
             <div className="space-y-2">
-              <label className="text-xs font-medium block">Segmenti</label>
-              <div className="flex flex-wrap gap-1.5">
-                {LEAD_STATUSES.map((s) => {
-                  const on = statuses.includes(s.value);
-                  return (
-                    <button key={s.value} onClick={() => setStatuses((p) => on ? p.filter((x) => x !== s.value) : [...p, s.value])}
-                      className={`text-xs px-2 py-1 rounded-full border ${on ? 'bg-[#25D366] text-white border-[#25D366]' : 'border-border text-muted-foreground hover:bg-muted'}`}>
-                      {s.label}
-                    </button>
-                  );
-                })}
+              <label className="text-xs font-medium block">Audienca</label>
+              <div className="flex gap-2">
+                <button onClick={() => toggleAudience('leads')}
+                  className={`flex-1 text-xs px-3 py-1.5 rounded-md border ${audience.includes('leads') ? 'bg-[#25D366] text-white border-[#25D366]' : 'border-border text-muted-foreground hover:bg-muted'}`}>
+                  Lead-et
+                </button>
+                <button onClick={() => toggleAudience('customers')}
+                  className={`flex-1 text-xs px-3 py-1.5 rounded-md border ${audience.includes('customers') ? 'bg-[#25D366] text-white border-[#25D366]' : 'border-border text-muted-foreground hover:bg-muted'}`}>
+                  Klientët
+                </button>
               </div>
+
+              {audience.includes('leads') && (
+                <>
+                  <label className="text-[11px] text-muted-foreground block pt-1">Statusi i lead-eve (lër bosh = të gjitha)</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {LEAD_STATUSES.map((s) => {
+                      const on = statuses.includes(s.value);
+                      return (
+                        <button key={s.value} onClick={() => setStatuses((p) => on ? p.filter((x) => x !== s.value) : [...p, s.value])}
+                          className={`text-xs px-2 py-1 rounded-full border ${on ? 'bg-[#25D366] text-white border-[#25D366]' : 'border-border text-muted-foreground hover:bg-muted'}`}>
+                          {s.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+              {audience.includes('customers') && (
+                <p className="text-[11px] text-muted-foreground">
+                  Klientët: të gjithë klientët me numër telefoni përfshihen{assignedTo ? ' (filtruar sipas agjentit)' : ''}.
+                </p>
+              )}
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className="text-[11px] text-muted-foreground block mb-1">Tag</label>
@@ -281,7 +320,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
                 {' '}nga <span className="font-semibold text-foreground">{segmentStats.matched}</span> gjithsej në segment.
                 {segmentStats.matched > segmentStats.withPhone && (
                   <span className="block text-[11px] text-amber-600 mt-0.5">
-                    {segmentStats.matched - segmentStats.withPhone} lead s’kanë numër telefoni dhe nuk dërgohen dot.
+                    {segmentStats.matched - segmentStats.withPhone} kontakte s’kanë numër telefoni dhe nuk dërgohen dot.
                   </span>
                 )}
               </p>

@@ -50,9 +50,10 @@ export interface WhatsAppBroadcast {
   channelPhoneNumberId?: string;      // Meta: which channel sends
   agentId?: string;                   // Baileys: which agent sends
   segment: {
-    statuses?: string[];              // Lead.status values
-    tag?: string;                     // Lead.tags contains
-    assignedToUserId?: string;        // Lead.assignedToUserId
+    audience?: ('leads' | 'customers')[]; // who to target (default ['leads'])
+    statuses?: string[];              // Lead.status values (leads only)
+    tag?: string;                     // Lead.tags contains (leads only)
+    assignedToUserId?: string;        // assignedToUserId (leads + customers)
   };
   scheduledAt?: Date | null;
   status: 'draft' | 'queued' | 'sending' | 'completed' | 'failed';
