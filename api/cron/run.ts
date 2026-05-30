@@ -1142,7 +1142,10 @@ async function runWhatsappBroadcasts() {
       const byPhone = new Map<string, { id: string; name?: string; phone: string; [k: string]: any }>();
 
       if (audience.includes('leads')) {
-        const leadsSnap = await db.collection('leads').where('teamId', '==', b.teamId).get();
+        // Leads aren't team-isolated in this app (loaded app-wide with
+        // skipTeamFilter, rules: read if isAuth), so include them all — matching
+        // the /app/crm view — then narrow by the segment filters.
+        const leadsSnap = await db.collection('leads').get();
         for (const d of leadsSnap.docs) {
           const l = d.data() as any;
           const rawPhone = l.phone || l.phoneNumber;

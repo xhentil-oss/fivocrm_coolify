@@ -42,9 +42,10 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
     orderBy: { field: 'createdAt', direction: 'desc' },
   });
   const { data: templates } = useCollection<WhatsAppTemplate>('waTemplates');
-  const { data: leads } = useCollection<Lead>('leads');
-  // Customers are loaded app-wide with skipTeamFilter (many legacy/portal
-  // customers have no teamId); we guard by teamId client-side below.
+  // Leads and customers are loaded app-wide with skipTeamFilter (CRMView /
+  // CustomersView do the same — neither is team-isolated, rules: read if isAuth),
+  // so we mirror that here to show the full lists users see.
+  const { data: leads } = useCollection<Lead>('leads', { skipTeamFilter: true });
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
