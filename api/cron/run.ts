@@ -1141,6 +1141,21 @@ async function runWhatsappBroadcasts() {
       const audience: string[] = seg.audience?.length ? seg.audience : ['leads'];
       const byPhone = new Map<string, { id: string; name?: string; phone: string; [k: string]: any }>();
 
+      // Tag filtering (normalize array/comma-string; support ANY/ALL + legacy single tag).
+      const wantTags: string[] = seg.tags?.length ? seg.tags : (seg.tag ? [seg.tag] : []);
+      const tagMatchAll = seg.tagMatch === 'all';
+      const entityTags = (e: any): string[] => {
+        const t = e?.tags;
+        if (Array.isArray(t)) return t.map((x: any) => String(x).trim()).filter(Boolean);
+        if (typeof t === 'string') return t.split(',').map((s: string) => s.trim()).filter(Boolean);
+        return [];
+      };
+      const matchesTags = (e: any): boolean => {
+        if (!wantTags.length) return true;
+        const et = entityTags(e);
+        return tagMatchAll ? wantTags.every((t) => et.includes(t)) : wantTags.some((t) => et.includes(t));
+      };
+
       if (audience.includes('leads')) {
         // Leads aren't team-isolated in this app (loaded app-wide with
         // skipTeamFilter, rules: read if isAuth), so include them all — matching
@@ -1151,7 +1166,7 @@ async function runWhatsappBroadcasts() {
           const rawPhone = l.phone || l.phoneNumber;
           if (!rawPhone) continue;
           if (seg.statuses?.length && !seg.statuses.includes(l.status)) continue;
-          if (seg.tag && !(l.tags || []).includes(seg.tag)) continue;
+          if (!matchesTags(l)) continue;
           if (seg.assignedToUserId && l.assignedToUserId !== seg.assignedToUserId) continue;
           const phone = normalizeWaPhone(rawPhone);
           if (phone.length >= 7 && !byPhone.has(phone)) byPhone.set(phone, { ...l, id: d.id, phone });
@@ -1164,6 +1179,7 @@ async function runWhatsappBroadcasts() {
         for (const d of custSnap.docs) {
           const c = d.data() as any;
           if (!c.phone) continue;
+          if (!matchesTags(c)) continue;
           if (seg.assignedToUserId && c.assignedToUserId !== seg.assignedToUserId) continue;
           const phone = normalizeWaPhone(c.phone);
           if (phone.length >= 7 && !byPhone.has(phone)) byPhone.set(phone, { ...c, id: d.id, phone });

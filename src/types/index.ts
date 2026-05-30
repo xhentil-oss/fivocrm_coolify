@@ -52,7 +52,9 @@ export interface WhatsAppBroadcast {
   segment: {
     audience?: ('leads' | 'customers')[]; // who to target (default ['leads'])
     statuses?: string[];              // Lead.status values (leads only)
-    tag?: string;                     // Lead.tags contains (leads only)
+    tags?: string[];                  // tags on leads/customers
+    tagMatch?: 'any' | 'all';         // match ANY (default) or ALL selected tags
+    tag?: string;                     // @deprecated single-tag (back-compat)
     assignedToUserId?: string;        // assignedToUserId (leads + customers)
   };
   scheduledAt?: Date | null;

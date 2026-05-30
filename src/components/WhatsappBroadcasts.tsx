@@ -16,6 +16,14 @@ interface Props {
 // Mirror the exact statuses the CRM uses (tabs in CRMView / PipelineBoard).
 // 'Proposal'/'Won' exist in the type but are never assigned in the UI, so they
 // are intentionally excluded here.
+// Normalize tags from either an array (leads) or a comma string (customers).
+function entityTags(e: { tags?: unknown }): string[] {
+  const t = e.tags;
+  if (Array.isArray(t)) return t.map((x) => String(x).trim()).filter(Boolean);
+  if (typeof t === 'string') return t.split(',').map((s) => s.trim()).filter(Boolean);
+  return [];
+}
+
 const LEAD_STATUSES: { value: string; label: string }[] = [
   { value: 'New', label: 'Të reja' },
   { value: 'Contacted', label: 'Kontaktuara' },
@@ -65,16 +73,28 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
   const [channelId, setChannelId] = useState('');
   const [agentId, setAgentId] = useState('');
   const [statuses, setStatuses] = useState<string[]>([]);
-  const [tag, setTag] = useState('');
+  const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [tagMatch, setTagMatch] = useState<'any' | 'all'>('any');
   const [assignedTo, setAssignedTo] = useState('');
   const [scheduledAt, setScheduledAt] = useState('');
   const [busy, setBusy] = useState(false);
 
+  // Union of all tags across leads + customers (normalized) for the picker.
   const allTags = useMemo(() => {
     const s = new Set<string>();
-    (leads || []).forEach((l) => (l.tags || []).forEach((t) => s.add(t)));
-    return Array.from(s).sort();
-  }, [leads]);
+    (leads || []).forEach((l) => entityTags(l).forEach((t) => s.add(t)));
+    (customers || []).forEach((c) => entityTags(c).forEach((t) => s.add(t)));
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [leads, customers]);
+
+  const tagsMatchEntity = (entityTagList: string[]) => {
+    if (selectedTags.length === 0) return true;
+    return tagMatch === 'all'
+      ? selectedTags.every((t) => entityTagList.includes(t))
+      : selectedTags.some((t) => entityTagList.includes(t));
+  };
+  const toggleTag = (t: string) =>
+    setSelectedTags((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
 
   // Counts across the selected audiences (leads + customers), deduped by phone.
   // `matched` = recipients in the segment; `withPhone` = the real WhatsApp target.
@@ -86,7 +106,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
     if (audience.includes('leads')) {
       for (const l of leads || []) {
         if (statuses.length && !statuses.includes(l.status)) continue;
-        if (tag && !(l.tags || []).includes(tag)) continue;
+        if (!tagsMatchEntity(entityTags(l))) continue;
         if (assignedTo && l.assignedToUserId !== assignedTo) continue;
         matched++;
         const phone = l.phone || (l as any).phoneNumber;
@@ -97,20 +117,22 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
       // Customers aren't team-isolated in this app (read: isAuth, loaded with
       // skipTeamFilter everywhere), so we count them all — matching /app/customers.
       for (const c of customers || []) {
+        if (!tagsMatchEntity(entityTags(c))) continue;
         if (assignedTo && c.assignedToUserId !== assignedTo) continue;
         matched++;
         if (hasPhone(c.phone)) phones.add(norm(c.phone));
       }
     }
     return { matched, withPhone: phones.size };
-  }, [leads, customers, audience, statuses, tag, assignedTo]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads, customers, audience, statuses, selectedTags, tagMatch, assignedTo]);
   const targetCount = segmentStats.withPhone;
 
   const toggleAudience = (a: 'leads' | 'customers') =>
     setAudience((prev) => (prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]));
 
   const resetForm = () => {
-    setName(''); setTemplateId(''); setStatuses([]); setTag(''); setAssignedTo(''); setScheduledAt('');
+    setName(''); setTemplateId(''); setStatuses([]); setSelectedTags([]); setAssignedTo(''); setScheduledAt('');
   };
 
   const buildPayload = (status: WhatsAppBroadcast['status']) => ({
@@ -122,7 +144,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
     segment: {
       audience,
       ...(statuses.length ? { statuses } : {}),
-      ...(tag ? { tag } : {}),
+      ...(selectedTags.length ? { tags: selectedTags, tagMatch } : {}),
       ...(assignedTo ? { assignedToUserId: assignedTo } : {}),
     },
     scheduledAt: scheduledAt ? Timestamp.fromDate(new Date(scheduledAt)) : null,
@@ -304,21 +326,42 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
                   Klientët: të gjithë klientët me numër telefoni përfshihen{assignedTo ? ' (filtruar sipas agjentit)' : ''}.
                 </p>
               )}
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] text-muted-foreground block mb-1">Tag</label>
-                  <input list="wa-bcast-tags" value={tag} onChange={(e) => setTag(e.target.value)} placeholder="çdo tag"
-                    className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/40" />
-                  <datalist id="wa-bcast-tags">{allTags.map((t) => <option key={t} value={t} />)}</datalist>
+              {/* Tag picker (multi-select, works for leads + customers) */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] text-muted-foreground">Etiketat (tags)</label>
+                  {selectedTags.length > 1 && (
+                    <div className="flex items-center gap-1 text-[10px]">
+                      <button onClick={() => setTagMatch('any')}
+                        className={`px-1.5 py-0.5 rounded ${tagMatch === 'any' ? 'bg-[#25D366] text-white' : 'bg-muted text-muted-foreground'}`}>Çdo</button>
+                      <button onClick={() => setTagMatch('all')}
+                        className={`px-1.5 py-0.5 rounded ${tagMatch === 'all' ? 'bg-[#25D366] text-white' : 'bg-muted text-muted-foreground'}`}>Të gjitha</button>
+                    </div>
+                  )}
                 </div>
-                <div>
-                  <label className="text-[11px] text-muted-foreground block mb-1">Caktuar te</label>
-                  <select value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}
-                    className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/40">
-                    <option value="">Kushdo</option>
-                    {teamMembers?.filter((m) => m.userId).map((m) => <option key={m.id} value={m.userId}>{memberName(m)}</option>)}
-                  </select>
-                </div>
+                {allTags.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground">Asnjë etiketë te lead-et/klientët ende.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                    {allTags.map((t) => {
+                      const on = selectedTags.includes(t);
+                      return (
+                        <button key={t} onClick={() => toggleTag(t)}
+                          className={`text-xs px-2 py-1 rounded-full border ${on ? 'bg-[#25D366] text-white border-[#25D366]' : 'border-border text-muted-foreground hover:bg-muted'}`}>
+                          {t}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+              <div>
+                <label className="text-[11px] text-muted-foreground block mb-1">Caktuar te</label>
+                <select value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}
+                  className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/40">
+                  <option value="">Kushdo</option>
+                  {teamMembers?.filter((m) => m.userId).map((m) => <option key={m.id} value={m.userId}>{memberName(m)}</option>)}
+                </select>
               </div>
               <p className="text-xs text-muted-foreground">
                 Target: <span className="font-semibold text-foreground">{segmentStats.withPhone}</span> me numër telefoni
