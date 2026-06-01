@@ -53,9 +53,11 @@ const ContractsView: React.FC = () => {
 
   const teamSettings = useTeamSettingsData();
   const { data: contracts, loading } = useCollection<Contract>('contracts');
-  const { data: customers } = useCollection<Customer>('customers');
+  // Customers/invoices aren't team-isolated in this app (loaded app-wide with
+  // skipTeamFilter elsewhere); mirror that so the full client list shows here.
+  const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: quotes } = useCollection<Quote>('quotes');
-  const { data: invoices } = useCollection<Invoice>('invoices');
+  const { data: invoices } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
   const { data: services, loading: servicesLoading } = useCollection<Service>('services');
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers');
   const contractMutation = useMutation<Contract>('contracts');
