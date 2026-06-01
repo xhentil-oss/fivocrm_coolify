@@ -539,7 +539,11 @@ const ContractsView: React.FC = () => {
                       </Button>
                     </PopoverTrigger>
                     <PopoverContent className="p-0 w-[220px]" align="start">
-                      <Command>
+                      {/* shouldFilter=false: cmdk's built-in filter matches the
+                          typed text against each item's `value` (here the random
+                          customer id), which hid all results. We filter manually
+                          by name/company below instead. */}
+                      <Command shouldFilter={false}>
                         <CommandInput
                           placeholder="Kërko klient..."
                           value={customerSearch}
