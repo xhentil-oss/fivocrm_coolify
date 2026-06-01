@@ -61,7 +61,7 @@ function checkRateLimit(uid: string): boolean {
 const ALLOWED_TYPES = new Set(['image', 'video', 'audio', 'document']);
 const MAX_BYTES = 16 * 1024 * 1024; // Meta limit for most media types
 
-function isAllowedMediaUrl(u: string): boolean {
+function isAllowedMediaUrl(u: string, allowedVpsHost?: string | null): boolean {
   try {
     const url = new URL(u);
     if (url.protocol !== 'https:') return false;
@@ -69,6 +69,8 @@ function isAllowedMediaUrl(u: string): boolean {
     if (url.hostname === 'firebasestorage.googleapis.com') return true;
     if (url.hostname.endsWith('.firebasestorage.app')) return true;
     if (url.hostname === 'storage.googleapis.com') return true;
+    // The team's own VPS file host (attachments now live on the VPS).
+    if (allowedVpsHost && url.hostname === allowedVpsHost) return true;
     return false;
   } catch {
     return false;
@@ -113,7 +115,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'Fusha "to" është e detyrueshme' });
   }
   if (!teamId) return res.status(400).json({ error: 'teamId mungon' });
-  if (!mediaUrl || typeof mediaUrl !== 'string' || !isAllowedMediaUrl(mediaUrl)) {
+  // Basic shape check here; the host whitelist (incl. the team's VPS) runs once
+  // team settings are loaded below.
+  if (!mediaUrl || typeof mediaUrl !== 'string') {
     return res.status(400).json({ error: 'mediaUrl i pavlefshëm' });
   }
   if (!mediaType || !ALLOWED_TYPES.has(String(mediaType))) {
@@ -147,6 +151,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const settingsSnap = await adminDb.collection('teamSettings').doc(teamId).get();
   if (!settingsSnap.exists) return res.status(404).json({ error: 'Team settings nuk u gjetën' });
   const settings = settingsSnap.data()!;
+
+  // Now that we know the team's VPS, enforce the media-URL host whitelist
+  // (Firebase/Google or the team's own VPS file host).
+  const vpsHost = (() => {
+    try { return settings.whatsappVpsUrl ? new URL(settings.whatsappVpsUrl).hostname : null; }
+    catch { return null; }
+  })();
+  if (!isAllowedMediaUrl(mediaUrl, vpsHost)) {
+    return res.status(400).json({ error: 'mediaUrl i pavlefshëm' });
+  }
 
   let accessToken: string | undefined;
   let phoneNumberId: string | undefined;
