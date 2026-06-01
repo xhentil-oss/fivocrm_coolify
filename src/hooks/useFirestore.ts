@@ -118,6 +118,16 @@ const teamScopedCollections = new Set([
   'whatsappMessages',
 ]);
 
+// CRM "record" collections that are NOT team-isolated in practice: most views
+// already load them with skipTeamFilter, many docs (legacy / portal / landing)
+// have no teamId, and the rules allow `read: if isAuth()`. We force their READS
+// to be global (full list everywhere, regardless of the skipTeamFilter prop) to
+// avoid incomplete lists, while CREATE still stamps teamId (they stay in
+// teamScopedCollections above). Single-org deployments see no behavior change.
+const globalReadCollections = new Set([
+  'customers', 'leads', 'invoices', 'quotes', 'contracts', 'services',
+]);
+
 // Module-level cache: reuse listeners for identical queries across components.
 // Key = "{collectionName}|{whereKey}|{orderKey}|{limit}|{skipTeamFilter}|{teamId}"
 interface CacheEntry {
@@ -163,7 +173,10 @@ export function useCollection<T = DocumentData>(
   const { user } = useAuth();
   const reactiveTeamId = useGlobalTeamId();
   const superAdmin = useIsSuperAdmin();
-  const isTeamScoped = teamScopedCollections.has(collectionName) && !options?.skipTeamFilter && !superAdmin;
+  const isTeamScoped = teamScopedCollections.has(collectionName)
+    && !options?.skipTeamFilter
+    && !superAdmin
+    && !globalReadCollections.has(collectionName);
   const globalTeamId = isTeamScoped ? reactiveTeamId : null;
 
   const whereKey = JSON.stringify(options?.where || null);
