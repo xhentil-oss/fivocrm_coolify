@@ -1,6 +1,4 @@
 import { useState, useCallback } from 'react';
-import { ref, uploadBytesResumable, getDownloadURL } from 'firebase/storage';
-import { storage } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { getGlobalTeamId } from './useFirestore';
 
@@ -12,6 +10,10 @@ interface UploadResult {
   type: string;
 }
 
+// Uploads go to the self-hosted VPS (POST {vpsUrl}/upload) instead of Firebase
+// Storage. The VPS verifies the Firebase ID token, stores the file on disk, and
+// serves it publicly under /files. VPS URL comes from team settings
+// (whatsapp_vps_url, synced to localStorage by useTeamSettingsSync).
 export function useFileUpload() {
   const { user } = useAuth();
   const [uploading, setUploading] = useState(false);
@@ -20,38 +22,52 @@ export function useFileUpload() {
 
   const upload = useCallback(async (file: File, folder = 'uploads'): Promise<UploadResult> => {
     if (!user) throw new Error('Not authenticated');
+    const vpsUrl = (localStorage.getItem('whatsapp_vps_url') || '').replace(/\/$/, '');
+    if (!vpsUrl) {
+      throw new Error('Serveri i skedarëve (VPS) nuk është konfiguruar. Shtoje te Cilësimet → WhatsApp.');
+    }
     const teamId = getGlobalTeamId() || 'shared';
-    const safeName = `${Date.now()}_${file.name.replace(/[^a-zA-Z0-9._-]/g, '_')}`;
-    const storagePath = `${teamId}/${folder}/${safeName}`;
-    const storageRef = ref(storage, storagePath);
 
     setUploading(true);
     setProgress(0);
     setError(null);
 
-    return new Promise((resolve, reject) => {
-      const task = uploadBytesResumable(storageRef, file, {
-        customMetadata: { uploadedBy: user.uid },
+    try {
+      const token = await user.getIdToken();
+      const form = new FormData();
+      form.append('teamId', teamId);
+      form.append('folder', folder);
+      form.append('file', file);
+
+      const result = await new Promise<UploadResult>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${vpsUrl}/upload`);
+        xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        xhr.upload.onprogress = (e) => {
+          if (e.lengthComputable) setProgress(Math.round((e.loaded / e.total) * 100));
+        };
+        xhr.onload = () => {
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try { resolve(JSON.parse(xhr.responseText) as UploadResult); }
+            catch { reject(new Error('Përgjigje e pavlefshme nga serveri')); }
+          } else {
+            let msg = `Ngarkimi dështoi (${xhr.status})`;
+            try { msg = JSON.parse(xhr.responseText).error || msg; } catch { /* ignore */ }
+            reject(new Error(msg));
+          }
+        };
+        xhr.onerror = () => reject(new Error('Lidhja me serverin e skedarëve dështoi'));
+        xhr.send(form);
       });
 
-      task.on(
-        'state_changed',
-        (snapshot) => {
-          setProgress(Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 100));
-        },
-        (err) => {
-          setError(err);
-          setUploading(false);
-          reject(err);
-        },
-        async () => {
-          const url = await getDownloadURL(task.snapshot.ref);
-          setUploading(false);
-          setProgress(100);
-          resolve({ url, path: storagePath, name: file.name, size: file.size, type: file.type });
-        }
-      );
-    });
+      setUploading(false);
+      setProgress(100);
+      return result;
+    } catch (err) {
+      setError(err as Error);
+      setUploading(false);
+      throw err;
+    }
   }, [user]);
 
   return { upload, uploading, progress, error };

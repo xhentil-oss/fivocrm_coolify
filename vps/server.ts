@@ -7,14 +7,40 @@ import makeWASocket, {
 import { Boom } from '@hapi/boom';
 import admin from 'firebase-admin';
 import QRCode from 'qrcode';
-import { readFileSync, existsSync, rmSync } from 'fs';
+import { readFileSync, existsSync, rmSync, mkdirSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import cors from 'cors';
+import multer from 'multer';
 import pino from 'pino';
 
 process.on('unhandledRejection', (err) => { console.error('[WA] Unhandled rejection:', err); });
 process.on('uncaughtException', (err) => { console.error('[WA] Uncaught exception:', err); });
 
 const app = express();
+app.set('trust proxy', true); // respect X-Forwarded-Proto for https URLs behind a proxy
+app.use(cors());
 app.use(express.json());
+
+// ── File hosting (replaces Firebase Storage for chat/comment attachments) ──────
+const UPLOAD_DIR = process.env.UPLOAD_DIR || './uploads';
+mkdirSync(UPLOAD_DIR, { recursive: true });
+app.use('/files', express.static(UPLOAD_DIR, { maxAge: '7d', immutable: true }));
+const uploadMw = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
+// Mirror storage.rules: images / audio / video / pdf / office / text only.
+const ALLOWED_UPLOAD = /^(image\/(png|jpe?g|gif|webp)|audio\/.*|video\/.*|application\/pdf|application\/.*officedocument.*|text\/(plain|csv))$/;
+
+// Verify a Firebase ID token (so clients never need the VPS API secret to upload).
+async function requireFirebaseAuth(req: any, res: any, next: any) {
+  const h = req.headers.authorization as string | undefined;
+  if (!h?.startsWith('Bearer ')) { res.status(401).json({ error: 'Mungon token-i i autentikimit' }); return; }
+  try {
+    const decoded = await admin.auth().verifyIdToken(h.slice(7));
+    req.uid = decoded.uid;
+    next();
+  } catch {
+    res.status(401).json({ error: 'Token i pavlefshëm' });
+  }
+}
 
 // ── Config ────────────────────────────────────────────────────────────────────
 const API_SECRET = process.env.API_SECRET;
@@ -568,6 +594,17 @@ function getAgent(agentId?: string): AgentState | null {
 
 // ── Routes ────────────────────────────────────────────────────────────────────
 
+// Public health/info root — confirms server is alive without exposing secrets.
+app.get('/', (_req, res) => {
+  res.json({
+    service: 'whatsapp-vps-server',
+    status: 'ok',
+    agents: agents.size,
+    uptimeSec: Math.round(process.uptime()),
+    hint: 'Use /status, /send, /qr/:agentId with header x-api-key',
+  });
+});
+
 app.get('/status', requireApiKey, (_req, res) => {
   const statuses: Record<string, any> = {};
   for (const [id, a] of agents) {
@@ -715,6 +752,34 @@ app.post('/send', requireApiKey, async (req, res) => {
     res.json({ success: true, id: docId, agentId: agent.config.id });
   } catch (err: unknown) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Dërgimi dështoi' });
+  }
+});
+
+// ── File upload (chat / comment attachments) ─────────────────────────────────
+// POST /upload  (multipart: file, teamId, folder)  — auth via Firebase ID token.
+// Returns { url, path, name, size, type }.  Files served publicly under /files.
+app.post('/upload', requireFirebaseAuth, uploadMw.single('file'), async (req: any, res: any) => {
+  try {
+    const file = req.file;
+    if (!file) { res.status(400).json({ error: 'Mungon skedari' }); return; }
+    if (!ALLOWED_UPLOAD.test(file.mimetype)) { res.status(400).json({ error: `Tip skedari i palejuar: ${file.mimetype}` }); return; }
+    const teamId = String(req.body.teamId || 'shared').replace(/[^a-zA-Z0-9_-]/g, '_') || 'shared';
+    const folder = String(req.body.folder || 'uploads').replace(/[^a-zA-Z0-9_-]/g, '_') || 'uploads';
+    const safeName = `${Date.now()}_${String(file.originalname || 'file').replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    const relPath = `${teamId}/${folder}/${safeName}`;
+    const absDir = join(UPLOAD_DIR, teamId, folder);
+    mkdirSync(absDir, { recursive: true });
+    writeFileSync(join(absDir, safeName), file.buffer);
+    const base = (process.env.PUBLIC_URL || `${req.protocol}://${req.get('host')}`).replace(/\/$/, '');
+    res.json({
+      url: `${base}/files/${relPath}`,
+      path: relPath,
+      name: file.originalname,
+      size: file.size,
+      type: file.mimetype,
+    });
+  } catch (err: unknown) {
+    res.status(500).json({ error: err instanceof Error ? err.message : 'Ngarkimi dështoi' });
   }
 });
 
