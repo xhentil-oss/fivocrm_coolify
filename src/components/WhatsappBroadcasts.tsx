@@ -363,6 +363,9 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
                   {teamMembers?.filter((m) => m.userId).map((m) => <option key={m.id} value={m.userId}>{memberName(m)}</option>)}
                 </select>
               </div>
+              <p className="text-[10px] text-muted-foreground">
+                Ngarkuar: {leads?.length ?? 0} lead · {customers?.length ?? 0} klientë.
+              </p>
               <p className="text-xs text-muted-foreground">
                 Target: <span className="font-semibold text-foreground">{segmentStats.withPhone}</span> me numër telefoni
                 {' '}nga <span className="font-semibold text-foreground">{segmentStats.matched}</span> gjithsej në segment.
