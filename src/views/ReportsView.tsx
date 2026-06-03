@@ -401,6 +401,10 @@ const ReportsView: React.FC = () => {
             value: toAll(it.totalPrice, currency),
           }))
         : [{ dept: 'Të tjera', value: invoiceTotal }];
+      // Allocate partial payments by each line's share of the SUM OF LINES (not
+      // the invoice total) so the shares always add up to 100% even with
+      // discounts/VAT/rounding differences between line items and the total.
+      const itemsSum = effItems.reduce((s, it) => s + it.value, 0);
 
       const createdDate = parseDate(invoice.createdAt);
       const createdInYear = !!createdDate && createdDate.getFullYear() === selectedRevenueYear;
@@ -424,7 +428,7 @@ const ReportsView: React.FC = () => {
         }
 
         if (invoice.status === 'Partial') {
-          const itemShare = invoiceTotal > 0 ? (itemValue / invoiceTotal) : 0;
+          const itemShare = itemsSum > 0 ? (itemValue / itemsSum) : 0;
           (invoice.partialPayments ?? []).forEach(p => {
             const pd = parseDate(p.paidAt);
             if (!pd || pd.getFullYear() !== selectedRevenueYear) return;

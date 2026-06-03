@@ -30,7 +30,10 @@ export function parseDate(value: unknown): Date | null {
 }
 
 export function getInvoicePaidDate(inv: Invoice): Date | null {
-  return parseDate(inv.paidAt) || parseDate(inv.updatedAt) || parseDate(inv.createdAt);
+  // Prefer the explicit payment date. Fall back to createdAt (immutable) rather
+  // than updatedAt — using updatedAt would re-bucket revenue to another
+  // month/year on any unrelated edit, making financial reports unstable.
+  return parseDate(inv.paidAt) || parseDate(inv.createdAt);
 }
 
 /**
