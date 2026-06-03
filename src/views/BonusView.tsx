@@ -202,10 +202,18 @@ const BonusView: React.FC = () => {
         const salary = effectiveSalary(member.userId, member.monthlySalary);
         const salarySource = salaryFromExpenses.has(member.userId) ? 'expenses' : 'profile';
 
-        // Match by responsibleUserId first; fall back to createdByUserId
+        // Match owner by uid OR email — member docs may store either, and
+        // projects may reference either (mirrors ReportsView identity logic).
+        const memberIdentifiers = new Set<string>(
+          [member.userId, (member as any).email]
+            .map(v => (typeof v === 'string' ? v.trim().toLowerCase() : ''))
+            .filter(Boolean)
+        );
+        const matchesMember = (v?: string | null) =>
+          !!v && memberIdentifiers.has(String(v).trim().toLowerCase());
         const memberProjects = periodProjects.filter(p => {
           const owner = p.responsibleUserId || p.createdByUserId;
-          return owner === member.userId;
+          return matchesMember(owner);
         });
 
         const projectDetails = memberProjects.map(p => {

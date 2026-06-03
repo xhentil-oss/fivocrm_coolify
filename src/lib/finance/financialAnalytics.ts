@@ -69,6 +69,32 @@ export function getExpenseDate(exp: Expense): Date | null {
   return parseDate(exp.date) || parseDate(exp.createdAt);
 }
 
+/** Amount collected on an invoice with payment date within [start, end], in ALL.
+ *  Used for period-accurate cash-basis attribution (e.g. per staff member). */
+export function getInvoiceCollectedBetween(inv: Invoice, start: Date, end?: Date): number {
+  const inRange = (d: Date | null) => !!d && d >= start && (!end || d <= end);
+  if (inv.status === 'Paid') {
+    return inRange(getInvoicePaidDate(inv)) ? getInvoiceTotalAll(inv) : 0;
+  }
+  if (inv.status === 'Partial') {
+    if (inv.partialPayments?.length) {
+      return inv.partialPayments.reduce((s, p) => {
+        return inRange(parseDate(p.paidAt)) ? s + toAll(p.amount ?? 0, inv.currency) : s;
+      }, 0);
+    }
+    return inRange(getInvoicePaidDate(inv)) ? toAll(inv.paidAmount ?? 0, inv.currency) : 0;
+  }
+  return 0;
+}
+
+/** Billed (full invoice) amount if recognized within [start, end], in ALL (accrual). */
+export function getInvoiceBilledBetween(inv: Invoice, start: Date, end?: Date): number {
+  if (!ACCRUAL_REVENUE_STATUSES.includes(inv.status)) return 0;
+  const rd = getInvoiceRecognitionDate(inv);
+  if (!rd || rd < start || (end && rd > end)) return 0;
+  return getInvoiceTotalAll(inv);
+}
+
 /** Has month `i` (0-based) of `year` already occurred relative to `now`? */
 export function monthHasOccurred(year: number, i: number, now = new Date()): boolean {
   if (year < now.getFullYear()) return true;

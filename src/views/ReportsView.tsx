@@ -31,6 +31,8 @@ import {
   monthsElapsedInYear,
   getFinancialAvailableYears,
   getInvoiceCollectedAll,
+  getInvoiceCollectedBetween,
+  getInvoiceBilledBetween,
   getInvoiceOutstandingAll,
   getInvoicePaidDate,
   getInvoiceRecognitionDate,
@@ -690,9 +692,13 @@ const ReportsView: React.FC = () => {
           return true;
         });
 
-        // Centralised money math — consistent with the rest of finance reports.
-        const billed = memberInvoices.reduce((s, inv) => s + getInvoiceTotalAll(inv), 0);
-        const collected = memberInvoices.reduce((s, inv) => s + getInvoiceCollectedAll(inv), 0);
+        // Period-accurate money math: for a selected year, billed counts only
+        // invoices recognized that year (accrual) and collected counts only
+        // payments received that year (cash) — so years don't double-count.
+        const billed = memberInvoices.reduce((s, inv) =>
+          s + (staffPeriod === 'all' ? getInvoiceTotalAll(inv) : getInvoiceBilledBetween(inv, yearStart, yearEnd)), 0);
+        const collected = memberInvoices.reduce((s, inv) =>
+          s + (staffPeriod === 'all' ? getInvoiceCollectedAll(inv) : getInvoiceCollectedBetween(inv, yearStart, yearEnd)), 0);
         const outstanding = memberInvoices.reduce((s, inv) => s + getInvoiceOutstandingAll(inv), 0);
 
         const wonLeads = (leads ?? []).filter(l => {
@@ -750,8 +756,8 @@ const ReportsView: React.FC = () => {
       if (inv.status === 'Draft') return;
       if (!inSelectedPeriod(inv)) return;
       if (attributedInvoiceIds.has(inv.id)) return;
-      unattributed.billed += getInvoiceTotalAll(inv);
-      unattributed.collected += getInvoiceCollectedAll(inv);
+      unattributed.billed += staffPeriod === 'all' ? getInvoiceTotalAll(inv) : getInvoiceBilledBetween(inv, yearStart, yearEnd);
+      unattributed.collected += staffPeriod === 'all' ? getInvoiceCollectedAll(inv) : getInvoiceCollectedBetween(inv, yearStart, yearEnd);
       unattributed.outstanding += getInvoiceOutstandingAll(inv);
       unattributed.invoiceCount += 1;
     });

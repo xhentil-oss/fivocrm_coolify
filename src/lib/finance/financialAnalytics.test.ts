@@ -15,6 +15,7 @@ import {
   calculateRevenueBetween,
   calculateTotalExpenses,
   calculateExpensesBetween,
+  getInvoiceCollectedBetween,
   monthHasOccurred,
   monthsElapsedInYear,
   getFinancialAvailableYears,
@@ -306,6 +307,26 @@ describe('ERP-grade accounting helpers (accrual + AR)', () => {
       new Date('2026-12-31T23:59:59Z'),
     );
     expect(total).toBe(300); // only the two 2026 expenses
+  });
+
+  it('attributes collected amounts to the payment period only', () => {
+    const start = new Date('2026-01-01T00:00:00Z');
+    const end = new Date('2026-12-31T23:59:59Z');
+    // Paid in 2025 → 0 collected in 2026.
+    const paid2025 = mkInvoice({ status: 'Paid', total: 1000, currency: 'ALL', paidAt: new Date('2025-12-20T10:00:00Z') });
+    expect(getInvoiceCollectedBetween(paid2025, start, end)).toBe(0);
+    // Paid in 2026 → full.
+    const paid2026 = mkInvoice({ status: 'Paid', total: 1000, currency: 'ALL', paidAt: new Date('2026-03-01T10:00:00Z') });
+    expect(getInvoiceCollectedBetween(paid2026, start, end)).toBe(1000);
+    // Partial: only the 2026 payment counts.
+    const partial = mkInvoice({
+      status: 'Partial', total: 2000, currency: 'ALL',
+      partialPayments: [
+        { amount: 300, paidAt: new Date('2025-11-01T10:00:00Z') },
+        { amount: 500, paidAt: new Date('2026-02-01T10:00:00Z') },
+      ],
+    });
+    expect(getInvoiceCollectedBetween(partial, start, end)).toBe(500);
   });
 
   it('calculates accrual revenue in a date range', () => {
