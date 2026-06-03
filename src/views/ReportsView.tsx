@@ -500,11 +500,19 @@ const ReportsView: React.FC = () => {
     let assignedSalary = 0;
     (teamMembers ?? []).forEach(m => {
       if (m.status !== 'Active') return;
-      const line = (m as any).serviceLine ? normalizeFinanceCategory((m as any).serviceLine) : null;
-      if (!line || !serviceCats.has(line)) return;
-      const cost = (m.monthlySalary || 0) * monthsEl;
-      directLaborByCat.set(line, (directLaborByCat.get(line) || 0) + cost);
-      assignedSalary += cost;
+      // A member can serve multiple service lines — split salary equally across
+      // the selected lines. Shares for lines without revenue stay in overhead.
+      const raw: string[] = Array.isArray((m as any).serviceLines) && (m as any).serviceLines.length
+        ? (m as any).serviceLines
+        : ((m as any).serviceLine ? [(m as any).serviceLine] : []);
+      const memberLines = raw.map((x: string) => normalizeFinanceCategory(x));
+      if (!memberLines.length) return; // unassigned → overhead
+      const perLine = ((m.monthlySalary || 0) * monthsEl) / memberLines.length;
+      memberLines.forEach(line => {
+        if (!serviceCats.has(line)) return; // share for a non-revenue line → overhead
+        directLaborByCat.set(line, (directLaborByCat.get(line) || 0) + perLine);
+        assignedSalary += perLine;
+      });
     });
 
     // Remaining (unassigned) salaries + non-service expenses = shared overhead.

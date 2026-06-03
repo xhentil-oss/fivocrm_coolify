@@ -1097,7 +1097,13 @@ const EditMemberForm: React.FC<{
   const [canAccessSettings, setCanAccessSettings] = useState(member.canAccessSettings ?? false);
   const [status, setStatus] = useState(member.status);
   const [monthlySalary, setMonthlySalary] = useState(member.monthlySalary?.toString() || '');
-  const [serviceLine, setServiceLine] = useState(member.serviceLine || '');
+  const [serviceLines, setServiceLines] = useState<string[]>(
+    Array.isArray(member.serviceLines) && member.serviceLines.length
+      ? member.serviceLines
+      : (member.serviceLine ? [member.serviceLine] : [])
+  );
+  const toggleServiceLine = (c: string) =>
+    setServiceLines(prev => (prev.includes(c) ? prev.filter(x => x !== c) : [...prev, c]));
   const [displayName, setDisplayName] = useState(member.displayName || member.email?.split('@')[0] || '');
   const [email, setEmail] = useState(member.email || '');
 
@@ -1123,7 +1129,7 @@ const EditMemberForm: React.FC<{
       displayName: displayName.trim() || undefined,
       email: email.trim() || undefined,
       monthlySalary: monthlySalary ? parseFloat(monthlySalary) : undefined,
-      serviceLine: serviceLine.trim() || undefined,
+      serviceLines: serviceLines.length ? serviceLines : undefined,
     });
   };
 
@@ -1303,19 +1309,27 @@ const EditMemberForm: React.FC<{
           className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
         />
         <div className="pt-1">
-          <Label htmlFor="serviceLine" className="text-xs text-amber-800 dark:text-amber-300">Shërbimi (për P&L)</Label>
-          <p className="text-[11px] text-muted-foreground">Rroga ngarkohet si kosto direkte e këtij shërbimi te raporti financiar. Bosh = overhead i përbashkët.</p>
-          <input
-            id="serviceLine"
-            list="member-service-lines"
-            value={serviceLine}
-            onChange={(e) => setServiceLine(e.target.value)}
-            placeholder="p.sh. Social Media, Web, SEO"
-            className="mt-1 w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
-          />
-          <datalist id="member-service-lines">
-            {serviceLineOptions.map((c: string) => <option key={c} value={c} />)}
-          </datalist>
+          <Label className="text-xs text-amber-800 dark:text-amber-300">Shërbimet (për P&L)</Label>
+          <p className="text-[11px] text-muted-foreground">Zgjidh një ose disa shërbime. Rroga ndahet baras mes tyre si kosto direkte. Asnjë = overhead i përbashkët.</p>
+          {serviceLineOptions.length === 0 ? (
+            <p className="mt-1 text-[11px] text-muted-foreground italic">Krijo shërbime me kategori më parë (te Shërbimet).</p>
+          ) : (
+            <div className="mt-1 flex flex-wrap gap-1.5">
+              {serviceLineOptions.map((c: string) => {
+                const on = serviceLines.includes(c);
+                return (
+                  <button
+                    type="button"
+                    key={c}
+                    onClick={() => toggleServiceLine(c)}
+                    className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${on ? 'bg-amber-500 text-white border-amber-500' : 'border-input bg-background hover:bg-muted'}`}
+                  >
+                    {on ? '✓ ' : ''}{c}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
       </div>
 
