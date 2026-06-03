@@ -489,8 +489,23 @@ const ReportsView: React.FC = () => {
       if (serviceCats.has(cat)) return; // direct cost, already on the service line
       overheadExpenses += toAll(exp.amount || 0, (exp as any).currency);
     });
-    // Salaries are company-wide overhead (not tagged to a service).
-    const overheadSalaries = totalMonthlySalary * monthsElapsedInYear(selectedRevenueYear);
+    // Direct labor: a member assigned to a service line (serviceLine matching a
+    // revenue category) charges their salary as a DIRECT cost of that service.
+    // Unassigned members' salaries stay in the shared overhead pool.
+    const monthsEl = monthsElapsedInYear(selectedRevenueYear);
+    const directLaborByCat = new Map<string, number>();
+    let assignedSalary = 0;
+    (teamMembers ?? []).forEach(m => {
+      if (m.status !== 'Active') return;
+      const line = (m as any).serviceLine ? normalizeFinanceCategory((m as any).serviceLine) : null;
+      if (!line || !serviceCats.has(line)) return;
+      const cost = (m.monthlySalary || 0) * monthsEl;
+      directLaborByCat.set(line, (directLaborByCat.get(line) || 0) + cost);
+      assignedSalary += cost;
+    });
+
+    // Remaining (unassigned) salaries + non-service expenses = shared overhead.
+    const overheadSalaries = Math.max(0, totalMonthlySalary * monthsEl - assignedSalary);
     const overheadPool = overheadExpenses + overheadSalaries;
     const totalRev = lines.reduce((s, l) => s + l.paid, 0);
 
@@ -498,7 +513,8 @@ const ReportsView: React.FC = () => {
       const allocatedOverhead = totalRev > 0
         ? overheadPool * (l.paid / totalRev)
         : (lines.length ? overheadPool / lines.length : 0);
-      const directCost = l.expenses;
+      const directLabor = directLaborByCat.get(l.department) || 0;
+      const directCost = l.expenses + directLabor;
       const net = l.paid - directCost - allocatedOverhead;
       return {
         department: l.department,
@@ -518,7 +534,7 @@ const ReportsView: React.FC = () => {
       net: rows.reduce((s, r) => s + r.net, 0),
     };
     return { rows, totals, overheadExpenses, overheadSalaries, overheadPool };
-  }, [revenueByDepartment, expenses, totalMonthlySalary, selectedRevenueYear]);
+  }, [revenueByDepartment, expenses, teamMembers, totalMonthlySalary, selectedRevenueYear]);
 
   // ── Revenue by Staff Member (Admin/Owner only) ──
   const currentTeamId = useGlobalTeamId();
@@ -1450,7 +1466,7 @@ const ReportsView: React.FC = () => {
         </div>
         <div className="text-[11px] text-muted-foreground space-y-0.5">
           <p>Overhead i alokuar gjithsej: <span className="font-medium text-foreground">{Math.round(servicePnl.overheadPool).toLocaleString()} ALL</span> (rroga {Math.round(servicePnl.overheadSalaries).toLocaleString()} + shpenzime të përgjithshme {Math.round(servicePnl.overheadExpenses).toLocaleString()}).</p>
-          <p>Kosto direkte = shpenzimet me kategori të njëjtë me shërbimin. Që ndarja të jetë e saktë, kategorizo shpenzimet sipas të njëjtave emra si shërbimet.</p>
+          <p>Kosto direkte = shpenzimet me kategori të njëjtë me shërbimin + rrogat e punëtorëve të caktuar te ai shërbim (Ekipet → edito anëtarin → "Shërbimi"). Punëtorët pa shërbim trajtohen si overhead.</p>
         </div>
       </Card>
       )}

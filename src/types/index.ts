@@ -155,6 +155,9 @@ export interface TeamMember {
   canAccessExpenses?: boolean;
   canAccessProfile?: boolean;
   monthlySalary?: number;
+  /** Service line this member's labor belongs to (matches a service category),
+   *  used to charge their salary as a direct cost of that service in the P&L. */
+  serviceLine?: string;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

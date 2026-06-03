@@ -1097,8 +1097,17 @@ const EditMemberForm: React.FC<{
   const [canAccessSettings, setCanAccessSettings] = useState(member.canAccessSettings ?? false);
   const [status, setStatus] = useState(member.status);
   const [monthlySalary, setMonthlySalary] = useState(member.monthlySalary?.toString() || '');
+  const [serviceLine, setServiceLine] = useState(member.serviceLine || '');
   const [displayName, setDisplayName] = useState(member.displayName || member.email?.split('@')[0] || '');
   const [email, setEmail] = useState(member.email || '');
+
+  // Service categories (for charging this member's salary as a direct cost
+  // of the service line they work on, in the financial P&L).
+  const { data: svcForLines } = useCollection<any>('services', { skipTeamFilter: true });
+  const serviceLineOptions = React.useMemo(
+    () => Array.from(new Set((svcForLines || []).map((s: any) => (s.category || '').trim()).filter(Boolean))).sort(),
+    [svcForLines]
+  );
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1114,6 +1123,7 @@ const EditMemberForm: React.FC<{
       displayName: displayName.trim() || undefined,
       email: email.trim() || undefined,
       monthlySalary: monthlySalary ? parseFloat(monthlySalary) : undefined,
+      serviceLine: serviceLine.trim() || undefined,
     });
   };
 
@@ -1292,6 +1302,21 @@ const EditMemberForm: React.FC<{
           placeholder="p.sh. 800"
           className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
         />
+        <div className="pt-1">
+          <Label htmlFor="serviceLine" className="text-xs text-amber-800 dark:text-amber-300">Shërbimi (për P&L)</Label>
+          <p className="text-[11px] text-muted-foreground">Rroga ngarkohet si kosto direkte e këtij shërbimi te raporti financiar. Bosh = overhead i përbashkët.</p>
+          <input
+            id="serviceLine"
+            list="member-service-lines"
+            value={serviceLine}
+            onChange={(e) => setServiceLine(e.target.value)}
+            placeholder="p.sh. Social Media, Web, SEO"
+            className="mt-1 w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+          <datalist id="member-service-lines">
+            {serviceLineOptions.map((c: string) => <option key={c} value={c} />)}
+          </datalist>
+        </div>
       </div>
 
       <Button type="submit" className="w-full">
