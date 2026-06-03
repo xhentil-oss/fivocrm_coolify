@@ -388,19 +388,27 @@ const ReportsView: React.FC = () => {
     }>();
 
     invoices.forEach(invoice => {
-      const items = itemsByInvoiceId.get(invoice.id) || [];
-      if (items.length === 0) return;
+      const currency = (invoice as any).currency;
+      const invoiceTotal = toAll(invoice.total ?? invoice.amount ?? 0, currency);
+      const rawItems = itemsByInvoiceId.get(invoice.id) || [];
+      // Item-less / manual invoices still count — attributed to "Të tjera" so the
+      // per-service totals reconcile with company revenue (no lost revenue).
+      const effItems = rawItems.length > 0
+        ? rawItems.map(it => ({
+            dept: normalizeFinanceCategory(serviceById.get(it.serviceId)?.category || 'General'),
+            value: toAll(it.totalPrice, currency),
+          }))
+        : [{ dept: 'Të tjera', value: invoiceTotal }];
 
       const createdDate = parseDate(invoice.createdAt);
       const createdInYear = !!createdDate && createdDate.getFullYear() === selectedRevenueYear;
       const paidDate = getInvoicePaidDate(invoice);
       const paidInYear = !!paidDate && paidDate.getFullYear() === selectedRevenueYear;
 
-      items.forEach(item => {
-        const service = serviceById.get(item.serviceId);
-        const dept = normalizeFinanceCategory(service?.category || 'General');
+      effItems.forEach(item => {
+        const dept = item.dept;
         const current = deptMap.get(dept) || { total: 0, paid: 0, count: 0, monthlyPaid: Array(12).fill(0), _invoiceIds: new Set<string>() };
-        const itemValue = toAll(item.totalPrice, (invoice as any).currency);
+        const itemValue = item.value;
 
         if (createdInYear) {
           current.total += itemValue;
@@ -414,12 +422,11 @@ const ReportsView: React.FC = () => {
         }
 
         if (invoice.status === 'Partial') {
-          const invoiceTotal = toAll(invoice.total ?? invoice.amount ?? 0, (invoice as any).currency);
           const itemShare = invoiceTotal > 0 ? (itemValue / invoiceTotal) : 0;
           (invoice.partialPayments ?? []).forEach(p => {
             const pd = parseDate(p.paidAt);
             if (!pd || pd.getFullYear() !== selectedRevenueYear) return;
-            const paidChunk = toAll(p.amount, (invoice as any).currency) * itemShare;
+            const paidChunk = toAll(p.amount, currency) * itemShare;
             current.paid += paidChunk;
             current.monthlyPaid[pd.getMonth()] += paidChunk;
           });
@@ -557,10 +564,13 @@ const ReportsView: React.FC = () => {
     const inTeam = teamMembers;
     const seen = new Set<string>();
     return inTeam.filter(m => {
-      const uid = (m as any).userId || (m as any).uid || (m as any).id;
-      if (!uid) return true;
-      if (seen.has(uid)) return false;
-      seen.add(uid);
+      // Dedup by email first (stable identity): the same person can have one doc
+      // keyed by email and another by uid — keying on email avoids double-counting.
+      const email = ((m as any).email || '').trim().toLowerCase();
+      const key = email || (m as any).userId || (m as any).uid || (m as any).id;
+      if (!key) return true;
+      if (seen.has(key)) return false;
+      seen.add(key);
       return true;
     });
   }, [teamMembers, currentTeamId]);
@@ -703,7 +713,9 @@ const ReportsView: React.FC = () => {
         // Net profit per employee = their revenue − their salary cost for the
         // period. Salary (monthlySalary, assumed ALL) × elapsed months in the
         // selected year, or 12 (annualized) when viewing "all time".
-        const monthlySalary = (member as any).monthlySalary || 0;
+        // Only active members carry a salary cost (inactive = no longer paid),
+        // keeping staff totals consistent with the company KPI (active-only).
+        const monthlySalary = member.status === 'Active' ? ((member as any).monthlySalary || 0) : 0;
         const monthsInPeriod = staffPeriod === 'all' ? 12 : monthsElapsedInYear(selectedRevenueYear);
         const salaryCost = monthlySalary * monthsInPeriod;
         const netProfit = revenue - salaryCost;
@@ -1427,8 +1439,8 @@ const ReportsView: React.FC = () => {
         <div>
           <h3 className="text-lg font-semibold">Fitimi sipas Shërbimit (P&L) — {selectedRevenueYear}</h3>
           <p className="text-xs text-muted-foreground mt-0.5">
-            Të ardhura − kosto direkte − pjesa e overhead-it (rroga + shpenzime të përgjithshme,
-            ndarë sipas peshës së të ardhurave). Shuma barazohet me fitimin neto të kompanisë.
+            Bazë arkë (të arkëtuara) − kosto direkte − pjesa e overhead-it (rroga + shpenzime,
+            ndarë sipas peshës së të ardhurave). Shuma barazohet me fitimin neto të kompanisë në bazë arkë.
           </p>
         </div>
         <div className="overflow-x-auto">
