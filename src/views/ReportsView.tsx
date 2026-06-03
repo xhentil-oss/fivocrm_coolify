@@ -426,27 +426,42 @@ const ReportsView: React.FC = () => {
       });
     });
 
+    // Year-scoped expenses grouped by the SAME normalized category, so profit
+    // per service line = service revenue (collected, this year) − direct
+    // expenses tagged with that category (this year). Company-wide salaries are
+    // overhead and intentionally excluded → this is gross margin per service.
+    const expenseByDept = new Map<string, number>();
+    (expenses ?? []).forEach(exp => {
+      const d = parseDate(exp.date) || parseDate(exp.createdAt);
+      if (!d || d.getFullYear() !== selectedRevenueYear) return;
+      const cat = normalizeFinanceCategory(exp.category || 'General');
+      expenseByDept.set(cat, (expenseByDept.get(cat) || 0) + toAll(exp.amount || 0, (exp as any).currency));
+    });
+
     return Array.from(deptMap.entries())
-      .map(([dept, stats]) => ({
-        department: dept,
-        total: stats.total,
-        paid: stats.paid,
-        count: stats._invoiceIds.size,
-        monthlyPaid: stats.monthlyPaid,
-      }))
+      .map(([dept, stats]) => {
+        const deptExpenses = expenseByDept.get(dept) || 0;
+        return {
+          department: dept,
+          total: stats.total,
+          paid: stats.paid,
+          expenses: deptExpenses,
+          profit: stats.paid - deptExpenses,
+          count: stats._invoiceIds.size,
+          monthlyPaid: stats.monthlyPaid,
+        };
+      })
       .sort((a, b) => b.paid - a.paid);
-  }, [invoices, invoiceItems, services, selectedRevenueYear]);
+  }, [invoices, invoiceItems, services, expenses, selectedRevenueYear]);
 
   const seoFinanceSummary = useMemo(() => {
-    const seoRevenue = revenueByDepartment
-      .filter(d => normalizeFinanceCategory(d.department) === 'SEO')
-      .reduce((s, d) => s + d.paid, 0);
-    const seoExpenses = expensesByCategory
-      .filter(c => normalizeFinanceCategory(c.label) === 'SEO')
-      .reduce((s, c) => s + c.value, 0);
-    const seoProfit = seoRevenue - seoExpenses;
-    return { seoRevenue, seoExpenses, seoProfit };
-  }, [revenueByDepartment, expensesByCategory]);
+    const seo = revenueByDepartment.find(d => normalizeFinanceCategory(d.department) === 'SEO');
+    return {
+      seoRevenue: seo?.paid ?? 0,
+      seoExpenses: seo?.expenses ?? 0,
+      seoProfit: seo?.profit ?? 0,
+    };
+  }, [revenueByDepartment]);
 
   const departmentYearTotal = useMemo(
     () => revenueByDepartment.reduce((s, dept) => s + dept.paid, 0),
@@ -1251,7 +1266,7 @@ const ReportsView: React.FC = () => {
       {/* Revenue by Department */}
       <Card className="p-6 space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Të Ardhura sipas Departamentit</h3>
+          <h3 className="text-lg font-semibold">Të Ardhura & Fitimi sipas Shërbimit</h3>
           <div className="flex items-center gap-2">
             <Badge variant="secondary">{selectedRevenueYear}</Badge>
             <Badge variant="secondary">{revenueByDepartment.length} departamente</Badge>
@@ -1311,6 +1326,14 @@ const ReportsView: React.FC = () => {
                     <span>Këtë muaj: {Math.round(thisMonthPaid).toLocaleString()} ALL</span>
                     <span>Arkëtim: {Math.round(paidPct)}%</span>
                   </div>
+                  {!isSales && (
+                    <div className="text-[11px] flex justify-between border-t border-dashed pt-1">
+                      <span className="text-muted-foreground">Shpenzime: {Math.round(dept.expenses).toLocaleString()} ALL</span>
+                      <span className={dept.profit >= 0 ? 'text-indigo-600 font-medium' : 'text-red-600 font-medium'}>
+                        Fitim: {Math.round(dept.profit).toLocaleString()} ALL
+                      </span>
+                    </div>
+                  )}
                 </div>
               );
             })}
@@ -1319,12 +1342,15 @@ const ReportsView: React.FC = () => {
                 <span>Totale Departamente ({selectedRevenueYear})</span>
                 <span>{Math.round(departmentYearTotal).toLocaleString()} ALL</span>
               </div>
-              {!isSales && (
-              <div className="flex justify-between text-sm font-semibold">
-                <span>Fitimi Neto</span>
-                <span className={profit >= 0 ? 'text-green-600' : 'text-red-600'}>{profit.toLocaleString()} ALL</span>
-              </div>
-              )}
+              {!isSales && (() => {
+                const grossMargin = revenueByDepartment.reduce((s, d) => s + d.profit, 0);
+                return (
+                  <div className="flex justify-between text-sm font-semibold">
+                    <span>Marzh bruto sipas shërbimeve <span className="font-normal text-muted-foreground">(pa rroga)</span></span>
+                    <span className={grossMargin >= 0 ? 'text-indigo-600' : 'text-red-600'}>{Math.round(grossMargin).toLocaleString()} ALL</span>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         )}
