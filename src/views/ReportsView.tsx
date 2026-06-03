@@ -1512,11 +1512,14 @@ const ReportsView: React.FC = () => {
         <Card className="p-6 space-y-4">
           <div className="flex items-center justify-between flex-wrap gap-3">
             <div>
-              <h3 className="text-lg font-semibold">Të Ardhura sipas Stafit</h3>
+              <h3 className="text-lg font-semibold">Të Ardhura sipas Stafit <span className="font-normal text-muted-foreground text-sm">(sipas përgjegjësit)</span></h3>
               <p className="text-xs text-muted-foreground mt-0.5">
                 {accountingBasis === 'accrual' ? 'Bazë akruale · data e faturës' : 'Bazë arkë · data e pagesës'}
                 {' · '}
                 {staffPeriod === 'year' ? `Viti ${selectedRevenueYear}` : 'Të gjitha kohërat'}
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-0.5">
+                Vlera e plotë i shkon përgjegjësit të faturës/projektit. Stafi i dorëzimit (p.sh. ekipi i Social Media) shihet si <span className="text-indigo-600">Kontribues</span> — vlera e tyre matet te P&L-ja sipas shërbimit (rroga = kosto e shërbimit).
               </p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
@@ -1553,8 +1556,11 @@ const ReportsView: React.FC = () => {
                       {member.status === 'Inactive' && (
                         <Badge variant="outline" className="text-xs border-muted-foreground/40 text-muted-foreground">Inaktiv</Badge>
                       )}
+                      {member.revenue === 0 && (member.projectCount > 0 || member.taskCount > 0) && (
+                        <Badge variant="outline" className="text-xs border-indigo-300 text-indigo-600">Kontribues</Badge>
+                      )}
                       <span className="text-xs text-muted-foreground whitespace-nowrap">
-                        {member.invoiceCount} fatura · {member.wonLeads} lead · {member.projectCount} projekte
+                        {member.invoiceCount} fatura · {member.wonLeads} lead · {member.projectCount} projekte · {member.taskCount} detyra
                       </span>
                     </div>
                     <div className="text-right">
