@@ -1434,7 +1434,7 @@ const ReportsView: React.FC = () => {
             <div className="pt-3 border-t">
               <div className="flex justify-between text-sm font-semibold">
                 <span>Totale Shpenzime</span>
-                <span className="text-red-600">{(expenses?.reduce((s, e) => s + (e.amount || 0), 0) || 0).toLocaleString()} ALL</span>
+                <span className="text-red-600">{expensesByCategory.reduce((s, c) => s + c.value, 0).toLocaleString()} ALL</span>
               </div>
             </div>
           </div>

@@ -3,6 +3,7 @@ import { useCollection } from '../hooks/useFirestore';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useUserNames } from '../hooks/useUserNames';
+import { toAll } from '../lib/utils';
 import { Award, TrendingUp, DollarSign, Users, ChevronDown, ChevronUp, Info } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -175,7 +176,7 @@ const BonusView: React.FC = () => {
       const d = e.date ? new Date(e.date) : null;
       if (!d || isNaN(d.getTime())) return;
       if (d.getMonth() !== month || d.getFullYear() !== year) return;
-      salaryFromExpenses.set(memberId, (salaryFromExpenses.get(memberId) || 0) + (e.amount || 0));
+      salaryFromExpenses.set(memberId, (salaryFromExpenses.get(memberId) || 0) + toAll(e.amount || 0, e.currency));
     });
 
     const effectiveSalary = (uid: string, monthlySalary?: number): number =>
@@ -189,7 +190,7 @@ const BonusView: React.FC = () => {
       const d = e.date ? new Date(e.date) : null;
       if (!d || isNaN(d.getTime())) return sum;
       if (d.getMonth() !== month || d.getFullYear() !== year) return sum;
-      return sum + (e.amount || 0);
+      return sum + toAll(e.amount || 0, e.currency);
     }, 0);
 
     // Allocate office expenses proportionally to each project's budget weight
@@ -211,7 +212,7 @@ const BonusView: React.FC = () => {
           // ── direct project expenses ─────────────────────────────────────
           const directExpenses = (expenses || [])
             .filter(e => (e as any).projectId === p.id)
-            .reduce((sum, e) => sum + (e.amount || 0), 0);
+            .reduce((sum, e) => sum + toAll(e.amount || 0, e.currency), 0);
 
           // ── office expenses allocated by this project's budget share ────
           const budgetFraction = totalPeriodBudget > 0
