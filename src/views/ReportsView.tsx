@@ -468,6 +468,58 @@ const ReportsView: React.FC = () => {
     [revenueByDepartment]
   );
 
+  // ── Service-line P&L (enterprise full-absorption costing) ──
+  // Each service line carries: its revenue (collected, this year), its direct
+  // costs (expenses tagged with that category), and an allocated share of
+  // company overhead (all salaries + expenses not tied to any service line),
+  // distributed by revenue weight. By construction the sum of per-service net
+  // profit reconciles to the company net profit (cash basis).
+  const servicePnl = useMemo(() => {
+    const lines = revenueByDepartment;
+    const serviceCats = new Set(lines.map(l => l.department));
+    const yStart = new Date(selectedRevenueYear, 0, 1);
+    const yEnd = new Date(selectedRevenueYear, 11, 31, 23, 59, 59, 999);
+
+    // Overhead = expenses NOT tied to a revenue-generating service line.
+    let overheadExpenses = 0;
+    (expenses ?? []).forEach(exp => {
+      const d = parseDate(exp.date) || parseDate(exp.createdAt);
+      if (!d || d < yStart || d > yEnd) return;
+      const cat = normalizeFinanceCategory(exp.category || 'General');
+      if (serviceCats.has(cat)) return; // direct cost, already on the service line
+      overheadExpenses += toAll(exp.amount || 0, (exp as any).currency);
+    });
+    // Salaries are company-wide overhead (not tagged to a service).
+    const overheadSalaries = totalMonthlySalary * monthsElapsedInYear(selectedRevenueYear);
+    const overheadPool = overheadExpenses + overheadSalaries;
+    const totalRev = lines.reduce((s, l) => s + l.paid, 0);
+
+    const rows = lines.map(l => {
+      const allocatedOverhead = totalRev > 0
+        ? overheadPool * (l.paid / totalRev)
+        : (lines.length ? overheadPool / lines.length : 0);
+      const directCost = l.expenses;
+      const net = l.paid - directCost - allocatedOverhead;
+      return {
+        department: l.department,
+        revenue: l.paid,
+        directCost,
+        allocatedOverhead,
+        net,
+        marginPct: l.paid > 0 ? (net / l.paid) * 100 : 0,
+        count: l.count,
+      };
+    }).sort((a, b) => b.net - a.net);
+
+    const totals = {
+      revenue: totalRev,
+      directCost: rows.reduce((s, r) => s + r.directCost, 0),
+      overhead: overheadPool,
+      net: rows.reduce((s, r) => s + r.net, 0),
+    };
+    return { rows, totals, overheadExpenses, overheadSalaries, overheadPool };
+  }, [revenueByDepartment, expenses, totalMonthlySalary, selectedRevenueYear]);
+
   // ── Revenue by Staff Member (Admin/Owner only) ──
   const currentTeamId = useGlobalTeamId();
   const scopedTeamMembers = useMemo(() => {
@@ -1266,7 +1318,7 @@ const ReportsView: React.FC = () => {
       {/* Revenue by Department */}
       <Card className="p-6 space-y-4">
         <div className="flex items-center justify-between">
-          <h3 className="text-lg font-semibold">Të Ardhura & Fitimi sipas Shërbimit</h3>
+          <h3 className="text-lg font-semibold">Të Ardhura sipas Shërbimit</h3>
           <div className="flex items-center gap-2">
             <Badge variant="secondary">{selectedRevenueYear}</Badge>
             <Badge variant="secondary">{revenueByDepartment.length} departamente</Badge>
@@ -1326,14 +1378,6 @@ const ReportsView: React.FC = () => {
                     <span>Këtë muaj: {Math.round(thisMonthPaid).toLocaleString()} ALL</span>
                     <span>Arkëtim: {Math.round(paidPct)}%</span>
                   </div>
-                  {!isSales && (
-                    <div className="text-[11px] flex justify-between border-t border-dashed pt-1">
-                      <span className="text-muted-foreground">Shpenzime: {Math.round(dept.expenses).toLocaleString()} ALL</span>
-                      <span className={dept.profit >= 0 ? 'text-indigo-600 font-medium' : 'text-red-600 font-medium'}>
-                        Fitim: {Math.round(dept.profit).toLocaleString()} ALL
-                      </span>
-                    </div>
-                  )}
                 </div>
               );
             })}
@@ -1342,19 +1386,74 @@ const ReportsView: React.FC = () => {
                 <span>Totale Departamente ({selectedRevenueYear})</span>
                 <span>{Math.round(departmentYearTotal).toLocaleString()} ALL</span>
               </div>
-              {!isSales && (() => {
-                const grossMargin = revenueByDepartment.reduce((s, d) => s + d.profit, 0);
-                return (
-                  <div className="flex justify-between text-sm font-semibold">
-                    <span>Marzh bruto sipas shërbimeve <span className="font-normal text-muted-foreground">(pa rroga)</span></span>
-                    <span className={grossMargin >= 0 ? 'text-indigo-600' : 'text-red-600'}>{Math.round(grossMargin).toLocaleString()} ALL</span>
-                  </div>
-                );
-              })()}
             </div>
           </div>
         )}
       </Card>
+
+      {/* Profit & Loss per service line — full-absorption, Admin/Owner only */}
+      {!isSales && servicePnl.rows.length > 0 && (
+      <Card className="p-6 space-y-4">
+        <div>
+          <h3 className="text-lg font-semibold">Fitimi sipas Shërbimit (P&L) — {selectedRevenueYear}</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Të ardhura − kosto direkte − pjesa e overhead-it (rroga + shpenzime të përgjithshme,
+            ndarë sipas peshës së të ardhurave). Shuma barazohet me fitimin neto të kompanisë.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-xs text-muted-foreground border-b">
+                <th className="text-left font-medium py-2">Shërbimi</th>
+                <th className="text-right font-medium py-2">Të ardhura</th>
+                <th className="text-right font-medium py-2">Kosto direkte</th>
+                <th className="text-right font-medium py-2">Overhead</th>
+                <th className="text-right font-medium py-2">Fitimi neto</th>
+                <th className="text-right font-medium py-2">Marzh</th>
+              </tr>
+            </thead>
+            <tbody>
+              {servicePnl.rows.map(r => (
+                <tr key={r.department} className="border-b border-border/50">
+                  <td className="py-2">
+                    <span className="font-medium">{r.department}</span>
+                    <span className="text-[11px] text-muted-foreground ml-1">· {r.count} fatura</span>
+                  </td>
+                  <td className="text-right tabular-nums">{Math.round(r.revenue).toLocaleString()}</td>
+                  <td className="text-right tabular-nums text-red-600">−{Math.round(r.directCost).toLocaleString()}</td>
+                  <td className="text-right tabular-nums text-amber-600">−{Math.round(r.allocatedOverhead).toLocaleString()}</td>
+                  <td className={`text-right tabular-nums font-semibold ${r.net >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                    {Math.round(r.net).toLocaleString()}
+                  </td>
+                  <td className={`text-right tabular-nums ${r.net >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                    {r.marginPct.toFixed(0)}%
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="font-semibold border-t">
+                <td className="py-2">Totale (kompania)</td>
+                <td className="text-right tabular-nums">{Math.round(servicePnl.totals.revenue).toLocaleString()}</td>
+                <td className="text-right tabular-nums text-red-600">−{Math.round(servicePnl.totals.directCost).toLocaleString()}</td>
+                <td className="text-right tabular-nums text-amber-600">−{Math.round(servicePnl.totals.overhead).toLocaleString()}</td>
+                <td className={`text-right tabular-nums ${servicePnl.totals.net >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                  {Math.round(servicePnl.totals.net).toLocaleString()}
+                </td>
+                <td className="text-right tabular-nums text-muted-foreground">
+                  {servicePnl.totals.revenue > 0 ? Math.round((servicePnl.totals.net / servicePnl.totals.revenue) * 100) : 0}%
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <div className="text-[11px] text-muted-foreground space-y-0.5">
+          <p>Overhead i alokuar gjithsej: <span className="font-medium text-foreground">{Math.round(servicePnl.overheadPool).toLocaleString()} ALL</span> (rroga {Math.round(servicePnl.overheadSalaries).toLocaleString()} + shpenzime të përgjithshme {Math.round(servicePnl.overheadExpenses).toLocaleString()}).</p>
+          <p>Kosto direkte = shpenzimet me kategori të njëjtë me shërbimin. Që ndarja të jetë e saktë, kategorizo shpenzimet sipas të njëjtave emra si shërbimet.</p>
+        </div>
+      </Card>
+      )}
 
       {/* Revenue by Staff Member — Admin/Owner only */}
       {(permissions.isAdmin || permissions.isOwner) && revenueByStaff.length > 0 && (
