@@ -551,9 +551,10 @@ const ReportsView: React.FC = () => {
   const currentTeamId = useGlobalTeamId();
   const scopedTeamMembers = useMemo(() => {
     if (!teamMembers) return [];
-    // Include current-team members AND members with no teamId (legacy/inconsistent
-    // records); only exclude members that clearly belong to a different team.
-    const inTeam = teamMembers.filter(m => !currentTeamId || !(m as any).teamId || (m as any).teamId === currentTeamId);
+    // Members are not team-isolated in practice (teamId is inconsistent/absent
+    // across records), so show ALL of them — same approach as customers/leads.
+    // Revenue attribution below still scopes invoices to the current team.
+    const inTeam = teamMembers;
     const seen = new Set<string>();
     return inTeam.filter(m => {
       const uid = (m as any).userId || (m as any).uid || (m as any).id;
