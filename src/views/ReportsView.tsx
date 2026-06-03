@@ -796,6 +796,75 @@ const ReportsView: React.FC = () => {
     return Array.from(map.values()).sort((a, b) => b.netProfit - a.netProfit);
   }, [revenueByStaff]);
 
+  // ── Profit per member from the projects they participate in ──
+  // Management lens (not sales): each project's profit = value (budget) − direct
+  // expenses − labor, where each member's salary is prorated across the projects
+  // they're on. Project profit is split equally among its participants (owner +
+  // collaborators), so a member sees their share of every project they touch.
+  const staffProjectProfit = useMemo(() => {
+    if (!projects || !teamMembers) return { rows: [] as any[], totalProfit: 0 };
+    const months = staffPeriod === 'all' ? 12 : monthsElapsedInYear(selectedRevenueYear);
+    const yStart = new Date(selectedRevenueYear, 0, 1);
+    const yEnd = new Date(selectedRevenueYear, 11, 31, 23, 59, 59, 999);
+    const inYear = (d: Date | null) => !!d && d >= yStart && d <= yEnd;
+    const expDate = (e: any) => parseDate(e.date) || parseDate(e.createdAt);
+
+    const activeMembers = teamMembers.filter(m => m.status === 'Active');
+    const idsOf = (m: any) => new Set(
+      [m.userId, m.email].filter(Boolean).map((x: string) => String(x).trim().toLowerCase())
+    );
+    const memberKey = (m: any) => (m.userId || m.email || m.id);
+
+    const periodProjects = staffPeriod === 'all'
+      ? projects
+      : projects.filter(p => inYear(parseDate((p as any).lastCompletedAt) || parseDate(p.updatedAt) || parseDate(p.createdAt)));
+
+    const participantsOf = (p: any) => {
+      const owner = p.responsibleUserId || (p as any).ownerUserId || p.createdByUserId;
+      const collab = (Array.isArray(p.memberUserIds) ? p.memberUserIds : []).map((x: string) => String(x).toLowerCase());
+      return activeMembers.filter(m => {
+        const ids = idsOf(m);
+        if (owner && ids.has(String(owner).toLowerCase())) return true;
+        return collab.some((c: string) => ids.has(c));
+      });
+    };
+
+    // How many period projects each member participates in (to prorate salary).
+    const projCount = new Map<string, number>();
+    periodProjects.forEach(p => participantsOf(p).forEach(m => {
+      const k = memberKey(m); projCount.set(k, (projCount.get(k) || 0) + 1);
+    }));
+
+    const acc = new Map<string, { name: string; role: string; projects: number; value: number; cost: number; profit: number }>();
+    periodProjects.forEach(p => {
+      const parts = participantsOf(p);
+      if (parts.length === 0) return;
+      const value = (p.budget || 0); // project value (ALL — projects have no currency)
+      const directExp = (expenses ?? [])
+        .filter(e => (e as any).projectId === p.id && inYear(expDate(e)))
+        .reduce((s, e) => s + toAll(e.amount || 0, (e as any).currency), 0);
+      const labor = parts.reduce((s, m) => {
+        const cnt = projCount.get(memberKey(m)) || 1;
+        return s + ((m.monthlySalary || 0) * months) / cnt;
+      }, 0);
+      const profit = value - directExp - labor;
+      const shareValue = value / parts.length;
+      const shareCost = (directExp + labor) / parts.length;
+      const shareProfit = profit / parts.length;
+      parts.forEach(m => {
+        const k = memberKey(m);
+        const a = acc.get(k) || { name: m.displayName || m.email || 'Pa emër', role: m.role, projects: 0, value: 0, cost: 0, profit: 0 };
+        a.projects += 1;
+        a.value += shareValue;
+        a.cost += shareCost;
+        a.profit += shareProfit;
+        acc.set(k, a);
+      });
+    });
+    const rows = Array.from(acc.values()).sort((a, b) => b.profit - a.profit);
+    return { rows, totalProfit: rows.reduce((s, r) => s + r.profit, 0) };
+  }, [projects, teamMembers, expenses, staffPeriod, selectedRevenueYear]);
+
   // ── KPI Calculations ──
   const totalRevenue = calculateCollectedRevenue(invoices);
   const paidRevenue = totalRevenue;
@@ -1640,6 +1709,57 @@ const ReportsView: React.FC = () => {
             )}
           </div>
         </Card>
+      )}
+
+      {/* Profit per member from the projects they participate in (management lens) */}
+      {!isSales && staffProjectProfit.rows.length > 0 && (
+      <Card className="p-6 space-y-4">
+        <div>
+          <h3 className="text-lg font-semibold">Fitimi sipas Stafit (nga projektet)</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">
+            Sa fitim gjeneron secili anëtar nga projektet ku merr pjesë. Fitimi i çdo projekti
+            (vlera − shpenzime direkte − pagat e ekipit) ndahet baras mes pjesëmarrësve. Bazuar në
+            buxhetin e projektit; rroga ndahet sipas numrit të projekteve të anëtarit.
+          </p>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-xs text-muted-foreground border-b">
+                <th className="text-left font-medium py-2">Anëtari</th>
+                <th className="text-right font-medium py-2">Projekte</th>
+                <th className="text-right font-medium py-2">Vlera (pjesa)</th>
+                <th className="text-right font-medium py-2">Kosto (pjesa)</th>
+                <th className="text-right font-medium py-2">Fitimi</th>
+              </tr>
+            </thead>
+            <tbody>
+              {staffProjectProfit.rows.map((r, i) => (
+                <tr key={`spp-${i}`} className="border-b border-border/50">
+                  <td className="py-2">
+                    <span className="font-medium">{r.name}</span>
+                    <span className="text-[11px] text-muted-foreground ml-1">· {r.role}</span>
+                  </td>
+                  <td className="text-right tabular-nums">{r.projects}</td>
+                  <td className="text-right tabular-nums">{Math.round(r.value).toLocaleString()}</td>
+                  <td className="text-right tabular-nums text-red-600">−{Math.round(r.cost).toLocaleString()}</td>
+                  <td className={`text-right tabular-nums font-semibold ${r.profit >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                    {Math.round(r.profit).toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot>
+              <tr className="font-semibold border-t">
+                <td className="py-2" colSpan={4}>Fitimi total nga projektet</td>
+                <td className={`text-right tabular-nums ${staffProjectProfit.totalProfit >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                  {Math.round(staffProjectProfit.totalProfit).toLocaleString()} ALL
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      </Card>
       )}
 
       {/* Profit by Squad (grouped by role) */}
