@@ -69,6 +69,31 @@ export function getExpenseDate(exp: Expense): Date | null {
   return parseDate(exp.date) || parseDate(exp.createdAt);
 }
 
+/** Has month `i` (0-based) of `year` already occurred relative to `now`? */
+export function monthHasOccurred(year: number, i: number, now = new Date()): boolean {
+  if (year < now.getFullYear()) return true;
+  if (year > now.getFullYear()) return false;
+  return i <= now.getMonth();
+}
+
+/** Number of months of `year` that have elapsed (12 for past years, 0 for future). */
+export function monthsElapsedInYear(year: number, now = new Date()): number {
+  if (year < now.getFullYear()) return 12;
+  if (year > now.getFullYear()) return 0;
+  return now.getMonth() + 1;
+}
+
+/** Total expenses (in ALL) with a date within [start, end]. */
+export function calculateExpensesBetween(expenses: Expense[] | undefined, start: Date, end?: Date): number {
+  return (expenses ?? []).reduce((s, exp) => {
+    const d = getExpenseDate(exp);
+    if (!d) return s;
+    if (d < start) return s;
+    if (end && d > end) return s;
+    return s + toAll(exp.amount ?? 0, exp.currency);
+  }, 0);
+}
+
 export function getFinancialAvailableYears(invoices?: Invoice[], expenses?: Expense[], now = new Date()): number[] {
   const years = new Set<number>([now.getFullYear()]);
 
@@ -137,7 +162,7 @@ export function buildRevenueByMonth(invoices: Invoice[] | undefined, year: numbe
   });
 }
 
-export function buildExpensesByMonth(expenses: Expense[] | undefined, year: number, totalMonthlySalary = 0, monthLabels = MONTH_LABELS_SQ): ExpenseMonthPoint[] {
+export function buildExpensesByMonth(expenses: Expense[] | undefined, year: number, totalMonthlySalary = 0, monthLabels = MONTH_LABELS_SQ, now = new Date()): ExpenseMonthPoint[] {
   return monthLabels.map((label, i) => {
     const monthExpenseTotal = (expenses ?? [])
       .filter(exp => {
@@ -147,7 +172,10 @@ export function buildExpensesByMonth(expenses: Expense[] | undefined, year: numb
       })
       .reduce((s, exp) => s + toAll(exp.amount ?? 0, exp.currency), 0);
 
-    return { label, value: monthExpenseTotal + totalMonthlySalary };
+    // Salary only applies to months that have actually occurred (no salary
+    // cost for future months of the current year, or any month of a future year).
+    const salary = monthHasOccurred(year, i, now) ? totalMonthlySalary : 0;
+    return { label, value: monthExpenseTotal + salary };
   });
 }
 
@@ -157,6 +185,7 @@ export function buildCashflowByMonth(
   year: number,
   totalMonthlySalary = 0,
   monthLabels = MONTH_LABELS_SQ,
+  now = new Date(),
 ): CashflowMonthPoint[] {
   return monthLabels.map((label, i) => {
     const partialInflow = (invoices ?? [])
@@ -196,7 +225,7 @@ export function buildCashflowByMonth(
         return d.getMonth() === i && d.getFullYear() === year;
       })
       .reduce((s, exp) => s + toAll(exp.amount ?? 0, exp.currency), 0)
-      + totalMonthlySalary;
+      + (monthHasOccurred(year, i, now) ? totalMonthlySalary : 0);
 
     return { label, inflow, outflow, net: inflow - outflow };
   });

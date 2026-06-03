@@ -27,6 +27,8 @@ import {
   calculateCollectedRevenue,
   calculateRevenueBetween,
   calculateTotalExpenses,
+  calculateExpensesBetween,
+  monthsElapsedInYear,
   getFinancialAvailableYears,
   getInvoiceCollectedAll,
   getInvoiceOutstandingAll,
@@ -516,6 +518,8 @@ const ReportsView: React.FC = () => {
             billed: 0,
             collected: 0,
             outstanding: 0,
+            salaryCost: 0,
+            netProfit: 0,
             invoiceCount: 0,
             avgDeal: 0,
             wonLeads: 0,
@@ -599,6 +603,14 @@ const ReportsView: React.FC = () => {
         const revenue = accountingBasis === 'accrual' ? billed : collected;
         const avgDeal = memberInvoices.length > 0 ? billed / memberInvoices.length : 0;
 
+        // Net profit per employee = their revenue − their salary cost for the
+        // period. Salary (monthlySalary, assumed ALL) × elapsed months in the
+        // selected year, or 12 (annualized) when viewing "all time".
+        const monthlySalary = (member as any).monthlySalary || 0;
+        const monthsInPeriod = staffPeriod === 'all' ? 12 : monthsElapsedInYear(selectedRevenueYear);
+        const salaryCost = monthlySalary * monthsInPeriod;
+        const netProfit = revenue - salaryCost;
+
         return {
           name: member.displayName || member.email || 'Pa emër',
           role: member.role,
@@ -607,6 +619,8 @@ const ReportsView: React.FC = () => {
           billed,
           collected,
           outstanding,
+          salaryCost,
+          netProfit,
           invoiceCount: memberInvoices.length,
           avgDeal,
           wonLeads,
@@ -644,7 +658,24 @@ const ReportsView: React.FC = () => {
     billed: revenueByStaff.reduce((s, m) => s + m.billed, 0),
     collected: revenueByStaff.reduce((s, m) => s + m.collected, 0),
     outstanding: revenueByStaff.reduce((s, m) => s + m.outstanding, 0),
+    salaryCost: revenueByStaff.reduce((s, m) => s + (m.salaryCost || 0), 0),
+    netProfit: revenueByStaff.reduce((s, m) => s + (m.netProfit || 0), 0),
   }), [revenueByStaff]);
+
+  // ── Profit by squad (grouped by role) ──
+  const profitBySquad = useMemo(() => {
+    const map = new Map<string, { role: string; revenue: number; salaryCost: number; netProfit: number; count: number }>();
+    revenueByStaff.forEach(m => {
+      const key = m.role || 'Pa rol';
+      const g = map.get(key) || { role: key, revenue: 0, salaryCost: 0, netProfit: 0, count: 0 };
+      g.revenue += m.revenue || 0;
+      g.salaryCost += m.salaryCost || 0;
+      g.netProfit += m.netProfit || 0;
+      g.count += 1;
+      map.set(key, g);
+    });
+    return Array.from(map.values()).sort((a, b) => b.netProfit - a.netProfit);
+  }, [revenueByStaff]);
 
   // ── KPI Calculations ──
   const totalRevenue = calculateCollectedRevenue(invoices);
@@ -655,8 +686,21 @@ const ReportsView: React.FC = () => {
     const startOfYear = new Date(now.getFullYear(), 0, 1);
     return calculateAccrualRevenueBetween(invoices, startOfYear, now);
   }, [invoices]);
-  const totalExpenses = calculateTotalExpenses(expenses, totalMonthlySalary);
-  const profit = paidRevenue - totalExpenses;
+  // Year + basis-scoped P&L (drives the "Shpenzime" and "Fitimi Neto" KPIs so
+  // they respect the year selector and the accrual/cash toggle). Salary is
+  // counted only for the months of the year that have actually elapsed.
+  const periodPnl = useMemo(() => {
+    const start = new Date(selectedRevenueYear, 0, 1);
+    const end = new Date(selectedRevenueYear, 11, 31, 23, 59, 59, 999);
+    const revenue = accountingBasis === 'accrual'
+      ? calculateAccrualRevenueBetween(invoices, start, end)
+      : calculateRevenueBetween(invoices, start, end);
+    const salaryCost = totalMonthlySalary * monthsElapsedInYear(selectedRevenueYear);
+    const expensesTotal = calculateExpensesBetween(expenses, start, end) + salaryCost;
+    return { revenue, expenses: expensesTotal, salaryCost, profit: revenue - expensesTotal };
+  }, [invoices, expenses, selectedRevenueYear, accountingBasis, totalMonthlySalary]);
+  const totalExpenses = periodPnl.expenses;
+  const profit = periodPnl.profit;
   const activeProjects = projects?.filter(p => p.status === 'Active').length || 0;
   const totalCustomers = customers?.length || 0;
   const wonLeads = leads?.filter(l => l.status === 'Won').length || 0;
@@ -864,21 +908,21 @@ const ReportsView: React.FC = () => {
         {!isSales && (
         <Card className="p-5 space-y-2 border-l-4 border-l-red-500">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Shpenzime (Gjithsej)</p>
+            <p className="text-sm text-muted-foreground">Shpenzime ({selectedRevenueYear})</p>
             <Receipt className="w-5 h-5 text-red-500" />
           </div>
-          <p className="text-2xl font-bold">{totalExpenses.toLocaleString()} ALL</p>
+          <p className="text-2xl font-bold">{Math.round(totalExpenses).toLocaleString()} ALL</p>
           <p className="text-xs text-muted-foreground">Shpenzime + Rroga ({totalMonthlySalary.toLocaleString()} ALL/muaj)</p>
         </Card>
         )}
         {!isSales && (
         <Card className="p-5 space-y-2 border-l-4 border-l-indigo-500">
           <div className="flex items-center justify-between">
-            <p className="text-sm text-muted-foreground">Fitimi Neto</p>
+            <p className="text-sm text-muted-foreground">Fitimi Neto ({selectedRevenueYear})</p>
             <TrendingUp className="w-5 h-5 text-indigo-500" />
           </div>
-          <p className={`text-2xl font-bold ${profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{profit.toLocaleString()} ALL</p>
-          <p className="text-xs text-muted-foreground">Paguar - Shpenzime</p>
+          <p className={`text-2xl font-bold ${profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{Math.round(profit).toLocaleString()} ALL</p>
+          <p className="text-xs text-muted-foreground">{accountingBasis === 'accrual' ? 'Të faturuara' : 'Të arkëtuara'} − Shpenzime</p>
         </Card>
         )}
         <Card className="p-5 space-y-2 border-l-4 border-l-blue-500">
@@ -1347,6 +1391,14 @@ const ReportsView: React.FC = () => {
                           <span className="text-amber-600"> · AR {Math.round(member.outstanding).toLocaleString()} ALL</span>
                         )}
                       </div>
+                      {!isSales && member.salaryCost > 0 && (
+                        <div className="text-xs">
+                          <span className={member.netProfit >= 0 ? 'text-indigo-600 font-medium' : 'text-red-600 font-medium'}>
+                            Fitim neto: {Math.round(member.netProfit).toLocaleString()} ALL
+                          </span>
+                          <span className="text-muted-foreground"> (pagë {Math.round(member.salaryCost).toLocaleString()})</span>
+                        </div>
+                      )}
                     </div>
                   </div>
                   <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
@@ -1395,8 +1447,57 @@ const ReportsView: React.FC = () => {
                 <p className="font-semibold text-amber-600">{Math.round(staffTotals.outstanding).toLocaleString()} ALL</p>
               </div>
             </div>
+            {!isSales && staffTotals.salaryCost > 0 && (
+              <div className="pt-2 flex justify-between text-sm">
+                <span className="text-muted-foreground">Fitim neto i stafit (të ardhura − pagat)</span>
+                <span className={`font-semibold ${staffTotals.netProfit >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                  {Math.round(staffTotals.netProfit).toLocaleString()} ALL
+                </span>
+              </div>
+            )}
           </div>
         </Card>
+      )}
+
+      {/* Profit by Squad (grouped by role) */}
+      {!isSales && profitBySquad.length > 0 && (
+      <Card className="p-6 space-y-4">
+        <div className="flex items-center justify-between">
+          <h3 className="text-lg font-semibold">Fitimi sipas Skuadrës (rolit)</h3>
+          <Badge variant="secondary">{profitBySquad.length} role</Badge>
+        </div>
+        <div className="space-y-3">
+          {profitBySquad.map(squad => {
+            const maxNet = Math.max(...profitBySquad.map(s => Math.abs(s.netProfit)), 1);
+            const pct = (Math.abs(squad.netProfit) / maxNet) * 100;
+            return (
+              <div key={squad.role} className="space-y-1.5">
+                <div className="flex items-center justify-between text-sm flex-wrap gap-2">
+                  <div className="flex items-center gap-2">
+                    <Users className="h-4 w-4 text-muted-foreground" />
+                    <span className="font-medium">{squad.role}</span>
+                    <span className="text-xs text-muted-foreground">{squad.count} persona</span>
+                  </div>
+                  <div className="text-right">
+                    <span className={`font-semibold ${squad.netProfit >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                      {Math.round(squad.netProfit).toLocaleString()} ALL
+                    </span>
+                    <div className="text-[11px] text-muted-foreground">
+                      Të ardhura {Math.round(squad.revenue).toLocaleString()} · Pagë {Math.round(squad.salaryCost).toLocaleString()}
+                    </div>
+                  </div>
+                </div>
+                <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
+                  <div className={`h-full rounded-full transition-all ${squad.netProfit >= 0 ? 'bg-indigo-500' : 'bg-red-400'}`} style={{ width: `${pct}%` }} />
+                </div>
+              </div>
+            );
+          })}
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Fitimi neto = të ardhurat e atribuara ({accountingBasis === 'accrual' ? 'të faturuara' : 'të arkëtuara'}) − pagat e periudhës.
+        </p>
+      </Card>
       )}
 
       {/* Expenses by Department/Category */}

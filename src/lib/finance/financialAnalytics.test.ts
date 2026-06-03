@@ -14,6 +14,9 @@ import {
   calculateProjectedRevenue,
   calculateRevenueBetween,
   calculateTotalExpenses,
+  calculateExpensesBetween,
+  monthHasOccurred,
+  monthsElapsedInYear,
   getFinancialAvailableYears,
   getInvoiceOutstandingAll,
 } from './financialAnalytics';
@@ -272,6 +275,37 @@ describe('ERP-grade accounting helpers (accrual + AR)', () => {
     expect(aging['90+']).toBe(400);
     const total = aging['0-30'] + aging['31-60'] + aging['61-90'] + aging['90+'];
     expect(total).toBe(1000);
+  });
+
+  it('scopes salary to elapsed months only (no salary for future months)', () => {
+    const now = new Date('2026-06-15T10:00:00Z'); // mid-June 2026
+    // Current year: salary applies Jan–Jun, not Jul–Dec.
+    expect(monthHasOccurred(2026, 5, now)).toBe(true);  // June
+    expect(monthHasOccurred(2026, 6, now)).toBe(false); // July (future)
+    expect(monthHasOccurred(2025, 11, now)).toBe(true); // past year
+    expect(monthHasOccurred(2027, 0, now)).toBe(false); // future year
+
+    expect(monthsElapsedInYear(2026, now)).toBe(6); // Jan–Jun
+    expect(monthsElapsedInYear(2025, now)).toBe(12);
+    expect(monthsElapsedInYear(2027, now)).toBe(0);
+
+    const byMonth = buildExpensesByMonth([], 2026, 1000, MONTH_LABELS_SQ, now);
+    expect(byMonth[5].value).toBe(1000); // June — salary counted
+    expect(byMonth[6].value).toBe(0);    // July — future, no salary
+  });
+
+  it('sums expenses within a date range with currency normalization', () => {
+    const expenses: Expense[] = [
+      mkExpense({ id: 'e1', amount: 100, currency: 'ALL', date: new Date('2026-03-10T10:00:00Z') }),
+      mkExpense({ id: 'e2', amount: 200, currency: 'ALL', date: new Date('2026-05-10T10:00:00Z') }),
+      mkExpense({ id: 'e3', amount: 999, currency: 'ALL', date: new Date('2025-12-31T10:00:00Z') }),
+    ];
+    const total = calculateExpensesBetween(
+      expenses,
+      new Date('2026-01-01T00:00:00Z'),
+      new Date('2026-12-31T23:59:59Z'),
+    );
+    expect(total).toBe(300); // only the two 2026 expenses
   });
 
   it('calculates accrual revenue in a date range', () => {
