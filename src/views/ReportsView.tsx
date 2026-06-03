@@ -159,7 +159,10 @@ const ReportsView: React.FC = () => {
   // NOTE: We deliberately do NOT filter by status here. The staff-revenue card
   // must surface former employees too (with an "Inaktiv" badge); salary totals
   // below explicitly restrict to Active members.
-  const { data: teamMembers } = useCollection<TeamMember>('teamMembers');
+  // Load all members (like usePermissions/CRM/Chat); many member docs have an
+  // inconsistent/absent teamId, so a team-scoped load hid most of them. We scope
+  // to the current team (or teamless members) in `scopedTeamMembers` below.
+  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
 
   // ── Personal stats for Member/Viewer ──
   const myTasks = useMemo(() => {
@@ -540,7 +543,9 @@ const ReportsView: React.FC = () => {
   const currentTeamId = useGlobalTeamId();
   const scopedTeamMembers = useMemo(() => {
     if (!teamMembers) return [];
-    const inTeam = teamMembers.filter(m => !currentTeamId || (m as any).teamId === currentTeamId);
+    // Include current-team members AND members with no teamId (legacy/inconsistent
+    // records); only exclude members that clearly belong to a different team.
+    const inTeam = teamMembers.filter(m => !currentTeamId || !(m as any).teamId || (m as any).teamId === currentTeamId);
     const seen = new Set<string>();
     return inTeam.filter(m => {
       const uid = (m as any).userId || (m as any).uid || (m as any).id;
