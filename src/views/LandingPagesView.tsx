@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2 } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -124,6 +124,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Trees,
     color: 'text-emerald-700',
     gradient: 'from-amber-500 to-emerald-600',
+    status: 'active',
+  },
+  {
+    id: 'website',
+    title: 'Faqe Interneti (Website)',
+    description: 'Paketa zhvillimi website-i në 3 gjuhë (EN · IT · SQ) — Bazike, Standard, Avancuar, Premium. Çmim një herë nga €550.',
+    path: '/website',
+    category: 'Website',
+    icon: Code2,
+    color: 'text-blue-600',
+    gradient: 'from-blue-500 to-indigo-600',
     status: 'active',
   },
 ];
