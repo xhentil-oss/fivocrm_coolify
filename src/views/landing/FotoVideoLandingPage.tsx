@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import {
   Camera, Video, Image as ImageIcon, Film, CheckCircle2, ArrowRight,
   Star, Clock, ChevronDown, Phone, ArrowUpRight, Sparkles, Shield,
-  Play, X, CalendarCheck, Download, Utensils, Coffee, Scissors,
+  Play, CalendarCheck, Download, Utensils, Coffee, Scissors,
   ShoppingBag, Building2, Gift,
 } from 'lucide-react';
 
