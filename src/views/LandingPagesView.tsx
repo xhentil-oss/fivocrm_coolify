@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Sun } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Sun, Camera } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -146,6 +146,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Sun,
     color: 'text-orange-600',
     gradient: 'from-amber-500 to-orange-600',
+    status: 'active',
+  },
+  {
+    id: 'foto-video',
+    title: 'Foto + Video për Biznese',
+    description: 'Paketa fotografimi & video për biznese lokale (restorante, kafene, salone, klinika) — Starter €120, Growth €290, Premium €650. Foto, Reels & video gati për postim.',
+    path: '/foto-video',
+    category: 'Foto & Video',
+    icon: Camera,
+    color: 'text-fuchsia-600',
+    gradient: 'from-fuchsia-600 to-pink-600',
     status: 'active',
   },
 ];

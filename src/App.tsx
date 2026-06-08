@@ -87,6 +87,7 @@ const MassageLandingPage = lazyRetry(() => import('./views/landing/MassageLandin
 const AgroturizemLandingPage = lazyRetry(() => import('./views/landing/AgroturizemLandingPage'));
 const WebsiteLandingPage = lazyRetry(() => import('./views/landing/WebsiteLandingPage'));
 const PergolaLandingPage = lazyRetry(() => import('./views/landing/PergolaLandingPage'));
+const FotoVideoLandingPage = lazyRetry(() => import('./views/landing/FotoVideoLandingPage'));
 const PriceCalculatorView = lazyRetry(() => import('./views/PriceCalculatorView'));
 const LandingPagesView = lazyRetry(() => import('./views/LandingPagesView'));
 const ContractsView = lazyRetry(() => import('./views/ContractsView'));
@@ -212,6 +213,7 @@ function AppContent() {
       <Route path="/agroturizem" element={<Suspense fallback={<LazyFallback />}><AgroturizemLandingPage /></Suspense>} />
       <Route path="/website" element={<Suspense fallback={<LazyFallback />}><WebsiteLandingPage /></Suspense>} />
       <Route path="/pergola" element={<Suspense fallback={<LazyFallback />}><PergolaLandingPage /></Suspense>} />
+      <Route path="/foto-video" element={<Suspense fallback={<LazyFallback />}><FotoVideoLandingPage /></Suspense>} />
 
       {/* Client Portal routes */}
       <Route path="/portal" element={<Suspense fallback={<LazyFallback />}><PortalLayout /></Suspense>}>
