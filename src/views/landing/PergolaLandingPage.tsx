@@ -41,6 +41,7 @@ interface Pkg {
   title: string;
   subtitle: string;
   price: string;
+  originalPrice?: string;
   priceNote: string;
   popular?: boolean;
   badge?: string;
@@ -58,8 +59,10 @@ const PACKAGES: Pkg[] = [
     id: 'baze',
     title: 'Bazë',
     subtitle: 'Prezencë profesionale dhe kërkesat e para',
-    price: '650€',
+    price: '1,100€',
+    originalPrice: '1,200€',
     priceNote: '/ muaj + buxhet reklamash',
+    badge: 'Ofertë',
     color: 'from-zinc-500 to-slate-600',
     border: 'border-zinc-200 hover:border-zinc-400',
     ring: 'ring-zinc-400',
@@ -106,7 +109,8 @@ const PACKAGES: Pkg[] = [
     id: 'rritje',
     title: 'Rritje',
     subtitle: 'Rritje e qëndrueshme e kërkesave dhe projekteve',
-    price: '1,200€',
+    price: '1,800€',
+    originalPrice: '2,000€',
     priceNote: '/ muaj + buxhet reklamash',
     popular: true,
     badge: 'Më e Zgjedhura',
@@ -158,7 +162,8 @@ const PACKAGES: Pkg[] = [
     id: 'dominim',
     title: 'Dominim',
     subtitle: 'Dominim i plotë i tregut në zonën tuaj',
-    price: '2,000€',
+    price: '2,800€',
+    originalPrice: '3,000€',
     priceNote: '/ muaj + buxhet reklamash',
     badge: 'Maksimum Rezultate',
     color: 'from-orange-600 to-red-600',
@@ -487,7 +492,8 @@ export default function PergolaLandingPage() {
                     <div className="p-6 flex flex-col h-full">
                       <h3 className="text-2xl font-bold">{pkg.title}</h3>
                       <p className="text-sm text-gray-500 mt-1">{pkg.subtitle}</p>
-                      <div className="mt-5 flex items-baseline gap-1.5"><span className={`text-4xl font-bold bg-gradient-to-r ${pkg.color} bg-clip-text text-transparent`}>{pkg.price}</span><span className="text-sm text-gray-500">{pkg.priceNote}</span></div>
+                      <div className="mt-5 flex items-baseline gap-2 flex-wrap"><span className={`text-4xl font-bold bg-gradient-to-r ${pkg.color} bg-clip-text text-transparent`}>{pkg.price}</span>{pkg.originalPrice && (<span className="text-lg font-medium text-gray-400 line-through">{pkg.originalPrice}</span>)}<span className="text-sm text-gray-500">{pkg.priceNote}</span></div>
+                      {pkg.originalPrice && (<p className="mt-1.5 text-xs font-semibold text-orange-600">Ofertë e kufizuar — çmim promocional</p>)}
 
                       <div className="mt-4 p-3 rounded-lg bg-gray-50">
                         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Ideale për:</p>
@@ -568,7 +574,7 @@ export default function PergolaLandingPage() {
               ) : (
                 <form onSubmit={handleSubmit} className="bg-white/10 backdrop-blur-xl rounded-2xl p-8 border border-white/10 space-y-5">
                   <h3 className="text-xl font-bold mb-2">Merrni konsultimin falas</h3>
-                  {selectedPackage && (<div className="flex items-center justify-between px-4 py-3 rounded-xl bg-orange-500/20 border border-orange-500/30"><div><p className="text-xs text-orange-300">Paketa e zgjedhur</p><p className="font-semibold text-white">{selectedPackage.title} — {selectedPackage.price} {selectedPackage.priceNote}</p></div><button type="button" onClick={() => setSelectedPackage(null)} className="text-orange-300 hover:text-white text-sm underline">Ndrysho</button></div>)}
+                  {selectedPackage && (<div className="flex items-center justify-between px-4 py-3 rounded-xl bg-orange-500/20 border border-orange-500/30"><div><p className="text-xs text-orange-300">Paketa e zgjedhur</p><p className="font-semibold text-white">{selectedPackage.title} — {selectedPackage.price}{selectedPackage.originalPrice && <span className="text-gray-400 line-through ml-1.5 font-normal">{selectedPackage.originalPrice}</span>} {selectedPackage.priceNote}</p></div><button type="button" onClick={() => setSelectedPackage(null)} className="text-orange-300 hover:text-white text-sm underline">Ndrysho</button></div>)}
                   <div><label className="block text-sm font-medium text-gray-300 mb-1.5">Emri i plotë *</label><input type="text" required value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} className="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-500" placeholder="Emër Mbiemër" /></div>
                   <div className="grid grid-cols-2 gap-4">
                     <div><label className="block text-sm font-medium text-gray-300 mb-1.5">Email *</label><input type="email" required value={formData.email} onChange={e => setFormData(p => ({ ...p, email: e.target.value }))} className="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-orange-500" placeholder="email@kompania.al" /></div>
