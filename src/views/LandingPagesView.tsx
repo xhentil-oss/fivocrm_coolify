@@ -140,7 +140,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
   {
     id: 'pergola',
     title: 'Pergola, Kangjella & Tenda',
-    description: 'Marketing për prodhues outdoor — Rrjete Sociale + SEO + Google Ads + Email në 3 paketa (Bazë, Rritje, Dominim). Nga €1.100/muaj (ofertë).',
+    description: 'Marketing për prodhues outdoor — Rrjete Sociale + SEO + Google Ads + Email në 3 paketa: Prezencë Profesionale (130.000 Lekë), Rritje & Kërkesa për Preventiv (180.000 Lekë), Dominim Lokal & B2B (250.000 Lekë).',
     path: '/pergola',
     category: 'Marketing',
     icon: Sun,

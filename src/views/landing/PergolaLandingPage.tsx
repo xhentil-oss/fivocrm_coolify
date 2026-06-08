@@ -49,6 +49,7 @@ interface Pkg {
   border: string;
   ring: string;
   cta: string;
+  channels: string[];
   targetAudience: string[];
   features: { category: string; items: string[] }[];
   notIncluded: string[];
@@ -57,157 +58,167 @@ interface Pkg {
 const PACKAGES: Pkg[] = [
   {
     id: 'baze',
-    title: 'Bazë',
-    subtitle: 'Prezencë profesionale dhe kërkesat e para',
-    price: '1,100€',
-    originalPrice: '1,200€',
-    priceNote: '/ muaj + buxhet reklamash',
-    badge: 'Ofertë',
+    title: 'Prezencë Profesionale',
+    subtitle: 'Prezencë bazë, produkte dhe reklama fillestare',
+    price: '130.000',
+    priceNote: 'Lekë / muaj',
     color: 'from-zinc-500 to-slate-600',
     border: 'border-zinc-200 hover:border-zinc-400',
     ring: 'ring-zinc-400',
-    cta: 'Fillo me Bazë',
+    cta: 'Zgjidh Prezencën',
+    channels: ['Facebook', 'Instagram'],
     targetAudience: [
-      'Prodhues të rinj që duan prani online',
-      'Biznese të vogla familjare',
-      'Ata që sapo nisin marketingun dixhital',
+      'Kompani që kërkon prezencë më serioze online',
+      'Prezantim më i mirë i produkteve',
+      'Fillimi i bazës për kërkesa të reja',
     ],
     features: [
-      { category: 'Rrjete Sociale', items: [
-        'Menaxhim Facebook + Instagram',
-        '10 postime / muaj',
-        '6 reels / muaj',
-        '1 ditë xhirimi produktesh / muaj',
-        'Dizajn grafik & tekste profesionale',
-        'Kalendar mujor publikimi',
+      { category: 'Rrjete Sociale & Prezantim Produktesh', items: [
+        'Përgatitje e planit mujor të marketingut',
+        'Menaxhim i Facebook dhe Instagram',
+        'Përgatitje tekstesh profesionale për postime',
+        'Postime për prezantimin e produkteve',
+        'Përmbajtje me fokus te punimet reale',
+        'Ide për video të shkurtra prezantuese',
+        'Prezantim i avantazheve të produkteve',
+        'Raportim bazë mujor',
       ] },
-      { category: 'SEO (Google & Maps)', items: [
-        'Audit teknik i website-it',
-        'Krijim & optimizim i Google Maps (Business Profile)',
-        '15 fjalë kyçe të zonës suaj',
-        'Optimizim On-page',
-        '1 artikull blog / muaj',
+      { category: 'SEO & Google Maps', items: [
+        'Analizë bazë e website-it',
+        'Përzgjedhje e fjalëve kyçe kryesore',
+        'Optimizim bazë i faqeve ekzistuese',
+        'Optimizim i Google Business Profile',
+        'Fokus te shfaqja në Google Maps',
+        'Sugjerime për përmirësimin e përmbajtjes',
       ] },
-      { category: 'Google Ads', items: [
-        'Konfigurim i fushatave',
-        '1 fushatë aktive për gjenerim kërkesash',
-        'Targetim lokal i saktë',
-      ] },
-      { category: 'Email Marketing', items: [
-        'Ndërtim i listës së kontakteve',
-        '1 newsletter / muaj me oferta & projekte',
-        'Shabllone profesionale',
+      { category: 'Google Ads & Email Marketing', items: [
+        'Krijim & menaxhim bazë i fushatës Google Ads',
+        'Targetim sipas zonës dhe interesit',
+        'Reklama për kërkesa për preventiv',
+        'Sponsorizim i një videoje / materiali prezantues',
+        '1 email marketing në muaj',
+        'Raportim mujor për reklamat',
       ] },
     ],
     notIncluded: [
-      'Buxheti i reklamave (ad spend)',
-      'Video kinematike / me dron ajror',
-      'Automatizim email-i & fushata ndërkombëtare',
+      'TikTok & YouTube',
+      'Video para/pas & case studies',
+      'Remarketing',
     ],
   },
   {
     id: 'rritje',
-    title: 'Rritje',
-    subtitle: 'Rritje e qëndrueshme e kërkesave dhe projekteve',
-    price: '1,800€',
-    originalPrice: '2,000€',
-    priceNote: '/ muaj + buxhet reklamash',
+    title: 'Rritje & Kërkesa për Preventiv',
+    subtitle: 'Më shumë përmbajtje, case studies, SEO & Google Ads',
+    price: '180.000',
+    priceNote: 'Lekë / muaj',
     popular: true,
-    badge: 'Më e Zgjedhura',
+    badge: 'E Rekomanduara',
     color: 'from-amber-500 to-orange-600',
     border: 'border-amber-300 hover:border-amber-500',
     ring: 'ring-amber-400',
-    cta: 'Zgjidh Rritje',
+    cta: 'Zgjidh Rritjen',
+    channels: ['Facebook', 'Instagram', 'TikTok', 'YouTube'],
     targetAudience: [
-      'Prodhues në rritje me portofol projektesh',
-      'Biznese që synojnë hotele, restorante & resorte',
-      'Ata që duan kërkesa të rregullta çdo javë',
+      'Kompani që kërkon më shumë kërkesa për preventiv',
+      'Prezencë aktive në disa kanale',
+      'Fokus te video & case studies',
     ],
     features: [
-      { category: 'Rrjete Sociale', items: [
-        'Menaxhim Facebook + Instagram + TikTok',
-        '16 postime / muaj',
-        '12 reels / muaj',
-        '1–2 video prezantuese profesionale / muaj',
-        'Case studies nga projektet reale',
-        'Community management aktiv',
+      { category: 'Rrjete Sociale, Video & Case Studies', items: [
+        'Plan marketingu mujor më i detajuar',
+        'Menaxhim i Facebook, Instagram, TikTok & YouTube',
+        'Përgatitje e përmbajtjes për postime dhe video',
+        'Video të shkurtra për procesin e punës',
+        'Video para/pas',
+        'Prezantim i projekteve të realizuara',
+        'Case studies për punime të zgjedhura',
+        'Fokus te hotelet, restorantet, BnB, vilat & bizneset',
+        'Ide për video prezantuese që mund të sponsorizohet',
+        'Raportim mujor me rekomandime',
       ] },
-      { category: 'SEO (Google & Maps)', items: [
-        'SEO i plotë On-page & Off-page',
-        'Dominim lokal në Google Maps',
-        '30+ fjalë kyçe',
-        '2 artikuj blog / muaj',
-        'Ndërtim backlink-esh (autoritet)',
+      { category: 'SEO & Pozicionim Lokal në Google', items: [
+        'Analizë SEO e website-it',
+        'Kërkim i fjalëve kyçe sipas shërbimit',
+        'Optimizim i faqeve kryesore',
+        'Sugjerime për faqe të reja shërbimesh',
+        'Optimizim i Google Business Profile',
+        'Përmirësim i përshkrimeve, fotove & kategorive në Maps',
+        'Strategji për rritjen e kërkesave organike',
+        'Raportim mujor mbi ecurinë e SEO-s',
       ] },
-      { category: 'Google Ads', items: [
-        'Menaxhim i plotë i fushatave',
-        '3–4 fushata aktive',
-        'Retargeting i vizitorëve',
-        'Targetim: hotele, restorante & bujtina',
-      ] },
-      { category: 'Email Marketing', items: [
-        '2 fushata / muaj',
-        'Segmentim B2B (hotele & biznese)',
-        'Shabllone të personalizuara',
-        'Raport hapjesh & klikimesh',
+      { category: 'Google Ads & Email Marketing për Leads', items: [
+        'Krijim & menaxhim i fushatave Google Ads',
+        'Reklama në Google Search për shërbimet kryesore',
+        'Targetim sipas zonës, interesit & fjalëve kyçe',
+        'Sponsorizim i videos prezantuese',
+        'Reklama për telefonata & kërkesa për preventiv',
+        '2 email marketing në muaj',
+        'Strukturë për ndjekjen e klientëve potencialë',
+        'Raportim mujor për performancën',
       ] },
     ],
     notIncluded: [
-      'Buxheti i reklamave (ad spend)',
-      'Video me dron ajror (si shtesë)',
-      'Zhvillim website-i',
+      'LinkedIn & pozicionim B2B',
+      'Remarketing',
+      'Strategji SEO 3-mujore e avancuar',
     ],
   },
   {
     id: 'dominim',
-    title: 'Dominim',
-    subtitle: 'Dominim i plotë i tregut në zonën tuaj',
-    price: '2,800€',
-    originalPrice: '3,000€',
-    priceNote: '/ muaj + buxhet reklamash',
+    title: 'Dominim Lokal & B2B',
+    subtitle: 'Dominim në Google, video marketing & B2B',
+    price: '250.000',
+    priceNote: 'Lekë / muaj',
     badge: 'Maksimum Rezultate',
     color: 'from-orange-600 to-red-600',
     border: 'border-orange-300 hover:border-orange-500',
     ring: 'ring-orange-400',
-    cta: 'Zgjidh Dominim',
+    cta: 'Zgjidh Dominimin',
+    channels: ['Facebook', 'Instagram', 'TikTok', 'YouTube', 'LinkedIn'],
     targetAudience: [
-      'Prodhues premium me brand të fortë',
-      'Kompani me instalime në disa qytete',
-      'Ata që duan epërsi të qartë ndaj konkurrencës',
+      'Kompani që synon të jetë zgjedhja kryesore në treg',
+      'Ndërtim autoriteti & dominim në Google',
+      'Targetim i klientëve B2B me potencial të lartë',
     ],
     features: [
-      { category: 'Rrjete Sociale', items: [
-        'Menaxhim FB + Instagram + TikTok + YouTube',
-        '24 postime / muaj',
-        '20 reels / muaj',
-        'Video kinematike me dron ajror',
-        'Case studies premium & PR',
-        'Bashkëpunime me influencerë & arkitektë',
+      { category: 'Rrjete Sociale, Video Marketing & B2B', items: [
+        'Strategji mujore marketingu',
+        'Menaxhim i FB, Instagram, TikTok, YouTube & LinkedIn',
+        'Kalendari mujor i përmbajtjes',
+        'Postime për produkte dhe projekte reale',
+        'Video prezantuese për produkte & shërbime',
+        'Video për reklama & sponsorizime',
+        'Case studies më të detajuara',
+        'Përmbajtje për klientë familjarë dhe B2B',
+        'Përmbajtje për hotele, restorante, BnB, vila & biznese',
+        'Ide për oferta sezonale',
+        'Raportim i detajuar mujor me rekomandime',
       ] },
-      { category: 'SEO (Google & Maps)', items: [
-        'SEO premium shumë-qytetësh',
-        'Dominim i plotë në Google Maps',
-        '60+ fjalë kyçe',
-        '4 artikuj blog / muaj',
-        'Ndërtim i autoritetit të domenit',
+      { category: 'SEO i Avancuar & Google Maps', items: [
+        'Strategji SEO 3-mujore',
+        'Kërkim i avancuar i fjalëve kyçe',
+        'Optimizim i website-it për shërbimet kryesore',
+        'Sugjerime për artikuj / faqe informuese',
+        'Optimizim i Google Business Profile',
+        'Përmirësim i prezencës në Google Maps',
+        'Strukturë për mbledhjen e vlerësimeve nga klientët',
+        'Monitorim i pozicioneve & kërkesave',
+        'Raportim i detajuar mujor',
       ] },
-      { category: 'Google Ads', items: [
-        'Meta + Google + YouTube Ads',
-        'Fushata pa limit',
-        'A/B testing i kreativëve',
-        'Optimizim ditor i performancës',
-      ] },
-      { category: 'Email Marketing', items: [
-        'Automatizim i plotë (drip campaigns)',
-        'Integrim me CRM & ndjekje e kërkesave',
-        'Follow-up automatik i klientëve',
-        'Raport mujor i kthimit nga investimi (ROI)',
+      { category: 'Google Ads, Remarketing & Email', items: [
+        'Strategji mujore Google Ads',
+        'Fushata në Google Search për shërbimet kryesore',
+        'Reklama për telefonata & kërkesa për preventiv',
+        'Sponsorizim i videos prezantuese',
+        'Remarketing për klientët që kanë shfaqur interes',
+        'Testim i disa varianteve të reklamave',
+        '3 email marketing në muaj',
+        'Strukturë për ndjekjen e lead-eve',
+        'Raportim mbi performancën & koston për kërkesë',
       ] },
     ],
-    notIncluded: [
-      'Buxheti i reklamave (ad spend)',
-      'Zhvillim website-i (si projekt veçmas)',
-    ],
+    notIncluded: [],
   },
 ];
 
@@ -493,7 +504,10 @@ export default function PergolaLandingPage() {
                       <h3 className="text-2xl font-bold">{pkg.title}</h3>
                       <p className="text-sm text-gray-500 mt-1">{pkg.subtitle}</p>
                       <div className="mt-5 flex items-baseline gap-2 flex-wrap"><span className={`text-4xl font-bold bg-gradient-to-r ${pkg.color} bg-clip-text text-transparent`}>{pkg.price}</span>{pkg.originalPrice && (<span className="text-lg font-medium text-gray-400 line-through">{pkg.originalPrice}</span>)}<span className="text-sm text-gray-500">{pkg.priceNote}</span></div>
-                      {pkg.originalPrice && (<p className="mt-1.5 text-xs font-semibold text-orange-600">Ofertë e kufizuar — çmim promocional</p>)}
+                      <div className="mt-4">
+                        <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Kanalet e përfshira</p>
+                        <div className="flex flex-wrap gap-1.5">{pkg.channels.map((c, ci) => (<span key={ci} className="text-[11px] font-medium px-2.5 py-1 rounded-full bg-orange-50 text-orange-700 border border-orange-100">{c}</span>))}</div>
+                      </div>
 
                       <div className="mt-4 p-3 rounded-lg bg-gray-50">
                         <p className="text-xs font-semibold text-gray-500 uppercase tracking-wide mb-2">Ideale për:</p>
@@ -522,7 +536,10 @@ export default function PergolaLandingPage() {
               );
             })}
           </div>
-          <FadeIn delay={500}><p className="mt-10 text-center text-sm text-gray-500">Të gjitha çmimet janë në Euro (€) dhe pa TVSH. Buxheti i reklamave (ad spend) paguhet veçmas, drejtpërdrejt te Meta/Google. Faturim mujor, pa kontratë afatgjatë.</p></FadeIn>
+          <FadeIn delay={500}><div className="mt-10 max-w-3xl mx-auto text-center text-sm text-gray-500 space-y-1.5">
+            <p>Të gjitha çmimet janë mujore, në Lekë (ALL). Buxheti i reklamave në Google Ads dhe sponsorizimet në rrjete sociale nuk përfshihen në çmimin e menaxhimit.</p>
+            <p>SEO kërkon minimumi 3 muaj punë të vazhdueshme për rezultate të qëndrueshme, ndërsa Google Ads sjell rezultate më të shpejta.</p>
+          </div></FadeIn>
         </div>
       </section>
 
