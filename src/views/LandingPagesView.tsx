@@ -151,7 +151,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
   {
     id: 'foto-video',
     title: 'Foto + Video për Biznese',
-    description: 'Paketa fotografimi & video për biznese lokale (restorante, kafene, salone, klinika) — Starter €120, Growth €290, Premium €650. Foto, Reels & video gati për postim.',
+    description: 'Paketa fotografimi & video për biznese lokale (restorante, kafene, salone, klinika) — Starter 12.000, Growth 30.000, Premium 70.000, Elite 250.000 Lekë. Foto, Reels & video gati për postim.',
     path: '/foto-video',
     category: 'Foto & Video',
     icon: Camera,

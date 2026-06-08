@@ -51,8 +51,8 @@ const PACKAGES: Pkg[] = [
     id: 'starter',
     title: 'Starter',
     idealFor: 'Biznese të vogla që duan një imazh më profesional online për herë të parë.',
-    price: '120€',
-    priceNote: 'një herë',
+    price: '12.000',
+    priceNote: 'Lekë · një herë',
     photos: '15 foto',
     reels: '1 Reel',
     duration: '~1 orë',
@@ -74,8 +74,8 @@ const PACKAGES: Pkg[] = [
     id: 'growth',
     title: 'Growth',
     idealFor: 'Biznese që duan përmbajtje të mjaftueshme për rrjetet sociale për disa javë.',
-    price: '290€',
-    priceNote: 'një herë',
+    price: '30.000',
+    priceNote: 'Lekë · një herë',
     photos: '30 foto',
     reels: '3–4 Reels',
     duration: '~2–3 orë',
@@ -99,8 +99,8 @@ const PACKAGES: Pkg[] = [
     id: 'premium',
     title: 'Premium',
     idealFor: 'Biznese që duan materiale të nivelit të lartë për reklama, website dhe fushata.',
-    price: '650€',
-    priceNote: 'një herë',
+    price: '70.000',
+    priceNote: 'Lekë · një herë',
     photos: '50+ foto',
     reels: '6–8 Reels',
     duration: 'Gjysmë dite',
@@ -119,6 +119,32 @@ const PACKAGES: Pkg[] = [
     ],
     deliverable: '50+ foto, 6–8 Reels dhe 1 video promovuese për reklama & website.',
     salesLine: 'Gjithçka që ju duhet për të dukur si brandi më i mirë në treg.',
+  },
+  {
+    id: 'elite',
+    title: 'Elite',
+    idealFor: 'Biznese & brande që duan një bibliotekë të plotë përmbajtjeje për muaj të tërë.',
+    price: '250.000',
+    priceNote: 'Lekë · një herë',
+    photos: '50 foto',
+    reels: '50 video',
+    duration: '1–2 ditë',
+    badge: 'Vëllim Maksimal',
+    color: 'from-pink-600 to-rose-600',
+    border: 'border-pink-300 hover:border-pink-500',
+    ring: 'ring-pink-400',
+    cta: 'Zgjidh Elite',
+    includes: [
+      'Produksion i plotë foto + video (1–2 ditë xhirimi)',
+      '50 foto profesionale të edituara',
+      '50 video / Reels të gatshme për postim',
+      '1–2 video promovuese kryesore',
+      'Editim kinematik me muzikë & titra',
+      'Materiale për reklama, website & rrjete sociale',
+      'Të drejta të plota përdorimi',
+    ],
+    deliverable: '50 foto + 50 video — një bibliotekë e plotë përmbajtjeje për muaj të tërë.',
+    salesLine: 'Përmbajtje sa për muaj të tërë — pa u shqetësuar më për materiale të reja.',
   },
 ];
 
@@ -298,7 +324,7 @@ export default function FotoVideoLandingPage() {
       <section id="packages" className="py-24 bg-gradient-to-b from-gray-50 to-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <FadeIn><div className="text-center mb-16"><p className="text-sm font-semibold uppercase tracking-widest text-fuchsia-600 mb-3">Paketat</p><h2 className="text-3xl sm:text-4xl font-bold">Paketa Foto + Video për Biznese</h2><p className="mt-4 text-gray-600 max-w-2xl mx-auto">Tri paketa të qarta. Zgjidhni atë që i përshtatet biznesit dhe buxhetit tuaj.</p></div></FadeIn>
-          <div className="grid lg:grid-cols-3 gap-6 items-start">
+          <div className="grid md:grid-cols-2 xl:grid-cols-4 gap-6 items-start">
             {PACKAGES.map((pkg, i) => {
               const isSelected = selectedPackage?.id === pkg.id;
               return (
@@ -335,7 +361,7 @@ export default function FotoVideoLandingPage() {
               );
             })}
           </div>
-          <FadeIn delay={500}><p className="mt-10 text-center text-sm text-gray-500">Çmimet janë orientuese, për një seancë (një herë). Numrat e fotove dhe Reels-eve janë orientues dhe mund të përshtaten sipas nevojës suaj.</p></FadeIn>
+          <FadeIn delay={500}><p className="mt-10 text-center text-sm text-gray-500">Çmimet janë në Lekë dhe orientuese, për një seancë. Numrat e fotove dhe videove janë orientues dhe mund të përshtaten sipas nevojës suaj.</p></FadeIn>
         </div>
       </section>
 
@@ -397,7 +423,7 @@ export default function FotoVideoLandingPage() {
               ) : (
                 <form onSubmit={handleSubmit} className="bg-white/10 backdrop-blur-xl rounded-2xl p-8 border border-white/10 space-y-5">
                   <h3 className="text-xl font-bold mb-2">Rezervo seancën tënde</h3>
-                  {selectedPackage && (<div className="flex items-center justify-between px-4 py-3 rounded-xl bg-fuchsia-500/20 border border-fuchsia-500/30"><div><p className="text-xs text-fuchsia-300">Paketa e zgjedhur</p><p className="font-semibold text-white">{selectedPackage.title} — {selectedPackage.price} ({selectedPackage.priceNote})</p></div><button type="button" onClick={() => setSelectedPackage(null)} className="text-fuchsia-300 hover:text-white text-sm underline">Ndrysho</button></div>)}
+                  {selectedPackage && (<div className="flex items-center justify-between px-4 py-3 rounded-xl bg-fuchsia-500/20 border border-fuchsia-500/30"><div><p className="text-xs text-fuchsia-300">Paketa e zgjedhur</p><p className="font-semibold text-white">{selectedPackage.title} — {selectedPackage.price} {selectedPackage.priceNote}</p></div><button type="button" onClick={() => setSelectedPackage(null)} className="text-fuchsia-300 hover:text-white text-sm underline">Ndrysho</button></div>)}
                   <div><label className="block text-sm font-medium text-gray-300 mb-1.5">Emri i plotë *</label><input type="text" required value={formData.name} onChange={e => setFormData(p => ({ ...p, name: e.target.value }))} className="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-fuchsia-500" placeholder="Emër Mbiemër" /></div>
                   <div className="grid grid-cols-2 gap-4">
                     <div><label className="block text-sm font-medium text-gray-300 mb-1.5">Email *</label><input type="email" required value={formData.email} onChange={e => setFormData(p => ({ ...p, email: e.target.value }))} className="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-fuchsia-500" placeholder="email@biznesi.al" /></div>
