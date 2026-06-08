@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2 } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Sun } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -135,6 +135,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Code2,
     color: 'text-blue-600',
     gradient: 'from-blue-500 to-indigo-600',
+    status: 'active',
+  },
+  {
+    id: 'pergola',
+    title: 'Pergola, Kangjella & Tenda',
+    description: 'Marketing për prodhues outdoor — Rrjete Sociale + SEO + Google Ads + Email në 3 paketa (Bazë, Rritje, Dominim). Nga €650/muaj.',
+    path: '/pergola',
+    category: 'Marketing',
+    icon: Sun,
+    color: 'text-orange-600',
+    gradient: 'from-amber-500 to-orange-600',
     status: 'active',
   },
 ];
