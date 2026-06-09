@@ -16,8 +16,11 @@ import crypto from 'crypto';
 
 // ── Config ──────────────────────────────────────────────────────────────────
 function apiUrl(): string {
-  const base = process.env.WHMCS_API_URL;
+  let base = process.env.WHMCS_API_URL;
   if (!base) throw new Error('WHMCS_API_URL nuk është konfiguruar');
+  base = base.trim();
+  // Tolerate a URL set without a scheme (e.g. "app.cloudfivo.com") — fetch needs one.
+  if (!/^https?:\/\//i.test(base)) base = `https://${base}`;
   return `${base.replace(/\/$/, '')}/includes/api.php`;
 }
 
