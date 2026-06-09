@@ -25,11 +25,14 @@ function apiUrl(): string {
 }
 
 export function whmcsConfigured(): boolean {
-  // Credentials are always needed; the target can be either a direct WHMCS URL
-  // or the VPS proxy (static IP) — at least one must be set.
-  const hasCreds = !!(process.env.WHMCS_API_IDENTIFIER && process.env.WHMCS_API_SECRET);
-  const hasTarget = !!(process.env.WHMCS_API_URL || process.env.WHMCS_PROXY_URL);
-  return hasCreds && hasTarget;
+  // WHMCS_API_URL + credentials are always required (the URL is built on Vercel
+  // even in proxy mode). WHMCS_PROXY_URL is optional — when set, calls are
+  // relayed through the VPS's static IP instead of hitting WHMCS directly.
+  return !!(
+    process.env.WHMCS_API_URL &&
+    process.env.WHMCS_API_IDENTIFIER &&
+    process.env.WHMCS_API_SECRET
+  );
 }
 
 // ── Core call ─────────────────────────────────────────────────────────────────
@@ -56,7 +59,9 @@ export async function whmcsCall(action: string, params: Record<string, string | 
           'Content-Type': 'application/json',
           'x-api-key': process.env.WHMCS_PROXY_SECRET || '',
         },
-        body: JSON.stringify({ form: body.toString() }),
+        // Send the WHMCS target URL too (built from Vercel's WHMCS_API_URL) so
+        // the VPS relay needs no WHMCS env of its own.
+        body: JSON.stringify({ url: apiUrl(), form: body.toString() }),
         signal: AbortSignal.timeout(25_000),
       })
     : await fetch(apiUrl(), {

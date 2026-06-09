@@ -792,10 +792,15 @@ app.post('/upload', requireFirebaseAuth, uploadMw.single('file'), async (req: an
 // + secret); the VPS never stores WHMCS credentials and only ever forwards to
 // its own WHMCS_API_URL (so it can't be abused as an open SSRF relay).
 app.post('/whmcs-proxy', requireApiKey, async (req, res) => {
-  if (!WHMCS_API_URL) { res.status(503).json({ error: 'WHMCS_API_URL nuk është konfiguruar në VPS' }); return; }
-  const form = (req.body as any)?.form;
+  const { url, form } = (req.body as any) || {};
   if (typeof form !== 'string' || !form) { res.status(400).json({ error: 'Mungon fusha "form"' }); return; }
-  const target = `${WHMCS_API_URL.replace(/\/$/, '')}/includes/api.php`;
+  // Target: prefer the URL sent by FivoCRM (Vercel has WHMCS_API_URL); fall back
+  // to the VPS env only if present. Must be https to avoid open-relay abuse.
+  const target = (typeof url === 'string' && url)
+    ? url
+    : (WHMCS_API_URL ? `${WHMCS_API_URL.replace(/\/$/, '')}/includes/api.php` : '');
+  if (!target) { res.status(503).json({ error: 'Mungon URL-ja e WHMCS (as nga kërkesa, as nga env)' }); return; }
+  if (!/^https:\/\//i.test(target)) { res.status(400).json({ error: 'URL e WHMCS e pavlefshme' }); return; }
   try {
     const r = await fetch(target, {
       method: 'POST',
