@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
 import { buildInvoiceEmail } from '../_invoiceEmail.js';
 import admin, { adminDb as db, adminMessaging, adminAuth } from '../_firebaseAdmin.js';
+import { runWhmcsSync } from '../_whmcsSync.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 function authorize(req: VercelRequest): boolean {
@@ -1297,6 +1298,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'whatsapp-broadcasts':
         result = await runWhatsappBroadcasts();
         break;
+      case 'whmcs-sync':
+        result = await runWhmcsSync();
+        break;
       case 'cleanup-old-notifications':
         result = await runCleanupOldNotifications();
         break;
@@ -1305,7 +1309,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, digest, waBroadcasts] = await Promise.allSettled([
+        const [tasks, invoiceRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, digest, waBroadcasts, whmcs] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
           runRecurringTasks(),
@@ -1318,6 +1322,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           runLeadFollowUpReminders(),
           runNotificationDigest(),
           runWhatsappBroadcasts(),
+          runWhmcsSync(),
         ]);
         const settled = (r: PromiseSettledResult<any>) =>
           r.status === 'fulfilled' ? r.value : { error: (r.reason as Error)?.message || 'failed' };
@@ -1334,11 +1339,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           leadReminders: settled(leads),
           digest: settled(digest),
           whatsappBroadcasts: settled(waBroadcasts),
+          whmcsSync: settled(whmcs),
         };
         break;
       }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts, whmcs-sync` });
     }
 
     return res.status(200).json({ success: true, job, ...result, timestamp: new Date().toISOString() });

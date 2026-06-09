@@ -1566,6 +1566,19 @@ const SettingsView: React.FC = () => {
             lastRun={getLastRun('invoice_reminders')}
           />
 
+          {/* WHMCS Sync */}
+          <CronJobCard
+            title="Sinkronizim WHMCS"
+            description="Tërheq faturat, pagesat dhe shërbimet/abonimet aktive nga WHMCS në FivoCRM. Përditësimi në kohë reale bëhet nga webhook-u; ky sinkronizim periodik kap çdo ngjarje që mund të jetë humbur. Kliko 'Ekzekuto Tani' për një backfill të plotë."
+            schedule="Çdo ditë (brenda 'run-all') + kohë reale via webhook"
+            icon={<Cloud className="w-5 h-5 text-primary" />}
+            enabled={cronSettings['whmcs_sync']?.enabled ?? true}
+            onToggle={(v) => handleToggleCron('whmcs_sync', v)}
+            status={cronRunStatus['whmcs_sync']}
+            onRun={() => handleRunCron('/api/cron/run?job=whmcs-sync', 'whmcs_sync')}
+            lastRun={getLastRun('whmcs_sync')}
+          />
+
           {/* Recurring Tasks */}
           <CronJobCard
             title="Detyra Periodike"
@@ -1595,6 +1608,11 @@ const SettingsView: React.FC = () => {
                 ['FIREBASE_CLIENT_EMAIL',  'Email i Firebase Service Account'],
                 ['FIREBASE_PRIVATE_KEY',   'Çelësi privat i Service Account (fillon me -----BEGIN)'],
                 ['CRON_SECRET',            'Fjalëkalim sekret — Vercel e vendos automatikisht'],
+                ['WHMCS_API_URL',          'URL bazë e WHMCS (p.sh. https://billing.example.com)'],
+                ['WHMCS_API_IDENTIFIER',   'API credential identifier nga WHMCS'],
+                ['WHMCS_API_SECRET',       'API credential secret nga WHMCS'],
+                ['WHMCS_WEBHOOK_SECRET',   'Sekret i përbashkët për firmosjen HMAC të webhook-ut'],
+                ['WHMCS_TEAM_ID',          '(Opsionale) teamId ku ngjiten të dhënat e WHMCS'],
               ] as [string, string][]).map(([key, desc]) => (
                 <div key={key} className="flex items-center gap-3 p-3 bg-muted/50 rounded-lg">
                   <code className="text-xs font-mono text-primary bg-primary/10 px-2 py-1 rounded shrink-0">{key}</code>
