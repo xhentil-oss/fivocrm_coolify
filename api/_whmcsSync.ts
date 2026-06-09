@@ -244,5 +244,9 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
     ...(teamId ? { teamId } : {}),
   }, { merge: true });
 
-  return { invoicesCreated, invoicesUpdated, subsCreated, subsUpdated, errors: errors.length };
+  return {
+    invoicesCreated, invoicesUpdated, subsCreated, subsUpdated,
+    errors: errors.length,
+    ...(errors.length ? { errorDetail: errors.slice(0, 2).join(' | ').slice(0, 400) } : {}),
+  };
 }
