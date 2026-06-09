@@ -1572,23 +1572,10 @@ const SettingsView: React.FC = () => {
             lastRun={getLastRun('invoice_reminders')}
           />
 
-          {/* WHMCS Clients Sync */}
-          <CronJobCard
-            title="Sinkronizim Klientësh WHMCS"
-            description="Tërheq klientët nga WHMCS (emër, email, telefon, kompani, adresë) te lista e Klientëve në FivoCRM. Idempotent — nuk krijon dublime. Kliko 'Ekzekuto Tani' për të importuar të gjithë klientët."
-            schedule="Manual / brenda 'run-all'"
-            icon={<UserCircle className="w-5 h-5 text-primary" />}
-            enabled={cronSettings['whmcs_clients']?.enabled ?? true}
-            onToggle={(v) => handleToggleCron('whmcs_clients', v)}
-            status={cronRunStatus['whmcs_clients']}
-            onRun={() => handleRunCron('/api/cron/run?job=whmcs-clients', 'whmcs_clients')}
-            lastRun={getLastRun('whmcs_clients')}
-          />
-
           {/* WHMCS Sync */}
           <CronJobCard
             title="Sinkronizim WHMCS"
-            description="Tërheq faturat, pagesat dhe shërbimet/abonimet aktive nga WHMCS në FivoCRM. Përditësimi në kohë reale bëhet nga webhook-u; ky sinkronizim periodik kap çdo ngjarje që mund të jetë humbur. Kliko 'Ekzekuto Tani' për një backfill të plotë."
+            description="Tërheq klientët, faturat, pagesat dhe shërbimet/abonimet aktive nga WHMCS në FivoCRM. Klientët shkojnë te lista e Klientëve. Sinkronizimi është idempotent (pa dublime); pjesët pa leje në WHMCS API thjesht anashkalohen. Kliko 'Ekzekuto Tani' për një backfill të plotë."
             schedule="Çdo ditë (brenda 'run-all') + kohë reale via webhook"
             icon={<Cloud className="w-5 h-5 text-primary" />}
             enabled={cronSettings['whmcs_sync']?.enabled ?? true}

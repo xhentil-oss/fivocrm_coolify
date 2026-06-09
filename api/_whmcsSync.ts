@@ -216,6 +216,38 @@ async function clientForId(clientId: string, cache: Map<string, MappedClient | n
   return client;
 }
 
+// Shared client loop (used by both the full sync and the client-only sync).
+async function syncAllClients(teamId: string | null, errors: string[]): Promise<{ clientsCreated: number; clientsUpdated: number }> {
+  let clientsCreated = 0, clientsUpdated = 0;
+  for (let start = 0; ; start += PAGE) {
+    let data: any;
+    try {
+      data = await whmcsCall('GetClients', { limitstart: start, limitnum: PAGE });
+    } catch (e: any) {
+      errors.push(`GetClients: ${e?.message || e}`);
+      break;
+    }
+    const list: any[] = data?.clients?.client || [];
+    for (const raw of list) {
+      try {
+        let full: MappedClientFull;
+        try {
+          const det = await whmcsCall('GetClientsDetails', { clientid: raw.id, stats: 'false' });
+          full = mapWhmcsClientFull(det.client || det);
+        } catch {
+          full = mapWhmcsClientFull(raw);
+        }
+        const r = await upsertCustomer(full, teamId);
+        r === 'created' ? clientsCreated++ : clientsUpdated++;
+      } catch (e: any) {
+        errors.push(`client ${raw?.id}: ${e?.message || e}`);
+      }
+    }
+    if (list.length < PAGE) break;
+  }
+  return { clientsCreated, clientsUpdated };
+}
+
 export async function runWhmcsSync(): Promise<Record<string, unknown>> {
   if (!whmcsConfigured()) {
     return { skipped: 'WHMCS API nuk është konfiguruar' };
@@ -224,6 +256,9 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
   const clientCache = new Map<string, MappedClient | null>();
   let invoicesCreated = 0, invoicesUpdated = 0, subsCreated = 0, subsUpdated = 0;
   const errors: string[] = [];
+
+  // ── Clients → customers (also runs in the client-only job) ───────────────
+  const { clientsCreated, clientsUpdated } = await syncAllClients(teamId, errors);
 
   // ── Invoices (paginated) ────────────────────────────────────────────────
   for (let start = 0; ; start += PAGE) {
@@ -276,6 +311,7 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
   // ── Persist last-sync status (for the Settings UI) ────────────────────────
   await db.collection('integrations').doc('whmcs').set({
     lastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    clientsCreated, clientsUpdated,
     invoicesCreated, invoicesUpdated, subsCreated, subsUpdated,
     errorCount: errors.length,
     lastErrors: errors.slice(0, 10),
@@ -283,6 +319,7 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
   }, { merge: true });
 
   return {
+    clientsCreated, clientsUpdated,
     invoicesCreated, invoicesUpdated, subsCreated, subsUpdated,
     errors: errors.length,
     ...(errors.length ? { errorDetail: errors.slice(0, 2).join(' | ').slice(0, 400) } : {}),
@@ -295,36 +332,9 @@ export async function runWhmcsClientSync(): Promise<Record<string, unknown>> {
     return { skipped: 'WHMCS API nuk është konfiguruar' };
   }
   const teamId = await resolveTeamId();
-  let clientsCreated = 0, clientsUpdated = 0;
   const errors: string[] = [];
 
-  for (let start = 0; ; start += PAGE) {
-    let data: any;
-    try {
-      data = await whmcsCall('GetClients', { limitstart: start, limitnum: PAGE });
-    } catch (e: any) {
-      errors.push(`GetClients: ${e?.message || e}`);
-      break;
-    }
-    const list: any[] = data?.clients?.client || [];
-    for (const raw of list) {
-      try {
-        // Enrich with full details (phone/address); fall back to list fields.
-        let full: MappedClientFull;
-        try {
-          const det = await whmcsCall('GetClientsDetails', { clientid: raw.id, stats: 'false' });
-          full = mapWhmcsClientFull(det.client || det);
-        } catch {
-          full = mapWhmcsClientFull(raw);
-        }
-        const r = await upsertCustomer(full, teamId);
-        r === 'created' ? clientsCreated++ : clientsUpdated++;
-      } catch (e: any) {
-        errors.push(`client ${raw?.id}: ${e?.message || e}`);
-      }
-    }
-    if (list.length < PAGE) break;
-  }
+  const { clientsCreated, clientsUpdated } = await syncAllClients(teamId, errors);
 
   await db.collection('integrations').doc('whmcs').set({
     clientsLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
