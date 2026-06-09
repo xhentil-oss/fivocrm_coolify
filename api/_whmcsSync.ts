@@ -88,6 +88,12 @@ async function upsertCustomer(c: MappedClientFull, teamId: string | null): Promi
     const s = await db.collection('customers').where('email', '==', c.email).limit(1).get();
     if (!s.empty) ref = s.docs[0].ref;
   }
+  // Third fallback: exact phone match (only if it's a real number, never empty)
+  // so a customer entered manually by phone isn't duplicated.
+  if (!ref && c.phone && c.phone.replace(/\D/g, '').length >= 7) {
+    const s = await db.collection('customers').where('phone', '==', c.phone).limit(1).get();
+    if (!s.empty) ref = s.docs[0].ref;
+  }
 
   const payload: Record<string, any> = {
     whmcsClientId: c.whmcsClientId,
