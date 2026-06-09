@@ -111,6 +111,12 @@ export interface MappedClient {
   company: string;
 }
 
+export interface MappedClientFull extends MappedClient {
+  whmcsClientId: string;
+  address: string;
+  status: string;
+}
+
 // ── Pure mappers (no I/O) ─────────────────────────────────────────────────────
 function parseWhmcsDate(v: unknown): Date | null {
   if (!v || typeof v !== 'string') return null;
@@ -191,6 +197,21 @@ export function mapWhmcsClient(c: any): MappedClient {
     name: c.companyname ? String(c.companyname) : (fullName || String(c.email || '').trim()),
     phone: String(c.phonenumber || c.phone || '').trim(),
     company: String(c.companyname || '').trim(),
+  };
+}
+
+/** Richer client mapping (adds id, address, status) for the dedicated client sync. */
+export function mapWhmcsClientFull(c: any): MappedClientFull {
+  const base = mapWhmcsClient(c);
+  const address = [c.address1, c.address2, c.city, c.state, c.postcode, c.country]
+    .map((p) => String(p || '').trim())
+    .filter(Boolean)
+    .join(', ');
+  return {
+    ...base,
+    whmcsClientId: String(c.id ?? c.userid ?? c.client_id ?? c.clientid ?? ''),
+    address,
+    status: String(c.status || ''),
   };
 }
 

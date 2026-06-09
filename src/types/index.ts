@@ -206,6 +206,10 @@ export interface Customer {
   teamId?: string;
   leadId?: string;
   assignedToUserId?: string;
+  /** Set when the customer was imported/mirrored from WHMCS. */
+  source?: 'whmcs' | string;
+  /** WHMCS client id — idempotency key for the WHMCS → FivoCRM client sync. */
+  whmcsClientId?: string;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

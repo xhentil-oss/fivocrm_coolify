@@ -8,9 +8,11 @@ import {
   mapWhmcsInvoice,
   mapWhmcsProduct,
   mapWhmcsClient,
+  mapWhmcsClientFull,
   type MappedInvoice,
   type MappedSubscription,
   type MappedClient,
+  type MappedClientFull,
 } from './_whmcs.js';
 
 /**
@@ -69,6 +71,42 @@ async function resolveCustomer(client: MappedClient | null, teamId: string | nul
   });
   customerCache.set(email, ref.id);
   return ref.id;
+}
+
+// ── Full customer upsert (dedicated client sync) ──────────────────────────────
+// Match by whmcsClientId first, then fall back to email so minimal customers
+// created earlier by resolveCustomer() get enriched instead of duplicated.
+async function upsertCustomer(c: MappedClientFull, teamId: string | null): Promise<'created' | 'updated'> {
+  const now = Timestamp.now();
+  let ref: FirebaseFirestore.DocumentReference | null = null;
+
+  if (c.whmcsClientId) {
+    const s = await db.collection('customers').where('whmcsClientId', '==', c.whmcsClientId).limit(1).get();
+    if (!s.empty) ref = s.docs[0].ref;
+  }
+  if (!ref && c.email) {
+    const s = await db.collection('customers').where('email', '==', c.email).limit(1).get();
+    if (!s.empty) ref = s.docs[0].ref;
+  }
+
+  const payload: Record<string, any> = {
+    whmcsClientId: c.whmcsClientId,
+    source: 'whmcs',
+    name: c.name,
+    email: c.email,
+    phone: c.phone,
+    company: c.company,
+    address: c.address,
+    ...(teamId ? { teamId } : {}),
+    updatedAt: now,
+  };
+
+  if (!ref) {
+    await db.collection('customers').add({ ...payload, createdAt: now, createdByUserId: null });
+    return 'created';
+  }
+  await ref.update(payload);
+  return 'updated';
 }
 
 // ── Invoice upsert ────────────────────────────────────────────────────────────
@@ -246,6 +284,58 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
 
   return {
     invoicesCreated, invoicesUpdated, subsCreated, subsUpdated,
+    errors: errors.length,
+    ...(errors.length ? { errorDetail: errors.slice(0, 2).join(' | ').slice(0, 400) } : {}),
+  };
+}
+
+// ── Client-only sync (WHMCS clients → FivoCRM customers) ──────────────────────
+export async function runWhmcsClientSync(): Promise<Record<string, unknown>> {
+  if (!whmcsConfigured()) {
+    return { skipped: 'WHMCS API nuk është konfiguruar' };
+  }
+  const teamId = await resolveTeamId();
+  let clientsCreated = 0, clientsUpdated = 0;
+  const errors: string[] = [];
+
+  for (let start = 0; ; start += PAGE) {
+    let data: any;
+    try {
+      data = await whmcsCall('GetClients', { limitstart: start, limitnum: PAGE });
+    } catch (e: any) {
+      errors.push(`GetClients: ${e?.message || e}`);
+      break;
+    }
+    const list: any[] = data?.clients?.client || [];
+    for (const raw of list) {
+      try {
+        // Enrich with full details (phone/address); fall back to list fields.
+        let full: MappedClientFull;
+        try {
+          const det = await whmcsCall('GetClientsDetails', { clientid: raw.id, stats: 'false' });
+          full = mapWhmcsClientFull(det.client || det);
+        } catch {
+          full = mapWhmcsClientFull(raw);
+        }
+        const r = await upsertCustomer(full, teamId);
+        r === 'created' ? clientsCreated++ : clientsUpdated++;
+      } catch (e: any) {
+        errors.push(`client ${raw?.id}: ${e?.message || e}`);
+      }
+    }
+    if (list.length < PAGE) break;
+  }
+
+  await db.collection('integrations').doc('whmcs').set({
+    clientsLastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    clientsCreated, clientsUpdated,
+    clientErrorCount: errors.length,
+    clientLastErrors: errors.slice(0, 10),
+    ...(teamId ? { teamId } : {}),
+  }, { merge: true });
+
+  return {
+    clientsCreated, clientsUpdated,
     errors: errors.length,
     ...(errors.length ? { errorDetail: errors.slice(0, 2).join(' | ').slice(0, 400) } : {}),
   };

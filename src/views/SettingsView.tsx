@@ -1572,6 +1572,19 @@ const SettingsView: React.FC = () => {
             lastRun={getLastRun('invoice_reminders')}
           />
 
+          {/* WHMCS Clients Sync */}
+          <CronJobCard
+            title="Sinkronizim Klientësh WHMCS"
+            description="Tërheq klientët nga WHMCS (emër, email, telefon, kompani, adresë) te lista e Klientëve në FivoCRM. Idempotent — nuk krijon dublime. Kliko 'Ekzekuto Tani' për të importuar të gjithë klientët."
+            schedule="Manual / brenda 'run-all'"
+            icon={<UserCircle className="w-5 h-5 text-primary" />}
+            enabled={cronSettings['whmcs_clients']?.enabled ?? true}
+            onToggle={(v) => handleToggleCron('whmcs_clients', v)}
+            status={cronRunStatus['whmcs_clients']}
+            onRun={() => handleRunCron('/api/cron/run?job=whmcs-clients', 'whmcs_clients')}
+            lastRun={getLastRun('whmcs_clients')}
+          />
+
           {/* WHMCS Sync */}
           <CronJobCard
             title="Sinkronizim WHMCS"

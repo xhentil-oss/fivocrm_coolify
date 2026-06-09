@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
 import { buildInvoiceEmail } from '../_invoiceEmail.js';
 import admin, { adminDb as db, adminMessaging, adminAuth } from '../_firebaseAdmin.js';
-import { runWhmcsSync } from '../_whmcsSync.js';
+import { runWhmcsSync, runWhmcsClientSync } from '../_whmcsSync.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 function authorize(req: VercelRequest): boolean {
@@ -1301,6 +1301,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'whmcs-sync':
         result = await runWhmcsSync();
         break;
+      case 'whmcs-clients':
+        result = await runWhmcsClientSync();
+        break;
       case 'cleanup-old-notifications':
         result = await runCleanupOldNotifications();
         break;
@@ -1344,7 +1347,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts, whmcs-sync` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts, whmcs-sync, whmcs-clients` });
     }
 
     return res.status(200).json({ success: true, job, ...result, timestamp: new Date().toISOString() });
