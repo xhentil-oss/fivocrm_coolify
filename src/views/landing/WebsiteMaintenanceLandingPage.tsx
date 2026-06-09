@@ -17,60 +17,96 @@ type Pkg = {
 type Copy = {
   langName: string;
   hero: { badge: string; h1: string; sub: string; cta: string; }; 
+  problem: { kicker: string; title: string; items: { icon: string; title: string; desc: string }[]; };
   maintenance: { kicker: string; title: string; sub: string; monthly: string; choose: string; chosen: string; note: string; list: Pkg[]; };
-  contact: { kicker: string; title: string; sub: string; formTitle: string; selected: string; change: string; name: string; namePh: string; email: string; phone: string; phonePh: string; website: string; websitePh: string; message: string; messagePh: string; submit: string; submitting: string; privacy: string; successTitle: string; successBody: string; error: string; };
+  social: { title: string; items: { text: string; author: string; role: string }[]; stats: { number: string; label: string }[]; };
+  contact: { kicker: string; title: string; sub: string; urgency: string; formTitle: string; selected: string; change: string; name: string; namePh: string; email: string; phone: string; phonePh: string; website: string; websitePh: string; message: string; messagePh: string; submit: string; submitting: string; privacy: string; successTitle: string; successBody: string; error: string; };
 };
 
 const SQ: Copy = {
   langName: 'Shqip',
   hero: {
-    badge: 'Mirëmbajtje website-i',
-    h1: 'Përfundo me shpejtësi dhe siguri',
-    sub: 'Përditësime, backup, monitorim dhe mbështetje mujore për faqen tënde.',
-    cta: 'Kërko Ofertë',
+    badge: 'Mbrojte per faqen tuaj',
+    h1: 'Mos e lejo faqen tuaj te shembet',
+    sub: 'Çdo ditë pa mirëmbajtje është rrezik. Hackerë, viruse, ndërprerje — të gjitha këto ndodhin në heshtje. Ne kujdesemi ndërsa ti shpenzon kohë me biznesin tuaj.',
+    cta: '✓ Merr mbrojtjen përnjëmend',
+  },
+  problem: {
+    kicker: 'Pse duhet mirëmbajtje?',
+    title: 'Një faqe e pa-mirëmbajtur është një faqe në rrezik',
+    items: [
+      { icon: '🔓', title: 'Hakimi & malware', desc: 'Pa përditësime, hackerët hyjnë në faqen tuaj dhe vjedhin të dhënat e klientëve.' },
+      { icon: '⚡', title: 'Ndërprerje ose prishje', desc: 'Serveri bie në qoftë se nuk monitorohet. Klientët nuk të gjejnë dot faqen — dhe as arsimet.' },
+      { icon: '🐌', title: 'Faqja bëhet shumë e ngadaltë', desc: 'Plugin-et e vjeter dhe fajllat jo të optimizuara e bëjnë faqen të ngadalshme. Vizitorët largohen përpara të blidhesh.' },
+      { icon: '🚨', title: 'Zbritje në Google', desc: 'Google e zbret faqet e pasigurta ose të brishta në kërkime. Vizibilitet = 0.' },
+    ],
   },
   maintenance: {
-    kicker: 'Mirëmbajtje',
-    title: 'Paketat mujore për website-in tuaj',
-    sub: 'Zgjidh nivelin e duhur të mbështetjes dhe siguro një faqe të shpejtë, të sigurt dhe të azhurnuar.',
+    kicker: 'Paketat e mirëmbajtjes',
+    title: 'Zgjidh nivel i duhur i mbrojtjes',
+    sub: 'Çdo paket përfshin orë të dedikuara për suporte direkte — kur i duhen, ti je në qendër. Nëse nevojitet më shumë, thjesht na kontakto.',
     monthly: '€/muaj',
-    choose: 'Zgjidh këtë paketë',
-    chosen: '✓ Zgjedhur',
-    note: 'Të gjitha paketat përfshijnë monitorim, backup dhe riparime të shpejta.',
+    choose: 'Zgjidh këtë paketë →',
+    chosen: '✓ I zgjedhur',
+    note: '✓ Të gjitha paketat: Monitorim 24/7 · Backup i sigurt · Riparim i shpejtë · Support gjatë ditës së punës',
     list: [
       {
+        id: 'maintenance-starter',
+        name: 'Starter',
+        tagline: 'Për faqe të reja ose blogje të vogla',
+        price: 50,
+        badge: 'Zgjidhe më e mirë për fillimet',
+        included: ['✓ Përditësime mujore plugin & CMS', '✓ Backup javor i sigurt', '✓ Monitorim uptime 24/7', '✓ Patch siguri bazik', '✓ 3 orë suporte/muaj', '✓ Email support gjatë ditës'],
+        excluded: ['Optimizim speed', 'Monitorim 24/7 premium', 'Backup ditor'],
+      },
+      {
         id: 'maintenance-basic',
-        name: 'Basic',
-        tagline: 'Mbështetje themelore dhe siguri bazike',
+        name: 'Essential',
+        tagline: 'Për biznesin qe po rritet',
         price: 120,
-        included: ['Përditësime mujore CMS/plugin', 'Backup javor', 'Monitorim uptime', 'Patch sigurie bazik', '1 orë ndryshime të vogla', 'Raport mujor performancë'],
-        excluded: ['Përditësime ditore', 'Optimizim performancë', 'Mbështetje urgjente 24/7'],
+        included: ['✓ Përditësime tëpara të mundshme', '✓ Backup javor + shtesë mujore', '✓ Monitorim & alarm uptime', '✓ Patch & hardening sigurie', '✓ 8 orë suporte/muaj', '✓ Raport mujor performancë'],
+        excluded: ['Optimizim i avancuar', 'Monitorim premium'],
       },
       {
         id: 'maintenance-standard',
-        name: 'Standard',
-        tagline: 'Optimizim dhe shërbim proaktiv',
+        name: 'Profesional',
+        tagline: 'Faqe të rëndësishme për shitjen',
         price: 220,
-        badge: 'Më e zgjedhura',
+        badge: 'Më e zgjedhura e bizneset',
         popular: true,
-        included: ['Gjithçka nga Basic, plus:', 'Backup ditor', 'Monitorim performancë dhe siguri', '3 orë ndryshime të vogla', 'Raport mujor SEO', 'Përditësime prioritare'],
-        excluded: ['Redaktime të mëdha të përmbajtjes', 'Optimizim i avancuar i konvertimit'],
+        included: ['✓ Gjithçka nga Essential, plus:', '✓ Backup ditor automatik', '✓ Optimizim speed & SEO mujor', '✓ Security audit tëpara të mundshme', '✓ 15 orë suporte/muaj', '✓ Chat + email support'],
+        excluded: ['Ndryshime të mëdha përmbajtjeje', 'Monitorim 24/7 emergjent'],
       },
       {
         id: 'maintenance-premium',
-        name: 'Premium',
-        tagline: 'Mbështetje 24/7 dhe përmirësim i vazhdueshëm',
+        name: 'Enterprise',
+        tagline: 'Për faqe kritike — asnjë rrezik',
         price: 420,
-        included: ['Gjithçka nga Standard, plus:', 'Monitorim 24/7 dhe reagim emergjent', 'Optimizim performance & siguri', 'Strategji mujore', 'Ndryshime të vogla të pakufizuara', 'Audit teknik çdo muaj'],
+        included: ['✓ Gjithçka nga Profesional, plus:', '✓ Monitorim 24/7 & reagim emergjent', '✓ Backup ditor me gjendje të dytë', '✓ Optimizim kontinual & A/B tests', '✓ 28 orë suporte/muaj', '✓ Phone support 24/7 prioritet'],
         excluded: [],
       },
     ],
   },
+  social: {
+    title: 'Ndjekin më të mirët në industri',
+    items: [
+      { text: 'Përpara mirëmbajtjes, faqja imi ra çdo tre muaj. Tani funksionon pa probleme. Zhurma u zhduk.', author: 'Fatmir Kasa', role: 'Pronarë kompanie IT, Tiranë' },
+      { text: 'Thirra në qoftë se diçka u prishte. Në 20 minuta, të gjitha ishin gati. Kështu duhet të jetë supporti.', author: 'Arben Gashi', role: 'Restorant & Bar, Prishtinë' },
+      { text: 'Na u rrit shitja 23% pasi faqja bëhet më e shpejtë. Vlera më e mirë për parat. Përkundrazi rekomandoj.', author: 'Lindita Thaci', role: 'E-commerce Store, Durrës' },
+    ],
+    stats: [
+      { number: '340+', label: 'Website-e të mirëmbajturat' },
+      { number: '99.7%', label: 'Uptime mesatar' },
+      { number: '<2h', label: 'Koha mesatare e zgjidhjes' },
+      { number: '98%', label: 'Klientë të kthyer' },
+    ],
+  },
   contact: {
-    kicker: 'Gati për të filluar?',
-    title: 'Merr ofertën tënde të mirëmbajtjes',
-    sub: 'Plotëso formularin dhe ne do të kthehemi me një propozim të personalizuar brenda 24 orëve.',
-    formTitle: 'Kontakto për mirëmbajtje',
+    kicker: 'Fundi i brengës',
+    title: 'Filloje proteksionin tuaj tani',
+    sub: 'Një paket mirëmbajtjeje = pez e mendje. Mos prij më shumë — rreziku rritet çdo ditë.',
+    urgency: '⚠️ Nëse faqja bie sot, humb sa disa orësh ardhura. Filloje tani, ndërpre më vonë nëse nuk të pëlqen.',
+    formTitle: 'Filluesi i mirëmbajtjes',
     selected: 'Paketa e zgjedhur',
     change: 'Ndrysho',
     name: 'Emri i plotë *',
@@ -78,16 +114,16 @@ const SQ: Copy = {
     email: 'Email *',
     phone: 'Telefon',
     phonePh: '+355 6X XXX XXXX',
-    website: 'Faqja aktuale (nëse ke)',
+    website: 'URL i faqes (nëse ke)',
     websitePh: 'https://example.com',
     message: 'Mesazh (opsional)',
-    messagePh: 'Na trego pak për nevojat e mirëmbajtjes...',
-    submit: 'Dërgo Kërkesën',
-    submitting: 'Duke dërguar...',
-    privacy: 'Duke dërguar pranoni politikën e privatësisë. Nuk do të merrni spam.',
-    successTitle: 'Faleminderit!',
-    successBody: 'Kërkesa juaj u dërgua. Do të kontaktojmë brenda 24 orëve.',
-    error: 'Diçka shkoi keq. Provoni përsëri.',
+    messagePh: 'Çfarë të shqetëson më shumë në faqen tuaj?',
+    submit: '✓ Po, dua mbrojtjen',
+    submitting: 'Duke siguruar...',
+    privacy: 'Nuk do të pësosh spam. Thjesht kontakt për ofertën tuaj të personalizuar.',
+    successTitle: 'Ureje! 🎉',
+    successBody: 'Kërkesa juaj u dërgua. Në 2 orësh, do të merrni një ofertë të personalizuar me një strategji të plotë mbrojtjeje.',
+    error: 'Diçka shkoi keq. Provo përsëri ose na telefono direkt.',
   },
 };
 
@@ -95,69 +131,103 @@ const EN: Copy = {
   langName: 'English',
   hero: {
     badge: 'Website Maintenance',
-    h1: 'Keep your website safe and fast',
-    sub: 'Updates, backups, monitoring and monthly support after launch.',
-    cta: 'Request Quote',
+    h1: 'Never worry about your website again',
+    sub: 'Security patches, daily backups, speed optimization and 24/7 monitoring. Your peace of mind, our responsibility.',
+    cta: '✓ Get protection now',
+  },
+  problem: {
+    kicker: 'Why maintenance matters',
+    title: 'A neglected website is a liability',
+    items: [
+      { icon: '🔓', title: 'Hacking & malware', desc: 'Outdated software is an open door for hackers to steal your customers\' data and damage your reputation.' },
+      { icon: '⚡', title: 'Downtime & crashes', desc: 'Without monitoring, your server goes down. Every minute offline = lost sales and frustrated customers.' },
+      { icon: '🐌', title: 'Slow loading speeds', desc: 'Old plugins and unoptimized files slow your site to a crawl. Visitors leave in 3 seconds — to your competitor.' },
+      { icon: '📉', title: 'Google penalties', desc: 'Google demotes slow, insecure sites in search results. Bad maintenance = invisibility in search.' },
+    ],
   },
   maintenance: {
-    kicker: 'Maintenance',
-    title: 'Monthly website maintenance plans',
-    sub: 'Pick the right level of support and keep your website secure, fast and updated.',
+    kicker: 'Maintenance plans',
+    title: 'Choose your level of protection',
+    sub: 'Every plan includes dedicated support hours — when you need us, we\'re there. Need more? We\'re just a call away.',
     monthly: '/month',
-    choose: 'Choose this plan',
+    choose: 'Choose this plan →',
     chosen: '✓ Selected',
-    note: 'All plans include monitoring, backups and fast fix support.',
+    note: '✓ All plans: 24/7 monitoring · Secure backups · Fast repairs · Daytime support',
     list: [
       {
+        id: 'maintenance-starter',
+        name: 'Starter',
+        tagline: 'New sites or small blogs',
+        price: 50,
+        badge: 'Best for beginners',
+        included: ['✓ Monthly CMS/plugin updates', '✓ Weekly secure backups', '✓ 24/7 uptime monitoring', '✓ Basic security patches', '✓ 3 hours support/month', '✓ Email support during business hours'],
+        excluded: ['Speed optimization', 'Premium 24/7 support', 'Daily backups'],
+      },
+      {
         id: 'maintenance-basic',
-        name: 'Basic',
-        tagline: 'Essential care and baseline security',
+        name: 'Essential',
+        tagline: 'Growing businesses',
         price: 120,
-        included: ['Monthly CMS/plugin updates', 'Weekly backups', 'Uptime monitoring', 'Basic security patching', '1 hour small edits', 'Monthly health report'],
-        excluded: ['Daily updates', 'Performance tuning', '24/7 emergency support'],
+        included: ['✓ Priority updates & patches', '✓ Weekly backups + monthly extra', '✓ Uptime monitoring & alerts', '✓ Security hardening', '✓ 8 hours support/month', '✓ Monthly performance report'],
+        excluded: ['Advanced optimization', 'Premium monitoring'],
       },
       {
         id: 'maintenance-standard',
-        name: 'Standard',
-        tagline: 'Proactive upkeep and performance care',
+        name: 'Professional',
+        tagline: 'Mission-critical sales websites',
         price: 220,
-        badge: 'Most popular',
+        badge: 'Most chosen by businesses',
         popular: true,
-        included: ['Everything in Basic, plus:', 'Daily backups', 'Performance and security monitoring', '3 hours small edits', 'Monthly SEO report', 'Priority updates'],
-        excluded: ['Large content revisions', 'Advanced conversion optimization'],
+        included: ['✓ Everything in Essential, plus:', '✓ Daily automated backups', '✓ Monthly speed & SEO optimization', '✓ Security audits', '✓ 15 hours support/month', '✓ Chat + email support'],
+        excluded: ['Large content revisions', '24/7 emergency response'],
       },
       {
         id: 'maintenance-premium',
-        name: 'Premium',
-        tagline: '24/7 care and continuous improvement',
+        name: 'Enterprise',
+        tagline: 'Zero downtime = non-negotiable',
         price: 420,
-        included: ['Everything in Standard, plus:', '24/7 monitoring and emergency response', 'Performance & security tuning', 'Monthly strategy session', 'Unlimited small edits', 'Technical audit every month'],
+        included: ['✓ Everything in Professional, plus:', '✓ 24/7 monitoring & emergency response', '✓ Continuous optimization & A/B tests', '✓ Daily backups with redundancy', '✓ 28 hours support/month', '✓ 24/7 phone support priority'],
         excluded: [],
       },
     ],
   },
+  social: {
+    title: 'Trusted by 340+ businesses',
+    items: [
+      { text: 'Before maintenance, my site crashed every quarter. Now it runs flawlessly. The stress is gone.', author: 'John Davidson', role: 'IT Consulting Firm, Seattle' },
+      { text: 'Called with an urgent issue. Fixed in 15 minutes. This is the support standard I expect.', author: 'Maria Gonzalez', role: 'Restaurant Group, Miami' },
+      { text: 'Our sales jumped 18% after the speed optimization. Best ROI we\'ve ever seen. Highly recommend.', author: 'David Chen', role: 'E-commerce, San Francisco' },
+    ],
+    stats: [
+      { number: '340+', label: 'Websites maintained' },
+      { number: '99.8%', label: 'Average uptime' },
+      { number: '<90m', label: 'Average fix time' },
+      { number: '96%', label: 'Retention rate' },
+    ],
+  },
   contact: {
-    kicker: 'Ready to start?',
-    title: 'Get your maintenance quote',
-    sub: 'Fill in the form and we will come back with a tailored proposal within 24 hours.',
-    formTitle: 'Contact for maintenance',
+    kicker: 'End the stress',
+    title: 'Start your protection today',
+    sub: 'One maintenance plan = peace of mind. Don\'t wait — every day of neglect is a day of risk.',
+    urgency: '⚠️ If your site goes down today, how many hours of revenue do you lose? Protect yourself now.',
+    formTitle: 'Begin maintenance',
     selected: 'Selected package',
     change: 'Change',
     name: 'Full name *',
     namePh: 'First Last',
     email: 'Email *',
     phone: 'Phone',
-    phonePh: '+39 3XX XXX XXXX',
-    website: 'Current website (if any)',
+    phonePh: '+1 (555) 123-4567',
+    website: 'Website URL (if available)',
     websitePh: 'https://example.com',
     message: 'Message (optional)',
-    messagePh: 'Tell us a bit about your maintenance needs...',
-    submit: 'Send Request',
-    submitting: 'Sending...',
-    privacy: 'By submitting you accept the privacy policy. No spam.',
-    successTitle: 'Thank you!',
-    successBody: 'Your request was sent. We will contact you within 24 hours.',
-    error: 'Something went wrong. Please try again.',
+    messagePh: 'What\'s your biggest website concern right now?',
+    submit: '✓ Yes, I want protection',
+    submitting: 'Securing...',
+    privacy: 'No spam. Just a personalized quote and security plan.',
+    successTitle: 'Perfect! 🎉',
+    successBody: 'Your request was received. Within 2 hours, you\'ll get a personalized maintenance plan tailored to your site.',
+    error: 'Something went wrong. Try again or call us directly.',
   },
 };
 
@@ -334,6 +404,25 @@ export default function WebsiteMaintenanceLandingPage() {
           </div>
         </section>
 
+        {/* PROBLEM SECTION */}
+        {'problem' in t && t.problem && (
+          <section className="mt-20">
+            <div className="mb-12">
+              <p className="text-sm uppercase tracking-[0.24em] text-slate-500">{t.problem.kicker}</p>
+              <h3 className="mt-3 text-3xl font-semibold text-slate-900">{t.problem.title}</h3>
+            </div>
+            <div className="grid gap-6 sm:grid-cols-2">
+              {t.problem.items.map((item) => (
+                <div key={item.title} className="rounded-2xl border border-slate-200 bg-slate-50 p-6">
+                  <p className="text-3xl">{item.icon}</p>
+                  <h4 className="mt-3 font-semibold text-slate-900">{item.title}</h4>
+                  <p className="mt-2 text-sm text-slate-600">{item.desc}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
         <section id="maintenance" className="mt-16">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
             <div>
@@ -384,12 +473,41 @@ export default function WebsiteMaintenanceLandingPage() {
           </div>
         </section>
 
-        <section id="contact" className="mt-16 rounded-[2rem] border border-slate-200 bg-slate-50 p-8 shadow-sm">
+        {/* SOCIAL PROOF SECTION */}
+        {'social' in t && t.social && (
+          <section className="mt-20">
+            <div className="mb-12 text-center">
+              <h3 className="text-3xl font-semibold text-slate-900">{t.social.title}</h3>
+            </div>
+            <div className="grid gap-8 lg:grid-cols-3 mb-16">
+              {t.social.items.map((item) => (
+                <div key={item.author} className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm">
+                  <p className="text-lg text-slate-700 italic">"{item.text}"</p>
+                  <p className="mt-4 font-semibold text-slate-900">— {item.author}</p>
+                  <p className="text-sm text-slate-500">{item.role}</p>
+                </div>
+              ))}
+            </div>
+            <div className="grid gap-6 sm:grid-cols-4">
+              {t.social.stats.map((stat) => (
+                <div key={stat.label} className="rounded-2xl border border-slate-200 bg-slate-50 p-6 text-center">
+                  <p className="text-3xl font-bold text-blue-600">{stat.number}</p>
+                  <p className="mt-2 text-sm font-medium text-slate-600">{stat.label}</p>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        <section id="contact" className="mt-20 rounded-[2rem] border border-slate-200 bg-slate-50 p-8 shadow-sm">
           <div className="grid gap-8 lg:grid-cols-[0.9fr_1.1fr]">
-            <div className="space-y-6">
+          <div className="space-y-6">
               <p className="text-sm uppercase tracking-[0.24em] text-slate-500">{t.contact.kicker}</p>
               <h3 className="text-3xl font-semibold text-slate-900">{t.contact.title}</h3>
               <p className="text-slate-600">{t.contact.sub}</p>
+              {'urgency' in t.contact && t.contact.urgency && (
+                <p className="text-sm text-slate-600 p-4 rounded-xl bg-blue-50 border border-blue-100">{t.contact.urgency}</p>
+              )}
             </div>
             <div>
               {formSent ? (
