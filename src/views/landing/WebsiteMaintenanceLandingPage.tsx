@@ -259,7 +259,7 @@ const IT: Copy = {
     monthly: '/mese',
     choose: 'Scegli questo piano →',
     chosen: '✓ Selezionato',
-    note: '✓ Tutti i piani: Monitoraggio 24/7 · Backup sicuri · Riparazioni veloci · Supporto durante l'orario lavorativo',
+    note: '✓ Tutti i piani: Monitoraggio 24/7 · Backup sicuri · Riparazioni veloci · Supporto durante l\'orario lavorativo',
     list: [
       {
         id: 'maintenance-starter',
@@ -303,7 +303,7 @@ const IT: Copy = {
     items: [
       { text: 'Prima della manutenzione, il sito crollava ogni trimestre. Ora funziona perfettamente. Lo stress è sparito.', author: 'Luca Rossi', role: 'Azienda IT, Milano' },
       { text: 'Ho chiamato con un problema urgente. Risolto in 10 minuti. È così che dovrebbe essere il supporto.', author: 'Elena Moretti', role: 'Ristorante Group, Roma' },
-      { text: 'Le nostre vendite sono aumentate del 21% dopo l'ottimizzazione velocità. Migliore ROI che abbiamo mai visto.', author: 'Marco Bianchi', role: 'E-commerce, Firenze' },
+      { text: 'Le nostre vendite sono aumentate del 21% dopo l\'ottimizzazione velocità. Migliore ROI che abbiamo mai visto.', author: 'Marco Bianchi', role: 'E-commerce, Firenze' },
     ],
     stats: [
       { number: '340+', label: 'Siti mantenuti' },
