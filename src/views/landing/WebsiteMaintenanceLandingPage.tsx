@@ -27,8 +27,8 @@ const SQ: Copy = {
   langName: 'Shqip',
   hero: {
     badge: 'Mbrojte per faqen tuaj',
-    h1: 'Mos e lejo faqen tuaj te shembet',
-    sub: 'Çdo ditë pa mirëmbajtje është rrezik. Hackerë, viruse, ndërprerje — të gjitha këto ndodhin në heshtje. Ne kujdesemi ndërsa ti shpenzon kohë me biznesin tuaj.',
+    h1: 'Kur faqja nuk funksionon, edhe klientët largohen.',
+    sub: 'Ne kujdesemi që kjo të mos ndodhë.',
     cta: '✓ Merr mbrojtjen përnjëmend',
   },
   problem: {
