@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Sun, Camera } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Shield, Sun, Camera } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -135,6 +135,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Code2,
     color: 'text-blue-600',
     gradient: 'from-blue-500 to-indigo-600',
+    status: 'active',
+  },
+  {
+    id: 'website-maintenance',
+    title: 'Website Maintenance',
+    description: 'Paketa mirëmbajtjeje mujore për website-in tuaj — Basic, Standard, Premium. Siguri, backup dhe fixes të shpejta.',
+    path: '/website-maintenance',
+    category: 'Maintenance',
+    icon: Shield,
+    color: 'text-slate-800',
+    gradient: 'from-slate-500 to-slate-700',
     status: 'active',
   },
   {
