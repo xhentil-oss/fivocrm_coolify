@@ -5,7 +5,7 @@
  * INSTALIM:
  *   1. Kopjo këtë skedar te: <WHMCS>/includes/hooks/fivocrm_sync.php
  *   2. Vendos dy konstantet më poshtë:
- *        - FIVOCRM_WEBHOOK_URL    → https://fivocrm.vercel.app/api/whmcs-webhook
+ *        - FIVOCRM_WEBHOOK_URL    → https://fivocrm.com/api/whmcs-webhook
  *        - FIVOCRM_WEBHOOK_SECRET → i njëjti sekret si WHMCS_WEBHOOK_SECRET në Vercel
  *   3. Gati. WHMCS do të dërgojë çdo ngjarje fature/shërbimi te FivoCRM.
  *
@@ -23,7 +23,7 @@ if (!defined('WHMCS')) {
 }
 
 if (!defined('FIVOCRM_WEBHOOK_URL')) {
-    define('FIVOCRM_WEBHOOK_URL', 'https://fivocrm.vercel.app/api/whmcs-webhook');
+    define('FIVOCRM_WEBHOOK_URL', 'https://fivocrm.com/api/whmcs-webhook');
 }
 if (!defined('FIVOCRM_WEBHOOK_SECRET')) {
     define('FIVOCRM_WEBHOOK_SECRET', 'VENDOS_SEKRETIN_KETU');

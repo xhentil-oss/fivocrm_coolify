@@ -280,7 +280,13 @@ const SettingsView: React.FC = () => {
   const handleRunCron = async (path: string, key: string) => {
     setCronRunStatus(prev => ({ ...prev, [key]: 'running' }));
     try {
-      const response = await fetch(path);
+      // Manual trigger: authenticate with the admin's Firebase ID token.
+      // The cron endpoint accepts either CRON_SECRET (server) or manual=1 + token.
+      const token = await user?.getIdToken();
+      const url = path + (path.includes('?') ? '&' : '?') + 'manual=1';
+      const response = await fetch(url, {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
       const data = await response.json();
       if (response.ok) {
         setCronRunStatus(prev => ({ ...prev, [key]: 'success' }));
