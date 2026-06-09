@@ -17,7 +17,7 @@ type Pkg = {
 type Copy = {
   langName: string;
   hero: { badge: string; h1: string; sub: string; cta: string; }; 
-  problem: { kicker: string; title: string; items: { icon: string; title: string; desc: string }[]; };
+  problem: { kicker: string; title: string; subtitle: string; items: { icon: string; title: string; desc: string }[]; };
   maintenance: { kicker: string; title: string; sub: string; monthly: string; choose: string; chosen: string; note: string; list: Pkg[]; };
   social: { title: string; items: { text: string; author: string; role: string }[]; stats: { number: string; label: string }[]; };
   contact: { kicker: string; title: string; sub: string; urgency: string; formTitle: string; selected: string; change: string; name: string; namePh: string; email: string; phone: string; phonePh: string; website: string; websitePh: string; message: string; messagePh: string; submit: string; submitting: string; privacy: string; successTitle: string; successBody: string; error: string; };
@@ -34,6 +34,7 @@ const SQ: Copy = {
   problem: {
     kicker: 'Pse duhet mirëmbajtje?',
     title: 'Një faqe e pa-mirëmbajtur është një faqe në rrezik',
+    subtitle: '💰 Një faqe jo funksionale mund të të kushtojë më shumë se mirëmbajtja.',
     items: [
       { icon: '🔓', title: 'Hakimi & malware', desc: 'Pa përditësime, hackerët hyjnë në faqen tuaj dhe vjedhin të dhënat e klientëve.' },
       { icon: '⚡', title: 'Ndërprerje ose prishje', desc: 'Serveri bie në qoftë se nuk monitorohet. Klientët nuk të gjejnë dot faqen — dhe as arsimet.' },
@@ -138,6 +139,7 @@ const EN: Copy = {
   problem: {
     kicker: 'Why maintenance matters',
     title: 'A neglected website is a liability',
+    subtitle: '💰 A non-functional site costs far more than maintenance ever will.',
     items: [
       { icon: '🔓', title: 'Hacking & malware', desc: 'Outdated software is an open door for hackers to steal your customers\' data and damage your reputation.' },
       { icon: '⚡', title: 'Downtime & crashes', desc: 'Without monitoring, your server goes down. Every minute offline = lost sales and frustrated customers.' },
@@ -410,6 +412,7 @@ export default function WebsiteMaintenanceLandingPage() {
             <div className="mb-12">
               <p className="text-sm uppercase tracking-[0.24em] text-slate-500">{t.problem.kicker}</p>
               <h3 className="mt-3 text-3xl font-semibold text-slate-900">{t.problem.title}</h3>
+              <p className="mt-4 text-lg font-semibold text-amber-700 bg-amber-50 rounded-lg p-4 border border-amber-200">{t.problem.subtitle}</p>
             </div>
             <div className="grid gap-6 sm:grid-cols-2">
               {t.problem.items.map((item) => (
