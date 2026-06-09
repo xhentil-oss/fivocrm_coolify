@@ -46,6 +46,9 @@ async function requireFirebaseAuth(req: any, res: any, next: any) {
 const API_SECRET = process.env.API_SECRET;
 const PORT = parseInt(process.env.PORT || '3001');
 const DEFAULT_TEAM_ID = process.env.TEAM_ID || '';
+// WHMCS API base URL — used by the /whmcs-proxy relay so WHMCS sees this VPS's
+// static IP instead of Vercel's dynamic IPs (avoids WHMCS "Invalid IP").
+const WHMCS_API_URL = process.env.WHMCS_API_URL || '';
 
 if (!API_SECRET) { console.error('[VPS] ERROR: API_SECRET env variable mungon!'); process.exit(1); }
 
@@ -780,6 +783,30 @@ app.post('/upload', requireFirebaseAuth, uploadMw.single('file'), async (req: an
     });
   } catch (err: unknown) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Ngarkimi dështoi' });
+  }
+});
+
+// ── WHMCS API proxy ───────────────────────────────────────────────────────────
+// Relays a pre-built urlencoded WHMCS API body to the configured WHMCS install
+// from this VPS's static IP. FivoCRM (Vercel) builds the body (incl. identifier
+// + secret); the VPS never stores WHMCS credentials and only ever forwards to
+// its own WHMCS_API_URL (so it can't be abused as an open SSRF relay).
+app.post('/whmcs-proxy', requireApiKey, async (req, res) => {
+  if (!WHMCS_API_URL) { res.status(503).json({ error: 'WHMCS_API_URL nuk është konfiguruar në VPS' }); return; }
+  const form = (req.body as any)?.form;
+  if (typeof form !== 'string' || !form) { res.status(400).json({ error: 'Mungon fusha "form"' }); return; }
+  const target = `${WHMCS_API_URL.replace(/\/$/, '')}/includes/api.php`;
+  try {
+    const r = await fetch(target, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: form,
+      signal: AbortSignal.timeout(20_000),
+    });
+    const text = await r.text();
+    res.status(r.status).type('application/json').send(text);
+  } catch (err: unknown) {
+    res.status(502).json({ error: err instanceof Error ? err.message : 'WHMCS proxy dështoi' });
   }
 });
 

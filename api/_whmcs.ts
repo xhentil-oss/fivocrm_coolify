@@ -25,7 +25,11 @@ function apiUrl(): string {
 }
 
 export function whmcsConfigured(): boolean {
-  return !!(process.env.WHMCS_API_URL && process.env.WHMCS_API_IDENTIFIER && process.env.WHMCS_API_SECRET);
+  // Credentials are always needed; the target can be either a direct WHMCS URL
+  // or the VPS proxy (static IP) — at least one must be set.
+  const hasCreds = !!(process.env.WHMCS_API_IDENTIFIER && process.env.WHMCS_API_SECRET);
+  const hasTarget = !!(process.env.WHMCS_API_URL || process.env.WHMCS_PROXY_URL);
+  return hasCreds && hasTarget;
 }
 
 // ── Core call ─────────────────────────────────────────────────────────────────
@@ -42,12 +46,25 @@ export async function whmcsCall(action: string, params: Record<string, string | 
   });
   for (const [k, v] of Object.entries(params)) body.set(k, String(v));
 
-  const resp = await fetch(apiUrl(), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    body: body.toString(),
-    signal: AbortSignal.timeout(20_000),
-  });
+  // When WHMCS_PROXY_URL is set, route the call through the VPS (static IP) so
+  // WHMCS sees a stable, whitelisted IP instead of Vercel's dynamic ones.
+  const proxyUrl = process.env.WHMCS_PROXY_URL;
+  const resp = proxyUrl
+    ? await fetch(proxyUrl, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': process.env.WHMCS_PROXY_SECRET || '',
+        },
+        body: JSON.stringify({ form: body.toString() }),
+        signal: AbortSignal.timeout(25_000),
+      })
+    : await fetch(apiUrl(), {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: body.toString(),
+        signal: AbortSignal.timeout(20_000),
+      });
 
   const text = await resp.text();
   let data: any;
