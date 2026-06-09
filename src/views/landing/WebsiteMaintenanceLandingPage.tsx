@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { Shield, ArrowRight } from 'lucide-react';
 
 type Lang = 'sq' | 'en' | 'it';
@@ -349,6 +349,19 @@ export default function WebsiteMaintenanceLandingPage() {
   const [formSent, setFormSent] = useState(false);
   const [formError, setFormError] = useState('');
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    document.title = `${t.hero.h1} | FivoCRM`;
+
+    const description = t.hero.sub;
+    let metaDescription = document.querySelector('meta[name="description"]') as HTMLMetaElement | null;
+    if (!metaDescription) {
+      metaDescription = document.createElement('meta');
+      metaDescription.name = 'description';
+      document.head.appendChild(metaDescription);
+    }
+    metaDescription.content = description;
+  }, [t.hero.h1, t.hero.sub]);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
