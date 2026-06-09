@@ -36,7 +36,10 @@ async function authorizeManual(req: VercelRequest): Promise<string | null> {
     }
     const roles = snap.docs.map(d => d.data().role as string);
     console.log(`[manual-auth] uid=${uid} roles=[${roles.join(', ')}]`);
-    if (!roles.includes('Admin')) return `Role not Admin (found: ${roles.join(', ')})`;
+    // Accept Admin OR Owner — matches the Settings tab gating (isAdmin || isOwner).
+    if (!roles.some(r => r === 'Admin' || r === 'Owner')) {
+      return `Role not Admin/Owner (found: ${roles.join(', ')})`;
+    }
     return null; // authorized
   } catch (err: any) {
     const msg = err?.message || String(err);
