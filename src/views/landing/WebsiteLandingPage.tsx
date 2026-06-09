@@ -48,7 +48,7 @@ interface Pkg {
 
 interface Copy {
   langName: string;
-  nav: { results: string; process: string; packages: string; faq: string; login: string; cta: string };
+  nav: { results: string; process: string; packages: string; maintenance: string; faq: string; login: string; cta: string };
   hero: {
     badge: string; h1a: string; h1b: string; h1c: string; sub: string;
     ctaPrimary: string; ctaSecondary: string;
@@ -58,6 +58,7 @@ interface Copy {
   why: { kicker: string; title: string; items: { metric: string; label: string }[] };
   process: { kicker: string; title: string; sub: string; steps: { title: string; desc: string }[] };
   packages: { kicker: string; title: string; sub: string; oneTime: string; choose: string; chosen: string; note: string; included: string; notIncluded: string; list: Pkg[] };
+  maintenance: { kicker: string; title: string; sub: string; monthly: string; choose: string; chosen: string; note: string; list: Pkg[] };
   testimonials: { kicker: string; title: string; items: { quote: string; name: string; role: string; avatar: string }[] };
   faq: { kicker: string; title: string; items: { q: string; a: string }[] };
   contact: {
@@ -74,7 +75,7 @@ interface Copy {
 /* ─────────────────────────── ALBANIAN ─────────────────────────── */
 const SQ: Copy = {
   langName: 'Shqip',
-  nav: { results: 'Pse ne', process: 'Procesi', packages: 'Paketat', faq: 'FAQ', login: 'Hyr', cta: 'Merr Ofertën' },
+  nav: { results: 'Pse ne', process: 'Procesi', packages: 'Paketat', maintenance: 'Mirëmbajtje', faq: 'FAQ', login: 'Hyr', cta: 'Merr Ofertën' },
   hero: {
     badge: '120+ faqe interneti të dorëzuara',
     h1a: 'Faqja juaj e re —', h1b: 'profesionale, e shpejtë', h1c: 'dhe që sjell klientë.',
@@ -138,6 +139,27 @@ const SQ: Copy = {
       },
     ],
   },
+  maintenance: {
+    kicker: 'Mirëmbajtje', title: 'Paketat mujore të mirëmbajtjes së website-it', sub: 'Siguroji faqes suaj performancë të qëndrueshme dhe mbështetje të shpejtë pas lansimit.',
+    monthly: '€/muaj', choose: 'Zgjidh këtë paketë', chosen: '✓ Zgjedhur', note: 'Të gjitha paketat përfshijnë monitorim, backup dhe riparime të shpejta.',
+    list: [
+      {
+        id: 'maintenance-basic', name: 'Basic', tagline: 'Mbështetje themelore dhe siguri bazike', price: 120,
+        included: ['Përditësime mujore të CMS/plugin', 'Backup javor', 'Monitorim uptime', 'Siguri bazike dhe patch', '1 orë ndryshime të vogla', 'Raport mujor performancë'],
+        excluded: ['Përditësime ditore', 'Optimizim performancë', 'Mbështetje urgjente 24/7'],
+      },
+      {
+        id: 'maintenance-standard', name: 'Standard', tagline: 'Optimizim dhe shërbim proaktiv', price: 220, popular: true, badge: 'Më e zgjedhura',
+        included: ['Gjithçka nga Basic, plus:', 'Backup ditor', 'Monitorim performancë dhe siguri', '3 orë ndryshime të vogla', 'Raport mujor SEO', 'Përditësime prioritare'],
+        excluded: ['Redaktime të mëdha të përmbajtjes', 'Optimizim i avancuar i konvertimit'],
+      },
+      {
+        id: 'maintenance-premium', name: 'Premium', tagline: 'Mbështetje 24/7 dhe përmirësim i vazhdueshëm', price: 420,
+        included: ['Gjithçka nga Standard, plus:', 'Monitorim 24/7 dhe reagim emergjent', 'Përmirësime të performancës dhe sigurisë', 'Konsulim strategjik mujor', 'Ndryshime të vogla të pakufizuara', 'Audit teknike çdo muaj'],
+        excluded: [],
+      },
+    ],
+  },
   testimonials: {
     kicker: 'Dëshmi', title: 'Çfarë thonë klientët',
     items: [
@@ -172,7 +194,7 @@ const SQ: Copy = {
 /* ─────────────────────────── ENGLISH ─────────────────────────── */
 const EN: Copy = {
   langName: 'English',
-  nav: { results: 'Why us', process: 'Process', packages: 'Packages', faq: 'FAQ', login: 'Login', cta: 'Get a Quote' },
+  nav: { results: 'Why us', process: 'Process', packages: 'Packages', maintenance: 'Maintenance', faq: 'FAQ', login: 'Login', cta: 'Get a Quote' },
   hero: {
     badge: '120+ websites delivered',
     h1a: 'Your new website —', h1b: 'professional, fast', h1c: 'and built to convert.',
@@ -236,6 +258,27 @@ const EN: Copy = {
       },
     ],
   },
+  maintenance: {
+    kicker: 'Maintenance', title: 'Monthly website maintenance plans', sub: 'Keep your site fast, secure and up-to-date after launch.',
+    monthly: '/month', choose: 'Choose this plan', chosen: '✓ Selected', note: 'All plans include monitoring, backups and fast fix support.',
+    list: [
+      {
+        id: 'maintenance-basic', name: 'Basic', tagline: 'Essential care and baseline security', price: 120,
+        included: ['Monthly CMS/plugin updates', 'Weekly backups', 'Uptime monitoring', 'Basic security patching', '1 hour small edits', 'Monthly health report'],
+        excluded: ['Daily updates', 'Performance tuning', '24/7 emergency support'],
+      },
+      {
+        id: 'maintenance-standard', name: 'Standard', tagline: 'Proactive upkeep and performance care', price: 220, popular: true, badge: 'Most popular',
+        included: ['Everything in Basic, plus:', 'Daily backups', 'Performance and security monitoring', '3 hours small edits', 'Monthly SEO report', 'Priority updates'],
+        excluded: ['Large content revisions', 'Advanced conversion optimization'],
+      },
+      {
+        id: 'maintenance-premium', name: 'Premium', tagline: '24/7 care and continuous improvement', price: 420,
+        included: ['Everything in Standard, plus:', '24/7 monitoring and emergency response', 'Performance & security tuning', 'Monthly strategy session', 'Unlimited small edits', 'Technical audit every month'],
+        excluded: [],
+      },
+    ],
+  },
   testimonials: {
     kicker: 'Testimonials', title: 'What clients say',
     items: [
@@ -270,7 +313,7 @@ const EN: Copy = {
 /* ─────────────────────────── ITALIAN ─────────────────────────── */
 const IT: Copy = {
   langName: 'Italiano',
-  nav: { results: 'Perché noi', process: 'Processo', packages: 'Pacchetti', faq: 'FAQ', login: 'Accedi', cta: 'Richiedi Preventivo' },
+  nav: { results: 'Perché noi', process: 'Processo', packages: 'Pacchetti', maintenance: 'Manutenzione', faq: 'FAQ', login: 'Accedi', cta: 'Richiedi Preventivo' },
   hero: {
     badge: '120+ siti web realizzati',
     h1a: 'Il tuo nuovo sito —', h1b: 'professionale, veloce', h1c: 'e fatto per convertire.',
@@ -330,6 +373,27 @@ const IT: Copy = {
       {
         id: 'premium', name: 'Premium', tagline: 'La soluzione totale, senza compromessi', price: 2400,
         included: ['Tutto dell\'Avanzato, più:', 'Design unico totalmente personalizzato', 'Pagine illimitate + aggiornamenti', 'Sistema completo prenotazioni & pagamenti', 'SEO con analisi della concorrenza', 'Pubblicità Google & Social + tracking', 'Integrazione Google Reviews', 'Hosting Premium Plus', 'Sicurezza & monitoraggio 24/7', 'Supporto tecnico 12 mesi'],
+        excluded: [],
+      },
+    ],
+  },
+  maintenance: {
+    kicker: 'Manutenzione', title: 'Piani mensili di manutenzione del sito', sub: 'Mantieni il sito veloce, sicuro e aggiornato dopo il lancio.',
+    monthly: '/mese', choose: 'Scegli questo pacchetto', chosen: '✓ Selezionato', note: 'Tutti i piani includono monitoraggio, backup e interventi rapidi.',
+    list: [
+      {
+        id: 'maintenance-basic', name: 'Base', tagline: 'Cura essenziale e sicurezza di base', price: 120,
+        included: ['Aggiornamenti mensili CMS/plugin', 'Backup settimanali', 'Monitoraggio uptime', 'Patch di sicurezza di base', '1 ora modifiche minori', 'Report mensile sullo stato'],
+        excluded: ['Aggiornamenti giornalieri', 'Ottimizzazione delle prestazioni', 'Supporto emergenza 24/7'],
+      },
+      {
+        id: 'maintenance-standard', name: 'Standard', tagline: 'Manutenzione proattiva e cura delle prestazioni', price: 220, popular: true, badge: 'Più scelto',
+        included: ['Tutto del Base, più:', 'Backup giornalieri', 'Monitoraggio prestazioni e sicurezza', '3 ore modifiche minori', 'Report mensile SEO', 'Aggiornamenti prioritari'],
+        excluded: ['Revisioni contenuti importanti', 'Ottimizzazione avanzata delle conversioni'],
+      },
+      {
+        id: 'maintenance-premium', name: 'Premium', tagline: 'Assistenza 24/7 e miglioramento continuo', price: 420,
+        included: ['Tutto dello Standard, più:', 'Monitoraggio 24/7 e risposta emergenza', 'Ottimizzazione prestazioni e sicurezza', 'Sessione strategica mensile', 'Modifiche minori illimitate', 'Audit tecnico ogni mese'],
         excluded: [],
       },
     ],
@@ -398,9 +462,9 @@ export default function WebsiteLandingPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...formData,
-          category: 'Website',
+          category: selected?.id.startsWith('maintenance') ? 'Website Maintenance' : 'Website',
           packageId: selected?.id || '',
-          packageName: selected ? `Website — ${selected.name} (€${selected.price})` : 'Website',
+          packageName: selected ? `${selected.id.startsWith('maintenance') ? 'Maintenance' : 'Website'} — ${selected.name} (${selected.id.startsWith('maintenance') ? '€' + selected.price + '/mo' : '€' + selected.price})` : 'Website',
           message: `[${lang.toUpperCase()}] ${formData.message}`,
         }),
       });
@@ -429,6 +493,7 @@ export default function WebsiteLandingPage() {
             <a href="#why" className="hover:text-blue-600 transition-colors">{t.nav.results}</a>
             <a href="#process" className="hover:text-blue-600 transition-colors">{t.nav.process}</a>
             <a href="#packages" className="hover:text-blue-600 transition-colors">{t.nav.packages}</a>
+            <a href="#maintenance" className="hover:text-blue-600 transition-colors">{t.nav.maintenance}</a>
             <a href="#faq" className="hover:text-blue-600 transition-colors">{t.nav.faq}</a>
           </div>
           <div className="flex items-center gap-3">
@@ -629,6 +694,63 @@ export default function WebsiteLandingPage() {
           </div>
           <FadeIn delay={400}>
             <p className="mt-10 text-center text-sm text-gray-500">{t.packages.note}</p>
+          </FadeIn>
+        </div>
+      </section>
+
+      {/* MAINTENANCE */}
+      <section id="maintenance" className="py-24 bg-white">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+          <FadeIn>
+            <div className="text-center mb-16">
+              <p className="text-sm font-semibold uppercase tracking-widest text-blue-600 mb-3">{t.maintenance.kicker}</p>
+              <h2 className="text-3xl sm:text-4xl font-bold">{t.maintenance.title}</h2>
+              <p className="mt-4 text-gray-600 max-w-xl mx-auto">{t.maintenance.sub}</p>
+            </div>
+          </FadeIn>
+          <div className="grid gap-6 md:grid-cols-2 xl:grid-cols-3 items-start">
+            {t.maintenance.list.map((pkg, i) => {
+              const accent = PKG_ACCENTS[i];
+              const isSel = selected?.id === pkg.id;
+              return (
+                <FadeIn key={pkg.id} delay={i * 100}>
+                  <div className={`relative rounded-2xl bg-white border-2 transition-all duration-300 hover:shadow-2xl ${pkg.popular ? 'border-blue-400 ring-2 ring-blue-500/20 xl:-mt-3 xl:mb-3 shadow-xl' : 'border-gray-200 shadow-sm'} ${isSel ? 'ring-2 ring-green-500' : ''}`}>
+                    {pkg.badge && (
+                      <div className={`absolute -top-3.5 left-1/2 -translate-x-1/2 whitespace-nowrap px-3.5 py-1.5 rounded-full bg-gradient-to-r ${accent} text-white text-[11px] font-bold tracking-wide`}>{pkg.badge}</div>
+                    )}
+                    <div className="p-6">
+                      <h3 className="text-xl font-bold">{pkg.name}</h3>
+                      <p className="text-xs text-gray-500 mt-1 min-h-[2.5rem]">{pkg.tagline}</p>
+                      <div className="mt-4 flex items-baseline gap-1.5">
+                        <span className={`text-4xl font-bold bg-gradient-to-r ${accent} bg-clip-text text-transparent`}>€{pkg.price.toLocaleString()}</span>
+                        <span className="text-xs text-gray-500">{t.maintenance.monthly}</span>
+                      </div>
+                      <button onClick={() => scrollTo('contact', pkg)}
+                        className={`mt-5 w-full py-3 rounded-xl text-sm font-semibold transition-all hover:-translate-y-0.5 ${pkg.popular ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:shadow-lg hover:shadow-blue-500/25' : 'bg-gray-100 text-gray-900 hover:bg-gray-200'}`}>
+                        {isSel ? t.maintenance.chosen : t.maintenance.choose}
+                      </button>
+                      <ul className="mt-6 space-y-2.5">
+                        {pkg.included.map((f, fi) => (
+                          <li key={fi} className={`flex items-start gap-2 text-[13px] ${f.endsWith(':') ? 'font-semibold text-gray-900 pt-1' : 'text-gray-700'}`}>
+                            {!f.endsWith(':') && <CheckCircle2 className="w-4 h-4 mt-0.5 flex-shrink-0 text-green-500" />}
+                            <span>{f}</span>
+                          </li>
+                        ))}
+                        {pkg.excluded.map((f, fi) => (
+                          <li key={`x-${fi}`} className="flex items-start gap-2 text-[13px] text-gray-400">
+                            <X className="w-4 h-4 mt-0.5 flex-shrink-0 text-gray-300" />
+                            <span className="line-through">{f}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  </div>
+                </FadeIn>
+              );
+            })}
+          </div>
+          <FadeIn delay={400}>
+            <p className="mt-10 text-center text-sm text-gray-500">{t.maintenance.note}</p>
           </FadeIn>
         </div>
       </section>
