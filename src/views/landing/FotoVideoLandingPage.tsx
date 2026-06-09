@@ -4,7 +4,7 @@ import {
   Camera, Video, Image as ImageIcon, Film, CheckCircle2, ArrowRight,
   Star, Clock, ChevronDown, Phone, ArrowUpRight, Sparkles, Shield,
   Play, CalendarCheck, Download, Utensils, Coffee, Scissors,
-  ShoppingBag, Building2, Gift,
+  ShoppingBag, Building2, Gift, UserPlus, Plus,
 } from 'lucide-react';
 
 /* ─── Animacioni në scroll ─── */
@@ -155,6 +155,12 @@ const BUSINESS_TYPES = [
   { icon: Scissors, label: 'Sallone Bukurie' },
   { icon: ShoppingBag, label: 'Dyqane Produktesh' },
   { icon: Building2, label: 'Hotele të Vogla' },
+];
+
+const ADDONS = [
+  { icon: UserPlus, name: 'Model / Modele', price: '10.000 Lekë', note: '1–2 orë', desc: 'Një model profesional për foto & video, nëse kërkohet.' },
+  { icon: Clock, name: 'Orë ekstra xhirimi', price: 'Sipas kërkesës', note: '', desc: 'Zgjasim seancën nëse ju duhet më shumë material.' },
+  { icon: Plus, name: 'Video shtesë / dron', price: 'Sipas kërkesës', note: '', desc: 'Reels ekstra ose pamje ajrore me dron për ambientin.' },
 ];
 
 const WHY = [
@@ -362,6 +368,27 @@ export default function FotoVideoLandingPage() {
             })}
           </div>
           <FadeIn delay={500}><p className="mt-10 text-center text-sm text-gray-500">Çmimet janë në Lekë dhe orientuese, për një seancë. Numrat e fotove dhe videove janë orientues dhe mund të përshtaten sipas nevojës suaj.</p></FadeIn>
+        </div>
+      </section>
+
+      {/* ═══ SHTESA / ADD-ONS ═══ */}
+      <section id="shtesa" className="py-16 bg-white border-t border-gray-100">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
+          <FadeIn><div className="text-center mb-10"><p className="text-sm font-semibold uppercase tracking-widest text-fuchsia-600 mb-3">Shtesa opsionale</p><h2 className="text-2xl sm:text-3xl font-bold">Personalizoni paketën tuaj</h2><p className="mt-3 text-gray-500">Mund t'i shtoni në çdo paketë, sipas nevojës.</p></div></FadeIn>
+          <div className="grid sm:grid-cols-3 gap-4">
+            {ADDONS.map((a, i) => (
+              <FadeIn key={i} delay={i * 100}>
+                <div className="flex items-start gap-4 p-5 rounded-xl bg-white border border-gray-100 shadow-sm hover:shadow-md hover:border-fuchsia-100 transition-all h-full">
+                  <div className="w-11 h-11 rounded-lg bg-fuchsia-50 flex items-center justify-center flex-shrink-0"><a.icon className="w-5 h-5 text-fuchsia-600" /></div>
+                  <div>
+                    <p className="font-semibold text-gray-900 text-sm">{a.name}</p>
+                    <p className="text-fuchsia-600 font-bold text-sm">{a.price}{a.note && <span className="text-gray-400 font-normal"> · {a.note}</span>}</p>
+                    <p className="text-xs text-gray-500 mt-1 leading-relaxed">{a.desc}</p>
+                  </div>
+                </div>
+              </FadeIn>
+            ))}
+          </div>
         </div>
       </section>
 
