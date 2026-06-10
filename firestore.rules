@@ -237,8 +237,11 @@ service cloud.firestore {
          request.resource.data.role == resource.data.role &&
          request.resource.data.diff(resource.data).affectedKeys()
            .hasOnly(['displayName', 'email', 'updatedAt'])) ||
-        // Non-self update: admins manage other members (admin check enforced client-side)
-        resource.data.userId != request.auth.uid
+        // Managing another member (incl. role changes) requires being the team
+        // owner — a server-trustworthy check (teams/{teamId}.createdByUserId).
+        // Client-side admin gating alone was bypassable.
+        (resource.data.userId != request.auth.uid &&
+         isTeamOwner(resource.data.teamId))
       );
       // Only allow deleting own membership or team owner removes a member
       allow delete: if isAuth() && (
