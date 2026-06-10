@@ -99,6 +99,52 @@ export function toAll(amount: number, currency?: string): number {
   return amount;
 }
 
+// ── Currency / date formatting ──
+// Centralized so the 80+ ad-hoc .toLocaleDateString()/.toFixed() call sites can
+// converge on one implementation (sq-AL locale, consistent rounding).
+
+/** Format a number as a currency string in sq-AL locale. Defaults to EUR. */
+export function formatCurrency(amount: number, currency: 'EUR' | 'ALL' | 'USD' | 'GBP' = 'EUR'): string {
+  const value = typeof amount === 'number' && isFinite(amount) ? amount : 0;
+  try {
+    return value.toLocaleString('sq-AL', {
+      style: 'currency',
+      currency,
+      minimumFractionDigits: currency === 'ALL' ? 0 : 2,
+      maximumFractionDigits: currency === 'ALL' ? 0 : 2,
+    });
+  } catch {
+    // Fallback if the runtime lacks the currency/locale data
+    return `${value.toFixed(currency === 'ALL' ? 0 : 2)} ${currency}`;
+  }
+}
+
+/** Shorthand: format as EUR. */
+export function formatEUR(amount: number): string {
+  return formatCurrency(amount, 'EUR');
+}
+
+/** Shorthand: format as ALL (Albanian Lek, no decimals). */
+export function formatALL(amount: number): string {
+  return formatCurrency(amount, 'ALL');
+}
+
+/**
+ * Parse a "YYYY-MM-DD" date-input string as a LOCAL date (midnight local time),
+ * avoiding the UTC-shift bug of `new Date('YYYY-MM-DD')` which lands on the
+ * previous day in negative-offset timezones. Returns null for invalid input.
+ */
+export function parseLocalDate(dateStr: string | undefined | null): Date | null {
+  if (!dateStr) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateStr.trim());
+  if (!m) {
+    const d = new Date(dateStr);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return isNaN(d.getTime()) ? null : d;
+}
+
 /**
  * Normalize an Albanian phone number to international digit-only format.
  * "069123456" → "35569123456", "+355069123456" → "35569123456",

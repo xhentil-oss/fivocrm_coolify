@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, useDocument, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
 import { getStatusColor } from '../lib/statusColors';
@@ -37,16 +37,31 @@ const Customer360View: React.FC = () => {
   const [showArchivedRequests, setShowArchivedRequests] = useState(false);
 
   // Data
-  const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
-  const { data: invoices } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
-  const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
-  const { data: requests } = useCollection<ClientRequest>('clientRequests', { skipTeamFilter: true });
-  const { data: activities } = useCollection<Activity>('activities', { skipTeamFilter: true });
+  // Single-customer query: filter by customerId server-side instead of loading
+  // whole collections and filtering in the client. Cuts Firestore reads to this
+  // customer's docs and shrinks cross-team exposure. (skipTeamFilter is kept so
+  // the server constraint stays customerId-only and doesn't depend on every doc
+  // already carrying a teamId — see workspace/SECURITY_RULES_MIGRATION.md.)
+  const byCustomer = useMemo(() => ({
+    where: [{ field: 'customerId', operator: '==' as const, value: customerId }],
+    skipTeamFilter: true,
+    skip: !customerId,
+  }), [customerId]);
+
+  // The customer itself is a single doc — fetch by id, not the whole collection.
+  const { data: customer } = useDocument<Customer>('customers', customerId);
+  const { data: invoices } = useCollection<Invoice>('invoices', byCustomer);
+  const { data: projects } = useCollection<Project>('projects', byCustomer);
+  const { data: requests } = useCollection<ClientRequest>('clientRequests', byCustomer);
+  const { data: activities } = useCollection<Activity>('activities', byCustomer);
+  // tasks (joined via projectId), quotes (customerId OR leadId), leads
+  // (customerId OR email), services (full catalog) need broader reads — left
+  // as full-collection loads filtered client-side below.
   const { data: tasks } = useCollection<Task>('tasks', { skipTeamFilter: true });
   const { data: quotes } = useCollection<Quote>('quotes', { skipTeamFilter: true });
   const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
   const { data: allLeads } = useCollection<Lead>('leads', { skipTeamFilter: true });
-  const { data: allContracts } = useCollection<Contract>('contracts', { skipTeamFilter: true });
+  const { data: allContracts } = useCollection<Contract>('contracts', byCustomer);
   const activityMutation = useMutation<Activity>('activities');
   const quoteMutation = useMutation<Quote>('quotes');
   const contractMutation = useMutation<Contract>('contracts');
@@ -59,8 +74,6 @@ const Customer360View: React.FC = () => {
   const [manualServiceLabel, setManualServiceLabel] = useState<string>('');
   const [isAutoDetecting, setIsAutoDetecting] = useState(false);
   const [savingService, setSavingService] = useState(false);
-
-  const customer = customers?.find(c => c.id === customerId);
 
   // Collect all lead IDs linked to this customer
   const linkedLeadIds = useMemo(() => {

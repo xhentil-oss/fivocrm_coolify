@@ -8,6 +8,16 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    // Server-trustworthy super-admin signal, backed by a custom auth claim set
+    // via scripts/set-super-admin-claims.cjs. Use as a global-read escape hatch
+    // when tightening per-team read rules (see workspace/SECURITY_RULES_MIGRATION.md):
+    //   allow read: if isTeamMember(resource.data.teamId) || isSuperAdmin();
+    // Defined now (additive, safe to deploy) so the phased tightening can rely on
+    // it without a second rules round-trip.
+    function isSuperAdmin() {
+      return isAuth() && request.auth.token.superAdmin == true;
+    }
+
     // Verify that a team-scoped doc belongs to a team the user is a member of.
     // Because teamMember docs currently use random IDs (addDoc), we cannot do a
     // direct exists() lookup.  Instead we verify that the request comes from an
