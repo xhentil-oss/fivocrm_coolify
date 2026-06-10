@@ -294,6 +294,46 @@
         { "fieldPath": "teamId", "order": "ASCENDING" },
         { "fieldPath": "date", "order": "DESCENDING" }
       ]
+    },
+    {
+      "collectionGroup": "invoices",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "teamId", "order": "ASCENDING" },
+        { "fieldPath": "customerId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "projects",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "teamId", "order": "ASCENDING" },
+        { "fieldPath": "customerId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "clientRequests",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "teamId", "order": "ASCENDING" },
+        { "fieldPath": "customerId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "activities",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "teamId", "order": "ASCENDING" },
+        { "fieldPath": "customerId", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "contracts",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "teamId", "order": "ASCENDING" },
+        { "fieldPath": "customerId", "order": "ASCENDING" }
+      ]
     }
   ],
   "fieldOverrides": []

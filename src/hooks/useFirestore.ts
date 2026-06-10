@@ -24,6 +24,14 @@ interface QueryOptions {
   skipTeamFilter?: boolean; // For portal views and hooks that handle their own scoping
   limit?: number; // Server-side limit for non-team-scoped collections (ignored for team-scoped)
   skip?: boolean; // Skip the query entirely (e.g. when required params are not yet available)
+  // Opt-in: for a TEAM-SCOPED collection, push the `where` constraints to the
+  // server ALONGSIDE the teamId filter (default behaviour pushes only teamId and
+  // filters `where` client-side). Lets a query stay teamId-constrained — so it
+  // satisfies an `isTeamMember(resource.data.teamId)` read rule — while also
+  // narrowing reads (e.g. teamId + customerId). REQUIRES a matching composite
+  // index in firestore.indexes.json; deploy indexes BEFORE shipping a caller
+  // that sets this. See workspace/SECURITY_RULES_MIGRATION.md.
+  teamScopedWhere?: boolean;
 }
 
 // ---- Reactive global teamId for data isolation ----
@@ -179,7 +187,9 @@ export function useCollection<T = DocumentData>(
     && !globalReadCollections.has(collectionName);
   const globalTeamId = isTeamScoped ? reactiveTeamId : null;
 
-  const whereKey = JSON.stringify(options?.where || null);
+  // teamScopedWhere is folded into the cache key so a server-pushed variant
+  // doesn't collide with a client-filtered one sharing the same `where`.
+  const whereKey = JSON.stringify({ w: options?.where || null, tsw: options?.teamScopedWhere || false });
   const orderKey = JSON.stringify(options?.orderBy || null);
   const skipTeamFilter = options?.skipTeamFilter || false;
   const limitVal = options?.limit;
@@ -238,6 +248,11 @@ export function useCollection<T = DocumentData>(
         // Server-side teamId filter — reduces Firestore reads to this team's documents only.
         // Additional where/orderBy/limit are applied client-side to avoid composite index requirements.
         constraints.push(where('teamId', '==', globalTeamId));
+        // Opt-in: also push the caller's where constraints server-side (needs a
+        // composite index). The client-side pass below still re-applies them.
+        if (options?.teamScopedWhere && options?.where) {
+          options.where.forEach(w => constraints.push(where(w.field, w.operator as any, w.value)));
+        }
       } else {
         if (options?.where) options.where.forEach(w => constraints.push(where(w.field, w.operator as any, w.value)));
         if (options?.orderBy) constraints.push(orderBy(options.orderBy.field, options.orderBy.direction || 'asc'));

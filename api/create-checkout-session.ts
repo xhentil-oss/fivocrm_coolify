@@ -6,6 +6,30 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2026-02-25.clover',
 });
 
+// Currencies Stripe supports here. Anything else is rejected rather than
+// silently forwarded to Stripe (which would 400 late, or worse, charge wrong).
+const ALLOWED_CURRENCIES = new Set(['eur', 'usd', 'gbp', 'all']);
+
+// Same host allowlist convention used by the email endpoints (ALLOWED_HOSTS).
+// We echo the request Origin only when its host is allowed — never a blanket
+// `*`, which combined with credentials:true is a CORS misconfiguration.
+const ALLOWED_HOSTS = (process.env.ALLOWED_HOSTS || 'fivoo.net,fivocrm.vercel.app,localhost,vercel.app')
+  .split(',')
+  .map(h => h.trim())
+  .filter(Boolean);
+const PRIMARY_ORIGIN = process.env.VITE_APP_URL || 'https://app.fivoo.net';
+
+function resolveAllowedOrigin(origin: string | undefined): string | null {
+  if (!origin) return null;
+  try {
+    const host = new URL(origin).hostname;
+    const ok = ALLOWED_HOSTS.some(h => host === h || host.endsWith(`.${h}`));
+    return ok ? origin : null;
+  } catch {
+    return null;
+  }
+}
+
 async function verifyAuthToken(authHeader: string | undefined): Promise<string | null> {
   if (!authHeader?.startsWith('Bearer ')) return null;
   const token = authHeader.slice(7);
@@ -18,10 +42,14 @@ async function verifyAuthToken(authHeader: string | undefined): Promise<string |
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
-  res.setHeader('Access-Control-Allow-Origin', req.headers.origin || '*');
+  const allowedOrigin = resolveAllowedOrigin(req.headers.origin as string | undefined);
+  res.setHeader('Access-Control-Allow-Origin', allowedOrigin || PRIMARY_ORIGIN);
+  res.setHeader('Vary', 'Origin');
   res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
-  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  // Credentials are only meaningful for an explicitly-allowed origin; never pair
+  // with a wildcard/fallback origin.
+  if (allowedOrigin) res.setHeader('Access-Control-Allow-Credentials', 'true');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
@@ -81,6 +109,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // Normalise currency: use invoice's stored currency, fall back to client hint, then EUR
     const invoiceCurrency = (invoiceData.currency as string | undefined)?.toLowerCase();
     const resolvedCurrency = invoiceCurrency === 'all' ? 'all' : (invoiceCurrency || (currency as string | undefined)?.toLowerCase() || 'eur');
+    if (!ALLOWED_CURRENCIES.has(resolvedCurrency)) {
+      return res.status(400).json({ error: `Unsupported currency: ${resolvedCurrency}` });
+    }
 
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       payment_method_types: ['card'],
