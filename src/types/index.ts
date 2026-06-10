@@ -174,6 +174,12 @@ export interface Task {
   teamId?: string;
   projectId?: string;
   assignedToUserId?: string;
+  /** Optional label identifying which service this customer purchased */
+  serviceLabel?: string;
+  /** Optional linked service id from `services` collection */
+  serviceId?: string;
+  /** Whether the serviceLabel was set automatically */
+  serviceAuto?: boolean;
   dueDate?: Date;
   startDate?: Date;
   endDate?: Date;

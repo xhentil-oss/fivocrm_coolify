@@ -2,7 +2,16 @@
   "permissions": {
     "allow": [
       "Bash(git commit -m ' *)",
-      "Bash(git rm *)"
+      "Bash(git rm *)",
+      "PowerShell(npm run build 2>&1)",
+      "PowerShell(npx eslint src/views/WhatsappInboxView.tsx src/components/WhatsAppChatPanel.tsx src/hooks/usePermissions.ts src/components/Sidebar.tsx 2>&1)",
+      "PowerShell(npx tsc --noEmit --skipLibCheck --esModuleInterop --module esnext --moduleResolution bundler --target es2020 api/cron/run.ts 2>&1)",
+      "PowerShell(npx tsc --noEmit -p tsconfig.api.json 2>&1)",
+      "PowerShell(npx eslint src/views/WhatsappInboxView.tsx src/components/WhatsappTemplateManager.tsx src/components/WhatsappBroadcasts.tsx src/components/WhatsappAutomation.tsx src/components/WhatsappAnalytics.tsx src/lib/whatsappTemplates.ts 2>&1)",
+      "Bash(git checkout *)",
+      "Bash(git pull *)",
+      "Bash(firebase deploy *)",
+      "Bash(node scripts/count-wa-targets.cjs)"
     ]
   }
 }

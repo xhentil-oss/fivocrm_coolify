@@ -20,7 +20,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Separator } from '../components/ui/separator';
 import { safeHref, toAll } from '../lib/utils';
-import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract } from '../types';
+import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract, Service } from '../types';
 
 const Customer360View: React.FC = () => {
   const { customerId } = useParams<{ customerId: string }>();
@@ -44,12 +44,21 @@ const Customer360View: React.FC = () => {
   const { data: activities } = useCollection<Activity>('activities', { skipTeamFilter: true });
   const { data: tasks } = useCollection<Task>('tasks', { skipTeamFilter: true });
   const { data: quotes } = useCollection<Quote>('quotes', { skipTeamFilter: true });
+  const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
   const { data: allLeads } = useCollection<Lead>('leads', { skipTeamFilter: true });
   const { data: allContracts } = useCollection<Contract>('contracts', { skipTeamFilter: true });
   const activityMutation = useMutation<Activity>('activities');
   const quoteMutation = useMutation<Quote>('quotes');
   const contractMutation = useMutation<Contract>('contracts');
   const requestMutation = useMutation<ClientRequest>('clientRequests');
+  const customerMutation = useMutation<Customer>('customers');
+
+  // Service label UI state
+  const [isServiceDialogOpen, setIsServiceDialogOpen] = useState(false);
+  const [selectedServiceId, setSelectedServiceId] = useState<string | null>(null);
+  const [manualServiceLabel, setManualServiceLabel] = useState<string>('');
+  const [isAutoDetecting, setIsAutoDetecting] = useState(false);
+  const [savingService, setSavingService] = useState(false);
 
   const customer = customers?.find(c => c.id === customerId);
 
@@ -210,6 +219,50 @@ const Customer360View: React.FC = () => {
     setIsActivityDialogOpen(false);
   };
 
+  const handleSaveService = async () => {
+    if (!customer) return;
+    setSavingService(true);
+    try {
+      const svc = services?.find(s => s.id === selectedServiceId);
+      const label = manualServiceLabel?.trim() || svc?.title || svc?.name || undefined;
+      await customerMutation.update(customer.id, { serviceLabel: label, serviceId: selectedServiceId || undefined, serviceAuto: false } as any);
+      toast({ title: 'Shërbimi u ruajt' });
+      setIsServiceDialogOpen(false);
+    } catch (e) {
+      toast({ title: 'Gabim', description: 'Ndodhi një gabim gjatë ruajtjes', variant: 'destructive' });
+    } finally {
+      setSavingService(false);
+    }
+  };
+
+  const handleAutoDetectService = async () => {
+    if (!customer) return;
+    setIsAutoDetecting(true);
+    try {
+      // Prefer accepted quotes, then most recent quote, then invoices
+      const accepted = customerQuotes.find(q => q.status === 'Accepted');
+      const recent = customerQuotes[0];
+      let label: string | undefined;
+      if (accepted) label = accepted.label || accepted.result?.suggestedLabel;
+      else if (recent) label = recent.label || recent.result?.suggestedLabel;
+      if (!label && customerInvoices.length > 0) {
+        // fallback: look for invoice line items? Use invoice description/title if available
+        label = (customerInvoices[0] as any).description || (customerInvoices[0] as any).invoiceNumber;
+      }
+      if (!label) {
+        toast({ title: 'Nuk u gjet shërbim për tu vendosur automatikisht' });
+        return;
+      }
+      await customerMutation.update(customer.id, { serviceLabel: label, serviceAuto: true } as any);
+      toast({ title: 'Shërbimi u vendos automatikisht' });
+      setIsServiceDialogOpen(false);
+    } catch (e) {
+      toast({ title: 'Gabim', description: 'Detaj gabimi i paqartë', variant: 'destructive' });
+    } finally {
+      setIsAutoDetecting(false);
+    }
+  };
+
   if (!customer) {
     return (
       <div className="text-center py-20">
@@ -306,6 +359,18 @@ const Customer360View: React.FC = () => {
             <Card>
               <CardHeader><CardTitle className="text-base">Informacioni i Klientit</CardTitle></CardHeader>
               <CardContent className="space-y-3 text-sm">
+                {/* Service label display + edit */}
+                <div className="flex justify-between items-center">
+                  <span className="text-muted-foreground">Shërbimi</span>
+                  <div className="flex items-center gap-2">
+                    <span>{(customer as any).serviceLabel || '-'}</span>
+                    <Button size="sm" variant="ghost" onClick={() => {
+                      setSelectedServiceId((customer as any).serviceId || null);
+                      setManualServiceLabel((customer as any).serviceLabel || '');
+                      setIsServiceDialogOpen(true);
+                    }}>Ndrysho</Button>
+                  </div>
+                </div>
                 {customer.email && <div className="flex justify-between"><span className="text-muted-foreground">Email</span><span>{customer.email}</span></div>}
                 {customer.phone && <div className="flex justify-between"><span className="text-muted-foreground">Telefon</span><span>{customer.phone}</span></div>}
                 {(customer as any).company && <div className="flex justify-between"><span className="text-muted-foreground">Kompani</span><span>{(customer as any).company}</span></div>}
@@ -850,6 +915,37 @@ const Customer360View: React.FC = () => {
             <Button className="w-full" onClick={handleAddActivity} disabled={!activityTitle.trim()}>
               Ruaj Aktivitetin
             </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+      {/* Service label Dialog */}
+      <Dialog open={isServiceDialogOpen} onOpenChange={setIsServiceDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Vendos Shërbimin për Klientin</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div>
+              <Label>Zgjedh Shërbim nga lista</Label>
+              <Select value={selectedServiceId || ''} onValueChange={(v) => setSelectedServiceId(v || null)}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">(Asnjë)</SelectItem>
+                  {services?.map(s => (
+                    <SelectItem key={s.id} value={s.id}>{s.title || s.name || s.id}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <Label>Label Manual (opsionale)</Label>
+              <Input value={manualServiceLabel} onChange={e => setManualServiceLabel(e.target.value)} placeholder="P.sh. Paketë SEO - 6 muaj" />
+            </div>
+            <div className="flex gap-2">
+              <Button onClick={handleSaveService} disabled={savingService} className="flex-1">Ruaj</Button>
+              <Button variant="outline" onClick={handleAutoDetectService} disabled={isAutoDetecting} className="flex-1">Zbulim Automatik</Button>
+              <Button variant="ghost" onClick={() => setIsServiceDialogOpen(false)}>Anulo</Button>
+            </div>
           </div>
         </DialogContent>
       </Dialog>
