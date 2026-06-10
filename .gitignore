@@ -35,3 +35,10 @@ ios/
 
 .vercel
 .env*.local
+
+# Firebase service-account keys (NEVER commit — used by scripts/*.cjs)
+scripts/sa.json
+**/sa.json
+*serviceAccount*.json
+*service-account*.json
+*-firebase-adminsdk-*.json
