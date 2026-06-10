@@ -155,7 +155,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
   const { data: taskMessages, loading: isLoadingMessages } = useCollection<any>('messages', {
     where: [{ field: 'taskId', operator: '==', value: task.id }],
-    orderBy: { field: 'createdAt', direction: 'asc' }
+    orderBy: { field: 'createdAt', direction: 'asc' },
+    // Query server-side by taskId (uses messages: taskId,createdAt index) instead of
+    // downloading the whole team's messages and filtering client-side.
+    skipTeamFilter: true,
   });
 
   const { data: allActiveTimeEntries } = useCollection<any>('timeEntries', {

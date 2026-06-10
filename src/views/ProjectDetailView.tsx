@@ -65,7 +65,9 @@ const ProjectDetailView: React.FC = () => {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
   const teamMembers = useUniqueTeamMembers(rawTeamMembers);
-  const { data: comments } = useCollection<any>('taskComments', { skipTeamFilter: true });
+  // Team-scoped (not skipTeamFilter) so we don't download every team's comments
+  // from the whole database; comments are then matched per task client-side.
+  const { data: comments } = useCollection<any>('taskComments');
 
   const projectMutation = useMutation<Project>('projects');
   const taskMutation = useMutation<Task>('tasks');
