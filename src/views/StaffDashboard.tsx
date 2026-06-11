@@ -83,7 +83,7 @@ function calculateStreak(activities: (Activity & { id: string })[], userId: stri
 
 const StaffDashboard: React.FC = () => {
   const { user } = useAuth();
-  const { isAdmin, isManager, isOwner } = usePermissions(); // also ensures teamId is synced
+  const { isGuest } = usePermissions(); // also ensures teamId is synced
   const navigate = useNavigate();
   const { toast } = useToast();
   const [showAllMyTasks, setShowAllMyTasks] = useState(false);
@@ -118,7 +118,9 @@ const StaffDashboard: React.FC = () => {
 
   // ── ADMIN/MANAGER: team tasks due today, grouped per person ──
   // Reuses the already-loaded rawTasks + userProfiles (no extra Firestore reads).
-  const canSeeTeamDay = isAdmin || isManager || isOwner;
+  // Visible to all staff (any non-guest). rawTasks is team-scoped, so every team
+  // member sees the team's day; guests/clients are excluded.
+  const canSeeTeamDay = !isGuest;
   const teamDueTodayByPerson = useMemo(() => {
     if (!canSeeTeamDay || !rawTasks) return [];
     // Mirror the app's authoritative "due today" logic (see myDueToday): the
