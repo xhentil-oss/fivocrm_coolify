@@ -83,7 +83,7 @@ function calculateStreak(activities: (Activity & { id: string })[], userId: stri
 
 const StaffDashboard: React.FC = () => {
   const { user } = useAuth();
-  const { isGuest } = usePermissions(); // also ensures teamId is synced
+  const { isGuest, dataScope } = usePermissions(); // also ensures teamId is synced
   const navigate = useNavigate();
   const { toast } = useToast();
   const [showAllMyTasks, setShowAllMyTasks] = useState(false);
@@ -116,20 +116,45 @@ const StaffDashboard: React.FC = () => {
 
   const taskMutation = useMutation<Task>('tasks');
 
-  // ── ADMIN/MANAGER: team tasks due today, grouped per person ──
-  // Reuses the already-loaded rawTasks + userProfiles (no extra Firestore reads).
-  // Visible to all staff (any non-guest). rawTasks is team-scoped, so every team
-  // member sees the team's day; guests/clients are excluded.
+  // ── "Today" section: tasks due today OR overdue (open), grouped per person ──
+  // Definition (Asana "Today" style): endDate (or dueDate) <= today AND not Done.
+  // Role scope: Admin sees every member's tasks; Member sees their own; SalesAgent
+  // sees tasks they created (incl. assigned to others) + assigned to them.
+  // Admins additionally see across ALL teams where they are Admin (not just active).
   const canSeeTeamDay = !isGuest;
+
+  // The current user's team memberships → all teams where they are Admin.
+  const myMembershipsQuery = useMemo(() => ({
+    where: user ? [{ field: 'userId', operator: '==' as const, value: user.uid }] : undefined,
+    skipTeamFilter: true,
+    skip: !user,
+  }), [user?.uid]);
+  const { data: myMemberships } = useCollection<any>('teamMembers', myMembershipsQuery);
+
+  const adminTeamIds = useMemo(() => {
+    if (dataScope !== 'all') return [];
+    return (myMemberships || [])
+      .filter((m: any) => m.role === 'Admin' && (m.status === 'Active' || !m.status))
+      .map((m: any) => m.teamId)
+      .filter(Boolean)
+      .slice(0, 30); // Firestore 'in' supports up to 30 values
+  }, [myMemberships, dataScope]);
+
+  // For admins, pull tasks across all their admin teams (not just the active one).
+  const crossTeamTasksQuery = useMemo(() => ({
+    where: adminTeamIds.length ? [{ field: 'teamId', operator: 'in' as const, value: adminTeamIds }] : undefined,
+    skipTeamFilter: true,
+    skip: adminTeamIds.length === 0,
+  }), [adminTeamIds]);
+  const { data: crossTeamTasks } = useCollection<Task>('tasks', crossTeamTasksQuery);
+
   const teamDueTodayByPerson = useMemo(() => {
-    // Use the role-filtered `tasks` (useFilteredTasks): Admin/Manager → all;
-    // Member → own (assigned to / created by them); SalesAgent → tasks they
-    // created (incl. ones they assigned to others) + assigned to them.
-    if (!canSeeTeamDay || !tasks) return [];
-    // Mirror the app's authoritative "due today" logic (see myDueToday): the
-    // operative date is endDate (falling back to dueDate), the value may be a
-    // Firestore Timestamp / Date / string, and we compare by local YYYY-MM-DD.
-    const todayStr = new Date().toLocaleDateString('sv');
+    if (!canSeeTeamDay) return [];
+    // Admin → all tasks across their admin teams; otherwise the role-filtered set.
+    const source: Task[] = (dataScope === 'all' && adminTeamIds.length > 0) ? (crossTeamTasks || []) : (tasks || []);
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const endOfToday = new Date(startOfToday.getTime() + 86400000);
     const dueOf = (t: Task): Date | null => {
       const due: any = (t as any).endDate || (t as any).dueDate;
       if (!due) return null;
@@ -139,26 +164,28 @@ const StaffDashboard: React.FC = () => {
       return isNaN(d.getTime()) ? null : d;
     };
     const UNASSIGNED = '__unassigned__';
-    const groups = new Map<string, { userId: string; name: string; tasks: Task[]; done: number }>();
-    for (const t of tasks) {
+    const groups = new Map<string, { userId: string; name: string; tasks: { task: Task; overdue: boolean }[]; overdue: number }>();
+    for (const t of source) {
+      if (t.status === 'Done') continue;            // open only
       const due = dueOf(t);
-      if (!due || due.toLocaleDateString('sv') !== todayStr) continue;
+      if (!due || due >= endOfToday) continue;       // due today or earlier (overdue)
+      const isOverdue = due < startOfToday;
       const uid = t.assignedToUserId || UNASSIGNED;
       if (!groups.has(uid)) {
         const profile = uid === UNASSIGNED ? null : userProfiles?.find((p: any) => p.userId === uid);
         const name = uid === UNASSIGNED ? 'Pa caktuar' : (profile?.displayName || profile?.name || 'Anonim');
-        groups.set(uid, { userId: uid, name, tasks: [], done: 0 });
+        groups.set(uid, { userId: uid, name, tasks: [], overdue: 0 });
       }
       const g = groups.get(uid)!;
-      g.tasks.push(t);
-      if (t.status === 'Done') g.done++;
+      g.tasks.push({ task: t, overdue: isOverdue });
+      if (isOverdue) g.overdue++;
     }
     return Array.from(groups.values()).sort((a, b) => {
       if (a.userId === UNASSIGNED) return 1;
       if (b.userId === UNASSIGNED) return -1;
       return b.tasks.length - a.tasks.length;
     });
-  }, [canSeeTeamDay, tasks, userProfiles]);
+  }, [canSeeTeamDay, dataScope, adminTeamIds, crossTeamTasks, tasks, userProfiles]);
 
   const teamDueTodayTotal = useMemo(
     () => teamDueTodayByPerson.reduce((s, g) => s + g.tasks.length, 0),
@@ -526,9 +553,9 @@ const StaffDashboard: React.FC = () => {
                 <Users className="w-5 h-5 text-blue-500" />
               </div>
               <div>
-                <h2 className="text-sm font-semibold text-foreground">Detyrat e sotme sipas personit</h2>
+                <h2 className="text-sm font-semibold text-foreground">Për sot · sipas personit</h2>
                 <p className="text-xs text-muted-foreground">
-                  {new Date().toLocaleDateString('sq-AL', { weekday: 'long', day: 'numeric', month: 'long' })}
+                  Me afat sot ose të vonuara · {new Date().toLocaleDateString('sq-AL', { weekday: 'long', day: 'numeric', month: 'long' })}
                 </p>
               </div>
             </div>
@@ -538,31 +565,37 @@ const StaffDashboard: React.FC = () => {
             {teamDueTodayByPerson.length === 0 ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground py-4 justify-center">
                 <CheckCircle2 className="w-4 h-4 text-green-500" />
-                Asnjë detyrë me afat sot.
+                Asnjë detyrë e hapur për sot apo e vonuar.
               </div>
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
                 {teamDueTodayByPerson.map(group => (
                   <div key={group.userId} className="rounded-lg border p-3">
-                    <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center justify-between mb-2 gap-2">
                       <span className="text-sm font-medium text-foreground truncate" title={group.name}>
                         {group.name}
                       </span>
-                      <Badge variant="outline" className="shrink-0">
-                        {group.done}/{group.tasks.length}
-                      </Badge>
+                      <div className="flex items-center gap-1 shrink-0">
+                        {group.overdue > 0 && (
+                          <Badge variant="outline" className="text-[10px] px-1.5 py-0 text-destructive border-destructive/40">
+                            {group.overdue} vonë
+                          </Badge>
+                        )}
+                        <Badge variant="outline">{group.tasks.length}</Badge>
+                      </div>
                     </div>
                     <ul className="space-y-1.5">
-                      {group.tasks.map(t => (
+                      {group.tasks.map(({ task: t, overdue }) => (
                         <li
                           key={t.id}
                           className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5"
                           onClick={() => navigate('/app/tasks')}
                         >
                           <span
-                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.status === 'Done' ? 'bg-green-500' : 'bg-muted-foreground/40'}`}
+                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${overdue ? 'bg-destructive' : 'bg-muted-foreground/40'}`}
+                            title={overdue ? 'E vonuar' : undefined}
                           />
-                          <span className={`truncate flex-1 ${t.status === 'Done' ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
+                          <span className="truncate flex-1 text-foreground">
                             {t.title}
                           </span>
                           <Badge className={`shrink-0 text-[10px] px-1.5 py-0 ${getStatusColor(t.status)}`}>
