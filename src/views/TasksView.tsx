@@ -50,6 +50,7 @@ const TasksView: React.FC = () => {
   const logActivity = useActivityLogger();
   const [viewMode, setViewMode] = useState<'board' | 'calendar' | 'list'>('list');
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  const [groupBy, setGroupBy] = useState<'none' | 'assignee' | 'priority' | 'project' | 'dueDate'>('none');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -444,6 +445,213 @@ const TasksView: React.FC = () => {
     return { text: dateStr, overdue: false, className: 'text-muted-foreground' };
   };
 
+  // ── Group by (Jira/Asana style) — purely client-side over the loaded tasks ──
+  const taskGroups = useMemo(() => {
+    if (groupBy === 'none') return [];
+    const now = new Date();
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const PRIORITY_LABEL: Record<string, string> = { urgent: 'Urgjente', high: 'I lartë', medium: 'Mesatar', low: 'I ulët' };
+    const PRIORITY_ORDER = ['urgent', 'high', 'medium', 'low'];
+    const groups = new Map<string, { key: string; label: string; sort: number; tasks: Task[] }>();
+    const add = (key: string, label: string, sort: number, task: Task) => {
+      let g = groups.get(key);
+      if (!g) { g = { key, label, sort, tasks: [] }; groups.set(key, g); }
+      g.tasks.push(task);
+    };
+    for (const task of orderedTasks) {
+      if (groupBy === 'assignee') {
+        const uid = task.assignedToUserId || '';
+        add(uid || '__none__', uid ? getUserName(uid) : 'Pa caktuar', uid ? 0 : 1, task);
+      } else if (groupBy === 'priority') {
+        const p = task.priority || '';
+        const idx = PRIORITY_ORDER.indexOf(p);
+        add(p || '__none__', PRIORITY_LABEL[p] || 'Pa prioritet', idx < 0 ? 99 : idx, task);
+      } else if (groupBy === 'project') {
+        const pid = task.projectId || '';
+        add(pid || '__none__', pid ? (getProjectName(pid) || 'Projekt pa emër') : 'Pa projekt', pid ? 0 : 1, task);
+      } else if (groupBy === 'dueDate') {
+        const raw = task.endDate ? new Date(task.endDate) : null;
+        if (!raw || isNaN(raw.getTime())) { add('z_none', 'Pa afat', 5, task); continue; }
+        const day = new Date(raw.getFullYear(), raw.getMonth(), raw.getDate());
+        const diff = Math.round((day.getTime() - startOfToday.getTime()) / 86400000);
+        if (day < startOfToday && task.status !== 'Done') add('a_overdue', 'Të vonuara', 0, task);
+        else if (diff === 0) add('b_today', 'Sot', 1, task);
+        else if (diff > 0 && diff <= 7) add('c_week', 'Këtë javë', 2, task);
+        else add('d_later', 'Më vonë', 3, task);
+      }
+    }
+    return Array.from(groups.values()).sort((a, b) => a.sort - b.sort || a.label.localeCompare(b.label));
+  }, [groupBy, orderedTasks, getUserName, getProjectName]);
+
+  // Single task row — shared by the flat (drag-sortable) list and the grouped view.
+  const renderTaskRow = (task: Task) => {
+    const dateInfo = formatDateCompact(new Date(task.endDate));
+    const isSelected = selectedTask?.id === task.id;
+    const isOverdue = new Date(task.endDate) < new Date() && task.status !== 'Done';
+    const isBlocked = blockedTaskIds.has(task.id);
+    const projectName = getProjectName(task.projectId);
+    const subtaskInfo = subtaskCounts[task.id];
+    const isBeingWorkedOn = tasksBeingWorkedOn.has(task.id);
+    const commentCount = comments?.filter(c => c.taskId === task.id).length || 0;
+    const assigneeName = getUserName(task.assignedToUserId);
+    const initials = assigneeName.slice(0, 2).toUpperCase();
+    const initialsColor = hashColor(assigneeName);
+    const priorityFlagColor = task.priority === 'urgent' || task.priority === 'high'
+      ? '#EF4444' : task.priority === 'medium' ? '#F97316' : '#9CA3AF';
+    return (
+      <div
+        className={`group relative flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-muted/50 transition-colors ${
+          isSelected ? 'bg-primary/5 border-l-2 border-l-primary' : ''
+        } ${isOverdue ? 'bg-destructive/5' : ''}`}
+        onClick={() => setSelectedTask(task)}
+      >
+        {/* Drag handle */}
+        <div className="mt-1.5 cursor-grab opacity-0 group-hover:opacity-30 hover:!opacity-70 text-muted-foreground flex-shrink-0 hidden sm:block">
+          <GripVertical className="w-3.5 h-3.5" />
+        </div>
+        <Checkbox
+          checked={task.status === 'Done'}
+          onCheckedChange={async (checked) => {
+            const newStatus = checked ? 'Done' : 'Todo';
+            await taskMutation.update(task.id, { status: newStatus });
+            toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${checked ? 'Përfunduar' : 'Për të bërë'}` });
+            if (checked) logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
+          }}
+          onClick={(e) => e.stopPropagation()}
+          className={`mt-1 flex-shrink-0 ${task.status === 'Done' ? 'bg-success border-success' : ''}`}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Priority flag icon */}
+            {task.priority && (
+              <Flag className="w-3 h-3 flex-shrink-0" style={{ color: priorityFlagColor }} />
+            )}
+            <span className={`text-sm font-medium ${task.status === 'Done' ? 'line-through text-muted-foreground' : ''}`}>
+              {task.title}
+            </span>
+            {isBeingWorkedOn && (
+              <span className="flex items-center gap-0.5 text-[10px] text-success bg-success/10 px-1.5 py-0.5 rounded-full">
+                <span className="w-1.5 h-1.5 rounded-full bg-success animate-pulse" />
+                Duke punuar
+              </span>
+            )}
+            {isBlocked && (
+              <span className="flex items-center gap-0.5 text-[10px] text-orange-600 bg-orange-50 dark:bg-orange-950 dark:text-orange-300 px-1.5 py-0.5 rounded-full border border-orange-200 dark:border-orange-800">
+                🔒 Bllokuar
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            {/* Status badge */}
+            <span className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
+              task.status === 'Done' ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+              : task.status === 'In Progress' ? 'bg-blue-100 text-blue-700 dark:bg-blue-950 dark:text-blue-300'
+              : task.status === 'Review' ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
+              : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
+            }`}>
+              {task.status === 'Todo' ? 'Për të bërë' : task.status === 'In Progress' ? 'Në progres' : task.status === 'Review' ? 'Rishikim' : 'Përfunduar'}
+            </span>
+            {/* Project name */}
+            {projectName && (
+              <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded flex items-center gap-1">
+                <Target className="w-2.5 h-2.5" />{projectName}
+              </span>
+            )}
+            {/* Comment count */}
+            {commentCount > 0 && (
+              <span className="text-[10px] text-muted-foreground flex items-center gap-1">
+                <MessageSquare className="w-2.5 h-2.5" />{commentCount}
+              </span>
+            )}
+          </div>
+          {/* Subtask progress bar */}
+          {subtaskInfo && (
+            <div className="mt-1.5">
+              <div className="flex items-center gap-1.5 mb-0.5">
+                <ListChecks className="w-2.5 h-2.5 text-muted-foreground" />
+                <span className="text-[10px] text-muted-foreground">{subtaskInfo.done}/{subtaskInfo.total}</span>
+              </div>
+              <div className="h-1 bg-muted rounded-full overflow-hidden w-24">
+                <div className="h-full bg-primary rounded-full transition-all"
+                  style={{ width: `${subtaskInfo.total > 0 ? (subtaskInfo.done / subtaskInfo.total) * 100 : 0}%` }} />
+              </div>
+            </div>
+          )}
+        </div>
+        {/* Assignee initials — 28px, hash color, tooltip */}
+        <div
+          className="hidden sm:flex items-center gap-1.5 flex-shrink-0"
+          title={assigneeName}
+        >
+          <div
+            className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0"
+            style={{ backgroundColor: initialsColor }}
+          >
+            {initials}
+          </div>
+        </div>
+        {/* Date */}
+        <div className={`flex items-center gap-1 text-xs whitespace-nowrap flex-shrink-0 mt-0.5 ${dateInfo.className}`}>
+          {dateInfo.overdue && <AlertTriangle className="w-3 h-3" />}
+          {dateInfo.text}
+        </div>
+        {/* Hover quick actions */}
+        <div
+          className="absolute right-4 top-2.5 hidden group-hover:flex items-center gap-0.5 bg-background border border-border rounded-md shadow-sm px-0.5 py-0.5 z-10"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Mark Done */}
+          <button
+            title="Shëno si Përfunduar"
+            className="px-1.5 py-1 rounded text-xs hover:bg-muted text-emerald-600"
+            onClick={async (e) => {
+              e.stopPropagation();
+              if (task.status !== 'Done') {
+                await taskMutation.update(task.id, { status: 'Done' });
+                toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
+                logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
+              }
+            }}
+          >
+            <Check className="w-3.5 h-3.5" />
+          </button>
+          {/* Edit */}
+          <button
+            title="Edito"
+            className="px-1.5 py-1 rounded text-xs hover:bg-muted text-foreground"
+            onClick={(e) => { e.stopPropagation(); setSelectedTask(task); }}
+          >
+            <Edit2 className="w-3.5 h-3.5" />
+          </button>
+          {/* More */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button className="px-1.5 py-1 rounded text-xs hover:bg-muted text-foreground">
+                <MoreVertical className="w-3.5 h-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="text-sm">
+              <DropdownMenuItem onClick={async () => {
+                const { id, ...rest } = task;
+                await taskMutation.create({ ...rest, title: rest.title + ' (kopje)' });
+                toast({ title: 'Detyrë u kopjua' });
+              }}>
+                Kopjo
+              </DropdownMenuItem>
+              <DropdownMenuSeparator />
+              <DropdownMenuItem
+                className="text-destructive"
+                onClick={() => setDeleteConfirmId(task.id)}
+              >
+                Fshi
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </div>
+      </div>
+    );
+  };
+
   if (tasksLoading) {
     return (
       <div className="space-y-6">
@@ -507,6 +715,22 @@ const TasksView: React.FC = () => {
                 <TabsTrigger value="calendar" className="text-xs px-2"><CalendarDays className="w-3 h-3 sm:mr-1" /><span className="hidden sm:inline">Kalendar</span></TabsTrigger>
               </TabsList>
             </Tabs>
+
+            {viewMode === 'list' && (
+              <Select value={groupBy} onValueChange={(v) => setGroupBy(v as any)}>
+                <SelectTrigger className="h-8 text-xs w-[140px]">
+                  <Users className="w-3 h-3 mr-1 shrink-0" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Pa grupim</SelectItem>
+                  <SelectItem value="assignee">Sipas personit</SelectItem>
+                  <SelectItem value="priority">Sipas prioritetit</SelectItem>
+                  <SelectItem value="project">Sipas projektit</SelectItem>
+                  <SelectItem value="dueDate">Sipas afatit</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
 
             {permissions.canEdit && (
               <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
@@ -623,7 +847,7 @@ const TasksView: React.FC = () => {
 
         {/* Task List Content */}
         <div className="flex-1 overflow-y-auto">
-          {viewMode === 'list' && (
+          {viewMode === 'list' && groupBy === 'none' && (
             <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
               <SortableContext items={orderedTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
                 <div className="divide-y">
@@ -817,6 +1041,30 @@ const TasksView: React.FC = () => {
                 ) : null}
               </DragOverlay>
             </DndContext>
+          )}
+
+          {viewMode === 'list' && groupBy !== 'none' && (
+            <div>
+              {taskGroups.map(group => (
+                <div key={group.key}>
+                  <div className="sticky top-0 z-[1] flex items-center gap-2 px-4 py-1.5 bg-muted/60 backdrop-blur border-b">
+                    <ChevronDown className="w-3 h-3 text-muted-foreground" />
+                    <span className="text-xs font-semibold text-foreground">{group.label}</span>
+                    <span className="text-xs text-muted-foreground">{group.tasks.length}</span>
+                  </div>
+                  <div className="divide-y">
+                    {group.tasks.map(task => (
+                      <div key={task.id}>{renderTaskRow(task)}</div>
+                    ))}
+                  </div>
+                </div>
+              ))}
+              {tasks.length === 0 && (
+                <div className="text-center py-12 text-muted-foreground">
+                  <p>Asnjë detyrë</p>
+                </div>
+              )}
+            </div>
           )}
 
           {viewMode === 'board' && (
