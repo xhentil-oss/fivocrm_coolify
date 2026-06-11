@@ -83,7 +83,7 @@ function calculateStreak(activities: (Activity & { id: string })[], userId: stri
 
 const StaffDashboard: React.FC = () => {
   const { user } = useAuth();
-  usePermissions(); // ensures teamId is synced
+  const { isAdmin, isManager, isOwner } = usePermissions(); // also ensures teamId is synced
   const navigate = useNavigate();
   const { toast } = useToast();
   const [showAllMyTasks, setShowAllMyTasks] = useState(false);
@@ -115,6 +115,43 @@ const StaffDashboard: React.FC = () => {
   const goals = useFilteredByOwner(rawGoals);
 
   const taskMutation = useMutation<Task>('tasks');
+
+  // ── ADMIN/MANAGER: team tasks due today, grouped per person ──
+  // Reuses the already-loaded rawTasks + userProfiles (no extra Firestore reads).
+  const canSeeTeamDay = isAdmin || isManager || isOwner;
+  const teamDueTodayByPerson = useMemo(() => {
+    if (!canSeeTeamDay || !rawTasks) return [];
+    const now = new Date();
+    const isToday = (d: any) =>
+      d instanceof Date &&
+      d.getFullYear() === now.getFullYear() &&
+      d.getMonth() === now.getMonth() &&
+      d.getDate() === now.getDate();
+    const UNASSIGNED = '__unassigned__';
+    const groups = new Map<string, { userId: string; name: string; tasks: Task[]; done: number }>();
+    for (const t of rawTasks) {
+      if (!isToday(t.dueDate)) continue;
+      const uid = t.assignedToUserId || UNASSIGNED;
+      if (!groups.has(uid)) {
+        const profile = uid === UNASSIGNED ? null : userProfiles?.find((p: any) => p.userId === uid);
+        const name = uid === UNASSIGNED ? 'Pa caktuar' : (profile?.displayName || profile?.name || 'Anonim');
+        groups.set(uid, { userId: uid, name, tasks: [], done: 0 });
+      }
+      const g = groups.get(uid)!;
+      g.tasks.push(t);
+      if (t.status === 'Done') g.done++;
+    }
+    return Array.from(groups.values()).sort((a, b) => {
+      if (a.userId === UNASSIGNED) return 1;
+      if (b.userId === UNASSIGNED) return -1;
+      return b.tasks.length - a.tasks.length;
+    });
+  }, [canSeeTeamDay, rawTasks, userProfiles]);
+
+  const teamDueTodayTotal = useMemo(
+    () => teamDueTodayByPerson.reduce((s, g) => s + g.tasks.length, 0),
+    [teamDueTodayByPerson]
+  );
 
   // ── Unread client messages: count from notifications ──
   const unreadClientMsgs = useMemo(
@@ -467,6 +504,68 @@ const StaffDashboard: React.FC = () => {
           </div>
         </Card>
       </div>
+
+      {/* ── ADMIN/MANAGER: Team tasks due today, per person ── */}
+      {canSeeTeamDay && (
+        <Card className="overflow-hidden">
+          <div className="p-4 border-b flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <div className="p-2 rounded-lg bg-blue-100 dark:bg-blue-900/30">
+                <Users className="w-5 h-5 text-blue-500" />
+              </div>
+              <div>
+                <h2 className="text-sm font-semibold text-foreground">Detyrat e sotme sipas personit</h2>
+                <p className="text-xs text-muted-foreground">
+                  {new Date().toLocaleDateString('sq-AL', { weekday: 'long', day: 'numeric', month: 'long' })}
+                </p>
+              </div>
+            </div>
+            <Badge variant="secondary">{teamDueTodayTotal} detyra</Badge>
+          </div>
+          <div className="p-4">
+            {teamDueTodayByPerson.length === 0 ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-4 justify-center">
+                <CheckCircle2 className="w-4 h-4 text-green-500" />
+                Asnjë detyrë me afat sot.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                {teamDueTodayByPerson.map(group => (
+                  <div key={group.userId} className="rounded-lg border p-3">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-sm font-medium text-foreground truncate" title={group.name}>
+                        {group.name}
+                      </span>
+                      <Badge variant="outline" className="shrink-0">
+                        {group.done}/{group.tasks.length}
+                      </Badge>
+                    </div>
+                    <ul className="space-y-1.5">
+                      {group.tasks.map(t => (
+                        <li
+                          key={t.id}
+                          className="flex items-center gap-2 text-xs cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5"
+                          onClick={() => navigate('/app/tasks')}
+                        >
+                          <span
+                            className={`w-1.5 h-1.5 rounded-full shrink-0 ${t.status === 'Done' ? 'bg-green-500' : 'bg-muted-foreground/40'}`}
+                          />
+                          <span className={`truncate flex-1 ${t.status === 'Done' ? 'line-through text-muted-foreground' : 'text-foreground'}`}>
+                            {t.title}
+                          </span>
+                          <Badge className={`shrink-0 text-[10px] px-1.5 py-0 ${getStatusColor(t.status)}`}>
+                            {t.status}
+                          </Badge>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </Card>
+      )}
 
       {/* ── Main Content: Two Column Layout ── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
