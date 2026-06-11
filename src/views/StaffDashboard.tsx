@@ -121,16 +121,23 @@ const StaffDashboard: React.FC = () => {
   const canSeeTeamDay = isAdmin || isManager || isOwner;
   const teamDueTodayByPerson = useMemo(() => {
     if (!canSeeTeamDay || !rawTasks) return [];
-    const now = new Date();
-    const isToday = (d: any) =>
-      d instanceof Date &&
-      d.getFullYear() === now.getFullYear() &&
-      d.getMonth() === now.getMonth() &&
-      d.getDate() === now.getDate();
+    // Mirror the app's authoritative "due today" logic (see myDueToday): the
+    // operative date is endDate (falling back to dueDate), the value may be a
+    // Firestore Timestamp / Date / string, and we compare by local YYYY-MM-DD.
+    const todayStr = new Date().toLocaleDateString('sv');
+    const dueOf = (t: Task): Date | null => {
+      const due: any = (t as any).endDate || (t as any).dueDate;
+      if (!due) return null;
+      if (typeof due?.toDate === 'function') return due.toDate();
+      if (due instanceof Date) return due;
+      const d = new Date(due);
+      return isNaN(d.getTime()) ? null : d;
+    };
     const UNASSIGNED = '__unassigned__';
     const groups = new Map<string, { userId: string; name: string; tasks: Task[]; done: number }>();
     for (const t of rawTasks) {
-      if (!isToday(t.dueDate)) continue;
+      const due = dueOf(t);
+      if (!due || due.toLocaleDateString('sv') !== todayStr) continue;
       const uid = t.assignedToUserId || UNASSIGNED;
       if (!groups.has(uid)) {
         const profile = uid === UNASSIGNED ? null : userProfiles?.find((p: any) => p.userId === uid);
