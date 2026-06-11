@@ -122,7 +122,10 @@ const StaffDashboard: React.FC = () => {
   // member sees the team's day; guests/clients are excluded.
   const canSeeTeamDay = !isGuest;
   const teamDueTodayByPerson = useMemo(() => {
-    if (!canSeeTeamDay || !rawTasks) return [];
+    // Use the role-filtered `tasks` (useFilteredTasks): Admin/Manager → all;
+    // Member → own (assigned to / created by them); SalesAgent → tasks they
+    // created (incl. ones they assigned to others) + assigned to them.
+    if (!canSeeTeamDay || !tasks) return [];
     // Mirror the app's authoritative "due today" logic (see myDueToday): the
     // operative date is endDate (falling back to dueDate), the value may be a
     // Firestore Timestamp / Date / string, and we compare by local YYYY-MM-DD.
@@ -137,7 +140,7 @@ const StaffDashboard: React.FC = () => {
     };
     const UNASSIGNED = '__unassigned__';
     const groups = new Map<string, { userId: string; name: string; tasks: Task[]; done: number }>();
-    for (const t of rawTasks) {
+    for (const t of tasks) {
       const due = dueOf(t);
       if (!due || due.toLocaleDateString('sv') !== todayStr) continue;
       const uid = t.assignedToUserId || UNASSIGNED;
@@ -155,7 +158,7 @@ const StaffDashboard: React.FC = () => {
       if (b.userId === UNASSIGNED) return -1;
       return b.tasks.length - a.tasks.length;
     });
-  }, [canSeeTeamDay, rawTasks, userProfiles]);
+  }, [canSeeTeamDay, tasks, userProfiles]);
 
   const teamDueTodayTotal = useMemo(
     () => teamDueTodayByPerson.reduce((s, g) => s + g.tasks.length, 0),
