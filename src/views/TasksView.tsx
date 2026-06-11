@@ -21,7 +21,6 @@ import { Calendar } from '../components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -51,6 +50,8 @@ const TasksView: React.FC = () => {
   const [viewMode, setViewMode] = useState<'board' | 'calendar' | 'list'>('list');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [groupBy, setGroupBy] = useState<'none' | 'assignee' | 'priority' | 'project' | 'dueDate'>('none');
+  const LIST_PAGE = 50;
+  const [listLimit, setListLimit] = useState(LIST_PAGE);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -429,6 +430,10 @@ const TasksView: React.FC = () => {
     });
   }, [tasks, listOrder]);
 
+  // Pagination for the flat list (load-more). Reset when the visible set changes.
+  const visibleTasks = useMemo(() => orderedTasks.slice(0, listLimit), [orderedTasks, listLimit]);
+  React.useEffect(() => { setListLimit(LIST_PAGE); }, [filterStatus, searchQuery, groupBy]);
+
   // Format date compactly — always show actual date; flag overdue with ⚠️
   const formatDateCompact = (date: Date) => {
     if (!date || isNaN(new Date(date).getTime())) {
@@ -708,13 +713,26 @@ const TasksView: React.FC = () => {
             </p>
           </div>
           <div className="flex items-center gap-2 flex-wrap">
-            <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as any)}>
-              <TabsList className="h-8">
-                <TabsTrigger value="list" className="text-xs px-2"><List className="w-3 h-3 sm:mr-1" /><span className="hidden sm:inline">Listë</span></TabsTrigger>
-                <TabsTrigger value="board" className="text-xs px-2"><LayoutGrid className="w-3 h-3 sm:mr-1" /><span className="hidden sm:inline">Board</span></TabsTrigger>
-                <TabsTrigger value="calendar" className="text-xs px-2"><CalendarDays className="w-3 h-3 sm:mr-1" /><span className="hidden sm:inline">Kalendar</span></TabsTrigger>
-              </TabsList>
-            </Tabs>
+            {/* View switcher — plain buttons (reliable onClick) instead of Radix Tabs */}
+            <div className="inline-flex h-8 items-center rounded-lg bg-muted p-0.5">
+              {([
+                { v: 'list' as const, label: 'Listë', Icon: List },
+                { v: 'board' as const, label: 'Board', Icon: LayoutGrid },
+                { v: 'calendar' as const, label: 'Kalendar', Icon: CalendarDays },
+              ]).map(({ v, label, Icon }) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setViewMode(v)}
+                  className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
+                    viewMode === v ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <Icon className="w-3 h-3 sm:mr-0.5" />
+                  <span className="hidden sm:inline">{label}</span>
+                </button>
+              ))}
+            </div>
 
             {viewMode === 'list' && (
               <Select value={groupBy} onValueChange={(v) => setGroupBy(v as any)}>
@@ -849,9 +867,9 @@ const TasksView: React.FC = () => {
         <div className="flex-1 overflow-y-auto">
           {viewMode === 'list' && groupBy === 'none' && (
             <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
-              <SortableContext items={orderedTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
+              <SortableContext items={visibleTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
                 <div className="divide-y">
-                  {orderedTasks.map((task) => {
+                  {visibleTasks.map((task) => {
                     const dateInfo = formatDateCompact(new Date(task.endDate));
                     const isSelected = selectedTask?.id === task.id;
                     const isOverdue = new Date(task.endDate) < new Date() && task.status !== 'Done';
@@ -1027,6 +1045,16 @@ const TasksView: React.FC = () => {
                       <p>Asnjë detyrë</p>
                       <Button variant="link" className="mt-2" onClick={() => setIsCreateDialogOpen(true)}>
                         Krijo detyrën e parë
+                      </Button>
+                    </div>
+                  )}
+                  {orderedTasks.length > listLimit && (
+                    <div className="flex items-center justify-center gap-3 py-4">
+                      <span className="text-xs text-muted-foreground">
+                        Duke shfaqur {visibleTasks.length} nga {orderedTasks.length}
+                      </span>
+                      <Button variant="outline" size="sm" onClick={() => setListLimit(l => l + LIST_PAGE)}>
+                        Shfaq më shumë (+{Math.min(LIST_PAGE, orderedTasks.length - listLimit)})
                       </Button>
                     </div>
                   )}
