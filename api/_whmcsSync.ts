@@ -344,11 +344,15 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
   let phase: string = cursor?.phase || 'clients';
   let start: number = cursor?.start || 0;
 
-  // Mark the run as started immediately (moves "Fundit" the moment it begins).
+  // Mark the run as started immediately (moves "Fundit" the moment it begins)
+  // and clear any stale errors from previous runs so the UI doesn't show old
+  // failures next to a clean run.
   await writeWhmcsStatus({
     syncStatus: 'running',
     syncStartedAt: admin.firestore.FieldValue.serverTimestamp(),
     lastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    errorCount: 0,
+    lastErrors: [],
   }, teamId);
 
   const pause = async (p: string, nextStart: number): Promise<Record<string, unknown>> => {
