@@ -47,6 +47,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const session = event.data.object as Stripe.Checkout.Session;
     const invoiceId = session.metadata?.invoiceId;
 
+    // SECURITY: only act on genuinely-paid sessions. `checkout.session.completed`
+    // also fires for async/delayed payment methods with payment_status 'unpaid';
+    // acting on those would mark the invoice Paid (and post to WHMCS) before the
+    // money actually arrives. The real confirmation for those arrives later via
+    // `checkout.session.async_payment_succeeded`.
+    if (invoiceId && session.payment_status !== 'paid') {
+      console.warn(`[Stripe Webhook] session ${session.id} completed but payment_status=${session.payment_status}; not marking paid.`);
+      return res.status(200).json({ received: true, skipped: 'payment_not_completed' });
+    }
+
     if (invoiceId) {
       try {
         const invoiceRef = db.collection('invoices').doc(invoiceId);
@@ -82,13 +92,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           // Write the payment back to WHMCS for WHMCS-sourced invoices (best-effort).
           // Never fail the Stripe webhook on a WHMCS error — the FivoCRM invoice is
           // already Paid; a 500 would make Stripe retry the whole event.
-          if (invoiceData?.source === 'whmcs' && invoiceData?.whmcsInvoiceId && whmcsConfigured()) {
+          // Idempotency: skip if this invoice's payment was already pushed to WHMCS
+          // (Stripe can redeliver the same event). transId dedup is a second guard.
+          const alreadySynced = !!invoiceData?.whmcsPaymentSyncedAt;
+          if (invoiceData?.source === 'whmcs' && invoiceData?.whmcsInvoiceId && !alreadySynced && whmcsConfigured()) {
             try {
+              // SECURITY: only send a numeric amount when the Stripe charge currency
+              // matches the invoice currency. On a mismatch, omit it so WHMCS closes
+              // the full balance in its own currency instead of recording a wrong sum.
+              const invCurrency = String(invoiceData.currency || '').toLowerCase();
+              const payCurrency = String(session.currency || '').toLowerCase();
+              const currencyMatches = !!invCurrency && invCurrency === payCurrency;
+              if (!currencyMatches) {
+                console.warn(`[Stripe Webhook] currency mismatch (invoice=${invCurrency || '?'} stripe=${payCurrency || '?'}) for WHMCS invoice ${invoiceData.whmcsInvoiceId}; letting WHMCS close full balance.`);
+              }
               const result = await pushInvoicePayment({
                 whmcsInvoiceId: invoiceData.whmcsInvoiceId,
                 transId: (session.payment_intent as string) || session.id,
                 gateway: 'stripe',
-                amount: (session.amount_total || 0) / 100,
+                amount: currencyMatches ? (session.amount_total || 0) / 100 : undefined,
                 date: new Date(),
               });
               if (result.ok) {
