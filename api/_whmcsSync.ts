@@ -268,91 +268,158 @@ async function syncAllClients(
   return { clientsCreated, clientsUpdated };
 }
 
+// Stay safely under the 60s function cap: stop starting new pages after this,
+// leaving headroom for the in-flight WHMCS call + status write to finish.
+const SYNC_BUDGET_MS = 30_000;
+
+// Run one paginated WHMCS phase with a time budget. Returns where it stopped so
+// the caller can persist a resume cursor when the budget runs out.
+async function runPhase(
+  action: string,
+  pick: (data: any) => any[],
+  handle: (raw: any) => Promise<'created' | 'updated'>,
+  startAt: number,
+  overBudget: () => boolean,
+  errors: string[],
+  counters: { created: number; updated: number },
+): Promise<{ done: boolean; nextStart: number }> {
+  for (let start = startAt; ; start += PAGE) {
+    if (overBudget()) return { done: false, nextStart: start };
+    let data: any;
+    try {
+      data = await whmcsCall(action, { limitstart: start, limitnum: PAGE });
+    } catch (e: any) {
+      errors.push(`${action}: ${e?.message || e}`);
+      return { done: true, nextStart: 0 }; // hard error → stop this phase, move on
+    }
+    const list: any[] = pick(data) || [];
+    for (const raw of list) {
+      try {
+        (await handle(raw)) === 'created' ? counters.created++ : counters.updated++;
+      } catch (e: any) {
+        errors.push(`${action} ${raw?.id}: ${e?.message || e}`);
+      }
+    }
+    if (list.length < PAGE) return { done: true, nextStart: 0 };
+  }
+}
+
 export async function runWhmcsSync(): Promise<Record<string, unknown>> {
   if (!whmcsConfigured()) {
     return { skipped: 'WHMCS API nuk është konfiguruar' };
   }
+  const startedAt = Date.now();
+  const overBudget = () => Date.now() - startedAt > SYNC_BUDGET_MS;
+
   const teamId = await resolveTeamId();
   const clientCache = new Map<string, MappedClient | null>();
-  let invoicesCreated = 0, invoicesUpdated = 0, subsCreated = 0, subsUpdated = 0;
-  const errors: string[] = [];
+  // whmcsClientId → FivoCRM customerId, resolved from Firestore (no WHMCS call)
+  // since clients are synced to customers in the first phase. Falls back to a
+  // WHMCS lookup only if the customer isn't found yet (keeps resume runs fast).
+  const customerByWhmcsId = new Map<string, string | null>();
+  const resolveCustomerId = async (whmcsClientId: string): Promise<string | null> => {
+    if (!whmcsClientId) return null;
+    if (customerByWhmcsId.has(whmcsClientId)) return customerByWhmcsId.get(whmcsClientId)!;
+    let id: string | null = null;
+    const snap = await db.collection('customers').where('whmcsClientId', '==', whmcsClientId).limit(1).get();
+    if (!snap.empty) id = snap.docs[0].id;
+    if (!id) {
+      const client = await clientForId(whmcsClientId, clientCache);
+      id = await resolveCustomer(client, teamId);
+    }
+    customerByWhmcsId.set(whmcsClientId, id);
+    return id;
+  };
 
-  // Mark the run as started immediately (incl. lastSyncAt) so the "Fundit"
-  // timestamp moves the moment a run begins — even if a later phase times out
-  // (Vercel may hard-kill the function before the final write). This is how we
-  // tell "a run actually started" from "nothing happened".
+  const errors: string[] = [];
+  const counters = {
+    clients: { created: 0, updated: 0 },
+    invoices: { created: 0, updated: 0 },
+    subs: { created: 0, updated: 0 },
+  };
+
+  // Resume from where the last invocation stopped (if it ran out of budget).
+  const statusSnap = await db.collection('integrations').doc('whmcs').get();
+  const cursor = (statusSnap.exists ? statusSnap.data()?.syncCursor : null) as { phase?: string; start?: number } | null;
+  let phase: string = cursor?.phase || 'clients';
+  let start: number = cursor?.start || 0;
+
+  // Mark the run as started immediately (moves "Fundit" the moment it begins).
   await writeWhmcsStatus({
     syncStatus: 'running',
     syncStartedAt: admin.firestore.FieldValue.serverTimestamp(),
     lastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
   }, teamId);
 
-  // ── Clients → customers (also runs in the client-only job) ───────────────
-  const { clientsCreated, clientsUpdated } = await syncAllClients(teamId, errors, clientCache);
-  await writeWhmcsStatus({ clientsCreated, clientsUpdated, errorCount: errors.length, lastErrors: errors.slice(0, 10) }, teamId);
+  const pause = async (p: string, nextStart: number): Promise<Record<string, unknown>> => {
+    await writeWhmcsStatus({
+      syncStatus: 'partial',
+      syncCursor: { phase: p, start: nextStart },
+      clientsCreated: counters.clients.created, clientsUpdated: counters.clients.updated,
+      invoicesCreated: counters.invoices.created, invoicesUpdated: counters.invoices.updated,
+      subsCreated: counters.subs.created, subsUpdated: counters.subs.updated,
+      errorCount: errors.length, lastErrors: errors.slice(0, 10),
+    }, teamId);
+    return {
+      partial: true, resumePhase: p, resumeStart: nextStart,
+      clientsCreated: counters.clients.created, clientsUpdated: counters.clients.updated,
+      invoicesCreated: counters.invoices.created, invoicesUpdated: counters.invoices.updated,
+      subsCreated: counters.subs.created, subsUpdated: counters.subs.updated,
+      errors: errors.length,
+      ...(errors.length ? { errorDetail: errors.slice(0, 2).join(' | ').slice(0, 400) } : {}),
+    };
+  };
 
-  // ── Invoices (paginated) ────────────────────────────────────────────────
-  for (let start = 0; ; start += PAGE) {
-    let data: any;
-    try {
-      data = await whmcsCall('GetInvoices', { limitstart: start, limitnum: PAGE });
-    } catch (e: any) {
-      errors.push(`GetInvoices: ${e?.message || e}`);
-      break;
-    }
-    const list: any[] = data?.invoices?.invoice || [];
-    for (const raw of list) {
-      try {
-        const inv = mapWhmcsInvoice(raw);
-        const client = await clientForId(inv.whmcsClientId, clientCache);
-        const customerId = await resolveCustomer(client, teamId);
-        const r = await upsertInvoice(inv, customerId, teamId);
-        r === 'created' ? invoicesCreated++ : invoicesUpdated++;
-      } catch (e: any) {
-        errors.push(`invoice ${raw?.id}: ${e?.message || e}`);
-      }
-    }
-    if (list.length < PAGE) break;
-  }
-  await writeWhmcsStatus({ invoicesCreated, invoicesUpdated, errorCount: errors.length, lastErrors: errors.slice(0, 10) }, teamId);
-
-  // ── Client products / subscriptions (paginated) ──────────────────────────
-  for (let start = 0; ; start += PAGE) {
-    let data: any;
-    try {
-      data = await whmcsCall('GetClientsProducts', { limitstart: start, limitnum: PAGE });
-    } catch (e: any) {
-      errors.push(`GetClientsProducts: ${e?.message || e}`);
-      break;
-    }
-    const list: any[] = data?.products?.product || [];
-    for (const raw of list) {
-      try {
-        const sub = mapWhmcsProduct(raw);
-        const client = await clientForId(sub.whmcsClientId, clientCache);
-        const customerId = await resolveCustomer(client, teamId);
-        const r = await upsertSubscription(sub, customerId, teamId);
-        r === 'created' ? subsCreated++ : subsUpdated++;
-      } catch (e: any) {
-        errors.push(`product ${raw?.id}: ${e?.message || e}`);
-      }
-    }
-    if (list.length < PAGE) break;
+  // ── Phase: clients → customers ───────────────────────────────────────────
+  if (phase === 'clients') {
+    const res = await runPhase('GetClients', d => d?.clients?.client, async (raw) => {
+      const r = await upsertCustomer(mapWhmcsClientFull(raw), teamId);
+      if (raw?.id != null) clientCache.set(String(raw.id), mapWhmcsClient(raw));
+      return r;
+    }, start, overBudget, errors, counters.clients);
+    await writeWhmcsStatus({ clientsCreated: counters.clients.created, clientsUpdated: counters.clients.updated, errorCount: errors.length, lastErrors: errors.slice(0, 10) }, teamId);
+    if (!res.done) return pause('clients', res.nextStart);
+    phase = 'invoices'; start = 0;
   }
 
-  // ── Persist last-sync status (for the Settings UI) ────────────────────────
+  // ── Phase: invoices ────────────────────────────────────────────────────────
+  if (phase === 'invoices') {
+    const res = await runPhase('GetInvoices', d => d?.invoices?.invoice, async (raw) => {
+      const inv = mapWhmcsInvoice(raw);
+      const customerId = await resolveCustomerId(inv.whmcsClientId);
+      return upsertInvoice(inv, customerId, teamId);
+    }, start, overBudget, errors, counters.invoices);
+    await writeWhmcsStatus({ invoicesCreated: counters.invoices.created, invoicesUpdated: counters.invoices.updated, errorCount: errors.length, lastErrors: errors.slice(0, 10) }, teamId);
+    if (!res.done) return pause('invoices', res.nextStart);
+    phase = 'subscriptions'; start = 0;
+  }
+
+  // ── Phase: client products / subscriptions ──────────────────────────────────
+  if (phase === 'subscriptions') {
+    const res = await runPhase('GetClientsProducts', d => d?.products?.product, async (raw) => {
+      const sub = mapWhmcsProduct(raw);
+      const customerId = await resolveCustomerId(sub.whmcsClientId);
+      return upsertSubscription(sub, customerId, teamId);
+    }, start, overBudget, errors, counters.subs);
+    if (!res.done) return pause('subscriptions', res.nextStart);
+  }
+
+  // ── Done: clear the cursor and persist the final status ─────────────────────
   await writeWhmcsStatus({
     lastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
     syncStatus: 'done',
-    clientsCreated, clientsUpdated,
-    invoicesCreated, invoicesUpdated, subsCreated, subsUpdated,
+    syncCursor: admin.firestore.FieldValue.delete(),
+    clientsCreated: counters.clients.created, clientsUpdated: counters.clients.updated,
+    invoicesCreated: counters.invoices.created, invoicesUpdated: counters.invoices.updated,
+    subsCreated: counters.subs.created, subsUpdated: counters.subs.updated,
     errorCount: errors.length,
     lastErrors: errors.slice(0, 10),
   }, teamId);
 
   return {
-    clientsCreated, clientsUpdated,
-    invoicesCreated, invoicesUpdated, subsCreated, subsUpdated,
+    clientsCreated: counters.clients.created, clientsUpdated: counters.clients.updated,
+    invoicesCreated: counters.invoices.created, invoicesUpdated: counters.invoices.updated,
+    subsCreated: counters.subs.created, subsUpdated: counters.subs.updated,
     errors: errors.length,
     ...(errors.length ? { errorDetail: errors.slice(0, 2).join(' | ').slice(0, 400) } : {}),
   };
