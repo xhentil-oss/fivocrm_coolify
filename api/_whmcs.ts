@@ -52,24 +52,38 @@ export async function whmcsCall(action: string, params: Record<string, string | 
   // When WHMCS_PROXY_URL is set, route the call through the VPS (static IP) so
   // WHMCS sees a stable, whitelisted IP instead of Vercel's dynamic ones.
   const proxyUrl = process.env.WHMCS_PROXY_URL;
-  const resp = proxyUrl
-    ? await fetch(proxyUrl, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': process.env.WHMCS_PROXY_SECRET || '',
-        },
-        // Send the WHMCS target URL too (built from Vercel's WHMCS_API_URL) so
-        // the VPS relay needs no WHMCS env of its own.
-        body: JSON.stringify({ url: apiUrl(), form: body.toString() }),
-        signal: AbortSignal.timeout(25_000),
-      })
-    : await fetch(apiUrl(), {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: body.toString(),
-        signal: AbortSignal.timeout(20_000),
-      });
+  let resp: Response;
+  try {
+    resp = proxyUrl
+      ? await fetch(proxyUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.WHMCS_PROXY_SECRET || '',
+          },
+          // Send the WHMCS target URL too (built from Vercel's WHMCS_API_URL) so
+          // the VPS relay needs no WHMCS env of its own.
+          body: JSON.stringify({ url: apiUrl(), form: body.toString() }),
+          signal: AbortSignal.timeout(28_000),
+        })
+      : await fetch(apiUrl(), {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: body.toString(),
+          signal: AbortSignal.timeout(20_000),
+        });
+  } catch (err: any) {
+    // Bare "fetch failed" hides the real reason. undici always attaches it to
+    // `err.cause` — surface code/message + whether it was our timeout, so the
+    // sync's errorDetail tells us DNS vs refused vs timeout vs TLS at a glance.
+    const cause = err?.cause;
+    const isTimeout = err?.name === 'TimeoutError' || cause?.name === 'TimeoutError';
+    const reason = isTimeout
+      ? `timeout pas ${proxyUrl ? 28 : 20}s`
+      : (cause?.code || cause?.message || err?.message || 'arsye e panjohur');
+    const where = proxyUrl ? `proxy (${proxyUrl})` : 'WHMCS direkt';
+    throw new Error(`Lidhja me ${where} dështoi: ${reason}`);
+  }
 
   const text = await resp.text();
   let data: any;
