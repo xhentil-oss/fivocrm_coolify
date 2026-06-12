@@ -222,8 +222,27 @@ async function clientForId(clientId: string, cache: Map<string, MappedClient | n
   return client;
 }
 
+// Status doc helper — lets the sync report progress incrementally so a later
+// phase timing out doesn't leave the UI frozen on a stale run.
+async function writeWhmcsStatus(patch: Record<string, any>, teamId: string | null): Promise<void> {
+  await db.collection('integrations').doc('whmcs').set(
+    { ...patch, ...(teamId ? { teamId } : {}) },
+    { merge: true },
+  ).catch(() => { /* status write is best-effort */ });
+}
+
 // Shared client loop (used by both the full sync and the client-only sync).
-async function syncAllClients(teamId: string | null, errors: string[]): Promise<{ clientsCreated: number; clientsUpdated: number }> {
+// Maps straight from the GetClients list row — NO per-client GetClientsDetails
+// call. That extra round-trip (one per client, each through the proxy → VPS →
+// WHMCS) was the main cause of the 60s function timeout on larger accounts.
+// Phone/address get enriched later by the real-time webhook (syncInvoiceById →
+// fetchClient). Optionally seeds `clientCache` so the invoice/subscription
+// phases reuse the data instead of re-fetching each client from WHMCS.
+async function syncAllClients(
+  teamId: string | null,
+  errors: string[],
+  clientCache?: Map<string, MappedClient | null>,
+): Promise<{ clientsCreated: number; clientsUpdated: number }> {
   let clientsCreated = 0, clientsUpdated = 0;
   for (let start = 0; ; start += PAGE) {
     let data: any;
@@ -236,15 +255,10 @@ async function syncAllClients(teamId: string | null, errors: string[]): Promise<
     const list: any[] = data?.clients?.client || [];
     for (const raw of list) {
       try {
-        let full: MappedClientFull;
-        try {
-          const det = await whmcsCall('GetClientsDetails', { clientid: raw.id, stats: 'false' });
-          full = mapWhmcsClientFull(det.client || det);
-        } catch {
-          full = mapWhmcsClientFull(raw);
-        }
+        const full: MappedClientFull = mapWhmcsClientFull(raw);
         const r = await upsertCustomer(full, teamId);
         r === 'created' ? clientsCreated++ : clientsUpdated++;
+        if (clientCache && raw?.id != null) clientCache.set(String(raw.id), mapWhmcsClient(raw));
       } catch (e: any) {
         errors.push(`client ${raw?.id}: ${e?.message || e}`);
       }
@@ -263,8 +277,19 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
   let invoicesCreated = 0, invoicesUpdated = 0, subsCreated = 0, subsUpdated = 0;
   const errors: string[] = [];
 
+  // Mark the run as started immediately (incl. lastSyncAt) so the "Fundit"
+  // timestamp moves the moment a run begins — even if a later phase times out
+  // (Vercel may hard-kill the function before the final write). This is how we
+  // tell "a run actually started" from "nothing happened".
+  await writeWhmcsStatus({
+    syncStatus: 'running',
+    syncStartedAt: admin.firestore.FieldValue.serverTimestamp(),
+    lastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+  }, teamId);
+
   // ── Clients → customers (also runs in the client-only job) ───────────────
-  const { clientsCreated, clientsUpdated } = await syncAllClients(teamId, errors);
+  const { clientsCreated, clientsUpdated } = await syncAllClients(teamId, errors, clientCache);
+  await writeWhmcsStatus({ clientsCreated, clientsUpdated, errorCount: errors.length, lastErrors: errors.slice(0, 10) }, teamId);
 
   // ── Invoices (paginated) ────────────────────────────────────────────────
   for (let start = 0; ; start += PAGE) {
@@ -289,6 +314,7 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
     }
     if (list.length < PAGE) break;
   }
+  await writeWhmcsStatus({ invoicesCreated, invoicesUpdated, errorCount: errors.length, lastErrors: errors.slice(0, 10) }, teamId);
 
   // ── Client products / subscriptions (paginated) ──────────────────────────
   for (let start = 0; ; start += PAGE) {
@@ -315,14 +341,14 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
   }
 
   // ── Persist last-sync status (for the Settings UI) ────────────────────────
-  await db.collection('integrations').doc('whmcs').set({
+  await writeWhmcsStatus({
     lastSyncAt: admin.firestore.FieldValue.serverTimestamp(),
+    syncStatus: 'done',
     clientsCreated, clientsUpdated,
     invoicesCreated, invoicesUpdated, subsCreated, subsUpdated,
     errorCount: errors.length,
     lastErrors: errors.slice(0, 10),
-    ...(teamId ? { teamId } : {}),
-  }, { merge: true });
+  }, teamId);
 
   return {
     clientsCreated, clientsUpdated,
