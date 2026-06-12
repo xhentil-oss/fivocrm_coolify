@@ -829,15 +829,18 @@ const TasksView: React.FC = () => {
           </div>
         </div>
 
-        {/* Smart Suggestions Panel */}
-        <SmartSuggestions
-          tasks={allTasks || []}
-          projects={projects || []}
-          customers={customers || []}
-          invoices={invoices || []}
-          onTaskClick={(task) => setSelectedTask(task)}
-          getUserName={getUserName}
-        />
+        {/* Smart Suggestions Panel — only in list view (it eats vertical space and
+            pushes Board/Calendar below the fold otherwise) */}
+        {viewMode === 'list' && (
+          <SmartSuggestions
+            tasks={allTasks || []}
+            projects={projects || []}
+            customers={customers || []}
+            invoices={invoices || []}
+            onTaskClick={(task) => setSelectedTask(task)}
+            getUserName={getUserName}
+          />
+        )}
 
         {/* Search Bar */}
         <div className="px-4 py-2 border-b bg-muted/30">
