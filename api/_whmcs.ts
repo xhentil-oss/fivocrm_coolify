@@ -254,3 +254,43 @@ export async function fetchClientProduct(serviceId: string | number): Promise<Ma
   const product = data?.products?.product?.[0];
   return product ? mapWhmcsProduct(product) : null;
 }
+
+// ── Write-back: record a payment on a WHMCS invoice (FivoCRM → WHMCS) ──────────
+/**
+ * Record a payment against a WHMCS invoice when a WHMCS-sourced invoice is paid
+ * inside FivoCRM (e.g. via Stripe). This is the ONE place FivoCRM writes to WHMCS.
+ *
+ * `transId` MUST be unique (use the Stripe payment_intent / session id). WHMCS
+ * rejects a duplicate transid, which gives us natural idempotency — we treat that
+ * specific error as success so Stripe retries don't double-post.
+ *
+ * No infinite loop: WHMCS will fire its own InvoicePaid hook back to us, but the
+ * inbound handler only re-syncs (status → Paid, already Paid) and never calls back.
+ */
+export async function pushInvoicePayment(args: {
+  whmcsInvoiceId: string | number;
+  transId: string;
+  gateway?: string;
+  amount?: number;
+  date?: Date;
+}): Promise<{ ok: boolean; alreadyRecorded?: boolean; message?: string }> {
+  const params: Record<string, string | number> = {
+    invoiceid: args.whmcsInvoiceId,
+    transid: args.transId,
+    gateway: args.gateway || 'stripe',
+  };
+  // Amount in the invoice's own currency. If omitted, WHMCS pays the full balance.
+  if (typeof args.amount === 'number' && args.amount > 0) params.amount = args.amount.toFixed(2);
+  if (args.date) params.date = args.date.toISOString().slice(0, 19).replace('T', ' ');
+
+  try {
+    await whmcsCall('AddInvoicePayment', params);
+    return { ok: true };
+  } catch (err: any) {
+    const msg = String(err?.message || '');
+    if (/transaction id already exists/i.test(msg) || /duplicate/i.test(msg)) {
+      return { ok: true, alreadyRecorded: true, message: msg };
+    }
+    return { ok: false, message: msg };
+  }
+}

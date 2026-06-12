@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import Stripe from 'stripe';
 import admin, { adminDb as db } from './_firebaseAdmin.js';
+import { whmcsConfigured, pushInvoicePayment } from './_whmcs.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2026-02-25.clover',
@@ -77,6 +78,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           }
 
           console.log(`Invoice ${invoiceId} marked as paid via Stripe`);
+
+          // Write the payment back to WHMCS for WHMCS-sourced invoices (best-effort).
+          // Never fail the Stripe webhook on a WHMCS error — the FivoCRM invoice is
+          // already Paid; a 500 would make Stripe retry the whole event.
+          if (invoiceData?.source === 'whmcs' && invoiceData?.whmcsInvoiceId && whmcsConfigured()) {
+            try {
+              const result = await pushInvoicePayment({
+                whmcsInvoiceId: invoiceData.whmcsInvoiceId,
+                transId: (session.payment_intent as string) || session.id,
+                gateway: 'stripe',
+                amount: (session.amount_total || 0) / 100,
+                date: new Date(),
+              });
+              if (result.ok) {
+                console.log(`[Stripe Webhook] WHMCS invoice ${invoiceData.whmcsInvoiceId} payment recorded${result.alreadyRecorded ? ' (already existed)' : ''}`);
+                await invoiceRef.update({
+                  whmcsPaymentSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+                  whmcsPaymentSyncError: admin.firestore.FieldValue.delete(),
+                }).catch(() => {});
+              } else {
+                console.error(`[Stripe Webhook] WHMCS write-back failed for invoice ${invoiceData.whmcsInvoiceId}: ${result.message}`);
+                await invoiceRef.update({ whmcsPaymentSyncError: result.message || 'unknown' }).catch(() => {});
+              }
+            } catch (err: any) {
+              console.error('[Stripe Webhook] WHMCS write-back threw:', err?.message || err);
+              await invoiceRef.update({ whmcsPaymentSyncError: String(err?.message || err).slice(0, 500) }).catch(() => {});
+            }
+          }
         }
       } catch (err: any) {
         console.error('Error updating invoice:', err.message);
