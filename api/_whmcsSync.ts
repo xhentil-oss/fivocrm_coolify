@@ -340,7 +340,21 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
 
   // Resume from where the last invocation stopped (if it ran out of budget).
   const statusSnap = await db.collection('integrations').doc('whmcs').get();
-  const cursor = (statusSnap.exists ? statusSnap.data()?.syncCursor : null) as { phase?: string; start?: number } | null;
+  const status = statusSnap.exists ? statusSnap.data() : null;
+
+  // Concurrency guard: rapid manual clicks (and the daily cron) can launch
+  // overlapping invocations that race on the shared cursor — making it jump
+  // backwards and never converge. If a run is already in flight (started < 70s
+  // ago, i.e. still within the function's lifetime), skip this one. The 70s
+  // staleness window auto-releases the lock if a run was hard-killed.
+  if (status?.syncStatus === 'running') {
+    const startedMs: number = status.syncStartedAt?.toMillis ? status.syncStartedAt.toMillis() : 0;
+    if (startedMs && Date.now() - startedMs < 70_000) {
+      return { skipped: 'sinkronizimi është tashmë në progres — prit pak para se ta klikosh sërish' };
+    }
+  }
+
+  const cursor = (status?.syncCursor || null) as { phase?: string; start?: number } | null;
   let phase: string = cursor?.phase || 'clients';
   let start: number = cursor?.start || 0;
 
