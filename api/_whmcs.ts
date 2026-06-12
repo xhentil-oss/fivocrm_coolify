@@ -15,13 +15,22 @@ import crypto from 'crypto';
  */
 
 // ── Config ──────────────────────────────────────────────────────────────────
+/**
+ * Coerce an env-provided URL to a valid https URL. Tolerates a missing scheme
+ * ("wa.fivocrm.com") AND a malformed/typo scheme ("ttps://", "htps://", "http//")
+ * — both are common when pasting into a dashboard. A correct http(s):// is kept.
+ */
+function normalizeUrl(raw: string): string {
+  let u = (raw || '').trim();
+  if (/^https?:\/\//i.test(u)) return u;          // already valid http/https
+  u = u.replace(/^[a-zA-Z][\w+.-]*:?\/\/+/, '');  // strip any broken scheme prefix
+  return `https://${u}`;
+}
+
 function apiUrl(): string {
-  let base = process.env.WHMCS_API_URL;
+  const base = process.env.WHMCS_API_URL;
   if (!base) throw new Error('WHMCS_API_URL nuk është konfiguruar');
-  base = base.trim();
-  // Tolerate a URL set without a scheme (e.g. "app.cloudfivo.com") — fetch needs one.
-  if (!/^https?:\/\//i.test(base)) base = `https://${base}`;
-  return `${base.replace(/\/$/, '')}/includes/api.php`;
+  return `${normalizeUrl(base).replace(/\/$/, '')}/includes/api.php`;
 }
 
 export function whmcsConfigured(): boolean {
@@ -51,7 +60,8 @@ export async function whmcsCall(action: string, params: Record<string, string | 
 
   // When WHMCS_PROXY_URL is set, route the call through the VPS (static IP) so
   // WHMCS sees a stable, whitelisted IP instead of Vercel's dynamic ones.
-  const proxyUrl = process.env.WHMCS_PROXY_URL;
+  const rawProxy = process.env.WHMCS_PROXY_URL?.trim();
+  const proxyUrl = rawProxy ? normalizeUrl(rawProxy) : undefined;
   let resp: Response;
   try {
     resp = proxyUrl
