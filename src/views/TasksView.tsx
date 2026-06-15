@@ -8,7 +8,7 @@ import { useCollection, useMutation, useGlobalTeamId } from '../hooks/useFiresto
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { Calendar as CalendarIcon, User, Flag, MoreVertical, Plus, MessageSquare, CalendarDays, Filter, List, LayoutGrid, Users, ChevronRight, ChevronDown, Target, Clock, Play, Pause, Square, Check, X, AlertCircle, CheckCircle2, CircleDot, ListChecks, Maximize2, Minimize2, Edit2, Trash2, AlertTriangle, GripVertical } from 'lucide-react';
+import { Calendar as CalendarIcon, User, Flag, MoreVertical, Plus, MessageSquare, CalendarDays, Filter, List, LayoutGrid, Users, ChevronLeft, ChevronRight, ChevronDown, Target, Clock, Play, Pause, Square, Check, X, AlertCircle, CheckCircle2, CircleDot, ListChecks, Maximize2, Minimize2, Edit2, Trash2, AlertTriangle, GripVertical } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Checkbox } from '../components/ui/checkbox';
@@ -50,8 +50,8 @@ const TasksView: React.FC = () => {
   const [viewMode, setViewMode] = useState<'board' | 'calendar' | 'list'>('list');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [groupBy, setGroupBy] = useState<'none' | 'assignee' | 'priority' | 'project' | 'dueDate'>('none');
-  const LIST_PAGE = 50;
-  const [listLimit, setListLimit] = useState(LIST_PAGE);
+  const PAGE_SIZE = 50;
+  const [page, setPage] = useState(0);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -180,9 +180,14 @@ const TasksView: React.FC = () => {
     return filtered;
   }, [allTasks, searchQuery]);
 
-  // Final tasks list: additionally filtered by status for the displayed list
+  // Final tasks list: additionally filtered by status for the displayed list.
+  // 'overdue' is a computed pseudo-status (past due date and not yet Done).
   const tasks = React.useMemo(() => {
     if (filterStatus === 'all') return baseTasksForStats;
+    if (filterStatus === 'overdue') {
+      const now = new Date();
+      return baseTasksForStats.filter(t => new Date(t.endDate) < now && t.status !== 'Done');
+    }
     return baseTasksForStats.filter(t => t.status === filterStatus);
   }, [baseTasksForStats, filterStatus]);
 
@@ -430,9 +435,16 @@ const TasksView: React.FC = () => {
     });
   }, [tasks, listOrder]);
 
-  // Pagination for the flat list (load-more). Reset when the visible set changes.
-  const visibleTasks = useMemo(() => orderedTasks.slice(0, listLimit), [orderedTasks, listLimit]);
-  React.useEffect(() => { setListLimit(LIST_PAGE); }, [filterStatus, searchQuery, groupBy]);
+  // Page-based pagination (50 per page) — applies to both flat and grouped views.
+  const totalPages = Math.max(1, Math.ceil(orderedTasks.length / PAGE_SIZE));
+  // Reset to first page whenever the underlying set changes.
+  React.useEffect(() => { setPage(0); }, [filterStatus, searchQuery, groupBy]);
+  // Clamp if the current page falls out of range (e.g. after deletions).
+  React.useEffect(() => { if (page > totalPages - 1) setPage(totalPages - 1); }, [page, totalPages]);
+  const visibleTasks = useMemo(
+    () => orderedTasks.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE),
+    [orderedTasks, page]
+  );
 
   // Format date compactly — always show actual date; flag overdue with ⚠️
   const formatDateCompact = (date: Date) => {
@@ -463,7 +475,7 @@ const TasksView: React.FC = () => {
       if (!g) { g = { key, label, sort, tasks: [] }; groups.set(key, g); }
       g.tasks.push(task);
     };
-    for (const task of orderedTasks) {
+    for (const task of visibleTasks) {
       if (groupBy === 'assignee') {
         const uid = task.assignedToUserId || '';
         add(uid || '__none__', uid ? getUserName(uid) : 'Pa caktuar', uid ? 0 : 1, task);
@@ -486,7 +498,7 @@ const TasksView: React.FC = () => {
       }
     }
     return Array.from(groups.values()).sort((a, b) => a.sort - b.sort || a.label.localeCompare(b.label));
-  }, [groupBy, orderedTasks, getUserName, getProjectName]);
+  }, [groupBy, visibleTasks, getUserName, getProjectName]);
 
   // Single task row — shared by the flat (drag-sortable) list and the grouped view.
   const renderTaskRow = (task: Task) => {
@@ -790,6 +802,9 @@ const TasksView: React.FC = () => {
                 <SelectItem value="In Progress">Në progres ({taskStats.inProgress})</SelectItem>
                 <SelectItem value="Review">Rishikim ({taskStats.review})</SelectItem>
                 <SelectItem value="Done">Përfunduar ({taskStats.done})</SelectItem>
+                {taskStats.overdue > 0 && (
+                  <SelectItem value="overdue">Vonuar ({taskStats.overdue})</SelectItem>
+                )}
               </SelectContent>
             </Select>
           </div>
@@ -821,8 +836,9 @@ const TasksView: React.FC = () => {
               <CheckCircle2 className="w-3 h-3" />Përfunduar <span className="tabular-nums">{taskStats.done}</span>
             </button>
             {taskStats.overdue > 0 && (
-              <button onClick={() => setFilterStatus('all')}
-                className="flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-600 dark:bg-red-950 dark:text-red-300">
+              <button onClick={() => setFilterStatus('overdue')}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
+                  filterStatus === 'overdue' ? 'bg-red-500 text-white' : 'bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-300'}`}>
                 <AlertTriangle className="w-3 h-3" />Vonuar <span className="tabular-nums">{taskStats.overdue}</span>
               </button>
             )}
@@ -1051,18 +1067,15 @@ const TasksView: React.FC = () => {
                       </Button>
                     </div>
                   )}
-                  {orderedTasks.length > listLimit && (
-                    <div className="flex items-center justify-center gap-3 py-4">
-                      <span className="text-xs text-muted-foreground">
-                        Duke shfaqur {visibleTasks.length} nga {orderedTasks.length}
-                      </span>
-                      <Button variant="outline" size="sm" onClick={() => setListLimit(l => l + LIST_PAGE)}>
-                        Shfaq më shumë (+{Math.min(LIST_PAGE, orderedTasks.length - listLimit)})
-                      </Button>
-                    </div>
-                  )}
                 </div>
               </SortableContext>
+              <PaginationBar
+                page={page}
+                totalPages={totalPages}
+                totalItems={orderedTasks.length}
+                pageSize={PAGE_SIZE}
+                onPage={setPage}
+              />
               <DragOverlay>
                 {activeTaskId && viewMode === 'list' ? (
                   <div className="flex items-center gap-3 px-4 py-3 bg-background border shadow-xl rounded-md opacity-95">
@@ -1095,6 +1108,13 @@ const TasksView: React.FC = () => {
                   <p>Asnjë detyrë</p>
                 </div>
               )}
+              <PaginationBar
+                page={page}
+                totalPages={totalPages}
+                totalItems={orderedTasks.length}
+                pageSize={PAGE_SIZE}
+                onPage={setPage}
+              />
             </div>
           )}
 
@@ -1711,6 +1731,39 @@ const CalendarView: React.FC<{
           </div>
         ))}
         {days}
+      </div>
+    </div>
+  );
+};
+
+// Numbered pagination footer (Prev / "Faqja x / y" / Next). Hidden when single page.
+const PaginationBar: React.FC<{
+  page: number;
+  totalPages: number;
+  totalItems: number;
+  pageSize: number;
+  onPage: (p: number) => void;
+}> = ({ page, totalPages, totalItems, pageSize, onPage }) => {
+  if (totalPages <= 1) return null;
+  const from = page * pageSize + 1;
+  const to = Math.min((page + 1) * pageSize, totalItems);
+  return (
+    <div className="flex items-center justify-between gap-3 px-4 py-3 border-t bg-muted/20 sticky bottom-0">
+      <span className="text-xs text-muted-foreground tabular-nums">
+        {from}–{to} nga {totalItems}
+      </span>
+      <div className="flex items-center gap-1">
+        <Button variant="outline" size="sm" disabled={page === 0} onClick={() => onPage(page - 1)}>
+          <ChevronLeft className="w-4 h-4 sm:mr-1" />
+          <span className="hidden sm:inline">Para</span>
+        </Button>
+        <span className="text-xs text-muted-foreground px-2 tabular-nums whitespace-nowrap">
+          Faqja {page + 1} / {totalPages}
+        </span>
+        <Button variant="outline" size="sm" disabled={page >= totalPages - 1} onClick={() => onPage(page + 1)}>
+          <span className="hidden sm:inline">Pas</span>
+          <ChevronRight className="w-4 h-4 sm:ml-1" />
+        </Button>
       </div>
     </div>
   );
