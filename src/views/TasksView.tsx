@@ -1069,13 +1069,6 @@ const TasksView: React.FC = () => {
                   )}
                 </div>
               </SortableContext>
-              <PaginationBar
-                page={page}
-                totalPages={totalPages}
-                totalItems={orderedTasks.length}
-                pageSize={PAGE_SIZE}
-                onPage={setPage}
-              />
               <DragOverlay>
                 {activeTaskId && viewMode === 'list' ? (
                   <div className="flex items-center gap-3 px-4 py-3 bg-background border shadow-xl rounded-md opacity-95">
@@ -1108,13 +1101,6 @@ const TasksView: React.FC = () => {
                   <p>Asnjë detyrë</p>
                 </div>
               )}
-              <PaginationBar
-                page={page}
-                totalPages={totalPages}
-                totalItems={orderedTasks.length}
-                pageSize={PAGE_SIZE}
-                onPage={setPage}
-              />
             </div>
           )}
 
@@ -1234,6 +1220,17 @@ const TasksView: React.FC = () => {
             <CalendarView tasks={tasks} onTaskClick={setSelectedTask} />
           )}
         </div>
+
+        {/* Persistent pagination footer (list view) — always visible, below the scroll area */}
+        {viewMode === 'list' && (
+          <PaginationBar
+            page={page}
+            totalPages={totalPages}
+            totalItems={orderedTasks.length}
+            pageSize={PAGE_SIZE}
+            onPage={setPage}
+          />
+        )}
       </div>
 
       {/* Right Side - Task Detail Panel */}
@@ -1748,7 +1745,7 @@ const PaginationBar: React.FC<{
   const from = page * pageSize + 1;
   const to = Math.min((page + 1) * pageSize, totalItems);
   return (
-    <div className="flex items-center justify-between gap-3 px-4 py-3 border-t bg-muted/20 sticky bottom-0">
+    <div className="flex items-center justify-between gap-3 px-4 py-2.5 border-t bg-background shrink-0">
       <span className="text-xs text-muted-foreground tabular-nums">
         {from}–{to} nga {totalItems}
       </span>
