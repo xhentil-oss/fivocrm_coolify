@@ -14,7 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Checkbox } from '../components/ui/checkbox';
 import { Badge } from '../components/ui/badge';
-import { useCollection, useMutation, setGlobalWaEnabled } from '../hooks/useFirestore';
+import { useCollection, useMutation, setGlobalWaEnabled, useGlobalTeamId } from '../hooks/useFirestore';
 import { saveTeamSettings, useTeamSettingsData } from '../hooks/useTeamSettings';
 import { isBreakReminderEnabled, setBreakReminderEnabled } from '../hooks/useBreakReminder';
 import { useAuth } from '../contexts/AuthContext';
@@ -94,7 +94,12 @@ const CronJobCard: React.FC<CronJobCardProps> = ({
 
 // ─── SettingsView ──────────────────────────────────────────────────────────────
 const SettingsView: React.FC = () => {
-  const { teamId, isAdmin, isOwner } = usePermissions();
+  const { teamId: permTeamId, isAdmin, isOwner } = usePermissions();
+  // A super-admin has no permissions.teamId (null); fall back to the resolved
+  // global active team so team-scoped saves here (WhatsApp, bank, Meta, Stripe)
+  // still work for them.
+  const globalActiveTeamId = useGlobalTeamId();
+  const teamId = permTeamId || globalActiveTeamId;
   const firestoreSettings = useTeamSettingsData();
   const [breakReminderOn, setBreakReminderOn] = useState(isBreakReminderEnabled);
   const [stripePublishableKey, setStripePublishableKey] = useState('');
