@@ -987,6 +987,97 @@ async function runLeadSlaAndStaleAlerts() {
   return { slaBreaches, staleLeads };
 }
 
+// ── JOB: lead-wa-auto-reminders ──────────────────────────────────────────────
+// Sends an automatic WhatsApp template to "waiting" leads (configured statuses)
+// that have had no communication for waAutoReminderDays (default 7). Requires the
+// team to enable it + configure a template/channel (Settings → WhatsApp automation).
+async function runLeadWhatsappAutoReminders() {
+  const now = Date.now();
+  const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
+
+  const leadsSnap = await db.collection('leads').get();
+  if (leadsSnap.empty) return { sent: 0 };
+
+  const tsCache = new Map<string, any>();
+  const tplCache = new Map<string, any>();
+  const getTeamSettings = async (teamId: string) => {
+    if (tsCache.has(teamId)) return tsCache.get(teamId);
+    const doc = await db.collection('teamSettings').doc(teamId).get();
+    const data = doc.exists ? doc.data() : null;
+    tsCache.set(teamId, data);
+    return data;
+  };
+  const getTemplate = async (id: string) => {
+    if (tplCache.has(id)) return tplCache.get(id);
+    const doc = await db.collection('waTemplates').doc(id).get();
+    const data = doc.exists ? doc.data() : null;
+    tplCache.set(id, data);
+    return data;
+  };
+
+  let sent = 0;
+  const ops: Promise<any>[] = [];
+
+  for (const leadDoc of leadsSnap.docs) {
+    const lead = leadDoc.data();
+    if (['Won', 'Lost', 'Converted'].includes(lead.status)) continue;
+    const phone = lead.phone || lead.phoneNumber;
+    if (!phone || !lead.teamId) continue;
+
+    const settings = await getTeamSettings(lead.teamId);
+    if (!settings?.waAutoReminderEnabled || !settings?.metaEnabled || !settings?.waAutoReminderTemplateId) continue;
+
+    const statuses: string[] = settings.waAutoReminderStatuses?.length ? settings.waAutoReminderStatuses : ['Follow-up', 'Proposal'];
+    if (!statuses.includes(lead.status)) continue;
+
+    const days = Number(settings.waAutoReminderDays) || 7;
+    const lastComm = Math.max(ms(lead.lastActivityAt), ms(lead.lastFollowUpDate)) || ms(lead.createdAt);
+    const daysSince = lastComm ? (now - lastComm) / 86_400_000 : Infinity;
+    if (daysSince < days) continue;
+
+    // Debounce: re-send at most once per `days` window.
+    const lastAuto = ms(lead.waAutoReminderAt);
+    if (lastAuto && (now - lastAuto) / 86_400_000 < days) continue;
+
+    const tpl = await getTemplate(settings.waAutoReminderTemplateId);
+    const channels: any[] = settings.metaChannels || [];
+    const channel = channels.find((c) => c.phoneNumberId === settings.waAutoReminderChannelPhoneNumberId) || channels[0];
+    if (!tpl || !channel?.accessToken || !channel?.phoneNumberId) continue;
+
+    const params: string[] = (tpl.paramFields || []).map((f: string) =>
+      f && f !== 'custom' && lead[f] != null ? String(lead[f]) : ''
+    );
+    ops.push(
+      sendMetaBroadcastMessage(channel, normalizeWaPhone(phone), tpl, params, lead.teamId, null, { id: leadDoc.id, name: lead.name })
+        .catch((e) => console.error('[wa-auto-reminder]', e))
+    );
+    ops.push(db.collection('leadActivities').add({
+      leadId: leadDoc.id, teamId: lead.teamId, type: 'whatsapp',
+      title: 'WhatsApp automatik (rikujtues)',
+      body: `Rikujtues pas ${Math.floor(daysSince)} ditësh pa komunikim.`,
+      userId: null, userName: 'Sistemi', createdAt: admin.firestore.Timestamp.now(),
+    }));
+    ops.push(leadDoc.ref.update({
+      waAutoReminderAt: admin.firestore.Timestamp.now(),
+      lastFollowUpDate: admin.firestore.Timestamp.now(),
+      lastActivityAt: admin.firestore.Timestamp.now(),
+    }));
+    const assignee = lead.assignedToUserId || lead.createdByUserId;
+    if (assignee) {
+      ops.push(db.collection('notifications').add({
+        userId: assignee, type: 'lead_follow_up',
+        title: `📲 Rikujtues WhatsApp u dërgua — ${lead.name}`,
+        message: `Rikujtues automatik WhatsApp u dërgua te ${lead.name} (${Math.floor(daysSince)} ditë pa komunikim).`,
+        isRead: false, actionUrl: '/app/crm', actionLabel: 'Shiko CRM', createdAt: admin.firestore.Timestamp.now(),
+      }));
+    }
+    sent++;
+  }
+
+  await settleAll(ops, 'lead-wa-auto-reminders');
+  return { sent };
+}
+
 // ── JOB: notification-digest ─────────────────────────────────────────────────
 async function runNotificationDigest() {
   const transporter = makeTransporter();
@@ -1399,6 +1490,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'lead-sla-stale-alerts':
         result = await runLeadSlaAndStaleAlerts();
         break;
+      case 'lead-wa-auto-reminders':
+        result = await runLeadWhatsappAutoReminders();
+        break;
       case 'whmcs-sync':
         result = await runWhmcsSync();
         break;
@@ -1413,7 +1507,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, digest, waBroadcasts, whmcs] = await Promise.allSettled([
+        const [tasks, invoiceRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, whmcs] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
           runRecurringTasks(),
@@ -1425,6 +1519,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           runExpireInvitations(),
           runLeadFollowUpReminders(),
           runLeadSlaAndStaleAlerts(),
+          runLeadWhatsappAutoReminders(),
           runNotificationDigest(),
           runWhatsappBroadcasts(),
           runWhmcsSync(),
@@ -1443,6 +1538,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           invites: settled(invites),
           leadReminders: settled(leads),
           leadSlaStale: settled(leadSla),
+          leadWaAutoReminders: settled(leadWaAuto),
           digest: settled(digest),
           whatsappBroadcasts: settled(waBroadcasts),
           whmcsSync: settled(whmcs),

@@ -46,6 +46,13 @@ export interface TeamSettings {
   waFollowUpEnabled?: boolean;
   waFollowUpTemplateId?: string;     // ref → waTemplates
   waFollowUpChannelPhoneNumberId?: string;
+  // WhatsApp auto-reminder: nudge stale "waiting" leads after N days of silence
+  waAutoReminderEnabled?: boolean;
+  waAutoReminderDays?: number;            // default 7
+  waAutoReminderStatuses?: string[];      // lead statuses to target (default Follow-up, Proposal)
+  waAutoReminderTemplateId?: string;      // ref → waTemplates
+  waAutoReminderChannelPhoneNumberId?: string;
+  leadAssignCursor?: number;              // round-robin cursor for landing-page auto-assignment
   cronSettings?: Record<string, any>;
   cronLastRuns?: Record<string, any>;
   stripePublishableKey?: string;

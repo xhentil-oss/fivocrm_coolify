@@ -24,6 +24,21 @@ const WhatsappAutomation: React.FC<Props> = ({ onClose }) => {
   const [followUp, setFollowUp] = useState(!!settings?.waFollowUpEnabled);
   const [followUpTpl, setFollowUpTpl] = useState(settings?.waFollowUpTemplateId || '');
   const [followUpChannel, setFollowUpChannel] = useState(settings?.waFollowUpChannelPhoneNumberId || '');
+  // Auto-reminder for stale "waiting" leads
+  const [autoRem, setAutoRem] = useState(!!settings?.waAutoReminderEnabled);
+  const [autoRemDays, setAutoRemDays] = useState<number>(settings?.waAutoReminderDays ?? 7);
+  const [autoRemStatuses, setAutoRemStatuses] = useState<string[]>(settings?.waAutoReminderStatuses ?? ['Follow-up', 'Proposal']);
+  const [autoRemTpl, setAutoRemTpl] = useState(settings?.waAutoReminderTemplateId || '');
+  const [autoRemChannel, setAutoRemChannel] = useState(settings?.waAutoReminderChannelPhoneNumberId || '');
+  const STATUS_OPTIONS: { value: string; label: string }[] = [
+    { value: 'New', label: 'Të reja' },
+    { value: 'Contacted', label: 'Kontaktuara' },
+    { value: 'Qualified', label: 'Kualifikuara' },
+    { value: 'Follow-up', label: 'Në ndjekje' },
+    { value: 'Proposal', label: 'Propozim' },
+  ];
+  const toggleStatus = (s: string) =>
+    setAutoRemStatuses(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
@@ -38,6 +53,11 @@ const WhatsappAutomation: React.FC<Props> = ({ onClose }) => {
         waFollowUpEnabled: followUp,
         waFollowUpTemplateId: followUpTpl,
         waFollowUpChannelPhoneNumberId: followUpChannel,
+        waAutoReminderEnabled: autoRem,
+        waAutoReminderDays: Number(autoRemDays) || 7,
+        waAutoReminderStatuses: autoRemStatuses,
+        waAutoReminderTemplateId: autoRemTpl,
+        waAutoReminderChannelPhoneNumberId: autoRemChannel,
       });
       toast({ title: 'Automatizimet u ruajtën' });
       onClose();
@@ -116,6 +136,55 @@ const WhatsappAutomation: React.FC<Props> = ({ onClose }) => {
                 <div>
                   <label className="text-[11px] text-muted-foreground block mb-1">Kanali Meta</label>
                   <select value={followUpChannel} onChange={(e) => setFollowUpChannel(e.target.value)} disabled={!followUp}
+                    className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/40 disabled:opacity-50">
+                    <option value="">I pari</option>
+                    {channels.map((c) => <option key={c.phoneNumberId} value={c.phoneNumberId}>{c.label || c.phone}</option>)}
+                  </select>
+                </div>
+              )}
+            </div>
+          </section>
+
+          <div className="border-t border-border" />
+
+          {/* Auto-reminder for stale waiting leads */}
+          <section className="space-y-2">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input type="checkbox" checked={autoRem} onChange={(e) => setAutoRem(e.target.checked)} />
+              Rikujtues automatik WhatsApp (lead në pritje)
+            </label>
+            <p className="text-[11px] text-muted-foreground">
+              Nëse një lead është në statuset e zgjedhura dhe kanë kaluar X ditë nga komunikimi i fundit, i dërgohet automatikisht template-i WhatsApp.
+            </p>
+            <div className="flex items-center gap-2">
+              <label className="text-[11px] text-muted-foreground">Pas</label>
+              <input type="number" min={1} max={90} value={autoRemDays} onChange={(e) => setAutoRemDays(Number(e.target.value))} disabled={!autoRem}
+                className="w-16 px-2 py-1.5 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/40 disabled:opacity-50" />
+              <label className="text-[11px] text-muted-foreground">ditësh pa komunikim</label>
+            </div>
+            <div className="flex flex-wrap gap-1.5">
+              {STATUS_OPTIONS.map(s => (
+                <button key={s.value} type="button" onClick={() => toggleStatus(s.value)} disabled={!autoRem}
+                  className={`px-2.5 py-1 text-xs rounded-full border transition-colors disabled:opacity-50 ${
+                    autoRemStatuses.includes(s.value) ? 'bg-[#25D366] text-white border-[#25D366]' : 'bg-background border-border hover:bg-muted'
+                  }`}>
+                  {s.label}
+                </button>
+              ))}
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[11px] text-muted-foreground block mb-1">Template</label>
+                <select value={autoRemTpl} onChange={(e) => setAutoRemTpl(e.target.value)} disabled={!autoRem}
+                  className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/40 disabled:opacity-50">
+                  <option value="">— Zgjidh —</option>
+                  {templates?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+              {channels.length > 1 && (
+                <div>
+                  <label className="text-[11px] text-muted-foreground block mb-1">Kanali Meta</label>
+                  <select value={autoRemChannel} onChange={(e) => setAutoRemChannel(e.target.value)} disabled={!autoRem}
                     className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/40 disabled:opacity-50">
                     <option value="">I pari</option>
                     {channels.map((c) => <option key={c.phoneNumberId} value={c.phoneNumberId}>{c.label || c.phone}</option>)}

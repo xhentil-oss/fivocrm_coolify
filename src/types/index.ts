@@ -450,6 +450,7 @@ export interface Lead {
   lastActivityAt?: Date;        // most recent timeline activity (for temperature/staleness)
   slaBreachNotified?: boolean;  // cron debounce: first-response SLA breach alerted
   staleNotifiedAt?: Date;       // cron debounce: last staleness alert
+  waAutoReminderAt?: Date;      // cron debounce: last WhatsApp auto-reminder sent
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
