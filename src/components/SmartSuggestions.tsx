@@ -139,7 +139,18 @@ const SmartSuggestions: React.FC<SmartSuggestionsProps> = ({
   getUserName,
   maxSuggestions = 5,
 }) => {
-  const [expanded, setExpanded] = useState(true);
+  // Collapsed by default so the actual task list (below) is immediately visible;
+  // the user's choice is remembered across reloads.
+  const [expanded, setExpanded] = useState(() => {
+    try { return localStorage.getItem('smart_suggestions_expanded') === 'true'; } catch { return false; }
+  });
+  const toggleExpanded = () => {
+    setExpanded(prev => {
+      const next = !prev;
+      try { localStorage.setItem('smart_suggestions_expanded', String(next)); } catch { /* ignore */ }
+      return next;
+    });
+  };
 
   // Build lookup maps
   const projectMap = useMemo(() => {
@@ -210,7 +221,7 @@ const SmartSuggestions: React.FC<SmartSuggestionsProps> = ({
   return (
     <div className="border-b bg-gradient-to-r from-amber-50/50 via-orange-50/30 to-rose-50/50 dark:from-amber-950/20 dark:via-orange-950/10 dark:to-rose-950/20">
       <button
-        onClick={() => setExpanded(!expanded)}
+        onClick={toggleExpanded}
         className="w-full flex items-center justify-between px-4 py-2.5 hover:bg-black/5 dark:hover:bg-white/5 transition-colors"
       >
         <div className="flex items-center gap-2">
