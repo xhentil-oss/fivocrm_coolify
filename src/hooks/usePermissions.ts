@@ -498,6 +498,18 @@ export function usePermissions(): UserPermissions {
   const persistedTeamIdRef = useRef<string | null>(null);
   useEffect(() => {
     setSuperAdmin(isSuperAdmin);
+    // Super admin READS bypass team scoping (cross-team view), but WRITES must
+    // still stamp a teamId — otherwise every team-scoped create throws
+    // "Cannot create … without an active team". Give them a default active
+    // team (their own membership, else the first team) so creates work. This
+    // does NOT re-enable team filtering on reads (the superAdmin flag bypasses
+    // it regardless of globalTeamId). Context-aware creates (e.g. a task inside
+    // a project) still pass an explicit teamId, which takes precedence.
+    if (isSuperAdmin) {
+      const fallbackTeamId = teamMembers[0]?.teamId || teams?.[0]?.id || null;
+      if (fallbackTeamId) setGlobalTeamId(fallbackTeamId);
+      return;
+    }
     if (!permissions.isLoading && permissions.teamId !== null) {
       setGlobalTeamId(permissions.teamId);
       // Persist the active teamId to users/{uid} so Firestore rules can scope
@@ -513,7 +525,7 @@ export function usePermissions(): UserPermissions {
         ).catch(() => {});
       }
     }
-  }, [isSuperAdmin, permissions.isLoading, permissions.teamId, user]);
+  }, [isSuperAdmin, permissions.isLoading, permissions.teamId, user, teamMembers, teams]);
 
   return permissions;
 }

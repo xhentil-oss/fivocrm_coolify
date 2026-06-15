@@ -398,7 +398,11 @@ export function useMutation<T = DocumentData>(collectionName: string) {
     setLoading(true);
     setError(null);
     try {
-      const teamId = getGlobalTeamId();
+      // Prefer a teamId explicitly provided by the caller (e.g. a super-admin
+      // creating within a specific project/team context — they have no global
+      // active team), otherwise fall back to the global active team.
+      const explicitTeamId = (data as any)?.teamId as string | undefined;
+      const teamId = explicitTeamId || getGlobalTeamId();
       if (teamScopedCollections.has(collectionName) && !teamId) {
         throw new Error(`Cannot create ${collectionName} document without an active team`);
       }

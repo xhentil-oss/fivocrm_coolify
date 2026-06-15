@@ -188,6 +188,9 @@ const ProjectDetailView: React.FC = () => {
       status,
       priority,
       collaboratorIds: [],
+      // Stamp the project's team so creation works even when there's no global
+      // active team (e.g. a super-admin viewing across teams).
+      ...(project?.teamId ? { teamId: project.teamId } : {}),
     };
 
     if (isRecurring) {
