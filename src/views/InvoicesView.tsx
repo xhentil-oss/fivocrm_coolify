@@ -1993,22 +1993,38 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
         </div>
       </div>
 
-      {/* Bank Details */}
-      {invoice.paymentMethod === 'Bank' && (invoice as any).bankIBAN && (
-        <div className="p-4 border border-dashed border-border rounded-lg bg-muted/30">
-          <h3 className="font-semibold mb-2 flex items-center gap-2">
-            <Building2 className="w-4 h-4" />
-            Detajet Bankare për Pagesë
-          </h3>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
-            {(invoice as any).bankName && <p><span className="text-muted-foreground">Banka:</span> {(invoice as any).bankName}</p>}
-            {(invoice as any).bankAccountHolder && <p><span className="text-muted-foreground">Mbajtësi:</span> {(invoice as any).bankAccountHolder}</p>}
-            <p><span className="text-muted-foreground">IBAN:</span> <span className="font-mono">{(invoice as any).bankIBAN}</span></p>
-            {(invoice as any).bankSWIFT && <p><span className="text-muted-foreground">SWIFT:</span> <span className="font-mono">{(invoice as any).bankSWIFT}</span></p>}
-            {(invoice as any).bankCountry && <p><span className="text-muted-foreground">Shteti:</span> {(invoice as any).bankCountry}</p>}
+      {/* Bank Details — all accounts configured in Settings (falls back to the invoice's own bank) */}
+      {(() => {
+        let banks: { bankName?: string; accountHolder?: string; iban?: string; swift?: string; country?: string }[] = [];
+        try { banks = JSON.parse(localStorage.getItem('bank_accounts') || '[]'); } catch { banks = []; }
+        banks = banks.filter(b => b.iban);
+        if (banks.length === 0 && (invoice as any).bankIBAN) {
+          banks = [{
+            bankName: (invoice as any).bankName, accountHolder: (invoice as any).bankAccountHolder,
+            iban: (invoice as any).bankIBAN, swift: (invoice as any).bankSWIFT, country: (invoice as any).bankCountry,
+          }];
+        }
+        if (banks.length === 0) return null;
+        return (
+          <div className="p-4 border border-dashed border-border rounded-lg bg-muted/30">
+            <h3 className="font-semibold mb-2 flex items-center gap-2">
+              <Building2 className="w-4 h-4" />
+              Detajet Bankare për Pagesë
+            </h3>
+            <div className="space-y-3">
+              {banks.map((b, i) => (
+                <div key={i} className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm border-b border-border/50 last:border-0 pb-2 last:pb-0">
+                  {b.bankName && <p><span className="text-muted-foreground">Banka:</span> {b.bankName}</p>}
+                  {b.accountHolder && <p><span className="text-muted-foreground">Mbajtësi:</span> {b.accountHolder}</p>}
+                  <p><span className="text-muted-foreground">IBAN:</span> <span className="font-mono">{b.iban}</span></p>
+                  {b.swift && <p><span className="text-muted-foreground">SWIFT:</span> <span className="font-mono">{b.swift}</span></p>}
+                  {b.country && <p><span className="text-muted-foreground">Shteti:</span> {b.country}</p>}
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       <div>
         <h3 className="font-semibold mb-2">Artikujt</h3>
@@ -2266,28 +2282,42 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             if (customer?.phone) { doc.text(customer.phone, margin, y); y += 5; }
             if (customer?.address) { doc.text(customer.address, margin, y); y += 5; }
 
-            // Bank info — right column
-            const pdfBankIBAN = (invoice as any).bankIBAN || localStorage.getItem('default_bank_iban') || '';
-            const pdfBankName = (invoice as any).bankName || localStorage.getItem('default_bank_name') || '';
-            const pdfBankSwift = (invoice as any).bankSWIFT || localStorage.getItem('default_bank_swift') || '';
-            if (pdfBankIBAN) {
-              let by = y - (5 * ([customer?.name, customer?.company, customer?.email, customer?.phone, customer?.address].filter(Boolean).length));
+            // Bank info — right column: show ALL bank accounts configured in Settings.
+            let pdfBanks: { bankName?: string; accountHolder?: string; iban?: string; swift?: string }[] = [];
+            try { pdfBanks = JSON.parse(localStorage.getItem('bank_accounts') || '[]'); } catch { pdfBanks = []; }
+            // Legacy fallback: a single default bank (or the invoice's own bank fields).
+            if (pdfBanks.length === 0) {
+              const legacyIban = (invoice as any).bankIBAN || localStorage.getItem('default_bank_iban') || '';
+              if (legacyIban) pdfBanks = [{
+                bankName: (invoice as any).bankName || localStorage.getItem('default_bank_name') || '',
+                accountHolder: pdfBankHolder,
+                iban: legacyIban,
+                swift: (invoice as any).bankSWIFT || localStorage.getItem('default_bank_swift') || '',
+              }];
+            }
+            let by = y - (5 * ([customer?.name, customer?.company, customer?.email, customer?.phone, customer?.address].filter(Boolean).length));
+            const validBanks = pdfBanks.filter(b => b.iban);
+            if (validBanks.length > 0) {
               doc.setFontSize(8);
               doc.setFont('helvetica', 'bold');
               doc.setTextColor(13, 148, 136);
               doc.text('DETAJET BANKARE', colMid, by); by += 5;
-              doc.setFont('helvetica', 'normal');
               doc.setTextColor(50, 50, 50);
-              doc.setFontSize(9);
-              if (pdfBankName) { doc.text(pdfBankName, colMid, by); by += 5; }
-              if (pdfBankHolder) { doc.text(`Mbajtësi: ${pdfBankHolder}`, colMid, by); by += 5; }
-              doc.setFont('helvetica', 'bold');
-              doc.text(`IBAN: ${pdfBankIBAN}`, colMid, by); by += 5;
-              doc.setFont('helvetica', 'normal');
-              if (pdfBankSwift) { doc.text(`SWIFT: ${pdfBankSwift}`, colMid, by); }
+              validBanks.forEach((b, idx) => {
+                if (idx > 0) by += 2; // gap between accounts
+                doc.setFontSize(9);
+                doc.setFont('helvetica', 'normal');
+                if (b.bankName) { doc.setFont('helvetica', 'bold'); doc.text(String(b.bankName), colMid, by); doc.setFont('helvetica', 'normal'); by += 4.5; }
+                if (b.accountHolder) { doc.text(`Mbajtësi: ${b.accountHolder}`, colMid, by); by += 4.5; }
+                doc.setFont('helvetica', 'bold');
+                doc.text(`IBAN: ${b.iban}`, colMid, by); by += 4.5;
+                doc.setFont('helvetica', 'normal');
+                if (b.swift) { doc.text(`SWIFT: ${b.swift}`, colMid, by); by += 4.5; }
+              });
             }
 
-            y = Math.max(y + 5, 90);
+            // Start the items table below whichever column (customer / banks) is taller.
+            y = Math.max(y + 5, by + 2, 90);
 
             // ── Items table ──────────────────────────────────────────────────
             // Table header
