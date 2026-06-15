@@ -35,7 +35,7 @@ import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilter
 import { useUserNames } from '../hooks/useUserNames';
 import { safeHref, phoneKeyDown, normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import { leadTemperature, leadSla, TEMP_META } from '../lib/leadIntel';
-import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember, Quote } from '../types';
+import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember, Quote, Deal } from '../types';
 
 const CRMView: React.FC = () => {
   const navigate = useNavigate();
@@ -103,6 +103,7 @@ const CRMView: React.FC = () => {
   const teamMembers = useUniqueTeamMembers(rawTeamMembers);
   const leadMutation = useMutation<Lead>('leads');
   const leadActivityMutation = useMutation('leadActivities');
+  const dealMutation = useMutation<Deal>('deals');
   const customerMutation = useMutation<Customer>('customers');
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const waTeamId = useGlobalTeamId();
@@ -676,7 +677,21 @@ const CRMView: React.FC = () => {
 
       logActivity('lead_converted', `Lead u konvertua: ${lead.name}`, { entityType: 'lead', entityId: lead.id });
       logLead(lead.id, 'converted', '🎉 Lead u konvertua në klient');
-      toast({ title: 'Lead u konvertua', description: `${lead.name} tani është klient.` });
+
+      // Spin up an Opportunity/Deal from the converted lead (Salesforce-style).
+      dealMutation.create({
+        title: lead.name + (lead.company ? ` — ${lead.company}` : ''),
+        customerId: customerDoc!.id,
+        customerName: lead.name,
+        leadId: lead.id,
+        amount: lead.estimatedValue || 0,
+        currency: 'EUR',
+        stage: 'Qualification',
+        ownerId: lead.assignedToUserId || undefined,
+        lastActivityAt: new Date(),
+      }).catch(() => { /* non-critical */ });
+
+      toast({ title: 'Lead u konvertua', description: `${lead.name} → klient + marrëveshje e re.` });
       return;
     }
 

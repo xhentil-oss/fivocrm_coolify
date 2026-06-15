@@ -456,6 +456,32 @@ export interface Lead {
   createdByUserId: string | null;
 }
 
+// ── Opportunities / Deals (qualified pipeline, split from Lead) ─────────────
+export type DealStage = 'Qualification' | 'Proposal' | 'Negotiation' | 'Won' | 'Lost';
+
+export interface Deal {
+  id: string;
+  title: string;
+  customerId?: string;
+  customerName?: string;        // denormalized for display
+  leadId?: string;              // origin lead, if converted from one
+  amount: number;
+  currency?: string;            // 'EUR' | 'ALL' | 'USD'
+  stage: DealStage;
+  probability?: number;         // override; otherwise derived from stage
+  expectedCloseDate?: Date;
+  ownerId?: string;             // assigned rep
+  notes?: string;
+  lostReason?: string;
+  wonAt?: Date;
+  lostAt?: Date;
+  teamId?: string;
+  lastActivityAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
 // ── Lead activity / audit timeline ──────────────────────────────────────────
 export type LeadActivityType =
   | 'created' | 'status_changed' | 'assigned' | 'note' | 'call' | 'email'

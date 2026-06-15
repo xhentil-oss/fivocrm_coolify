@@ -45,6 +45,7 @@ function lazyRetry(factory: () => Promise<any>): React.LazyExoticComponent<any> 
 const ProjectsView = lazyRetry(() => import('./views/ProjectsView'));
 const ProjectDetailView = lazyRetry(() => import('./views/ProjectDetailView'));
 const CRMView = lazyRetry(() => import('./views/CRMView'));
+const DealsView = lazyRetry(() => import('./views/DealsView'));
 const TasksView = lazyRetry(() => import('./views/TasksView'));
 const GoalsView = lazyRetry(() => import('./views/GoalsView'));
 const TeamsView = lazyRetry(() => import('./views/TeamsView'));
@@ -279,6 +280,7 @@ function AppContent() {
                       <Route path="/app/projects" element={<PermissionGate permissionKey="canAccessProjects"><ProjectsView /></PermissionGate>} />
                       <Route path="/app/projects/:projectId" element={<PermissionGate permissionKey="canAccessProjects"><ProjectDetailView /></PermissionGate>} />
                       <Route path="/app/crm" element={<PermissionGate permissionKey="canAccessCRM"><CRMView /></PermissionGate>} />
+                      <Route path="/app/deals" element={<PermissionGate permissionKey="canAccessCRM"><DealsView /></PermissionGate>} />
                       <Route path="/app/tasks" element={<PermissionGate permissionKey="canAccessTasks"><TasksView /></PermissionGate>} />
                       <Route path="/app/goals" element={<PermissionGate permissionKey="canAccessGoals"><GoalsView /></PermissionGate>} />
                       <Route path="/app/teams" element={<PermissionGate permissionKey="canAccessTeams"><TeamsView /></PermissionGate>} />
