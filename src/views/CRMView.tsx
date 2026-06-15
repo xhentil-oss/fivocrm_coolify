@@ -12,7 +12,9 @@ import { ToastAction } from '../components/ui/toast';
 import { Checkbox } from '../components/ui/checkbox';
 import { PipelineBoard } from './crm/PipelineBoard';
 import LeadAnalytics from './crm/LeadAnalytics';
-import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle, Edit2, Percent, MessageSquare, ExternalLink, Calculator, FileText, Clock, Bell, Send, ArrowUp, ArrowDown, ChevronsUpDown, Inbox } from 'lucide-react';
+import ExportButton from '../components/ExportButton';
+import LeadImportDialog from '../components/LeadImportDialog';
+import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle, Edit2, Percent, MessageSquare, ExternalLink, Calculator, FileText, Clock, Bell, Send, ArrowUp, ArrowDown, ChevronsUpDown, Inbox, Upload } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -51,6 +53,7 @@ const CRMView: React.FC = () => {
   const [scoreFilter, setScoreFilter] = useState('all');
   const [assignedFilter, setAssignedFilter] = useState('all');
   const [sourceFilter, setSourceFilter] = useState('all');
+  const [tagFilter, setTagFilter] = useState('all');
   type SortKey = 'createdAt' | 'name' | 'value' | 'score' | 'prob' | 'follow';
   const [sortBy, setSortBy] = useState<SortKey>('createdAt');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
@@ -63,6 +66,7 @@ const CRMView: React.FC = () => {
   // Bulk selection
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   // View mode (table | pipeline) — persisted
   const [viewMode, setViewMode] = useState<'table' | 'pipeline' | 'analytics'>(() => {
     if (typeof window === 'undefined') return 'table';
@@ -429,6 +433,48 @@ const CRMView: React.FC = () => {
     }
   };
 
+  // Bulk-create leads from a parsed CSV import, skipping email/phone duplicates.
+  const handleImportLeads = async (rows: Record<string, any>[]) => {
+    let created = 0, skipped = 0, errors = 0;
+    const seenEmail = new Set((leads || []).map(l => l.email?.toLowerCase().trim()).filter(Boolean));
+    const seenPhone = new Set((leads || []).map(l => l.phoneNumber?.replace(/\D/g, '')).filter(p => p && p.length >= 7));
+    (customers || []).forEach(c => {
+      if (c.email) seenEmail.add(c.email.toLowerCase().trim());
+      const p = c.phone?.replace(/\D/g, '');
+      if (p && p.length >= 7) seenPhone.add(p);
+    });
+    for (const r of rows) {
+      try {
+        const email = (r.email || '').toLowerCase().trim();
+        const phone = (r.phoneNumber || '').replace(/\D/g, '');
+        if ((email && seenEmail.has(email)) || (phone && phone.length >= 7 && seenPhone.has(phone))) { skipped++; continue; }
+        const status = ['New', 'Contacted', 'Qualified', 'Follow-up', 'Proposal', 'Won', 'Lost'].includes(r.status) ? r.status : 'New';
+        const estimatedValue = r.estimatedValue ? parseFloat(String(r.estimatedValue).replace(/[^\d.]/g, '')) : undefined;
+        const newLead = await leadMutation.create({
+          name: r.name,
+          email: email || undefined,
+          phoneNumber: r.phoneNumber || undefined,
+          company: r.company || undefined,
+          jobTitle: r.jobTitle || undefined,
+          website: r.website || undefined,
+          source: r.source || 'Import CSV',
+          businessCategory: r.businessCategory || undefined,
+          address: r.address || undefined,
+          notes: r.notes || undefined,
+          status,
+          estimatedValue: estimatedValue && !isNaN(estimatedValue) ? estimatedValue : undefined,
+          probability: STAGE_PROBABILITY[status] ?? 10,
+          score: calculateLeadScore({ name: r.name, email, phoneNumber: r.phoneNumber, company: r.company, estimatedValue }),
+        });
+        if (email) seenEmail.add(email);
+        if (phone && phone.length >= 7) seenPhone.add(phone);
+        logLead(newLead.id, 'created', 'Lead u importua nga CSV');
+        created++;
+      } catch { errors++; }
+    }
+    return { created, skipped, errors };
+  };
+
   const handleDeleteLead = async (id: string) => {
     // Capture full snapshot for Undo
     const snapshot = leads?.find(l => l.id === id);
@@ -700,6 +746,7 @@ const CRMView: React.FC = () => {
     if (assignedFilter === 'mine') result = result.filter(l => l.assignedToUserId === user?.uid);
     if (assignedFilter === 'unassigned') result = result.filter(l => !l.assignedToUserId);
     if (sourceFilter !== 'all') result = result.filter(l => l.source === sourceFilter);
+    if (tagFilter !== 'all') result = result.filter(l => Array.isArray(l.tags) && l.tags.includes(tagFilter));
 
     // Sort
     const dir = sortDir === 'asc' ? 1 : -1;
@@ -725,19 +772,27 @@ const CRMView: React.FC = () => {
     });
     return sorted;
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, activeTab, searchQuery, scoreFilter, assignedFilter, sourceFilter, sortBy, sortDir, user, optimisticStatus]);
+  }, [leads, activeTab, searchQuery, scoreFilter, assignedFilter, sourceFilter, tagFilter, sortBy, sortDir, user, optimisticStatus]);
+
+  // Distinct tags across leads (for the tag filter dropdown)
+  const allTags = React.useMemo(() => {
+    const s = new Set<string>();
+    (leads || []).forEach(l => (l.tags || []).forEach(t => t && s.add(t)));
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [leads]);
 
   // Reset window when filters/sort change
   useEffect(() => {
     setVisibleLimit(PAGE_SIZE);
   }, [activeTab, searchQuery, scoreFilter, assignedFilter, sourceFilter, sortBy, sortDir]);
 
-  const hasActiveFilters = searchQuery.trim() !== '' || scoreFilter !== 'all' || assignedFilter !== 'all' || sourceFilter !== 'all';
+  const hasActiveFilters = searchQuery.trim() !== '' || scoreFilter !== 'all' || assignedFilter !== 'all' || sourceFilter !== 'all' || tagFilter !== 'all';
   const clearAllFilters = () => {
     setSearchQuery('');
     setScoreFilter('all');
     setAssignedFilter('all');
     setSourceFilter('all');
+    setTagFilter('all');
   };
 
   const needsFollowUp = React.useMemo(() => {
@@ -924,6 +979,19 @@ const CRMView: React.FC = () => {
               Analitikë
             </button>
           </div>
+          <div className="hidden sm:block">
+            <ExportButton
+              data={filteredLeads}
+              filename={`leads-${new Date().toISOString().slice(0, 10)}`}
+              columns={['name', 'email', 'phoneNumber', 'company', 'jobTitle', 'website', 'status', 'source', 'estimatedValue', 'score', 'probability', 'businessCategory', 'notes']}
+            />
+          </div>
+          {permissions.canEdit && (
+            <Button variant="outline" className="hidden sm:inline-flex" onClick={() => setImportOpen(true)}>
+              <Upload className="w-4 h-4 mr-2" />
+              Importo
+            </Button>
+          )}
           {permissions.canEdit && (
           <Dialog open={isCreateDialogOpen} onOpenChange={(open) => {
             if (open) { setDirty(false); setIsCreateDialogOpen(true); }
@@ -1014,6 +1082,17 @@ const CRMView: React.FC = () => {
             <SelectItem value="Other">Tjetër</SelectItem>
           </SelectContent>
         </Select>
+        {allTags.length > 0 && (
+          <Select value={tagFilter} onValueChange={setTagFilter}>
+            <SelectTrigger className="w-full sm:w-[140px] h-9">
+              <SelectValue placeholder="Tag" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Të gjitha tags</SelectItem>
+              {allTags.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        )}
       </div>
 
       {/* Active filter chips */}
@@ -2128,6 +2207,9 @@ const CRMView: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* CSV import */}
+      <LeadImportDialog open={importOpen} onClose={() => setImportOpen(false)} onImport={handleImportLeads} />
 
       {/* Bulk delete confirm */}
       <Dialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>
