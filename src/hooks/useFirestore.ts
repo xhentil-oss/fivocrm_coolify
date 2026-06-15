@@ -417,6 +417,33 @@ export function useMutation<T = DocumentData>(collectionName: string) {
         createdByUserId: user?.uid || null
       });
       const docRef = await addDoc(collection(db, collectionName), docData);
+
+      // Email delivery for in-app notifications — single choke point covering
+      // every notification creation site. Fire-and-forget; the server endpoint
+      // resolves the recipient's email and honors their preferences (emailEnabled,
+      // category mute, Do-Not-Disturb) and skips self-notifications. Cron-created
+      // notifications use the admin SDK directly and bypass this path (no dupes).
+      if (collectionName === 'notifications' && (docData as any).userId && (docData as any).title) {
+        (async () => {
+          try {
+            const token = await auth.currentUser?.getIdToken();
+            if (!token) return;
+            await fetch('/api/send-notification-email', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+              body: JSON.stringify({
+                userId: (docData as any).userId,
+                type: (docData as any).type,
+                title: (docData as any).title,
+                message: (docData as any).message,
+                actionUrl: (docData as any).actionUrl,
+                actionLabel: (docData as any).actionLabel,
+              }),
+            });
+          } catch { /* non-critical: in-app notification already saved */ }
+        })();
+      }
+
       setLoading(false);
       return { id: docRef.id, ...docData };
     } catch (err) {

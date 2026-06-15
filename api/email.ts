@@ -3,6 +3,7 @@ import inviteHandler from './_send-invite.js';
 import invoiceHandler from './_send-invoice-email.js';
 import leadReminderHandler from './_send-lead-reminder-email.js';
 import welcomeHandler from './_send-welcome-email.js';
+import notificationHandler from './_send-notification-email.js';
 
 /**
  * Consolidated email dispatcher.
@@ -25,6 +26,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.url.includes('send-invoice-email')) type = 'invoice';
     else if (req.url.includes('send-lead-reminder-email')) type = 'lead-reminder';
     else if (req.url.includes('send-welcome-email')) type = 'welcome';
+    else if (req.url.includes('send-notification-email')) type = 'notification';
   }
 
   switch (type) {
@@ -36,10 +38,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return leadReminderHandler(req, res);
     case 'welcome':
       return welcomeHandler(req, res);
+    case 'notification':
+      return notificationHandler(req, res);
     default:
       return res.status(400).json({
         error: 'Unknown email type',
-        detail: 'Expected ?type=invite|invoice|lead-reminder|welcome',
+        detail: 'Expected ?type=invite|invoice|lead-reminder|welcome|notification',
       });
   }
 }
