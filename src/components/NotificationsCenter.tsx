@@ -1,9 +1,10 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
+import { toast } from '../hooks/use-toast';
 import {
-  Bell, Check, Trash2, AlertCircle, CheckCircle, Info, ExternalLink,
+  Bell, Check, Trash2, AlertCircle, CheckCircle, XCircle, Info, ExternalLink,
   MessageSquare, DollarSign, RefreshCw, Target, FileText, Users, User,
   Calendar, Clock, TrendingUp, Zap, ChevronDown, ChevronRight, UserPlus, Eye, Plus,
   Settings, Moon,
@@ -47,6 +48,8 @@ const TYPE_CONFIG: Record<string, TypeConfig> = {
   goal_achieved:            { icon: <CheckCircle className="w-4 h-4 text-emerald-500" />,  priority: 'success',  borderColor: 'border-l-emerald-500', bgColor: 'bg-emerald-50/60 dark:bg-emerald-950/20' },
   project_completed:        { icon: <CheckCircle className="w-4 h-4 text-emerald-500" />,  priority: 'success',  borderColor: 'border-l-emerald-500', bgColor: 'bg-emerald-50/60 dark:bg-emerald-950/20' },
   lead_converted:           { icon: <TrendingUp className="w-4 h-4 text-emerald-500" />,   priority: 'success',  borderColor: 'border-l-emerald-500', bgColor: 'bg-emerald-50/60 dark:bg-emerald-950/20' },
+  quote_accepted:           { icon: <CheckCircle className="w-4 h-4 text-emerald-500" />,  priority: 'success',  borderColor: 'border-l-emerald-500', bgColor: 'bg-emerald-50/60 dark:bg-emerald-950/20' },
+  quote_rejected:           { icon: <XCircle className="w-4 h-4 text-red-500" />,          priority: 'warning',  borderColor: 'border-l-red-500',     bgColor: 'bg-red-50/60 dark:bg-red-950/20' },
   // Info — assignments & collaboration
   task_assigned:            { icon: <User className="w-4 h-4 text-blue-500" />,            priority: 'info',     borderColor: 'border-l-blue-500',    bgColor: 'bg-blue-50/60 dark:bg-blue-950/20' },
   task_collaborator_added:  { icon: <Users className="w-4 h-4 text-violet-500" />,         priority: 'info',     borderColor: 'border-l-violet-500',  bgColor: 'bg-violet-50/60 dark:bg-violet-950/20' },
@@ -96,7 +99,7 @@ const CATEGORY_TYPES: Record<Exclude<Category, 'all'>, string[]> = {
   tasks:    ['task_overdue', 'task_due_soon', 'task_assigned', 'task_collaborator_added', 'task_mention', 'recurring_task_created', 'goal_overdue', 'goal_assigned', 'goal_achieved', 'blocker_reported'],
   messages: ['client_message', 'staff_message', 'project_comment', 'client_request'],
   projects: ['project_created', 'project_completed', 'project_open_reminder', 'project_cycle_reset', 'lead_converted', 'lead_assigned', 'lead_follow_up', 'guest_project_invited', 'guest_task_new', 'guest_task_update', 'project_status_changed'],
-  invoices: ['invoice_overdue', 'invoice_paid', 'invoice_reminder_sent', 'auto_invoice_created', 'invoice_created', 'recurring_expense_created', 'expense_submitted'],
+  invoices: ['invoice_overdue', 'invoice_paid', 'invoice_reminder_sent', 'auto_invoice_created', 'invoice_created', 'recurring_expense_created', 'expense_submitted', 'quote_accepted', 'quote_rejected'],
 };
 
 const CATEGORY_LABELS: Record<Category, string> = {
@@ -144,6 +147,9 @@ function groupNotifications(notifs: Notification[]): NotifGroup[] {
 // ── User preferences ───────────────────────────────────────────────────────────
 interface NotifPrefs {
   categoryEnabled: { tasks: boolean; messages: boolean; projects: boolean; invoices: boolean };
+  emailEnabled: boolean;
+  pushEnabled: boolean;
+  soundEnabled: boolean;
   dndEnabled: boolean;
   dndStart: string;
   dndEnd: string;
@@ -151,6 +157,9 @@ interface NotifPrefs {
 
 const DEFAULT_PREFS: NotifPrefs = {
   categoryEnabled: { tasks: true, messages: true, projects: true, invoices: true },
+  emailEnabled: true,
+  pushEnabled: true,
+  soundEnabled: true,
   dndEnabled: false,
   dndStart: '22:00',
   dndEnd: '08:00',
@@ -162,6 +171,27 @@ function mergePrefs(raw: Partial<NotifPrefs>): NotifPrefs {
     ...raw,
     categoryEnabled: { ...DEFAULT_PREFS.categoryEnabled, ...(raw.categoryEnabled || {}) },
   };
+}
+
+// True when the current local time falls inside the user's Do-Not-Disturb window.
+export function isInDndWindow(prefs: { dndEnabled?: boolean; dndStart?: string; dndEnd?: string }): boolean {
+  if (!prefs.dndEnabled || !prefs.dndStart || !prefs.dndEnd) return false;
+  const now = new Date();
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const [sh, sm] = prefs.dndStart.split(':').map(Number);
+  const [eh, em] = prefs.dndEnd.split(':').map(Number);
+  const start = sh * 60 + sm;
+  const end = eh * 60 + em;
+  return start <= end ? (cur >= start && cur < end) : (cur >= start || cur < end);
+}
+
+// Is a notification type muted by the user's category preferences?
+function isTypeMuted(type: string | undefined, prefs: NotifPrefs): boolean {
+  if (!type) return false;
+  for (const [cat, types] of Object.entries(CATEGORY_TYPES) as [Exclude<Category, 'all'>, string[]][]) {
+    if (types.includes(type) && !prefs.categoryEnabled[cat]) return true;
+  }
+  return false;
 }
 
 const LOAD_STEP = 30;
@@ -201,6 +231,48 @@ const NotificationsCenter: React.FC = () => {
       }
     }).catch(() => { /* offline */ });
   }, [user?.uid]);
+
+  // ── Real-time alert (toast + chime) when a brand-new notification arrives ──
+  const lastNotifIdRef = useRef<string | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const playChime = useCallback(() => {
+    try {
+      if (!audioCtxRef.current) {
+        audioCtxRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+      }
+      const ctx = audioCtxRef.current;
+      if (ctx.state === 'suspended') ctx.resume();
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(880, ctx.currentTime);
+      osc.frequency.setValueAtTime(1320, ctx.currentTime + 0.1);
+      gain.gain.setValueAtTime(0.12, ctx.currentTime);
+      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+      osc.start(ctx.currentTime);
+      osc.stop(ctx.currentTime + 0.3);
+    } catch { /* audio blocked — ignore */ }
+  }, []);
+
+  useEffect(() => {
+    if (!notifications || notifications.length === 0) return;
+    const newest = notifications[0]; // query is ordered createdAt desc
+    // First load: remember the newest without alerting (avoids a chime on every refresh)
+    if (lastNotifIdRef.current === null) {
+      lastNotifIdRef.current = newest.id;
+      return;
+    }
+    if (newest.id === lastNotifIdRef.current) return;
+    lastNotifIdRef.current = newest.id;
+    // Only alert for a fresh, unread notification, respecting DND + category mute
+    if (newest.isRead) return;
+    if (isInDndWindow(localPrefs)) return;
+    if (isTypeMuted(newest.type, localPrefs)) return;
+    toast({ title: newest.title, description: newest.message });
+    if (localPrefs.soundEnabled !== false) playChime();
+  }, [notifications, localPrefs, playChime]);
 
   // Filter out muted categories
   const activeNotifications = useMemo(() => {

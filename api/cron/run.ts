@@ -58,26 +58,34 @@ async function settleAll(ops: Promise<any>[], jobName: string): Promise<void> {
   });
 }
 
-// ── sendPush: send FCM push to a user if they have a registered token ─────────
-async function sendPush(userId: string, title: string, body: string, data?: Record<string, string>): Promise<void> {
+// ── Notification preferences helpers ──────────────────────────────────────────
+async function getUserPrefs(userId: string): Promise<any> {
   try {
-    // Respect Do Not Disturb schedule from userPreferences
-    const prefsDoc = await db.collection('userPreferences').doc(userId).get();
-    if (prefsDoc.exists) {
-      const prefs = prefsDoc.data() as any;
-      if (prefs?.dndEnabled && prefs?.dndStart && prefs?.dndEnd) {
-        const now = new Date();
-        const currentMinutes = now.getUTCHours() * 60 + now.getUTCMinutes();
-        const [sh, sm] = (prefs.dndStart as string).split(':').map(Number);
-        const [eh, em] = (prefs.dndEnd as string).split(':').map(Number);
-        const startMin = sh * 60 + sm;
-        const endMin   = eh * 60 + em;
-        const isDND = startMin <= endMin
-          ? currentMinutes >= startMin && currentMinutes < endMin
-          : currentMinutes >= startMin || currentMinutes < endMin; // overnight window
-        if (isDND) return;
-      }
-    }
+    const d = await db.collection('userPreferences').doc(userId).get();
+    return d.exists ? (d.data() as any) : {};
+  } catch { return {}; }
+}
+
+// True when the current time falls inside the user's Do-Not-Disturb window.
+function isDndActive(prefs: any): boolean {
+  if (!prefs?.dndEnabled || !prefs?.dndStart || !prefs?.dndEnd) return false;
+  const now = new Date();
+  const cur = now.getUTCHours() * 60 + now.getUTCMinutes();
+  const [sh, sm] = String(prefs.dndStart).split(':').map(Number);
+  const [eh, em] = String(prefs.dndEnd).split(':').map(Number);
+  const s = sh * 60 + sm;
+  const e = eh * 60 + em;
+  return s <= e ? (cur >= s && cur < e) : (cur >= s || cur < e); // overnight window
+}
+
+// ── sendPush: send FCM push to a user if they have a registered token ─────────
+// Pass `prefs` to avoid a duplicate userPreferences read when the caller already has it.
+async function sendPush(userId: string, title: string, body: string, data?: Record<string, string>, prefs?: any): Promise<void> {
+  try {
+    // Respect Do Not Disturb + the push channel toggle from userPreferences
+    const p = prefs ?? await getUserPrefs(userId);
+    if (p?.pushEnabled === false) return;
+    if (isDndActive(p)) return;
 
     const tokenDoc = await db.collection('userPushTokens').doc(userId).get();
     if (!tokenDoc.exists) return;
@@ -149,7 +157,11 @@ async function runTaskDeadlineAlerts() {
   alertThreshold.setDate(alertThreshold.getDate() + 2);
   alertThreshold.setHours(23, 59, 59, 999);
 
-  const tasksSnap = await db.collection('tasks').where('dueNotificationSent', '==', false).get();
+  // Fetch tasks not yet fully alerted. We use TWO stage flags so a task that was
+  // alerted as "due soon" still gets a fresh "overdue" alert once it passes its
+  // deadline (the old single `dueNotificationSent` flag suppressed that). Legacy
+  // tasks (missing overdueNotificationSent) are caught for a one-time overdue alert.
+  const tasksSnap = await db.collection('tasks').get();
   let notified = 0;
   const ops: Promise<any>[] = [];
 
@@ -165,22 +177,37 @@ async function runTaskDeadlineAlerts() {
     const isDueSoon = endDate <= alertThreshold;
     if (!isOverdue && !isDueSoon) continue;
 
+    const dueSent = task.dueNotificationSent === true;
+    const overdueSent = task.overdueNotificationSent === true;
+    // Decide which alert (if any) is owed: overdue takes priority and fires once
+    // even if a due-soon alert was already sent.
+    let stage: 'overdue' | 'due_soon' | null = null;
+    if (isOverdue && !overdueSent) stage = 'overdue';
+    else if (isDueSoon && !isOverdue && !dueSent) stage = 'due_soon';
+    if (!stage) continue;
+
     const daysLeft = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
     const overdueByDays = Math.abs(daysLeft);
-    const notifTitle = isOverdue ? `⚠️ Detyrë e skaduara: ${task.title}` : `⏰ Afati afrohet: ${task.title}`;
-    const notifMessage = isOverdue
+    const isOverdueAlert = stage === 'overdue';
+    const notifTitle = isOverdueAlert ? `⚠️ Detyrë e skaduara: ${task.title}` : `⏰ Afati afrohet: ${task.title}`;
+    const notifMessage = isOverdueAlert
       ? `Detyra "${task.title}" ka kaluar afatin prej ${overdueByDays} ditë.`
       : `Detyra "${task.title}" skadon ${daysLeft === 0 ? 'sot' : `për ${daysLeft} ditë`}.`;
 
-    ops.push(db.collection('notifications').add({ userId: recipientId, type: isOverdue ? 'task_overdue' : 'task_due_soon', title: notifTitle, message: notifMessage, isRead: false, actionUrl: '/app/tasks', actionLabel: 'Shiko Detyrat', createdAt: admin.firestore.Timestamp.now() }));
-    ops.push(doc.ref.update({ dueNotificationSent: true }));
-    ops.push(sendPush(recipientId, notifTitle, notifMessage));
+    // In-app notification is always stored (the bell respects category mutes itself).
+    ops.push(db.collection('notifications').add({ userId: recipientId, type: isOverdueAlert ? 'task_overdue' : 'task_due_soon', title: notifTitle, message: notifMessage, isRead: false, actionUrl: '/app/tasks', actionLabel: 'Shiko Detyrat', createdAt: admin.firestore.Timestamp.now() }));
+    // Mark the stage(s) consumed. An overdue alert also implies due-soon is done.
+    ops.push(doc.ref.update(isOverdueAlert ? { dueNotificationSent: true, overdueNotificationSent: true } : { dueNotificationSent: true }));
 
-    if (transporter && smtpUser) {
+    // Push + email respect the user's channel toggles + Do-Not-Disturb window.
+    const prefs = await getUserPrefs(recipientId);
+    ops.push(sendPush(recipientId, notifTitle, notifMessage, undefined, prefs));
+
+    if (transporter && smtpUser && prefs?.emailEnabled !== false && !isDndActive(prefs)) {
       try {
         const userRecord = await admin.auth().getUser(recipientId);
         if (userRecord.email) {
-          ops.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: userRecord.email, subject: notifTitle, html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;"><h2 style="color:${isOverdue ? '#ef4444' : '#f59e0b'}">${notifTitle}</h2><p>${notifMessage}</p><p style="color:#9ca3af;font-size:12px">FivoCRM – Njoftime automatike</p></div>` }));
+          ops.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: userRecord.email, subject: notifTitle, html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;"><h2 style="color:${isOverdueAlert ? '#ef4444' : '#f59e0b'}">${notifTitle}</h2><p>${notifMessage}</p><p style="color:#9ca3af;font-size:12px">FivoCRM – Njoftime automatike</p></div>` }));
         }
       } catch { /* skip */ }
     }

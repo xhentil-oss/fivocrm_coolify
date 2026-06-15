@@ -19,7 +19,7 @@ import { saveTeamSettings, useTeamSettingsData } from '../hooks/useTeamSettings'
 import { isBreakReminderEnabled, setBreakReminderEnabled } from '../hooks/useBreakReminder';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { getDocs, query, where, collection, writeBatch, doc, Timestamp } from 'firebase/firestore';
+import { getDocs, getDoc, setDoc, query, where, collection, writeBatch, doc, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { toast } from '../hooks/use-toast';
 
@@ -187,6 +187,55 @@ const SettingsView: React.FC = () => {
   const [qrLoading, setQrLoading] = useState(false);
   const qrPollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const { user } = useAuth();
+
+  // ── Notification preferences (shared shape with NotificationsCenter / cron) ──
+  const [notifPrefs, setNotifPrefs] = useState({
+    emailEnabled: true,
+    pushEnabled: true,
+    soundEnabled: true,
+    taskReminders: true, // maps to categoryEnabled.tasks
+    dndEnabled: false,
+    dndStart: '22:00',
+    dndEnd: '08:00',
+  });
+  useEffect(() => {
+    if (!user) return;
+    getDoc(doc(db, 'userPreferences', user.uid)).then(snap => {
+      if (!snap.exists()) return;
+      const p = snap.data() as any;
+      setNotifPrefs(prev => ({
+        emailEnabled: p.emailEnabled ?? prev.emailEnabled,
+        pushEnabled: p.pushEnabled ?? prev.pushEnabled,
+        soundEnabled: p.soundEnabled ?? prev.soundEnabled,
+        taskReminders: p.categoryEnabled?.tasks ?? prev.taskReminders,
+        dndEnabled: p.dndEnabled ?? prev.dndEnabled,
+        dndStart: p.dndStart ?? prev.dndStart,
+        dndEnd: p.dndEnd ?? prev.dndEnd,
+      }));
+    }).catch(() => { /* offline */ });
+  }, [user?.uid]);
+
+  // Persist a partial change to userPreferences/{uid} (merge) and update local state.
+  const saveNotifPref = (patch: Partial<typeof notifPrefs>) => {
+    setNotifPrefs(prev => {
+      const next = { ...prev, ...patch };
+      if (user) {
+        // Persist in the canonical shape the bell + cron read.
+        const doc_: any = {
+          emailEnabled: next.emailEnabled,
+          pushEnabled: next.pushEnabled,
+          soundEnabled: next.soundEnabled,
+          dndEnabled: next.dndEnabled,
+          dndStart: next.dndStart,
+          dndEnd: next.dndEnd,
+        };
+        if ('taskReminders' in patch) doc_.categoryEnabled = { tasks: next.taskReminders };
+        setDoc(doc(db, 'userPreferences', user.uid), doc_, { merge: true }).catch(() => { /* ignore */ });
+        try { localStorage.removeItem(`notif_prefs_${user.uid}`); } catch { /* ignore */ }
+      }
+      return next;
+    });
+  };
 
   const fetchQrData = async (acc: WhatsAppAccount) => {
     try {
@@ -549,10 +598,10 @@ const SettingsView: React.FC = () => {
                   <div className="space-y-1">
                     <p className="text-body text-foreground font-normal">Njoftimet me Email</p>
                     <p className="text-body-sm text-muted-foreground">
-                      Merr përditësime me email për projektet
+                      Merr njoftime me email (afate detyrash, kujtesa)
                     </p>
                   </div>
-                  <Switch defaultChecked />
+                  <Switch checked={notifPrefs.emailEnabled} onCheckedChange={(v) => saveNotifPref({ emailEnabled: v })} />
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between py-3">
@@ -562,27 +611,51 @@ const SettingsView: React.FC = () => {
                       Merr njoftime push në pajisjet e tua
                     </p>
                   </div>
-                  <Switch defaultChecked />
+                  <Switch checked={notifPrefs.pushEnabled} onCheckedChange={(v) => saveNotifPref({ pushEnabled: v })} />
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between py-3">
                   <div className="space-y-1">
                     <p className="text-body text-foreground font-normal">Kujtesa për Detyrat</p>
                     <p className="text-body-sm text-muted-foreground">
-                      Merr kujtesa për detyrat e ardhshme
+                      Shfaq njoftime për detyrat (afate, caktim, përmendje)
                     </p>
                   </div>
-                  <Switch defaultChecked />
+                  <Switch checked={notifPrefs.taskReminders} onCheckedChange={(v) => saveNotifPref({ taskReminders: v })} />
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between py-3">
                   <div className="space-y-1">
-                    <p className="text-body text-foreground font-normal">Raportet Javore</p>
+                    <p className="text-body text-foreground font-normal">Tingull për Njoftime</p>
                     <p className="text-body-sm text-muted-foreground">
-                      Merr përmbledhje javore të aktiviteteve
+                      Luaj një tingull kur mbërrin një njoftim i ri
                     </p>
                   </div>
-                  <Switch />
+                  <Switch checked={notifPrefs.soundEnabled} onCheckedChange={(v) => saveNotifPref({ soundEnabled: v })} />
+                </div>
+                <Separator />
+                <div className="py-3 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="space-y-1">
+                      <p className="text-body text-foreground font-normal">Mos Shqetëso</p>
+                      <p className="text-body-sm text-muted-foreground">
+                        Hesht njoftimet push/email/tingull brenda një intervali kohor
+                      </p>
+                    </div>
+                    <Switch checked={notifPrefs.dndEnabled} onCheckedChange={(v) => saveNotifPref({ dndEnabled: v })} />
+                  </div>
+                  {notifPrefs.dndEnabled && (
+                    <div className="flex items-center gap-3 pl-1">
+                      <div className="flex items-center gap-2">
+                        <Label className="text-body-sm text-muted-foreground">Nga</Label>
+                        <Input type="time" value={notifPrefs.dndStart} onChange={(e) => saveNotifPref({ dndStart: e.target.value })} className="h-9 w-32" />
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <Label className="text-body-sm text-muted-foreground">Deri</Label>
+                        <Input type="time" value={notifPrefs.dndEnd} onChange={(e) => saveNotifPref({ dndEnd: e.target.value })} className="h-9 w-32" />
+                      </div>
+                    </div>
+                  )}
                 </div>
                 <Separator />
                 <div className="flex items-center justify-between py-3">

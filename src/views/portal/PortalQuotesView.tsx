@@ -6,7 +6,7 @@ import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { FileText, Calculator, CheckCircle2, XCircle, ChevronDown, ChevronUp } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
-import type { Quote, Customer, Lead } from '../../types';
+import type { Quote, Customer, Lead, Notification } from '../../types';
 
 const statusMap: Record<string, { label: string; class: string }> = {
   Draft: { label: 'Draft', class: 'bg-gray-100 text-gray-700' },
@@ -19,8 +19,15 @@ const PortalQuotesView: React.FC = () => {
   const { customerId } = useClientPortal();
   const { toast } = useToast();
   const quoteMutation = useMutation<Quote>('quotes');
+  const notificationMutation = useMutation<Notification>('notifications');
   const [respondingId, setRespondingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Active staff members — used to notify the team when a client responds to a quote.
+  const { data: allTeamMembers } = useCollection<any>('teamMembers', {
+    where: [{ field: 'status', operator: '==', value: 'Active' }],
+    skipTeamFilter: true,
+  });
 
   const { data: quotes, loading } = useCollection<Quote>('quotes', {
     skip: !customerId,
@@ -112,6 +119,31 @@ const PortalQuotesView: React.FC = () => {
               setRespondingId(q.id + status);
               try {
                 await quoteMutation.update(q.id, { status });
+
+                // Notify the staff: the quote's creator + Admin/Manager/Sales of its team.
+                const clientName = customer?.name || q.customerName || 'Klienti';
+                const recipientIds = new Set<string>();
+                if (q.createdByUserId) recipientIds.add(q.createdByUserId);
+                (allTeamMembers || []).forEach((m: any) => {
+                  if (m.teamId === q.teamId && ['Admin', 'Manager', 'Sales'].includes(m.role)) {
+                    if (m.userId) recipientIds.add(m.userId);
+                  }
+                });
+                const accepted = status === 'Accepted';
+                await Promise.all(
+                  [...recipientIds].map(uid =>
+                    notificationMutation.create({
+                      userId: uid,
+                      type: accepted ? 'quote_accepted' : 'quote_rejected',
+                      title: accepted ? '✅ Preventiva u pranua' : '❌ Preventiva u refuzua',
+                      message: `${clientName} ${accepted ? 'pranoi' : 'refuzoi'} preventivën "${q.label || 'pa emër'}".`,
+                      isRead: false,
+                      actionUrl: '/app/customers',
+                      actionLabel: 'Shiko Klientin',
+                    }).catch(() => { /* non-critical */ })
+                  )
+                );
+
                 toast({
                   title: status === 'Accepted' ? '✅ Preventiva u pranua!' : '❌ Preventiva u refuzua.',
                   description: status === 'Accepted'
