@@ -11,6 +11,7 @@ import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
 import { Checkbox } from '../components/ui/checkbox';
 import { PipelineBoard } from './crm/PipelineBoard';
+import LeadAnalytics from './crm/LeadAnalytics';
 import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle, Edit2, Percent, MessageSquare, ExternalLink, Calculator, FileText, Clock, Bell, Send, ArrowUp, ArrowDown, ChevronsUpDown, Inbox } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -63,9 +64,9 @@ const CRMView: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   // View mode (table | pipeline) — persisted
-  const [viewMode, setViewMode] = useState<'table' | 'pipeline'>(() => {
+  const [viewMode, setViewMode] = useState<'table' | 'pipeline' | 'analytics'>(() => {
     if (typeof window === 'undefined') return 'table';
-    return (window.localStorage.getItem('crm_view_mode') as 'table' | 'pipeline') || 'table';
+    return (window.localStorage.getItem('crm_view_mode') as 'table' | 'pipeline' | 'analytics') || 'table';
   });
   useEffect(() => {
     if (typeof window !== 'undefined') window.localStorage.setItem('crm_view_mode', viewMode);
@@ -914,6 +915,14 @@ const CRMView: React.FC = () => {
             >
               Pipeline
             </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('analytics')}
+              className={`px-3 py-1 text-xs font-medium rounded transition-colors ${viewMode === 'analytics' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+              aria-pressed={viewMode === 'analytics'}
+            >
+              Analitikë
+            </button>
           </div>
           {permissions.canEdit && (
           <Dialog open={isCreateDialogOpen} onOpenChange={(open) => {
@@ -1134,7 +1143,9 @@ const CRMView: React.FC = () => {
         </Card>
       </div>
 
-      {viewMode === 'pipeline' ? (
+      {viewMode === 'analytics' ? (
+        <LeadAnalytics leads={leads || []} teamMembers={teamMembers || []} getName={getName} />
+      ) : viewMode === 'pipeline' ? (
         <PipelineBoard
           leads={
             (Object.keys(optimisticStatus).length === 0
