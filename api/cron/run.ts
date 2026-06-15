@@ -299,6 +299,106 @@ async function runInvoiceReminders() {
   return { overdueMarked, remindersSent, reminder25Sent, reminderLastDaySent };
 }
 
+// ── JOB: overdue-reminders ───────────────────────────────────────────────────
+// Emails the CUSTOMER about overdue invoices (weekly, unless the customer opted
+// out via disableOverdueReminders), and escalates to WhatsApp once an invoice is
+// more than waOverdueDays (default 60 ≈ 2 months) overdue.
+async function runOverdueReminders() {
+  const transporter = makeTransporter();
+  const smtpUser = process.env.SMTP_USER;
+  const now = Date.now();
+  const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
+  const EMAIL_RENOTIFY_DAYS = 7;
+  const WA_RENOTIFY_DAYS = 14;
+
+  const snap = await db.collection('invoices').where('status', '==', 'Overdue').get();
+  if (snap.empty) return { emailsSent: 0, waSent: 0 };
+
+  const custCache = new Map<string, any>();
+  const tsCache = new Map<string, any>();
+  const tplCache = new Map<string, any>();
+  const getCustomer = async (id: string) => {
+    if (custCache.has(id)) return custCache.get(id);
+    const d = await db.collection('customers').doc(id).get();
+    const data = d.exists ? d.data() : null;
+    custCache.set(id, data);
+    return data;
+  };
+  const getTeamSettings = async (teamId: string) => {
+    if (tsCache.has(teamId)) return tsCache.get(teamId);
+    const d = await db.collection('teamSettings').doc(teamId).get();
+    const data = d.exists ? d.data() : null;
+    tsCache.set(teamId, data);
+    return data;
+  };
+  const getTemplate = async (id: string) => {
+    if (tplCache.has(id)) return tplCache.get(id);
+    const d = await db.collection('waTemplates').doc(id).get();
+    const data = d.exists ? d.data() : null;
+    tplCache.set(id, data);
+    return data;
+  };
+
+  let emailsSent = 0, waSent = 0;
+  const ops: Promise<any>[] = [];
+
+  for (const doc of snap.docs) {
+    const inv = doc.data();
+    if (!inv.customerId) continue;
+    const customer = await getCustomer(inv.customerId);
+    if (!customer || customer.disableOverdueReminders) continue; // opt-out
+
+    const dueMs = ms(inv.dueDate);
+    const daysOverdue = dueMs ? Math.floor((now - dueMs) / 86_400_000) : 0;
+    const invoiceLabel = inv.invoiceNumber || doc.id.slice(0, 8).toUpperCase();
+
+    // 1) Weekly overdue email to the customer
+    const lastEmail = ms(inv.overdueEmailSentAt);
+    if (transporter && smtpUser && customer.email && (!lastEmail || (now - lastEmail) / 86_400_000 >= EMAIL_RENOTIFY_DAYS)) {
+      const dueDate = dueMs ? new Date(dueMs) : new Date();
+      const { html } = buildInvoiceEmail({
+        customerName: customer.name || 'Klient', invoiceNumber: invoiceLabel,
+        amount: inv.total || inv.amount || 0, dueDate, projectName: '', type: 'reminder2',
+        currency: inv.currency || 'ALL', paymentMethod: inv.paymentMethod,
+        bankName: inv.bankName, bankIBAN: inv.bankIBAN, bankSWIFT: inv.bankSWIFT,
+        bankAccountHolder: inv.bankAccountHolder, bankCountry: inv.bankCountry,
+      });
+      ops.push(
+        transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject: `⚠️ Faturë e papaguar #${invoiceLabel} (${daysOverdue} ditë vonesë)`, html })
+          .then(() => doc.ref.update({ overdueEmailSentAt: admin.firestore.Timestamp.now() }))
+          .catch((e) => console.error('[overdue-email]', e))
+      );
+      emailsSent++;
+    }
+
+    // 2) WhatsApp escalation after waOverdueDays (default 60)
+    if (inv.teamId) {
+      const settings = await getTeamSettings(inv.teamId);
+      const waDays = Number(settings?.waOverdueDays) || 60;
+      const lastWa = ms(inv.overdueWaSentAt);
+      if (settings?.waOverdueEnabled && settings?.metaEnabled && settings?.waOverdueTemplateId && customer.phone
+          && daysOverdue >= waDays && (!lastWa || (now - lastWa) / 86_400_000 >= WA_RENOTIFY_DAYS)) {
+        const tpl = await getTemplate(settings.waOverdueTemplateId);
+        const channels: any[] = settings.metaChannels || [];
+        const channel = channels.find((c) => c.phoneNumberId === settings.waOverdueChannelPhoneNumberId) || channels[0];
+        if (tpl && channel?.accessToken && channel?.phoneNumberId) {
+          const ctx: Record<string, any> = { name: customer.name, invoiceNumber: invoiceLabel, amount: inv.total || inv.amount || 0, total: inv.total || inv.amount || 0, daysOverdue };
+          const params: string[] = (tpl.paramFields || []).map((f: string) => f && f !== 'custom' && ctx[f] != null ? String(ctx[f]) : '');
+          ops.push(
+            sendMetaBroadcastMessage(channel, normalizeWaPhone(customer.phone), tpl, params, inv.teamId, null, { id: doc.id, name: customer.name })
+              .catch((e) => console.error('[overdue-wa]', e))
+          );
+          ops.push(doc.ref.update({ overdueWaSentAt: admin.firestore.Timestamp.now() }));
+          waSent++;
+        }
+      }
+    }
+  }
+
+  await settleAll(ops, 'overdue-reminders');
+  return { emailsSent, waSent };
+}
+
 // ── JOB: recurring-tasks ─────────────────────────────────────────────────────
 async function runRecurringTasks() {
   const now = new Date();
@@ -1493,6 +1593,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'lead-wa-auto-reminders':
         result = await runLeadWhatsappAutoReminders();
         break;
+      case 'overdue-reminders':
+        result = await runOverdueReminders();
+        break;
       case 'whmcs-sync':
         result = await runWhmcsSync();
         break;
@@ -1507,9 +1610,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, whmcs] = await Promise.allSettled([
+        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, whmcs] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
+          runOverdueReminders(),
           runRecurringTasks(),
           runRecurringInvoices(),
           runProjectCompletionReminder(),
@@ -1529,6 +1633,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         result = {
           tasks: settled(tasks),
           invoiceReminders: settled(invoiceRem),
+          overdueReminders: settled(overdueRem),
           recurringTasks: settled(recurTasks),
           recurringInvoices: settled(recurInv),
           projectCompletionReminder: settled(projCompl),

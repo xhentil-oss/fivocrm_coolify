@@ -217,6 +217,8 @@ export interface Customer {
   source?: 'whmcs' | string;
   /** WHMCS client id — idempotency key for the WHMCS → FivoCRM client sync. */
   whmcsClientId?: string;
+  /** Opt-out: when true, this customer is NOT emailed/messaged about overdue invoices. */
+  disableOverdueReminders?: boolean;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
@@ -317,6 +319,9 @@ export interface Invoice {
   lineItems?: { description: string; amount: number; type: string }[];
   /** Short product/services summary from line items. */
   productSummary?: string;
+  /** Cron debounce: last overdue email + WhatsApp escalation sent to the customer. */
+  overdueEmailSentAt?: Date;
+  overdueWaSentAt?: Date;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

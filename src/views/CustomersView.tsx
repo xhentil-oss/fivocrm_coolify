@@ -187,6 +187,7 @@ const CustomersView: React.FC = () => {
     if (creditLimit) data.creditLimit = parseFloat(creditLimit);
     const assignedTo = formData.get('assignedToUserId') as string;
     data.assignedToUserId = assignedTo && assignedTo !== 'unassigned' ? assignedTo : null;
+    data.disableOverdueReminders = formData.get('disableOverdueReminders') === 'true';
 
     // Duplicate check: email vs existing customers + leads
     const normEmail = data.email?.toLowerCase().trim();
@@ -287,6 +288,7 @@ const CustomersView: React.FC = () => {
     data.creditLimit = creditLimit ? parseFloat(creditLimit) : null;
     const assignedTo = formData.get('assignedToUserId') as string;
     data.assignedToUserId = assignedTo && assignedTo !== 'unassigned' ? assignedTo : null;
+    data.disableOverdueReminders = formData.get('disableOverdueReminders') === 'true';
 
     const normEmail = (data.email as string | undefined)?.toLowerCase().trim();
     const normPhone = (data.phone as string | undefined)?.replace(/\D/g, '');
@@ -1195,6 +1197,7 @@ const CustomerForm: React.FC<{
   const [status, setStatus] = useState(init?.status || 'Active');
   const [industry, setIndustry] = useState(init?.industry || '');
   const [assignedTo, setAssignedTo] = useState(init?.assignedToUserId || 'unassigned');
+  const [disableOverdue, setDisableOverdue] = useState(!!init?.disableOverdueReminders);
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -1202,6 +1205,7 @@ const CustomerForm: React.FC<{
     formData.set('status', status);
     formData.set('industry', industry);
     formData.set('assignedToUserId', assignedTo);
+    formData.set('disableOverdueReminders', String(disableOverdue));
     onSubmit(formData);
   };
 
@@ -1336,6 +1340,14 @@ const CustomerForm: React.FC<{
         <Label htmlFor="notes">Shenime</Label>
         <Textarea id="notes" name="notes" rows={3} defaultValue={init?.notes} />
       </div>
+
+      <label className="flex items-start gap-2 p-3 rounded-lg border border-border bg-muted/30 cursor-pointer">
+        <input type="checkbox" checked={disableOverdue} onChange={(e) => { setDisableOverdue(e.target.checked); onDirtyChange?.(true); }} className="mt-0.5" />
+        <span className="text-sm">
+          Mos dërgo kujtesa për fatura të vonuara
+          <span className="block text-xs text-muted-foreground">Çaktivizon email-in javor + WhatsApp për këtë klient kur faturat janë Overdue.</span>
+        </span>
+      </label>
 
       <Button type="submit" className="w-full">
         {initialData ? 'Perditeso Klientin' : 'Krijo Klientin'}

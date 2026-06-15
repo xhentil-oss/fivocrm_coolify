@@ -52,6 +52,11 @@ export interface TeamSettings {
   waAutoReminderStatuses?: string[];      // lead statuses to target (default Follow-up, Proposal)
   waAutoReminderTemplateId?: string;      // ref → waTemplates
   waAutoReminderChannelPhoneNumberId?: string;
+  // WhatsApp escalation for long-overdue invoices
+  waOverdueEnabled?: boolean;
+  waOverdueDays?: number;                 // default 60 (≈2 months)
+  waOverdueTemplateId?: string;           // ref → waTemplates
+  waOverdueChannelPhoneNumberId?: string;
   leadAssignCursor?: number;              // round-robin cursor for landing-page auto-assignment
   cronSettings?: Record<string, any>;
   cronLastRuns?: Record<string, any>;

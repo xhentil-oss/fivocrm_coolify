@@ -39,6 +39,11 @@ const WhatsappAutomation: React.FC<Props> = ({ onClose }) => {
   ];
   const toggleStatus = (s: string) =>
     setAutoRemStatuses(prev => prev.includes(s) ? prev.filter(x => x !== s) : [...prev, s]);
+  // Overdue-invoice WhatsApp escalation
+  const [overdue, setOverdue] = useState(!!settings?.waOverdueEnabled);
+  const [overdueDays, setOverdueDays] = useState<number>(settings?.waOverdueDays ?? 60);
+  const [overdueTpl, setOverdueTpl] = useState(settings?.waOverdueTemplateId || '');
+  const [overdueChannel, setOverdueChannel] = useState(settings?.waOverdueChannelPhoneNumberId || '');
   const [saving, setSaving] = useState(false);
 
   const save = async () => {
@@ -58,6 +63,10 @@ const WhatsappAutomation: React.FC<Props> = ({ onClose }) => {
         waAutoReminderStatuses: autoRemStatuses,
         waAutoReminderTemplateId: autoRemTpl,
         waAutoReminderChannelPhoneNumberId: autoRemChannel,
+        waOverdueEnabled: overdue,
+        waOverdueDays: Number(overdueDays) || 60,
+        waOverdueTemplateId: overdueTpl,
+        waOverdueChannelPhoneNumberId: overdueChannel,
       });
       toast({ title: 'Automatizimet u ruajtën' });
       onClose();
@@ -185,6 +194,44 @@ const WhatsappAutomation: React.FC<Props> = ({ onClose }) => {
                 <div>
                   <label className="text-[11px] text-muted-foreground block mb-1">Kanali Meta</label>
                   <select value={autoRemChannel} onChange={(e) => setAutoRemChannel(e.target.value)} disabled={!autoRem}
+                    className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/40 disabled:opacity-50">
+                    <option value="">I pari</option>
+                    {channels.map((c) => <option key={c.phoneNumberId} value={c.phoneNumberId}>{c.label || c.phone}</option>)}
+                  </select>
+                </div>
+              )}
+            </div>
+          </section>
+          <div className="border-t border-border" />
+
+          {/* Overdue invoice → WhatsApp escalation */}
+          <section className="space-y-2">
+            <label className="flex items-center gap-2 text-sm font-medium">
+              <input type="checkbox" checked={overdue} onChange={(e) => setOverdue(e.target.checked)} />
+              Eskalim WhatsApp për fatura të vonuara
+            </label>
+            <p className="text-[11px] text-muted-foreground">
+              Nëse një faturë mbetet e papaguar (Overdue) më shumë se X ditë, klientit i dërgohet automatikisht template-i WhatsApp (përveç email-it javor). Klientët me opsionin e fikur anashkalohen.
+            </p>
+            <div className="flex items-center gap-2">
+              <label className="text-[11px] text-muted-foreground">Pas</label>
+              <input type="number" min={1} max={365} value={overdueDays} onChange={(e) => setOverdueDays(Number(e.target.value))} disabled={!overdue}
+                className="w-16 px-2 py-1.5 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/40 disabled:opacity-50" />
+              <label className="text-[11px] text-muted-foreground">ditësh vonesë (60 ≈ 2 muaj)</label>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="text-[11px] text-muted-foreground block mb-1">Template</label>
+                <select value={overdueTpl} onChange={(e) => setOverdueTpl(e.target.value)} disabled={!overdue}
+                  className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/40 disabled:opacity-50">
+                  <option value="">— Zgjidh —</option>
+                  {templates?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+              {channels.length > 1 && (
+                <div>
+                  <label className="text-[11px] text-muted-foreground block mb-1">Kanali Meta</label>
+                  <select value={overdueChannel} onChange={(e) => setOverdueChannel(e.target.value)} disabled={!overdue}
                     className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/40 disabled:opacity-50">
                     <option value="">I pari</option>
                     {channels.map((c) => <option key={c.phoneNumberId} value={c.phoneNumberId}>{c.label || c.phone}</option>)}
