@@ -313,6 +313,10 @@ export interface Invoice {
   source?: 'whmcs' | 'manual' | 'stripe';
   /** WHMCS invoice id — idempotency key for the WHMCS → FivoCRM sync. */
   whmcsInvoiceId?: string;
+  /** WHMCS invoice line items (products/services billed). */
+  lineItems?: { description: string; amount: number; type: string }[];
+  /** Short product/services summary from line items. */
+  productSummary?: string;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

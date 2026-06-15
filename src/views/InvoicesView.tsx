@@ -744,6 +744,9 @@ const InvoicesView: React.FC = () => {
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground truncate">{customer?.name || 'Unknown'}</p>
+                  {invoice.productSummary && (
+                    <p className="text-[11px] text-muted-foreground/80 truncate" title={invoice.productSummary}>📦 {invoice.productSummary}</p>
+                  )}
                   <div className="flex items-center gap-3 mt-1.5">
                     <span className="text-sm font-semibold">{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}</span>
                     {invoice.status === 'Partial' && invoice.paidAmount != null && (
@@ -2009,6 +2012,27 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
 
       <div>
         <h3 className="font-semibold mb-2">Artikujt</h3>
+        {/* WHMCS invoices carry their line items inline (products/services billed) */}
+        {invoice.lineItems && invoice.lineItems.length > 0 ? (
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead className="bg-muted">
+                <tr>
+                  <th className="px-4 py-2 text-left text-sm">Produkti / Shërbimi</th>
+                  <th className="px-4 py-2 text-right text-sm">Shuma</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {invoice.lineItems.map((item, i) => (
+                  <tr key={i}>
+                    <td className="px-4 py-2 text-sm">{item.description}</td>
+                    <td className="px-4 py-2 text-right font-medium whitespace-nowrap">{(item.amount ?? 0).toFixed(2)} {cur}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        ) : (<>
         {/* Mobile: stacked cards */}
         <div className="sm:hidden space-y-2">
           {invoiceItems?.map((item) => (
@@ -2044,6 +2068,7 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             </tbody>
           </table>
         </div>
+        </>)}
       </div>
 
       <div className="border-t pt-4">

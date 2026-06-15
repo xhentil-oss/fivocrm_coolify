@@ -135,6 +135,9 @@ async function upsertInvoice(inv: MappedInvoice, customerId: string | null, team
     invoiceDate: toTs(inv.invoiceDate),
     dueDate: toTs(inv.dueDate),
     paidAt: toTs(inv.paidAt),
+    // Only set line items when we actually have them (GetInvoice/webhook path),
+    // so a bulk GetInvoices update never erases items captured earlier.
+    ...(inv.lineItems && inv.lineItems.length ? { lineItems: inv.lineItems, productSummary: inv.productSummary } : {}),
     ...(customerId ? { customerId } : {}),
     ...(teamId ? { teamId } : {}),
     updatedAt: now,

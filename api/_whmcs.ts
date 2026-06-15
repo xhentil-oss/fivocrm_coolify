@@ -136,6 +136,10 @@ export interface MappedInvoice {
   dueDate: Date | null;
   paidAt: Date | null;
   notes: string;
+  /** Line items — present only when fetched via GetInvoice (single), e.g. the webhook path. */
+  lineItems?: { description: string; amount: number; type: string }[];
+  /** Short product/services summary derived from line items (for list display). */
+  productSummary?: string;
 }
 
 export interface MappedSubscription {
@@ -192,6 +196,13 @@ export function mapWhmcsStatus(whmcsStatus: string, dueDate: Date | null): FivoI
 export function mapWhmcsInvoice(inv: any): MappedInvoice {
   const dueDate = parseWhmcsDate(inv.duedate);
   const total = Number(inv.total ?? 0);
+  // Line items only exist on GetInvoice (single). WHMCS returns items.item as an
+  // array or a single object — normalize. Each description holds the product name.
+  const rawItems = inv.items?.item;
+  const itemsArr = Array.isArray(rawItems) ? rawItems : rawItems ? [rawItems] : [];
+  const lineItems = itemsArr
+    .map((it: any) => ({ description: String(it.description || '').slice(0, 500), amount: Number(it.amount ?? 0), type: String(it.type || '') }))
+    .filter((it: any) => it.description);
   return {
     whmcsInvoiceId: String(inv.id ?? inv.invoiceid),
     whmcsClientId: String(inv.userid ?? inv.clientid ?? ''),
@@ -206,6 +217,7 @@ export function mapWhmcsInvoice(inv: any): MappedInvoice {
     dueDate,
     paidAt: parseWhmcsDate(inv.datepaid),
     notes: String(inv.notes || '').slice(0, 2000),
+    ...(lineItems.length ? { lineItems, productSummary: lineItems.map((i: any) => i.description).join('; ').slice(0, 500) } : {}),
   };
 }
 
