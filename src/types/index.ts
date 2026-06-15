@@ -447,6 +447,9 @@ export interface Lead {
   assignedToUserId?: string;
   customerId?: string;          // set when converted (reverse link to the Customer)
   firstResponseAt?: Date;       // first outbound touch (for response-time/SLA)
+  lastActivityAt?: Date;        // most recent timeline activity (for temperature/staleness)
+  slaBreachNotified?: boolean;  // cron debounce: first-response SLA breach alerted
+  staleNotifiedAt?: Date;       // cron debounce: last staleness alert
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

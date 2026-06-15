@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminDb, Timestamp } from './_firebaseAdmin.js';
+import { FieldValue } from 'firebase-admin/firestore';
 
 /**
  * Combined landing-page API (public, no auth).
@@ -213,9 +214,31 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
         .collection('teamMembers')
         .where('teamId', '==', teamId)
         .get();
-      const adminDoc = teamMembersSnap.docs.find(d => ['Admin', 'Owner'].includes(d.data().role));
-      if (adminDoc) {
-        assigneeId = adminDoc.data().userId || '';
+      // Round-robin among eligible sales reps (CRM-capable roles), fallback to Admin/Owner.
+      const eligible = teamMembersSnap.docs.filter((d: any) => {
+        const m = d.data();
+        if (m.status && m.status !== 'Active') return false;
+        return ['Sales', 'SalesAgent', 'Manager', 'Admin', 'Owner'].includes(m.role) || m.canAccessCRM === true;
+      });
+      if (eligible.length > 0) {
+        let cursor = 1;
+        try {
+          const tsRef = adminDb.collection('teamSettings').doc(teamId);
+          await tsRef.set({ leadAssignCursor: FieldValue.increment(1) }, { merge: true });
+          const tsSnap = await tsRef.get();
+          cursor = (tsSnap.data()?.leadAssignCursor as number) || 1;
+        } catch { /* keep cursor=1 */ }
+        assigneeId = eligible[(cursor - 1) % eligible.length].data().userId || '';
+      }
+      // Assign the lead to the chosen rep if it has no owner yet (dedup-reused
+      // leads keep their existing owner, and the task follows that owner).
+      if (assigneeId) {
+        try {
+          const leadSnap = await leadRef.get();
+          const existingOwner = leadSnap.data()?.assignedToUserId;
+          if (existingOwner) assigneeId = existingOwner;
+          else await leadRef.update({ assignedToUserId: assigneeId, updatedAt: now });
+        } catch { /* non-blocking */ }
       }
     }
 

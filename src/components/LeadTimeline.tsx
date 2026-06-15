@@ -62,7 +62,7 @@ const COMPOSER_TYPES: { value: LeadActivityType; label: string }[] = [
 
 const CALL_OUTCOMES = ['U përgjigj', 'Nuk u përgjigj', 'La mesazh', 'I zënë', 'Numër gabim'];
 
-const LeadTimeline: React.FC<{ leadId: string }> = ({ leadId }) => {
+const LeadTimeline: React.FC<{ leadId: string; onLogged?: (type: LeadActivityType) => void }> = ({ leadId, onLogged }) => {
   const { user } = useAuth();
   const { toast } = useToast();
   const activityMutation = useMutation<LeadActivity>('leadActivities');
@@ -100,6 +100,7 @@ const LeadTimeline: React.FC<{ leadId: string }> = ({ leadId }) => {
         userName: user?.displayName || user?.email || undefined,
       });
       setText('');
+      onLogged?.(composerType);
       toast({ title: `${label} u regjistrua` });
     } finally {
       setSaving(false);

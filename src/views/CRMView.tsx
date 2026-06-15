@@ -31,6 +31,7 @@ import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
 import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
 import { safeHref, phoneKeyDown, normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
+import { leadTemperature, leadSla, TEMP_META } from '../lib/leadIntel';
 import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember, Quote } from '../types';
 
 const CRMView: React.FC = () => {
@@ -353,12 +354,24 @@ const CRMView: React.FC = () => {
     }
   };
 
-  // Append an entry to a lead's activity timeline (fire-and-forget).
+  // Bump a lead's recency signals after an activity. Outbound touches also set
+  // firstResponseAt (once) — the basis for the first-response SLA.
+  const bumpLeadActivity = (leadId: string, type: string) => {
+    const patch: Record<string, any> = { lastActivityAt: new Date() };
+    if (['call', 'email', 'whatsapp', 'meeting'].includes(type)) {
+      const l = leads?.find(x => x.id === leadId);
+      if (l && !l.firstResponseAt) patch.firstResponseAt = new Date();
+    }
+    leadMutation.update(leadId, patch).catch(() => { /* non-critical */ });
+  };
+
+  // Append an entry to a lead's activity timeline (fire-and-forget) + bump recency.
   const logLead = (leadId: string, type: any, title: string, body?: string, meta?: Record<string, any>) => {
     logLeadActivity(leadActivityMutation.create, {
       leadId, type, title, body, meta,
       userName: user?.displayName || user?.email || undefined,
     });
+    bumpLeadActivity(leadId, type);
   };
 
   // Lead Scoring: 0-100 based on data completeness & value
@@ -391,6 +404,27 @@ const CRMView: React.FC = () => {
         actionUrl: '/app/crm',
         actionLabel: 'Shiko CRM',
       }).catch(err => console.error('[Notifications] lead_assigned dërgim dështoi:', err));
+    }
+  };
+
+  // Round-robin distribute leads among eligible reps (CRM-capable roles).
+  const handleAutoDistribute = async (ids: string[]) => {
+    if (ids.length === 0) return;
+    const eligible = (teamMembers || []).filter((m: any) =>
+      ['Sales', 'SalesAgent', 'Manager', 'Admin'].includes(m.role) || m.canAccessCRM === true
+    );
+    const pool = eligible.length ? eligible : (teamMembers || []);
+    if (pool.length === 0) { toast({ title: 'Asnjë anëtar i disponueshëm për caktim', variant: 'destructive' }); return; }
+    try {
+      await Promise.all(ids.map((id, i) => {
+        const m = pool[i % pool.length];
+        logLead(id, 'assigned', `Caktuar te ${getName(m.userId, m.name)} (round-robin)`);
+        return leadMutation.update(id, { assignedToUserId: m.userId });
+      }));
+      toast({ title: `${ids.length} lead u shpërndanë`, description: `Mes ${pool.length} anëtarëve (round-robin)` });
+      setSelectedIds(new Set());
+    } catch {
+      toast({ title: 'Gabim', description: 'Shpërndarja dështoi', variant: 'destructive' });
     }
   };
 
@@ -1185,7 +1219,9 @@ const CRMView: React.FC = () => {
                   {/* Tier 1 — name + status + score + menu */}
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex-1 min-w-0 flex items-center gap-2">
+                      <span className="shrink-0">{TEMP_META[leadTemperature(lead)].emoji}</span>
                       <p className="font-medium text-foreground truncate">{lead.name}</p>
+                      {leadSla(lead).breached && <span className="text-[10px] px-1 py-0.5 rounded-full font-medium bg-red-500 text-white shrink-0">SLA</span>}
                       <Badge className={`${getStatusColor(lead.status)} text-[10px] py-0 px-1.5 shrink-0`}>
                         {getStatusLabel(lead.status)}
                       </Badge>
@@ -1405,6 +1441,16 @@ const CRMView: React.FC = () => {
                   <Button
                     variant="outline"
                     size="sm"
+                    onClick={() => handleAutoDistribute(Array.from(selectedIds))}
+                    title="Shpërndaj në mënyrë të barabartë (round-robin) mes ekipit"
+                  >
+                    <UserCircle className="w-4 h-4 mr-1" />
+                    Shpërndaj auto
+                  </Button>
+
+                  <Button
+                    variant="outline"
+                    size="sm"
                     className="text-destructive border-destructive/30 hover:bg-destructive/10 hover:text-destructive"
                     onClick={() => setBulkDeleteOpen(true)}
                   >
@@ -1542,7 +1588,18 @@ const CRMView: React.FC = () => {
                       </td>
                       <td className="px-6 py-4">
                         <div className="space-y-1">
-                          <p className="text-body font-normal text-foreground">{lead.name}</p>
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            {(() => { const t = leadTemperature(lead); return (
+                              <span title={`Temperatura: ${TEMP_META[t].label}`} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${TEMP_META[t].className}`}>
+                                {TEMP_META[t].emoji}
+                              </span>
+                            ); })()}
+                            <p className="text-body font-normal text-foreground">{lead.name}</p>
+                            {(() => { const s = leadSla(lead); return (<>
+                              {s.breached && <span title="Pa përgjigje brenda 24h" className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-red-500 text-white">⏰ SLA</span>}
+                              {!s.breached && s.stale && <span title="Pa aktivitet prej 14+ ditësh" className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300">💤 Ngrirë</span>}
+                            </>); })()}
+                          </div>
                           {lead.jobTitle && (
                             <p className="text-body-sm text-muted-foreground">{lead.jobTitle}</p>
                           )}
@@ -1789,9 +1846,16 @@ const CRMView: React.FC = () => {
           await leadMutation.update(selectedLead.id, { notes });
           logLead(selectedLead.id, 'note', 'Shënim u përditësua');
         } : undefined}
-        activityContent={selectedLead ? <LeadTimeline leadId={selectedLead.id} /> : undefined}
+        activityContent={selectedLead ? <LeadTimeline leadId={selectedLead.id} onLogged={(type) => bumpLeadActivity(selectedLead.id, type)} /> : undefined}
         actions={selectedLead ? (
           <div className="space-y-3">
+            {(() => { const t = leadTemperature(selectedLead); const s = leadSla(selectedLead); return (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${TEMP_META[t].className}`}>{TEMP_META[t].emoji} {TEMP_META[t].label}</span>
+                {s.breached && <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-500 text-white">⏰ SLA e shkelur</span>}
+                {!s.breached && s.stale && <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300">💤 Ngrirë</span>}
+              </div>
+            ); })()}
             <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Kontakto</p>
             <div className="flex flex-wrap gap-2">
               {selectedLead.email && (

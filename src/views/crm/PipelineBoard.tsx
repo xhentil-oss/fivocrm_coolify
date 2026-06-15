@@ -14,6 +14,7 @@ import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Zap, Percent, GripVertical } from 'lucide-react';
 import type { Lead } from '../../types';
+import { leadTemperature, leadSla, TEMP_META } from '../../lib/leadIntel';
 
 const STAGE_PROBABILITY: Record<string, number> = {
   New: 10,
@@ -65,7 +66,11 @@ function LeadCard({ lead, calculateLeadScore, onCardClick }: { lead: Lead; calcu
           onClick={() => onCardClick(lead)}
           className="flex-1 min-w-0 text-left"
         >
-          <p className="font-medium text-foreground text-sm truncate">{lead.name}</p>
+          <p className="font-medium text-foreground text-sm truncate">
+            <span className="mr-1">{TEMP_META[leadTemperature(lead)].emoji}</span>
+            {lead.name}
+            {leadSla(lead).breached && <span className="ml-1 text-[9px] px-1 py-0.5 rounded-full font-medium bg-red-500 text-white align-middle">SLA</span>}
+          </p>
           {lead.company && (
             <p className="text-xs text-muted-foreground truncate">{lead.company}</p>
           )}

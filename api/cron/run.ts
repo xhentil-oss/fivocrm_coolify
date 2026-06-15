@@ -919,6 +919,74 @@ async function runLeadFollowUpReminders() {
   return { notified, waSent };
 }
 
+// ── JOB: lead-sla-stale-alerts ───────────────────────────────────────────────
+// Flags leads that breached the first-response SLA (no outbound touch within
+// SLA_HOURS) and leads that went stale (no activity for STALE_DAYS), notifying
+// the owner (or team admins if unassigned). Debounced via per-lead flags.
+async function runLeadSlaAndStaleAlerts() {
+  const SLA_HOURS = 24;
+  const STALE_DAYS = 14;
+  const STALE_RENOTIFY_DAYS = 7;
+  const now = Date.now();
+  const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
+
+  const leadsSnap = await db.collection('leads').get();
+  const adminsByTeam: Record<string, string[]> = {};
+  const getTeamAdmins = async (teamId?: string): Promise<string[]> => {
+    if (!teamId) return [];
+    if (adminsByTeam[teamId]) return adminsByTeam[teamId];
+    const snap = await db.collection('teamMembers').where('teamId', '==', teamId).get();
+    const ids = snap.docs
+      .filter(d => ['Admin', 'Manager', 'Owner'].includes(d.data().role))
+      .map(d => d.data().userId).filter(Boolean);
+    adminsByTeam[teamId] = ids;
+    return ids;
+  };
+
+  let slaBreaches = 0, staleLeads = 0;
+  const ops: Promise<any>[] = [];
+
+  for (const doc of leadsSnap.docs) {
+    const lead = doc.data();
+    if (lead.status === 'Lost' || lead.status === 'Converted') continue;
+
+    const recipients = lead.assignedToUserId ? [lead.assignedToUserId] : await getTeamAdmins(lead.teamId);
+    if (recipients.length === 0) continue;
+
+    // First-response SLA breach — notify once.
+    const createdMs = ms(lead.createdAt);
+    const hoursSinceCreated = createdMs ? (now - createdMs) / 3_600_000 : 0;
+    if (!lead.firstResponseAt && hoursSinceCreated > SLA_HOURS && !lead.slaBreachNotified) {
+      const title = `⏰ SLA: lead pa përgjigje — ${lead.name}`;
+      const message = `Lead-i "${lead.name}" nuk ka marrë përgjigje brenda ${SLA_HOURS}h nga krijimi.`;
+      for (const uid of recipients) {
+        ops.push(db.collection('notifications').add({ userId: uid, type: 'lead_follow_up', title, message, isRead: false, actionUrl: '/app/crm', actionLabel: 'Shiko CRM', createdAt: admin.firestore.Timestamp.now() }));
+        ops.push(sendPush(uid, title, message, { url: '/app/crm' }));
+      }
+      ops.push(doc.ref.update({ slaBreachNotified: true }));
+      slaBreaches++;
+    }
+
+    // Staleness — re-notify at most every STALE_RENOTIFY_DAYS.
+    const lastMs = Math.max(ms(lead.lastActivityAt), ms(lead.lastFollowUpDate), ms(lead.updatedAt));
+    const staleDays = lastMs ? (now - lastMs) / 86_400_000 : Infinity;
+    const sinceStaleNotif = ms(lead.staleNotifiedAt) ? (now - ms(lead.staleNotifiedAt)) / 86_400_000 : Infinity;
+    if (staleDays > STALE_DAYS && sinceStaleNotif > STALE_RENOTIFY_DAYS) {
+      const title = `💤 Lead i ftohur — ${lead.name}`;
+      const message = `Lead-i "${lead.name}" s'ka aktivitet prej ${Math.floor(staleDays)} ditësh.`;
+      for (const uid of recipients) {
+        ops.push(db.collection('notifications').add({ userId: uid, type: 'lead_follow_up', title, message, isRead: false, actionUrl: '/app/crm', actionLabel: 'Shiko CRM', createdAt: admin.firestore.Timestamp.now() }));
+        ops.push(sendPush(uid, title, message, { url: '/app/crm' }));
+      }
+      ops.push(doc.ref.update({ staleNotifiedAt: admin.firestore.Timestamp.now() }));
+      staleLeads++;
+    }
+  }
+
+  await settleAll(ops, 'lead-sla-stale-alerts');
+  return { slaBreaches, staleLeads };
+}
+
 // ── JOB: notification-digest ─────────────────────────────────────────────────
 async function runNotificationDigest() {
   const transporter = makeTransporter();
@@ -1328,6 +1396,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'whatsapp-broadcasts':
         result = await runWhatsappBroadcasts();
         break;
+      case 'lead-sla-stale-alerts':
+        result = await runLeadSlaAndStaleAlerts();
+        break;
       case 'whmcs-sync':
         result = await runWhmcsSync();
         break;
@@ -1342,7 +1413,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, digest, waBroadcasts, whmcs] = await Promise.allSettled([
+        const [tasks, invoiceRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, digest, waBroadcasts, whmcs] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
           runRecurringTasks(),
@@ -1353,6 +1424,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           runRecurringExpenses(),
           runExpireInvitations(),
           runLeadFollowUpReminders(),
+          runLeadSlaAndStaleAlerts(),
           runNotificationDigest(),
           runWhatsappBroadcasts(),
           runWhmcsSync(),
@@ -1370,6 +1442,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           recurringExpenses: settled(expenses),
           invites: settled(invites),
           leadReminders: settled(leads),
+          leadSlaStale: settled(leadSla),
           digest: settled(digest),
           whatsappBroadcasts: settled(waBroadcasts),
           whmcsSync: settled(whmcs),
