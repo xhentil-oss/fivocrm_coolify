@@ -445,9 +445,29 @@ export interface Lead {
   tags?: string[];
   serviceInquiryId?: string;
   assignedToUserId?: string;
+  customerId?: string;          // set when converted (reverse link to the Customer)
+  firstResponseAt?: Date;       // first outbound touch (for response-time/SLA)
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
+}
+
+// ── Lead activity / audit timeline ──────────────────────────────────────────
+export type LeadActivityType =
+  | 'created' | 'status_changed' | 'assigned' | 'note' | 'call' | 'email'
+  | 'whatsapp' | 'meeting' | 'followup_scheduled' | 'converted' | 'lost' | 'field_updated';
+
+export interface LeadActivity {
+  id: string;
+  leadId: string;
+  teamId?: string;
+  type: LeadActivityType;
+  title: string;                 // short human summary
+  body?: string;                 // note text / call summary / details
+  meta?: Record<string, any>;    // { from, to, outcome, durationMin, channel }
+  userId: string | null;         // actor
+  userName?: string;
+  createdAt: Date;
 }
 
 export interface ServiceInquiry {
@@ -684,7 +704,7 @@ export type NotificationType =
   | 'project_completed' | 'project_created' | 'project_open_reminder' | 'project_cycle_reset'
   | 'invoice_paid' | 'invoice_overdue' | 'invoice_created' | 'invoice_reminder_sent'
   | 'invoice_reminder1_sent' | 'invoice_reminder2_sent' | 'auto_invoice_created'
-  | 'lead_assigned' | 'lead_converted' | 'lead_follow_up'
+  | 'lead_created' | 'lead_assigned' | 'lead_converted' | 'lead_follow_up'
   | 'quote_accepted' | 'quote_rejected'
   | 'goal_achieved' | 'goal_assigned' | 'goal_overdue'
   | 'client_message' | 'staff_message' | 'project_comment' | 'client_request'

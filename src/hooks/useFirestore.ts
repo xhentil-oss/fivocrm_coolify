@@ -115,7 +115,7 @@ export function useGlobalTeamId(): string | null {
 const teamScopedCollections = new Set([
   'tasks', 'invoices', 'customers', 'leads', 'services',
   'expenses', 'goals', 'timeEntries', 'channels', 'messages',
-  'activities', 'clientRequests', 'invoiceItems', 'taskComments',
+  'activities', 'clientRequests', 'invoiceItems', 'taskComments', 'leadActivities',
   'taskCollaborators', 'customIndustries', 'typingIndicators',
   'directMessages', 'milestones', 'serviceInquiries', 'projectComments',
   'workspaceFolders', 'workspaceDriveFiles', 'projects', 'dailyReports',

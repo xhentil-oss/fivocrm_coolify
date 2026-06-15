@@ -172,7 +172,32 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
       } catch { /* non-blocking */ }
     }
 
-    const leadRef = await adminDb.collection('leads').add(leadData);
+    // Dedup: reuse an existing lead with the same email (or phone) in this team
+    // instead of creating a duplicate on repeat landing-page submissions.
+    let leadRef: FirebaseFirestore.DocumentReference | null = null;
+    try {
+      const normPhone = (sPhone || '').replace(/\D/g, '');
+      let existing: FirebaseFirestore.QueryDocumentSnapshot | undefined;
+      if (sEmail) {
+        const q = await adminDb.collection('leads').where('email', '==', sEmail).get();
+        existing = q.docs.find(d => !teamId || d.data().teamId === teamId);
+      }
+      if (!existing && normPhone.length >= 7) {
+        const q = await adminDb.collection('leads').where('phoneNumber', '==', sPhone).get();
+        existing = q.docs.find(d => !teamId || d.data().teamId === teamId);
+      }
+      if (existing) {
+        leadRef = existing.ref;
+        await existing.ref.update({
+          serviceInquiryId: inquiryRef.id,
+          updatedAt: now,
+          notes: [existing.data()?.notes || '', `— Kërkesë e re nga ${sSource} (${new Date().toISOString().slice(0, 10)})`].filter(Boolean).join('\n'),
+        });
+      }
+    } catch { /* non-blocking — fall through to create a new lead */ }
+    if (!leadRef) {
+      leadRef = await adminDb.collection('leads').add(leadData);
+    }
 
     // 3. Link inquiry → lead
     await inquiryRef.update({ leadId: leadRef.id });

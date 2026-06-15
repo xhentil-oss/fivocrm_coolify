@@ -18,9 +18,11 @@ interface DetailDrawerProps {
   onSaveNotes?: (notes: string) => void;
   actions?: React.ReactNode;
   extraTabs?: ExtraTab[];
+  /** Custom content for the Activity tab (e.g. a real timeline). Falls back to a placeholder. */
+  activityContent?: React.ReactNode;
 }
 
-const DetailDrawer: React.FC<DetailDrawerProps> = ({ open, onClose, title, data, onSaveNotes, actions, extraTabs }) => {
+const DetailDrawer: React.FC<DetailDrawerProps> = ({ open, onClose, title, data, onSaveNotes, actions, extraTabs, activityContent }) => {
   const [notes, setNotes] = useState('');
   const [saving, setSaving] = useState(false);
 
@@ -106,29 +108,11 @@ const DetailDrawer: React.FC<DetailDrawerProps> = ({ open, onClose, title, data,
               ))}
 
               <TabsContent value="activity" className="space-y-4 mt-6">
-                <div className="space-y-4">
-                  <div className="flex gap-3">
-                    <div className="w-2 h-2 rounded-full bg-success mt-2" />
-                    <div className="flex-1 space-y-1">
-                      <p className="text-body text-foreground">Status updated to Active</p>
-                      <p className="text-body-sm text-muted-foreground">2 hours ago</p>
-                    </div>
-                  </div>
-                  <div className="flex gap-3">
-                    <div className="w-2 h-2 rounded-full bg-info mt-2" />
-                    <div className="flex-1 space-y-1">
-                      <p className="text-body text-foreground">New comment added</p>
-                      <p className="text-body-sm text-muted-foreground">5 hours ago</p>
-                    </div>
-                  </div>
-                  <div className="flex gap-3">
-                    <div className="w-2 h-2 rounded-full bg-warning mt-2" />
-                    <div className="flex-1 space-y-1">
-                      <p className="text-body text-foreground">Assigned to team member</p>
-                      <p className="text-body-sm text-muted-foreground">1 day ago</p>
-                    </div>
-                  </div>
-                </div>
+                {activityContent ?? (
+                  <p className="text-body-sm text-muted-foreground text-center py-8">
+                    Nuk ka aktivitet të regjistruar.
+                  </p>
+                )}
               </TabsContent>
 
               <TabsContent value="notes" className="space-y-4 mt-6">

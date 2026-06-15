@@ -26,6 +26,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Textarea } from '../components/ui/textarea';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
 import DetailDrawer from '../components/DetailDrawer';
+import LeadTimeline, { logLeadActivity } from '../components/LeadTimeline';
 import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
 import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
@@ -95,6 +96,7 @@ const CRMView: React.FC = () => {
   });
   const teamMembers = useUniqueTeamMembers(rawTeamMembers);
   const leadMutation = useMutation<Lead>('leads');
+  const leadActivityMutation = useMutation('leadActivities');
   const customerMutation = useMutation<Customer>('customers');
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const waTeamId = useGlobalTeamId();
@@ -213,7 +215,7 @@ const CRMView: React.FC = () => {
     const assignedToUserId = formData.get('assignedToUserId') as string;
     const resolvedAssigned = assignedToUserId && assignedToUserId !== 'unassigned' ? assignedToUserId : undefined;
 
-    await leadMutation.create({
+    const createdLead = await leadMutation.create({
       name,
       email: email || undefined,
       status,
@@ -231,6 +233,7 @@ const CRMView: React.FC = () => {
       score: calculateLeadScore({ name, email, phoneNumber, company, estimatedValue: estimatedValue && !isNaN(parseFloat(estimatedValue)) ? parseFloat(estimatedValue) : undefined }),
       assignedToUserId: resolvedAssigned,
     });
+    logLead(createdLead.id, 'created', 'Lead u krijua', source ? `Burimi: ${source}` : undefined);
 
     // Notify assigned user
     if (resolvedAssigned && user && resolvedAssigned !== user.uid) {
@@ -332,11 +335,30 @@ const CRMView: React.FC = () => {
         }).catch(err => console.error('[Notifications] lead_assigned dërgim dështoi:', err));
       }
 
+      // Timeline: log meaningful changes
+      if (status !== editLead.status) {
+        logLead(editLead.id, 'status_changed', `Statusi: ${getStatusLabel(editLead.status)} → ${getStatusLabel(status)}`, undefined, { from: editLead.status, to: status });
+      }
+      if (resolvedAssigned !== editLead.assignedToUserId) {
+        logLead(editLead.id, 'assigned', resolvedAssigned ? `Caktuar te ${getName(resolvedAssigned)}` : 'Hequr caktimi');
+      }
+      if (status === editLead.status && resolvedAssigned === editLead.assignedToUserId) {
+        logLead(editLead.id, 'field_updated', 'Detajet u përditësuan');
+      }
+
       toast({ title: 'Lead u përditësua', description: `${name} u përditësua me sukses.` });
       setEditLead(null);
     } finally {
       setSaving(false);
     }
+  };
+
+  // Append an entry to a lead's activity timeline (fire-and-forget).
+  const logLead = (leadId: string, type: any, title: string, body?: string, meta?: Record<string, any>) => {
+    logLeadActivity(leadActivityMutation.create, {
+      leadId, type, title, body, meta,
+      userName: user?.displayName || user?.email || undefined,
+    });
   };
 
   // Lead Scoring: 0-100 based on data completeness & value
@@ -358,6 +380,7 @@ const CRMView: React.FC = () => {
   const handleAssignLead = async (lead: Lead, assignedToUserId: string) => {
     const resolved = assignedToUserId && assignedToUserId !== 'unassigned' ? assignedToUserId : undefined;
     await leadMutation.update(lead.id, { assignedToUserId: resolved });
+    logLead(lead.id, 'assigned', resolved ? `Caktuar te ${getName(resolved)}` : 'Hequr caktimi');
     if (resolved && user && resolved !== user.uid) {
       await notificationMutation.create({
         userId: resolved,
@@ -437,6 +460,9 @@ const CRMView: React.FC = () => {
         nextFollowUpDate: followUpDate ? new Date(followUpDate) : null,
         followUpNote: followUpNote.trim() || null,
       });
+      if (followUpDate) {
+        logLead(selectedLead.id, 'followup_scheduled', `Rikontakt i planifikuar: ${followUpDate}`, followUpNote.trim() || undefined);
+      }
       toast({ title: 'Kujtesë e ruajtur' });
     } catch {
       toast({ title: 'Gabim', description: 'Kujtesja nuk u ruajt', variant: 'destructive' });
@@ -458,7 +484,8 @@ const CRMView: React.FC = () => {
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Dërgimi dështoi'); }
       toast({ title: 'WhatsApp u dërgua!' });
-      await leadMutation.update(selectedLead.id, { lastFollowUpDate: new Date() });
+      await leadMutation.update(selectedLead.id, { lastFollowUpDate: new Date(), ...(selectedLead.firstResponseAt ? {} : { firstResponseAt: new Date() }) });
+      logLead(selectedLead.id, 'whatsapp', 'WhatsApp i dërguar', recontactMsg.trim());
     } catch (err: unknown) {
       toast({ title: 'Gabim WhatsApp', description: err instanceof Error ? err.message : 'Dërgimi dështoi', variant: 'destructive' });
     } finally {
@@ -478,7 +505,8 @@ const CRMView: React.FC = () => {
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Dërgimi dështoi'); }
       toast({ title: 'Email u dërgua!' });
-      await leadMutation.update(selectedLead.id, { lastFollowUpDate: new Date() });
+      await leadMutation.update(selectedLead.id, { lastFollowUpDate: new Date(), ...(selectedLead.firstResponseAt ? {} : { firstResponseAt: new Date() }) });
+      logLead(selectedLead.id, 'email', 'Email i dërguar', recontactMsg.trim());
     } catch (err: unknown) {
       toast({ title: 'Gabim Email', description: err instanceof Error ? err.message : 'Dërgimi dështoi', variant: 'destructive' });
     } finally {
@@ -532,8 +560,15 @@ const CRMView: React.FC = () => {
             status: 'Active',
           });
         }
-        // Delete the lead inside the same try — if it fails, roll back everything
-        await leadMutation.remove(lead.id);
+        // Mark the lead as Converted (keep it for history/audit) and link the
+        // new customer. Non-destructive: the lead record + its activity timeline
+        // survive instead of being hard-deleted.
+        await leadMutation.update(lead.id, {
+          status: 'Converted',
+          probability: 100,
+          convertedAt: new Date(),
+          customerId: customerDoc!.id,
+        });
       } catch (err) {
         // Roll back both customer and portal access on any failure
         if (portalAccessDoc?.id) await portalAccessMutation.remove(portalAccessDoc.id).catch(() => {});
@@ -559,6 +594,7 @@ const CRMView: React.FC = () => {
       }
 
       logActivity('lead_converted', `Lead u konvertua: ${lead.name}`, { entityType: 'lead', entityId: lead.id });
+      logLead(lead.id, 'converted', '🎉 Lead u konvertua në klient');
       toast({ title: 'Lead u konvertua', description: `${lead.name} tani është klient.` });
       return;
     }
@@ -570,6 +606,7 @@ const CRMView: React.FC = () => {
     setOptimisticStatus(prev => ({ ...prev, [lead.id]: newStatus }));
     try {
       await leadMutation.update(lead.id, update);
+      logLead(lead.id, 'status_changed', `Statusi: ${getStatusLabel(lead.status)} → ${getStatusLabel(newStatus)}`, undefined, { from: lead.status, to: newStatus });
       // Clear optimistic entry once Firestore confirms (next snapshot will carry it)
       setOptimisticStatus(prev => {
         const { [lead.id]: _, ...rest } = prev;
@@ -592,6 +629,7 @@ const CRMView: React.FC = () => {
       probability: 0,
       lostReason: lostReason || undefined,
     });
+    logLead(lostReasonLead.id, 'lost', 'Shënuar si i humbur', lostReason || undefined);
     toast({ title: 'Lead u shënja si i humbur', description: lostReason ? `Arsyeja: ${lostReason}` : undefined });
     setLostReasonLead(null);
     setLostReason('');
@@ -604,7 +642,9 @@ const CRMView: React.FC = () => {
       ? leads
       : leads.map(l => optimisticStatus[l.id] ? { ...l, status: optimisticStatus[l.id] } : l);
     let result = base;
+    // "all" hides Converted leads (they're customers now) — still visible via the Converted tab.
     if (activeTab !== 'all') result = result.filter(l => l.status === activeTab);
+    else result = result.filter(l => l.status !== 'Converted');
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       result = result.filter(l =>
@@ -1747,7 +1787,9 @@ const CRMView: React.FC = () => {
         data={selectedLead}
         onSaveNotes={selectedLead ? async (notes) => {
           await leadMutation.update(selectedLead.id, { notes });
+          logLead(selectedLead.id, 'note', 'Shënim u përditësua');
         } : undefined}
+        activityContent={selectedLead ? <LeadTimeline leadId={selectedLead.id} /> : undefined}
         actions={selectedLead ? (
           <div className="space-y-3">
             <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Kontakto</p>
