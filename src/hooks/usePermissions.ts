@@ -1,7 +1,7 @@
 import { useCollection, setGlobalTeamId, setSuperAdmin } from './useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useMemo, useEffect, useRef } from 'react';
-import { doc, updateDoc, setDoc, Timestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
+import { doc, getDoc, updateDoc, setDoc, Timestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 // Data scope determines what data a user can see
@@ -506,9 +506,30 @@ export function usePermissions(): UserPermissions {
     // it regardless of globalTeamId). Context-aware creates (e.g. a task inside
     // a project) still pass an explicit teamId, which takes precedence.
     if (isSuperAdmin) {
-      const fallbackTeamId = teamMembers[0]?.teamId || teams?.[0]?.id || null;
-      if (fallbackTeamId) setGlobalTeamId(fallbackTeamId);
-      return;
+      // Candidate active teams: the super-admin's own memberships, else all teams.
+      const candidates = (teamMembers.length ? teamMembers.map((m: any) => m.teamId) : (teams || []).map((t: any) => t.id))
+        .filter(Boolean) as string[];
+      if (candidates.length === 0) return;
+      let cancelled = false;
+      (async () => {
+        // Prefer a team that has WhatsApp enabled so per-team features (WhatsApp,
+        // bank/rate/Stripe settings) resolve to a configured team rather than an
+        // arbitrary one. Falls back to the first candidate.
+        let chosen = candidates[0];
+        try {
+          for (const tid of candidates) {
+            const s = await getDoc(doc(db, 'teamSettings', tid));
+            if (s.exists() && (s.data() as any).whatsappEnabled) { chosen = tid; break; }
+          }
+        } catch { /* ignore — keep the first candidate */ }
+        if (cancelled) return;
+        setGlobalTeamId(chosen);
+        if (user && persistedTeamIdRef.current !== chosen) {
+          persistedTeamIdRef.current = chosen;
+          setDoc(doc(db, 'users', user.uid), { teamId: chosen, updatedAt: Timestamp.now() }, { merge: true }).catch(() => {});
+        }
+      })();
+      return () => { cancelled = true; };
     }
     if (!permissions.isLoading && permissions.teamId !== null) {
       setGlobalTeamId(permissions.teamId);
