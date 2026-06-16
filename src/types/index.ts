@@ -285,7 +285,7 @@ export interface Invoice {
   discountType?: 'fixed' | 'percent';
   tax?: number;
   notes?: string;
-  status: 'Draft' | 'Pending' | 'Paid' | 'Overdue' | 'Partial';
+  status: 'Draft' | 'Pending' | 'Paid' | 'Overdue' | 'Partial' | 'Cancelled';
   paymentMethod?: string;
   paymentUrl?: string;
   currency?: 'ALL' | 'EUR';
@@ -322,6 +322,9 @@ export interface Invoice {
   /** Cron debounce: last overdue email + WhatsApp escalation sent to the customer. */
   overdueEmailSentAt?: Date;
   overdueWaSentAt?: Date;
+  /** Set when a WHMCS-mirrored invoice was cancelled locally — the sync preserves
+   *  this (won't revert status), so it stays out of revenue instead of resurrecting. */
+  locallyCancelled?: boolean;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

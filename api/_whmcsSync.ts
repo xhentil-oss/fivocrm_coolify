@@ -156,6 +156,12 @@ async function upsertInvoice(inv: MappedInvoice, customerId: string | null, team
     });
     return 'created';
   }
+  // Preserve a local cancellation: if the user cancelled this mirrored invoice
+  // in FivoCRM, don't let the sync revert its status (which would resurrect it
+  // into revenue). All other fields still refresh from WHMCS.
+  if (snap.docs[0].data()?.locallyCancelled) {
+    delete payload.status;
+  }
   await snap.docs[0].ref.update(payload);
   return 'updated';
 }

@@ -111,6 +111,16 @@ const InvoicesView: React.FC = () => {
 
   const handleDeleteInvoice = async (id: string) => {
     try {
+      const target = invoices?.find(inv => inv.id === id);
+      // WHMCS invoices are mirror copies — hard-deleting them just lets the next
+      // sync re-create them (and revenue comes back). Cancel instead: mark
+      // Cancelled + locallyCancelled (sync preserves it, excluded from revenue).
+      if (target?.source === 'whmcs') {
+        await invoiceMutation.update(id, { status: 'Cancelled', locallyCancelled: true } as any);
+        toast({ title: 'Fatura WHMCS u anulua', description: 'Nuk numërohet më te të ardhurat dhe nuk rikthehet nga sinkronizimi.' });
+        setInvoiceToDelete(null);
+        return;
+      }
       await invoiceMutation.remove(id);
       const relatedItems = allInvoiceItems?.filter(item => (item as any).invoiceId === id) || [];
       await Promise.all(relatedItems.map(item => invoiceItemMutationTop.remove(item.id)));
@@ -1152,12 +1162,21 @@ const InvoicesView: React.FC = () => {
       {/* Delete Invoice Confirmation */}
       <Dialog open={!!invoiceToDelete} onOpenChange={(open) => { if (!open) setInvoiceToDelete(null); }}>
         <DialogContent className="max-w-sm">
-          <DialogHeader><DialogTitle>Fshi Fatur\u00ebn</DialogTitle></DialogHeader>
-          <p className="text-sm text-muted-foreground">Je i sigurt q\u00eb d\u00ebshiron t\u00eb fshish k\u00ebt\u00eb fatur\u00eb? Ky veprim nuk mund t\u00eb zhb\u00ebhet.</p>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setInvoiceToDelete(null)}>Anulo</Button>
-            <Button variant="destructive" onClick={() => invoiceToDelete && handleDeleteInvoice(invoiceToDelete)}>Fshi</Button>
-          </div>
+          {(() => {
+            const isWhmcs = invoices?.find(i => i.id === invoiceToDelete)?.source === 'whmcs';
+            return (<>
+              <DialogHeader><DialogTitle>{isWhmcs ? 'Anulo Fatur\u00ebn' : 'Fshi Fatur\u00ebn'}</DialogTitle></DialogHeader>
+              <p className="text-sm text-muted-foreground">
+                {isWhmcs
+                  ? 'Kjo fatur\u00eb vjen nga WHMCS. Do sh\u00ebnohet si e Anuluar (nuk num\u00ebrohet te t\u00eb ardhurat) \u2014 nuk fshihet, q\u00eb t\u00eb mos rikthehet nga sinkronizimi.'
+                  : 'Je i sigurt q\u00eb d\u00ebshiron t\u00eb fshish k\u00ebt\u00eb fatur\u00eb? Ky veprim nuk mund t\u00eb zhb\u00ebhet.'}
+              </p>
+              <div className="flex justify-end gap-2 pt-2">
+                <Button variant="outline" onClick={() => setInvoiceToDelete(null)}>Mbyll</Button>
+                <Button variant="destructive" onClick={() => invoiceToDelete && handleDeleteInvoice(invoiceToDelete)}>{isWhmcs ? 'Anulo Fatur\u00ebn' : 'Fshi'}</Button>
+              </div>
+            </>);
+          })()}
         </DialogContent>
       </Dialog>
 

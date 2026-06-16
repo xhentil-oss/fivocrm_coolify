@@ -303,9 +303,9 @@ const ReportsView: React.FC = () => {
         const total = projectTasks.length;
         const pct = total > 0 ? Math.round((done / total) * 100) : 0;
         const projectInvoices = (invoices ?? []).filter(inv => inv.projectId === p.id);
-        // Exclude Draft invoices from billed — they haven't been sent to the client yet;
-        // including them inflates 'outstanding' with amounts not yet owed.
-        const sentInvoices = projectInvoices.filter(inv => inv.status !== 'Draft');
+        // Exclude Draft (not sent) and Cancelled (voided) invoices from billed —
+        // they don't represent amounts actually owed.
+        const sentInvoices = projectInvoices.filter(inv => inv.status !== 'Draft' && inv.status !== 'Cancelled');
         const billed = sentInvoices.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
         const collected = sentInvoices.reduce((s, inv) => {
           if (inv.status === 'Paid') return s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);

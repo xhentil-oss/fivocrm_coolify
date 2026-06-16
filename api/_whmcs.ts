@@ -120,7 +120,7 @@ export function verifyWebhookSignature(rawBody: Buffer | string, signature: stri
 }
 
 // ── Typed shapes returned to the sync layer ───────────────────────────────────
-export type FivoInvoiceStatus = 'Draft' | 'Pending' | 'Paid' | 'Overdue' | 'Partial';
+export type FivoInvoiceStatus = 'Draft' | 'Pending' | 'Paid' | 'Overdue' | 'Partial' | 'Cancelled';
 
 export interface MappedInvoice {
   whmcsInvoiceId: string;
