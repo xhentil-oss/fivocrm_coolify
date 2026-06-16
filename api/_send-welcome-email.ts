@@ -101,10 +101,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const safeName = escapeHtml(String(customerName));
   const safeTeam = escapeHtml(String(teamName || 'FivoCRM'));
   const safePortalUrl = encodeURI(portalUrl);
+  // Header-safe display name (NOT HTML-escaped — entities like &#x27; trip
+  // Gmail's "abnormal characters" warning). Object form lets nodemailer
+  // RFC-2047-encode non-ASCII names.
+  const fromName = String(teamName || 'FivoCRM').replace(/[\r\n"<>]/g, '').trim().slice(0, 120) || 'FivoCRM';
 
   try {
     await transporter.sendMail({
-      from: `"${safeTeam}" <${smtpUser}>`,
+      from: { name: fromName, address: smtpUser },
       to: customerEmail,
       subject: `Mirë se vini në ${String(teamName || 'FivoCRM').replace(/["\n\r]/g, '')}!`,
       html: `
