@@ -64,15 +64,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'Invalid email address' });
   }
 
-  // Validate inviteLink is a safe URL from an allowed domain
+  // Validate inviteLink is a safe URL. Accept it when it points to the SAME host
+  // that served this request (the link is always built from the app the user is
+  // on — so this covers custom domains / preview URLs automatically) or to an
+  // explicitly allowed host.
   try {
     const parsed = new URL(inviteLink);
     if (!['http:', 'https:'].includes(parsed.protocol)) {
       return res.status(400).json({ error: 'Invalid invite link' });
     }
-    const allowedHosts = (process.env.ALLOWED_HOSTS || 'fivoo.net,fivocrm.vercel.app,localhost').split(',').map(h => h.trim());
-    if (!allowedHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h))) {
-      return res.status(400).json({ error: 'Invalid invite link domain' });
+    const reqHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').toLowerCase();
+    const allowedHosts = (process.env.ALLOWED_HOSTS || 'fivoo.net,fivocrm.vercel.app,localhost').split(',').map(h => h.trim()).filter(Boolean);
+    const sameOrigin = !!reqHost && (parsed.host.toLowerCase() === reqHost || parsed.hostname.toLowerCase() === reqHost.split(':')[0]);
+    const inAllowlist = allowedHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h));
+    if (!sameOrigin && !inAllowlist) {
+      return res.status(400).json({ error: `Invalid invite link domain: ${parsed.hostname}` });
     }
   } catch {
     return res.status(400).json({ error: 'Invalid invite link' });

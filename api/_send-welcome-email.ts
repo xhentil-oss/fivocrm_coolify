@@ -67,14 +67,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'Invalid email address' });
   }
 
-  // Validate portalUrl domain
+  // Validate portalUrl domain — accept same-origin (the URL is built from the
+  // app the user is on, so custom domains / previews work) or an allowed host.
   try {
     const parsed = new URL(portalUrl);
     if (!['http:', 'https:'].includes(parsed.protocol)) {
       return res.status(400).json({ error: 'Invalid portal URL' });
     }
-    const allowedHosts = (process.env.ALLOWED_HOSTS || 'fivocrm.vercel.app,fivoo.net,localhost,vercel.app').split(',').map(h => h.trim());
-    if (!allowedHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h))) {
+    const reqHost = String(req.headers['x-forwarded-host'] || req.headers.host || '').toLowerCase();
+    const allowedHosts = (process.env.ALLOWED_HOSTS || 'fivocrm.vercel.app,fivoo.net,localhost,vercel.app').split(',').map(h => h.trim()).filter(Boolean);
+    const sameOrigin = !!reqHost && (parsed.host.toLowerCase() === reqHost || parsed.hostname.toLowerCase() === reqHost.split(':')[0]);
+    const inAllowlist = allowedHosts.some(h => parsed.hostname === h || parsed.hostname.endsWith('.' + h));
+    if (!sameOrigin && !inAllowlist) {
       return res.status(400).json({ error: `Invalid portal URL domain: ${parsed.hostname}` });
     }
   } catch {
