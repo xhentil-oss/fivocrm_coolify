@@ -69,6 +69,15 @@ const PAIN_STYLE = [
 const ADDON_ICONS = [Video, Globe, MessageSquare, Award, Camera, Shield];
 const TESTI_COLORS = ['bg-pink-500', 'bg-violet-500', 'bg-indigo-500'];
 const PERK_ICONS = [CheckCircle2, Target, TrendingUp, Zap];
+// Add-on monthly prices (€), by add-on order. Selectable on the page.
+const ADDON_PRICES = [200, 350, 150, 300, 180, 150];
+const ANNUAL_DISCOUNT = 0.15;
+const priceNum = (p: string) => parseInt(String(p).replace(/[^\d]/g, ''), 10) || 0;
+const BILLING_T: Record<string, { monthly: string; annual: string; save: string; annualNote: string; add: string; added: string; estTitle: string; perMonth: string }> = {
+  sq: { monthly: 'Mujore', annual: 'Vjetore', save: 'Kurse 15%', annualNote: 'faturuar vjetore', add: 'Shto', added: 'Shtuar ✓', estTitle: 'Vlera e përafërt', perMonth: '/muaj' },
+  en: { monthly: 'Monthly', annual: 'Annual', save: 'Save 15%', annualNote: 'billed annually', add: 'Add', added: 'Added ✓', estTitle: 'Estimated value', perMonth: '/mo' },
+  it: { monthly: 'Mensile', annual: 'Annuale', save: 'Risparmia 15%', annualNote: 'fatturato annualmente', add: 'Aggiungi', added: 'Aggiunto ✓', estTitle: 'Valore stimato', perMonth: '/mese' },
+};
 
 interface Pkg { title: string; subtitle: string; price: string; priceNote: string; badge: string; cta: string; targetAudience: string[]; features: { category: string; items: string[] }[]; notIncluded: string[]; }
 interface Copy {
@@ -289,6 +298,15 @@ const SocialMediaLandingPage: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState('');
   const [formData, setFormData] = useState({ name: '', email: '', phone: '', business: '', message: '' });
+  const [billing, setBilling] = useState<'monthly' | 'annual'>('monthly');
+  const [selectedAddons, setSelectedAddons] = useState<number[]>([]);
+  const bt = BILLING_T[lang] || BILLING_T.sq;
+  const toggleAddon = (i: number) => setSelectedAddons(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]);
+  // Monthly value: selected package (annual = −15%) + selected add-ons.
+  const pkgMonthly = priceNum(t.packages.pkgs.find(x => x.title === selectedPkg)?.price || '');
+  const effPkgMonthly = billing === 'annual' ? Math.round(pkgMonthly * (1 - ANNUAL_DISCOUNT)) : pkgMonthly;
+  const addonsMonthly = selectedAddons.reduce((s, i) => s + (ADDON_PRICES[i] || 0), 0);
+  const estMonthly = effPkgMonthly + addonsMonthly;
 
   const scrollToPackages = () => document.getElementById('packages')?.scrollIntoView({ behavior: 'smooth' });
   const scrollToContact = (pkg = '') => { if (pkg) setSelectedPkg(pkg); document.getElementById('contact')?.scrollIntoView({ behavior: 'smooth' }); };
@@ -298,10 +316,23 @@ const SocialMediaLandingPage: React.FC = () => {
     setFormError('');
     setSubmitting(true);
     try {
+      const addonNames = selectedAddons.map(i => t.addons.items[i]?.title).filter(Boolean);
+      const billingLabel = billing === 'annual' ? bt.annual : bt.monthly;
+      const fullMsg = `[${lang.toUpperCase()}] [${billingLabel}]${addonNames.length ? ` [Add-ons: ${addonNames.join(', ')}]` : ''} ${formData.message}`;
       const res = await fetch('/api/landing', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...formData, message: `[${lang.toUpperCase()}] ${formData.message}`, selectedPackage: selectedPkg, source: 'social-media-landing', category: 'SocialMedia' }),
+        body: JSON.stringify({
+          name: formData.name,
+          email: formData.email,
+          phone: formData.phone,
+          company: formData.business,
+          message: fullMsg,
+          packageName: selectedPkg ? `${selectedPkg}${billing === 'annual' ? ' (Vjetore)' : ''}` : '',
+          estimatedValue: estMonthly,
+          source: 'social-media-landing',
+          category: 'SocialMedia',
+        }),
       });
       if (!res.ok) throw new Error();
       setSubmitted(true);
@@ -389,7 +420,18 @@ const SocialMediaLandingPage: React.FC = () => {
       {/* ═══ PACKAGES ═══ */}
       <section id="packages" className="py-24 bg-white">
         <div className="max-w-6xl mx-auto px-4 sm:px-6">
-          <FadeIn><div className="text-center mb-16"><span className="inline-block bg-purple-100 text-purple-600 text-xs font-bold px-3 py-1 rounded-full mb-4 uppercase tracking-wide">{t.packages.kicker}</span><h2 className="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">{t.packages.title}</h2><p className="text-gray-500 max-w-xl mx-auto">{t.packages.sub}</p></div></FadeIn>
+          <FadeIn><div className="text-center mb-8"><span className="inline-block bg-purple-100 text-purple-600 text-xs font-bold px-3 py-1 rounded-full mb-4 uppercase tracking-wide">{t.packages.kicker}</span><h2 className="text-3xl sm:text-4xl font-extrabold text-gray-900 mb-4">{t.packages.title}</h2><p className="text-gray-500 max-w-xl mx-auto">{t.packages.sub}</p></div></FadeIn>
+          {/* Billing toggle (monthly / annual −15%) */}
+          <FadeIn>
+            <div className="flex items-center justify-center gap-1 mb-12">
+              <div className="inline-flex items-center bg-gray-100 rounded-full p-1">
+                <button onClick={() => setBilling('monthly')} className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors ${billing === 'monthly' ? 'bg-white shadow text-gray-900' : 'text-gray-500'}`}>{bt.monthly}</button>
+                <button onClick={() => setBilling('annual')} className={`px-4 py-2 rounded-full text-sm font-semibold transition-colors flex items-center gap-1.5 ${billing === 'annual' ? 'bg-white shadow text-gray-900' : 'text-gray-500'}`}>
+                  {bt.annual}<span className="text-[10px] font-bold text-green-600 bg-green-100 px-1.5 py-0.5 rounded-full">{bt.save}</span>
+                </button>
+              </div>
+            </div>
+          </FadeIn>
           <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-6 items-start">
             {t.packages.pkgs.map((pkg, i) => { const style = PKG_STYLES[i]; return (
               <FadeIn key={style.id} delay={i * 100}>
@@ -400,8 +442,24 @@ const SocialMediaLandingPage: React.FC = () => {
                     <div className={`inline-flex w-9 h-9 rounded-xl items-center justify-center bg-gradient-to-br ${style.color} mb-3`}><Megaphone className="w-4 h-4 text-white" /></div>
                     <h3 className="text-xl font-extrabold text-gray-900">{pkg.title}</h3>
                     <p className="text-xs text-gray-500 mt-1 mb-3 leading-snug">{pkg.subtitle}</p>
-                    <div className="flex items-end gap-1"><span className="text-3xl font-extrabold text-gray-900">{pkg.price}</span></div>
-                    <p className="text-[11px] text-gray-400 mt-0.5 mb-4">{pkg.priceNote}</p>
+                    {(() => {
+                      const m = priceNum(pkg.price);
+                      const annual = Math.round(m * (1 - ANNUAL_DISCOUNT));
+                      return billing === 'annual' ? (
+                        <>
+                          <div className="flex items-end gap-2">
+                            <span className="text-3xl font-extrabold text-gray-900">{annual.toLocaleString()}€</span>
+                            <span className="text-sm text-gray-400 line-through mb-1">{m.toLocaleString()}€</span>
+                          </div>
+                          <p className="text-[11px] text-gray-400 mt-0.5 mb-4">{bt.perMonth} · {bt.annualNote}</p>
+                        </>
+                      ) : (
+                        <>
+                          <div className="flex items-end gap-1"><span className="text-3xl font-extrabold text-gray-900">{pkg.price}</span></div>
+                          <p className="text-[11px] text-gray-400 mt-0.5 mb-4">{pkg.priceNote}</p>
+                        </>
+                      );
+                    })()}
                     <button onClick={() => scrollToContact(pkg.title)} className={`w-full py-2.5 rounded-xl font-bold text-sm text-white bg-gradient-to-r ${style.color} hover:opacity-90 transition-opacity shadow`}>{pkg.cta}</button>
                   </div>
                   <div className="px-5 py-3 border-b border-gray-100">
@@ -458,9 +516,36 @@ const SocialMediaLandingPage: React.FC = () => {
         <div className="max-w-6xl mx-auto px-4 sm:px-6 relative z-10">
           <FadeIn><div className="text-center mb-12"><span className="inline-block bg-white/10 text-purple-300 text-xs font-bold px-3 py-1 rounded-full mb-4 uppercase tracking-wide">{t.addons.kicker}</span><h2 className="text-3xl font-extrabold mb-3">{t.addons.title}</h2><p className="text-gray-400 max-w-xl mx-auto text-sm">{t.addons.sub}</p></div></FadeIn>
           <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-5">
-            {t.addons.items.map((a, i) => { const Icon = ADDON_ICONS[i]; return (
-              <FadeIn key={i} delay={i * 80}><div className="bg-white/5 border border-white/10 rounded-2xl p-6 hover:bg-white/10 transition-colors"><div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center mb-4"><Icon className="w-5 h-5 text-purple-300" /></div><h3 className="font-bold mb-2">{a.title}</h3><p className="text-sm text-gray-400 leading-relaxed">{a.desc}</p></div></FadeIn>); })}
+            {t.addons.items.map((a, i) => { const Icon = ADDON_ICONS[i]; const on = selectedAddons.includes(i); const price = ADDON_PRICES[i]; return (
+              <FadeIn key={i} delay={i * 80}>
+                <button type="button" onClick={() => toggleAddon(i)} className={`w-full text-left rounded-2xl p-6 border transition-all ${on ? 'bg-purple-500/20 border-purple-400 ring-1 ring-purple-400' : 'bg-white/5 border-white/10 hover:bg-white/10'}`}>
+                  <div className="flex items-start justify-between mb-4">
+                    <div className="w-10 h-10 bg-white/10 rounded-xl flex items-center justify-center"><Icon className="w-5 h-5 text-purple-300" /></div>
+                    {price ? <span className="text-sm font-extrabold text-white">+{price}€<span className="text-[10px] text-gray-400 font-normal">{bt.perMonth}</span></span> : null}
+                  </div>
+                  <h3 className="font-bold mb-2">{a.title}</h3>
+                  <p className="text-sm text-gray-400 leading-relaxed mb-3">{a.desc}</p>
+                  <span className={`inline-flex items-center gap-1 text-xs font-bold px-3 py-1.5 rounded-full ${on ? 'bg-purple-500 text-white' : 'bg-white/10 text-purple-200'}`}>{on ? bt.added : `+ ${bt.add}`}</span>
+                </button>
+              </FadeIn>); })}
           </div>
+          {(selectedPkg || selectedAddons.length > 0) && estMonthly > 0 && (
+            <FadeIn>
+              <div className="mt-10 max-w-2xl mx-auto bg-white/5 border border-purple-400/30 rounded-2xl p-5 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div>
+                  <p className="text-xs text-purple-300 uppercase tracking-wider font-bold">{bt.estTitle}</p>
+                  <p className="text-2xl font-extrabold text-white">{estMonthly.toLocaleString()}€<span className="text-sm text-gray-400 font-normal">{bt.perMonth}</span></p>
+                  <p className="text-[11px] text-gray-400 mt-0.5">
+                    {selectedPkg ? `${selectedPkg} (${billing === 'annual' ? bt.annual : bt.monthly})` : ''}
+                    {selectedAddons.length > 0 ? ` + ${selectedAddons.length} add-on${selectedAddons.length > 1 ? 's' : ''}` : ''}
+                  </p>
+                </div>
+                <button onClick={() => scrollToContact(selectedPkg)} className="shrink-0 px-6 py-3 rounded-xl font-bold text-sm text-white bg-gradient-to-r from-pink-500 via-purple-500 to-indigo-500 hover:opacity-90 shadow flex items-center gap-2">
+                  {t.packages.compareChoose} <ArrowRight className="w-4 h-4" />
+                </button>
+              </div>
+            </FadeIn>
+          )}
         </div>
       </section>
 

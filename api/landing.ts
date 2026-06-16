@@ -82,7 +82,7 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
     return res.status(429).json({ error: 'Keni arritur limitin e kërkesave. Provoni përsëri pas pak.' });
   }
 
-  const { name, email, phone, website, message, packageId, packageName, source, category } = req.body || {};
+  const { name, email, phone, website, message, packageId, packageName, source, category, company, estimatedValue } = req.body || {};
 
   const sName = sanitize(name, 100);
   const sEmail = sanitize(email, 200);
@@ -98,6 +98,10 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
   const sMessage = sanitize(message, 2000);
   const sPackageId = sanitize(packageId, 100);
   const sPackageName = sanitize(packageName, 100);
+  const sCompany = sanitize(company, 120);
+  // Client-provided estimated value (e.g. selected package price). Clamp to a sane range.
+  const sEstimatedValue = Number(estimatedValue);
+  const estimatedValueNum = Number.isFinite(sEstimatedValue) && sEstimatedValue > 0 ? Math.min(sEstimatedValue, 1_000_000) : 0;
   const sSource = sanitize(source, 100) || 'SEO Landing Page';
   const sCategory = sanitize(category, 100) || 'SEO';
 
@@ -148,12 +152,14 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
       email: sEmail,
       phoneNumber: sPhone,
       website: sWebsite,
+      ...(sCompany ? { company: sCompany } : {}),
       status: 'New',
       source: sSource,
-      estimatedValue: 0,
+      estimatedValue: estimatedValueNum,
       tags,
       notes: [
         `Paketa: ${sPackageName || 'Pa zgjedhur'}`,
+        sCompany ? `Biznesi: ${sCompany}` : '',
         sMessage ? `Mesazh: ${sMessage}` : '',
         sWebsite ? `Website: ${sWebsite}` : '',
       ].filter(Boolean).join('\n'),
@@ -164,7 +170,8 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
       createdByUserId: null,
     };
 
-    if (sPackageId) {
+    // If a service id was provided and no explicit value came through, use the service price.
+    if (sPackageId && !estimatedValueNum) {
       try {
         const svcDoc = await adminDb.collection('services').doc(sPackageId).get();
         if (svcDoc.exists) {
