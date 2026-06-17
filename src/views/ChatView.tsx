@@ -21,8 +21,10 @@ import {
   ClipboardList, ExternalLink, UserPlus, ChevronDown, CheckCheck,
   ImageIcon, Circle, Pin, PinOff, Mic, Square, Filter, AtSign,
   Bookmark, BookmarkCheck, ListChecks,
-  Zap, BellRing, AlarmClock, Wand2, Clock, CalendarClock, Rows3, Languages,
+  Zap, BellRing, AlarmClock, Wand2, Clock, CalendarClock, Rows3, Languages, Video,
 } from 'lucide-react';
+import { useVideoCall } from '../hooks/useVideoCall';
+import VideoCallModal from '../components/VideoCallModal';
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
 import { useFileUpload } from '../hooks/useFileUpload';
@@ -682,6 +684,22 @@ const ChatView: React.FC = () => {
       console.error('[ChatView] delete snippet failed', err);
     }
   }, [snippetMutation, toast]);
+
+  // ── Video call (Daily) ──
+  const { roomUrl: videoRoomUrl, starting: videoStarting, start: startVideo, close: closeVideo } = useVideoCall();
+  const startVideoCall = async () => {
+    let room = '';
+    if (chatMode === 'channel' && activeChannel) room = `fivocrm-${activeChannel}`;
+    else if (chatMode === 'direct' && activeDirectUserId && user) room = `fivocrm-dm-${[user.uid, activeDirectUserId].sort().join('-')}`;
+    else return;
+    room = room.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60);
+    const url = await startVideo(room);
+    if (!url) return;
+    // For a client channel, post a join link so the client sees the invite.
+    if (chatMode === 'channel' && activeChannel.startsWith('client-')) {
+      handleSendMessage(null, { content: `📹 Thirrje video u nis. Bashkohu: ${url}` });
+    }
+  };
 
   // ── #19 AI Summary of conversation ──
   const [summaryOpen, setSummaryOpen] = useState(false);
@@ -2863,6 +2881,11 @@ const ChatView: React.FC = () => {
                 <RefreshCw className="h-4 w-4" />
               </Button>
             )}
+            {(chatMode === 'channel' ? !!activeChannel : chatMode === 'direct' ? !!activeDirectUserId : false) && (
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-emerald-600 hover:text-emerald-700" onClick={startVideoCall} disabled={videoStarting} title="Thirrje video">
+                {videoStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Video className="h-4 w-4" />}
+              </Button>
+            )}
             {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleSummarizeChat} disabled={summaryLoading} title="Përmblidh bisedën me AI">
                 {summaryLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
@@ -4532,6 +4555,7 @@ const ChatView: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+      {videoRoomUrl && <VideoCallModal roomUrl={videoRoomUrl} userName={getUserDisplayName(user?.uid || '') || 'Agjent'} onClose={closeVideo} />}
     </div>
   );
 };

@@ -9,8 +9,10 @@ import { Input } from '../../components/ui/input';
 import { Button } from '../../components/ui/button';
 import { ScrollArea } from '../../components/ui/scroll-area';
 import { Badge } from '../../components/ui/badge';
-import { Send, MessageSquare, Paperclip, X, FileIcon, FolderKanban, HelpCircle, AlertCircle, RefreshCw, ChevronRight, Reply, SmilePlus } from 'lucide-react';
+import { Send, MessageSquare, Paperclip, X, FileIcon, FolderKanban, HelpCircle, AlertCircle, RefreshCw, ChevronRight, Reply, SmilePlus, Video } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
+import { useVideoCall } from '../../hooks/useVideoCall';
+import VideoCallModal from '../../components/VideoCallModal';
 import type { ChatMessage, Project } from '../../types';
 
 const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
@@ -214,6 +216,32 @@ const PortalChatView: React.FC = () => {
         variant: 'destructive',
       });
     }
+  };
+
+  // ── Video call (Daily) ──────────────────────────────────────────────────
+  const { roomUrl, starting: videoStarting, start: startVideo, close: closeVideo } = useVideoCall();
+  const videoEnabled = teamSettings?.videoCallsEnabled !== false; // default on
+  const handleVideoCall = async () => {
+    const room = `fivocrm-${channelId}`.replace(/[^a-zA-Z0-9_-]/g, '').slice(0, 60);
+    const url = await startVideo(room);
+    if (!url || !user || !customerId) return;
+    // Post a join link so the responsible person sees it (and gets notified).
+    try {
+      await addDoc(collection(db, 'messages'), {
+        content: `📹 Thirrje video u nis. Bashkohu: ${url}`,
+        senderId: user.uid,
+        channelId,
+        isRead: false,
+        senderType: 'client',
+        ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+        createdAt: Timestamp.now(),
+        updatedAt: Timestamp.now(),
+        createdByUserId: user.uid,
+      });
+      await notifyStaffOfClientMessage('📹 Thirrje video', selectedProjectId
+        ? customerProjects?.find(p => p.id === selectedProjectId)?.name || 'Projekt'
+        : 'Bisedë e përgjithshme');
+    } catch { /* non-blocking */ }
   };
 
   // Upload an image and send it immediately (same flow as the admin chat).
@@ -637,6 +665,19 @@ const PortalChatView: React.FC = () => {
           >
             {uploading ? <RefreshCw className="h-4 w-4 sm:h-5 sm:w-5 animate-spin" /> : <Paperclip className="h-4 w-4 sm:h-5 sm:w-5" />}
           </Button>
+          {videoEnabled && (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon"
+              disabled={videoStarting}
+              className="h-9 w-9 sm:h-10 sm:w-10 rounded-full flex-shrink-0 text-muted-foreground hover:text-foreground"
+              onClick={handleVideoCall}
+              title="Thirrje video"
+            >
+              {videoStarting ? <RefreshCw className="h-4 w-4 sm:h-5 sm:w-5 animate-spin" /> : <Video className="h-4 w-4 sm:h-5 sm:w-5" />}
+            </Button>
+          )}
           <div className="flex-1 min-w-0">
             <Input
               placeholder="Shkruani mesazhin..."
@@ -655,6 +696,7 @@ const PortalChatView: React.FC = () => {
           </Button>
         </form>
       </div>
+      {roomUrl && <VideoCallModal roomUrl={roomUrl} userName={customer?.name || 'Klient'} onClose={closeVideo} />}
     </div>
   );
 };
