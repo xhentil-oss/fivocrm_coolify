@@ -2035,7 +2035,7 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
                 <div key={i} className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm border-b border-border/50 last:border-0 pb-2 last:pb-0">
                   {b.bankName && <p><span className="text-muted-foreground">Banka:</span> {b.bankName}</p>}
                   {b.accountHolder && <p><span className="text-muted-foreground">Mbajtësi:</span> {b.accountHolder}</p>}
-                  <p><span className="text-muted-foreground">IBAN:</span> <span className="font-mono">{b.iban}</span></p>
+                  <p><span className="text-muted-foreground">IBAN:</span> <span className="font-mono break-all">{b.iban}</span></p>
                   {b.swift && <p><span className="text-muted-foreground">SWIFT:</span> <span className="font-mono">{b.swift}</span></p>}
                   {b.country && <p><span className="text-muted-foreground">Shteti:</span> {b.country}</p>}
                 </div>

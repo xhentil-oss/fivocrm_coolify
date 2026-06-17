@@ -415,7 +415,7 @@ const PortalInvoicesView: React.FC = () => {
                     {(selectedInvoice as any).bankAccountHolder && (
                       <p><span className="text-muted-foreground">Mbajtësi:</span> <span className="font-medium">{(selectedInvoice as any).bankAccountHolder}</span></p>
                     )}
-                    <p><span className="text-muted-foreground">IBAN:</span> <span className="font-mono font-medium">{(selectedInvoice as any).bankIBAN}</span></p>
+                    <p><span className="text-muted-foreground">IBAN:</span> <span className="font-mono font-medium break-all">{(selectedInvoice as any).bankIBAN}</span></p>
                     {(selectedInvoice as any).bankSWIFT && (
                       <p><span className="text-muted-foreground">SWIFT / BIC:</span> <span className="font-mono font-medium">{(selectedInvoice as any).bankSWIFT}</span></p>
                     )}

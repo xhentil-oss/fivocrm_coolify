@@ -3432,7 +3432,7 @@ const ChatView: React.FC = () => {
                                       {showEmojiPicker === message.id && (
                                         <div className={`absolute bottom-full ${isOwn ? 'left-0' : 'right-0'} mb-1 flex flex-wrap gap-0.5 bg-popover border rounded-xl shadow-lg px-2 py-1.5 z-50 max-w-[200px]`}>
                                           {EMOJI_REACTIONS.map(emoji => (
-                                            <button key={emoji} onClick={() => handleReaction(message.id, emoji)} className="hover:scale-125 transition-transform p-0.5 text-base">{emoji}</button>
+                                            <button key={emoji} onClick={() => handleReaction(message.id, emoji)} className="hover:scale-125 transition-transform p-2 sm:p-0.5 text-xl sm:text-base">{emoji}</button>
                                           ))}
                                         </div>
                                       )}
@@ -3561,7 +3561,7 @@ const ChatView: React.FC = () => {
                                   {showEmojiPicker === message.id && (
                                     <div className={`absolute bottom-full ${isOwn ? 'right-0' : 'left-0'} mb-1 flex flex-wrap gap-1 bg-popover border rounded-xl shadow-lg px-2 py-2 z-50 max-w-[200px]`}>
                                       {EMOJI_REACTIONS.map(emoji => (
-                                        <button key={emoji} onClick={() => handleReaction(message.id, emoji)} className="text-lg p-0.5">{emoji}</button>
+                                        <button key={emoji} onClick={() => handleReaction(message.id, emoji)} className="text-xl sm:text-lg p-2 sm:p-0.5">{emoji}</button>
                                       ))}
                                     </div>
                                   )}
@@ -3676,7 +3676,7 @@ const ChatView: React.FC = () => {
                 <div className="flex gap-2 items-center px-3 py-1.5 mb-2 bg-muted/30 rounded-xl border">
                   <Paperclip className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                   <Input value={attachmentUrl} onChange={e => setAttachmentUrl(e.target.value)} placeholder="Ngjit URL skedarit..." disabled={isSending}
-                    className="h-7 text-xs border-0 bg-transparent focus-visible:ring-0 shadow-none" />
+                    className="h-8 text-base sm:h-7 sm:text-xs border-0 bg-transparent focus-visible:ring-0 shadow-none" />
                   <Button variant="ghost" size="icon" className="h-6 w-6 rounded-full" onClick={() => { setShowAttachmentInput(false); setAttachmentUrl(''); }}><X className="h-3 w-3" /></Button>
                 </div>
               )}
@@ -3846,17 +3846,17 @@ const ChatView: React.FC = () => {
                       disabled={isSending} onClick={() => setShowEmojiPicker(showEmojiPicker ? null : 'input')}>
                       <SmilePlus className="h-3.5 w-3.5" />
                     </Button>
-                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
+                    <Button type="button" variant="ghost" size="icon" className="hidden sm:inline-flex h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
                       disabled={isSending} onClick={() => { setSnippetSearch(''); setSnippetPickerOpen(true); }}
                       title="Përgjigje të ruajtura">
                       <Zap className="h-3.5 w-3.5" />
                     </Button>
-                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
+                    <Button type="button" variant="ghost" size="icon" className="hidden sm:inline-flex h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
                       disabled={isSending || polishLoading || !messageText.trim()} onClick={handlePolishMessage}
                       title="Përmirëso tekstin me AI">
                       {polishLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
                     </Button>
-                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
+                    <Button type="button" variant="ghost" size="icon" className="hidden sm:inline-flex h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
                       disabled={isSending || smartRepliesLoading} onClick={handleSuggestReplies}
                       title="Sugjero përgjigje me AI">
                       {smartRepliesLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
