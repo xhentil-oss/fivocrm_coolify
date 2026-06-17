@@ -528,7 +528,7 @@ const PortalChatView: React.FC = () => {
                             )}
 
                             {/* Message actions on hover */}
-                            <div className={`absolute -top-3 ${own ? 'left-1' : 'right-1'} opacity-0 group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-background border rounded-lg shadow-sm px-1 py-0.5 z-10`}>
+                            <div className={`absolute -top-3 ${own ? 'left-1' : 'right-1'} opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-background border rounded-lg shadow-sm px-1 py-0.5 z-10`}>
                               <div className="relative">
                                 <button
                                   className="p-1 hover:bg-accent rounded text-muted-foreground hover:text-foreground"
