@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { addDoc, collection, Timestamp } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useClientPortal } from '../../hooks/useClientPortal';
-import { useCollection, useMutation } from '../../hooks/useFirestore';
+import { useCollection, useMutation, useDocument } from '../../hooks/useFirestore';
 import { useAuth } from '../../contexts/AuthContext';
 import { Input } from '../../components/ui/input';
 import { Button } from '../../components/ui/button';
@@ -80,6 +80,50 @@ const PortalChatView: React.FC = () => {
   // admin's team-scoped useCollection('messages') to see them.
   const resolvedTeamId = allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
 
+  // The customer record — used to find the responsible rep for the general channel.
+  const { data: customer } = useDocument<any>('customers', customerId || undefined);
+
+  // Who should receive the client's message: the responsible person for the
+  // active project, else the customer's assigned rep. Null → fall back to team.
+  const responsibleUserId: string | null = React.useMemo(() => {
+    if (selectedProjectId) {
+      const p = customerProjects?.find(x => x.id === selectedProjectId) as any;
+      const r = p?.responsibleUserId || p?.assignedToUserId;
+      if (r) return r as string;
+    }
+    return (customer as any)?.assignedToUserId || null;
+  }, [selectedProjectId, customerProjects, customer]);
+
+  // Notify the responsible person about a client message (in-app → also emails
+  // them via the notification choke point). Falls back to the project team /
+  // admins when no responsible person is set.
+  const notifyStaffOfClientMessage = React.useCallback(async (content: string, channelLabel: string) => {
+    let recipients: string[] = [];
+    if (responsibleUserId) {
+      recipients = [responsibleUserId];
+    } else if (teamMembers) {
+      const proj = selectedProjectId ? customerProjects?.find(x => x.id === selectedProjectId) : null;
+      const teamFallback = proj?.teamId ? teamMembers.filter((m: any) => m.teamId === proj.teamId && m.status === 'Active') : [];
+      const pool = teamFallback.length ? teamFallback : teamMembers.filter((m: any) => m.role === 'Admin' || m.canAccessCRM);
+      recipients = pool.map((m: any) => m.userId);
+    }
+    const preview = content.length > 100 ? content.slice(0, 100) + '...' : content;
+    await Promise.all(
+      [...new Set(recipients)].filter(Boolean).map(uid =>
+        notificationMutation.create({
+          userId: uid,
+          type: 'client_message',
+          title: `Mesazh i ri nga klienti${channelLabel ? ` — ${channelLabel}` : ''}`,
+          message: preview,
+          isRead: false,
+          actionUrl: '/app/chat',
+          actionLabel: 'Hap Chat',
+          linkTo: channelId,
+        } as any).catch(() => { /* don't block */ })
+      )
+    );
+  }, [responsibleUserId, teamMembers, selectedProjectId, customerProjects, channelId, notificationMutation]);
+
   // Auto-scroll on new messages and when switching project channels
   const prevCountRef = useRef(0);
   useEffect(() => {
@@ -140,39 +184,11 @@ const PortalChatView: React.FC = () => {
         createdByUserId: user.uid,
       });
 
-      // Notify team members — works for BOTH general and project channels
-      if (teamMembers) {
-        let notifyMembers: any[] = [];
-        if (selectedProjectId) {
-          const project = customerProjects?.find(p => p.id === selectedProjectId);
-          if (project?.teamId) {
-            notifyMembers = teamMembers.filter(
-              (m: any) => m.teamId === project.teamId && m.status === 'Active'
-            );
-          }
-        }
-        // For general channel or if no project team found, notify admins + CRM users
-        if (notifyMembers.length === 0) {
-          notifyMembers = teamMembers.filter(
-            (m: any) => m.role === 'Admin' || m.canAccessCRM
-          );
-        }
-        const channelLabel = selectedProjectId
-          ? customerProjects?.find(p => p.id === selectedProjectId)?.name || 'Projekt'
-          : 'Bisedë e përgjithshme';
-        for (const member of notifyMembers) {
-          try {
-            await notificationMutation.create({
-              userId: member.userId,
-              type: 'client_message',
-              title: `Mesazh i ri nga klienti - ${channelLabel}`,
-              message: msgContent.length > 100 ? msgContent.slice(0, 100) + '...' : msgContent,
-              isRead: false,
-              linkTo: channelId,
-            } as any);
-          } catch { /* don't block */ }
-        }
-      }
+      // Route the message to the responsible person (in-app + email).
+      const channelLabel = selectedProjectId
+        ? customerProjects?.find(p => p.id === selectedProjectId)?.name || 'Projekt'
+        : 'Bisedë e përgjithshme';
+      await notifyStaffOfClientMessage(msgContent, channelLabel);
 
       setMessageText('');
       setAttachmentUrl('');
@@ -284,24 +300,11 @@ const PortalChatView: React.FC = () => {
         createdByUserId: user.uid,
       });
 
-      // Notify team members about the quick message
-      if (teamMembers) {
-        const notifyMembers = teamMembers.filter(
-          (m: any) => m.role === 'Admin' || m.canAccessCRM
-        );
-        for (const member of notifyMembers) {
-          try {
-            await notificationMutation.create({
-              userId: member.userId,
-              type: 'client_message',
-              title: 'Mesazh i ri nga klienti',
-              message: msg.length > 100 ? msg.slice(0, 100) + '...' : msg,
-              isRead: false,
-              linkTo: channelId,
-            } as any);
-          } catch { /* don't block */ }
-        }
-      }
+      // Route the quick message to the responsible person (in-app + email).
+      const channelLabel = selectedProjectId
+        ? customerProjects?.find(p => p.id === selectedProjectId)?.name || 'Projekt'
+        : 'Bisedë e përgjithshme';
+      await notifyStaffOfClientMessage(msg, channelLabel);
     } catch {
       toast({ title: 'Gabim', description: 'Mesazhi nuk u dërgua.', variant: 'destructive' });
     }
