@@ -88,6 +88,14 @@ const PortalChatView: React.FC = () => {
   // The customer record — used to find the responsible rep for the general channel.
   const { data: customer } = useDocument<any>('customers', customerId || undefined);
 
+  // The file-upload VPS URL lives in teamSettings but is synced to localStorage
+  // only for staff. Portal clients must load it themselves so photo upload works.
+  const { data: teamSettings } = useDocument<any>('teamSettings', resolvedTeamId || undefined);
+  useEffect(() => {
+    const url = teamSettings?.whatsappVpsUrl;
+    if (url) { try { localStorage.setItem('whatsapp_vps_url', url); } catch { /* ignore */ } }
+  }, [teamSettings]);
+
   // Who should receive the client's message: the responsible person for the
   // active project, else the customer's assigned rep. Null → fall back to team.
   const responsibleUserId: string | null = React.useMemo(() => {
