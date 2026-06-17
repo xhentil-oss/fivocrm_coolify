@@ -531,7 +531,7 @@ const PortalChatView: React.FC = () => {
                             <div className={`absolute -top-3 ${own ? 'left-1' : 'right-1'} opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-background border rounded-lg shadow-sm px-1 py-0.5 z-10`}>
                               <div className="relative">
                                 <button
-                                  className="p-1 hover:bg-accent rounded text-muted-foreground hover:text-foreground"
+                                  className="p-2 sm:p-1 hover:bg-accent rounded text-muted-foreground hover:text-foreground"
                                   onClick={() => setShowEmojiPicker(showEmojiPicker === msg.id ? null : msg.id)}
                                 >
                                   <SmilePlus className="h-3.5 w-3.5" />
@@ -542,7 +542,7 @@ const PortalChatView: React.FC = () => {
                                       <button
                                         key={emoji}
                                         onClick={() => handleReaction(msg.id, emoji)}
-                                        className="hover:bg-accent rounded p-1 text-base transition-transform hover:scale-125"
+                                        className="hover:bg-accent rounded p-2 sm:p-1 text-xl sm:text-base leading-none transition-transform hover:scale-125"
                                       >
                                         {emoji}
                                       </button>
