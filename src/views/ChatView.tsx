@@ -96,6 +96,7 @@ const ChatView: React.FC = () => {
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null);
   const [clientSearch, setClientSearch] = useState('');
+  const [clientScope, setClientScope] = useState<'all' | 'mine'>('all');
   // Pagination state
   const [channelLimit, setChannelLimit] = useState(100);
   const [waDisplayLimit, setWaDisplayLimit] = useState(50);
@@ -2496,13 +2497,24 @@ const ChatView: React.FC = () => {
                   <button onClick={() => setClientSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2"><X className="h-3 w-3 text-muted-foreground" /></button>
                 )}
               </div>
+              {/* Scope: mine (assigned to me) vs all (admins follow everything) */}
+              <div className="px-1 mb-1.5 inline-flex items-center gap-0.5 bg-muted/40 rounded-lg p-0.5 text-[11px]">
+                {([['all', 'Të gjitha'], ['mine', 'Të miat']] as const).map(([v, label]) => (
+                  <button key={v} onClick={() => setClientScope(v)}
+                    className={`px-2.5 py-1 rounded-md font-medium transition-colors ${clientScope === v ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}>
+                    {label}
+                  </button>
+                ))}
+              </div>
               <div className="space-y-0.5 max-h-[30vh] overflow-y-auto">
                 {portalAccess.filter((a, i, arr) => {
                   // Deduplicate by customerId — keep first occurrence only
                   if (arr.findIndex(x => x.customerId === a.customerId) !== i) return false;
+                  const c = customers?.find(cu => cu.id === a.customerId);
+                  // "Të miat" = conversations of customers assigned to me
+                  if (clientScope === 'mine' && (c as any)?.assignedToUserId !== user?.uid) return false;
                   if (!clientSearch.trim()) return true;
                   const q = clientSearch.toLowerCase();
-                  const c = customers?.find(cu => cu.id === a.customerId);
                   return c?.name?.toLowerCase().includes(q) || c?.email?.toLowerCase().includes(q) || a.email?.toLowerCase().includes(q);
                 }).sort((a, b) => {
                   const ua = (clientUnreadMap.get(`client-${a.customerId}`) || 0)
@@ -2533,6 +2545,15 @@ const ChatView: React.FC = () => {
                         </div>
                         <div className="flex-1 min-w-0">
                           <span className="truncate block text-sm">{customer?.name || access.email}</span>
+                          {(() => {
+                            const repId = (customer as any)?.assignedToUserId;
+                            const mine = repId && repId === user?.uid;
+                            return (
+                              <span className={`truncate block text-[10px] ${mine ? 'text-emerald-600 dark:text-emerald-400 font-medium' : 'text-muted-foreground'}`}>
+                                {repId ? `👤 ${mine ? 'Ti' : getUserDisplayName(repId)}` : '⚠️ Pa përgjegjës'}
+                              </span>
+                            );
+                          })()}
                         </div>
                         {unread > 0 && !isActive && (
                           <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-emerald-500 text-white text-[10px] font-bold">{unread}</span>
