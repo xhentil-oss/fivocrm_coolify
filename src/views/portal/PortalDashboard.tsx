@@ -278,16 +278,16 @@ const PortalDashboard: React.FC = () => {
           </Card>
         </Link>
 
-        <Link to="/portal/requests">
+        <Link to="/portal/chat">
           <Card className="hover:shadow-md transition-shadow cursor-pointer">
             <CardContent className="pt-6">
               <div className="flex items-center gap-3">
                 <div className="p-2 bg-orange-100 rounded-lg">
-                  <ClipboardList className="h-5 w-5 text-orange-600" />
+                  <MessageSquare className="h-5 w-5 text-orange-600" />
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Kërkesa Aktive</p>
-                  <p className="text-2xl font-bold">{activeRequests}</p>
+                  <p className="text-sm text-muted-foreground">Mbështetje</p>
+                  <p className="text-base font-semibold">Na shkruani</p>
                 </div>
               </div>
             </CardContent>
@@ -357,36 +357,23 @@ const PortalDashboard: React.FC = () => {
           </CardContent>
         </Card>
 
-        {/* Recent Requests */}
+        {/* Support via chat */}
         <Card>
           <CardHeader className="pb-3">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-lg">Kërkesat e Fundit</CardTitle>
-              <Link to="/portal/requests" className="text-sm text-primary hover:underline">
-                Shiko të gjitha
-              </Link>
-            </div>
+            <CardTitle className="text-lg flex items-center gap-2">
+              <MessageSquare className="w-5 h-5 text-primary" />
+              Mbështetje
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            {recentRequests.length === 0 ? (
-              <p className="text-sm text-muted-foreground py-4 text-center">
-                Nuk ka kërkesa akoma
-              </p>
-            ) : (
-              <div className="space-y-3">
-                {recentRequests.map(req => (
-                  <div key={req.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                    <div>
-                      <p className="font-medium text-sm">{req.title}</p>
-                      <p className="text-xs text-muted-foreground">{req.category}</p>
-                    </div>
-                    <Badge className={getStatusColor(req.status)} variant="secondary">
-                      {req.status}
-                    </Badge>
-                  </div>
-                ))}
-              </div>
-            )}
+            <p className="text-sm text-muted-foreground mb-4">
+              Keni një pyetje ose kërkesë? Na shkruani direkt — ekipi përgjegjës ju përgjigjet sa më shpejt.
+            </p>
+            <Link to="/portal/chat">
+              <Button className="w-full">
+                <MessageSquare className="w-4 h-4 mr-2" /> Hap bisedën
+              </Button>
+            </Link>
           </CardContent>
         </Card>
       </div>

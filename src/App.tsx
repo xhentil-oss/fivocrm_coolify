@@ -71,7 +71,6 @@ const PortalDashboard = React.lazy(() => import('./views/portal/PortalDashboard'
 const PortalInvoicesView = React.lazy(() => import('./views/portal/PortalInvoicesView'));
 const PortalServicesView = React.lazy(() => import('./views/portal/PortalServicesView'));
 const PortalChatView = React.lazy(() => import('./views/portal/PortalChatView'));
-const PortalRequestsView = React.lazy(() => import('./views/portal/PortalRequestsView'));
 const PortalProjectsView = React.lazy(() => import('./views/portal/PortalProjectsView'));
 const PortalProjectDetailView = React.lazy(() => import('./views/portal/PortalProjectDetailView'));
 const PortalQuotesView = React.lazy(() => import('./views/portal/PortalQuotesView'));
@@ -224,7 +223,8 @@ function AppContent() {
         <Route path="invoices" element={<Suspense fallback={<LazyFallback />}><PortalInvoicesView /></Suspense>} />
         <Route path="services" element={<Suspense fallback={<LazyFallback />}><PortalServicesView /></Suspense>} />
         <Route path="chat" element={<Suspense fallback={<LazyFallback />}><PortalChatView /></Suspense>} />
-        <Route path="requests" element={<Suspense fallback={<LazyFallback />}><PortalRequestsView /></Suspense>} />
+        {/* Requests removed — chat is now the single support channel. Redirect old links. */}
+        <Route path="requests" element={<Navigate to="/portal/chat" replace />} />
         <Route path="projects" element={<Suspense fallback={<LazyFallback />}><PortalProjectsView /></Suspense>} />
         <Route path="projects/:projectId" element={<Suspense fallback={<LazyFallback />}><PortalProjectDetailView /></Suspense>} />
         <Route path="preventiva" element={<Suspense fallback={<LazyFallback />}><PortalQuotesView /></Suspense>} />

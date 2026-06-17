@@ -27,8 +27,7 @@ const navItems = [
   { to: '/portal/contracts', icon: ScrollText, label: 'Kontratat' },
   { to: '/portal/services', icon: ShoppingBag, label: 'Shërbimet' },
   { to: '/portal/projects', icon: FolderKanban, label: 'Projektet' },
-  { to: '/portal/chat', icon: MessageSquare, label: 'Biseda' },
-  { to: '/portal/requests', icon: ClipboardList, label: 'Kërkesat' },
+  { to: '/portal/chat', icon: MessageSquare, label: 'Mbështetje' },
   { to: '/portal/preventiva', icon: Calculator, label: 'Preventiva' },
 ];
 
