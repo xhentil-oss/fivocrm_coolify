@@ -3,6 +3,7 @@ import { addDoc, collection, Timestamp } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useCollection, useMutation, useDocument } from '../../hooks/useFirestore';
+import { useFileUpload } from '../../hooks/useFileUpload';
 import { useAuth } from '../../contexts/AuthContext';
 import { Input } from '../../components/ui/input';
 import { Button } from '../../components/ui/button';
@@ -20,7 +21,6 @@ const PortalChatView: React.FC = () => {
   const { toast } = useToast();
   const [messageText, setMessageText] = useState('');
   const [attachmentUrl, setAttachmentUrl] = useState('');
-  const [showAttachmentInput, setShowAttachmentInput] = useState(false);
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [replyingTo, setReplyingTo] = useState<any>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null);
@@ -75,6 +75,11 @@ const PortalChatView: React.FC = () => {
 
   const messageMutation = useMutation<ChatMessage>('messages');
   const notificationMutation = useMutation<any>('notifications');
+  const { upload: uploadAttachment, uploading } = useFileUpload();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const ALLOWED_IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+  const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
+  const isImageUrl = (url: string) => /\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$/i.test(url) || /image%2F/i.test(url);
 
   // Resolve teamId from team members so client messages include it — required for
   // admin's team-scoped useCollection('messages') to see them.
@@ -157,12 +162,13 @@ const PortalChatView: React.FC = () => {
     });
   }, [messages, user]);
 
-  const handleSendMessage = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if ((!messageText.trim() && !attachmentUrl.trim()) || !user || !customerId) return;
+  const handleSendMessage = async (e?: React.FormEvent | null, override?: { attachmentUrl?: string }) => {
+    if (e && typeof e.preventDefault === 'function') e.preventDefault();
+    const attach = (override?.attachmentUrl ?? attachmentUrl).trim();
+    if ((!messageText.trim() && !attach) || !user || !customerId) return;
 
     try {
-      const msgContent = messageText || '📎 Bashkëngjitje';
+      const msgContent = messageText || (attach && isImageUrl(attach) ? '📷 Foto' : '📎 Bashkëngjitje');
       // Use addDoc directly — portal users have getGlobalTeamId()=null which makes
       // useMutation.create() throw before reaching Firestore. The Firestore rule
       // allows create when senderType == 'client' (no teamId needed).
@@ -171,7 +177,7 @@ const PortalChatView: React.FC = () => {
         senderId: user.uid,
         channelId,
         isRead: false,
-        attachmentUrl: attachmentUrl.trim() || null,
+        attachmentUrl: attach || null,
         senderType: 'client',
         ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
         ...(replyingTo ? {
@@ -192,7 +198,6 @@ const PortalChatView: React.FC = () => {
 
       setMessageText('');
       setAttachmentUrl('');
-      setShowAttachmentInput(false);
       setReplyingTo(null);
     } catch (err) {
       toast({
@@ -200,6 +205,24 @@ const PortalChatView: React.FC = () => {
         description: 'Mesazhi nuk u dërgua. Provoni përsëri.',
         variant: 'destructive',
       });
+    }
+  };
+
+  // Upload an image and send it immediately (same flow as the admin chat).
+  const handleFileSelect = async (file: File) => {
+    if (!ALLOWED_IMG_TYPES.includes(file.type)) {
+      toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP.', variant: 'destructive' });
+      return;
+    }
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      toast({ title: 'Skedari shumë i madh', description: 'Maksimumi 10 MB.', variant: 'destructive' });
+      return;
+    }
+    try {
+      const res = await uploadAttachment(file, 'portal-chat');
+      await handleSendMessage(null, { attachmentUrl: res.url });
+    } catch (err) {
+      toast({ title: 'Ngarkimi dështoi', description: (err as Error)?.message || 'Provo përsëri.', variant: 'destructive' });
     }
   };
 
@@ -477,17 +500,23 @@ const PortalChatView: React.FC = () => {
                           >
                             <p className="text-[13px] sm:text-[13.5px] leading-relaxed whitespace-pre-wrap break-words">{msg.content}</p>
                             {msg.attachmentUrl && (
-                              <a
-                                href={msg.attachmentUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className={`inline-flex items-center gap-1.5 text-xs mt-1.5 px-2 py-1 rounded-md ${
-                                  own ? 'bg-primary-foreground/15 text-primary-foreground hover:bg-primary-foreground/25' : 'bg-background text-primary hover:bg-accent'
-                                } transition-colors`}
-                              >
-                                <FileIcon className="h-3 w-3" />
-                                Skedar i bashkëngjitur
-                              </a>
+                              isImageUrl(msg.attachmentUrl) ? (
+                                <a href={msg.attachmentUrl} target="_blank" rel="noopener noreferrer" className="block mt-1.5">
+                                  <img src={msg.attachmentUrl} alt="Foto" loading="lazy" className="rounded-lg max-w-[220px] max-h-[280px] object-cover border border-border/40" />
+                                </a>
+                              ) : (
+                                <a
+                                  href={msg.attachmentUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className={`inline-flex items-center gap-1.5 text-xs mt-1.5 px-2 py-1 rounded-md ${
+                                    own ? 'bg-primary-foreground/15 text-primary-foreground hover:bg-primary-foreground/25' : 'bg-background text-primary hover:bg-accent'
+                                  } transition-colors`}
+                                >
+                                  <FileIcon className="h-3 w-3" />
+                                  Skedar i bashkëngjitur
+                                </a>
+                              )
                             )}
 
                             {/* Message actions on hover */}
@@ -581,31 +610,24 @@ const PortalChatView: React.FC = () => {
 
       {/* Message Input Area */}
       <div className="border-t bg-background pt-2 pb-1">
-        {showAttachmentInput && (
-          <div className="flex items-center gap-2 mb-2 px-1">
-            <div className="flex-1 flex items-center gap-2 bg-muted rounded-lg px-3 py-2">
-              <Paperclip className="h-4 w-4 text-muted-foreground flex-shrink-0" />
-              <Input
-                placeholder="Ngjitni linkun e skedarit..."
-                value={attachmentUrl}
-                onChange={(e) => setAttachmentUrl(e.target.value)}
-                className="border-0 bg-transparent h-auto p-0 focus-visible:ring-0 text-sm min-w-0"
-              />
-            </div>
-            <Button variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0" onClick={() => { setShowAttachmentInput(false); setAttachmentUrl(''); }}>
-              <X className="h-4 w-4" />
-            </Button>
-          </div>
-        )}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          className="hidden"
+          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelect(f); e.target.value = ''; }}
+        />
         <form onSubmit={handleSendMessage} className="flex items-end gap-1.5 sm:gap-2">
           <Button
             type="button"
             variant="ghost"
             size="icon"
+            disabled={uploading}
             className="h-9 w-9 sm:h-10 sm:w-10 rounded-full flex-shrink-0 text-muted-foreground hover:text-foreground"
-            onClick={() => setShowAttachmentInput(!showAttachmentInput)}
+            onClick={() => fileInputRef.current?.click()}
+            title="Dërgo foto"
           >
-            <Paperclip className="h-4 w-4 sm:h-5 sm:w-5" />
+            {uploading ? <RefreshCw className="h-4 w-4 sm:h-5 sm:w-5 animate-spin" /> : <Paperclip className="h-4 w-4 sm:h-5 sm:w-5" />}
           </Button>
           <div className="flex-1 min-w-0">
             <Input
