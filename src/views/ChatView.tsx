@@ -466,8 +466,16 @@ const ChatView: React.FC = () => {
     teams?.forEach((t: any) => {
       if (t.createdByUserId && !map.has(t.createdByUserId)) map.set(t.createdByUserId, 'Admin');
     });
+    // Portal clients: resolve their auth uid → customer name (they aren't team members).
+    portalAccess?.forEach((a: any) => {
+      if (a.userId && !map.has(a.userId)) {
+        const c = customers?.find(cu => cu.id === a.customerId);
+        if (c?.name) map.set(a.userId, c.name);
+        else if (a.email) map.set(a.userId, a.email.split('@')[0]);
+      }
+    });
     return map;
-  }, [user?.uid, user?.displayName, user?.email, userProfiles, teamMembers, teams]);
+  }, [user?.uid, user?.displayName, user?.email, userProfiles, teamMembers, teams, portalAccess, customers]);
 
   const getUserDisplayName = useCallback((userId: string) => {
     const cached = displayNameCache.get(userId);
