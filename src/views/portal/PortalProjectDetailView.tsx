@@ -514,14 +514,6 @@ const PortalProjectDetailView: React.FC = () => {
               </Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="support" className="gap-1.5">
-            <ClipboardList className="h-4 w-4" /> Suporti
-            {projectRequests.length > 0 && (
-              <Badge variant="secondary" className="ml-1 text-[10px] px-1.5">
-                {projectRequests.length}
-              </Badge>
-            )}
-          </TabsTrigger>
         </TabsList>
 
         {/* ── Tasks Tab ── */}
@@ -748,108 +740,6 @@ const PortalProjectDetailView: React.FC = () => {
           </Card>
         </TabsContent>
 
-        {/* ── Support Tab ── */}
-        <TabsContent value="support" className="mt-4 space-y-4">
-          <div className="flex items-center justify-between">
-            <h3 className="font-semibold text-lg">Kërkesat për këtë Projekt</h3>
-            <Dialog open={isRequestOpen} onOpenChange={setIsRequestOpen}>
-              <DialogTrigger asChild>
-                <Button size="sm" className="gap-2">
-                  <Plus className="h-4 w-4" /> Kërkesë e Re
-                </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-lg">
-                <DialogHeader>
-                  <DialogTitle>Kërkesë Suporti — {project.name}</DialogTitle>
-                </DialogHeader>
-                <form
-                  onSubmit={e => { e.preventDefault(); handleCreateRequest(new FormData(e.currentTarget)); }}
-                  className="space-y-4"
-                >
-                  <div>
-                    <Label htmlFor="req-title">Titulli</Label>
-                    <Input id="req-title" name="title" required placeholder="Përshkruani shkurt kërkesën" />
-                  </div>
-                  <div>
-                    <Label htmlFor="req-category">Kategoria</Label>
-                    <Select name="category" required>
-                      <SelectTrigger><SelectValue placeholder="Zgjidhni kategorinë" /></SelectTrigger>
-                      <SelectContent>
-                        {CATEGORIES.map(c => (
-                          <SelectItem key={c.value} value={c.value}>{c.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label htmlFor="req-priority">Prioriteti</Label>
-                    <Select name="priority" required>
-                      <SelectTrigger><SelectValue placeholder="Zgjidhni prioritetin" /></SelectTrigger>
-                      <SelectContent>
-                        {PRIORITIES.map(p => (
-                          <SelectItem key={p.value} value={p.value}>{p.label}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div>
-                    <Label htmlFor="req-description">Përshkrimi</Label>
-                    <Textarea id="req-description" name="description" required rows={4}
-                      placeholder="Përshkruani në detaje kërkesën tuaj..." />
-                  </div>
-                  <div className="flex justify-end gap-2">
-                    <Button type="button" variant="outline" onClick={() => setIsRequestOpen(false)}>Anulo</Button>
-                    <Button type="submit">Dërgo Kërkesën</Button>
-                  </div>
-                </form>
-              </DialogContent>
-            </Dialog>
-          </div>
-
-          {projectRequests.length === 0 ? (
-            <Card>
-              <CardContent className="py-8 text-center">
-                <ClipboardList className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
-                <p className="text-muted-foreground text-sm">Nuk ka kërkesa për këtë projekt</p>
-                <p className="text-xs text-muted-foreground mt-1">
-                  Klikoni "Kërkesë e Re" për të dërguar një kërkesë suporti.
-                </p>
-              </CardContent>
-            </Card>
-          ) : (
-            <div className="space-y-3">
-              {projectRequests.map(req => (
-                <Card key={req.id}>
-                  <CardContent className="py-4">
-                    <div className="flex flex-col sm:flex-row sm:items-center gap-2">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-semibold text-sm">{req.title}</p>
-                        <p className="text-xs text-muted-foreground mt-0.5 line-clamp-2">
-                          {req.description}
-                        </p>
-                        <div className="flex items-center gap-2 mt-1.5 flex-wrap">
-                          <Badge className={getRequestStatusColor(req.status)} variant="secondary">
-                            {req.status}
-                          </Badge>
-                          <span className="text-xs text-muted-foreground">{req.category}</span>
-                          <span className="text-xs text-muted-foreground">
-                            {req.createdAt instanceof Date ? req.createdAt.toLocaleDateString('sq-AL') : ''}
-                          </span>
-                        </div>
-                      </div>
-                      {req.adminNotes && (
-                        <div className="bg-muted rounded-lg p-2 text-xs max-w-xs">
-                          <p className="font-medium mb-0.5">Përgjigje:</p>
-                          <p className="text-muted-foreground">{req.adminNotes}</p>
-                        </div>
-                      )}
-                    </div>
-                  </CardContent>
-                </Card>
-              ))}
-            </div>
-          )}
-        </TabsContent>
       </Tabs>
     </div>
   );
