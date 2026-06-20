@@ -80,6 +80,8 @@ const PortalChatView: React.FC = () => {
   const { upload: uploadAttachment, uploading } = useFileUpload();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const ALLOWED_IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+  const ALLOWED_DOC_TYPES = ['application/pdf'];
+  const ALLOWED_ATTACHMENT_TYPES = [...ALLOWED_IMG_TYPES, ...ALLOWED_DOC_TYPES];
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
   const isImageUrl = (url: string) => /\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$/i.test(url) || /image%2F/i.test(url);
 
@@ -246,8 +248,8 @@ const PortalChatView: React.FC = () => {
 
   // Upload an image and send it immediately (same flow as the admin chat).
   const handleFileSelect = async (file: File) => {
-    if (!ALLOWED_IMG_TYPES.includes(file.type)) {
-      toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP.', variant: 'destructive' });
+    if (!ALLOWED_ATTACHMENT_TYPES.includes(file.type)) {
+      toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP ose PDF.', variant: 'destructive' });
       return;
     }
     if (file.size > MAX_ATTACHMENT_BYTES) {
@@ -649,7 +651,7 @@ const PortalChatView: React.FC = () => {
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp"
+          accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
           className="hidden"
           onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelect(f); e.target.value = ''; }}
         />

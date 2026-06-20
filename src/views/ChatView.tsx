@@ -1779,11 +1779,13 @@ const ChatView: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   // SVG removed — script injection vector. Use raster formats only.
   const ALLOWED_IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
+  const ALLOWED_DOC_TYPES = ['application/pdf'];
+  const ALLOWED_ATTACHMENT_TYPES = [...ALLOWED_IMG_TYPES, ...ALLOWED_DOC_TYPES];
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
 
   const handleAttachmentUpload = async (file: File) => {
-    if (!ALLOWED_IMG_TYPES.includes(file.type)) {
-      toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP.', variant: 'destructive' });
+    if (!ALLOWED_ATTACHMENT_TYPES.includes(file.type)) {
+      toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP ose PDF.', variant: 'destructive' });
       return;
     }
     if (file.size > MAX_ATTACHMENT_BYTES) {
@@ -1792,15 +1794,15 @@ const ChatView: React.FC = () => {
     }
     // Guard: must have a valid send target before consuming the upload.
     if (chatMode === 'channel' && !activeChannel) {
-      toast({ title: 'Zgjidh një kanal', description: 'Hap një kanal për të dërguar imazhin.', variant: 'destructive' });
+      toast({ title: 'Zgjidh një kanal', description: 'Hap një kanal për të dërguar skedarin.', variant: 'destructive' });
       return;
     }
     if (chatMode === 'direct' && !activeDirectUserId) {
-      toast({ title: 'Zgjidh një bisedë', description: 'Hap një DM për të dërguar imazhin.', variant: 'destructive' });
+      toast({ title: 'Zgjidh një bisedë', description: 'Hap një DM për të dërguar skedarin.', variant: 'destructive' });
       return;
     }
     if (chatMode !== 'channel' && chatMode !== 'direct') {
-      toast({ title: 'Nuk mund të dërgohet', description: 'Imazhet dërgohen vetëm në kanale ose DM.', variant: 'destructive' });
+      toast({ title: 'Nuk mund të dërgohet', description: 'Skedarët dërgohen vetëm në kanale ose DM.', variant: 'destructive' });
       return;
     }
     try {
@@ -3751,10 +3753,10 @@ const ChatView: React.FC = () => {
                   onDragOver={(e) => { if (e.dataTransfer?.types?.includes('Files')) e.preventDefault(); }}
                   onDrop={async (e) => {
                     const files = Array.from(e.dataTransfer?.files || []);
-                    const imgs = files.filter(f => f.type.startsWith('image/'));
-                    if (imgs.length === 0) return;
+                    const accepted = files.filter(f => ALLOWED_ATTACHMENT_TYPES.includes(f.type));
+                    if (accepted.length === 0) return;
                     e.preventDefault();
-                    for (const f of imgs) await handleAttachmentUpload(f);
+                    for (const f of accepted) await handleAttachmentUpload(f);
                   }}
                 >
                   {/* @mention autocomplete */}
@@ -3821,7 +3823,7 @@ const ChatView: React.FC = () => {
                         (chatMode === 'direct' && !activeDirectUserId) ||
                         (chatMode !== 'channel' && chatMode !== 'direct')
                       }
-                      title={attachmentUploading ? 'Po ngarkohet…' : 'Dërgo imazh'}>
+                      title={attachmentUploading ? 'Po ngarkohet…' : 'Dërgo imazh ose PDF'}>
                       {attachmentUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
                     </Button>
                     <Button type="button" variant="ghost" size="icon"
@@ -3834,7 +3836,7 @@ const ChatView: React.FC = () => {
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept="image/png,image/jpeg,image/gif,image/webp"
+                      accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
                       className="hidden"
                       onChange={async (e) => {
                         const f = e.target.files?.[0];
