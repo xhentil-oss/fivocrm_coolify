@@ -869,11 +869,14 @@ function startCronSchedulers(): void {
     return;
   }
   const MIN = 60_000;
-  // Time-sensitive jobs run frequently (all idempotent / flag-guarded server-side).
+  // Frequencies are kept conservative because lead jobs do a full `leads`
+  // collection scan each run — running them too often pins Firestore read quota.
+  // whatsapp-broadcasts only reads queued broadcasts (tiny), so it stays frequent.
   setInterval(() => { void triggerCronJob('whatsapp-broadcasts'); }, 5 * MIN);
-  setInterval(() => { void triggerCronJob('lead-sla-stale-alerts'); }, 15 * MIN);
-  setInterval(() => { void triggerCronJob('lead-wa-auto-reminders'); }, 15 * MIN);
-  setInterval(() => { void triggerCronJob('overdue-reminders'); }, 30 * MIN);
+  setInterval(() => { void triggerCronJob('lead-sla-stale-alerts'); }, 60 * MIN);
+  setInterval(() => { void triggerCronJob('overdue-reminders'); }, 120 * MIN);
+  // lead-wa-auto-reminders runs only in the daily run-all — it's a 7-day-inactivity
+  // reminder, so a full-collection scan every 15 min was needless read pressure.
   // Everything else: once a day at ~08:00 UTC (same as the old Vercel daily cron).
   scheduleDailyUtc(CRON_DAILY_HOUR, 0, () => { void triggerCronJob('run-all'); });
   // Housekeeping at 03:00 UTC.
