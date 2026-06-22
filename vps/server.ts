@@ -815,12 +815,82 @@ app.post('/whmcs-proxy', requireApiKey, async (req, res) => {
   }
 });
 
+// ── Scheduled jobs (replaces Vercel cron) ──────────────────────────────────────
+// Vercel Hobby caps crons at 2/day. We keep ALL job logic in the Vercel function
+// (api/cron/run.ts, guarded by CRON_SECRET) and just trigger it here on a schedule,
+// so time-sensitive jobs can run far more often than once a day.
+// Requires env: CRM_BASE_URL (e.g. https://fivocrm.vercel.app) and CRON_SECRET
+// (same value set in Vercel). If either is missing, scheduling is disabled.
+const CRM_BASE_URL = (process.env.CRM_BASE_URL || '').replace(/\/$/, '');
+const CRON_SECRET = process.env.CRON_SECRET || '';
+const CRON_DAILY_HOUR = parseInt(process.env.CRON_DAILY_HOUR || '8'); // UTC, matches old "0 8 * * *"
+const cronInFlight = new Set<string>();
+
+async function triggerCronJob(job: string): Promise<void> {
+  if (!CRM_BASE_URL || !CRON_SECRET) return;
+  if (cronInFlight.has(job)) {
+    console.warn(`[CRON] anashkalo "${job}" — ekzekutimi i mëparshëm ende në punë`);
+    return;
+  }
+  cronInFlight.add(job);
+  const started = Date.now();
+  try {
+    const ctrl = new AbortController();
+    const to = setTimeout(() => ctrl.abort(), 90_000);
+    const res = await fetch(`${CRM_BASE_URL}/api/cron/run?job=${encodeURIComponent(job)}`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${CRON_SECRET}` },
+      signal: ctrl.signal,
+    });
+    clearTimeout(to);
+    const ms = Date.now() - started;
+    if (!res.ok) console.error(`[CRON] "${job}" → HTTP ${res.status} (${ms}ms)`);
+    else console.log(`[CRON] "${job}" ok (${ms}ms)`);
+  } catch (err) {
+    console.error(`[CRON] "${job}" dështoi:`, (err as Error)?.message || err);
+  } finally {
+    cronInFlight.delete(job);
+  }
+}
+
+function scheduleDailyUtc(hour: number, minute: number, fn: () => void): void {
+  const DAY = 24 * 60 * 60 * 1000;
+  const now = new Date();
+  const next = new Date(now);
+  next.setUTCHours(hour, minute, 0, 0);
+  if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
+  const run = () => { fn(); setTimeout(run, DAY); };
+  setTimeout(run, next.getTime() - now.getTime());
+}
+
+function startCronSchedulers(): void {
+  if (!CRM_BASE_URL || !CRON_SECRET) {
+    console.warn('[CRON] CRM_BASE_URL / CRON_SECRET nuk janë vendosur — punët me orar janë çaktivizuar');
+    return;
+  }
+  const MIN = 60_000;
+  // Time-sensitive jobs run frequently (all idempotent / flag-guarded server-side).
+  setInterval(() => { void triggerCronJob('whatsapp-broadcasts'); }, 5 * MIN);
+  setInterval(() => { void triggerCronJob('lead-sla-stale-alerts'); }, 15 * MIN);
+  setInterval(() => { void triggerCronJob('lead-wa-auto-reminders'); }, 15 * MIN);
+  setInterval(() => { void triggerCronJob('overdue-reminders'); }, 30 * MIN);
+  // Everything else: once a day at ~08:00 UTC (same as the old Vercel daily cron).
+  scheduleDailyUtc(CRON_DAILY_HOUR, 0, () => { void triggerCronJob('run-all'); });
+  // Housekeeping at 03:00 UTC.
+  scheduleDailyUtc(3, 0, () => { void triggerCronJob('cleanup-old-notifications'); });
+  // Kick the frequent set shortly after boot so a restart doesn't stall a broadcast.
+  setTimeout(() => { void triggerCronJob('whatsapp-broadcasts'); }, MIN);
+  console.log(`[CRON] ✅ Schedulerët aktiv → ${CRM_BASE_URL} (daily run-all @ ${CRON_DAILY_HOUR}:00 UTC)`);
+}
+
 // ── Start ─────────────────────────────────────────────────────────────────────
 app.listen(PORT, async () => {
   console.log(`\n[VPS Server] ✅ Aktiv në port ${PORT}`);
   console.log(`[VPS Server]  → Status:  http://localhost:${PORT}/status`);
   console.log(`[VPS Server]  → Agents:  http://localhost:${PORT}/agents`);
   console.log(`[VPS Server]  → QR:      http://localhost:${PORT}/qr/{agentId}\n`);
+
+  startCronSchedulers();
 
   await loadAgents();
 

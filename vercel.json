@@ -1,8 +1,5 @@
 {
-  "crons": [
-    { "path": "/api/cron/run?job=run-all",                   "schedule": "0 8 * * *" },
-    { "path": "/api/cron/run?job=cleanup-old-notifications", "schedule": "0 3 * * 0" }
-  ],
+  "//crons": "Cron scheduling moved to the VPS (vps/server.ts startCronSchedulers) to bypass the Vercel Hobby 2-cron/daily limit. The /api/cron/run endpoint stays and is triggered over HTTP with CRON_SECRET.",
   "functions": {
     "api/cron/run.ts": { "maxDuration": 60 }
   },
