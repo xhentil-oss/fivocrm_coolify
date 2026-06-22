@@ -10,6 +10,7 @@ import {
   orderBy,
   limit as firestoreLimit,
   onSnapshot,
+  getDocs,
   QueryConstraint,
   Timestamp,
   DocumentData
@@ -136,6 +137,17 @@ const globalReadCollections = new Set([
   'customers', 'leads', 'invoices', 'quotes', 'contracts', 'services',
 ]);
 
+// "Reference" collections that change rarely but are subscribed on almost every
+// screen. Reading them with a live onSnapshot keeps an open stream + re-reads the
+// whole list on every (re)mount. Instead we read them ONCE via getDocs and serve
+// from a shared cache for STATIC_TTL_MS. Writes invalidate the cache (see
+// invalidateCollectionCache) so edits still show up immediately. Net effect: far
+// fewer Firestore reads, at the cost of up-to-TTL staleness for passive viewers.
+const staticCollections = new Set([
+  'teamMembers', 'teams', 'userProfiles', 'services',
+]);
+const STATIC_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
 // Module-level cache: reuse listeners for identical queries across components.
 // Key = "{collectionName}|{whereKey}|{orderKey}|{limit}|{skipTeamFilter}|{teamId}"
 interface CacheEntry {
@@ -143,8 +155,27 @@ interface CacheEntry {
   listeners: Set<(data: (DocumentData & { id: string })[]) => void>;
   unsubscribe: () => void;
   refCount: number;
+  isStatic?: boolean;        // true → cached one-time read, no live listener
+  fetchedAt?: number;        // last getDocs time (static entries only)
+  refetch?: () => void;      // re-run the one-time read + notify (static entries only)
 }
 const _collectionCache = new Map<string, CacheEntry>();
+
+// Drop / refresh cached reads for a static collection after a write, so edits are
+// reflected immediately instead of waiting for the TTL. Mounted views (refCount>0)
+// are refreshed in place; unused entries are dropped and re-fetched on next mount.
+export function invalidateCollectionCache(collectionName: string) {
+  const prefix = `${collectionName}|`;
+  for (const [key, entry] of _collectionCache) {
+    if (!key.startsWith(prefix) || !entry.isStatic) continue;
+    if (entry.refCount > 0 && entry.refetch) {
+      entry.fetchedAt = 0;
+      entry.refetch();
+    } else {
+      _collectionCache.delete(key);
+    }
+  }
+}
 
 function buildCacheKey(
   collectionName: string,
@@ -200,8 +231,69 @@ export function useCollection<T = DocumentData>(
     if (isTeamScoped && !globalTeamId) { setData([]); setLoading(true); return; }
 
     const cacheKey = buildCacheKey(collectionName, whereKey, orderKey, limitVal, skipTeamFilter, globalTeamId);
+    const isStatic = staticCollections.has(collectionName);
 
-    // Register listener on existing cache entry
+    // Build the Firestore query identically for the live and static paths.
+    const buildQuery = () => {
+      const constraints: QueryConstraint[] = [];
+      if (isTeamScoped && globalTeamId) {
+        // Server-side teamId filter — reduces Firestore reads to this team's documents only.
+        // Additional where/orderBy/limit are applied client-side to avoid composite index requirements.
+        constraints.push(where('teamId', '==', globalTeamId));
+        if (options?.teamScopedWhere && options?.where) {
+          options.where.forEach(w => constraints.push(where(w.field, w.operator as any, w.value)));
+        }
+      } else {
+        if (options?.where) options.where.forEach(w => constraints.push(where(w.field, w.operator as any, w.value)));
+        if (options?.orderBy) constraints.push(orderBy(options.orderBy.field, options.orderBy.direction || 'asc'));
+        if (options?.limit && options.limit > 0) constraints.push(firestoreLimit(options.limit));
+      }
+      return query(collection(db, collectionName), ...constraints);
+    };
+
+    // Client-side teamId/where/order shaping (only needed for team-scoped reads;
+    // for non-team-scoped reads the constraints above are already applied server-side).
+    const processItems = (raw: (DocumentData & { id: string })[]) => {
+      let items = raw;
+      if (isTeamScoped && globalTeamId) {
+        items = items.filter(item => (item as any).teamId === globalTeamId);
+        if (options?.where) {
+          items = items.filter(item => options.where!.every(w => {
+            const val = (item as any)[w.field];
+            switch (w.operator) {
+              case '==': return val === w.value;
+              case '!=': return val !== w.value;
+              case '<': return val < w.value;
+              case '<=': return val <= w.value;
+              case '>': return val > w.value;
+              case '>=': return val >= w.value;
+              case 'in': return Array.isArray(w.value) && w.value.includes(val);
+              case 'not-in': return Array.isArray(w.value) && !w.value.includes(val);
+              case 'array-contains': return Array.isArray(val) && val.includes(w.value);
+              case 'array-contains-any': return Array.isArray(val) && Array.isArray(w.value) && w.value.some((v: any) => val.includes(v));
+              default: return true;
+            }
+          }));
+        }
+        if (options?.orderBy) {
+          const field = options.orderBy.field;
+          const dir = options.orderBy.direction || 'asc';
+          items = [...items].sort((a, b) => {
+            const va = (a as any)[field]; const vb = (b as any)[field];
+            if (va == null && vb == null) return 0;
+            if (va == null) return 1; if (vb == null) return -1;
+            const ta = va instanceof Date ? va.getTime() : typeof va === 'string' ? va : Number(va);
+            const tb = vb instanceof Date ? vb.getTime() : typeof vb === 'string' ? vb : Number(vb);
+            if (ta < tb) return dir === 'asc' ? -1 : 1;
+            if (ta > tb) return dir === 'asc' ? 1 : -1;
+            return 0;
+          });
+        }
+      }
+      return items;
+    };
+
+    // Register on an existing cache entry (shared live listener or cached static data).
     if (_collectionCache.has(cacheKey)) {
       const entry = _collectionCache.get(cacheKey)!;
       entry.refCount++;
@@ -210,13 +302,17 @@ export function useCollection<T = DocumentData>(
         setLoading(false);
       };
       entry.listeners.add(listener);
-      // Deliver current data immediately
       setData(entry.data as (T & { id: string })[]);
       setLoading(false);
+      // Static entry past its TTL → refresh in the background (stale-while-revalidate).
+      if (isStatic && entry.refetch && entry.fetchedAt !== undefined && Date.now() - entry.fetchedAt > STATIC_TTL_MS) {
+        entry.refetch();
+      }
       return () => {
         entry.listeners.delete(listener);
         entry.refCount--;
-        if (entry.refCount <= 0) {
+        // Live entries are torn down when unused; static entries persist for TTL reuse.
+        if (entry.refCount <= 0 && !entry.isStatic) {
           entry.unsubscribe();
           _collectionCache.delete(cacheKey);
         }
@@ -240,64 +336,39 @@ export function useCollection<T = DocumentData>(
     entry.listeners.add(selfListener);
     _collectionCache.set(cacheKey, entry);
 
+    if (isStatic) {
+      // One-time read + TTL cache (no live stream) for rarely-changing reference data.
+      entry.isStatic = true;
+      entry.fetchedAt = 0;
+      const refetch = () => {
+        (auth.currentUser?.getIdToken() ?? Promise.resolve())
+          .then(() => getDocs(buildQuery()))
+          .then((snap) => {
+            const items = processItems(snap.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as (DocumentData & { id: string })[]);
+            const e = _collectionCache.get(cacheKey);
+            if (e) { e.data = items; e.fetchedAt = Date.now(); e.listeners.forEach(l => l(items)); }
+            if (!cancelled) setError(null);
+          })
+          .catch((err) => {
+            console.error(`Error fetching ${collectionName}:`, err);
+            if (!cancelled) { setError(err as Error); setLoading(false); }
+          });
+      };
+      entry.refetch = refetch;
+      refetch();
+      return () => {
+        cancelled = true;
+        entry.listeners.delete(selfListener);
+        entry.refCount--;
+        // Keep the static entry (refCount may hit 0) so navigation reuses it within the TTL.
+      };
+    }
+
+    // Live path (onSnapshot) — default for all non-static collections.
     (auth.currentUser?.getIdToken() ?? Promise.resolve()).then(() => {
       if (cancelled) return;
-
-      const constraints: QueryConstraint[] = [];
-      if (isTeamScoped && globalTeamId) {
-        // Server-side teamId filter — reduces Firestore reads to this team's documents only.
-        // Additional where/orderBy/limit are applied client-side to avoid composite index requirements.
-        constraints.push(where('teamId', '==', globalTeamId));
-        // Opt-in: also push the caller's where constraints server-side (needs a
-        // composite index). The client-side pass below still re-applies them.
-        if (options?.teamScopedWhere && options?.where) {
-          options.where.forEach(w => constraints.push(where(w.field, w.operator as any, w.value)));
-        }
-      } else {
-        if (options?.where) options.where.forEach(w => constraints.push(where(w.field, w.operator as any, w.value)));
-        if (options?.orderBy) constraints.push(orderBy(options.orderBy.field, options.orderBy.direction || 'asc'));
-        if (options?.limit && options.limit > 0) constraints.push(firestoreLimit(options.limit));
-      }
-
-      const q = query(collection(db, collectionName), ...constraints);
-      unsubFn = onSnapshot(q, (snapshot) => {
-        let items = snapshot.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as (DocumentData & { id: string })[];
-        if (isTeamScoped && globalTeamId) {
-          items = items.filter(item => (item as any).teamId === globalTeamId);
-        }
-        if (isTeamScoped && globalTeamId && options?.where) {
-          items = items.filter(item => options.where!.every(w => {
-            const val = (item as any)[w.field];
-            switch (w.operator) {
-              case '==': return val === w.value;
-              case '!=': return val !== w.value;
-              case '<': return val < w.value;
-              case '<=': return val <= w.value;
-              case '>': return val > w.value;
-              case '>=': return val >= w.value;
-              case 'in': return Array.isArray(w.value) && w.value.includes(val);
-              case 'not-in': return Array.isArray(w.value) && !w.value.includes(val);
-              case 'array-contains': return Array.isArray(val) && val.includes(w.value);
-              case 'array-contains-any': return Array.isArray(val) && Array.isArray(w.value) && w.value.some((v: any) => val.includes(v));
-              default: return true;
-            }
-          }));
-        }
-        if (isTeamScoped && globalTeamId && options?.orderBy) {
-          const field = options.orderBy.field;
-          const dir = options.orderBy.direction || 'asc';
-          items = [...items].sort((a, b) => {
-            const va = (a as any)[field]; const vb = (b as any)[field];
-            if (va == null && vb == null) return 0;
-            if (va == null) return 1; if (vb == null) return -1;
-            const ta = va instanceof Date ? va.getTime() : typeof va === 'string' ? va : Number(va);
-            const tb = vb instanceof Date ? vb.getTime() : typeof vb === 'string' ? vb : Number(vb);
-            if (ta < tb) return dir === 'asc' ? -1 : 1;
-            if (ta > tb) return dir === 'asc' ? 1 : -1;
-            return 0;
-          });
-        }
-        // Update cache and notify all listeners
+      unsubFn = onSnapshot(buildQuery(), (snapshot) => {
+        const items = processItems(snapshot.docs.map(d => ({ id: d.id, ...convertTimestamps(d.data()) })) as (DocumentData & { id: string })[]);
         if (_collectionCache.has(cacheKey)) {
           const e = _collectionCache.get(cacheKey)!;
           e.data = items;
@@ -417,6 +488,7 @@ export function useMutation<T = DocumentData>(collectionName: string) {
         createdByUserId: user?.uid || null
       });
       const docRef = await addDoc(collection(db, collectionName), docData);
+      if (staticCollections.has(collectionName)) invalidateCollectionCache(collectionName);
 
       // Email delivery for in-app notifications — single choke point covering
       // every notification creation site. Fire-and-forget; the server endpoint
@@ -462,6 +534,7 @@ export function useMutation<T = DocumentData>(collectionName: string) {
         ...data,
         updatedAt: Timestamp.now()
       }) as any);
+      if (staticCollections.has(collectionName)) invalidateCollectionCache(collectionName);
       setLoading(false);
     } catch (err) {
       setError(err as Error);
@@ -476,6 +549,7 @@ export function useMutation<T = DocumentData>(collectionName: string) {
     try {
       const docRef = doc(db, collectionName, id);
       await deleteDoc(docRef);
+      if (staticCollections.has(collectionName)) invalidateCollectionCache(collectionName);
       setLoading(false);
     } catch (err) {
       setError(err as Error);
