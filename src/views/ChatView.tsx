@@ -2960,7 +2960,7 @@ const ChatView: React.FC = () => {
                 <select
                   value={searchSenderId}
                   onChange={e => setSearchSenderId(e.target.value)}
-                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                  className="h-7 rounded-md border bg-background px-2 text-base sm:text-xs"
                 >
                   <option value="__any__">Të gjithë</option>
                   {visibleSenders.map(uid => (
@@ -2972,14 +2972,14 @@ const ChatView: React.FC = () => {
                   type="date"
                   value={searchDateFrom}
                   onChange={e => setSearchDateFrom(e.target.value)}
-                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                  className="h-7 rounded-md border bg-background px-2 text-base sm:text-xs"
                 />
                 <span className="text-muted-foreground">Deri:</span>
                 <input
                   type="date"
                   value={searchDateTo}
                   onChange={e => setSearchDateTo(e.target.value)}
-                  className="h-7 rounded-md border bg-background px-2 text-xs"
+                  className="h-7 rounded-md border bg-background px-2 text-base sm:text-xs"
                 />
                 {(searchSenderId !== '__any__' || searchDateFrom || searchDateTo) && (
                   <button
@@ -3423,9 +3423,9 @@ const ChatView: React.FC = () => {
                                   </div>
                                 )}
 
-                                {/* Hover actions — desktop hover */}
+                                {/* Hover actions — desktop hover; on touch (no hover) they stay visible so reply/react stay reachable */}
                                 {!isDeleted && !isEditing && (
-                                  <div className={`absolute -top-3.5 ${isOwn ? 'left-1' : 'right-1'} opacity-0 group-hover:opacity-100 active:opacity-100 transition-all flex items-center bg-background border rounded-xl shadow-lg px-1 py-0.5 z-10 gap-0.5`}>
+                                  <div className={`absolute -top-3.5 ${isOwn ? 'left-1' : 'right-1'} opacity-100 sm:opacity-0 group-hover:opacity-100 active:opacity-100 transition-all flex items-center flex-wrap max-w-[90vw] bg-background border rounded-xl shadow-lg px-1 py-0.5 z-10 gap-0.5`}>
                                     <div className="relative">
                                       <button className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors"
                                         onClick={() => setShowEmojiPicker(showEmojiPicker === message.id ? null : message.id)}>

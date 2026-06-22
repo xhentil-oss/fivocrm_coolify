@@ -316,7 +316,7 @@ export default function InteriorDesignLandingPage() {
           <FadeIn><div className="text-center mb-16"><p className="text-sm font-semibold uppercase tracking-widest text-amber-600 mb-3">{t.results.kicker}</p><h2 className="text-3xl sm:text-4xl font-bold">{t.results.title}</h2></div></FadeIn>
           <div className="grid grid-cols-2 lg:grid-cols-4 gap-6">
             {t.results.items.map((r, i) => { const Icon = RESULT_ICONS[i]; return (
-              <FadeIn key={i} delay={i * 100}><div className="text-center p-8 rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-100"><Icon className="w-8 h-8 text-amber-600 mx-auto mb-4" /><div className="text-4xl sm:text-5xl font-bold bg-gradient-to-r from-amber-600 to-orange-600 bg-clip-text text-transparent"><Counter end={parseFloat(r.metric)} suffix={r.suffix} /></div><p className="mt-3 text-sm text-gray-600 font-medium">{r.label}</p></div></FadeIn>); })}
+              <FadeIn key={i} delay={i * 100}><div className="text-center p-5 sm:p-8 rounded-2xl bg-gradient-to-br from-amber-50 to-orange-50 border border-amber-100"><Icon className="w-8 h-8 text-amber-600 mx-auto mb-4" /><div className="text-3xl sm:text-5xl font-bold bg-gradient-to-r from-amber-600 to-orange-600 bg-clip-text text-transparent"><Counter end={parseFloat(r.metric)} suffix={r.suffix} /></div><p className="mt-3 text-sm text-gray-600 font-medium">{r.label}</p></div></FadeIn>); })}
           </div>
         </div>
       </section>

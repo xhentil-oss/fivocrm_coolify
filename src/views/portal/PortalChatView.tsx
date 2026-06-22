@@ -647,7 +647,7 @@ const PortalChatView: React.FC = () => {
       )}
 
       {/* Message Input Area */}
-      <div className="border-t bg-background pt-2 pb-1">
+      <div className="border-t bg-background pt-2" style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom, 8px))' }}>
         <input
           ref={fileInputRef}
           type="file"
