@@ -22,7 +22,12 @@ export function useFileUpload() {
 
   const upload = useCallback(async (file: File, folder = 'uploads'): Promise<UploadResult> => {
     if (!user) throw new Error('Not authenticated');
-    const vpsUrl = (localStorage.getItem('whatsapp_vps_url') || '').replace(/\/$/, '');
+    // Prefer the team-specific VPS URL (synced from teamSettings), but fall back
+    // to a deployment-wide VITE_VPS_URL so uploads work for every team/member even
+    // when a team's settings haven't been populated/synced to this browser yet.
+    const teamVps = (localStorage.getItem('whatsapp_vps_url') || '').replace(/\/$/, '');
+    const envVps = ((import.meta.env.VITE_VPS_URL as string | undefined) || '').replace(/\/$/, '');
+    const vpsUrl = teamVps || envVps;
     if (!vpsUrl) {
       throw new Error('Serveri i skedarëve (VPS) nuk është konfiguruar. Shtoje te Cilësimet → WhatsApp.');
     }
