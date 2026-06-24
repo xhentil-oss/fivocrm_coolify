@@ -1411,7 +1411,14 @@ const ChatView: React.FC = () => {
     const newIncoming = filteredMessages.filter(
       m => m.senderId !== user.uid && !prevSeenMsgIdsRef.current.has(m.id)
     );
-    if (newIncoming.length > 0) {
+    // Only chirp for messages that genuinely arrived during this session. Without
+    // this, expanding the visible window ("load older", pagination, opening a
+    // menu that refreshes the list) reveals old messages that aren't in the seen
+    // set yet and would falsely trigger the sound.
+    const genuinelyNew = newIncoming.filter(
+      m => getTimestampMs(m.createdAt) > mountTimeRef.current.getTime()
+    );
+    if (genuinelyNew.length > 0) {
       playBirdChirp();
     }
     filteredMessages.forEach(m => prevSeenMsgIdsRef.current.add(m.id));
