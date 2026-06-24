@@ -16,7 +16,7 @@ const FloatingActionButton: React.FC = () => {
   ];
 
   return (
-    <div className="fixed bottom-6 right-4 sm:bottom-8 sm:right-8 z-50 flex flex-col-reverse items-end gap-3" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+    <div className="fixed bottom-20 right-4 lg:bottom-8 lg:right-8 z-50 flex flex-col-reverse items-end gap-3" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
       {expanded && (
         <div className="flex flex-col-reverse gap-2 animate-fade-in">
           {actions.map((action, index) => {

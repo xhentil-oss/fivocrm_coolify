@@ -68,8 +68,8 @@ const LoginView: React.FC = () => {
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-background p-4">
-      <Card className="w-full max-w-md p-8 space-y-6">
+    <div className="min-h-screen flex items-center justify-center bg-background p-4 overflow-x-hidden">
+      <Card className="w-full max-w-md min-w-0 p-6 sm:p-8 space-y-6">
         {/* Logo / Title */}
         <div className="text-center space-y-2">
           <h1 className="text-3xl font-bold text-gradient-primary">FivoCRM</h1>

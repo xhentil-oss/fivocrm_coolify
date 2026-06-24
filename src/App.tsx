@@ -11,6 +11,7 @@ import LoginView from './views/LoginView';
 import RegisterView from './views/RegisterView';
 import FloatingActionButton from './components/FloatingActionButton';
 import MobileBottomNav from './components/MobileBottomNav';
+import { AndroidBackButton } from './components/AndroidBackButton';
 import DailyReportPopup from './components/DailyReportPopup';
 import CommandPalette from './components/CommandPalette';
 import PermissionGate from './components/PermissionGate';
@@ -340,6 +341,7 @@ function App() {
   return (
     <ErrorBoundary>
       <Router>
+        <AndroidBackButton />
         <GoogleApiProvider>
           <PermissionsProvider>
             <AppContent />

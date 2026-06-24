@@ -585,21 +585,27 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     if (!files || files.length === 0) return;
 
     const newAttachments = [...attachments];
-    
-    for (const file of Array.from(files)) {
-      const url = URL.createObjectURL(file);
-      const attachment = {
-        name: file.name,
-        size: file.size,
-        type: file.type,
-        url,
-        uploadedBy: user?.uid,
-        uploadedAt: new Date().toISOString(),
-      };
-      newAttachments.push(attachment);
-    }
 
-    await onUpdate(task.id, { attachments: JSON.stringify(newAttachments) });
+    try {
+      for (const file of Array.from(files)) {
+        // Upload to the file server so the URL survives reloads (a blob: URL is
+        // session-scoped and dies on navigation/app restart).
+        const result = await uploadCommentImage(file, 'task-attachments');
+        newAttachments.push({
+          name: file.name,
+          size: file.size,
+          type: file.type,
+          url: result.url,
+          uploadedBy: user?.uid,
+          uploadedAt: new Date().toISOString(),
+        });
+      }
+      await onUpdate(task.id, { attachments: JSON.stringify(newAttachments) });
+    } catch (err: any) {
+      toast({ title: 'Ngarkimi i skedarit dështoi', description: err?.message, variant: 'destructive' });
+    } finally {
+      e.target.value = '';
+    }
   };
 
   const handleRemoveAttachment = async (index: number) => {

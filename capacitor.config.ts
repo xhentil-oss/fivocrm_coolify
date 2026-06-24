@@ -8,6 +8,12 @@ const config: CapacitorConfig = {
     androidScheme: 'https',
   },
   plugins: {
+    FirebaseAuthentication: {
+      // We keep the Firebase JS SDK as the source of truth: the native plugin
+      // only returns the Google credential, then we sign in via signInWithCredential.
+      skipNativeAuth: true,
+      providers: ['google.com'],
+    },
     SplashScreen: {
       launchAutoHide: true,
       launchShowDuration: 2000,

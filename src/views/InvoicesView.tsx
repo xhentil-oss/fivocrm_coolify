@@ -36,6 +36,7 @@ import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import { toAll, getEurToAllRate } from '../lib/utils';
 import { toast } from '../hooks/use-toast';
 import { getStatusColor } from '../lib/statusColors';
+import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../lib/native';
 
 const InvoicesView: React.FC = () => {
   const permissions = usePermissions();
@@ -233,8 +234,8 @@ const InvoicesView: React.FC = () => {
           currency: ((invoice as any).currency || 'EUR').toLowerCase(),
           customerEmail: customer?.email || undefined,
           customerName: customer?.name || undefined,
-          successUrl: `${window.location.origin}/app/invoices?payment=success&invoice=${invoice.id}`,
-          cancelUrl: `${window.location.origin}/app/invoices?payment=cancelled&invoice=${invoice.id}`,
+          successUrl: appReturnUrl(`/app/invoices?payment=success&invoice=${invoice.id}`),
+          cancelUrl: appReturnUrl(`/app/invoices?payment=cancelled&invoice=${invoice.id}`),
         }),
       });
 
@@ -244,12 +245,12 @@ const InvoicesView: React.FC = () => {
       }
 
       const { url } = await response.json();
-      
+
       if (url) {
         try {
           const parsed = new URL(url);
           if (parsed.hostname.endsWith('.stripe.com') || parsed.hostname === 'stripe.com') {
-            window.location.href = url;
+            await openCheckout(url);
           } else {
             throw new Error('URL e pagesës nuk është e vlefshme');
           }
@@ -420,6 +421,14 @@ const InvoicesView: React.FC = () => {
     });
     return list;
   }, [invoices, statusFilter, searchQuery, sortBy, customers]);
+
+  // Cap rendered rows to avoid mounting hundreds of invoice rows at once on mobile.
+  const [visibleCount, setVisibleCount] = useState(50);
+  useEffect(() => { setVisibleCount(50); }, [statusFilter, searchQuery, sortBy]);
+  const visibleInvoices = useMemo(
+    () => filteredInvoices.slice(0, visibleCount),
+    [filteredInvoices, visibleCount]
+  );
 
   if (invoicesLoading) {
     return (
@@ -735,7 +744,7 @@ const InvoicesView: React.FC = () => {
 
       {/* Mobile Card Layout */}
       <div className="sm:hidden space-y-3">
-        {filteredInvoices.map((invoice) => {
+        {visibleInvoices.map((invoice) => {
           const customer = customers?.find(c => c.id === invoice.customerId);
           return (
             <Card key={invoice.id} className="p-3" onClick={() => setSelectedInvoice(invoice)}>
@@ -814,6 +823,11 @@ const InvoicesView: React.FC = () => {
             </Card>
           );
         })}
+        {filteredInvoices.length > visibleCount && (
+          <Button variant="outline" className="w-full" onClick={() => setVisibleCount((c) => c + 50)}>
+            Shfaq më shumë ({filteredInvoices.length - visibleCount})
+          </Button>
+        )}
       </div>
 
       {/* Desktop Table Layout */}
@@ -833,7 +847,7 @@ const InvoicesView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {filteredInvoices.map((invoice) => {
+              {visibleInvoices.map((invoice) => {
                 const customer = customers?.find(c => c.id === invoice.customerId);
                 return (
                   <tr key={invoice.id} className="hover:bg-muted/50">
@@ -1030,6 +1044,13 @@ const InvoicesView: React.FC = () => {
             </tbody>
           </table>
         </div>
+        {filteredInvoices.length > visibleCount && (
+          <div className="p-3 border-t border-border">
+            <Button variant="outline" className="w-full" onClick={() => setVisibleCount((c) => c + 50)}>
+              Shfaq më shumë ({filteredInvoices.length - visibleCount})
+            </Button>
+          </div>
+        )}
       </Card>
 
       {selectedInvoice && (
@@ -2142,11 +2163,13 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
 
       <div className="space-y-3">
         {invoice.paymentUrl && (
-          <Button asChild className="w-full" variant="outline">
-            <a href={invoice.paymentUrl} target="_blank" rel="noopener noreferrer">
-              <ExternalLink className="w-4 h-4 mr-2" />
-              Hap Linkun e Pagesës
-            </a>
+          <Button
+            className="w-full"
+            variant="outline"
+            onClick={() => openExternal(invoice.paymentUrl!)}
+          >
+            <ExternalLink className="w-4 h-4 mr-2" />
+            Hap Linkun e Pagesës
           </Button>
         )}
         
@@ -2180,8 +2203,8 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
                     currency: (invoice as any).currency === 'EUR' ? 'eur' : 'all',
                     customerEmail: customer?.email || undefined,
                     customerName: customer?.name || undefined,
-                    successUrl: `${window.location.origin}/app/invoices?payment=success&invoice=${invoice.id}`,
-                    cancelUrl: `${window.location.origin}/app/invoices?payment=cancelled&invoice=${invoice.id}`,
+                    successUrl: appReturnUrl(`/app/invoices?payment=success&invoice=${invoice.id}`),
+                    cancelUrl: appReturnUrl(`/app/invoices?payment=cancelled&invoice=${invoice.id}`),
                   }),
                 });
                 if (!response.ok) throw new Error('Gabim gjatë krijimit të sesionit');
@@ -2190,7 +2213,7 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
                   try {
                     const parsed = new URL(url);
                     if (parsed.hostname.endsWith('.stripe.com') || parsed.hostname === 'stripe.com') {
-                      window.location.href = url;
+                      await openCheckout(url);
                     } else {
                       throw new Error('URL e pagesës nuk është e vlefshme');
                     }
@@ -2467,8 +2490,9 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             doc.setFillColor(13, 148, 136);
             doc.rect(0, h - 4, w, 4, 'F');
 
-            doc.save(`Fatura-${invoice.invoiceNumber || invoice.id.slice(0, 8)}.pdf`);
-            toast({ title: 'PDF u shkarkua' });
+            const fileName = `Fatura-${invoice.invoiceNumber || invoice.id.slice(0, 8)}.pdf`;
+            await saveOrShareFile(doc.output('blob'), fileName, { shareTitle: fileName });
+            toast({ title: 'PDF u ruajt' });
           }}
         >
           <Download className="w-4 h-4 mr-2" />

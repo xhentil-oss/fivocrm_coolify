@@ -1,4 +1,4 @@
-﻿import React, { useState, useMemo } from 'react';
+﻿import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -156,6 +156,15 @@ const CustomersView: React.FC = () => {
       return true;
     });
   }, [customers, searchQuery, statusFilter, industryFilter, creditLimitFilter]);
+
+  // Cap rendered rows so large customer lists don't mount hundreds of DOM nodes
+  // at once (mobile jank). "Load more" reveals the rest of the filtered set.
+  const [visibleCount, setVisibleCount] = useState(50);
+  useEffect(() => { setVisibleCount(50); }, [searchQuery, statusFilter, industryFilter, creditLimitFilter]);
+  const visibleCustomers = useMemo(
+    () => filteredCustomers.slice(0, visibleCount),
+    [filteredCustomers, visibleCount]
+  );
 
   const statusCounts = useMemo(() => {
     if (!customers) return {};
@@ -672,7 +681,7 @@ const CustomersView: React.FC = () => {
                 </CardContent>
               </Card>
             ) : (
-              filteredCustomers.map((customer) => {
+              visibleCustomers.map((customer) => {
                 const cust = customer as any;
                 const statusOpt = STATUS_OPTIONS.find(s => s.value === (cust.status || 'Active'));
                 const StatusIcon = statusOpt?.icon || CheckCircle2;
@@ -724,6 +733,11 @@ const CustomersView: React.FC = () => {
                 );
               })
             )}
+            {filteredCustomers.length > visibleCount && (
+              <Button variant="outline" className="w-full" onClick={() => setVisibleCount((c) => c + 50)}>
+                Shfaq më shumë ({filteredCustomers.length - visibleCount})
+              </Button>
+            )}
           </div>
 
           {/* Customer Table - Desktop */}
@@ -753,7 +767,7 @@ const CustomersView: React.FC = () => {
                       </td>
                     </tr>
                   ) : (
-                    filteredCustomers.map((customer) => {
+                    visibleCustomers.map((customer) => {
                       const cust = customer as any;
                       const statusOpt = STATUS_OPTIONS.find(s => s.value === (cust.status || 'Active'));
                       const StatusIcon = statusOpt?.icon || CheckCircle2;
@@ -820,6 +834,13 @@ const CustomersView: React.FC = () => {
                 </tbody>
               </table>
             </div>
+            {filteredCustomers.length > visibleCount && (
+              <div className="p-3 border-t border-border">
+                <Button variant="outline" className="w-full" onClick={() => setVisibleCount((c) => c + 50)}>
+                  Shfaq më shumë ({filteredCustomers.length - visibleCount})
+                </Button>
+              </div>
+            )}
           </Card>
 
           {/* Edit Dialog */}

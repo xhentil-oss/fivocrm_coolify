@@ -12,7 +12,7 @@ import WhatsappBroadcasts from '../components/WhatsappBroadcasts';
 import WhatsappAutomation from '../components/WhatsappAutomation';
 import WhatsappAnalytics from '../components/WhatsappAnalytics';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { Search, MessageSquare, UserCircle2, Inbox, FileText, Megaphone, Zap, BarChart3 } from 'lucide-react';
+import { Search, MessageSquare, UserCircle2, Inbox, FileText, Megaphone, Zap, BarChart3, ArrowLeft } from 'lucide-react';
 import type { WhatsAppMessage, WhatsAppThread, TeamMember } from '../types';
 
 type Convo = {
@@ -165,41 +165,41 @@ const WhatsappInboxView: React.FC = () => {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100vh-7rem)]">
-      <div className="flex items-center justify-between mb-3">
-        <div className="flex items-center gap-2">
-          <h1 className="text-2xl font-bold">WhatsApp Inbox</h1>
+    <div className="flex flex-col h-[calc(100dvh-180px)] lg:h-[calc(100dvh-7rem)]">
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <div className="flex items-center gap-2 min-w-0">
+          <h1 className="text-xl sm:text-2xl font-bold truncate">WhatsApp Inbox</h1>
           {totalUnread > 0 && (
             <span className="text-xs font-semibold px-2 py-0.5 rounded-full bg-[#25D366] text-white">
               {totalUnread}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <button
             onClick={() => setBroadcastsOpen(true)}
             className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-md border border-border hover:bg-muted"
           >
-            <Megaphone className="w-3.5 h-3.5" /> Fushatat
+            <Megaphone className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Fushatat</span>
           </button>
           <button
             onClick={() => setTemplatesOpen(true)}
             className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-md border border-border hover:bg-muted"
           >
-            <FileText className="w-3.5 h-3.5" /> Template-t
+            <FileText className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Template-t</span>
           </button>
           <button
             onClick={() => setAnalyticsOpen(true)}
             className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-md border border-border hover:bg-muted"
           >
-            <BarChart3 className="w-3.5 h-3.5" /> Statistika
+            <BarChart3 className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Statistika</span>
           </button>
           {(permissions.isOwner || permissions.isAdmin) && (
             <button
               onClick={() => setAutomationOpen(true)}
               className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-md border border-border hover:bg-muted"
             >
-              <Zap className="w-3.5 h-3.5" /> Automatizime
+              <Zap className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Automatizime</span>
             </button>
           )}
           <WhatsAppStatusBadge variant="pill" />
@@ -212,7 +212,7 @@ const WhatsappInboxView: React.FC = () => {
 
       <div className="flex flex-1 min-h-0 gap-3">
         {/* Conversation list */}
-        <div className="w-full max-w-sm flex flex-col border border-border rounded-lg bg-card overflow-hidden">
+        <div className={`${selectedPhone ? 'hidden lg:flex' : 'flex'} w-full lg:max-w-sm flex-col border border-border rounded-lg bg-card overflow-hidden`}>
           <div className="p-2 border-b border-border">
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
@@ -305,7 +305,7 @@ const WhatsappInboxView: React.FC = () => {
         </div>
 
         {/* Thread + chat */}
-        <div className="flex-1 min-w-0 flex flex-col border border-border rounded-lg bg-card overflow-hidden">
+        <div className={`${selectedPhone ? 'flex' : 'hidden lg:flex'} flex-1 min-w-0 flex-col border border-border rounded-lg bg-card overflow-hidden`}>
           {!selected ? (
             <div className="flex flex-col items-center justify-center h-full gap-3 text-center text-muted-foreground">
               <MessageSquare className="w-10 h-10" />
@@ -315,6 +315,13 @@ const WhatsappInboxView: React.FC = () => {
             <div className="flex flex-col h-full">
               {/* Assignment / status / note bar */}
               <div className="flex flex-wrap items-center gap-2 px-3 py-2 border-b border-border bg-background">
+                <button
+                  onClick={() => setSelectedPhone(null)}
+                  className="lg:hidden inline-flex items-center justify-center w-9 h-9 rounded-md hover:bg-muted -ml-1"
+                  aria-label="Kthehu te bisedat"
+                >
+                  <ArrowLeft className="w-5 h-5" />
+                </button>
                 <select
                   value={selectedThread?.assignedToUserId || ''}
                   onChange={(e) => {

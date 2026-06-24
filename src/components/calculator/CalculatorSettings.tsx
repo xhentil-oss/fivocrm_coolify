@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import type { CalculatorSettings, Market, MarketPricing } from '../../lib/calculator/types';
 import { DEFAULT_SETTINGS, exportSettingsJSON, importSettingsJSON } from '../../lib/calculator/defaults';
+import { saveOrShareFile } from '../../lib/native';
 
 interface Props {
   settings: CalculatorSettings;
@@ -94,11 +95,7 @@ export default function CalculatorSettingsPanel({ settings, onSave, onReset }: P
   const handleExport = () => {
     const json = exportSettingsJSON(local);
     const blob = new Blob([json], { type: 'application/json' });
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob);
-    a.download = 'calculator-settings.json';
-    a.click();
-    URL.revokeObjectURL(a.href);
+    saveOrShareFile(blob, 'calculator-settings.json');
   };
 
   const handleImport = (e: React.ChangeEvent<HTMLInputElement>) => {

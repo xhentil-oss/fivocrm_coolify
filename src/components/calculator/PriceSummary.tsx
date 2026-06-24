@@ -3,6 +3,7 @@
    ═══════════════════════════════════════════════════════════════════════ */
 
 import React, { useRef } from 'react';
+import { Capacitor } from '@capacitor/core';
 import { Badge } from '../ui/badge';
 import { Separator } from '../ui/separator';
 import {
@@ -10,6 +11,7 @@ import {
 } from 'lucide-react';
 import type { CalculationResult, Currency, CalculatorSelections } from '../../lib/calculator/types';
 import { formatCurrency } from '../../lib/calculator/calculations';
+import { saveOrShareFile } from '../../lib/native';
 
 interface Props {
   result: CalculationResult;
@@ -31,9 +33,27 @@ export default function PriceSummary({ result, currency, sel, onReset, onSaveQuo
     });
   };
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     const el = printRef.current;
     if (!el) return;
+
+    // Native WebView can't open a print window; render the panel to a PDF and
+    // hand it to the share sheet instead.
+    if (Capacitor.isNativePlatform()) {
+      const [{ default: html2canvas }, { default: jsPDF }] = await Promise.all([
+        import('html2canvas'),
+        import('jspdf'),
+      ]);
+      const canvas = await html2canvas(el, { scale: 2, backgroundColor: '#ffffff' });
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF({ unit: 'mm', format: 'a4' });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const imgH = (canvas.height * pageW) / canvas.width;
+      pdf.addImage(imgData, 'PNG', 0, 0, pageW, imgH);
+      await saveOrShareFile(pdf.output('blob'), 'Oferta-FivoCRM.pdf', { shareTitle: 'Oferta — FivoCRM' });
+      return;
+    }
+
     const w = window.open('', '_blank');
     if (!w) return;
     w.document.write(`

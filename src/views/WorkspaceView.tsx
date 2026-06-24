@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { CalendarEventsList, CreateEventDialog } from '../components/GoogleCalendar';
 import GoogleDrivePicker from '../components/GoogleDrivePicker';
 import { useToast } from '../hooks/use-toast';
+import { openExternal } from '../lib/native';
 import {
   FolderOpen, Plus, Cloud, CloudOff, Loader2, ExternalLink, Trash2,
   File, Image, FileText, Film, Table, Presentation, Calendar,
@@ -253,7 +254,7 @@ const WorkspaceView: React.FC = () => {
       setDriveBreadcrumb(prev => [...prev, { id: file.id, name: file.name }]);
       setBrowsingDriveFolderId(file.id);
     } else if (file.webViewLink) {
-      window.open(file.webViewLink, '_blank', 'noopener,noreferrer');
+      openExternal(file.webViewLink);
     }
   };
 

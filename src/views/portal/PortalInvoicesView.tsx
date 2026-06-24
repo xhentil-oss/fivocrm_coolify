@@ -12,6 +12,7 @@ import { Separator } from '../../components/ui/separator';
 import { FileText, Search, Eye, DollarSign, Calendar, CreditCard, Check, ExternalLink, Building2, Download } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
 import type { Invoice, InvoiceItem, Service, Customer } from '../../types';
+import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../../lib/native';
 
 const PortalInvoicesView: React.FC = () => {
   const { customerId } = useClientPortal();
@@ -91,8 +92,8 @@ const PortalInvoicesView: React.FC = () => {
           currency: ((invoice as any).currency as string | undefined)?.toLowerCase() || 'eur',
           customerEmail: customer?.email || undefined,
           customerName: customer?.name || undefined,
-          successUrl: `${window.location.origin}/portal/invoices?payment=success`,
-          cancelUrl: `${window.location.origin}/portal/invoices?payment=cancelled`,
+          successUrl: appReturnUrl(`/portal/invoices?payment=success`),
+          cancelUrl: appReturnUrl(`/portal/invoices?payment=cancelled`),
         }),
       });
 
@@ -102,7 +103,7 @@ const PortalInvoicesView: React.FC = () => {
         try {
           const parsed = new URL(url);
           if (parsed.hostname.endsWith('.stripe.com') || parsed.hostname === 'stripe.com') {
-            window.location.href = url;
+            await openCheckout(url);
           } else {
             throw new Error('URL e pagesës nuk është e vlefshme');
           }
@@ -433,11 +434,13 @@ const PortalInvoicesView: React.FC = () => {
               {(selectedInvoice.status === 'Pending' || selectedInvoice.status === 'Overdue') && (
                 <div className="space-y-2 pt-2">
                   {(selectedInvoice as any).paymentUrl && (
-                    <Button asChild className="w-full" variant="outline">
-                      <a href={(selectedInvoice as any).paymentUrl} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink className="w-4 h-4 mr-2" />
-                        Hap Linkun e Pagesës
-                      </a>
+                    <Button
+                      className="w-full"
+                      variant="outline"
+                      onClick={() => openExternal((selectedInvoice as any).paymentUrl)}
+                    >
+                      <ExternalLink className="w-4 h-4 mr-2" />
+                      Hap Linkun e Pagesës
                     </Button>
                   )}
                   {selectedInvoice.paymentMethod === 'Stripe' && (
@@ -548,7 +551,8 @@ const PortalInvoicesView: React.FC = () => {
                     doc.text(doc.splitTextToSize(invoice.notes, w - margin * 2), margin, y);
                   }
 
-                  doc.save(`Fatura-${invoice.invoiceNumber || invoice.id.slice(0, 8)}.pdf`);
+                  const fileName = `Fatura-${invoice.invoiceNumber || invoice.id.slice(0, 8)}.pdf`;
+                  await saveOrShareFile(doc.output('blob'), fileName, { shareTitle: fileName });
                 }}
               >
                 <Download className="w-4 h-4 mr-2" />
