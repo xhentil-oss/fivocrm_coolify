@@ -24,13 +24,14 @@ import {
   Zap, BellRing, AlarmClock, Wand2, Clock, CalendarClock, Rows3, Languages, Video,
 } from 'lucide-react';
 import { useVideoCall } from '../hooks/useVideoCall';
-import VideoCallModal from '../components/VideoCallModal';
+// Lazy-loaded so the ~260KB Daily.co video SDK only loads when a call starts.
+const VideoCallModal = React.lazy(() => import('../components/VideoCallModal'));
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import { auth, db } from '../lib/firebase';
-import { collection, query, where, getDocs, writeBatch, doc } from 'firebase/firestore';
+import { collection, query, where, getDocs, writeBatch, doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, WhatsAppMessage, ClientRequest, Team, Lead, Task } from '../types';
 
 type ChatMode = 'channel' | 'direct' | 'ai' | 'whatsapp' | 'requests';
@@ -151,6 +152,7 @@ const ChatView: React.FC = () => {
   const [recordingDuration, setRecordingDuration] = useState(0);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordingChunksRef = useRef<Blob[]>([]);
+  const editSavingRef = useRef(false);
   const recordingTimerRef = useRef<number | null>(null);
 
   // UX state
@@ -158,6 +160,7 @@ const ChatView: React.FC = () => {
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
   const sessionUnreadIdsRef = useRef<Set<string>>(new Set());
+  const seededConvKeyRef = useRef<string>('');
 
   // WhatsApp state
   const [activeWaPhone, setActiveWaPhone] = useState<string | null>(null);
@@ -171,6 +174,13 @@ const ChatView: React.FC = () => {
   const waScrollRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevMessageCountRef = useRef(0);
+  // Whether the user is scrolled to the bottom (kept in a ref so async effects
+  // read a fresh value without re-subscribing).
+  const atBottomRef = useRef(true);
+  // Radix <ScrollArea> forwards its ref to the (overflow-hidden) Root; the real
+  // scroller is the inner Viewport. Resolve it for any programmatic scrolling.
+  const getScroller = (root: HTMLElement | null): HTMLElement | null =>
+    root?.querySelector<HTMLElement>('[data-radix-scroll-area-viewport]') ?? null;
   const markedAsReadRef = useRef<Set<string>>(new Set());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatTextareaRef = useRef<HTMLTextAreaElement>(null);
@@ -334,7 +344,9 @@ const ChatView: React.FC = () => {
       { field: 'senderType', operator: '==' as const, value: 'client' },
       { field: 'isRead', operator: '==' as const, value: false },
     ],
-    skipTeamFilter: true,
+    // Team-scoped: only the active team's unread client messages drive the
+    // sidebar badge. (Equality-only query — served by single-field indexes,
+    // no composite index needed.)
   }), []);
   const { data: allUnreadClientMsgs } = useCollection<ChatMessage>('messages', allUnreadClientQuery);
 
@@ -405,7 +417,12 @@ const ChatView: React.FC = () => {
       (m.senderId === activeDirectUserId && m.receiverId === user?.uid)
     ), [allDirectMessages, user?.uid, activeDirectUserId]);
 
-  const messages = chatMode === 'channel' ? channelMessages : directMessages;
+  const messages = useMemo(() => {
+    if (chatMode !== 'channel') return directMessages;
+    // Guard against the brief flash of the previous channel's messages right
+    // after a switch — the live query result lags the activeChannel change.
+    return (channelMessages || []).filter(m => m.channelId === activeChannel);
+  }, [chatMode, channelMessages, activeChannel, directMessages]);
   const isPending = chatMode === 'channel' ? channelPending : (sentPending || receivedPending);
   const error = chatMode === 'channel' ? channelError : null;
 
@@ -413,14 +430,19 @@ const ChatView: React.FC = () => {
     if (!messages) return [];
     const visible = messages.filter(m => !(m as any).deletedAt);
     // Always sort by time — DMs have no server-side orderBy to avoid composite index
-    const ordered = [...visible].sort((a, b) => getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt));
+    const sorted = [...visible].sort((a, b) => getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt));
+    // Channel pagination: team-scoped reads ignore the server `limit`, so bound the
+    // rendered window to the most-recent `channelLimit` here ("load older" raises it).
+    const ordered = (chatMode === 'channel' && !isClientChannel && sorted.length > channelLimit)
+      ? sorted.slice(-channelLimit)
+      : sorted;
     const senderFilter = searchSenderId !== '__any__' ? searchSenderId : null;
     const fromMs = searchDateFrom ? new Date(searchDateFrom + 'T00:00:00').getTime() : null;
     const toMs = searchDateTo ? new Date(searchDateTo + 'T23:59:59').getTime() : null;
     const q = searchQuery.trim().toLowerCase();
     if (!q && !senderFilter && fromMs == null && toMs == null) return ordered;
     return ordered.filter(m => {
-      if (q && !m.content.toLowerCase().includes(q)) return false;
+      if (q && !(m.content || '').toLowerCase().includes(q)) return false;
       if (senderFilter && m.senderId !== senderFilter) return false;
       if (fromMs != null || toMs != null) {
         const t = getTimestampMs(m.createdAt);
@@ -429,7 +451,7 @@ const ChatView: React.FC = () => {
       }
       return true;
     });
-  }, [messages, searchQuery, searchSenderId, searchDateFrom, searchDateTo]);
+  }, [messages, searchQuery, searchSenderId, searchDateFrom, searchDateTo, chatMode, isClientChannel, channelLimit]);
 
   // Pinned messages for current channel/DM — always visible, regardless of search filters
   const pinnedMessages = useMemo(() => {
@@ -1207,6 +1229,20 @@ const ChatView: React.FC = () => {
   const { data: typingIndicators } = useCollection<any>('typingIndicators', { skipTeamFilter: true });
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTypingWriteRef = useRef<number>(0);
+  // Always-fresh view of typing docs so the switch/unmount cleanup removes MY
+  // current doc (the cleanup closure would otherwise hold a stale snapshot and
+  // leak the typing indicator to others).
+  const typingIndicatorsRef = useRef(typingIndicators);
+  typingIndicatorsRef.current = typingIndicators;
+
+  // Periodic tick so time-based UI (typing freshness, online dots, last-seen)
+  // re-evaluates even when no other state changes — otherwise a stale "po
+  // shkruan…" or "Aktiv tani" can linger until an unrelated re-render.
+  const [nowTick, setNowTick] = useState(0);
+  useEffect(() => {
+    const id = setInterval(() => setNowTick(t => (t + 1) % 1000), 3000);
+    return () => clearInterval(id);
+  }, []);
 
   const activeTypingUsers = useMemo(() => {
     if (!typingIndicators || !user) return [];
@@ -1216,7 +1252,8 @@ const ChatView: React.FC = () => {
       t.channelId === channelOrDm && t.userId !== user.uid && t.timestamp &&
       (now - getTimestampMs(t.timestamp)) < 5000
     );
-  }, [typingIndicators, user, chatMode, activeChannel, activeDirectUserId]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [typingIndicators, user, chatMode, activeChannel, activeDirectUserId, nowTick]);
 
   const handleTyping = useCallback(() => {
     if (!user) return;
@@ -1243,8 +1280,9 @@ const ChatView: React.FC = () => {
   useEffect(() => {
     return () => {
       if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
-      if (user && typingIndicators) {
-        const myIndicators = typingIndicators.filter((t: any) => t.userId === user.uid);
+      const list = typingIndicatorsRef.current;
+      if (user && list) {
+        const myIndicators = list.filter((t: any) => t.userId === user.uid);
         myIndicators.forEach((t: any) => typingMutation.remove(t.id).catch(() => {}));
       }
     };
@@ -1264,39 +1302,51 @@ const ChatView: React.FC = () => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.uid, userProfiles?.length]);
 
-  // Capture unread message IDs when conversation changes (for "New messages" divider)
+  // Capture unread message IDs for the "New messages" divider — seeded ONCE per
+  // conversation, but only after messages have actually loaded (seeding at switch
+  // time caught an empty list, so the divider never appeared).
   useEffect(() => {
     if (!user) return;
+    const convKey = chatMode === 'channel' ? `c:${activeChannel}` : `d:${activeDirectUserId}`;
+    if (seededConvKeyRef.current === convKey) return; // already seeded this conversation
+    if (filteredMessages.length === 0) return;         // wait for the first load
+    seededConvKeyRef.current = convKey;
     sessionUnreadIdsRef.current = new Set(
       filteredMessages
         .filter(m => m.senderId !== user.uid && !m.isRead && !(m as any).deletedAt)
         .map(m => m.id)
     );
-  // Only re-run when conversation identity changes, not on every message update
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [chatMode, activeChannel, activeDirectUserId]);
+  }, [chatMode, activeChannel, activeDirectUserId, filteredMessages, user]);
 
   // IntersectionObserver — show jump-to-bottom when sentinel is out of view
   useEffect(() => {
     const sentinel = bottomSentinelRef.current;
     if (!sentinel) return;
     const observer = new IntersectionObserver(
-      ([entry]) => { if (entry) setShowJumpToBottom(!entry.isIntersecting); },
+      ([entry]) => {
+        if (!entry) return;
+        atBottomRef.current = entry.isIntersecting;
+        setShowJumpToBottom(!entry.isIntersecting);
+      },
       { threshold: 1.0 }
     );
     observer.observe(sentinel);
     return () => observer.disconnect();
-  });
+    // Re-attach on conversation switch and once the list first has messages
+    // (the sentinel only exists while the message pane is rendered).
+  }, [chatMode, activeChannel, activeDirectUserId, (filteredMessages?.length || 0) > 0]);
 
-  // Auto-scroll — on new messages AND when switching conversations
+  // Auto-scroll on new messages — but only if the user is already at the bottom
+  // or the new message is their own send (don't yank readers up in history).
   useEffect(() => {
     const currentCount = filteredMessages?.length || 0;
-    if (currentCount > prevMessageCountRef.current && scrollRef.current) {
-      // Use rAF to ensure DOM has rendered the new messages before scrolling
+    const last = currentCount > 0 ? filteredMessages[currentCount - 1] : undefined;
+    const isOwn = !!last && !!user && last.senderId === user.uid;
+    if (currentCount > prevMessageCountRef.current && (atBottomRef.current || isOwn)) {
+      // rAF to ensure the new messages are in the DOM before scrolling
       requestAnimationFrame(() => {
-        if (scrollRef.current) {
-          scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-        }
+        const vp = getScroller(scrollRef.current);
+        if (vp) vp.scrollTop = vp.scrollHeight;
       });
     }
     prevMessageCountRef.current = currentCount;
@@ -1321,18 +1371,20 @@ const ChatView: React.FC = () => {
 
   // Scroll to bottom whenever the active conversation changes
   useEffect(() => {
+    // Reset the count baseline so the next conversation's first load is treated
+    // as a fresh scroll-to-bottom, not a spurious "new message" from the prior one.
+    prevMessageCountRef.current = 0;
+    atBottomRef.current = true;
     requestAnimationFrame(() => {
-      if (scrollRef.current) {
-        scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-      }
+      const vp = getScroller(scrollRef.current);
+      if (vp) vp.scrollTop = vp.scrollHeight;
     });
   }, [activeChannel, activeDirectUserId, chatMode]);
 
   // AI auto-scroll
   useEffect(() => {
-    if (aiScrollRef.current) {
-      aiScrollRef.current.scrollTop = aiScrollRef.current.scrollHeight;
-    }
+    const vp = getScroller(aiScrollRef.current);
+    if (vp) vp.scrollTop = vp.scrollHeight;
   }, [aiMessages]);
 
   // Reset incoming message tracking and pagination when conversation changes
@@ -1380,7 +1432,8 @@ const ChatView: React.FC = () => {
     const d = date instanceof Date ? date : date.toDate ? date.toDate() : new Date(date);
     if (isNaN(d.getTime())) return '';
     const now = new Date();
-    const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+    const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
     if (diffDays === 0) return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
     if (diffDays === 1) return 'Dje';
     if (diffDays < 7) return d.toLocaleDateString('sq-AL', { weekday: 'short' });
@@ -1475,6 +1528,8 @@ const ChatView: React.FC = () => {
     const re = /@([\p{L}][\p{L}0-9_.\- ]{0,40})/gu;
     let m: RegExpExecArray | null;
     while ((m = re.exec(text))) {
+      // Skip "@@Customer" — that's a customer mention, not a user mention.
+      if (m.index > 0 && text[m.index - 1] === '@') continue;
       const candidate = m[1].trim().toLowerCase();
       // Try progressively shorter prefixes (longest match)
       let parts = candidate.split(/\s+/);
@@ -1643,7 +1698,8 @@ const ChatView: React.FC = () => {
     const d = date instanceof Date ? date : date.toDate ? date.toDate() : new Date(date);
     if (isNaN(d.getTime())) return '';
     const now = new Date();
-    const diffDays = Math.floor((now.getTime() - d.getTime()) / (1000 * 60 * 60 * 24));
+    const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
+    const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
     if (diffDays === 0) return 'Sot';
     if (diffDays === 1) return 'Dje';
     return d.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' });
@@ -1660,8 +1716,10 @@ const ChatView: React.FC = () => {
     let count = 0;
     CHANNELS.forEach(c => { count += channelUnreadMap.get(c.id) || 0; });
     directConversations.forEach(uid => { count += directUnreadMap.get(uid) || 0; });
+    // Client-portal channels were never rolled into the header badge.
+    clientUnreadMap.forEach(v => { count += v; });
     return count;
-  }, [channelUnreadMap, directUnreadMap, directConversations]);
+  }, [channelUnreadMap, directUnreadMap, directConversations, clientUnreadMap]);
 
   // Last own message in current DM — for read receipt display
   const lastOwnMsgId = useMemo(() => {
@@ -1772,7 +1830,9 @@ const ChatView: React.FC = () => {
     unread.forEach(m => {
       waMutation.update(m.id, { status: 'read' } as any).catch(() => {});
     });
-  }, [activeWaPhone, waActiveMessages.length]);
+    // Depend on the full set, not the capped slice length (which saturates at
+    // waDisplayLimit, so inbound messages past 50 would never get marked read).
+  }, [activeWaPhone, allWaMessages]);
 
   // Message Handlers
   const { upload: uploadAttachment, uploading: attachmentUploading } = useFileUpload();
@@ -1805,9 +1865,11 @@ const ChatView: React.FC = () => {
       toast({ title: 'Nuk mund të dërgohet', description: 'Skedarët dërgohen vetëm në kanale ose DM.', variant: 'destructive' });
       return;
     }
+    // Snapshot the target now — the user may switch conversations during upload.
+    const target = { targetMode: chatMode as 'channel' | 'direct', targetChannel: activeChannel, targetDirectUserId: activeDirectUserId };
     try {
       const res = await uploadAttachment(file, 'chat-attachments');
-      await handleSendMessage(null, { attachmentUrl: res.url });
+      await handleSendMessage(null, { attachmentUrl: res.url, ...target });
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error('[chat] image upload failed', err);
@@ -1821,8 +1883,13 @@ const ChatView: React.FC = () => {
     }
   };
 
-  const handleSendMessage = async (e?: React.FormEvent | null, override?: { content?: string; attachmentUrl?: string }) => {
+  const handleSendMessage = async (e?: React.FormEvent | null, override?: { content?: string; attachmentUrl?: string; targetMode?: 'channel' | 'direct'; targetChannel?: string; targetDirectUserId?: string | null }) => {
     if (e && typeof (e as any).preventDefault === 'function') (e as any).preventDefault();
+    // Target conversation — snapshotted by attachment/voice senders before their
+    // upload await, so a mid-upload conversation switch doesn't misroute the message.
+    const targetMode = override?.targetMode ?? chatMode;
+    const targetChannel = override?.targetChannel ?? activeChannel;
+    const targetDirectUserId = override?.targetDirectUserId ?? activeDirectUserId;
     const effectiveText = override?.content ?? messageText;
     const effectiveAttachment = (override?.attachmentUrl ?? attachmentUrl).trim();
     if ((!effectiveText.trim() && !effectiveAttachment) || !user || isSending) return;
@@ -1841,14 +1908,14 @@ const ChatView: React.FC = () => {
     }
 
     try {
-      const isClientChannel = activeChannel.startsWith('client-');
+      const isClientChannel = targetChannel.startsWith('client-');
       // Handle /me action command — render as italic third-person action
       let finalText = effectiveText;
       if (finalText.startsWith('/me ')) {
         const action = finalText.slice(4).trim();
         if (action) {
           const who = getUserDisplayName(user.uid) || 'Dikush';
-          finalText = `_* ${who} ${action} *_`;
+          finalText = `*${who} ${action}*`;
         }
       }
       const mentions = extractMentions(finalText);
@@ -1858,32 +1925,46 @@ const ChatView: React.FC = () => {
         isRead: false,
         attachmentUrl: effectiveAttachment || undefined,
         ...(mentions.length > 0 ? { mentions } as any : {}),
-        ...(isClientChannel && chatMode === 'channel' ? { senderType: 'staff' as const } : {}),
+        ...(isClientChannel && targetMode === 'channel' ? { senderType: 'staff' as const } : {}),
         ...(replyingTo ? {
           replyToId: replyingTo.id,
-          replyToContent: replyingTo.content.length > 100 ? replyingTo.content.slice(0, 100) + '…' : replyingTo.content,
+          replyToContent: (replyingTo.content || '').length > 100 ? (replyingTo.content || '').slice(0, 100) + '…' : (replyingTo.content || ''),
           replyToSender: getUserDisplayName(replyingTo.senderId),
         } : {}),
       };
 
-      if (chatMode === 'channel' && !activeChannel) {
+      if (targetMode === 'channel' && !targetChannel) {
         toast({ title: 'Zgjidh një kanal', description: 'Asnjë kanal aktiv për të dërguar.', variant: 'destructive' });
         return;
       }
-      if (chatMode === 'direct' && !activeDirectUserId) {
+      if (targetMode === 'direct' && !targetDirectUserId) {
         toast({ title: 'Zgjidh një bisedë', description: 'Hap një DM për të dërguar.', variant: 'destructive' });
         return;
       }
-      if (chatMode !== 'channel' && chatMode !== 'direct') {
+      if (targetMode !== 'channel' && targetMode !== 'direct') {
         toast({ title: 'Modaliteti nuk lejon dërgim', description: 'Përdor kanal ose DM për mesazhe me imazh.', variant: 'destructive' });
         return;
       }
 
-      if (chatMode === 'channel') {
-        await messageMutation.create({ ...baseMessage, channelId: activeChannel } as Omit<ChatMessage, 'id'>);
+      if (targetMode === 'channel') {
+        await messageMutation.create({ ...baseMessage, channelId: targetChannel } as Omit<ChatMessage, 'id'>);
+
+        // Notify mentioned staff (mention highlighting existed but no notification was created)
+        if (mentions.length > 0) {
+          mentions.filter(uid => uid !== user.uid).forEach(uid => {
+            notificationMutation.create({
+              userId: uid,
+              type: 'mention',
+              title: `${getUserDisplayName(user.uid)} ju përmendi`,
+              message: (finalText || '📎 Attachment').slice(0, 100),
+              isRead: false,
+              linkTo: targetChannel,
+            } as any).catch(() => { /* non-blocking */ });
+          });
+        }
 
         if (isClientChannel) {
-          const match = activeChannel.match(/^client-(.+?)(?:-project-(.+))?$/);
+          const match = targetChannel.match(/^client-(.+?)(?:-project-(.+))?$/);
           if (match) {
             const custId = match[1];
             const projId = match[2];
@@ -1894,7 +1975,7 @@ const ChatView: React.FC = () => {
               const title = projectName
                 ? `Mesazh i ri nga stafi - ${projectName}`
                 : `Mesazh i ri nga stafi - ${customer?.name || 'Biseda'}`;
-              try { await notificationMutation.create({ userId: (pa as any).userId || custId, type: 'staff_message', title, message: (effectiveText || '📎 Attachment').slice(0, 100), isRead: false, linkTo: activeChannel } as any); } catch { /* skip */ }
+              try { await notificationMutation.create({ userId: (pa as any).userId || custId, type: 'staff_message', title, message: (effectiveText || '📎 Attachment').slice(0, 100), isRead: false, linkTo: targetChannel } as any); } catch { /* skip */ }
               // Send email notification (rate-limited server-side)
               if ((pa as any).email) {
                 try {
@@ -1907,7 +1988,7 @@ const ChatView: React.FC = () => {
                         type: 'notify-client',
                         recipientEmail: (pa as any).email,
                         recipientName: customer?.name,
-                        channelId: activeChannel,
+                        channelId: targetChannel,
                         senderName: 'Ekipi',
                         messagePreview: (effectiveText || '📎 Bashkëngjitje').slice(0, 200),
                       }),
@@ -1918,8 +1999,8 @@ const ChatView: React.FC = () => {
             }
           }
         }
-      } else if (activeDirectUserId) {
-        await messageMutation.create({ ...baseMessage, receiverId: activeDirectUserId } as Omit<ChatMessage, 'id'>);
+      } else if (targetDirectUserId) {
+        await messageMutation.create({ ...baseMessage, receiverId: targetDirectUserId } as Omit<ChatMessage, 'id'>);
       }
 
       setMessageText('');
@@ -1938,6 +2019,8 @@ const ChatView: React.FC = () => {
 
   const handleEditMessage = async (msgId: string) => {
     if (!editText.trim()) return;
+    if (editSavingRef.current) return; // guard against rapid double-submit (Enter held)
+    editSavingRef.current = true;
     try {
       const current = messages?.find(m => m.id === msgId);
       const prevHistory: any[] = ((current as any)?.editHistory as any[]) || [];
@@ -1949,11 +2032,12 @@ const ChatView: React.FC = () => {
       setEditingMessageId(null);
       setEditText('');
     } catch { toast({ title: 'Gabim', variant: 'destructive' }); }
+    finally { editSavingRef.current = false; }
   };
 
   const handleDeleteMessage = async (msgId: string) => {
     try {
-      await messageMutation.update(msgId, { deletedAt: new Date(), content: 'Ky mesazh u fshi.', attachmentUrl: null } as any);
+      await messageMutation.update(msgId, { deletedAt: new Date(), content: 'Ky mesazh u fshi.', attachmentUrl: null, reactions: {}, isPinned: false } as any);
     } catch {
       toast({ title: 'Fshirja dështoi', description: 'Provo përsëri.', variant: 'destructive' });
     }
@@ -1962,15 +2046,14 @@ const ChatView: React.FC = () => {
   const handleReaction = async (msgId: string, emoji: string) => {
     if (!user || !EMOJI_REACTIONS.includes(emoji)) return;
     const msg = messages?.find(m => m.id === msgId);
-    if (!msg) return;
-    const reactions = { ...((msg as any).reactions || {}) };
-    const users = reactions[emoji] ? [...reactions[emoji]] : [];
-    const idx = users.indexOf(user.uid);
-    if (idx >= 0) users.splice(idx, 1); else users.push(user.uid);
-    if (users.length === 0) delete reactions[emoji]; else reactions[emoji] = users;
+    const already = !!msg && Array.isArray((msg as any).reactions?.[emoji]) && (msg as any).reactions[emoji].includes(user.uid);
     setShowEmojiPicker(null);
     try {
-      await messageMutation.update(msgId, { reactions } as any);
+      // Atomic per-emoji array update so two users reacting at once don't clobber
+      // each other (the old read-modify-write of the whole `reactions` object did).
+      await updateDoc(doc(db, 'messages', msgId), {
+        [`reactions.${emoji}`]: already ? arrayRemove(user.uid) : arrayUnion(user.uid),
+      } as any);
     } catch {
       toast({ title: 'Reaksioni dështoi', description: 'Provo përsëri.', variant: 'destructive' });
     }
@@ -2012,6 +2095,8 @@ const ChatView: React.FC = () => {
       toast({ title: 'Mikrofoni i pasupërtuar', description: 'Shfletuesi nuk lejon regjistrimin.', variant: 'destructive' });
       return;
     }
+    // Snapshot the target at record start — the conversation may change before stop.
+    const target = { targetMode: chatMode as 'channel' | 'direct', targetChannel: activeChannel, targetDirectUserId: activeDirectUserId };
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       const rec = new MediaRecorder(stream, MediaRecorder.isTypeSupported('audio/webm') ? { mimeType: 'audio/webm' } : undefined);
@@ -2028,7 +2113,7 @@ const ChatView: React.FC = () => {
         const file = new File([blob], fileName, { type: blob.type });
         try {
           const res = await uploadAttachment(file, 'voice-notes');
-          await handleSendMessage(null, { content: '🎙️ Voice note', attachmentUrl: res.url });
+          await handleSendMessage(null, { content: '🎙️ Voice note', attachmentUrl: res.url, ...target });
         } catch (err) {
           toast({ title: 'Ngarkimi dështoi', description: err instanceof Error ? err.message : 'Provo përsëri.', variant: 'destructive' });
         }
@@ -2037,7 +2122,12 @@ const ChatView: React.FC = () => {
       rec.start();
       setIsRecording(true);
       setRecordingDuration(0);
-      recordingTimerRef.current = window.setInterval(() => setRecordingDuration(d => d + 1), 1000);
+      const MAX_RECORDING_SECONDS = 300; // auto-stop at 5 min (keeps blob under upload limit)
+      recordingTimerRef.current = window.setInterval(() => setRecordingDuration(d => {
+        const next = d + 1;
+        if (next >= MAX_RECORDING_SECONDS) stopRecording(true);
+        return next;
+      }), 1000);
     } catch (err) {
       toast({ title: 'Mikrofoni u refuzua', description: err instanceof Error ? err.message : 'Lejet u refuzuan.', variant: 'destructive' });
     }
@@ -2049,6 +2139,17 @@ const ChatView: React.FC = () => {
     if (!sendIt) recordingChunksRef.current = []; // cancel: clear data so onstop sees empty blob
     try { rec.stop(); } catch { /* */ }
   };
+
+  // Release the mic and timer if the chat unmounts mid-recording (otherwise the
+  // stream stays live and the "recording" indicator never turns off).
+  useEffect(() => () => {
+    if (recordingTimerRef.current) { window.clearInterval(recordingTimerRef.current); recordingTimerRef.current = null; }
+    const rec = mediaRecorderRef.current;
+    if (rec && rec.state !== 'inactive') {
+      recordingChunksRef.current = []; // discard — don't upload a partial note on unmount
+      try { rec.stop(); } catch { /* */ }
+    }
+  }, []);
 
   // AI Chat
   const sendAiMessage = async (text: string) => {
@@ -2107,13 +2208,23 @@ const ChatView: React.FC = () => {
   };
 
   // Navigation
+  // Reset all search state — sender/date filters must clear too, or the new
+  // conversation renders empty (filtered by a sender that doesn't exist there).
+  const resetSearch = () => {
+    setShowSearch(false);
+    setSearchQuery('');
+    setSearchSenderId('__any__');
+    setSearchDateFrom('');
+    setSearchDateTo('');
+    setShowSearchFilters(false);
+  };
+
   const handleSelectChannel = useCallback((channelId: string) => {
     setChatMode('channel');
     setActiveChannel(channelId);
     setActiveDirectUserId(null);
     setShowSidebar(false);
-    setShowSearch(false);
-    setSearchQuery('');
+    resetSearch();
     setReplyingTo(null);
   }, []);
 
@@ -2121,8 +2232,7 @@ const ChatView: React.FC = () => {
     setChatMode('direct');
     setActiveDirectUserId(userId);
     setShowSidebar(false);
-    setShowSearch(false);
-    setSearchQuery('');
+    resetSearch();
     setReplyingTo(null);
   }, []);
 
@@ -2165,10 +2275,12 @@ const ChatView: React.FC = () => {
       });
       const data = await res.json();
       if (!res.ok) {
-        setWaText(body);
         throw new Error(data.error || 'Dërgimi dështoi');
       }
     } catch (err: unknown) {
+      // Restore the typed text on ANY failure (network throw, JSON parse, !ok) so
+      // the user doesn't lose their message. Only if they haven't retyped since.
+      setWaText(prev => prev || body);
       toast({ title: 'Gabim WhatsApp', description: err instanceof Error ? err.message : 'Dërgimi dështoi', variant: 'destructive' });
     } finally {
       setWaSending(false);
@@ -2258,10 +2370,16 @@ const ChatView: React.FC = () => {
 
   useEffect(() => {
     if (chatMode !== 'channel' || !user || !channelMessages) return;
+    // Snapshot the active channel — guard against rapid switches (mirror of the DM path)
+    const snapshotChannel = activeChannel;
     const unread = channelMessages.filter(m => m.senderId !== user.uid && !m.isRead && !markedAsReadRef.current.has(m.id));
     if (unread.length === 0) return;
     const ids = unread.map(m => m.id);
     ids.forEach(id => markedAsReadRef.current.add(id));
+    if (activeChannel !== snapshotChannel || chatMode !== 'channel') {
+      ids.forEach(id => markedAsReadRef.current.delete(id));
+      return;
+    }
     const batch = writeBatch(db);
     const extra: any = isClientChannel ? { readAt: new Date() } : {};
     ids.forEach(id => batch.update(doc(db, 'messages', id), { isRead: true, ...extra }));
@@ -2269,7 +2387,7 @@ const ChatView: React.FC = () => {
       ids.forEach(id => markedAsReadRef.current.delete(id));
       console.error('[ChatView] markAsRead channel batch failed', err);
     });
-  }, [chatMode, channelMessages, user]);
+  }, [chatMode, channelMessages, user, activeChannel, isClientChannel]);
 
   // Auto-resize textarea + @mention detection
   const handleTextareaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -2429,7 +2547,7 @@ const ChatView: React.FC = () => {
   // =====================================
 
   return (
-    <div className="flex h-[calc(100dvh-64px)] bg-background overflow-hidden">
+    <div className="flex -mx-3 -mt-3 -mb-20 sm:-mx-6 sm:-mt-6 lg:-m-8 h-[calc(100dvh-136px)] lg:h-[calc(100dvh-72px)] bg-background overflow-hidden">
       {/* SIDEBAR */}
       <aside className={`w-full lg:w-72 border-r bg-muted/5 flex flex-col flex-shrink-0 transition-all ${showSidebar ? 'flex' : 'hidden lg:flex'}`}>
         {/* Sidebar header */}
@@ -3225,7 +3343,7 @@ const ChatView: React.FC = () => {
                             className="block w-full text-left text-[11px] px-2 py-1 rounded hover:bg-amber-100/60 dark:hover:bg-amber-900/30 truncate"
                           >
                             <span className="font-medium text-amber-700 dark:text-amber-300">{getUserDisplayName(pm.senderId)}:</span>{' '}
-                            <span className="text-foreground/80">{pm.content.slice(0, 90)}{pm.content.length > 90 ? '…' : ''}</span>
+                            <span className="text-foreground/80">{(() => { const t = (pm.content || '').replace(/[*_`~]/g, ''); return t.slice(0, 90) + (t.length > 90 ? '…' : ''); })()}</span>
                           </button>
                         ))}
                       </div>
@@ -3345,7 +3463,7 @@ const ChatView: React.FC = () => {
                                       className="h-7 text-xs bg-background text-foreground rounded-lg"
                                       autoFocus
                                       onKeyDown={e => {
-                                        if (e.key === 'Enter') handleEditMessage(message.id);
+                                        if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleEditMessage(message.id); }
                                         if (e.key === 'Escape') { setEditingMessageId(null); setEditText(''); }
                                       }}
                                     />
@@ -3423,9 +3541,9 @@ const ChatView: React.FC = () => {
                                   </div>
                                 )}
 
-                                {/* Hover actions — desktop hover; on touch (no hover) they stay visible so reply/react stay reachable */}
+                                {/* Hover actions — desktop only (hidden on mobile; the mobile quick-actions row below handles touch, so the emoji picker isn't duplicated) */}
                                 {!isDeleted && !isEditing && (
-                                  <div className={`absolute -top-3.5 ${isOwn ? 'left-1' : 'right-1'} opacity-100 sm:opacity-0 group-hover:opacity-100 active:opacity-100 transition-all flex items-center flex-wrap max-w-[90vw] bg-background border rounded-xl shadow-lg px-1 py-0.5 z-10 gap-0.5`}>
+                                  <div className={`absolute -top-3.5 ${isOwn ? 'left-1' : 'right-1'} hidden sm:flex opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-all items-center flex-wrap max-w-[90vw] bg-background border rounded-xl shadow-lg px-1 py-0.5 z-10 gap-0.5`}>
                                     <div className="relative">
                                       <button className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors"
                                         onClick={() => setShowEmojiPicker(showEmojiPicker === message.id ? null : message.id)}>
@@ -3568,12 +3686,20 @@ const ChatView: React.FC = () => {
                                     </div>
                                   )}
                                   {isOwn && (
-                                    <button
-                                      className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-destructive active:text-destructive"
-                                      onClick={() => handleDeleteMessage(message.id)}
-                                    >
-                                      <Trash2 className="h-3.5 w-3.5" />
-                                    </button>
+                                    <>
+                                      <button
+                                        className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-foreground active:text-foreground"
+                                        onClick={() => { setEditingMessageId(message.id); setEditText(message.content); }}
+                                      >
+                                        <Pencil className="h-3.5 w-3.5" />
+                                      </button>
+                                      <button
+                                        className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-destructive active:text-destructive"
+                                        onClick={() => handleDeleteMessage(message.id)}
+                                      >
+                                        <Trash2 className="h-3.5 w-3.5" />
+                                      </button>
+                                    </>
                                   )}
                                 </div>
                               )}
@@ -3581,7 +3707,7 @@ const ChatView: React.FC = () => {
                               {/* Reactions */}
                               {(message as any).reactions && Object.keys((message as any).reactions).length > 0 && (
                                 <div className="flex flex-wrap gap-1 mt-1 px-0.5 relative">
-                                  {Object.entries((message as any).reactions as Record<string, string[]>).map(([emoji, users]) => {
+                                  {Object.entries((message as any).reactions as Record<string, string[]>).filter(([, users]) => users && users.length > 0).map(([emoji, users]) => {
                                     const names = users.map(u => getUserDisplayName(u)).join(', ');
                                     const showPop = reactionPopover?.msgId === message.id && reactionPopover?.emoji === emoji;
                                     return (
@@ -3633,7 +3759,8 @@ const ChatView: React.FC = () => {
             {showJumpToBottom && (chatMode === 'channel' || chatMode === 'direct') && (
               <button
                 onClick={() => {
-                  if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+                  const vp = getScroller(scrollRef.current);
+                  if (vp) vp.scrollTop = vp.scrollHeight;
                   setShowJumpToBottom(false);
                 }}
                 className="absolute bottom-4 right-5 z-20 h-9 w-9 rounded-full bg-background border shadow-lg flex items-center justify-center hover:bg-accent transition-colors"
@@ -4565,7 +4692,11 @@ const ChatView: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
-      {videoRoomUrl && <VideoCallModal roomUrl={videoRoomUrl} userName={getUserDisplayName(user?.uid || '') || 'Agjent'} onClose={closeVideo} />}
+      {videoRoomUrl && (
+        <React.Suspense fallback={null}>
+          <VideoCallModal roomUrl={videoRoomUrl} userName={getUserDisplayName(user?.uid || '') || 'Agjent'} onClose={closeVideo} />
+        </React.Suspense>
+      )}
     </div>
   );
 };
