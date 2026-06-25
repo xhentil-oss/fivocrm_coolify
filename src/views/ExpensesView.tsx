@@ -1,5 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
+import { toAll } from '../lib/utils';
+import { MONTH_LABELS_SQ, getExpenseDate } from '../lib/finance/financialAnalytics';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil, Search, Check, X, ThumbsUp, ThumbsDown, Clock } from 'lucide-react';
@@ -173,6 +175,26 @@ const ExpensesView: React.FC = () => {
   const totalExpenses = expenses?.reduce((sum, exp) => sum + exp.amount, 0) || 0;
   const activeExpenses = expenses?.filter(e => e.status === 'Active').length || 0;
   const recurringExpenses = expenses?.filter(e => e.isRecurring).length || 0;
+
+  // ── Shpenzime sipas muajve (për vitin e zgjedhur) ──
+  const currentYr = new Date().getFullYear();
+  const [byMonthYear, setByMonthYear] = useState(currentYr);
+  const monthlyExpenses = useMemo(() => {
+    const totals = new Array(12).fill(0) as number[];
+    (expenses || []).forEach(exp => {
+      const d = getExpenseDate(exp);
+      if (!d || d.getFullYear() !== byMonthYear) return;
+      totals[d.getMonth()] += toAll(exp.amount ?? 0, (exp as any).currency);
+    });
+    return totals;
+  }, [expenses, byMonthYear]);
+  const monthlyMax = Math.max(...monthlyExpenses, 1);
+  const yearTotal = monthlyExpenses.reduce((s, v) => s + v, 0);
+  const expenseYears = useMemo(() => {
+    const ys = new Set<number>([currentYr]);
+    (expenses || []).forEach(exp => { const d = getExpenseDate(exp); if (d) ys.add(d.getFullYear()); });
+    return Array.from(ys).sort((a, b) => b - a);
+  }, [expenses, currentYr]);
   const pendingApprovalCount = expenses?.filter(e => (e as any).approvalStatus === 'Submitted').length || 0;
   const isAdminOrManager = permissions.role === 'Admin' || permissions.role === 'Manager';
 
@@ -258,6 +280,47 @@ const ExpensesView: React.FC = () => {
           </p>
         </Card>
       </div>
+
+      {/* Shpenzime sipas muajve */}
+      <Card className="p-4 sm:p-6 space-y-4">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <CalendarIcon className="w-4 h-4 text-muted-foreground" />
+            <h3 className="text-body font-medium text-foreground">Shpenzime sipas Muajve</h3>
+          </div>
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setByMonthYear(y => y - 1)} aria-label="Viti i mëparshëm">‹</Button>
+            <Select value={String(byMonthYear)} onValueChange={(v) => setByMonthYear(Number(v))}>
+              <SelectTrigger className="h-7 w-[84px] text-body-sm"><SelectValue /></SelectTrigger>
+              <SelectContent>
+                {expenseYears.map(y => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
+              </SelectContent>
+            </Select>
+            <Button variant="ghost" size="icon" className="h-7 w-7" disabled={byMonthYear >= currentYr} onClick={() => setByMonthYear(y => Math.min(currentYr, y + 1))} aria-label="Viti pasardhës">›</Button>
+          </div>
+        </div>
+        <div className="space-y-2">
+          {MONTH_LABELS_SQ.map((label, i) => {
+            const val = monthlyExpenses[i];
+            const pct = Math.round((val / monthlyMax) * 100);
+            return (
+              <div key={label} className="flex items-center gap-3">
+                <span className="text-xs text-muted-foreground w-8 shrink-0">{label}</span>
+                <div className="flex-1 h-5 bg-muted/40 rounded-md overflow-hidden">
+                  <div className="h-full bg-error/70 rounded-md transition-all" style={{ width: `${pct}%` }} />
+                </div>
+                <span className="text-xs font-medium text-foreground w-28 text-right tabular-nums">
+                  {val > 0 ? `${Math.round(val).toLocaleString()} ALL` : '—'}
+                </span>
+              </div>
+            );
+          })}
+        </div>
+        <div className="flex items-center justify-between pt-2 border-t border-border/40">
+          <span className="text-body-sm text-muted-foreground">Totali {byMonthYear}</span>
+          <span className="text-body font-semibold text-foreground">{Math.round(yearTotal).toLocaleString()} ALL</span>
+        </div>
+      </Card>
 
       {/* Mobile card layout */}
       <div className="sm:hidden space-y-3">
