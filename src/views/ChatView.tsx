@@ -3398,6 +3398,9 @@ const ChatView: React.FC = () => {
                       // Image attachment
                       const hasImage = !!(message.attachmentUrl && isImageUrl(message.attachmentUrl));
                       const hasAudio = !!(message.attachmentUrl && !hasImage && isAudioUrl(message.attachmentUrl));
+                      // Placeholder text shown when a message is media-only — hide it so
+                      // the image/voice note is the only thing in the bubble (no "📎 Attachment").
+                      const isPlaceholderContent = message.content === '📎 Attachment' || message.content === '🎙️ Voice note';
 
                       return (
                         <React.Fragment key={message.id}>
@@ -3452,7 +3455,7 @@ const ChatView: React.FC = () => {
                               )}
 
                               {/* Bubble */}
-                              <div className={`relative px-4 py-2.5 ${
+                              <div className={`relative ${(hasImage || hasAudio) && isPlaceholderContent ? 'p-1.5' : 'px-4 py-2.5'} ${
                                 isOwn
                                   ? 'bg-primary text-primary-foreground rounded-2xl rounded-br-md'
                                   : 'bg-muted/60 border border-border/30 rounded-2xl rounded-bl-md'
@@ -3478,11 +3481,11 @@ const ChatView: React.FC = () => {
                                       <Check className="h-3 w-3" />
                                     </Button>
                                   </div>
-                                ) : (
+                                ) : (!isPlaceholderContent || (!hasImage && !hasAudio)) ? (
                                   <p className="text-[13.5px] leading-relaxed break-words whitespace-pre-wrap">
                                     {renderMessageBody(message.content, searchQuery)}
                                   </p>
-                                )}
+                                ) : null}
 
                                 {/* #22 Inline translation */}
                                 {!isEditing && translations[message.id] && (
@@ -3499,13 +3502,13 @@ const ChatView: React.FC = () => {
 
                                 {/* Inline image preview */}
                                 {message.attachmentUrl && hasImage && (
-                                  <a href={message.attachmentUrl} target="_blank" rel="noopener noreferrer" className="block mt-2">
+                                  <a href={message.attachmentUrl} target="_blank" rel="noopener noreferrer" className={`block ${isPlaceholderContent ? '' : 'mt-2'}`}>
                                     <img
                                       src={message.attachmentUrl}
                                       alt="attachment"
                                       loading="lazy"
                                       decoding="async"
-                                      className="max-w-[240px] max-h-[200px] rounded-xl object-cover border border-white/10 hover:opacity-90 transition-opacity"
+                                      className="max-w-[260px] max-h-[280px] rounded-xl object-contain bg-white border border-black/5 hover:opacity-90 transition-opacity"
                                       onError={e => { (e.currentTarget as HTMLImageElement).style.display = 'none'; (e.currentTarget.nextElementSibling as HTMLElement | null)?.removeAttribute('hidden'); }}
                                     />
                                     <span hidden className="inline-flex items-center gap-1.5 text-xs mt-1">
