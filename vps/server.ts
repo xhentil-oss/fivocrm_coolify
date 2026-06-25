@@ -12,6 +12,7 @@ import { join } from 'path';
 import cors from 'cors';
 import multer from 'multer';
 import pino from 'pino';
+import { randomUUID } from 'crypto';
 
 process.on('unhandledRejection', (err) => { console.error('[WA] Unhandled rejection:', err); });
 process.on('uncaughtException', (err) => { console.error('[WA] Uncaught exception:', err); });
@@ -768,7 +769,14 @@ app.post('/upload', requireFirebaseAuth, uploadMw.single('file'), async (req: an
     if (!ALLOWED_UPLOAD.test(file.mimetype)) { res.status(400).json({ error: `Tip skedari i palejuar: ${file.mimetype}` }); return; }
     const teamId = String(req.body.teamId || 'shared').replace(/[^a-zA-Z0-9_-]/g, '_') || 'shared';
     const folder = String(req.body.folder || 'uploads').replace(/[^a-zA-Z0-9_-]/g, '_') || 'uploads';
-    const safeName = `${Date.now()}_${String(file.originalname || 'file').replace(/[^a-zA-Z0-9._-]/g, '_')}`;
+    // Unguessable filename (capability URL) — files are served publicly under
+    // /files, so a predictable timestamp+originalname could be enumerated. A random
+    // UUID makes the URL itself the secret, like Slack/WhatsApp attachment CDNs.
+    // The original name is still returned as `name` for display/download.
+    const orig = String(file.originalname || 'file');
+    const extMatch = orig.match(/\.[a-zA-Z0-9]{1,8}$/);
+    const ext = extMatch ? extMatch[0].toLowerCase() : '';
+    const safeName = `${randomUUID()}${ext}`;
     const relPath = `${teamId}/${folder}/${safeName}`;
     const absDir = join(UPLOAD_DIR, teamId, folder);
     mkdirSync(absDir, { recursive: true });
