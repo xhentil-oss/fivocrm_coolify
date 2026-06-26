@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { useLocation, Link as RouterLink } from 'react-router-dom';
-import { useCollection, useMutation, getGlobalTeamId, useGlobalTeamId, useWhatsappEnabled } from '../hooks/useFirestore';
+import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { Input } from '../components/ui/input';
@@ -12,12 +12,11 @@ import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Separator } from '../components/ui/separator';
-import WhatsAppStatusBadge from '../components/WhatsAppStatusBadge';
 import {
   Send, MessageSquare, Users, Hash, Paperclip, X, FileIcon,
   FolderOpen, ArrowLeft, Search, Pencil, Trash2, Reply,
   SmilePlus, Check, Plus, Link2,
-  Bot, Sparkles, Loader2, Copy, RefreshCw, Phone, Smartphone,
+  Bot, Sparkles, Loader2, Copy, RefreshCw,
   ClipboardList, ExternalLink, UserPlus, ChevronDown, CheckCheck,
   ImageIcon, Circle, Pin, PinOff, Mic, Square, Filter, AtSign,
   Bookmark, BookmarkCheck, ListChecks,
@@ -30,12 +29,12 @@ const VideoCallModal = React.lazy(() => import('../components/VideoCallModal'));
 import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
 import { useFileUpload } from '../hooks/useFileUpload';
-import { normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
+import { getTimestampMs } from '../lib/utils';
 import { auth, db } from '../lib/firebase';
-import { collection, query, where, getDocs, writeBatch, doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
-import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, WhatsAppMessage, ClientRequest, Team, Lead, Task, Channel } from '../types';
+import { writeBatch, doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
+import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, ClientRequest, Team, Task, Channel } from '../types';
 
-type ChatMode = 'channel' | 'direct' | 'ai' | 'whatsapp' | 'requests';
+type ChatMode = 'channel' | 'direct' | 'ai' | 'requests';
 
 // AI Quick Actions
 const AI_QUICK_ACTIONS = [
@@ -105,7 +104,6 @@ const ChatView: React.FC = () => {
   const [dmSearch, setDmSearch] = useState('');
   // Pagination state
   const [channelLimit, setChannelLimit] = useState(100);
-  const [waDisplayLimit, setWaDisplayLimit] = useState(50);
 
   // Mention autocomplete
   const [mentionOpen, setMentionOpen] = useState(false);
@@ -165,16 +163,6 @@ const ChatView: React.FC = () => {
   const sessionUnreadIdsRef = useRef<Set<string>>(new Set());
   const seededConvKeyRef = useRef<string>('');
 
-  // WhatsApp state
-  const [activeWaPhone, setActiveWaPhone] = useState<string | null>(null);
-  const [activeWaJid, setActiveWaJid] = useState<string | null>(null);
-  const [activeWaLeadName, setActiveWaLeadName] = useState('');
-  const [activeWaChannel, setActiveWaChannel] = useState<'baileys' | 'meta' | null>(null);
-  const [activeWaLeadId, setActiveWaLeadId] = useState<string | null>(null);
-  const [convertingToLead, setConvertingToLead] = useState(false);
-  const [waText, setWaText] = useState('');
-  const [waSending, setWaSending] = useState(false);
-  const waScrollRef = useRef<HTMLDivElement>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const prevMessageCountRef = useRef(0);
   // Whether the user is scrolled to the bottom (kept in a ref so async effects
@@ -351,24 +339,6 @@ const ChatView: React.FC = () => {
     setSelectedRequest(prev => prev?.id === requestId ? { ...prev, assignedTeamId: teamId } : prev);
     toast({ title: 'Ekipi u caktua' });
   };
-  const waTeamId = useGlobalTeamId();
-  const waEnabled = useWhatsappEnabled();
-
-  // If WhatsApp gets disabled while in whatsapp mode, switch back to channel
-  useEffect(() => {
-    if (!waEnabled && chatMode === 'whatsapp') {
-      setChatMode('channel');
-      setActiveWaPhone(null);
-      setActiveWaJid(null);
-    }
-  }, [waEnabled]);
-  const waQuery = useMemo(() => ({
-    skip: !waEnabled || !waTeamId,
-    where: waTeamId ? [{ field: 'teamId', operator: '==' as const, value: waTeamId }] : undefined,
-    // No orderBy — avoids composite index requirement; sorting is done client-side
-    skipTeamFilter: true,
-  }), [waEnabled, waTeamId]);
-  const { data: allWaMessages } = useCollection<WhatsAppMessage>('whatsappMessages', waQuery);
 
   // Client channels (client-*) need skipTeamFilter because portal users may send
   // messages without teamId.  No orderBy — avoids composite index requirement;
@@ -668,8 +638,6 @@ const ChatView: React.FC = () => {
 
   const messageMutation = useMutation<ChatMessage>('messages');
   const notificationMutation = useMutation<any>('notifications');
-  const waMutation = useMutation<WhatsAppMessage>('whatsappMessages');
-  const leadsMutation = useMutation<Lead>('leads');
   const userProfileMutation = useMutation<UserProfile>('userProfiles');
   const taskMutation = useMutation<Task>('tasks');
   const bookmarkMutation = useMutation<any>('chatBookmarks');
@@ -1480,11 +1448,6 @@ const ChatView: React.FC = () => {
     setChannelLimit(100);
   }, [activeChannel, activeDirectUserId, chatMode]);
 
-  // Reset WA display limit when switching WA conversation
-  useEffect(() => {
-    setWaDisplayLimit(50);
-  }, [activeWaPhone]);
-
   // Bird chirp notification on new incoming messages from others (active conversation)
   useEffect(() => {
     if (!user || !filteredMessages) return;
@@ -1828,105 +1791,6 @@ const ChatView: React.FC = () => {
     if (chatMode === 'direct') return directUnreadMap.get(activeDirectUserId || '') || 0;
     return 0;
   }, [chatMode, activeChannel, activeDirectUserId, channelUnreadMap, directUnreadMap]);
-
-  const waConversations = useMemo(() => {
-    if (!allWaMessages) return [];
-    // Derive canonical phone: prefer jid-based (stable WhatsApp international format)
-    const phoneKey = (msg: WhatsAppMessage) => {
-      if (msg.jid?.endsWith('@s.whatsapp.net')) return normalizeAlbanianPhone(msg.jid.split('@')[0]);
-      return normalizeAlbanianPhone(msg.phone || '');
-    };
-    // Real phone = has @s.whatsapp.net JID OR phone digits ≤ 13
-    const isRealPhone = (phone: string, jid?: string | null) =>
-      !!jid?.endsWith('@s.whatsapp.net') || phone.length <= 13;
-    const map = new Map<string, { phone: string; jid: string | null; leadName: string; leadId?: string | null; lastMessage: string; lastDate: any; unread: number; isLid: boolean; channel?: 'baileys' | 'meta' }>();
-    for (const msg of allWaMessages) {
-      const key = phoneKey(msg);
-      if (!key) continue;
-      const msgIsLid = !isRealPhone(key, msg.jid) || (msg as any).isLid === true;
-      // Use leadName, then pushName (WhatsApp display name), then phone/unknown
-      const displayName = msg.leadName || msg.pushName || (msgIsLid ? 'Numër i panjohur' : `+${key}`);
-      if (!map.has(key)) {
-        map.set(key, {
-          phone: key,
-          jid: msg.jid || null,
-          leadName: displayName,
-          leadId: msg.leadId || null,
-          lastMessage: msg.message,
-          lastDate: msg.createdAt,
-          unread: (msg.direction === 'inbound' && msg.status === 'received') ? 1 : 0,
-          isLid: msgIsLid,
-          channel: msg.channel || 'baileys',
-        });
-      } else {
-        const existing = map.get(key)!;
-        // Upgrade display name if we find a better one
-        if ((msg.leadName || msg.pushName) && (existing.leadName === existing.phone || existing.leadName === 'Numër i panjohur')) {
-          existing.leadName = msg.leadName || msg.pushName || existing.leadName;
-        }
-        if (msg.leadId && !existing.leadId) existing.leadId = msg.leadId;
-        if (msg.jid?.endsWith('@s.whatsapp.net') && !existing.jid?.endsWith('@s.whatsapp.net')) existing.jid = msg.jid;
-        if (msg.direction === 'inbound' && msg.status === 'received') existing.unread++;
-        // Track the latest message per conversation
-        const msgTime = getTimestampMs(msg.createdAt);
-        const existTime = getTimestampMs(existing.lastDate);
-        if (msgTime > existTime) {
-          existing.lastDate = msg.createdAt;
-          existing.lastMessage = msg.message;
-        }
-      }
-    }
-    return Array.from(map.values())
-      .sort((a, b) => getTimestampMs(b.lastDate) - getTimestampMs(a.lastDate));
-  }, [allWaMessages]);
-
-  const waActiveMessagesAll = useMemo(() => {
-    if (!allWaMessages || !activeWaPhone) return [];
-    return [...allWaMessages].filter(m => {
-      const key = normalizeAlbanianPhone(
-        m.jid?.endsWith('@s.whatsapp.net')
-          ? m.jid.split('@')[0]
-          : (m.phone || '')
-      );
-      return key === activeWaPhone;
-    }).sort((a, b) => getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt));
-  }, [allWaMessages, activeWaPhone]);
-
-  const waActiveMessages = useMemo(
-    () => waActiveMessagesAll.slice(-waDisplayLimit),
-    [waActiveMessagesAll, waDisplayLimit]
-  );
-  const waHasMore = waActiveMessagesAll.length > waDisplayLimit;
-
-  const waTotalUnread = useMemo(
-    () => waConversations.reduce((s, c) => s + c.unread, 0),
-    [waConversations]
-  );
-
-  // WA auto-scroll
-  useEffect(() => {
-    if (waScrollRef.current) {
-      waScrollRef.current.scrollTop = waScrollRef.current.scrollHeight;
-    }
-  }, [waActiveMessages.length]);
-
-  // Mark WA messages as read when conversation opens or new messages arrive
-  useEffect(() => {
-    if (!activeWaPhone || !allWaMessages) return;
-    const unread = allWaMessages.filter(m => {
-      const key = normalizeAlbanianPhone(
-        m.jid?.endsWith('@s.whatsapp.net')
-          ? m.jid.split('@')[0]
-          : (m.phone || '')
-      );
-      return key === activeWaPhone && m.direction === 'inbound' && m.status === 'received';
-    });
-    unread.forEach(m => {
-      waMutation.update(m.id, { status: 'read' } as any).catch(() => {});
-    });
-    // Depend on the full set, not the capped slice length (which saturates at
-    // waDisplayLimit, so inbound messages past 50 would never get marked read).
-  }, [activeWaPhone, allWaMessages]);
 
   // Message Handlers
   const { upload: uploadAttachment, uploading: attachmentUploading } = useFileUpload();
@@ -2438,106 +2302,6 @@ const ChatView: React.FC = () => {
     setReplyingTo(null);
   }, []);
 
-  const handleSelectWhatsApp = useCallback((phone: string, leadName: string, jid?: string | null, channel?: 'baileys' | 'meta', leadId?: string | null) => {
-    setChatMode('whatsapp');
-    setActiveWaPhone(phone);
-    setActiveWaJid(jid || null);
-    setActiveWaLeadName(leadName);
-    setActiveWaChannel(channel || 'baileys');
-    setActiveWaLeadId(leadId || null);
-    setShowSidebar(false);
-    setShowSearch(false);
-    setSearchQuery('');
-  }, []);
-
-  const handleSendWa = async () => {
-    if (!waText.trim() || waSending || !user || !activeWaPhone) return;
-    setWaSending(true);
-    const body = waText.trim();
-    setWaText('');
-    try {
-      const token = await user.getIdToken();
-      const isMeta = activeWaChannel === 'meta';
-      const endpoint = isMeta ? '/api/meta-send' : '/api/whatsapp';
-      const payload = isMeta
-        ? { to: activeWaPhone, message: body, leadName: activeWaLeadName, teamId: getGlobalTeamId() }
-        : { to: activeWaPhone, message: body, leadName: activeWaLeadName, teamId: getGlobalTeamId(), jid: activeWaJid || undefined };
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-        body: JSON.stringify(payload),
-      });
-      const data = await res.json();
-      if (!res.ok) {
-        throw new Error(data.error || 'Dërgimi dështoi');
-      }
-    } catch (err: unknown) {
-      // Restore the typed text on ANY failure (network throw, JSON parse, !ok) so
-      // the user doesn't lose their message. Only if they haven't retyped since.
-      setWaText(prev => prev || body);
-      toast({ title: 'Gabim WhatsApp', description: err instanceof Error ? err.message : 'Dërgimi dështoi', variant: 'destructive' });
-    } finally {
-      setWaSending(false);
-    }
-  };
-
-  // Convert WhatsApp contact to Lead
-  const handleConvertToLead = async () => {
-    if (!activeWaPhone || !user || convertingToLead) return;
-    setConvertingToLead(true);
-    try {
-      const teamId = getGlobalTeamId();
-      const normPhone = activeWaPhone.replace(/\D/g, '');
-
-      // Duplicate check: query leads by phone
-      const leadsRef = collection(db, 'leads');
-      const q1 = query(leadsRef, where('phoneNumber', '==', normPhone), where('teamId', '==', teamId));
-      const q2 = query(leadsRef, where('phoneNumber', '==', `+${normPhone}`), where('teamId', '==', teamId));
-      const [snap1, snap2] = await Promise.all([getDocs(q1), getDocs(q2)]);
-      if (!snap1.empty || !snap2.empty) {
-        const existing = snap1.docs[0]?.data() || snap2.docs[0]?.data();
-        toast({ title: 'Numri ekziston tek Leads!', description: `Lead "${existing?.name}" ka të njëjtin numër.`, variant: 'destructive' });
-        setConvertingToLead(false);
-        return;
-      }
-
-      const leadName = activeWaLeadName || `+${activeWaPhone}`;
-      const newLead = await leadsMutation.create({
-        name: leadName,
-        phoneNumber: `+${normPhone}`,
-        source: 'WhatsApp',
-        status: 'New',
-        score: 10,
-        probability: 10,
-      } as any);
-
-      // Update all whatsappMessages for this phone with the new leadId (atomic: rollback lead on failure)
-      if (newLead?.id) {
-        const msgs = allWaMessages?.filter(m => {
-          const key = m.jid?.endsWith('@s.whatsapp.net')
-            ? normalizeAlbanianPhone(m.jid.split('@')[0])
-            : normalizeAlbanianPhone(m.phone || '');
-          return key === activeWaPhone;
-        }) || [];
-        try {
-          await Promise.all(msgs.map(m => waMutation.update(m.id, { leadId: newLead.id, leadName: leadName })));
-        } catch (linkErr) {
-          // Rollback: delete the created lead so no orphaned record remains
-          try { await leadsMutation.remove(newLead.id); } catch { /* best-effort */ }
-          throw new Error('Lidhja e mesazheve dështoi — Lead nuk u ruajt.');
-        }
-        setActiveWaLeadId(newLead.id);
-        setActiveWaLeadName(leadName);
-      }
-
-      toast({ title: 'Lead u krijua!', description: `"${leadName}" u shtua si lead nga WhatsApp.` });
-    } catch (err: unknown) {
-      toast({ title: 'Gabim', description: err instanceof Error ? err.message : 'Konvertimi dështoi', variant: 'destructive' });
-    } finally {
-      setConvertingToLead(false);
-    }
-  };
-
   // Mark as Read
   useEffect(() => {
     // Clear read tracking when switching conversations
@@ -2717,7 +2481,7 @@ const ChatView: React.FC = () => {
   }, [user]);
 
   // Loading / Error
-  if (chatMode !== 'ai' && chatMode !== 'whatsapp' && isPending) {
+  if (chatMode !== 'ai' && isPending) {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center space-y-3">
@@ -3150,35 +2914,6 @@ const ChatView: React.FC = () => {
                 );
               })()}
             </div>
-          ) : chatMode === 'whatsapp' ? (
-            <div className="flex items-center gap-3 flex-1 min-w-0">
-              <div className="h-9 w-9 rounded-xl bg-[#25D366]/15 flex items-center justify-center flex-shrink-0">
-                <Smartphone className="h-4 w-4 text-[#25D366]" />
-              </div>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2 flex-wrap">
-                  <p className="font-semibold text-sm truncate">{activeWaLeadName || (activeWaPhone && activeWaPhone.length <= 13 ? `+${activeWaPhone}` : 'Numër i panjohur')}</p>
-                  <WhatsAppStatusBadge variant="pill" />
-                </div>
-                {activeWaPhone && activeWaPhone.length <= 13 && (
-                  <p className="text-[11px] text-muted-foreground flex items-center gap-1">
-                    <Phone className="h-3 w-3" /> +{activeWaPhone}
-                  </p>
-                )}
-              </div>
-              {activeWaPhone && !activeWaLeadId && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="ml-auto h-8 gap-1.5 text-xs border-amber-300 text-amber-700 hover:bg-amber-50 dark:border-amber-600 dark:text-amber-400 dark:hover:bg-amber-950"
-                  onClick={handleConvertToLead}
-                  disabled={convertingToLead}
-                >
-                  {convertingToLead ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <UserPlus className="h-3.5 w-3.5" />}
-                  Shto si Lead
-                </Button>
-              )}
-            </div>
           ) : (
             <div className="flex items-center gap-3 flex-1 min-w-0">
               {activeDirectUserId ? (
@@ -3212,17 +2947,17 @@ const ChatView: React.FC = () => {
                 {videoStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Video className="h-4 w-4" />}
               </Button>
             )}
-            {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
+            {chatMode !== 'ai' && (
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleSummarizeChat} disabled={summaryLoading} title="Përmblidh bisedën me AI">
                 {summaryLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               </Button>
             )}
-            {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
+            {chatMode !== 'ai' && (
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleExtractActions} disabled={actionExtractLoading} title="Nxirr detyrat nga biseda (AI)">
                 {actionExtractLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
               </Button>
             )}
-            {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
+            {chatMode !== 'ai' && (
               <Button
                 variant="ghost"
                 size="icon"
@@ -3242,12 +2977,12 @@ const ChatView: React.FC = () => {
                 })()}
               </Button>
             )}
-            {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
+            {chatMode !== 'ai' && (
               <Button variant="ghost" size="icon" className={`h-8 w-8 ${compactMode ? 'text-primary' : ''}`} onClick={() => setCompactMode(c => !c)} title={compactMode ? 'Pamje normale' : 'Pamje kompakte'}>
                 <Rows3 className="h-4 w-4" />
               </Button>
             )}
-            {chatMode !== 'ai' && chatMode !== 'whatsapp' && (
+            {chatMode !== 'ai' && (
               <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setShowSearch(!showSearch); setSearchQuery(''); }}>
                 <Search className="h-4 w-4" />
               </Button>
@@ -3256,7 +2991,7 @@ const ChatView: React.FC = () => {
         </header>
 
         {/* Search bar */}
-        {showSearch && chatMode !== 'ai' && chatMode !== 'whatsapp' && (
+        {showSearch && chatMode !== 'ai' && (
           <div className="border-b bg-muted/20">
             <div className="flex items-center gap-2 px-5 py-2">
               <Search className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
@@ -3407,99 +3142,6 @@ const ChatView: React.FC = () => {
               </div>
               <p className="text-[10px] text-muted-foreground/50 text-center mt-1.5">FivoAI mund të bëjë gabime. Verificoni informacionin e rëndësishëm.</p>
             </div>
-          </>
-        ) : chatMode === 'whatsapp' ? (
-          /* WhatsApp Chat Area */
-          <>
-            <div className="px-3 pt-2 bg-background">
-              <WhatsAppStatusBadge variant="banner" />
-            </div>
-            <div
-              ref={waScrollRef}
-              className="flex-1 overflow-y-auto p-4"
-              style={{ background: 'var(--wa-bg, #efeae2)' }}
-            >
-              {!activeWaPhone ? (
-                <div className="flex flex-col items-center justify-center h-full gap-3 text-center py-16">
-                  <div className="p-4 bg-[#25D366]/10 rounded-full">
-                    <Smartphone className="w-8 h-8 text-[#25D366]/60" />
-                  </div>
-                  <p className="text-sm font-medium text-foreground/60">Zgjidh një bisedë nga lista</p>
-                </div>
-              ) : waActiveMessages.length === 0 ? (
-                <div className="flex flex-col items-center justify-center h-full gap-3 text-center py-16">
-                  <div className="p-4 bg-[#25D366]/10 rounded-full">
-                    <Smartphone className="w-8 h-8 text-[#25D366]/60" />
-                  </div>
-                  <p className="text-sm font-medium">Asnjë mesazh ende</p>
-                  <p className="text-xs text-muted-foreground">Dërgo mesazhin e parë te {activeWaLeadName}</p>
-                </div>
-              ) : (
-                <div className="space-y-2.5">
-                  {waHasMore && (
-                    <div className="flex justify-center py-2">
-                      <button
-                        onClick={() => setWaDisplayLimit(l => l + 50)}
-                        className="text-xs text-[#25D366] underline hover:opacity-80"
-                      >
-                        Ngarko mesazhe më të vjetra ({waActiveMessagesAll.length - waDisplayLimit} mbetur)
-                      </button>
-                    </div>
-                  )}
-                  {waActiveMessages.map((msg) => {
-                    const isOut = msg.direction === 'outbound';
-                    const timeStr = (() => {
-                      const d = msg.createdAt instanceof Date ? msg.createdAt : (msg.createdAt as any)?.toDate?.();
-                      return d ? d.toLocaleTimeString('sq-AL', { hour: '2-digit', minute: '2-digit' }) : '';
-                    })();
-                    return (
-                      <div key={msg.id} className={`flex ${isOut ? 'justify-end' : 'justify-start'}`}>
-                        <div className={`max-w-[85%] sm:max-w-[70%] px-3.5 py-2 rounded-2xl shadow-sm text-sm leading-relaxed ${
-                          isOut
-                            ? 'bg-[#d9fdd3] dark:bg-[#25D366]/25 text-foreground rounded-tr-none'
-                            : 'bg-white dark:bg-card text-foreground rounded-tl-none'
-                        }`}>
-                          <p style={{ wordBreak: 'break-word', whiteSpace: 'pre-wrap' }}>{msg.message}</p>
-                          <div className={`flex items-center gap-1 mt-1 ${isOut ? 'justify-end' : 'justify-start'}`}>
-                            <span className="text-[10px] text-muted-foreground/60">{timeStr}</span>
-                            {isOut && <span className="text-[10px] text-[#25D366]">{msg.status === 'read' ? '\u2713\u2713' : '\u2713'}</span>}
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </div>
-
-            {activeWaPhone && (
-              <div className="px-4 pt-2 border-t bg-background" style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom, 12px))' }}>
-                <div className="flex items-end gap-2">
-                  <textarea
-                    value={waText}
-                    onChange={(e) => {
-                      setWaText(e.target.value);
-                      e.target.style.height = 'auto';
-                      e.target.style.height = Math.min(e.target.scrollHeight, 112) + 'px';
-                    }}
-                    onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendWa(); } }}
-                    placeholder="Shkruaj mesazhin..."
-                    rows={1}
-                    className="flex-1 resize-none px-3 py-2.5 bg-muted rounded-2xl text-[16px] sm:text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-[#25D366]/40 overflow-y-auto"
-                    style={{ minHeight: '42px', maxHeight: '112px' }}
-                  />
-                  <Button
-                    size="sm"
-                    className="bg-[#25D366] hover:bg-[#1da851] text-white h-[42px] w-[42px] p-0 rounded-full shrink-0"
-                    onClick={handleSendWa}
-                    disabled={!waText.trim() || waSending}
-                  >
-                    {waSending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
-                  </Button>
-                </div>
-                <p className="text-[10px] text-muted-foreground mt-1.5 px-1">Enter = dërgo · Shift+Enter = rresht i ri</p>
-              </div>
-            )}
           </>
         ) : (
           /* Regular Chat Area */
@@ -4254,7 +3896,7 @@ const ChatView: React.FC = () => {
                     variant="ghost"
                     size="icon"
                     className="h-9 w-9 rounded-full flex-shrink-0 mb-0.5 text-muted-foreground hover:text-foreground"
-                    disabled={isSending || (!messageText.trim() && !attachmentUrl.trim()) || chatMode === 'ai' || chatMode === 'whatsapp'}
+                    disabled={isSending || (!messageText.trim() && !attachmentUrl.trim()) || chatMode === 'ai'}
                     onClick={() => {
                       const d = new Date(Date.now() + 60 * 60 * 1000);
                       setScheduleDate(d.toISOString().slice(0, 10));
