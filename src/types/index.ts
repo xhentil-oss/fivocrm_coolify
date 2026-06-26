@@ -680,6 +680,12 @@ export interface Channel {
   description?: string;
   teamId?: string;
   isPrivate?: boolean;
+  /** True for user-created WhatsApp-style group chats (vs. the fixed default channels). */
+  isGroup?: boolean;
+  /** User IDs of group members — only these users see the group. */
+  members?: string[];
+  /** User IDs of group admins — can add/remove members and rename the group. */
+  admins?: string[];
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

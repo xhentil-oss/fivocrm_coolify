@@ -22,6 +22,7 @@ import {
   ImageIcon, Circle, Pin, PinOff, Mic, Square, Filter, AtSign,
   Bookmark, BookmarkCheck, ListChecks,
   Zap, BellRing, AlarmClock, Wand2, Clock, CalendarClock, Rows3, Languages, Video,
+  LogOut, Crown, Settings2,
 } from 'lucide-react';
 import { useVideoCall } from '../hooks/useVideoCall';
 // Lazy-loaded so the ~260KB Daily.co video SDK only loads when a call starts.
@@ -32,7 +33,7 @@ import { useFileUpload } from '../hooks/useFileUpload';
 import { normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import { auth, db } from '../lib/firebase';
 import { collection, query, where, getDocs, writeBatch, doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
-import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, WhatsAppMessage, ClientRequest, Team, Lead, Task } from '../types';
+import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, WhatsAppMessage, ClientRequest, Team, Lead, Task, Channel } from '../types';
 
 type ChatMode = 'channel' | 'direct' | 'ai' | 'whatsapp' | 'requests';
 
@@ -267,6 +268,36 @@ const ChatView: React.FC = () => {
   });
   const requestMutation = useMutation<ClientRequest>('clientRequests');
   const permissions = usePermissions();
+
+  // ── WhatsApp-style groups (dynamic, team-scoped `channels` collection) ──
+  const { data: allGroups } = useCollection<Channel>('channels');
+  const channelMutation = useMutation<Channel>('channels');
+  // Only Admin/Manager/Owner may create groups.
+  const canCreateGroups = !!(permissions.isAdmin || permissions.isManager || permissions.isOwner);
+  // Groups the current user belongs to — only members see a group.
+  const myGroups = useMemo(
+    () => (allGroups || [])
+      .filter(g => g.isGroup && Array.isArray(g.members) && user?.uid && g.members.includes(user.uid))
+      .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'sq')),
+    [allGroups, user?.uid],
+  );
+  // Resolve any active channel id → display metadata (fixed channel OR dynamic group).
+  const getChannelMeta = useCallback((id: string): { name: string; description?: string; icon: any; isGroup: boolean; group?: Channel } | null => {
+    const fixed = CHANNELS.find(c => c.id === id);
+    if (fixed) return { name: fixed.name, description: fixed.description, icon: fixed.icon, isGroup: false };
+    const g = (allGroups || []).find(x => x.id === id);
+    if (g) return { name: g.name, description: g.description, icon: Users, isGroup: true, group: g };
+    return null;
+  }, [allGroups]);
+
+  // Group create/manage dialog state
+  const [showCreateGroup, setShowCreateGroup] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [newGroupDesc, setNewGroupDesc] = useState('');
+  const [newGroupMembers, setNewGroupMembers] = useState<string[]>([]);
+  const [creatingGroup, setCreatingGroup] = useState(false);
+  const [manageGroupId, setManageGroupId] = useState<string | null>(null);
+  const [addMemberQuery, setAddMemberQuery] = useState('');
 
   // Requests state
   const [selectedRequest, setSelectedRequest] = useState<ClientRequest | null>(null);
@@ -559,7 +590,7 @@ const ChatView: React.FC = () => {
   const channelUnreadMap = useMemo(() => {
     const map = new Map<string, number>();
     if (!user) return map;
-    const standardIds = new Set(CHANNELS.map(c => c.id));
+    const standardIds = new Set<string>([...CHANNELS.map(c => c.id), ...myGroups.map(g => g.id)]);
     // Use background all-unread query so non-active channels show correct badges
     const source = allUnreadTeamMsgs ?? [];
     source.forEach(m => {
@@ -568,7 +599,7 @@ const ChatView: React.FC = () => {
       }
     });
     return map;
-  }, [allUnreadTeamMsgs, user]);
+  }, [allUnreadTeamMsgs, user, myGroups]);
 
   const otherMembers = useMemo(() => {
     if (!teamMembers) return [];
@@ -1722,11 +1753,12 @@ const ChatView: React.FC = () => {
   const totalUnread = useMemo(() => {
     let count = 0;
     CHANNELS.forEach(c => { count += channelUnreadMap.get(c.id) || 0; });
+    myGroups.forEach(g => { count += channelUnreadMap.get(g.id) || 0; });
     directConversations.forEach(uid => { count += directUnreadMap.get(uid) || 0; });
     // Client-portal channels were never rolled into the header badge.
     clientUnreadMap.forEach(v => { count += v; });
     return count;
-  }, [channelUnreadMap, directUnreadMap, directConversations, clientUnreadMap]);
+  }, [channelUnreadMap, directUnreadMap, directConversations, clientUnreadMap, myGroups]);
 
   // Last own message in current DM — for read receipt display
   const lastOwnMsgId = useMemo(() => {
@@ -2235,6 +2267,95 @@ const ChatView: React.FC = () => {
     setReplyingTo(null);
   }, []);
 
+  // If the active group no longer includes me (removed by an admin), leave the view.
+  useEffect(() => {
+    if (chatMode !== 'channel' || !allGroups || !user?.uid) return;
+    const g = allGroups.find(x => x.id === activeChannel && x.isGroup);
+    if (g && !(g.members || []).includes(user.uid)) {
+      handleSelectChannel('general');
+    }
+  }, [allGroups, activeChannel, chatMode, user?.uid, handleSelectChannel]);
+
+  // ── Group management ──
+  const manageGroup = useMemo(
+    () => (manageGroupId ? (allGroups || []).find(g => g.id === manageGroupId) || null : null),
+    [manageGroupId, allGroups],
+  );
+  const isGroupAdmin = useCallback(
+    (g: Channel | null) => !!(g && user?.uid && Array.isArray(g.admins) && g.admins.includes(user.uid)),
+    [user?.uid],
+  );
+
+  const handleCreateGroup = useCallback(async () => {
+    const name = newGroupName.trim();
+    if (!name || !user || creatingGroup) return;
+    setCreatingGroup(true);
+    try {
+      // Creator is always a member and an admin.
+      const members = Array.from(new Set([user.uid, ...newGroupMembers]));
+      const created = await channelMutation.create({
+        name,
+        description: newGroupDesc.trim() || undefined,
+        isGroup: true,
+        isPrivate: true,
+        members,
+        admins: [user.uid],
+      } as any);
+      setShowCreateGroup(false);
+      setNewGroupName('');
+      setNewGroupDesc('');
+      setNewGroupMembers([]);
+      if (created?.id) handleSelectChannel(created.id);
+      toast({ title: 'Grupi u krijua', description: `"${name}" u krijua me ${members.length} anëtarë.` });
+    } catch {
+      toast({ title: 'Gabim', description: 'Krijimi i grupit dështoi.', variant: 'destructive' });
+    } finally {
+      setCreatingGroup(false);
+    }
+  }, [newGroupName, newGroupDesc, newGroupMembers, user, creatingGroup, channelMutation, handleSelectChannel, toast]);
+
+  const handleAddGroupMember = useCallback(async (g: Channel, userId: string) => {
+    const members = Array.from(new Set([...(g.members || []), userId]));
+    await channelMutation.update(g.id, { members } as any);
+  }, [channelMutation]);
+
+  const handleRemoveGroupMember = useCallback(async (g: Channel, userId: string) => {
+    const members = (g.members || []).filter(m => m !== userId);
+    const admins = (g.admins || []).filter(a => a !== userId);
+    await channelMutation.update(g.id, { members, admins } as any);
+  }, [channelMutation]);
+
+  const handleToggleGroupAdmin = useCallback(async (g: Channel, userId: string) => {
+    const isAdmin = (g.admins || []).includes(userId);
+    const admins = isAdmin
+      ? (g.admins || []).filter(a => a !== userId)
+      : Array.from(new Set([...(g.admins || []), userId]));
+    if (admins.length === 0) {
+      toast({ title: 'Veprim i ndaluar', description: 'Grupi duhet të ketë të paktën një admin.', variant: 'destructive' });
+      return;
+    }
+    await channelMutation.update(g.id, { admins } as any);
+  }, [channelMutation, toast]);
+
+  const handleLeaveGroup = useCallback(async (g: Channel) => {
+    if (!user) return;
+    const remainingMembers = (g.members || []).filter(m => m !== user.uid);
+    let admins = (g.admins || []).filter(a => a !== user.uid);
+    // If the last admin leaves, promote the first remaining member so the group isn't orphaned.
+    if (admins.length === 0 && remainingMembers.length > 0) admins = [remainingMembers[0]];
+    await channelMutation.update(g.id, { members: remainingMembers, admins } as any);
+    setManageGroupId(null);
+    if (activeChannel === g.id) handleSelectChannel('general');
+    toast({ title: 'Dole nga grupi', description: `Nuk je më anëtar i "${g.name}".` });
+  }, [user, channelMutation, activeChannel, handleSelectChannel, toast]);
+
+  const handleDeleteGroup = useCallback(async (g: Channel) => {
+    await channelMutation.remove(g.id);
+    setManageGroupId(null);
+    if (activeChannel === g.id) handleSelectChannel('general');
+    toast({ title: 'Grupi u fshi', description: `"${g.name}" u fshi përfundimisht.` });
+  }, [channelMutation, activeChannel, handleSelectChannel, toast]);
+
   const handleSelectDirectMessage = useCallback((userId: string) => {
     setChatMode('direct');
     setActiveDirectUserId(userId);
@@ -2620,6 +2741,62 @@ const ChatView: React.FC = () => {
             );
           })}
 
+          {/* Groups (WhatsApp-style, member-scoped) */}
+          <div className="flex items-center justify-between px-2 pt-3 pb-1">
+            <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Grupet</p>
+            {canCreateGroups && (
+              <button
+                onClick={() => { setNewGroupName(''); setNewGroupDesc(''); setNewGroupMembers([]); setShowCreateGroup(true); }}
+                className="h-5 w-5 flex items-center justify-center rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-colors"
+                title="Krijo grup të ri"
+                aria-label="Krijo grup të ri"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          {myGroups.length === 0 && (
+            <p className="px-3 py-1 text-[11px] text-muted-foreground/60">
+              {canCreateGroups ? 'Asnjë grup. Kliko + për të krijuar.' : 'Nuk je në asnjë grup.'}
+            </p>
+          )}
+          {myGroups.map(group => {
+            const isActive = chatMode === 'channel' && activeChannel === group.id;
+            const unread = channelUnreadMap.get(group.id) || 0;
+            return (
+              <div
+                key={group.id}
+                className={`group/grp w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-left cursor-pointer ${
+                  isActive
+                    ? 'bg-primary/8 text-primary font-medium shadow-sm border border-primary/10'
+                    : 'hover:bg-accent/50 text-foreground/70'
+                }`}
+                onClick={() => handleSelectChannel(group.id)}
+              >
+                <div className={`h-8 w-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                  isActive ? 'bg-primary/10' : 'bg-muted/80'
+                }`}>
+                  <Users className={`h-4 w-4 ${isActive ? 'text-primary' : 'text-muted-foreground'}`} />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <span className="block truncate text-sm">{group.name}</span>
+                  <span className="block truncate text-[10px] text-muted-foreground">{(group.members || []).length} anëtarë</span>
+                </div>
+                {unread > 0 && !isActive && (
+                  <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold">{unread}</span>
+                )}
+                <button
+                  onClick={(e) => { e.stopPropagation(); setAddMemberQuery(''); setManageGroupId(group.id); }}
+                  className="opacity-0 group-hover/grp:opacity-100 h-6 w-6 flex items-center justify-center rounded-md hover:bg-accent text-muted-foreground hover:text-foreground transition-all flex-shrink-0"
+                  title="Menaxho grupin"
+                  aria-label="Menaxho grupin"
+                >
+                  <Settings2 className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            );
+          })}
+
           {/* Client Channels */}
           {portalAccess && portalAccess.length > 0 && (
             <>
@@ -2947,17 +3124,31 @@ const ChatView: React.FC = () => {
                     <p className="text-[11px] text-muted-foreground">Kanal klienti</p>
                   </div>
                 </>
-              ) : (
-                <>
-                  <div className="h-9 w-9 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
-                    {React.createElement(CHANNELS.find(c => c.id === activeChannel)?.icon || Hash, { className: 'h-4 w-4 text-primary' })}
-                  </div>
-                  <div className="min-w-0">
-                    <p className="font-semibold text-sm">#{CHANNELS.find(c => c.id === activeChannel)?.name}</p>
-                    <p className="text-[11px] text-muted-foreground">{CHANNELS.find(c => c.id === activeChannel)?.description}</p>
-                  </div>
-                </>
-              )}
+              ) : (() => {
+                const meta = getChannelMeta(activeChannel);
+                const Icon = meta?.icon || Hash;
+                const isGroup = !!meta?.isGroup;
+                return (
+                  <button
+                    type="button"
+                    disabled={!isGroup}
+                    onClick={() => { if (isGroup && meta?.group) { setAddMemberQuery(''); setManageGroupId(meta.group.id); } }}
+                    className={`flex items-center gap-3 flex-1 min-w-0 text-left ${isGroup ? 'cursor-pointer rounded-lg -mx-1 px-1 hover:bg-accent/40' : ''}`}
+                  >
+                    <div className="h-9 w-9 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
+                      {React.createElement(Icon, { className: 'h-4 w-4 text-primary' })}
+                    </div>
+                    <div className="min-w-0">
+                      <p className="font-semibold text-sm truncate">{isGroup ? meta?.name : `#${meta?.name || activeChannel}`}</p>
+                      <p className="text-[11px] text-muted-foreground truncate">
+                        {isGroup
+                          ? `${(meta?.group?.members || []).length} anëtarë · prek për të menaxhuar`
+                          : meta?.description}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })()}
             </div>
           ) : chatMode === 'whatsapp' ? (
             <div className="flex items-center gap-3 flex-1 min-w-0">
@@ -4045,7 +4236,7 @@ const ChatView: React.FC = () => {
                         }
                       }
                     }}
-                    placeholder={`Shkruaj${chatMode === 'channel' ? ` në #${CHANNELS.find(c => c.id === activeChannel)?.name || activeChannel}` : ` te ${getUserDisplayName(activeDirectUserId || '')}`}...`}
+                    placeholder={`Shkruaj${chatMode === 'channel' ? ` në ${getChannelMeta(activeChannel)?.isGroup ? '' : '#'}${getChannelMeta(activeChannel)?.name || activeChannel}` : ` te ${getUserDisplayName(activeDirectUserId || '')}`}...`}
                     disabled={isSending}
                     rows={1}
                     className="flex-1 min-w-0 bg-transparent border-0 outline-none text-base sm:text-sm resize-none py-1.5 placeholder:text-muted-foreground/40 max-h-[120px]"
@@ -4702,6 +4893,186 @@ const ChatView: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+      {/* ── Krijo Grup ── */}
+      <Dialog open={showCreateGroup} onOpenChange={setShowCreateGroup}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-base"><Users className="h-4 w-4" /> Krijo grup të ri</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div>
+              <Label className="text-xs">Emri i grupit</Label>
+              <Input
+                value={newGroupName}
+                onChange={e => setNewGroupName(e.target.value)}
+                placeholder="p.sh. Marketing, Projekti X..."
+                className="mt-1"
+                autoFocus
+                maxLength={60}
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Përshkrim (opsional)</Label>
+              <Input
+                value={newGroupDesc}
+                onChange={e => setNewGroupDesc(e.target.value)}
+                placeholder="Për çfarë është ky grup?"
+                className="mt-1"
+                maxLength={120}
+              />
+            </div>
+            <div>
+              <Label className="text-xs">Anëtarët ({newGroupMembers.length} të zgjedhur)</Label>
+              <div className="mt-1 max-h-56 overflow-y-auto rounded-lg border border-border/60 divide-y divide-border/40">
+                {otherMembers.length === 0 && (
+                  <p className="px-3 py-2 text-xs text-muted-foreground">Asnjë anëtar ekipi tjetër.</p>
+                )}
+                {otherMembers.map(m => {
+                  const selected = newGroupMembers.includes(m.userId);
+                  return (
+                    <button
+                      key={m.userId}
+                      type="button"
+                      onClick={() => setNewGroupMembers(prev => selected ? prev.filter(x => x !== m.userId) : [...prev, m.userId])}
+                      className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-accent/50 transition-colors"
+                    >
+                      <div className={`h-4 w-4 rounded border flex items-center justify-center flex-shrink-0 ${selected ? 'bg-primary border-primary' : 'border-muted-foreground/40'}`}>
+                        {selected && <Check className="h-3 w-3 text-primary-foreground" />}
+                      </div>
+                      <span className="text-sm truncate">{getUserDisplayName(m.userId)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              <p className="mt-1 text-[11px] text-muted-foreground">Ti shtohesh automatikisht si admin i grupit.</p>
+            </div>
+            <div className="flex justify-end gap-2 pt-1">
+              <Button variant="ghost" size="sm" onClick={() => setShowCreateGroup(false)}>Anulo</Button>
+              <Button size="sm" onClick={handleCreateGroup} disabled={!newGroupName.trim() || creatingGroup}>
+                {creatingGroup ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : <Plus className="h-3.5 w-3.5 mr-1" />}
+                Krijo grupin
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Menaxho Grupin ── */}
+      <Dialog open={!!manageGroup} onOpenChange={(o) => { if (!o) setManageGroupId(null); }}>
+        <DialogContent className="sm:max-w-md">
+          {manageGroup && (() => {
+            const amAdmin = isGroupAdmin(manageGroup);
+            const members = manageGroup.members || [];
+            const admins = manageGroup.admins || [];
+            const nonMembers = otherMembers.filter(m => !members.includes(m.userId));
+            const filteredNonMembers = addMemberQuery.trim()
+              ? nonMembers.filter(m => getUserDisplayName(m.userId).toLowerCase().includes(addMemberQuery.trim().toLowerCase()))
+              : nonMembers;
+            return (
+              <>
+                <DialogHeader>
+                  <DialogTitle className="flex items-center gap-2 text-base">
+                    <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center"><Users className="h-4 w-4 text-primary" /></div>
+                    <div className="min-w-0">
+                      <p className="truncate">{manageGroup.name}</p>
+                      {manageGroup.description && <p className="text-[11px] font-normal text-muted-foreground truncate">{manageGroup.description}</p>}
+                    </div>
+                  </DialogTitle>
+                </DialogHeader>
+                <div className="space-y-4">
+                  {/* Members */}
+                  <div>
+                    <Label className="text-xs">Anëtarët ({members.length})</Label>
+                    <div className="mt-1 max-h-52 overflow-y-auto rounded-lg border border-border/60 divide-y divide-border/40">
+                      {members.map(uid => {
+                        const isAdm = admins.includes(uid);
+                        const isMe = uid === user?.uid;
+                        return (
+                          <div key={uid} className="flex items-center gap-2 px-3 py-2">
+                            <span className="text-sm truncate flex-1">
+                              {getUserDisplayName(uid)}{isMe && <span className="text-muted-foreground"> (ti)</span>}
+                            </span>
+                            {isAdm && (
+                              <span className="inline-flex items-center gap-1 text-[10px] font-semibold text-amber-600 dark:text-amber-400">
+                                <Crown className="h-3 w-3" /> Admin
+                              </span>
+                            )}
+                            {amAdmin && !isMe && (
+                              <>
+                                <button
+                                  onClick={() => handleToggleGroupAdmin(manageGroup, uid)}
+                                  className="text-[11px] text-muted-foreground hover:text-foreground transition-colors"
+                                  title={isAdm ? 'Hiq admin' : 'Bëj admin'}
+                                >
+                                  {isAdm ? 'Hiq admin' : 'Bëj admin'}
+                                </button>
+                                <button
+                                  onClick={() => handleRemoveGroupMember(manageGroup, uid)}
+                                  className="h-6 w-6 flex items-center justify-center rounded-md hover:bg-destructive/10 text-muted-foreground hover:text-destructive transition-colors"
+                                  title="Hiq nga grupi"
+                                  aria-label="Hiq nga grupi"
+                                >
+                                  <X className="h-3.5 w-3.5" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  {/* Add members (admin only) */}
+                  {amAdmin && (
+                    <div>
+                      <Label className="text-xs">Shto anëtarë</Label>
+                      <div className="relative mt-1">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                        <Input
+                          value={addMemberQuery}
+                          onChange={e => setAddMemberQuery(e.target.value)}
+                          placeholder="Kërko anëtar ekipi..."
+                          className="pl-8 h-8 text-sm"
+                        />
+                      </div>
+                      {filteredNonMembers.length > 0 && (
+                        <div className="mt-1 max-h-40 overflow-y-auto rounded-lg border border-border/60 divide-y divide-border/40">
+                          {filteredNonMembers.map(m => (
+                            <button
+                              key={m.userId}
+                              onClick={() => handleAddGroupMember(manageGroup, m.userId)}
+                              className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-accent/50 transition-colors"
+                            >
+                              <UserPlus className="h-3.5 w-3.5 text-muted-foreground" />
+                              <span className="text-sm truncate">{getUserDisplayName(m.userId)}</span>
+                            </button>
+                          ))}
+                        </div>
+                      )}
+                      {filteredNonMembers.length === 0 && (
+                        <p className="mt-1 px-1 text-[11px] text-muted-foreground">Të gjithë anëtarët janë në grup.</p>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="flex items-center justify-between pt-1 border-t border-border/40">
+                    <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => handleLeaveGroup(manageGroup)}>
+                      <LogOut className="h-3.5 w-3.5 mr-1" /> Dil nga grupi
+                    </Button>
+                    {amAdmin && (
+                      <Button variant="ghost" size="sm" className="text-destructive hover:text-destructive hover:bg-destructive/10" onClick={() => handleDeleteGroup(manageGroup)}>
+                        <Trash2 className="h-3.5 w-3.5 mr-1" /> Fshi grupin
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
       {videoRoomUrl && (
         <React.Suspense fallback={null}>
           <VideoCallModal roomUrl={videoRoomUrl} userName={getUserDisplayName(user?.uid || '') || 'Agjent'} onClose={closeVideo} />
