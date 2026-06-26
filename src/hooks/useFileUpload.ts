@@ -1,5 +1,7 @@
 import { useState, useCallback } from 'react';
+import { doc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
+import { db } from '../lib/firebase';
 import { getGlobalTeamId } from './useFirestore';
 
 interface UploadResult {
@@ -20,18 +22,34 @@ export function useFileUpload() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<Error | null>(null);
 
-  const upload = useCallback(async (file: File, folder = 'uploads'): Promise<UploadResult> => {
+  const upload = useCallback(async (file: File, folder = 'uploads', opts?: { teamId?: string }): Promise<UploadResult> => {
     if (!user) throw new Error('Not authenticated');
-    // Prefer the team-specific VPS URL (synced from teamSettings), but fall back
-    // to a deployment-wide VITE_VPS_URL so uploads work for every team/member even
-    // when a team's settings haven't been populated/synced to this browser yet.
+    // VPS URL resolution, in priority order. The VPS is shared across all of the
+    // owner's teams, so any team's configured URL works for any member.
+    //  1. active team's synced URL (localStorage)
+    //  2. deployment-wide VITE_VPS_URL env
+    //  3. a previously-resolved cross-team fallback (cached below)
+    //  4. the conversation team's URL, read live from teamSettings (then cached)
+    // Step 4 fixes members whose own active team has no VPS configured but who
+    // participate in a group/conversation owned by a team that does.
     const teamVps = (localStorage.getItem('whatsapp_vps_url') || '').replace(/\/$/, '');
     const envVps = ((import.meta.env.VITE_VPS_URL as string | undefined) || '').replace(/\/$/, '');
-    const vpsUrl = teamVps || envVps;
+    const cachedFallback = (localStorage.getItem('vps_url_fallback') || '').replace(/\/$/, '');
+    let vpsUrl = teamVps || envVps || cachedFallback;
+    if (!vpsUrl && opts?.teamId) {
+      try {
+        const snap = await getDoc(doc(db, 'teamSettings', opts.teamId));
+        const url = ((snap.exists() ? (snap.data() as any).whatsappVpsUrl : '') || '').replace(/\/$/, '');
+        if (url) {
+          vpsUrl = url;
+          try { localStorage.setItem('vps_url_fallback', url); } catch { /* ignore */ }
+        }
+      } catch { /* ignore — fall through to the not-configured error */ }
+    }
     if (!vpsUrl) {
       throw new Error('Serveri i skedarëve (VPS) nuk është konfiguruar. Shtoje te Cilësimet → WhatsApp.');
     }
-    const teamId = getGlobalTeamId() || 'shared';
+    const teamId = opts?.teamId || getGlobalTeamId() || 'shared';
 
     setUploading(true);
     setProgress(0);

@@ -373,6 +373,12 @@ const ChatView: React.FC = () => {
     [allGroups, activeChannel],
   );
   const usesServerLimit = isClientChannel || isGroupChannel;
+  // For uploads inside a group, the file must go to the group team's VPS (the
+  // member's own active team may not have one configured). null elsewhere.
+  const activeGroupTeamId = useMemo(
+    () => (allGroups || []).find(g => g.id === activeChannel && g.isGroup)?.teamId,
+    [allGroups, activeChannel],
+  );
   const channelMsgQuery = useMemo(() => ({
     where: [{ field: 'channelId', operator: '==', value: activeChannel }],
     limit: channelLimit,
@@ -1918,7 +1924,7 @@ const ChatView: React.FC = () => {
     // Snapshot the target now — the user may switch conversations during upload.
     const target = { targetMode: chatMode as 'channel' | 'direct', targetChannel: activeChannel, targetDirectUserId: activeDirectUserId };
     try {
-      const res = await uploadAttachment(file, 'chat-attachments');
+      const res = await uploadAttachment(file, 'chat-attachments', { teamId: activeGroupTeamId });
       await handleSendMessage(null, { attachmentUrl: res.url, ...target });
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -2162,7 +2168,7 @@ const ChatView: React.FC = () => {
         const fileName = `voice-${Date.now()}.webm`;
         const file = new File([blob], fileName, { type: blob.type });
         try {
-          const res = await uploadAttachment(file, 'voice-notes');
+          const res = await uploadAttachment(file, 'voice-notes', { teamId: activeGroupTeamId });
           await handleSendMessage(null, { content: '🎙️ Voice note', attachmentUrl: res.url, ...target });
         } catch (err) {
           toast({ title: 'Ngarkimi dështoi', description: err instanceof Error ? err.message : 'Provo përsëri.', variant: 'destructive' });
