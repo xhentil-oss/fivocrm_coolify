@@ -101,6 +101,8 @@ const ChatView: React.FC = () => {
   const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null);
   const [clientSearch, setClientSearch] = useState('');
   const [clientScope, setClientScope] = useState<'all' | 'mine'>('all');
+  // Search box to start a new DM (replaces the always-on "Anëtarë" list)
+  const [dmSearch, setDmSearch] = useState('');
   // Pagination state
   const [channelLimit, setChannelLimit] = useState(100);
   const [waDisplayLimit, setWaDisplayLimit] = useState(50);
@@ -630,6 +632,15 @@ const ChatView: React.FC = () => {
       return true;
     });
   }, [teamMembers, user?.uid]);
+
+  // Members matching the "start a new DM" search box (by display name).
+  const dmSearchResults = useMemo(() => {
+    const q = dmSearch.trim().toLowerCase();
+    if (!q) return [];
+    return otherMembers
+      .filter(m => getUserDisplayName(m.userId).toLowerCase().includes(q))
+      .slice(0, 30);
+  }, [dmSearch, otherMembers, getUserDisplayName]);
 
   const messageMutation = useMutation<ChatMessage>('messages');
   const notificationMutation = useMutation<any>('notifications');
@@ -2392,6 +2403,7 @@ const ChatView: React.FC = () => {
     setShowSidebar(false);
     resetSearch();
     setReplyingTo(null);
+    setDmSearch('');
   }, []);
 
   const handleSelectAi = useCallback(() => {
@@ -2951,7 +2963,56 @@ const ChatView: React.FC = () => {
           {/* Direct Messages */}
           <div className="h-px bg-border/50 mx-2 my-2" />
           <p className="px-2 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Mesazhe Direkte</p>
-          {directConversations.map(userId => {
+          {/* Search to start a new DM (replaces the always-on "Anëtarë" list) */}
+          <div className="relative px-1 mb-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
+            <Input
+              value={dmSearch}
+              onChange={e => setDmSearch(e.target.value)}
+              placeholder="Kërko person për t'i shkruar..."
+              className="h-7 pl-7 pr-6 text-xs rounded-lg bg-muted/40 border-0 focus-visible:ring-1"
+            />
+            {dmSearch && (
+              <button onClick={() => setDmSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2"><X className="h-3 w-3 text-muted-foreground" /></button>
+            )}
+          </div>
+          {/* Search results: matching members → click to start a DM */}
+          {dmSearch.trim() && (
+            dmSearchResults.length === 0 ? (
+              <p className="px-3 py-1.5 text-[11px] text-muted-foreground/40 italic">Asnjë person s'u gjet</p>
+            ) : (
+              dmSearchResults.map(member => {
+                const name = getUserDisplayName(member.userId);
+                const status = getUserStatus(member.userId);
+                return (
+                  <button
+                    key={member.id}
+                    onClick={() => handleSelectDirectMessage(member.userId)}
+                    className="w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-left hover:bg-accent/50 text-foreground/70"
+                  >
+                    <div className="relative flex-shrink-0">
+                      <div className={`h-8 w-8 rounded-lg ${getAvatarColor(member.userId)} flex items-center justify-center`}>
+                        <span className="text-[10px] font-bold text-white">{name.slice(0, 2).toUpperCase()}</span>
+                      </div>
+                      {isOnline(member.userId) && (
+                        <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-500 border-2 border-background" />
+                      )}
+                    </div>
+                    <span className="flex-1 truncate text-sm flex items-center gap-1.5">
+                      <span className="truncate">{name}</span>
+                      {status && (
+                        <span className="flex-shrink-0 text-xs opacity-75" title={status.text}>{status.emoji}</span>
+                      )}
+                    </span>
+                  </button>
+                );
+              })
+            )
+          )}
+          {!dmSearch.trim() && directConversations.length === 0 && (
+            <p className="px-3 py-1.5 text-[11px] text-muted-foreground/40 italic">Kërko një person për të nisur një bisedë.</p>
+          )}
+          {!dmSearch.trim() && directConversations.map(userId => {
             const unread = directUnreadMap.get(userId) || 0;
             const isActive = chatMode === 'direct' && activeDirectUserId === userId;
             const name = getUserDisplayName(userId);
@@ -2989,42 +3050,6 @@ const ChatView: React.FC = () => {
               </button>
             );
           })}
-
-          {/* Members not in conversation */}
-          {otherMembers.filter(m => !directConversations.includes(m.userId)).length > 0 && (
-            <>
-              <p className="px-2 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Anëtarë</p>
-              {otherMembers.filter(m => !directConversations.includes(m.userId)).map(member => {
-                const name = getUserDisplayName(member.userId);
-                const isActive = chatMode === 'direct' && activeDirectUserId === member.userId;
-                const status = getUserStatus(member.userId);
-                return (
-                  <button
-                    key={member.id}
-                    onClick={() => handleSelectDirectMessage(member.userId)}
-                    className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-left ${
-                      isActive ? 'bg-primary/8 text-primary font-medium' : 'hover:bg-accent/50 text-foreground/70'
-                    }`}
-                  >
-                    <div className="relative flex-shrink-0">
-                      <div className={`h-8 w-8 rounded-lg ${getAvatarColor(member.userId)} flex items-center justify-center`}>
-                        <span className="text-[10px] font-bold text-white">{name.slice(0, 2).toUpperCase()}</span>
-                      </div>
-                      {isOnline(member.userId) && (
-                        <span className="absolute -bottom-0.5 -right-0.5 h-2 w-2 rounded-full bg-emerald-500 border-2 border-background" />
-                      )}
-                    </div>
-                    <span className="flex-1 truncate text-sm flex items-center gap-1.5">
-                      <span className="truncate">{name}</span>
-                      {status && (
-                        <span className="flex-shrink-0 text-xs opacity-75" title={status.text}>{status.emoji}</span>
-                      )}
-                    </span>
-                  </button>
-                );
-              })}
-            </>
-          )}
 
           {/* WhatsApp Conversations */}
           {waEnabled && permissions.canAccessWhatsapp && (
