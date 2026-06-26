@@ -403,6 +403,30 @@ const ChatView: React.FC = () => {
   }), []);
   const { data: allUnreadClientMsgs } = useCollection<ChatMessage>('messages', allUnreadClientQuery);
 
+  // Background query: most-recent client messages (read OR unread, any team) —
+  // drives last-activity sorting of the client conversation list. skipTeamFilter
+  // because client conversations span teams; server-side orderBy needs the
+  // composite index messages(senderType, createdAt) in firestore.indexes.json.
+  const recentClientMsgsQuery = useMemo(() => ({
+    where: [{ field: 'senderType', operator: '==' as const, value: 'client' }],
+    orderBy: { field: 'createdAt', direction: 'desc' as const },
+    limit: 200,
+    skipTeamFilter: true,
+  }), []);
+  const { data: recentClientMsgs } = useCollection<ChatMessage>('messages', recentClientMsgsQuery);
+
+  // customerId → latest client-message timestamp (ms).
+  const clientRecencyMap = useMemo(() => {
+    const map = new Map<string, number>();
+    recentClientMsgs?.forEach(m => {
+      const cid = (m.channelId || '').match(/^client-([A-Za-z0-9]+)/)?.[1];
+      if (!cid) return;
+      const t = getTimestampMs(m.createdAt);
+      if (t > (map.get(cid) || 0)) map.set(cid, t);
+    });
+    return map;
+  }, [recentClientMsgs]);
+
   const clientUnreadMap = useMemo(() => {
     const map = new Map<string, number>();
     allUnreadClientMsgs?.forEach(m => {
@@ -2862,16 +2886,12 @@ const ChatView: React.FC = () => {
                   return c?.name?.toLowerCase().includes(q) || c?.email?.toLowerCase().includes(q) || a.email?.toLowerCase().includes(q);
                 }).sort((a, b) => {
                   // Sort by most-recent conversation (WhatsApp-style). Recency =
-                  // latest of the denormalized lastClientMessageAt and any current
-                  // unread client message for this customer.
+                  // latest client message (recentClientMsgs, read or unread) OR the
+                  // denormalized lastClientMessageAt (covers staff replies too).
                   const recency = (customerId: string) => {
                     const c = customers?.find(cu => cu.id === customerId);
-                    let t = (c as any)?.lastClientMessageAt ? getTimestampMs((c as any).lastClientMessageAt) : 0;
-                    allUnreadClientMsgs?.forEach(m => {
-                      const mid = (m.channelId || '').match(/^client-([A-Za-z0-9]+)/)?.[1];
-                      if (mid === customerId) t = Math.max(t, getTimestampMs(m.createdAt));
-                    });
-                    return t;
+                    const denorm = (c as any)?.lastClientMessageAt ? getTimestampMs((c as any).lastClientMessageAt) : 0;
+                    return Math.max(denorm, clientRecencyMap.get(customerId) || 0);
                   };
                   return recency(b.customerId) - recency(a.customerId);
                 }).map(access => {
@@ -3051,68 +3071,7 @@ const ChatView: React.FC = () => {
             );
           })}
 
-          {/* WhatsApp Conversations */}
-          {waEnabled && permissions.canAccessWhatsapp && (
-          <>
-            <div className="h-px bg-border/50 mx-2 my-2" />
-            <button
-              onClick={() => {
-                setChatMode('whatsapp');
-                setActiveWaPhone(null);
-                setShowSidebar(false);
-              }}
-              className="w-full px-2 pt-1 pb-1 flex items-center gap-1.5 text-left hover:bg-accent/30 rounded-lg"
-            >
-              <p className="text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60 flex items-center gap-1.5 flex-1">
-                <Smartphone className="h-3 w-3 text-[#25D366]" />
-                WhatsApp
-              </p>
-              {waTotalUnread > 0 && (
-                <span className="h-4 min-w-4 px-1 flex items-center justify-center rounded-full bg-[#25D366] text-white text-[9px] font-bold">{waTotalUnread}</span>
-              )}
-            </button>
-            {waConversations.length === 0 && (
-              <p className="px-3 py-1.5 text-[11px] text-muted-foreground/40 italic">Nuk ka biseda ende</p>
-            )}
-            {waConversations.map(conv => {
-              const isWaActive = chatMode === 'whatsapp' && activeWaPhone === conv.phone;
-              return (
-                <button
-                  key={conv.phone}
-                  onClick={() => handleSelectWhatsApp(conv.phone, conv.leadName, conv.jid, conv.channel, conv.leadId)}
-                  className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-left ${
-                    isWaActive
-                      ? 'bg-[#25D366]/10 border border-[#25D366]/20 shadow-sm'
-                      : 'hover:bg-accent/50 text-foreground/70'
-                  }`}
-                >
-                  <div className="relative flex-shrink-0">
-                    <div className={`h-8 w-8 rounded-lg flex items-center justify-center ${conv.channel === 'meta' ? 'bg-blue-500/15' : 'bg-[#25D366]/15'}`}>
-                      <Smartphone className={`h-4 w-4 ${conv.channel === 'meta' ? 'text-blue-500' : 'text-[#25D366]'}`} />
-                    </div>
-                    {!conv.leadId && !conv.isLid && (
-                      <span className="absolute -top-1 -right-1 h-3 w-3 rounded-full bg-amber-500 border-2 border-background" title="Nuk është në CRM" />
-                    )}
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <span className={`truncate block text-sm ${isWaActive ? 'text-[#25D366] font-medium' : ''}`}>{conv.leadName !== conv.phone ? conv.leadName : `+${conv.phone}`}</span>
-                    <span className="text-[10px] text-muted-foreground/60 truncate block">
-                      {conv.isLid
-                        ? (conv.lastMessage || '').slice(0, 32)
-                        : conv.leadName !== conv.phone
-                          ? `+${conv.phone}${conv.lastMessage ? ' · ' + conv.lastMessage.slice(0, 20) : ''}`
-                          : (conv.lastMessage || '').slice(0, 32)
-                      }
-                    </span>
-                  </div>
-                  {conv.unread > 0 && !isWaActive && (
-                    <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-[#25D366] text-white text-[10px] font-bold">{conv.unread}</span>
-                  )}
-                </button>
-              );
-            })}
-          </>
-          )}
+          {/* WhatsApp moved to its own page (/app/whatsapp) — old inline section removed. */}
         </div>
       </aside>
 
