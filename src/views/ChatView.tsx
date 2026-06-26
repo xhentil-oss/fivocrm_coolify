@@ -55,12 +55,10 @@ interface AIMessage {
   isLoading?: boolean;
 }
 
-// Channels
-const CHANNELS = [
-  { id: 'general' as const, name: 'Përgjithshme', icon: Hash, description: 'Diskutime të përgjithshme' },
-  { id: 'team' as const, name: 'Ekipi', icon: Users, description: 'Bashkëpunimi i ekipit' },
-  { id: 'support' as const, name: 'Mbështetja', icon: MessageSquare, description: 'Mbështetje klienti' },
-] as const;
+// Fixed default channels (Përgjithshme / Ekipi / Mbështetja) were removed per
+// product decision — chat now uses dynamic groups + DMs only. Kept as an (empty)
+// typed list so the shared lookup/badge helpers that iterate it stay valid.
+const CHANNELS: { id: string; name: string; icon: typeof Hash; description: string }[] = [];
 
 const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '💯', '✅', '🙏', '😎', '🤔'];
 
@@ -84,7 +82,9 @@ const ChatView: React.FC = () => {
   const [chatMode, setChatMode] = useState<ChatMode>('channel');
   const [activeChannel, setActiveChannel] = useState<string>(() => {
     const s = (location.state as any);
-    return s?.channel && typeof s.channel === 'string' ? s.channel : 'general';
+    // No fixed channels anymore — default to no selection (empty state) unless a
+    // specific channel/group was passed via navigation state.
+    return s?.channel && typeof s.channel === 'string' ? s.channel : '';
   });
   const [activeDirectUserId, setActiveDirectUserId] = useState<string | null>(() => {
     const s = (location.state as any);
@@ -373,6 +373,9 @@ const ChatView: React.FC = () => {
     [allGroups, activeChannel],
   );
   const usesServerLimit = isClientChannel || isGroupChannel;
+  // Channel mode with nothing valid selected (fixed channels were removed) — show
+  // the empty state and hide the composer.
+  const channelHasNoSelection = chatMode === 'channel' && !isClientChannel && !isGroupChannel;
   const channelMsgQuery = useMemo(() => ({
     where: [{ field: 'channelId', operator: '==', value: activeChannel }],
     limit: channelLimit,
@@ -2283,7 +2286,7 @@ const ChatView: React.FC = () => {
     if (chatMode !== 'channel' || !allGroups || !user?.uid) return;
     const g = allGroups.find(x => x.id === activeChannel && x.isGroup);
     if (g && !(g.members || []).includes(user.uid)) {
-      handleSelectChannel('general');
+      handleSelectChannel('');
     }
   }, [allGroups, activeChannel, chatMode, user?.uid, handleSelectChannel]);
 
@@ -2356,14 +2359,14 @@ const ChatView: React.FC = () => {
     if (admins.length === 0 && remainingMembers.length > 0) admins = [remainingMembers[0]];
     await channelMutation.update(g.id, { members: remainingMembers, admins } as any);
     setManageGroupId(null);
-    if (activeChannel === g.id) handleSelectChannel('general');
+    if (activeChannel === g.id) handleSelectChannel('');
     toast({ title: 'Dole nga grupi', description: `Nuk je më anëtar i "${g.name}".` });
   }, [user, channelMutation, activeChannel, handleSelectChannel, toast]);
 
   const handleDeleteGroup = useCallback(async (g: Channel) => {
     await channelMutation.remove(g.id);
     setManageGroupId(null);
-    if (activeChannel === g.id) handleSelectChannel('general');
+    if (activeChannel === g.id) handleSelectChannel('');
     toast({ title: 'Grupi u fshi', description: `"${g.name}" u fshi përfundimisht.` });
   }, [channelMutation, activeChannel, handleSelectChannel, toast]);
 
@@ -2723,34 +2726,6 @@ const ChatView: React.FC = () => {
           </button>
 
           <div className="h-px bg-border/50 mx-2 my-2" />
-
-          {/* Channels */}
-          <p className="px-2 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Kanale</p>
-          {CHANNELS.map(channel => {
-            const isActive = chatMode === 'channel' && activeChannel === channel.id;
-            const unread = channelUnreadMap.get(channel.id) || 0;
-            return (
-              <button
-                key={channel.id}
-                onClick={() => handleSelectChannel(channel.id)}
-                className={`w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-left ${
-                  isActive
-                    ? 'bg-primary/8 text-primary font-medium shadow-sm border border-primary/10'
-                    : 'hover:bg-accent/50 text-foreground/70'
-                }`}
-              >
-                <div className={`h-8 w-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                  isActive ? 'bg-primary/10' : 'bg-muted/80'
-                }`}>
-                  <channel.icon className={`h-4 w-4 ${isActive ? 'text-primary' : 'text-muted-foreground'}`} />
-                </div>
-                <span className="flex-1 truncate text-sm">{channel.name}</span>
-                {unread > 0 && !isActive && (
-                  <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[10px] font-bold">{unread}</span>
-                )}
-              </button>
-            );
-          })}
 
           {/* Groups (WhatsApp-style, member-scoped) */}
           <div className="flex items-center justify-between px-2 pt-3 pb-1">
@@ -3137,24 +3112,34 @@ const ChatView: React.FC = () => {
                 </>
               ) : (() => {
                 const meta = getChannelMeta(activeChannel);
-                const Icon = meta?.icon || Hash;
-                const isGroup = !!meta?.isGroup;
+                // Fixed channels removed — a non-client channel is either a group
+                // or nothing selected (empty state).
+                if (!meta || !meta.isGroup) {
+                  return (
+                    <div className="flex items-center gap-3 flex-1 min-w-0">
+                      <div className="h-9 w-9 rounded-xl bg-muted flex items-center justify-center flex-shrink-0">
+                        <MessageSquare className="h-4 w-4 text-muted-foreground" />
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-semibold text-sm">Bisedat</p>
+                        <p className="text-[11px] text-muted-foreground">Zgjidh një grup ose bisedë</p>
+                      </div>
+                    </div>
+                  );
+                }
                 return (
                   <button
                     type="button"
-                    disabled={!isGroup}
-                    onClick={() => { if (isGroup && meta?.group) { setAddMemberQuery(''); setManageGroupId(meta.group.id); } }}
-                    className={`flex items-center gap-3 flex-1 min-w-0 text-left ${isGroup ? 'cursor-pointer rounded-lg -mx-1 px-1 hover:bg-accent/40' : ''}`}
+                    onClick={() => { if (meta.group) { setAddMemberQuery(''); setManageGroupId(meta.group.id); } }}
+                    className="flex items-center gap-3 flex-1 min-w-0 text-left cursor-pointer rounded-lg -mx-1 px-1 hover:bg-accent/40"
                   >
                     <div className="h-9 w-9 rounded-xl bg-primary/10 flex items-center justify-center flex-shrink-0">
-                      {React.createElement(Icon, { className: 'h-4 w-4 text-primary' })}
+                      <Users className="h-4 w-4 text-primary" />
                     </div>
                     <div className="min-w-0">
-                      <p className="font-semibold text-sm truncate">{isGroup ? meta?.name : `#${meta?.name || activeChannel}`}</p>
+                      <p className="font-semibold text-sm truncate">{meta.name}</p>
                       <p className="text-[11px] text-muted-foreground truncate">
-                        {isGroup
-                          ? `${(meta?.group?.members || []).length} anëtarë · prek për të menaxhuar`
-                          : meta?.description}
+                        {(meta.group?.members || []).length} anëtarë · prek për të menaxhuar
                       </p>
                     </div>
                   </button>
@@ -3957,9 +3942,15 @@ const ChatView: React.FC = () => {
                       <MessageSquare className="h-6 w-6 opacity-30" />
                     </div>
                     <p className="text-sm font-medium text-foreground/50">
-                      {searchQuery ? 'Nuk u gjet asnjë mesazh' : chatMode === 'direct' && !activeDirectUserId ? 'Zgjidh një person' : 'Fillo bisedën!'}
+                      {searchQuery
+                        ? 'Nuk u gjet asnjë mesazh'
+                        : chatMode === 'direct' && !activeDirectUserId
+                          ? 'Zgjidh një person'
+                          : chatMode === 'channel' && !activeChannel.startsWith('client-') && !getChannelMeta(activeChannel)
+                            ? 'Zgjidh një grup ose bisedë nga lista'
+                            : 'Fillo bisedën!'}
                     </p>
-                    {!searchQuery && chatMode === 'channel' && <p className="text-xs text-muted-foreground/40 mt-1">Shkruaj mesazhin e parë</p>}
+                    {!searchQuery && chatMode === 'channel' && (getChannelMeta(activeChannel)?.isGroup || activeChannel.startsWith('client-')) && <p className="text-xs text-muted-foreground/40 mt-1">Shkruaj mesazhin e parë</p>}
                   </div>
                 )}
                 {/* Bottom sentinel for jump-to-bottom detection */}
@@ -4011,7 +4002,8 @@ const ChatView: React.FC = () => {
               </div>
             )}
 
-            {/* Message Input */}
+            {/* Message Input — hidden when no group/conversation is selected */}
+            {!channelHasNoSelection && (
             <div className="px-4 pt-2 border-t bg-background" style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom, 12px))' }}>
               {showAttachmentInput && (
                 <div className="flex gap-2 items-center px-3 py-1.5 mb-2 bg-muted/30 rounded-xl border">
@@ -4290,6 +4282,7 @@ const ChatView: React.FC = () => {
               </div>
               {messageMutation.error && <p className="text-xs text-destructive mt-1">{messageMutation.error.message}</p>}
             </div>
+            )}
           </>
         )}
 
