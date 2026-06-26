@@ -269,8 +269,12 @@ const ChatView: React.FC = () => {
   const requestMutation = useMutation<ClientRequest>('clientRequests');
   const permissions = usePermissions();
 
-  // ── WhatsApp-style groups (dynamic, team-scoped `channels` collection) ──
-  const { data: allGroups } = useCollection<Channel>('channels');
+  // ── WhatsApp-style groups (dynamic `channels` collection) ──
+  // Visibility is membership-based, not team-based: a group is created with the
+  // creator's teamId, but members from other teams must see it too. So we read
+  // cross-team (skipTeamFilter) and gate purely on the `members` array below —
+  // mirroring how DMs span teams.
+  const { data: allGroups } = useCollection<Channel>('channels', { skipTeamFilter: true });
   const channelMutation = useMutation<Channel>('channels');
   // Only Admin/Manager/Owner may create groups.
   const canCreateGroups = !!(permissions.isAdmin || permissions.isManager || permissions.isOwner);
@@ -362,11 +366,18 @@ const ChatView: React.FC = () => {
   // messages without teamId.  No orderBy — avoids composite index requirement;
   // sorting is done client-side in filteredMessages.
   const isClientChannel = activeChannel.startsWith('client-');
+  // Group channels can hold messages stamped with different teamIds (members may
+  // belong to different teams), so read them cross-team and filter by channelId.
+  const isGroupChannel = useMemo(
+    () => (allGroups || []).some(g => g.id === activeChannel && g.isGroup),
+    [allGroups, activeChannel],
+  );
+  const usesServerLimit = isClientChannel || isGroupChannel;
   const channelMsgQuery = useMemo(() => ({
     where: [{ field: 'channelId', operator: '==', value: activeChannel }],
     limit: channelLimit,
-    ...(isClientChannel ? { skipTeamFilter: true } : {}),
-  }), [activeChannel, isClientChannel, channelLimit]);
+    ...(usesServerLimit ? { skipTeamFilter: true } : {}),
+  }), [activeChannel, usesServerLimit, channelLimit]);
   const { data: channelMessages, loading: channelPending, error: channelError } = useCollection<ChatMessage>('messages', channelMsgQuery);
 
   // Background query: ALL unread client messages — drives per-channel unread badges
@@ -464,7 +475,7 @@ const ChatView: React.FC = () => {
     const sorted = [...visible].sort((a, b) => getTimestampMs(a.createdAt) - getTimestampMs(b.createdAt));
     // Channel pagination: team-scoped reads ignore the server `limit`, so bound the
     // rendered window to the most-recent `channelLimit` here ("load older" raises it).
-    const ordered = (chatMode === 'channel' && !isClientChannel && sorted.length > channelLimit)
+    const ordered = (chatMode === 'channel' && !usesServerLimit && sorted.length > channelLimit)
       ? sorted.slice(-channelLimit)
       : sorted;
     const senderFilter = searchSenderId !== '__any__' ? searchSenderId : null;
@@ -482,7 +493,7 @@ const ChatView: React.FC = () => {
       }
       return true;
     });
-  }, [messages, searchQuery, searchSenderId, searchDateFrom, searchDateTo, chatMode, isClientChannel, channelLimit]);
+  }, [messages, searchQuery, searchSenderId, searchDateFrom, searchDateTo, chatMode, usesServerLimit, channelLimit]);
 
   // Pinned messages for current channel/DM — always visible, regardless of search filters
   const pinnedMessages = useMemo(() => {
