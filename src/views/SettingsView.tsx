@@ -311,7 +311,12 @@ const SettingsView: React.FC = () => {
   };
 
   const handleDeleteWaAccount = async (id: string) => {
-    await waMutation.remove(id);
+    try {
+      await waMutation.remove(id);
+      toast({ title: 'Llogaria u fshi' });
+    } catch (err: any) {
+      toast({ title: 'Fshirja dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
+    }
   };
 
   // ── Meta WhatsApp Cloud API settings ──

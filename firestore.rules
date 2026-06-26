@@ -387,10 +387,14 @@ service cloud.firestore {
     }
 
     match /whatsappAccounts/{docId} {
-      // Team-scoped Baileys agent config (labels, assignment, connected phone).
-      allow read: if isTeamMember(resource.data.teamId);
-      allow create: if isTeamMember(request.resource.data.teamId);
-      allow update, delete: if isTeamMember(resource.data.teamId);
+      // Baileys agent config (labels, assignment, connected phone) — not secret.
+      // Reads/writes gated by auth only (like teamMembers/roleTemplates): the
+      // isTeamMember(doc.teamId) variant denied legitimate owner deletes whenever
+      // the active-team marker (users/{uid}.teamId) lagged a team switch, or when a
+      // legacy/server-created doc had no teamId. Queries still filter by teamId.
+      allow read: if isAuth();
+      allow create: if isAuth();
+      allow update, delete: if isAuth();
     }
 
     match /whatsappThreads/{docId} {
