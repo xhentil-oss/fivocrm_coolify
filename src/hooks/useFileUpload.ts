@@ -1,8 +1,14 @@
 import { useState, useCallback } from 'react';
-import { doc, getDoc } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
-import { db } from '../lib/firebase';
 import { getGlobalTeamId } from './useFirestore';
+
+// Deployment-wide file host (shared across all of the owner's teams). Used as the
+// final fallback so image/file uploads work in EVERY channel/DM for EVERY member,
+// even when their active team hasn't configured (or synced) a VPS URL. Vite bakes
+// VITE_VPS_URL at build time, so a hardcoded default is what guarantees it works in
+// production regardless of per-team settings. Must be HTTPS (page is served over
+// HTTPS — an http:// host would be blocked as mixed content).
+const DEFAULT_VPS_FILE_URL = 'https://vps.fivocrm.com';
 
 interface UploadResult {
   url: string;
@@ -22,34 +28,20 @@ export function useFileUpload() {
   const [progress, setProgress] = useState(0);
   const [error, setError] = useState<Error | null>(null);
 
-  const upload = useCallback(async (file: File, folder = 'uploads', opts?: { teamId?: string }): Promise<UploadResult> => {
+  const upload = useCallback(async (file: File, folder = 'uploads'): Promise<UploadResult> => {
     if (!user) throw new Error('Not authenticated');
-    // VPS URL resolution, in priority order. The VPS is shared across all of the
-    // owner's teams, so any team's configured URL works for any member.
-    //  1. active team's synced URL (localStorage)
-    //  2. deployment-wide VITE_VPS_URL env
-    //  3. a previously-resolved cross-team fallback (cached below)
-    //  4. the conversation team's URL, read live from teamSettings (then cached)
-    // Step 4 fixes members whose own active team has no VPS configured but who
-    // participate in a group/conversation owned by a team that does.
+    // VPS URL resolution, in priority order:
+    //  1. active team's synced URL (localStorage, from teamSettings)
+    //  2. deployment-wide VITE_VPS_URL env (baked at build time)
+    //  3. hardcoded shared file host — guarantees uploads work for every member
+    //     in every channel/DM, even with no team-specific config.
     const teamVps = (localStorage.getItem('whatsapp_vps_url') || '').replace(/\/$/, '');
     const envVps = ((import.meta.env.VITE_VPS_URL as string | undefined) || '').replace(/\/$/, '');
-    const cachedFallback = (localStorage.getItem('vps_url_fallback') || '').replace(/\/$/, '');
-    let vpsUrl = teamVps || envVps || cachedFallback;
-    if (!vpsUrl && opts?.teamId) {
-      try {
-        const snap = await getDoc(doc(db, 'teamSettings', opts.teamId));
-        const url = ((snap.exists() ? (snap.data() as any).whatsappVpsUrl : '') || '').replace(/\/$/, '');
-        if (url) {
-          vpsUrl = url;
-          try { localStorage.setItem('vps_url_fallback', url); } catch { /* ignore */ }
-        }
-      } catch { /* ignore — fall through to the not-configured error */ }
-    }
-    if (!vpsUrl) {
-      throw new Error('Serveri i skedarëve (VPS) nuk është konfiguruar. Shtoje te Cilësimet → WhatsApp.');
-    }
-    const teamId = opts?.teamId || getGlobalTeamId() || 'shared';
+    // Ignore an http:// team URL on an https page — it would be blocked as mixed
+    // content; fall through to the https env/default instead.
+    const isSecure = (u: string) => /^https:\/\//i.test(u) || /^https?:\/\/(localhost|127\.0\.0\.1)/i.test(u);
+    const vpsUrl = (isSecure(teamVps) && teamVps) || (isSecure(envVps) && envVps) || DEFAULT_VPS_FILE_URL;
+    const teamId = getGlobalTeamId() || 'shared';
 
     setUploading(true);
     setProgress(0);
@@ -85,6 +77,12 @@ export function useFileUpload() {
 
       setUploading(false);
       setProgress(100);
+      // If we reached the VPS over HTTPS but it returned an http:// file URL
+      // (PUBLIC_URL unset / no trust-proxy), upgrade it — the page is HTTPS, so an
+      // http URL would fail mixed-content and the chat's https-only send guard.
+      if (/^https:\/\//i.test(vpsUrl) && /^http:\/\//i.test(result.url)) {
+        result.url = result.url.replace(/^http:\/\//i, 'https://');
+      }
       return result;
     } catch (err) {
       setError(err as Error);
