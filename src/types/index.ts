@@ -686,6 +686,8 @@ export interface Channel {
   members?: string[];
   /** User IDs of group admins — can add/remove members and rename the group. */
   admins?: string[];
+  /** Denormalized timestamp of the most recent message — for sorting by recency. */
+  lastMessageAt?: Date;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

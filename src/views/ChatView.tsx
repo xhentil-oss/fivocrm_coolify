@@ -282,7 +282,13 @@ const ChatView: React.FC = () => {
   const myGroups = useMemo(
     () => (allGroups || [])
       .filter(g => g.isGroup && Array.isArray(g.members) && user?.uid && g.members.includes(user.uid))
-      .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'sq')),
+      // Most-recent conversation first (WhatsApp-style); name as tiebreaker.
+      .sort((a, b) => {
+        const at = a.lastMessageAt ? getTimestampMs(a.lastMessageAt) : 0;
+        const bt = b.lastMessageAt ? getTimestampMs(b.lastMessageAt) : 0;
+        if (bt !== at) return bt - at;
+        return (a.name || '').localeCompare(b.name || '', 'sq');
+      }),
     [allGroups, user?.uid],
   );
   // Resolve any active channel id → display metadata (fixed channel OR dynamic group).
@@ -2002,6 +2008,16 @@ const ChatView: React.FC = () => {
       if (targetMode === 'channel') {
         await messageMutation.create({ ...baseMessage, channelId: targetChannel } as Omit<ChatMessage, 'id'>);
 
+        // Denormalize last-activity so the sidebar can sort conversations by
+        // recency (WhatsApp-style). Fire-and-forget — never block the send.
+        const nowTs = new Date();
+        if (isClientChannel) {
+          const custId = targetChannel.match(/^client-([A-Za-z0-9]+)/)?.[1];
+          if (custId) updateDoc(doc(db, 'customers', custId), { lastClientMessageAt: nowTs }).catch(() => {});
+        } else if ((allGroups || []).some(g => g.id === targetChannel && g.isGroup)) {
+          updateDoc(doc(db, 'channels', targetChannel), { lastMessageAt: nowTs }).catch(() => {});
+        }
+
         // Notify mentioned staff (mention highlighting existed but no notification was created)
         if (mentions.length > 0) {
           mentions.filter(uid => uid !== user.uid).forEach(uid => {
@@ -2833,15 +2849,19 @@ const ChatView: React.FC = () => {
                   const q = clientSearch.toLowerCase();
                   return c?.name?.toLowerCase().includes(q) || c?.email?.toLowerCase().includes(q) || a.email?.toLowerCase().includes(q);
                 }).sort((a, b) => {
-                  const ua = (clientUnreadMap.get(`client-${a.customerId}`) || 0)
-                    + (projects?.filter(p => p.customerId === a.customerId) || [])
-                        .reduce((s, p) => s + (clientUnreadMap.get(`client-${a.customerId}-project-${p.id}`) || 0), 0);
-                  const ub = (clientUnreadMap.get(`client-${b.customerId}`) || 0)
-                    + (projects?.filter(p => p.customerId === b.customerId) || [])
-                        .reduce((s, p) => s + (clientUnreadMap.get(`client-${b.customerId}-project-${p.id}`) || 0), 0);
-                  if (ua > 0 && ub === 0) return -1;
-                  if (ub > 0 && ua === 0) return 1;
-                  return 0;
+                  // Sort by most-recent conversation (WhatsApp-style). Recency =
+                  // latest of the denormalized lastClientMessageAt and any current
+                  // unread client message for this customer.
+                  const recency = (customerId: string) => {
+                    const c = customers?.find(cu => cu.id === customerId);
+                    let t = (c as any)?.lastClientMessageAt ? getTimestampMs((c as any).lastClientMessageAt) : 0;
+                    allUnreadClientMsgs?.forEach(m => {
+                      const mid = (m.channelId || '').match(/^client-([A-Za-z0-9]+)/)?.[1];
+                      if (mid === customerId) t = Math.max(t, getTimestampMs(m.createdAt));
+                    });
+                    return t;
+                  };
+                  return recency(b.customerId) - recency(a.customerId);
                 }).map(access => {
                   const customer = customers?.find(c => c.id === access.customerId);
                   const clientChannelId = `client-${access.customerId}`;

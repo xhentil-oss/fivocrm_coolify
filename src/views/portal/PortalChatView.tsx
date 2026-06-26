@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { addDoc, collection, Timestamp } from 'firebase/firestore';
+import { addDoc, collection, doc, updateDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useCollection, useMutation, useDocument } from '../../hooks/useFirestore';
@@ -201,6 +201,9 @@ const PortalChatView: React.FC = () => {
         updatedAt: Timestamp.now(),
         createdByUserId: user.uid,
       });
+
+      // Bump last-activity so the staff sidebar sorts this conversation by recency.
+      updateDoc(doc(db, 'customers', customerId), { lastClientMessageAt: Timestamp.now() }).catch(() => { /* non-blocking */ });
 
       // Route the message to the responsible person (in-app + email).
       const channelLabel = selectedProjectId
