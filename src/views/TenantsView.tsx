@@ -69,6 +69,47 @@ const TenantsView: React.FC = () => {
   const [backfillProgress, setBackfillProgress] = useState('');
   const [claiming, setClaiming] = useState(false);
   const [portalBackfilling, setPortalBackfilling] = useState(false);
+  const [cidBackfilling, setCidBackfilling] = useState(false);
+  const [cidProgress, setCidProgress] = useState('');
+
+  // Phase 4.3b Wave 3: stamp customerId on parent-linked child records
+  // (invoiceItems, tasks, projectComments, taskComments) so portal clients keep
+  // read access under the tightened rules. Resumable loop like Phase 2.
+  const runCustomerIdBackfill = async () => {
+    if (cidBackfilling || !user) return;
+    setCidBackfilling(true);
+    setCidProgress('po nis…');
+    try {
+      const token = await user.getIdToken(true);
+      let totalUpdated = 0;
+      const failedSet = new Set<string>();
+      let remaining: string[] = [];
+      let guard = 0;
+      let prevRemaining = Infinity;
+      do {
+        const res = await fetch('/api/cron/run?job=backfill-customerid&manual=1', {
+          method: 'GET', headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) throw new Error(data.error || `Gabim serveri (${res.status})`);
+        totalUpdated += data.totalUpdated || 0;
+        (data.results || []).filter((r: any) => r.updated === -1).forEach((r: any) => failedSet.add(`${r.collection}${r.error ? `: ${r.error}` : ''}`));
+        remaining = data.remaining || [];
+        setCidProgress(`${data.completed}/${data.total} koleksione · mbetur ${remaining.length}`);
+        if (remaining.length >= prevRemaining) break;
+        prevRemaining = remaining.length;
+      } while (remaining.length > 0 && ++guard < 25);
+      toast({
+        title: 'Backfill customerId u krye',
+        description: `${totalUpdated} dokumente u stampuan${failedSet.size ? ` · dështuan: ${[...failedSet].join(', ')}` : ' · pa dështime'}.`,
+      });
+    } catch (err: any) {
+      toast({ title: 'Backfill dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
+    } finally {
+      setCidBackfilling(false);
+      setCidProgress('');
+    }
+  };
 
   const runPortalBackfill = async () => {
     if (portalBackfilling || !user) return;
@@ -288,9 +329,11 @@ const TenantsView: React.FC = () => {
             <Layers className="h-4 w-4 text-primary" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="font-medium text-sm">Faza 4 — Aktivizo super-admin claim</p>
+            <p className="font-medium text-sm">Faza 4 — RLS server-side (parakushtet)</p>
             <p className="text-xs text-muted-foreground mt-0.5">
-              Vendos custom claim-in server-side që rregullat e shtrënguara të mos të bllokojnë. Pas kësaj: <strong>dil dhe hyr sërish</strong>.
+              Vendos custom claim-in server-side që rregullat e shtrënguara të mos të bllokojnë (pas kësaj: <strong>dil dhe hyr sërish</strong>).
+              "Backfill customerId" stampon child-records (invoiceItems/tasks/komente) që portali të mos prishet.
+              {cidBackfilling && cidProgress && <span className="text-primary"> Po përpunon: {cidProgress}…</span>}
             </p>
           </div>
           <div className="flex flex-col gap-1.5 flex-shrink-0">
@@ -299,6 +342,9 @@ const TenantsView: React.FC = () => {
             </Button>
             <Button size="sm" variant="outline" onClick={runPortalBackfill} disabled={portalBackfilling}>
               {portalBackfilling ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> …</> : 'Backfill portali'}
+            </Button>
+            <Button size="sm" variant="outline" onClick={runCustomerIdBackfill} disabled={cidBackfilling}>
+              {cidBackfilling ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> …</> : 'Backfill customerId'}
             </Button>
           </div>
         </div>
