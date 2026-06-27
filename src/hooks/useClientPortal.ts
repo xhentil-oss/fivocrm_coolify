@@ -263,6 +263,23 @@ export function useClientPortal() {
     || preferredCustomer?.id
     || null;
 
+  // Mirror the portal user's customerId onto users/{uid} so Firestore rules can
+  // grant them read access to their own customer's data (isPortalClientFor) once
+  // reads are hardened. users/{uid} is uid-keyed, so no clientPortalAccess re-key.
+  const persistedCustomerIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!user?.uid || !resolvedCustomerId) return;
+    if (persistedCustomerIdRef.current === resolvedCustomerId) return;
+    persistedCustomerIdRef.current = resolvedCustomerId;
+    updateDoc(doc(db, 'users', user.uid), { customerId: resolvedCustomerId, updatedAt: Timestamp.now() })
+      .catch(() => {
+        // doc may not exist yet — create it
+        import('firebase/firestore').then(({ setDoc }) =>
+          setDoc(doc(db, 'users', user.uid), { customerId: resolvedCustomerId, updatedAt: Timestamp.now() }, { merge: true }).catch(() => {})
+        );
+      });
+  }, [user?.uid, resolvedCustomerId]);
+
   // Keep isLoading=true in the gap between "queries done" and "useEffect fires auto-create"
   const queriesLoaded = !byUserIdLoading && !byEmailLoading && !customersLoading && !teamMembersLoading;
   const hasNoAccess = activeByUserId.length === 0 && activeByEmail.length === 0;

@@ -1608,6 +1608,26 @@ async function runBackfillBusinessId(opts?: { reset?: boolean }) {
   return { totalUpdated, businesses: teamToBusiness.size, results, completed: done.length, total: BACKFILL_COLLECTIONS.length, remaining };
 }
 
+// ── JOB: backfill-portal-customerid ──────────────────────────────────────────
+// Mirrors each portal user's customerId onto users/{uid}.customerId so the
+// isPortalClientFor() rule can grant them read access once reads are hardened.
+async function runBackfillPortalCustomerId() {
+  const snap = await db.collection('clientPortalAccess').get();
+  const seen = new Set<string>();
+  let updated = 0;
+  for (const d of snap.docs) {
+    const data = d.data() as any;
+    const uid = data.userId; const cid = data.customerId;
+    if (!uid || !cid || seen.has(uid)) continue;
+    seen.add(uid);
+    try {
+      await db.collection('users').doc(uid).set({ customerId: cid, updatedAt: admin.firestore.Timestamp.now() }, { merge: true });
+      updated++;
+    } catch (err: any) { console.error(`[portal-backfill] ${uid} failed:`, err?.message || err); }
+  }
+  return { updated, total: snap.size };
+}
+
 // ── JOB: set-superadmin-claim ────────────────────────────────────────────────
 // Sets a Firebase custom claim { superAdmin: true } on the caller IF their email
 // is in the super-admin allowlist (server reads the same env the client uses).
@@ -1661,6 +1681,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'set-superadmin-claim':
         result = await runSetSuperAdminClaim(req);
+        break;
+      case 'backfill-portal-customerid':
+        result = await runBackfillPortalCustomerId();
         break;
       case 'project-completion-reminder':
         result = await runProjectCompletionReminder();

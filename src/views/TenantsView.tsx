@@ -66,6 +66,25 @@ const TenantsView: React.FC = () => {
   const [backfilling, setBackfilling] = useState(false);
   const [backfillProgress, setBackfillProgress] = useState('');
   const [claiming, setClaiming] = useState(false);
+  const [portalBackfilling, setPortalBackfilling] = useState(false);
+
+  const runPortalBackfill = async () => {
+    if (portalBackfilling || !user) return;
+    setPortalBackfilling(true);
+    try {
+      const token = await user.getIdToken(true);
+      const res = await fetch('/api/cron/run?job=backfill-portal-customerid&manual=1', {
+        method: 'GET', headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || `Gabim (${res.status})`);
+      toast({ title: 'Portal backfill u krye', description: `${data.updated}/${data.total} klientë portali u lidhën me customerId.` });
+    } catch (err: any) {
+      toast({ title: 'Dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
+    } finally {
+      setPortalBackfilling(false);
+    }
+  };
 
   const runSetClaim = async () => {
     if (claiming || !user) return;
@@ -259,9 +278,14 @@ const TenantsView: React.FC = () => {
               Vendos custom claim-in server-side që rregullat e shtrënguara të mos të bllokojnë. Pas kësaj: <strong>dil dhe hyr sërish</strong>.
             </p>
           </div>
-          <Button size="sm" variant="outline" onClick={runSetClaim} disabled={claiming} className="flex-shrink-0">
-            {claiming ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> …</> : 'Vendos claim-in'}
-          </Button>
+          <div className="flex flex-col gap-1.5 flex-shrink-0">
+            <Button size="sm" variant="outline" onClick={runSetClaim} disabled={claiming}>
+              {claiming ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> …</> : 'Vendos claim-in'}
+            </Button>
+            <Button size="sm" variant="outline" onClick={runPortalBackfill} disabled={portalBackfilling}>
+              {portalBackfilling ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> …</> : 'Backfill portali'}
+            </Button>
+          </div>
         </div>
       </Card>
 

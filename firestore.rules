@@ -62,13 +62,14 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessId == businessId;
     }
 
-    // Portal client reading their own customer's data. clientPortalAccess is re-keyed
-    // to the user's uid so rules can resolve uid → customerId deterministically.
+    // Portal client reading their own customer's data. useClientPortal mirrors the
+    // portal user's customerId onto users/{uid}.customerId (uid-keyed), so rules can
+    // resolve uid → customerId deterministically without re-keying clientPortalAccess.
     function isPortalClientFor(customerId) {
       return isAuth()
         && customerId is string
-        && exists(/databases/$(database)/documents/clientPortalAccess/$(request.auth.uid))
-        && get(/databases/$(database)/documents/clientPortalAccess/$(request.auth.uid)).data.customerId == customerId;
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.customerId == customerId;
     }
 
     // ── Team-Scoped Collections ──
