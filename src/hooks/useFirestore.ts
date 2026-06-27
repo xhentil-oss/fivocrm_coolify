@@ -10,6 +10,7 @@ import {
   orderBy,
   limit as firestoreLimit,
   onSnapshot,
+  getDoc,
   getDocs,
   QueryConstraint,
   Timestamp,
@@ -541,8 +542,29 @@ export function useMutation<T = DocumentData>(collectionName: string) {
       const autoScope = teamScopedCollections.has(collectionName) && teamId
         ? { teamId, ...(businessId ? { businessId } : {}) }
         : {};
+
+      // Phase 4.3b Wave 3: derive customerId on parent-linked child records so a
+      // portal client can read their own data under server-side RLS
+      // (isPortalClientFor). Staff isolation uses businessId (autoScope above); the
+      // portal needs customerId on these collections, which have no customerId of
+      // their own — pull it from the parent. Skipped when the caller already set it.
+      let derivedCustomerId = (data as any)?.customerId as string | undefined;
+      if (!derivedCustomerId) {
+        try {
+          const d = data as any;
+          if (collectionName === 'invoiceItems' && d.invoiceId) {
+            derivedCustomerId = (await getDoc(doc(db, 'invoices', d.invoiceId))).data()?.customerId;
+          } else if ((collectionName === 'tasks' || collectionName === 'projectComments') && d.projectId) {
+            derivedCustomerId = (await getDoc(doc(db, 'projects', d.projectId))).data()?.customerId;
+          } else if (collectionName === 'taskComments' && d.taskId) {
+            derivedCustomerId = (await getDoc(doc(db, 'tasks', d.taskId))).data()?.customerId;
+          }
+        } catch { /* parent missing/unreadable — leave customerId unset, backfill covers it */ }
+      }
+
       const docData = removeUndefined({
         ...autoScope,
+        ...(derivedCustomerId ? { customerId: derivedCustomerId } : {}),
         ...data,
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
