@@ -650,7 +650,7 @@ const InvoicesView: React.FC = () => {
             </div>
           </div>
         </div>
-        <div className="grid grid-cols-6 sm:grid-cols-12 gap-1.5 sm:gap-2">
+        <div className="grid grid-cols-3 sm:grid-cols-6 md:grid-cols-12 gap-1.5 sm:gap-2">
           {revenueByMonth.map((m, i) => {
             const barHeight = maxMonthRevenue > 0 ? Math.max((m.paid / maxMonthRevenue) * 100, m.paid > 0 ? 4 : 0) : 0;
             const isCurrentMonth = i === currentMonth && selectedYear === currentYear;

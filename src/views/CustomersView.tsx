@@ -548,7 +548,7 @@ const CustomersView: React.FC = () => {
         {/* TAB: Klientet */}
         <TabsContent value="customers" className="space-y-4">
           {/* Status Quick Filters */}
-          <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
             {STATUS_OPTIONS.map((st) => {
               const count = statusCounts[st.value] || 0;
               const Icon = st.icon;

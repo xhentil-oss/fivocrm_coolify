@@ -52,7 +52,7 @@ function DealCard({ deal, getName, onClick }: { deal: Deal; getName: (id?: strin
 
 function StageColumn({ stage, children }: { stage: DealStage; children: React.ReactNode }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage });
-  return <div ref={setNodeRef} className={`flex flex-col min-w-[260px] sm:min-w-[280px] flex-shrink-0 rounded-lg p-1 transition-colors ${isOver ? 'bg-primary/5 ring-1 ring-primary/30' : ''}`}>{children}</div>;
+  return <div ref={setNodeRef} className={`flex flex-col min-w-[80vw] sm:min-w-[280px] flex-shrink-0 rounded-lg p-1 transition-colors ${isOver ? 'bg-primary/5 ring-1 ring-primary/30' : ''}`}>{children}</div>;
 }
 
 const emptyForm = (): Partial<Deal> => ({ title: '', amount: 0, currency: 'EUR', stage: 'Qualification', customerId: '', notes: '' });

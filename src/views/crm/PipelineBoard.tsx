@@ -99,7 +99,7 @@ function StageColumn({ stage, accent, label, leads, calculateLeadScore, onCardCl
   const { isOver, setNodeRef } = useDroppable({ id: stage });
   const total = leads.reduce((s, l) => s + (l.estimatedValue || 0), 0);
   return (
-    <div className="flex flex-col min-w-[260px] w-[260px]">
+    <div className="flex flex-col min-w-[80vw] w-[80vw] sm:min-w-[260px] sm:w-[260px]">
       <div className={`bg-muted/60 border-l-4 ${accent} rounded-t-md px-3 py-2 flex items-center justify-between`}>
         <div>
           <p className="text-sm font-medium text-foreground">{label}</p>
