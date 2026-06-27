@@ -68,12 +68,13 @@ const TenantsView: React.FC = () => {
       // Server-side (Admin SDK) — bypasses Firestore rules so it can stamp
       // collections the client can't (activities=update:false, messages/comments).
       const token = await user.getIdToken(true);
-      const res = await fetch('/api/admin-backfill-businessid', {
-        method: 'POST',
+      const res = await fetch('/api/cron/run?job=backfill-businessid&manual=1', {
+        method: 'GET',
         headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Gabim serveri');
+      if (data.error) throw new Error(data.error);
       const failed = (data.results || []).filter((r: any) => r.updated === -1).map((r: any) => r.collection);
       toast({
         title: 'Faza 2 u krye (server)',

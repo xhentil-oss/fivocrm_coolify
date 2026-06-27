@@ -1541,6 +1541,52 @@ async function runWhatsappBroadcasts() {
   return { processed, sent };
 }
 
+// ── JOB: backfill-businessid (two-level tenancy, Phase 2) ────────────────────
+// Stamps businessId onto every team-scoped doc via Admin SDK (bypasses rules, so
+// it covers activities/messages/comments the client can't touch). Idempotent.
+const BACKFILL_COLLECTIONS = [
+  'tasks', 'invoices', 'invoiceItems', 'customers', 'leads', 'deals', 'leadActivities',
+  'services', 'expenses', 'goals', 'timeEntries', 'channels', 'messages', 'activities',
+  'clientRequests', 'taskComments', 'taskCollaborators', 'customIndustries', 'directMessages',
+  'milestones', 'serviceInquiries', 'projectComments', 'workspaceFolders', 'workspaceDriveFiles',
+  'projects', 'roleTemplates', 'dailyReports', 'standups', 'quotes', 'contracts', 'chatSnippets',
+  'whatsappAccounts', 'whatsappThreads', 'whatsappMessages', 'waTemplates', 'waBroadcasts',
+];
+
+async function runBackfillBusinessId() {
+  const teamsSnap = await db.collection('teams').get();
+  const teamToBusiness = new Map<string, string>();
+  teamsSnap.docs.forEach(d => { const b = (d.data() as any).businessId; if (b) teamToBusiness.set(d.id, b); });
+  if (teamToBusiness.size === 0) return { error: 'No teams linked to a business yet — run Phase 1 first.' };
+
+  let totalUpdated = 0;
+  const results: { collection: string; scanned: number; updated: number }[] = [];
+  for (const col of BACKFILL_COLLECTIONS) {
+    let scanned = 0, updated = 0;
+    try {
+      const snap = await db.collection(col).get();
+      scanned = snap.size;
+      const toUpdate = snap.docs.filter(d => {
+        const data = d.data() as any;
+        const bid = data.teamId ? teamToBusiness.get(data.teamId) : undefined;
+        return !!bid && data.businessId !== bid;
+      });
+      for (let i = 0; i < toUpdate.length; i += 400) {
+        const batch = db.batch();
+        toUpdate.slice(i, i + 400).forEach(d => batch.update(d.ref, { businessId: teamToBusiness.get((d.data() as any).teamId)! }));
+        await batch.commit();
+        updated += Math.min(400, toUpdate.length - i);
+      }
+      totalUpdated += updated;
+      results.push({ collection: col, scanned, updated });
+    } catch (err: any) {
+      console.error(`[backfill] ${col} failed:`, err?.message || err);
+      results.push({ collection: col, scanned, updated: -1 });
+    }
+  }
+  return { totalUpdated, businesses: teamToBusiness.size, results };
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const isManual = req.query.manual === '1';
@@ -1568,6 +1614,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'recurring-invoices':
         result = await runRecurringInvoices();
+        break;
+      case 'backfill-businessid':
+        result = await runBackfillBusinessId();
         break;
       case 'project-completion-reminder':
         result = await runProjectCompletionReminder();
