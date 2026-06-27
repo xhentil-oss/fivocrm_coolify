@@ -15,7 +15,8 @@
     "test:watch": "vitest",
     "android:sync": "vite build && npx cap sync android",
     "android:open": "npx cap open android",
-    "android:run": "npx cap run android"
+    "android:run": "npx cap run android",
+    "android:aab": "vite build && npx cap sync android && cd android && gradlew bundleRelease"
   },
   "dependencies": {
     "@capacitor-firebase/authentication": "^8.3.0",
