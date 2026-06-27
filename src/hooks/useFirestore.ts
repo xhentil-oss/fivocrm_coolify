@@ -127,15 +127,14 @@ const teamScopedCollections = new Set([
   'whatsappMessages',
 ]);
 
-// CRM "record" collections that are NOT team-isolated in practice: most views
-// already load them with skipTeamFilter, many docs (legacy / portal / landing)
-// have no teamId, and the rules allow `read: if isAuth()`. We force their READS
-// to be global (full list everywhere, regardless of the skipTeamFilter prop) to
-// avoid incomplete lists, while CREATE still stamps teamId (they stay in
-// teamScopedCollections above). Single-org deployments see no behavior change.
-const globalReadCollections = new Set([
-  'customers', 'leads', 'invoices', 'quotes', 'contracts', 'services',
-]);
+// Multi-tenant isolation: tenant data is ALWAYS scoped by teamId for normal users
+// (the "mandatory tenant predicate" big CRMs enforce). This set was a single-org
+// leftover that forced customers/leads/invoices/quotes/contracts/services to be
+// read across ALL teams — which leaked one tenant's data into another. Now empty:
+// nothing escapes team scoping client-side. Super-admins still bypass (they read
+// every team for the Relax CRM panel); portal views still pass skipTeamFilter
+// explicitly. Legacy docs without teamId are backfilled by useTeamDataMigration.
+const globalReadCollections = new Set<string>([]);
 
 // "Reference" collections that change rarely but are subscribed on almost every
 // screen. Reading them with a live onSnapshot keeps an open stream + re-reads the
