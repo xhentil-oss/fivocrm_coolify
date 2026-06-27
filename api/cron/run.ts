@@ -1548,6 +1548,8 @@ const BACKFILL_COLLECTIONS = [
   'clientRequests', 'taskComments', 'taskCollaborators', 'customIndustries', 'directMessages',
   'milestones', 'serviceInquiries', 'projectComments', 'workspaceFolders', 'workspaceDriveFiles',
   'projects', 'roleTemplates', 'dailyReports', 'standups', 'quotes', 'contracts', 'chatSnippets',
+  // Identity/structure collections that are now business-scoped on read:
+  'teamMembers', 'teamInvites',
   // WhatsApp collections excluded: their reads use skipTeamFilter (unaffected by the
   // Phase 3b businessId flip) and the owner doesn't need them tagged with businessId.
 ];

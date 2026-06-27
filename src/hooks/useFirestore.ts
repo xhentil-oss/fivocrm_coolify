@@ -33,6 +33,10 @@ interface QueryOptions {
   // index in firestore.indexes.json; deploy indexes BEFORE shipping a caller
   // that sets this. See workspace/SECURITY_RULES_MIGRATION.md.
   teamScopedWhere?: boolean;
+  // Opt OUT of the forced businessId isolation (businessIsolatedAlways). Used by
+  // usePermissions' identity queries (teamMembers by userId/email) which must read
+  // the user's memberships unscoped to RESOLVE which business they belong to.
+  skipBusinessFilter?: boolean;
 }
 
 // ---- Reactive global teamId for data isolation ----
@@ -154,6 +158,9 @@ const teamScopedCollections = new Set([
   // whatsappMessages reads pass skipTeamFilter (they scope by teamId+phone
   // explicitly), so being in this set only enforces teamId on create.
   'whatsappMessages',
+  // Identity/structure collections — scoped to the business so a tenant only sees
+  // its own staff/invites (usePermissions opts out via skipBusinessFilter).
+  'teamMembers', 'teamInvites',
 ]);
 
 // Multi-tenant isolation: tenant data is ALWAYS scoped by teamId for normal users
@@ -175,7 +182,8 @@ const businessIsolatedAlways = new Set<string>([
   'leads', 'projects', 'invoices', 'invoiceItems', 'customers', 'deals', 'leadActivities',
   'services', 'expenses', 'goals', 'quotes', 'contracts', 'tasks', 'taskComments',
   'taskCollaborators', 'milestones', 'projectComments', 'clientRequests', 'serviceInquiries',
-  'timeEntries', 'standups', 'dailyReports', 'customIndustries',
+  'timeEntries', 'standups', 'dailyReports', 'customIndustries', 'activities',
+  'teamMembers', 'teamInvites',
 ]);
 
 // "Reference" collections that change rarely but are subscribed on almost every
@@ -259,7 +267,7 @@ export function useCollection<T = DocumentData>(
   // to their business, even if the caller passed skipTeamFilter — otherwise that flag
   // bypasses tenant isolation. Portal clients have no businessId, so they may still
   // skipTeamFilter to read their own customer's data; super-admins bypass entirely.
-  const forceBusinessScope = !!reactiveBusinessId && businessIsolatedAlways.has(collectionName);
+  const forceBusinessScope = !!reactiveBusinessId && businessIsolatedAlways.has(collectionName) && !options?.skipBusinessFilter;
   const isTeamScoped = teamScopedCollections.has(collectionName)
     && !superAdmin
     && !globalReadCollections.has(collectionName)

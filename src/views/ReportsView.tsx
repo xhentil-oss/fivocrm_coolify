@@ -1,7 +1,7 @@
 import React, { useMemo, useState, Suspense, lazy } from 'react';
 import { TrendingUp, TrendingDown, DollarSign, Users, CheckCircle, Clock, Building2, Receipt, Target, FileText, UserPlus, CreditCard, ClipboardList, FolderKanban, ListChecks } from 'lucide-react';
 import { Card } from '../components/ui/card';
-import { useCollection, useGlobalTeamId } from '../hooks/useFirestore';
+import { useCollection, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { Badge } from '../components/ui/badge';
@@ -150,7 +150,12 @@ const ReportsView: React.FC = () => {
 
   const { data: invoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
   const { data: projects, loading: projectsLoading } = useCollection<Project>('projects', { skipTeamFilter: true });
-  const { data: teams } = useCollection<Team>('teams');
+  const reportsBusinessId = useGlobalBusinessId();
+  const { data: allTeamsRaw } = useCollection<Team>('teams');
+  const teams = useMemo(
+    () => (allTeamsRaw || []).filter(t => !reportsBusinessId || (t as any).businessId === reportsBusinessId),
+    [allTeamsRaw, reportsBusinessId],
+  );
   const { data: expenses, loading: expensesLoading } = useCollection<Expense>('expenses', { skipTeamFilter: true });
   const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
   const { data: invoiceItems } = useCollection<InvoiceItem>('invoiceItems', { skipTeamFilter: true });

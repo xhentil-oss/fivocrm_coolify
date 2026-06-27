@@ -108,6 +108,7 @@ export function usePermissions(): UserPermissions {
       ? [{ field: 'userId', operator: 'in', value: userIds }]
       : [{ field: 'userId', operator: '==', value: '__never__' }],
     skipTeamFilter: true,
+    skipBusinessFilter: true, // identity resolution must read unscoped to find the business
   });
 
   // Fallback query: by email field — catches members added manually where userId wasn't set to the Firebase UID
@@ -116,6 +117,7 @@ export function usePermissions(): UserPermissions {
       ? [{ field: 'email', operator: '==', value: user.email.toLowerCase() }]
       : [{ field: 'email', operator: '==', value: '__never__' }],
     skipTeamFilter: true,
+    skipBusinessFilter: true, // identity resolution must read unscoped to find the business
   });
 
   // Merge both queries, deduplicate by id, prefer records already having the correct userId

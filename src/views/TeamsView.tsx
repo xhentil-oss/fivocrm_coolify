@@ -1,5 +1,5 @@
-import React, { useState } from 'react';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import React, { useState, useMemo } from 'react';
+import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { getDocs, query, where, collection, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -70,9 +70,17 @@ const TeamsView: React.FC = () => {
   const [memberToDelete, setMemberToDelete] = useState<TeamMember | null>(null);
   const [teamToDelete, setTeamToDelete] = useState<Team | null>(null);
 
-  const { data: teams, loading: teamsLoading } = useCollection<Team>('teams', {
+  const businessId = useGlobalBusinessId();
+  const { data: allTeams, loading: teamsLoading } = useCollection<Team>('teams', {
     orderBy: { field: 'createdAt', direction: 'desc' }
   });
+  // teams isn't auto business-scoped (it's created via useMutation, which must not
+  // stamp a teamId), so scope it here: a business sees only its own departments.
+  const teams = useMemo(
+    () => (allTeams || []).filter(t => !businessId || (t as any).businessId === businessId),
+    [allTeams, businessId],
+  );
+  // teamMembers/teamInvites are business-scoped by useCollection automatically.
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers');
   const { data: teamInvites } = useCollection<TeamInvite>('teamInvites');
 
@@ -90,7 +98,8 @@ const TeamsView: React.FC = () => {
     const newTeam = await teamMutation.create({
       name,
       department,
-    });
+      ...(businessId ? { businessId } : {}),
+    } as any);
 
     // Auto-add creator as Admin member so they appear in mentions
     if (newTeam?.id) {
