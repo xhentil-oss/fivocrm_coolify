@@ -128,12 +128,23 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
     }
   }, []);
 
+  // Arm the chime only AFTER the unread queries have loaded, setting the baseline
+  // silently. Otherwise a page refresh (count goes 0 → N as data arrives) is read
+  // as an "increase" and beeps on every reload.
+  const chimeArmedRef = useRef(false);
   useEffect(() => {
-    if (unreadChatCount > prevUnreadRef.current && prevUnreadRef.current >= 0) {
+    const loaded = unreadMessages !== undefined && unreadClientMessages !== undefined;
+    if (!loaded) return;
+    if (!chimeArmedRef.current) {
+      chimeArmedRef.current = true;
+      prevUnreadRef.current = unreadChatCount; // baseline, no sound on initial load
+      return;
+    }
+    if (unreadChatCount > prevUnreadRef.current) {
       playNotificationSound();
     }
     prevUnreadRef.current = unreadChatCount;
-  }, [unreadChatCount, playNotificationSound]);
+  }, [unreadChatCount, unreadMessages, unreadClientMessages, playNotificationSound]);
 
   // Filter nav items based on user permissions
   // While loading, show only profile to avoid unauthorized flicker
