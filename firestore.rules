@@ -72,6 +72,15 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.customerId == customerId;
     }
 
+    // Portal client reading their OWN customer doc, whose document id IS the
+    // customerId (the customers collection has no self-referential customerId
+    // field). Used by the customers read rule.
+    function isPortalClientDoc(docId) {
+      return isAuth()
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.customerId == docId;
+    }
+
     // ── Team-Scoped Collections ──
     // Reads: authenticated only.  The client fetches all docs and filters by
     // teamId client-side (to support legacy docs without teamId and to avoid
@@ -80,19 +89,39 @@ service cloud.firestore {
     // Writes: the document must carry a valid teamId string.
 
     match /tasks/{docId} {
-      allow read: if isAuth();
+      // Staff via businessId; portal client reads their own customer's tasks
+      // (customerId derived from the parent project — see backfill-customerid).
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
       allow create: if isAuth();
       allow update, delete: if isAuth();
     }
 
+    // ── Phase 4.3b: crown-jewel CRM records — server-side tenant RLS.
+    // Staff read via businessId; the portal client reads their own customer's
+    // records (users/{uid}.customerId mirrored by useClientPortal); super-admin
+    // bypasses. The portal already queries these with `where customerId == myId`,
+    // so the per-doc rule holds for every doc the narrowed query returns.
     match /invoices/{docId} {
-      allow read: if isAuth();
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
       allow create: if canCreateForTeam();
       allow update, delete: if isAuth();
     }
 
     match /customers/{docId} {
-      allow read: if isAuth();
+      // Staff read their business's customers; the portal client reads only their
+      // own customer doc (doc id == their customerId); super-admin bypasses.
+      // The email clause covers portal bootstrap (useClientPortal queries customers
+      // by email to resolve customerId before users/{uid}.customerId exists). It is
+      // safe: Firebase verifies the token email, so a user can only match their own.
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientDoc(docId)
+        || (isAuth() && request.auth.token.email != null
+            && resource.data.email == request.auth.token.email.lower())
+        || isSuperAdmin();
       allow create: if isAuth();
       allow update, delete: if isAuth();
     }
@@ -110,26 +139,37 @@ service cloud.firestore {
       allow update, delete: if isAuth() && ownsTeamDoc();
     }
 
+    // ── Phase 4.3a: staff-only collections (never read by the client portal,
+    // always businessId-scoped client-side) hardened to server-side tenant RLS.
+    // Reads require the requester to belong to the doc's business (or be super-admin).
+    // Legacy docs without businessId are simply not returned by the businessId-
+    // filtered queries the client issues — no breakage.
     match /expenses/{docId} {
-      allow read: if isAuth();
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
       allow update, delete: if isAuth();
     }
 
     match /goals/{docId} {
-      allow read: if isAuth();
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
       allow update, delete: if isAuth();
     }
 
     match /timeEntries/{docId} {
-      allow read: if isAuth();
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
       allow update, delete: if isAuth();
     }
 
     match /projects/{docId} {
-      allow read: if isAuth();
+      // Portal clients reach projects either as the customer OR as an explicit
+      // project member (memberUserIds) — PortalProjectsView issues both queries.
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || (isAuth() && resource.data.memberUserIds is list
+            && request.auth.uid in resource.data.memberUserIds)
+        || isSuperAdmin();
       allow create: if canCreateForTeam();
       allow update, delete: if isAuth();
     }
@@ -158,25 +198,32 @@ service cloud.firestore {
     }
 
     match /activities/{docId} {
-      allow read: if isAuth();
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
       allow update, delete: if false;
     }
 
     match /dailyReports/{docId} {
-      allow read: if isAuth();
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
       allow update, delete: if isAuth();
     }
 
     match /invoiceItems/{docId} {
-      allow read: if isAuth();
+      // Staff via businessId; portal client via customerId (derived from invoice).
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
       allow create: if canCreateForTeam();
       allow update, delete: if isAuth();
     }
 
     match /taskComments/{docId} {
-      allow read: if isAuth();
+      // Staff via businessId; portal client via customerId (stamped on create +
+      // derived from the parent task by backfill-customerid).
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
       // Staff create with teamId; portal clients create with senderType == 'client' (no teamId required)
       allow create: if isAuth() && (
         request.resource.data.teamId is string ||
@@ -186,20 +233,22 @@ service cloud.firestore {
     }
 
     match /taskCollaborators/{docId} {
-      allow read: if isAuth();
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
       allow update, delete: if isAuth();
     }
 
     match /clientRequests/{docId} {
-      allow read: if isAuth();
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
       // Portal users may not have teamId resolved yet
       allow create: if isAuth();
       allow update, delete: if isAuth();
     }
 
     match /customIndustries/{docId} {
-      allow read: if isAuth();
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if isAuth();
       allow update, delete: if isAuth();
     }
@@ -217,21 +266,28 @@ service cloud.firestore {
     }
 
     match /projectComments/{docId} {
-      allow read: if isAuth();
+      // Staff via businessId; portal client via customerId (stamped on create +
+      // derived from the parent project by backfill-customerid).
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
       // Portal clients can create comments
       allow create: if isAuth();
       allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
     }
 
     match /serviceInquiries/{docId} {
-      allow read: if isAuth();
+      // Portal queries by clientUserId; staff by businessId.
+      allow read: if isBusinessMember(resource.data.businessId)
+        || (isAuth() && resource.data.clientUserId == request.auth.uid)
+        || isSuperAdmin();
       // Portal clients can submit inquiries
       allow create: if isAuth();
       allow update, delete: if isAuth();
     }
 
     match /standups/{docId} {
-      allow read: if isAuth();
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
       allow update, delete: if isAuth();
     }
@@ -243,7 +299,9 @@ service cloud.firestore {
     }
 
     match /contracts/{docId} {
-      allow read: if isAuth();
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
       allow create: if canCreateForTeam();
       allow update, delete: if isAuth();
     }
@@ -372,7 +430,7 @@ service cloud.firestore {
     }
 
     match /milestones/{docId} {
-      allow read: if isAuth();
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
       allow update, delete: if isAuth();
     }
