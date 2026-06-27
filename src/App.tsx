@@ -58,6 +58,7 @@ const ReportsView = lazyRetry(() => import('./views/ReportsView'));
 const BonusView = lazyRetry(() => import('./views/BonusView'));
 const UserProfileView = lazyRetry(() => import('./views/UserProfileView'));
 const SettingsView = lazyRetry(() => import('./views/SettingsView'));
+const TenantsView = lazyRetry(() => import('./views/TenantsView'));
 const CustomersView = lazyRetry(() => import('./views/CustomersView'));
 const ServicesView = lazyRetry(() => import('./views/ServicesView'));
 const ServiceInquiriesView = lazyRetry(() => import('./views/ServiceInquiriesView'));
@@ -281,6 +282,7 @@ function AppContent() {
                     <Routes>
                       <Route path="/" element={<DefaultRedirect />} />
                       <Route path="/app/dashboard" element={<StaffDashboard />} />
+                      <Route path="/app/tenants" element={<PermissionGate permissionKey="isSuperAdmin"><TenantsView /></PermissionGate>} />
                       <Route path="/app/projects" element={<PermissionGate permissionKey="canAccessProjects"><ProjectsView /></PermissionGate>} />
                       <Route path="/app/projects/:projectId" element={<PermissionGate permissionKey="canAccessProjects"><ProjectDetailView /></PermissionGate>} />
                       <Route path="/app/crm" element={<PermissionGate permissionKey="canAccessCRM"><CRMView /></PermissionGate>} />
