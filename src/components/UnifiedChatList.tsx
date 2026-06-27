@@ -171,7 +171,7 @@ const UnifiedChatList: React.FC<Props> = ({ conversations, canCreateGroups, onCr
   const rest = filter === 'all' && !search.trim() ? visible.filter(c => !c.pinned) : visible;
 
   return (
-    <div className="flex flex-col h-full min-h-0">
+    <div className="flex flex-col flex-1 min-h-0">
       {/* Single search */}
       <div className="px-3 pt-2 pb-1">
         <div className="relative">
