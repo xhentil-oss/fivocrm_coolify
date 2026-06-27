@@ -542,21 +542,6 @@ const CustomersView: React.FC = () => {
               <span className="hidden sm:inline">Klientet</span>
               <span className="sm:hidden">Kliente</span>
             </TabsTrigger>
-            <TabsTrigger value="portal" className="gap-1 sm:gap-2 text-xs sm:text-sm">
-              <ShieldCheck className="h-4 w-4" />
-              <span className="hidden sm:inline">Aksesi Portalit</span>
-              <span className="sm:hidden">Portal</span>
-            </TabsTrigger>
-            <TabsTrigger value="requests" className="gap-1 sm:gap-2 text-xs sm:text-sm">
-              <ClipboardList className="h-4 w-4" />
-              <span className="hidden sm:inline">Kerkesat</span>
-              <span className="sm:hidden">K�rk.</span>
-              {newRequestsCount > 0 && (
-                <Badge variant="destructive" className="ml-1 h-5 min-w-5 px-1.5 text-xs">
-                  {newRequestsCount}
-                </Badge>
-              )}
-            </TabsTrigger>
           </TabsList>
         </div>
 
