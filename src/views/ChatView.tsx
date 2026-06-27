@@ -277,6 +277,14 @@ const ChatView: React.FC = () => {
   const channelMutation = useMutation<Channel>('channels');
   // Only Admin/Manager/Owner may create groups.
   const canCreateGroups = !!(permissions.isAdmin || permissions.isManager || permissions.isOwner);
+  // The owner's role-preview banner adds 36px to the top offset (App.tsx mt-[108px]
+  // vs mt-[72px]). The chat fills the viewport with a fixed height calc, so without
+  // accounting for the banner the chat extends 36px over the mobile bottom nav
+  // (white bg covering the menu). Add the banner height when it's showing.
+  const previewBanner = !!(permissions.isOwner && (permissions as any).previewRole);
+  const chatHeightClass = previewBanner
+    ? 'h-[calc(100dvh-172px)] lg:h-[calc(100dvh-108px)]'
+    : 'h-[calc(100dvh-136px)] lg:h-[calc(100dvh-72px)]';
   // Groups the current user belongs to — only members see a group.
   const myGroups = useMemo(
     () => (allGroups || [])
@@ -2514,7 +2522,7 @@ const ChatView: React.FC = () => {
   // =====================================
 
   return (
-    <div className="flex -mx-3 -mt-3 -mb-20 sm:-mx-6 sm:-mt-6 lg:-m-8 h-[calc(100dvh-136px)] lg:h-[calc(100dvh-72px)] bg-background overflow-hidden">
+    <div className={`flex -mx-3 -mt-3 -mb-20 sm:-mx-6 sm:-mt-6 lg:-m-8 ${chatHeightClass} bg-background overflow-hidden`}>
       {/* SIDEBAR */}
       <aside className={`w-full lg:w-72 border-r bg-muted/5 flex flex-col flex-shrink-0 transition-all ${showSidebar ? 'flex' : 'hidden lg:flex'}`}>
         {/* Sidebar header */}
