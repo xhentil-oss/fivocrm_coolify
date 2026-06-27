@@ -238,13 +238,15 @@ export function useCollection<T = DocumentData>(
   const [error, setError] = useState<Error | null>(null);
 
   const { user } = useAuth();
-  const reactiveTeamId = useGlobalTeamId();
+  // Two-level tenancy: isolation is by businessId (the tenant). teamId is now a
+  // sub-group (department) within a business, so it no longer scopes reads.
+  const reactiveBusinessId = useGlobalBusinessId();
   const superAdmin = useIsSuperAdmin();
   const isTeamScoped = teamScopedCollections.has(collectionName)
     && !options?.skipTeamFilter
     && !superAdmin
     && !globalReadCollections.has(collectionName);
-  const globalTeamId = isTeamScoped ? reactiveTeamId : null;
+  const scopeId = isTeamScoped ? reactiveBusinessId : null;
 
   // teamScopedWhere is folded into the cache key so a server-pushed variant
   // doesn't collide with a client-filtered one sharing the same `where`.
@@ -256,18 +258,18 @@ export function useCollection<T = DocumentData>(
   useEffect(() => {
     if (options?.skip) { setData([]); setLoading(false); return; }
     if (!user) { setData([]); setLoading(false); return; }
-    if (isTeamScoped && !globalTeamId) { setData([]); setLoading(true); return; }
+    if (isTeamScoped && !scopeId) { setData([]); setLoading(true); return; }
 
-    const cacheKey = buildCacheKey(collectionName, whereKey, orderKey, limitVal, skipTeamFilter, globalTeamId);
+    const cacheKey = buildCacheKey(collectionName, whereKey, orderKey, limitVal, skipTeamFilter, scopeId);
     const isStatic = staticCollections.has(collectionName);
 
     // Build the Firestore query identically for the live and static paths.
     const buildQuery = () => {
       const constraints: QueryConstraint[] = [];
-      if (isTeamScoped && globalTeamId) {
-        // Server-side teamId filter — reduces Firestore reads to this team's documents only.
+      if (isTeamScoped && scopeId) {
+        // Server-side businessId filter — scopes reads to the active tenant's docs.
         // Additional where/orderBy/limit are applied client-side to avoid composite index requirements.
-        constraints.push(where('teamId', '==', globalTeamId));
+        constraints.push(where('businessId', '==', scopeId));
         if (options?.teamScopedWhere && options?.where) {
           options.where.forEach(w => constraints.push(where(w.field, w.operator as any, w.value)));
         }
@@ -283,8 +285,8 @@ export function useCollection<T = DocumentData>(
     // for non-team-scoped reads the constraints above are already applied server-side).
     const processItems = (raw: (DocumentData & { id: string })[]) => {
       let items = raw;
-      if (isTeamScoped && globalTeamId) {
-        items = items.filter(item => (item as any).teamId === globalTeamId);
+      if (isTeamScoped && scopeId) {
+        items = items.filter(item => (item as any).businessId === scopeId);
         if (options?.where) {
           items = items.filter(item => options.where!.every(w => {
             const val = (item as any)[w.field];
@@ -422,7 +424,7 @@ export function useCollection<T = DocumentData>(
         }
       }
     };
-  }, [collectionName, whereKey, orderKey, skipTeamFilter, limitVal, globalTeamId, superAdmin, options?.skip, user?.uid]);
+  }, [collectionName, whereKey, orderKey, skipTeamFilter, limitVal, scopeId, superAdmin, options?.skip, user?.uid]);
 
   return { data, loading, error };
 }
