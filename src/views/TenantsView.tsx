@@ -7,10 +7,34 @@ import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { Building2, Search, Users, ShieldX, Loader2, Layers } from 'lucide-react';
+import { Building2, Search, Users, ShieldX, Loader2, Layers, SlidersHorizontal } from 'lucide-react';
+import { doc, updateDoc, Timestamp } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import { getTimestampMs } from '../lib/utils';
 import { setupBusinessLayer } from '../lib/businessMigration';
 import type { Team, TeamMember, Business } from '../types';
+
+// Modules that the super-admin can enable/disable per tenant (nav path → label).
+const TOGGLEABLE_MODULES: { path: string; label: string }[] = [
+  { path: '/app/projects', label: 'Projektet' },
+  { path: '/app/crm', label: 'CRM Leads' },
+  { path: '/app/deals', label: 'Marrëveshjet' },
+  { path: '/app/customers', label: 'Klientët' },
+  { path: '/app/tasks', label: 'Detyrat' },
+  { path: '/app/goals', label: 'Objektivat' },
+  { path: '/app/services', label: 'Shërbimet' },
+  { path: '/app/invoices', label: 'Faturat' },
+  { path: '/app/contracts', label: 'Kontratat' },
+  { path: '/app/expenses', label: 'Shpenzimet' },
+  { path: '/app/time-tracking', label: 'Orari' },
+  { path: '/app/chat', label: 'Chat' },
+  { path: '/app/whatsapp', label: 'WhatsApp' },
+  { path: '/app/reports', label: 'Raportet' },
+  { path: '/app/workload', label: 'Ngarkesa' },
+  { path: '/app/price-calculator', label: 'Kalkulatori' },
+  { path: '/app/landing-pages', label: 'Landing Pages' },
+  { path: '/app/bonus', label: 'Bonuset' },
+];
 
 // Super-admin "Relax CRM" panel: lists every tenant (team) — i.e. FivoCRM's own
 // customers — across all workspaces. Read-only for now: editing a tenant's
@@ -129,31 +153,44 @@ const TenantsView: React.FC = () => {
     }
   };
 
+  // Members per business (members carry businessId after the Phase 2 backfill).
   const memberCount = useMemo(() => {
     const m = new Map<string, number>();
     (members || []).forEach(x => {
-      if (x.teamId && x.status === 'Active') m.set(x.teamId, (m.get(x.teamId) || 0) + 1);
+      const bid = (x as any).businessId;
+      if (bid && x.status === 'Active') m.set(bid, (m.get(bid) || 0) + 1);
     });
     return m;
   }, [members]);
 
+  // Tenants are BUSINESSES in the two-level model.
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return (teams || [])
-      .filter(t => !q || (t.name || '').toLowerCase().includes(q) || ((t as any).ownerEmail || '').toLowerCase().includes(q))
+    return (businesses || [])
+      .filter(b => !q || (b.name || '').toLowerCase().includes(q) || (b.ownerEmail || '').toLowerCase().includes(q))
       .sort((a, b) => getTimestampMs(b.createdAt) - getTimestampMs(a.createdAt));
-  }, [teams, search]);
+  }, [businesses, search]);
 
   const stats = useMemo(() => {
-    const s = { total: (teams || []).length, trialing: 0, active: 0, other: 0 };
-    (teams || []).forEach(t => {
-      const st = (t as any).status;
-      if (st === 'trialing') s.trialing++;
-      else if (st === 'active') s.active++;
+    const s = { total: (businesses || []).length, trialing: 0, active: 0, other: 0 };
+    (businesses || []).forEach(b => {
+      if (b.status === 'trialing') s.trialing++;
+      else if (b.status === 'active') s.active++;
       else s.other++;
     });
     return s;
-  }, [teams]);
+  }, [businesses]);
+
+  const [expandedBiz, setExpandedBiz] = useState<string | null>(null);
+  const toggleModule = async (biz: Business, path: string) => {
+    const disabled = new Set(biz.disabledModules || []);
+    if (disabled.has(path)) disabled.delete(path); else disabled.add(path);
+    try {
+      await updateDoc(doc(db, 'businesses', biz.id), { disabledModules: Array.from(disabled), updatedAt: Timestamp.now() });
+    } catch (err: any) {
+      toast({ title: 'Ndryshimi dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
+    }
+  };
 
   // Route is also gated, but guard here too.
   if (!permissions.isSuperAdmin) {
@@ -247,31 +284,65 @@ const TenantsView: React.FC = () => {
       {/* List */}
       <Card className="divide-y divide-border/60">
         {rows.length === 0 && <p className="p-6 text-center text-sm text-muted-foreground">Asnjë tenant.</p>}
-        {rows.map(t => {
-          const st = (t as any).status as string | undefined;
+        {rows.map(b => {
+          const st = b.status;
           const meta = (st && statusMeta[st]) || { label: st || '—', cls: 'bg-muted text-muted-foreground' };
+          const disabled = new Set(b.disabledModules || []);
+          const isExpanded = expandedBiz === b.id;
           return (
-            <div key={t.id} className="flex items-center gap-3 p-4">
-              <div className="h-9 w-9 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
-                <Building2 className="h-4 w-4 text-muted-foreground" />
+            <div key={b.id}>
+              <div className="flex items-center gap-3 p-4">
+                <div className="h-9 w-9 rounded-lg bg-muted flex items-center justify-center flex-shrink-0">
+                  <Building2 className="h-4 w-4 text-muted-foreground" />
+                </div>
+                <div className="flex-1 min-w-0">
+                  <p className="font-medium text-sm truncate">{b.name || 'Pa emër'}</p>
+                  <p className="text-xs text-muted-foreground truncate">{b.ownerEmail || '—'}</p>
+                </div>
+                <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground w-16">
+                  <Users className="h-3.5 w-3.5" /> {memberCount.get(b.id) || 0}
+                </div>
+                <div className="hidden md:block text-xs text-muted-foreground w-24">{b.plan || 'trial'}</div>
+                <div className="hidden lg:block text-xs text-muted-foreground w-24">{fmtDate(b.createdAt)}</div>
+                <Badge className={`${meta.cls} border-0 text-[10px] flex-shrink-0`}>{meta.label}</Badge>
+                <button
+                  onClick={() => setExpandedBiz(isExpanded ? null : b.id)}
+                  className="h-7 w-7 flex items-center justify-center rounded-md hover:bg-accent text-muted-foreground hover:text-foreground flex-shrink-0"
+                  title="Modulet"
+                >
+                  <SlidersHorizontal className="h-3.5 w-3.5" />
+                </button>
               </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-sm truncate">{t.name || 'Pa emër'}</p>
-                <p className="text-xs text-muted-foreground truncate">{(t as any).ownerEmail || '—'}</p>
-              </div>
-              <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground w-20">
-                <Users className="h-3.5 w-3.5" /> {memberCount.get(t.id) || 0}
-              </div>
-              <div className="hidden md:block text-xs text-muted-foreground w-28">{(t as any).plan || 'trial'}</div>
-              <div className="hidden lg:block text-xs text-muted-foreground w-28">{fmtDate(t.createdAt)}</div>
-              <Badge className={`${meta.cls} border-0 text-[10px] flex-shrink-0`}>{meta.label}</Badge>
+              {isExpanded && (
+                <div className="px-4 pb-4 -mt-1">
+                  <p className="text-[11px] text-muted-foreground mb-2">Modulet aktive për këtë tenant (kliko për të aktivizuar/çaktivizuar):</p>
+                  <div className="flex flex-wrap gap-1.5">
+                    {TOGGLEABLE_MODULES.map(m => {
+                      const off = disabled.has(m.path);
+                      return (
+                        <button
+                          key={m.path}
+                          onClick={() => toggleModule(b, m.path)}
+                          className={`px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors ${
+                            off
+                              ? 'bg-muted text-muted-foreground border-border line-through'
+                              : 'bg-primary/10 text-primary border-primary/20'
+                          }`}
+                        >
+                          {m.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </div>
           );
         })}
       </Card>
 
       <p className="text-[11px] text-muted-foreground/60 mt-4">
-        Vetëm-lexim. Menaxhimi i planit/statusit aktivizohet me billing-un (kërkon claim super-admin server-side).
+        Kliko ikonën ⚙ te çdo tenant për të aktivizuar/çaktivizuar modulet. Plani/statusi menaxhohen me billing-un.
       </p>
     </div>
   );

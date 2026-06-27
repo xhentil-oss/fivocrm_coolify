@@ -135,6 +135,8 @@ export interface Business {
   plan?: 'trial' | 'starter' | 'pro' | 'business' | 'enterprise';
   status?: 'trialing' | 'active' | 'past_due' | 'suspended' | 'canceled';
   trialEndsAt?: Date;
+  /** Nav paths disabled for this tenant (super-admin toggles per business). */
+  disabledModules?: string[];
   createdAt: Date;
   updatedAt: Date;
 }

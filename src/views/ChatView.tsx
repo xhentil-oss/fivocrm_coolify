@@ -247,10 +247,18 @@ const ChatView: React.FC = () => {
 
   // Data
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', ACTIVE_MEMBERS_QUERY);
-  const { data: portalAccess } = useCollection<ClientPortalAccess>('clientPortalAccess', { ...ACTIVE_PORTAL_QUERY, skipTeamFilter: true });
+  const { data: rawPortalAccess } = useCollection<ClientPortalAccess>('clientPortalAccess', { ...ACTIVE_PORTAL_QUERY, skipTeamFilter: true });
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
   const { data: userProfiles } = useCollection<UserProfile>('userProfiles');
+  // clientPortalAccess isn't business-scoped (portal users have no businessId), so the
+  // chat "Klientët" list leaked other tenants' clients. customers IS business-scoped,
+  // so intersect by customerId to scope the client list to this business.
+  const portalAccess = useMemo(() => {
+    if (!rawPortalAccess) return rawPortalAccess;
+    const ids = new Set((customers || []).map(c => c.id));
+    return rawPortalAccess.filter(a => a.customerId && ids.has(a.customerId));
+  }, [rawPortalAccess, customers]);
   const { data: teams } = useCollection<Team>('teams');
   const { data: requests, } = useCollection<ClientRequest>('clientRequests', {
     orderBy: { field: 'createdAt', direction: 'desc' },

@@ -259,7 +259,8 @@ service cloud.firestore {
     match /businesses/{docId} {
       allow read: if isAuth();
       allow create: if isAuth();
-      allow update, delete: if isAuth() && resource.data.ownerId == request.auth.uid;
+      // Owner manages their business; super-admin (claim) manages any (module toggles).
+      allow update, delete: if isAuth() && (resource.data.ownerId == request.auth.uid || isSuperAdmin());
     }
 
     match /teamMembers/{docId} {

@@ -43,6 +43,8 @@ export async function createTenant({ uid, companyName, ownerName, ownerEmail }: 
     plan: 'trial',
     status: 'trialing',
     trialEndsAt,
+    // Landing pages are an agency-only (FivoCRM) module — off by default for tenants.
+    disabledModules: ['/app/landing-pages'],
     createdAt: now,
     updatedAt: now,
   });

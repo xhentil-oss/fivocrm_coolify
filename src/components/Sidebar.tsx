@@ -4,7 +4,8 @@ import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Rece
 import { cn } from '../lib/utils';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
-import { useCollection } from '../hooks/useFirestore';
+import { useCollection, useDocument, useGlobalBusinessId } from '../hooks/useFirestore';
+import type { Business } from '../types';
 import { Badge } from './ui/badge';
 
 interface SidebarProps {
@@ -128,11 +129,22 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
 
   // Filter nav items based on user permissions
   // While loading, show only profile to avoid unauthorized flicker
-  const navItems = permissions.isLoading 
+  // Per-tenant module toggles: hide nav items the super-admin disabled for this
+  // business. Super-admins (no businessId scoping) always see everything.
+  const businessId = useGlobalBusinessId();
+  const { data: business } = useDocument<Business>('businesses', businessId || undefined);
+  const disabledModules = useMemo(
+    () => new Set((business as any)?.disabledModules || []),
+    [business],
+  );
+
+  const navItems = permissions.isLoading
     ? allNavItems.filter(item => item.permissionKey === 'canAccessProfile')
     : allNavItems.filter(item => {
         const permKey = item.permissionKey as keyof typeof permissions;
-        return permissions[permKey] === true;
+        if (permissions[permKey] !== true) return false;
+        // super-admin bypasses module toggles
+        return permissions.isSuperAdmin || !disabledModules.has(item.path);
       });
 
   return (
