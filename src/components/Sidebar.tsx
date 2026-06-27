@@ -70,7 +70,7 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
     };
   }, [user]);
 
-  const { data: unreadMessages } = useCollection<any>('messages', unreadDmQuery);
+  const { data: unreadMessages, loading: unreadDmLoading } = useCollection<any>('messages', unreadDmQuery);
 
   // Unread client-channel messages (senderType == 'client', not read)
   const unreadClientQuery = useMemo(() => {
@@ -83,7 +83,7 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
       skipTeamFilter: true,
     };
   }, [user]);
-  const { data: unreadClientMessages } = useCollection<any>('messages', unreadClientQuery);
+  const { data: unreadClientMessages, loading: unreadClientLoading } = useCollection<any>('messages', unreadClientQuery);
 
   const unreadChatCount = useMemo(() => {
     let count = 0;
@@ -133,8 +133,10 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
   // as an "increase" and beeps on every reload.
   const chimeArmedRef = useRef(false);
   useEffect(() => {
-    const loaded = unreadMessages !== undefined && unreadClientMessages !== undefined;
-    if (!loaded) return;
+    // useCollection initializes data to [] (count 0) and only flips loading=false
+    // once real data arrives. Wait for BOTH queries to finish loading before arming,
+    // otherwise the 0 → N transition on a page refresh is heard as an "increase".
+    if (unreadDmLoading || unreadClientLoading) return;
     if (!chimeArmedRef.current) {
       chimeArmedRef.current = true;
       prevUnreadRef.current = unreadChatCount; // baseline, no sound on initial load
@@ -144,7 +146,7 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
       playNotificationSound();
     }
     prevUnreadRef.current = unreadChatCount;
-  }, [unreadChatCount, unreadMessages, unreadClientMessages, playNotificationSound]);
+  }, [unreadChatCount, unreadDmLoading, unreadClientLoading, playNotificationSound]);
 
   // Filter nav items based on user permissions
   // While loading, show only profile to avoid unauthorized flicker
