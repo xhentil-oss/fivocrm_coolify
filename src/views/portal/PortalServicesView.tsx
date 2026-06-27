@@ -44,7 +44,8 @@ const PortalServicesView: React.FC = () => {
   const inquiryMutation = useMutation<ServiceInquiry>('serviceInquiries');
   const notificationMutation = useMutation<Notification>('notifications');
   const { data: activeTeamMembers } = useCollection<any>('teamMembers', {
-    where: [{ field: 'status', operator: '==', value: 'Active' }]
+    where: [{ field: 'status', operator: '==', value: 'Active' }],
+    skipTeamFilter: true, // portal client has no businessId → avoids the loading-forever guard
   });
   // Portal users don't have getGlobalTeamId() — resolve from any team member
   const resolvedTeamId = activeTeamMembers?.find((m: any) => m.teamId)?.teamId || null;

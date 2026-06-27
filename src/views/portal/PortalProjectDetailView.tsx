@@ -128,6 +128,7 @@ const PortalProjectDetailView: React.FC = () => {
   const { data: teams } = useCollection<Team>('teams');
   const { data: allTeamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
+    skipTeamFilter: true, // portal client has no businessId → avoids the loading-forever guard
   });
 
   // User profiles for comment display names

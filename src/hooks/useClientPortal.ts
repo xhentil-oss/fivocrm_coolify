@@ -67,6 +67,10 @@ export function useClientPortal() {
   // Fetch team members to notify admins and resolve teamId
   const { data: allTeamMembers, loading: teamMembersLoading } = useCollection<any>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
+    // Portal clients have no businessId; without skipTeamFilter the team-scoped
+    // read stays loading forever (useFirestore guards isTeamScoped && !scopeId),
+    // which freezes the whole portal on a spinner.
+    skipTeamFilter: true,
   });
 
   // Filter to get only Active access records

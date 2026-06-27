@@ -66,6 +66,7 @@ const PortalChatView: React.FC = () => {
   }, [customerProjects]);
   const { data: allTeamMembers } = useCollection<any>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
+    skipTeamFilter: true, // portal client has no businessId → avoids the loading-forever guard
   });
   const teamMembers = React.useMemo(() => {
     if (!allTeamMembers || projectTeamIds.length === 0) return allTeamMembers || [];
