@@ -1570,7 +1570,7 @@ async function runBackfillBusinessId(opts?: { reset?: boolean }) {
   const started = Date.now();
   const BUDGET_MS = 45000; // leave margin under the 60s function limit
   let totalUpdated = 0;
-  const results: { collection: string; scanned: number; updated: number }[] = [];
+  const results: { collection: string; scanned: number; updated: number; error?: string }[] = [];
 
   for (const col of pending) {
     if (Date.now() - started > BUDGET_MS) break;
@@ -1593,10 +1593,11 @@ async function runBackfillBusinessId(opts?: { reset?: boolean }) {
       done.push(col);
       results.push({ collection: col, scanned, updated });
     } catch (err: any) {
-      console.error(`[backfill] ${col} failed:`, err?.message || err);
-      results.push({ collection: col, scanned, updated: -1 });
+      const msg = String(err?.message || err);
+      console.error(`[backfill] ${col} failed:`, msg);
+      results.push({ collection: col, scanned, updated: -1, error: msg.slice(0, 300) });
       // Stop on quota errors — there's no point hammering an exhausted project.
-      if (String(err?.message || err).includes('RESOURCE_EXHAUSTED')) break;
+      if (msg.includes('RESOURCE_EXHAUSTED')) break;
     }
   }
 

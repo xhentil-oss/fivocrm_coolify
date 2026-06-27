@@ -74,6 +74,7 @@ const TenantsView: React.FC = () => {
       let remaining: string[] = [];
       let guard = 0;
       let quotaHit = false;
+      let prevRemaining = Infinity;
       do {
         const res = await fetch('/api/cron/run?job=backfill-businessid&manual=1', {
           method: 'GET', headers: { Authorization: `Bearer ${token}` },
@@ -84,9 +85,13 @@ const TenantsView: React.FC = () => {
           throw new Error(data.error || `Gabim serveri (${res.status})`);
         }
         totalUpdated += data.totalUpdated || 0;
-        (data.results || []).filter((r: any) => r.updated === -1).forEach((r: any) => failedSet.add(r.collection));
+        (data.results || []).filter((r: any) => r.updated === -1).forEach((r: any) => failedSet.add(`${r.collection}${r.error ? `: ${r.error}` : ''}`));
         remaining = data.remaining || [];
         setBackfillProgress(`${data.completed}/${data.total} koleksione · mbetur ${remaining.length}`);
+        // Stop if a pass made no progress (a collection keeps erroring) — avoids
+        // hammering a stuck/quota-limited collection 25× in a row.
+        if (remaining.length >= prevRemaining) break;
+        prevRemaining = remaining.length;
       } while (remaining.length > 0 && ++guard < 25);
 
       if (quotaHit) {
