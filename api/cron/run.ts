@@ -1548,7 +1548,8 @@ const BACKFILL_COLLECTIONS = [
   'clientRequests', 'taskComments', 'taskCollaborators', 'customIndustries', 'directMessages',
   'milestones', 'serviceInquiries', 'projectComments', 'workspaceFolders', 'workspaceDriveFiles',
   'projects', 'roleTemplates', 'dailyReports', 'standups', 'quotes', 'contracts', 'chatSnippets',
-  'whatsappAccounts', 'whatsappThreads', 'whatsappMessages', 'waTemplates', 'waBroadcasts',
+  // WhatsApp collections excluded: their reads use skipTeamFilter (unaffected by the
+  // Phase 3b businessId flip) and the owner doesn't need them tagged with businessId.
 ];
 
 async function runBackfillBusinessId(onlyCol?: string) {

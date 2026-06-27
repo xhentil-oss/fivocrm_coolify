@@ -65,33 +65,20 @@ const TenantsView: React.FC = () => {
     setBackfilling(true);
     setBackfillProgress('po nis…');
     try {
-      // Server-side (Admin SDK) bypasses Firestore rules. Process ONE collection per
-      // request (client loops) so no single call hits the serverless timeout (504).
+      // Single server call (Admin SDK, bypasses rules) — authenticates ONCE and
+      // processes all collections, avoiding the per-call re-auth that hammered the
+      // Firestore quota and produced 401s. WhatsApp collections are excluded server-side.
       const token = await user.getIdToken(true);
-      const call = async (col: string) => {
-        const res = await fetch(`/api/cron/run?job=backfill-businessid&manual=1&col=${encodeURIComponent(col)}`, {
-          method: 'GET', headers: { Authorization: `Bearer ${token}` },
-        });
-        const data = await res.json();
-        if (!res.ok) throw new Error(data.error || `Gabim serveri (${res.status})`);
-        if (data.error) throw new Error(data.error);
-        return data;
-      };
-      const list = (await call('__list__')).collections as string[];
-      let totalUpdated = 0;
-      const failed: string[] = [];
-      for (let i = 0; i < list.length; i++) {
-        const col = list[i];
-        setBackfillProgress(`${col} (${i + 1}/${list.length})`);
-        try {
-          const r = (await call(col)).results?.[0];
-          if (r?.updated === -1) failed.push(col);
-          else totalUpdated += r?.updated || 0;
-        } catch { failed.push(col); }
-      }
+      const res = await fetch('/api/cron/run?job=backfill-businessid&manual=1', {
+        method: 'GET', headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || `Gabim serveri (${res.status})`);
+      if (data.error) throw new Error(data.error);
+      const failed = (data.results || []).filter((r: any) => r.updated === -1).map((r: any) => r.collection);
       toast({
         title: 'Faza 2 u krye (server)',
-        description: `${totalUpdated} dokumente u stampuan me businessId${failed.length ? ` · dështuan: ${failed.join(', ')}` : ' · pa dështime'}.`,
+        description: `${data.totalUpdated} dokumente u stampuan me businessId${failed.length ? ` · dështuan: ${failed.join(', ')}` : ' · pa dështime'}.`,
       });
     } catch (err: any) {
       toast({ title: 'Backfill dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
