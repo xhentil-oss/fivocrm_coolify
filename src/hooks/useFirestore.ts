@@ -165,6 +165,19 @@ const teamScopedCollections = new Set([
 // explicitly. Legacy docs without teamId are backfilled by useTeamDataMigration.
 const globalReadCollections = new Set<string>([]);
 
+// CRM/business "record" collections that must ALWAYS be isolated to the active
+// business for a staff user — even when a call passes skipTeamFilter (many views do,
+// a single-org leftover that now leaks one tenant's data into another). Excludes the
+// cross-cutting chat/comm collections (messages, channels, directMessages, etc.),
+// which ChatView scopes itself and reads cross-team by design. Portal clients (no
+// businessId) and super-admins are unaffected — see isTeamScoped below.
+const businessIsolatedAlways = new Set<string>([
+  'leads', 'projects', 'invoices', 'invoiceItems', 'customers', 'deals', 'leadActivities',
+  'services', 'expenses', 'goals', 'quotes', 'contracts', 'tasks', 'taskComments',
+  'taskCollaborators', 'milestones', 'projectComments', 'clientRequests', 'serviceInquiries',
+  'timeEntries', 'standups', 'dailyReports', 'customIndustries',
+]);
+
 // "Reference" collections that change rarely but are subscribed on almost every
 // screen. Reading them with a live onSnapshot keeps an open stream + re-reads the
 // whole list on every (re)mount. Instead we read them ONCE via getDocs and serve
@@ -242,10 +255,15 @@ export function useCollection<T = DocumentData>(
   // sub-group (department) within a business, so it no longer scopes reads.
   const reactiveBusinessId = useGlobalBusinessId();
   const superAdmin = useIsSuperAdmin();
+  // A staff user (has a resolved businessId) reading a CRM collection is ALWAYS scoped
+  // to their business, even if the caller passed skipTeamFilter — otherwise that flag
+  // bypasses tenant isolation. Portal clients have no businessId, so they may still
+  // skipTeamFilter to read their own customer's data; super-admins bypass entirely.
+  const forceBusinessScope = !!reactiveBusinessId && businessIsolatedAlways.has(collectionName);
   const isTeamScoped = teamScopedCollections.has(collectionName)
-    && !options?.skipTeamFilter
     && !superAdmin
-    && !globalReadCollections.has(collectionName);
+    && !globalReadCollections.has(collectionName)
+    && (forceBusinessScope || !options?.skipTeamFilter);
   const scopeId = isTeamScoped ? reactiveBusinessId : null;
 
   // teamScopedWhere is folded into the cache key so a server-pushed variant
