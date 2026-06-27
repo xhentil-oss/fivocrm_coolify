@@ -1,5 +1,6 @@
 import { useEffect, useState, useRef, useCallback } from 'react';
 import { useCollection } from './useFirestore';
+import { usePortalTenant } from './usePortalTenant';
 import { useAuth } from '../contexts/AuthContext';
 import { collection, addDoc, updateDoc, doc, Timestamp, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -96,12 +97,17 @@ export function useClientPortal() {
     }
   }, [user, activeByUserId, activeByEmail, byUserIdLoading, byEmailLoading]);
 
-  // Direct Firestore create helper (avoids useMutation hook closure issues)
-  // Resolves teamId from the first available team member so portal-created docs
-  // satisfy Firestore rules that require `teamId is string`.
+  // Multi-tenant portal: when the client visits <tenant>.fivocrm.com, resolve which
+  // tenant (businessId) they belong to so auto-created records are stamped correctly.
+  // On the apex host (fivocrm.com) this is null and behavior is unchanged (agency).
+  const { tenantBusinessId, tenantTeamId } = usePortalTenant();
+
+  // Direct Firestore create helper (avoids useMutation hook closure issues).
+  // Prefer the subdomain tenant's team; else fall back to any available team member
+  // (apex/agency behavior) so portal-created docs satisfy rules requiring teamId.
   const resolveTeamId = useCallback(() => {
-    return allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
-  }, [allTeamMembers]);
+    return tenantTeamId || allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
+  }, [tenantTeamId, allTeamMembers]);
 
   const createDoc = useCallback(async (collName: string, data: Record<string, any>) => {
     const teamId = resolveTeamId();
@@ -109,6 +115,8 @@ export function useClientPortal() {
       Object.entries({
         ...data,
         ...(teamId ? { teamId } : {}),
+        // Stamp the tenant boundary so this client's records isolate to their tenant.
+        ...(tenantBusinessId ? { businessId: tenantBusinessId } : {}),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
         createdByUserId: user?.uid || null,
@@ -116,7 +124,7 @@ export function useClientPortal() {
     );
     const ref = await addDoc(collection(db, collName), docData);
     return { id: ref.id, ...docData };
-  }, [user?.uid, resolveTeamId]);
+  }, [user?.uid, resolveTeamId, tenantBusinessId]);
 
   // Auto-create: if no portal access exists, create Customer + Access + Lead
   useEffect(() => {

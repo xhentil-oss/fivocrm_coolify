@@ -137,6 +137,9 @@ export interface Business {
   trialEndsAt?: Date;
   /** Nav paths disabled for this tenant (super-admin toggles per business). */
   disabledModules?: string[];
+  /** Portal subdomain for this tenant: `<portalSubdomain>.fivocrm.com/portal`.
+   * Resolves hostname → businessId so this tenant's clients register/scope to it. */
+  portalSubdomain?: string;
   createdAt: Date;
   updatedAt: Date;
 }

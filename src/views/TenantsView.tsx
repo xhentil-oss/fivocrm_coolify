@@ -211,6 +211,19 @@ const TenantsView: React.FC = () => {
     }
   };
 
+  // Assign this tenant's portal subdomain (<sub>.fivocrm.com/portal). Resolves
+  // hostname → businessId so the tenant's clients register/scope to it.
+  const saveSubdomain = async (biz: Business, raw: string) => {
+    const sub = raw.trim().toLowerCase().replace(/[^a-z0-9-]/g, '');
+    if (sub === (biz.portalSubdomain || '')) return;
+    try {
+      await updateDoc(doc(db, 'businesses', biz.id), { portalSubdomain: sub || null, updatedAt: Timestamp.now() });
+      toast({ title: 'Subdomain u ruajt', description: sub ? `${sub}.fivocrm.com/portal` : 'Subdomain u hoq.' });
+    } catch (err: any) {
+      toast({ title: 'Dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
+    }
+  };
+
   // Route is also gated, but guard here too.
   if (!permissions.isSuperAdmin) {
     return (
@@ -357,6 +370,17 @@ const TenantsView: React.FC = () => {
                         </button>
                       );
                     })}
+                  </div>
+                  <div className="mt-3 flex items-center gap-2 flex-wrap">
+                    <span className="text-[11px] text-muted-foreground">Subdomain portali:</span>
+                    <input
+                      type="text"
+                      defaultValue={b.portalSubdomain || ''}
+                      placeholder="p.sh. acme"
+                      onBlur={(e) => saveSubdomain(b, e.target.value)}
+                      className="h-7 px-2 text-[11px] rounded border border-border bg-background w-28 focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    <span className="text-[11px] text-muted-foreground">.fivocrm.com/portal</span>
                   </div>
                 </div>
               )}
