@@ -303,7 +303,7 @@ const DailyReportsView: React.FC = () => {
 
         {isManagerOrAbove && (
           <Select value={filterUserId} onValueChange={setFilterUserId}>
-            <SelectTrigger className="w-[200px]">
+            <SelectTrigger className="w-full sm:w-[200px]">
               <SelectValue placeholder="Të gjithë" />
             </SelectTrigger>
             <SelectContent>

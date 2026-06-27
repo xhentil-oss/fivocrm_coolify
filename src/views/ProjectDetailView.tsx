@@ -565,7 +565,7 @@ const ProjectDetailView: React.FC = () => {
               />
             </div>
             <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger className="w-[130px] h-8 text-xs">
+              <SelectTrigger className="w-full sm:w-[130px] h-8 text-xs">
                 <Filter className="w-3 h-3 mr-1" />
                 <SelectValue />
               </SelectTrigger>

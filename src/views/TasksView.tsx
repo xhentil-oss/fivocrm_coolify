@@ -748,7 +748,7 @@ const TasksView: React.FC = () => {
 
             {viewMode === 'list' && (
               <Select value={groupBy} onValueChange={(v) => setGroupBy(v as any)}>
-                <SelectTrigger className="h-8 text-xs w-[140px]">
+                <SelectTrigger className="h-8 text-xs w-full sm:w-[140px]">
                   <Users className="w-3 h-3 mr-1 shrink-0" />
                   <SelectValue />
                 </SelectTrigger>

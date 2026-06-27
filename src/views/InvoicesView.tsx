@@ -1753,7 +1753,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
                   setBankCountry(bank.country);
                 }
               }}>
-                <SelectTrigger className="w-[200px]">
+                <SelectTrigger className="w-full sm:w-[200px]">
                   <SelectValue placeholder="Zgjidh bankën" />
                 </SelectTrigger>
                 <SelectContent>

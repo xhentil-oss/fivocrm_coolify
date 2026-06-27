@@ -183,7 +183,7 @@ const GoalsView: React.FC = () => {
 
         <div className="flex flex-wrap items-center gap-2">
           <Select value={filterStatus} onValueChange={setFilterStatus}>
-            <SelectTrigger className="w-[140px]">
+            <SelectTrigger className="w-full sm:w-[140px]">
               <SelectValue placeholder="Statusi" />
             </SelectTrigger>
             <SelectContent>

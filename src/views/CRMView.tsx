@@ -1755,7 +1755,7 @@ const CRMView: React.FC = () => {
                             handleStatusChange(lead, newStatus);
                           }}
                         >
-                          <SelectTrigger className="w-[140px]" onClick={(e) => e.stopPropagation()}>
+                          <SelectTrigger className="w-full sm:w-[140px]" onClick={(e) => e.stopPropagation()}>
                             <SelectValue>
                               <Badge className={getStatusColor(lead.status)}>
                                 {getStatusLabel(lead.status)}
@@ -1778,7 +1778,7 @@ const CRMView: React.FC = () => {
                             value={lead.assignedToUserId || 'unassigned'}
                             onValueChange={val => handleAssignLead(lead, val === 'unassigned' ? '' : val)}
                           >
-                            <SelectTrigger className="w-[130px] h-8 text-xs">
+                            <SelectTrigger className="w-full sm:w-[130px] h-8 text-xs">
                               <SelectValue>
                                 <div className="flex items-center gap-1">
                                   <UserCircle className="w-3 h-3 text-muted-foreground" />
@@ -2426,7 +2426,7 @@ const LeadForm: React.FC<{
           <Label htmlFor="phoneLocal">Numri i Telefonit</Label>
           <div className="flex gap-1">
             <Select value={phonePrefix} onValueChange={(v) => { setPhonePrefix(v); onDirtyChange?.(true); }}>
-              <SelectTrigger className="w-[100px] shrink-0">
+              <SelectTrigger className="w-full sm:w-[100px] sm:shrink-0">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>

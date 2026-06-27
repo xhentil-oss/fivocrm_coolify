@@ -291,7 +291,7 @@ const ExpensesView: React.FC = () => {
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setByMonthYear(y => y - 1)} aria-label="Viti i mëparshëm">‹</Button>
             <Select value={String(byMonthYear)} onValueChange={(v) => setByMonthYear(Number(v))}>
-              <SelectTrigger className="h-7 w-[84px] text-body-sm"><SelectValue /></SelectTrigger>
+              <SelectTrigger className="h-7 w-full sm:w-[84px] text-body-sm"><SelectValue /></SelectTrigger>
               <SelectContent>
                 {expenseYears.map(y => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}
               </SelectContent>
