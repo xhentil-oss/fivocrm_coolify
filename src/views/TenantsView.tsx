@@ -9,7 +9,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Building2, Search, Users, ShieldX, Loader2, Layers } from 'lucide-react';
 import { getTimestampMs } from '../lib/utils';
-import { setupBusinessLayer, backfillBusinessId } from '../lib/businessMigration';
+import { setupBusinessLayer } from '../lib/businessMigration';
 import type { Team, TeamMember, Business } from '../types';
 
 // Super-admin "Relax CRM" panel: lists every tenant (team) — i.e. FivoCRM's own
@@ -61,16 +61,23 @@ const TenantsView: React.FC = () => {
   };
 
   const runPhase2 = async () => {
-    if (backfilling) return;
+    if (backfilling || !user) return;
     setBackfilling(true);
-    setBackfillProgress('');
+    setBackfillProgress('po ekzekuton server-side…');
     try {
-      const results = await backfillBusinessId((col, i, total) => setBackfillProgress(`${col} (${i + 1}/${total})`));
-      const totalUpdated = results.reduce((s, r) => s + r.updated, 0);
-      const failed = results.filter(r => r.failed).map(r => r.collection);
+      // Server-side (Admin SDK) — bypasses Firestore rules so it can stamp
+      // collections the client can't (activities=update:false, messages/comments).
+      const token = await user.getIdToken(true);
+      const res = await fetch('/api/admin-backfill-businessid', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error || 'Gabim serveri');
+      const failed = (data.results || []).filter((r: any) => r.updated === -1).map((r: any) => r.collection);
       toast({
-        title: 'Faza 2 u krye',
-        description: `${totalUpdated} dokumente u stampuan me businessId${failed.length ? ` · dështuan: ${failed.join(', ')}` : ''}.`,
+        title: 'Faza 2 u krye (server)',
+        description: `${data.totalUpdated} dokumente u stampuan me businessId${failed.length ? ` · dështuan: ${failed.join(', ')}` : ' · pa dështime'}.`,
       });
     } catch (err: any) {
       toast({ title: 'Backfill dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
