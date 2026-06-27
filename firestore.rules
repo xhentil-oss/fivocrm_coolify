@@ -237,6 +237,13 @@ service cloud.firestore {
       allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
     }
 
+    // ── businesses: the tenant / isolation boundary (Business > Team) ──
+    match /businesses/{docId} {
+      allow read: if isAuth();
+      allow create: if isAuth();
+      allow update, delete: if isAuth() && resource.data.ownerId == request.auth.uid;
+    }
+
     match /teamMembers/{docId} {
       allow read: if isAuth();
       allow create: if isAuth();

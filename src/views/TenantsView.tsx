@@ -1,12 +1,16 @@
 import React, { useMemo, useState } from 'react';
 import { useCollection } from '../hooks/useFirestore';
 import { usePermissions } from '../contexts/PermissionsContext';
+import { useAuth } from '../contexts/AuthContext';
+import { useToast } from '../hooks/use-toast';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
+import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { Building2, Search, Users, ShieldX } from 'lucide-react';
+import { Building2, Search, Users, ShieldX, Loader2, Layers } from 'lucide-react';
 import { getTimestampMs } from '../lib/utils';
-import type { Team, TeamMember } from '../types';
+import { setupBusinessLayer } from '../lib/businessMigration';
+import type { Team, TeamMember, Business } from '../types';
 
 // Super-admin "Relax CRM" panel: lists every tenant (team) — i.e. FivoCRM's own
 // customers — across all workspaces. Read-only for now: editing a tenant's
@@ -28,9 +32,31 @@ const fmtDate = (d: any) => {
 
 const TenantsView: React.FC = () => {
   const permissions = usePermissions();
+  const { user } = useAuth();
+  const { toast } = useToast();
   const { data: teams } = useCollection<Team>('teams', { skipTeamFilter: true });
   const { data: members } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
+  const { data: businesses } = useCollection<Business>('businesses', { skipTeamFilter: true });
   const [search, setSearch] = useState('');
+  const [migrating, setMigrating] = useState(false);
+
+  const linkedTeams = useMemo(() => (teams || []).filter(t => (t as any).businessId).length, [teams]);
+
+  const runPhase1 = async () => {
+    if (!user || migrating) return;
+    setMigrating(true);
+    try {
+      const r = await setupBusinessLayer(user.uid, user.email || '');
+      toast({
+        title: 'Faza 1 u krye',
+        description: `Biznesi ${r.businessCreated ? 'u krijua' : 'ekzistonte'}; ${r.teamsLinked}/${r.teamsTotal} ekipe u lidhën si departamente.`,
+      });
+    } catch (err: any) {
+      toast({ title: 'Migrimi dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
+    } finally {
+      setMigrating(false);
+    }
+  };
 
   const memberCount = useMemo(() => {
     const m = new Map<string, number>();
@@ -80,6 +106,25 @@ const TenantsView: React.FC = () => {
           <p className="text-sm text-muted-foreground">Klientët e FivoCRM — të gjithë tenant-ët</p>
         </div>
       </div>
+
+      {/* Phase 1 migration — Business layer setup (additive, idempotent) */}
+      <Card className="p-4 my-5 border-primary/20 bg-primary/[0.03]">
+        <div className="flex items-start gap-3">
+          <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+            <Layers className="h-4 w-4 text-primary" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-medium text-sm">Faza 1 — Shtresa e Biznesit (Business &gt; Ekip)</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Krijon biznesin e agjencisë dhe lidh ekipet e tua si departamente (vendos <code>businessId</code>).
+              Shtesë &amp; idempotent — s'ndryshon sjellje. {(businesses?.length || 0) > 0 && `${businesses?.length} biznes(e), `}{linkedTeams}/{teams?.length || 0} ekipe të lidhura.
+            </p>
+          </div>
+          <Button size="sm" onClick={runPhase1} disabled={migrating} className="flex-shrink-0">
+            {migrating ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Po ekzekuton…</> : 'Ekzekuto Fazën 1'}
+          </Button>
+        </div>
+      </Card>
 
       {/* Summary */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 my-5">

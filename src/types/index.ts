@@ -123,10 +123,28 @@ export interface Project {
   createdByUserId: string | null;
 }
 
+/**
+ * A Business is the tenant / isolation boundary (two-level model: Business > Team).
+ * Teams become departments WITHIN a business and share the business's data.
+ */
+export interface Business {
+  id: string;
+  name: string;
+  ownerId: string;            // uid of the owner (matches createdByUserId)
+  ownerEmail?: string;
+  plan?: 'trial' | 'starter' | 'pro' | 'business' | 'enterprise';
+  status?: 'trialing' | 'active' | 'past_due' | 'suspended' | 'canceled';
+  trialEndsAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 export interface Team {
   id: string;
   name: string;
   department?: string;
+  /** Two-level tenancy: the business (tenant) this team/department belongs to. */
+  businessId?: string;
   // ── SaaS tenant fields (self-serve signup) ──
   /** Owner's email at signup — convenience copy of the createdByUserId's email. */
   ownerEmail?: string;
