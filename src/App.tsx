@@ -67,16 +67,16 @@ const WorkspaceView = lazyRetry(() => import('./views/WorkspaceView'));
 const StaffDashboard = lazyRetry(() => import('./views/StaffDashboard'));
 const WorkloadView = lazyRetry(() => import('./views/WorkloadView'));
 const JoinInviteView = lazyRetry(() => import('./views/JoinInviteView'));
-const Customer360View = React.lazy(() => import('./views/Customer360View'));
-const PortalLayout = React.lazy(() => import('./views/portal/PortalLayout'));
-const PortalDashboard = React.lazy(() => import('./views/portal/PortalDashboard'));
-const PortalInvoicesView = React.lazy(() => import('./views/portal/PortalInvoicesView'));
-const PortalServicesView = React.lazy(() => import('./views/portal/PortalServicesView'));
-const PortalChatView = React.lazy(() => import('./views/portal/PortalChatView'));
-const PortalProjectsView = React.lazy(() => import('./views/portal/PortalProjectsView'));
-const PortalProjectDetailView = React.lazy(() => import('./views/portal/PortalProjectDetailView'));
-const PortalQuotesView = React.lazy(() => import('./views/portal/PortalQuotesView'));
-const OnboardingWizard = React.lazy(() => import('./components/OnboardingWizard'));
+const Customer360View = lazyRetry(() => import('./views/Customer360View'));
+const PortalLayout = lazyRetry(() => import('./views/portal/PortalLayout'));
+const PortalDashboard = lazyRetry(() => import('./views/portal/PortalDashboard'));
+const PortalInvoicesView = lazyRetry(() => import('./views/portal/PortalInvoicesView'));
+const PortalServicesView = lazyRetry(() => import('./views/portal/PortalServicesView'));
+const PortalChatView = lazyRetry(() => import('./views/portal/PortalChatView'));
+const PortalProjectsView = lazyRetry(() => import('./views/portal/PortalProjectsView'));
+const PortalProjectDetailView = lazyRetry(() => import('./views/portal/PortalProjectDetailView'));
+const PortalQuotesView = lazyRetry(() => import('./views/portal/PortalQuotesView'));
+const OnboardingWizard = lazyRetry(() => import('./components/OnboardingWizard'));
 const SeoLandingPage = lazyRetry(() => import('./views/landing/SeoLandingPage'));
 const RealEstateLandingPage = lazyRetry(() => import('./views/landing/RealEstateLandingPage'));
 const ResortLandingPage = lazyRetry(() => import('./views/landing/ResortLandingPage'));
@@ -94,7 +94,7 @@ const FotoVideoLandingPage = lazyRetry(() => import('./views/landing/FotoVideoLa
 const PriceCalculatorView = lazyRetry(() => import('./views/PriceCalculatorView'));
 const LandingPagesView = lazyRetry(() => import('./views/LandingPagesView'));
 const ContractsView = lazyRetry(() => import('./views/ContractsView'));
-const PortalContractsView = React.lazy(() => import('./views/portal/PortalContractsView'));
+const PortalContractsView = lazyRetry(() => import('./views/portal/PortalContractsView'));
 
 function LazyFallback() {
   return (
