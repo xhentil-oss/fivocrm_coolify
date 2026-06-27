@@ -57,3 +57,66 @@ export async function setupBusinessLayer(uid: string, email: string, businessNam
 
   return { businessId, businessCreated, teamsLinked, teamsTotal: teamsSnap.size };
 }
+
+// ── Phase 2: backfill businessId onto every data document ────────────────────
+// Maps each doc's teamId → the businessId set on its team (Phase 1), then stamps
+// businessId. The agency's teams all map to the one agency business, so their data
+// consolidates while teamId is preserved as the department. Idempotent & batched.
+//
+// Only collections that allow read+update for isAuth() are included. whatsapp* are
+// excluded (their rules require isTeamMember, so a cross-team client read/write
+// would be denied) — they can be migrated per-team later if needed.
+const PHASE2_COLLECTIONS = [
+  'tasks', 'invoices', 'invoiceItems', 'customers', 'leads', 'deals', 'leadActivities',
+  'services', 'expenses', 'goals', 'timeEntries', 'channels', 'messages', 'clientRequests',
+  'taskComments', 'taskCollaborators', 'milestones', 'serviceInquiries', 'projectComments',
+  'workspaceFolders', 'workspaceDriveFiles', 'projects', 'roleTemplates', 'dailyReports',
+  'standups', 'quotes', 'contracts', 'customIndustries',
+];
+
+export interface BackfillResult {
+  collection: string;
+  scanned: number;
+  updated: number;
+  failed: boolean;
+}
+
+export async function backfillBusinessId(
+  onProgress?: (col: string, i: number, total: number) => void
+): Promise<BackfillResult[]> {
+  // teamId → businessId from the teams linked in Phase 1.
+  const teamsSnap = await getDocs(collection(db, 'teams'));
+  const teamToBusiness = new Map<string, string>();
+  teamsSnap.docs.forEach(d => {
+    const b = (d.data() as any).businessId;
+    if (b) teamToBusiness.set(d.id, b);
+  });
+
+  const results: BackfillResult[] = [];
+  for (let c = 0; c < PHASE2_COLLECTIONS.length; c++) {
+    const col = PHASE2_COLLECTIONS[c];
+    onProgress?.(col, c, PHASE2_COLLECTIONS.length);
+    try {
+      const snap = await getDocs(collection(db, col));
+      const toUpdate = snap.docs.filter(d => {
+        const data = d.data() as any;
+        const bid = data.teamId ? teamToBusiness.get(data.teamId) : undefined;
+        return !!bid && data.businessId !== bid;
+      });
+      let updated = 0;
+      for (let i = 0; i < toUpdate.length; i += 400) {
+        const batch = writeBatch(db);
+        toUpdate.slice(i, i + 400).forEach(d => {
+          const bid = teamToBusiness.get((d.data() as any).teamId)!;
+          batch.update(d.ref, { businessId: bid });
+        });
+        await batch.commit();
+        updated += Math.min(400, toUpdate.length - i);
+      }
+      results.push({ collection: col, scanned: snap.size, updated, failed: false });
+    } catch {
+      results.push({ collection: col, scanned: 0, updated: 0, failed: true });
+    }
+  }
+  return results;
+}
