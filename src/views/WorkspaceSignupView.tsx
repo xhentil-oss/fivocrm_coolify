@@ -59,14 +59,19 @@ const WorkspaceSignupView: React.FC = () => {
       // 3. Into the app — usePermissions resolves them as owner of the new tenant.
       navigate('/app');
     } catch (err: any) {
-      if (err?.code === 'auth/email-already-in-use') {
+      const code = err?.code as string | undefined;
+      // eslint-disable-next-line no-console
+      console.error('[signup] failed:', code, err?.message);
+      if (code === 'auth/email-already-in-use') {
         setError('Ky email është tashmë i regjistruar. Hyr nga faqja e hyrjes.');
-      } else if (err?.code === 'auth/invalid-email') {
+      } else if (code === 'auth/invalid-email') {
         setError('Email-i nuk është i vlefshëm.');
-      } else if (err?.code === 'auth/weak-password') {
-        setError('Fjalëkalimi është shumë i dobët (min. 6 karaktere).');
+      } else if (code === 'auth/weak-password' || code === 'auth/password-does-not-meet-requirements') {
+        setError('Fjalëkalimi nuk i plotëson kërkesat (provo një më të gjatë/të fortë).');
+      } else if (code === 'auth/operation-not-allowed') {
+        setError('Regjistrimi me email/fjalëkalim nuk është aktiv. Aktivizoje te Firebase Console → Authentication → Sign-in method → Email/Password.');
       } else {
-        setError(err?.message || 'Krijimi i workspace-it dështoi. Provo përsëri.');
+        setError(`Krijimi dështoi${code ? ` (${code})` : ''}: ${err?.message || 'provo përsëri.'}`);
       }
     } finally {
       setLoading(false);
