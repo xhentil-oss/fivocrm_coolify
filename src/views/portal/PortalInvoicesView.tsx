@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useClientPortal } from '../../hooks/useClientPortal';
-import { useCollection, useDocument, useMutation } from '../../hooks/useFirestore';
+import { useCollection, useMutation } from '../../hooks/useFirestore';
 import { useAuth } from '../../contexts/AuthContext';
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
@@ -51,15 +51,12 @@ const PortalInvoicesView: React.FC = () => {
     });
   }, [rawInvoices]);
 
-  const { data: invoiceItems } = useCollection<InvoiceItem>('invoiceItems', {
-    skip: !customerId,
-    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
-    skipTeamFilter: true,
-  });
+  const { data: invoiceItems } = useCollection<InvoiceItem>('invoiceItems', { skipTeamFilter: true });
   const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
-  // Read only the client's own customer doc (server-side RLS: isPortalClientDoc).
-  const { data: customer } = useDocument<Customer>('customers', customerId || undefined);
+  const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   useMutation<Invoice>('invoices');
+
+  const customer = customers?.find(c => c.id === customerId);
 
   const handleStripePayment = async (invoice: Invoice) => {
     const stripeKey = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;

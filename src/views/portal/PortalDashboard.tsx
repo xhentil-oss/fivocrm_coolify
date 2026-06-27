@@ -1,7 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useAuth } from '../../contexts/AuthContext';
-import { useCollection, useDocument } from '../../hooks/useFirestore';
+import { useCollection } from '../../hooks/useFirestore';
 import { getStatusColor } from '../../lib/statusColors';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
@@ -91,11 +91,7 @@ const PortalDashboard: React.FC = () => {
     });
   }, [rawInvoices]);
 
-  const { data: invoiceItems } = useCollection<InvoiceItem>('invoiceItems', {
-    skip: !customerId,
-    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
-    skipTeamFilter: true,
-  });
+  const { data: invoiceItems } = useCollection<InvoiceItem>('invoiceItems', { skipTeamFilter: true });
   useCollection<Service>('services', { skipTeamFilter: true });
 
   const { data: rawRequests } = useCollection<ClientRequest>('clientRequests', {
@@ -140,8 +136,11 @@ const PortalDashboard: React.FC = () => {
     skip: !customerId,
     skipTeamFilter: true,
   });
-  // Read only the client's own customer doc (server-side RLS: isPortalClientDoc).
-  const { data: myCustomer } = useDocument<any>('customers', customerId || undefined);
+  const { data: allCustomers } = useCollection<any>('customers', {
+    skip: !customerId,
+    skipTeamFilter: true,
+  });
+  const myCustomer = allCustomers?.find((c: any) => c.id === customerId);
   const customerEmail = myCustomer?.email?.toLowerCase();
 
   const linkedLeadIds = React.useMemo(() => {
@@ -183,11 +182,7 @@ const PortalDashboard: React.FC = () => {
     const seen = new Set<string>();
     return all.filter(p => { if (seen.has(p.id)) return false; seen.add(p.id); return true; });
   }, [projectsByCustomer, projectsByMember]);
-  const { data: allTasks } = useCollection<Task>('tasks', {
-    skip: !customerId,
-    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
-    skipTeamFilter: true,
-  });
+  const { data: allTasks } = useCollection<Task>('tasks', { skipTeamFilter: true });
 
   const customerProjects = React.useMemo(() => {
     if (!rawProjects) return [];

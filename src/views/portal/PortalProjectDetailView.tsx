@@ -67,15 +67,9 @@ const PortalProjectDetailView: React.FC = () => {
   // Fetch project
   const { data: project } = useDocument<Project>('projects', projectId || '');
 
-  // Fetch tasks for this project, scoped by customerId so the RLS rule
-  // (isPortalClientFor) holds for every returned doc.
+  // Fetch tasks for this project
   const { data: rawTasks } = useCollection<Task>('tasks', {
-    where: customerId
-      ? [
-          { field: 'projectId', operator: '==', value: projectId || '' },
-          { field: 'customerId', operator: '==', value: customerId },
-        ]
-      : [{ field: 'projectId', operator: '==', value: projectId || '' }],
+    where: [{ field: 'projectId', operator: '==', value: projectId || '' }],
     skipTeamFilter: true,
   });
   const tasks = React.useMemo(() => {
@@ -86,11 +80,8 @@ const PortalProjectDetailView: React.FC = () => {
     });
   }, [rawTasks]);
 
-  // Task comments — scoped to this client's customerId (server-side RLS), then
-  // filtered client-side to this project's tasks.
+  // Task comments — fetch all, filter client-side to this project's tasks
   const { data: rawTaskComments } = useCollection<TaskComment>('taskComments', {
-    skip: !customerId,
-    where: customerId ? [{ field: 'customerId', operator: '==', value: customerId }] : undefined,
     skipTeamFilter: true,
   });
   const projectTaskIds = React.useMemo(() => new Set(tasks.map(t => t.id)), [tasks]);
@@ -103,15 +94,9 @@ const PortalProjectDetailView: React.FC = () => {
     });
   }, [rawTaskComments, projectTaskIds]);
 
-  // Project comments — scoped by projectId AND customerId so the RLS rule
-  // (isPortalClientFor) holds for every returned doc.
+  // Project comments
   const { data: rawComments } = useCollection<ProjectComment>('projectComments', {
-    where: customerId
-      ? [
-          { field: 'projectId', operator: '==', value: projectId || '' },
-          { field: 'customerId', operator: '==', value: customerId },
-        ]
-      : [{ field: 'projectId', operator: '==', value: projectId || '' }],
+    where: [{ field: 'projectId', operator: '==', value: projectId || '' }],
     skipTeamFilter: true,
   });
   const comments = React.useMemo(() => {
@@ -238,10 +223,6 @@ const PortalProjectDetailView: React.FC = () => {
         userId: user.uid,
         senderType: 'client',
         ...(commentTeamId ? { teamId: commentTeamId } : {}),
-        // Stamp the isolation keys so both sides can read it under RLS:
-        // customerId (portal client) + businessId (staff, from the parent project).
-        ...(customerId ? { customerId } : {}),
-        ...((project as any)?.businessId ? { businessId: (project as any).businessId } : {}),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
         createdByUserId: user.uid,
@@ -288,9 +269,6 @@ const PortalProjectDetailView: React.FC = () => {
         senderType: 'client',
         createdByUserId: user.uid,
         ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
-        // Isolation keys: customerId (portal client) + businessId (staff).
-        ...(customerId ? { customerId } : {}),
-        ...((project as any)?.businessId ? { businessId: (project as any).businessId } : {}),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
       });

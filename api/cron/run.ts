@@ -1628,104 +1628,6 @@ async function runBackfillPortalCustomerId() {
   return { updated, total: snap.size };
 }
 
-// ── JOB: backfill-customerid (Phase 4.3b Wave 3) ─────────────────────────────
-// Stamps customerId onto parent-linked child records so portal clients can read
-// their own data under server-side RLS (isPortalClientFor). Staff isolation uses
-// businessId; the portal needs customerId on these collections, which carry none of
-// their own — derived from the parent invoice / project / task. Resumable +
-// time-budgeted, mirroring backfill-businessid. Order matters: tasks before
-// taskComments (a comment's customerId comes from its task's, derived here too).
-const CUSTOMERID_BACKFILL_COLLECTIONS = ['invoiceItems', 'tasks', 'projectComments', 'taskComments'];
-
-async function runBackfillCustomerId(opts?: { reset?: boolean }) {
-  const stateRef = db.collection('migrations').doc('customerIdBackfill');
-  const stateSnap = await stateRef.get();
-  const done: string[] = (opts?.reset || !stateSnap.exists) ? [] : (stateSnap.data()?.done || []);
-
-  const pending = CUSTOMERID_BACKFILL_COLLECTIONS.filter(c => !done.includes(c));
-  const started = Date.now();
-  const BUDGET_MS = 45000;
-  let totalUpdated = 0;
-  const results: { collection: string; scanned: number; updated: number; error?: string }[] = [];
-
-  // Parent → customerId maps, loaded once and cached across collections.
-  let invoiceCustomer: Map<string, string> | null = null;
-  let projectCustomer: Map<string, string> | null = null;
-  let taskCustomer: Map<string, string> | null = null;
-
-  const loadInvoices = async () => {
-    if (!invoiceCustomer) {
-      invoiceCustomer = new Map();
-      (await db.collection('invoices').get()).docs.forEach(d => {
-        const c = (d.data() as any).customerId; if (c) invoiceCustomer!.set(d.id, c);
-      });
-    }
-    return invoiceCustomer;
-  };
-  const loadProjects = async () => {
-    if (!projectCustomer) {
-      projectCustomer = new Map();
-      (await db.collection('projects').get()).docs.forEach(d => {
-        const c = (d.data() as any).customerId; if (c) projectCustomer!.set(d.id, c);
-      });
-    }
-    return projectCustomer;
-  };
-  const loadTasks = async () => {
-    if (!taskCustomer) {
-      const projMap = await loadProjects();
-      taskCustomer = new Map();
-      (await db.collection('tasks').get()).docs.forEach(d => {
-        const data = d.data() as any;
-        const c = data.customerId || (data.projectId ? projMap.get(data.projectId) : undefined);
-        if (c) taskCustomer!.set(d.id, c);
-      });
-    }
-    return taskCustomer;
-  };
-
-  for (const col of pending) {
-    if (Date.now() - started > BUDGET_MS) break;
-    let scanned = 0, updated = 0;
-    try {
-      // Preload the parent map this collection needs.
-      let lookup: Map<string, string>; let parentKey: string;
-      if (col === 'invoiceItems') { lookup = await loadInvoices(); parentKey = 'invoiceId'; }
-      else if (col === 'taskComments') { lookup = await loadTasks(); parentKey = 'taskId'; }
-      else { lookup = await loadProjects(); parentKey = 'projectId'; } // tasks, projectComments
-
-      const snap = await db.collection(col).get();
-      scanned = snap.size;
-      const toUpdate: { ref: any; customerId: string }[] = [];
-      snap.docs.forEach(d => {
-        const data = d.data() as any;
-        if (data.customerId) return;
-        const pid = data[parentKey];
-        const cid = pid ? lookup.get(pid) : undefined;
-        if (cid) toUpdate.push({ ref: d.ref, customerId: cid });
-      });
-      for (let i = 0; i < toUpdate.length; i += 400) {
-        const batch = db.batch();
-        toUpdate.slice(i, i + 400).forEach(u => batch.update(u.ref, { customerId: u.customerId }));
-        await batch.commit();
-        updated += Math.min(400, toUpdate.length - i);
-      }
-      totalUpdated += updated;
-      done.push(col);
-      results.push({ collection: col, scanned, updated });
-    } catch (err: any) {
-      const msg = String(err?.message || err);
-      console.error(`[backfill-customerid] ${col} failed:`, msg);
-      results.push({ collection: col, scanned, updated: -1, error: msg.slice(0, 300) });
-      if (msg.includes('RESOURCE_EXHAUSTED')) break;
-    }
-  }
-
-  await stateRef.set({ done, updatedAt: admin.firestore.Timestamp.now() }, { merge: true });
-  const remaining = CUSTOMERID_BACKFILL_COLLECTIONS.filter(c => !done.includes(c));
-  return { totalUpdated, results, completed: done.length, total: CUSTOMERID_BACKFILL_COLLECTIONS.length, remaining };
-}
-
 // ── JOB: set-superadmin-claim ────────────────────────────────────────────────
 // Sets a Firebase custom claim { superAdmin: true } on the caller IF their email
 // is in the super-admin allowlist (server reads the same env the client uses).
@@ -1782,9 +1684,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'backfill-portal-customerid':
         result = await runBackfillPortalCustomerId();
-        break;
-      case 'backfill-customerid':
-        result = await runBackfillCustomerId({ reset: req.query.reset === '1' });
         break;
       case 'project-completion-reminder':
         result = await runProjectCompletionReminder();

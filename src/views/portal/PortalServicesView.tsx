@@ -30,11 +30,7 @@ const PortalServicesView: React.FC = () => {
     skipTeamFilter: true,
   });
 
-  const { data: invoiceItems } = useCollection<InvoiceItem>('invoiceItems', {
-    skip: !customerId,
-    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
-    skipTeamFilter: true,
-  });
+  const { data: invoiceItems } = useCollection<InvoiceItem>('invoiceItems', { skipTeamFilter: true });
   const { data: services, loading } = useCollection<Service>('services', { skipTeamFilter: true });
 
   // Fetch client's own inquiries

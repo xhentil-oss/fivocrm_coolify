@@ -35,12 +35,17 @@ const PortalProjectsView: React.FC = () => {
 
   const loading = loadingByCustomer || loadingByMember;
 
-  // Fetch the client's own tasks (server-side RLS scopes by customerId); progress
-  // per project is computed client-side below. Tasks of member-only projects owned
-  // by a different customer are intentionally not shown.
+  // Only fetch tasks belonging to the customer's projects (not ALL tasks)
+  const projectIds = React.useMemo(() => {
+    if (!rawProjects || rawProjects.length === 0) return [];
+    return rawProjects.map(p => p.id);
+  }, [rawProjects]);
+
+  // Firestore 'in' operator supports up to 30 items (Firebase SDK v9)
   const { data: projectTasks } = useCollection<Task>('tasks', {
-    skip: !customerId,
-    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
+    where: projectIds.length > 0
+      ? [{ field: 'projectId', operator: 'in', value: projectIds.slice(0, 30) }]
+      : undefined,
     skipTeamFilter: true,
   });
 

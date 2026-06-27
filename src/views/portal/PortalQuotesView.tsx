@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useClientPortal } from '../../hooks/useClientPortal';
-import { useCollection, useDocument, useMutation } from '../../hooks/useFirestore';
+import { useCollection, useMutation } from '../../hooks/useFirestore';
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -34,14 +34,18 @@ const PortalQuotesView: React.FC = () => {
     skipTeamFilter: true,
   });
 
-  // Read only the client's own customer doc (server-side RLS: isPortalClientDoc).
-  const { data: customer } = useDocument<Customer>('customers', customerId || undefined);
+  const { data: customers } = useCollection<Customer>('customers', {
+    skip: !customerId,
+    skipTeamFilter: true,
+  });
 
   // Find leads that belong to this customer (lead.customerId or lead.email match)
   const { data: leads } = useCollection<Lead>('leads', {
     skip: !customerId,
     skipTeamFilter: true,
   });
+
+  const customer = customers?.find(c => c.id === customerId);
   const customerLeadId = (customer as any)?.leadId;
   const customerEmail = customer?.email?.toLowerCase();
 

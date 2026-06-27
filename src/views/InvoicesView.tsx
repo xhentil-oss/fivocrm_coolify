@@ -1468,7 +1468,6 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         if (service) {
           await invoiceItemMutation.create({
             invoiceId: editInvoice!.id,
-            customerId: editInvoice!.customerId, // portal RLS (isPortalClientFor)
             serviceId: item.serviceId,
             quantity: item.quantity,
             unitPrice: toInvoiceCurrency(service.price, service.currency),
@@ -1524,7 +1523,6 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         if (service) {
           await invoiceItemMutation.create({
             invoiceId: invoice.id,
-            customerId: selectedCustomerId, // portal RLS (isPortalClientFor)
             serviceId: item.serviceId,
             quantity: item.quantity,
             unitPrice: toInvoiceCurrency(service.price, service.currency),
