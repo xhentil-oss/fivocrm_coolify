@@ -271,7 +271,11 @@ const NotificationsCenter: React.FC = () => {
     if (isInDndWindow(localPrefs)) return;
     if (isTypeMuted(newest.type, localPrefs)) return;
     toast({ title: newest.title, description: newest.message });
-    if (localPrefs.soundEnabled !== false) playChime();
+    // Chat messages already get their own sound from the chat UI (Sidebar chime /
+    // ChatView chirp). Skip the chime here for those types to avoid a double sound
+    // on message arrival; keep it for all other notifications.
+    const CHAT_MSG_TYPES = new Set(['client_message', 'staff_message']);
+    if (localPrefs.soundEnabled !== false && !CHAT_MSG_TYPES.has(newest.type || '')) playChime();
   }, [notifications, localPrefs, playChime]);
 
   // Filter out muted categories
