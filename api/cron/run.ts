@@ -30,17 +30,15 @@ async function authorizeManual(req: VercelRequest): Promise<string | null> {
       .where('userId', '==', uid)
       .limit(10)
       .get();
-    if (snap.empty) {
-      console.warn(`[manual-auth] No teamMember for uid=${uid}`);
-      return `No team membership for uid=${uid}`;
-    }
     const roles = snap.docs.map(d => d.data().role as string);
-    console.log(`[manual-auth] uid=${uid} roles=[${roles.join(', ')}]`);
+    console.log(`[manual-auth] uid=${uid} roles=[${roles.join(', ') || 'none'}]`);
     // Accept Admin OR Owner — matches the Settings tab gating (isAdmin || isOwner).
-    if (!roles.some(r => r === 'Admin' || r === 'Owner')) {
-      return `Role not Admin/Owner (found: ${roles.join(', ')})`;
-    }
-    return null; // authorized
+    if (roles.some(r => r === 'Admin' || r === 'Owner')) return null;
+    // Fallback: a team OWNER (createdByUserId) is privileged even without an Admin
+    // teamMember role (or any teamMember doc) — covers the agency super-admin.
+    const ownedTeam = await db.collection('teams').where('createdByUserId', '==', uid).limit(1).get();
+    if (!ownedTeam.empty) return null;
+    return `Not Admin/Owner and owns no team (roles: ${roles.join(', ') || 'none'})`;
   } catch (err: any) {
     const msg = err?.message || String(err);
     console.error('[manual-auth] Firestore query failed:', msg);
@@ -1553,15 +1551,25 @@ const BACKFILL_COLLECTIONS = [
   'whatsappAccounts', 'whatsappThreads', 'whatsappMessages', 'waTemplates', 'waBroadcasts',
 ];
 
-async function runBackfillBusinessId() {
+async function runBackfillBusinessId(onlyCol?: string) {
+  // List mode: client fetches the collection list, then loops one call per collection.
+  if (onlyCol === '__list__') return { collections: BACKFILL_COLLECTIONS };
+
   const teamsSnap = await db.collection('teams').get();
   const teamToBusiness = new Map<string, string>();
   teamsSnap.docs.forEach(d => { const b = (d.data() as any).businessId; if (b) teamToBusiness.set(d.id, b); });
   if (teamToBusiness.size === 0) return { error: 'No teams linked to a business yet — run Phase 1 first.' };
 
+  // Process one collection per call when ?col= is given — keeps each request well
+  // under the serverless timeout on large datasets (the client loops the list).
+  const cols = onlyCol
+    ? (BACKFILL_COLLECTIONS.includes(onlyCol) ? [onlyCol] : [])
+    : BACKFILL_COLLECTIONS;
+  if (onlyCol && cols.length === 0) return { error: `Unknown collection: ${onlyCol}`, collections: BACKFILL_COLLECTIONS };
+
   let totalUpdated = 0;
   const results: { collection: string; scanned: number; updated: number }[] = [];
-  for (const col of BACKFILL_COLLECTIONS) {
+  for (const col of cols) {
     let scanned = 0, updated = 0;
     try {
       const snap = await db.collection(col).get();
@@ -1616,7 +1624,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         result = await runRecurringInvoices();
         break;
       case 'backfill-businessid':
-        result = await runBackfillBusinessId();
+        result = await runBackfillBusinessId(req.query.col as string | undefined);
         break;
       case 'project-completion-reminder':
         result = await runProjectCompletionReminder();
