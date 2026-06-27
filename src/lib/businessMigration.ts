@@ -66,12 +66,15 @@ export async function setupBusinessLayer(uid: string, email: string, businessNam
 // Only collections that allow read+update for isAuth() are included. whatsapp* are
 // excluded (their rules require isTeamMember, so a cross-team client read/write
 // would be denied) — they can be migrated per-team later if needed.
+// Must cover EVERY team-scoped collection that useCollection scopes (so none vanish
+// when read scoping flips to businessId in Phase 3b). Excludes whatsapp* (isTeamMember
+// rules + skipTeamFilter reads) and ephemeral typingIndicators.
 const PHASE2_COLLECTIONS = [
   'tasks', 'invoices', 'invoiceItems', 'customers', 'leads', 'deals', 'leadActivities',
-  'services', 'expenses', 'goals', 'timeEntries', 'channels', 'messages', 'clientRequests',
-  'taskComments', 'taskCollaborators', 'milestones', 'serviceInquiries', 'projectComments',
-  'workspaceFolders', 'workspaceDriveFiles', 'projects', 'roleTemplates', 'dailyReports',
-  'standups', 'quotes', 'contracts', 'customIndustries',
+  'services', 'expenses', 'goals', 'timeEntries', 'channels', 'messages', 'activities',
+  'clientRequests', 'taskComments', 'taskCollaborators', 'customIndustries', 'directMessages',
+  'milestones', 'serviceInquiries', 'projectComments', 'workspaceFolders', 'workspaceDriveFiles',
+  'projects', 'roleTemplates', 'dailyReports', 'standups', 'quotes', 'contracts', 'chatSnippets',
 ];
 
 export interface BackfillResult {
