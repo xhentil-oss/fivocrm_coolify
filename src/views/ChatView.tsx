@@ -33,6 +33,7 @@ import { getTimestampMs } from '../lib/utils';
 import { auth, db } from '../lib/firebase';
 import { writeBatch, doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, ClientRequest, Team, Task, Channel } from '../types';
+import UnifiedChatList, { type UnifiedConv } from '../components/UnifiedChatList';
 
 type ChatMode = 'channel' | 'direct' | 'ai' | 'requests';
 
@@ -2529,7 +2530,63 @@ const ChatView: React.FC = () => {
           </div>
         </div>
 
-        <div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
+        <UnifiedChatList
+          canCreateGroups={canCreateGroups}
+          onCreateGroup={() => { setNewGroupName(''); setNewGroupDesc(''); setNewGroupMembers([]); setShowCreateGroup(true); }}
+          conversations={((): UnifiedConv[] => {
+            const convs: UnifiedConv[] = [];
+            // FivoAI — always pinned at top.
+            convs.push({ key: 'ai', type: 'ai', name: 'FivoAI', preview: 'Asistenti juaj personal', time: Number.MAX_SAFE_INTEGER, unread: 0, pinned: true, initials: 'AI', isActive: chatMode === 'ai', onSelect: handleSelectAi });
+            // Groups
+            (myGroups || []).forEach(g => convs.push({
+              key: 'g-' + g.id, type: 'group', name: g.name || 'Grup',
+              preview: `${(g.members || []).length} anëtarë`,
+              time: (g as any).lastMessageAt ? getTimestampMs((g as any).lastMessageAt) : 0,
+              unread: channelUnreadMap.get(g.id) || 0,
+              initials: (g.name || 'G').slice(0, 2).toUpperCase(),
+              isActive: chatMode === 'channel' && activeChannel === g.id,
+              onSelect: () => handleSelectChannel(g.id),
+            }));
+            // Clients (dedup by customerId)
+            (portalAccess || []).filter((a, i, arr) => arr.findIndex(x => x.customerId === a.customerId) === i).forEach(a => {
+              const c = customers?.find(cu => cu.id === a.customerId);
+              const cid = `client-${a.customerId}`;
+              const repId = (c as any)?.assignedToUserId;
+              const denorm = (c as any)?.lastClientMessageAt ? getTimestampMs((c as any).lastClientMessageAt) : 0;
+              convs.push({
+                key: 'c-' + a.customerId, type: 'client', name: c?.name || a.email || 'Klient',
+                preview: repId ? `👤 ${repId === user?.uid ? 'Ti' : getUserDisplayName(repId)}` : '',
+                unassigned: !repId,
+                time: Math.max(denorm, clientRecencyMap.get(a.customerId) || 0),
+                unread: clientUnreadMap.get(cid) || 0,
+                initials: (c?.name || a.email || 'K').slice(0, 2).toUpperCase(),
+                isActive: chatMode === 'channel' && activeChannel === cid,
+                onSelect: () => handleSelectChannel(cid),
+              });
+            });
+            // Staff DMs (existing convos + all active members so new DMs can start)
+            const staffIds = new Set<string>(directConversations || []);
+            (teamMembers || []).forEach(m => { if (m.userId && m.userId !== user?.uid) staffIds.add(m.userId); });
+            staffIds.forEach(uid => {
+              const last = dmLastMessageMap.get(uid);
+              const status = getUserStatus(uid);
+              convs.push({
+                key: 's-' + uid, type: 'staff', name: getUserDisplayName(uid),
+                preview: last ? `${last.isOwn ? 'Ti: ' : ''}${last.content}` : '',
+                time: last ? getTimestampMs(last.createdAt) : 0,
+                unread: directUnreadMap.get(uid) || 0,
+                online: isOnline(uid),
+                statusEmoji: status?.emoji,
+                initials: (getUserDisplayName(uid) || '??').slice(0, 2).toUpperCase(),
+                isActive: chatMode === 'direct' && activeDirectUserId === uid,
+                onSelect: () => handleSelectDirectMessage(uid),
+              });
+            });
+            return convs;
+          })()}
+        />
+
+        {false && (<div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
           {/* AI Assistant - pinned at top */}
           <button
             onClick={handleSelectAi}
@@ -2822,7 +2879,7 @@ const ChatView: React.FC = () => {
           })}
 
           {/* WhatsApp moved to its own page (/app/whatsapp) — old inline section removed. */}
-        </div>
+        </div>)}
       </aside>
 
       {/* MAIN CHAT AREA */}
