@@ -52,6 +52,10 @@ const allNavItems: NavItem[] = [
 const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile }) => {
   const permissions = usePermissions();
   const { user } = useAuth();
+  // Active business (tenant) — used to scope the unread badge so a super-admin
+  // doesn't get sound/badge for OTHER tenants' client messages (which the scoped
+  // chat then can't show → "badge but no message").
+  const businessId = useGlobalBusinessId();
 
   // Unread direct messages count — DMs are stored in the `messages` collection
   // (not `directMessages`).  A DM has a `receiverId` but no `channelId`.
@@ -83,14 +87,18 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
 
   const unreadChatCount = useMemo(() => {
     let count = 0;
+    // Scope to the active business: only count messages belonging to this tenant
+    // (when a businessId is active). Excludes other tenants' client messages so the
+    // super-admin's badge matches the (scoped) chat list.
+    const inBusiness = (m: any) => !businessId || m.businessId === businessId;
     if (unreadMessages && user) {
-      count += unreadMessages.filter(m => m.senderId !== user.uid && !m.channelId).length;
+      count += unreadMessages.filter(m => m.senderId !== user.uid && !m.channelId && inBusiness(m)).length;
     }
     if (unreadClientMessages && user) {
-      count += unreadClientMessages.filter(m => m.senderId !== user.uid).length;
+      count += unreadClientMessages.filter(m => m.senderId !== user.uid && inBusiness(m)).length;
     }
     return count;
-  }, [unreadMessages, unreadClientMessages, user]);
+  }, [unreadMessages, unreadClientMessages, user, businessId]);
 
   // Play notification sound when unread count increases
   const prevUnreadRef = useRef(unreadChatCount);
@@ -131,7 +139,6 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
   // While loading, show only profile to avoid unauthorized flicker
   // Per-tenant module toggles: hide nav items the super-admin disabled for this
   // business. Super-admins (no businessId scoping) always see everything.
-  const businessId = useGlobalBusinessId();
   const { data: business } = useDocument<Business>('businesses', businessId || undefined);
   const disabledModules = useMemo(
     () => new Set((business as any)?.disabledModules || []),

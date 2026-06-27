@@ -21,7 +21,7 @@ const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 const PortalChatView: React.FC = () => {
   const { user } = useAuth();
   const { customerId } = useClientPortal();
-  const { tenantBusinessId } = usePortalTenant();
+  const { tenantBusinessId, tenantTeamId } = usePortalTenant();
   const { toast } = useToast();
   const [messageText, setMessageText] = useState('');
   const [attachmentUrl, setAttachmentUrl] = useState('');
@@ -88,12 +88,18 @@ const PortalChatView: React.FC = () => {
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
   const isImageUrl = (url: string) => /\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$/i.test(url) || /image%2F/i.test(url);
 
-  // Resolve teamId from team members so client messages include it — required for
-  // admin's team-scoped useCollection('messages') to see them.
-  const resolvedTeamId = allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
+  // Resolve teamId so client messages include it — required for the admin's
+  // team-scoped useCollection('messages') to see them. Prefer the tenant's own team
+  // (subdomain) over an arbitrary cross-tenant member.
+  const resolvedTeamId = tenantTeamId || allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
 
   // The customer record — used to find the responsible rep for the general channel.
   const { data: customer } = useDocument<any>('customers', customerId || undefined);
+
+  // Tenant boundary stamped on client messages so staff see them in their scoped
+  // chat/unread badge. Prefer the customer's own businessId (set for existing
+  // agency clients via backfill and for subdomain clients), then the subdomain.
+  const clientBusinessId = (customer as any)?.businessId || tenantBusinessId || null;
 
   // The file-upload VPS URL lives in teamSettings but is synced to localStorage
   // only for staff. Portal clients must load it themselves so photo upload works.
@@ -195,6 +201,7 @@ const PortalChatView: React.FC = () => {
         attachmentUrl: attach || null,
         senderType: 'client',
         ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+        ...(clientBusinessId ? { businessId: clientBusinessId } : {}),
         ...(replyingTo ? {
           replyToId: replyingTo.id,
           replyToContent: replyingTo.content.slice(0, 100),
@@ -242,6 +249,7 @@ const PortalChatView: React.FC = () => {
         isRead: false,
         senderType: 'client',
         ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+        ...(clientBusinessId ? { businessId: clientBusinessId } : {}),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
         createdByUserId: user.uid,
@@ -362,6 +370,7 @@ const PortalChatView: React.FC = () => {
         isRead: false,
         senderType: 'client',
         ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+        ...(clientBusinessId ? { businessId: clientBusinessId } : {}),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
         createdByUserId: user.uid,
