@@ -181,8 +181,19 @@ const LoginView: React.FC = () => {
           </button>
         </div>
 
-        {/* External Registration */}
+        {/* SaaS workspace signup — new business creates its own isolated tenant */}
         <div className="text-center text-sm border-t pt-4">
+          <span className="text-muted-foreground">Biznes i ri? </span>
+          <a
+            href="/signup"
+            className="text-primary hover:underline font-medium"
+          >
+            Krijo workspace-in tënd
+          </a>
+        </div>
+
+        {/* External Registration */}
+        <div className="text-center text-sm">
           <span className="text-muted-foreground">Jeni klient ose i interesuar? </span>
           <a
             href="/register"

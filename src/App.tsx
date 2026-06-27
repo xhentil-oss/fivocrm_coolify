@@ -9,6 +9,7 @@ import TopNavBar from './components/TopNavBar';
 import Sidebar from './components/Sidebar';
 import LoginView from './views/LoginView';
 import RegisterView from './views/RegisterView';
+import WorkspaceSignupView from './views/WorkspaceSignupView';
 import FloatingActionButton from './components/FloatingActionButton';
 import MobileBottomNav from './components/MobileBottomNav';
 import { AndroidBackButton } from './components/AndroidBackButton';
@@ -202,6 +203,8 @@ function AppContent() {
       {/* Public route */}
       <Route path="/login" element={user ? <DefaultRedirect /> : <LoginView />} />
       <Route path="/register" element={<RegisterView />} />
+      {/* SaaS workspace signup — creates a new isolated tenant (vs /register lead-capture) */}
+      <Route path="/signup" element={user ? <DefaultRedirect /> : <WorkspaceSignupView />} />
       <Route path="/join/:token" element={<JoinInviteView />} />
       <Route path="/seo" element={<Suspense fallback={<LazyFallback />}><SeoLandingPage /></Suspense>} />
       <Route path="/real-estate" element={<Suspense fallback={<LazyFallback />}><RealEstateLandingPage /></Suspense>} />

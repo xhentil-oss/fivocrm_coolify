@@ -127,6 +127,15 @@ export interface Team {
   id: string;
   name: string;
   department?: string;
+  // ── SaaS tenant fields (self-serve signup) ──
+  /** Owner's email at signup — convenience copy of the createdByUserId's email. */
+  ownerEmail?: string;
+  /** Subscription plan key. 'trial' until they pick a paid plan. */
+  plan?: 'trial' | 'starter' | 'pro' | 'business' | 'enterprise';
+  /** Tenant lifecycle status — gates access when not active/trialing. */
+  status?: 'trialing' | 'active' | 'past_due' | 'suspended' | 'canceled';
+  /** Trial expiry (set at signup). */
+  trialEndsAt?: Date;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
