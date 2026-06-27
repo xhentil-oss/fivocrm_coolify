@@ -1,4 +1,4 @@
-import { useCollection, setGlobalTeamId, setSuperAdmin } from './useFirestore';
+import { useCollection, setGlobalTeamId, setGlobalBusinessId, setSuperAdmin } from './useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useMemo, useEffect, useRef } from 'react';
 import { doc, getDoc, updateDoc, setDoc, Timestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
@@ -524,24 +524,31 @@ export function usePermissions(): UserPermissions {
         } catch { /* ignore — keep the first candidate */ }
         if (cancelled) return;
         setGlobalTeamId(chosen);
+        // Resolve the active business (two-level model). Falls back to the teamId
+        // when the team isn't linked to a business yet (pre-migration safe default).
+        const chosenBiz = (teams || []).find((t: any) => t.id === chosen)?.businessId || chosen;
+        setGlobalBusinessId(chosenBiz);
         if (user && persistedTeamIdRef.current !== chosen) {
           persistedTeamIdRef.current = chosen;
-          setDoc(doc(db, 'users', user.uid), { teamId: chosen, updatedAt: Timestamp.now() }, { merge: true }).catch(() => {});
+          setDoc(doc(db, 'users', user.uid), { teamId: chosen, businessId: chosenBiz, updatedAt: Timestamp.now() }, { merge: true }).catch(() => {});
         }
       })();
       return () => { cancelled = true; };
     }
     if (!permissions.isLoading && permissions.teamId !== null) {
       setGlobalTeamId(permissions.teamId);
-      // Persist the active teamId to users/{uid} so Firestore rules can scope
-      // team-sensitive reads (e.g. WhatsApp messages/accounts) to the user's team.
-      // teamMember docs use random IDs, so rules can't do a direct membership
-      // lookup; this self-write gives them a deterministic path to check.
+      // Resolve the active business: the team's businessId, or the teamId itself when
+      // the business layer isn't set up yet (keeps behavior identical pre-migration).
+      const activeBiz = (teams || []).find((t: any) => t.id === permissions.teamId)?.businessId || permissions.teamId;
+      setGlobalBusinessId(activeBiz);
+      // Persist the active teamId + businessId to users/{uid} so Firestore rules can
+      // scope team/business-sensitive reads. teamMember docs use random IDs, so rules
+      // can't do a direct membership lookup; this self-write gives a deterministic path.
       if (user && persistedTeamIdRef.current !== permissions.teamId) {
         persistedTeamIdRef.current = permissions.teamId;
         setDoc(
           doc(db, 'users', user.uid),
-          { teamId: permissions.teamId, updatedAt: Timestamp.now() },
+          { teamId: permissions.teamId, businessId: activeBiz, updatedAt: Timestamp.now() },
           { merge: true }
         ).catch(() => {});
       }

@@ -63,6 +63,35 @@ export function getGlobalTeamId(): string | null {
   return _globalTeamId;
 }
 
+// ---- Reactive global businessId (the tenant / isolation boundary; Business > Team) ----
+// In the two-level model this is the real isolation key. It falls back to the teamId
+// wherever the business layer hasn't been set up yet, so behavior is preserved until
+// the read scoping is flipped (Phase 3b).
+let _globalBusinessId: string | null = null;
+let _businessIdListeners: (() => void)[] = [];
+
+function _subscribeBusinessId(listener: () => void) {
+  _businessIdListeners = [..._businessIdListeners, listener];
+  return () => { _businessIdListeners = _businessIdListeners.filter(l => l !== listener); };
+}
+
+function _getBusinessIdSnapshot() { return _globalBusinessId; }
+
+export function setGlobalBusinessId(id: string | null) {
+  if (_globalBusinessId !== id) {
+    _globalBusinessId = id;
+    for (const listener of _businessIdListeners) listener();
+  }
+}
+
+export function getGlobalBusinessId(): string | null {
+  return _globalBusinessId;
+}
+
+export function useGlobalBusinessId(): string | null {
+  return useSyncExternalStore(_subscribeBusinessId, _getBusinessIdSnapshot);
+}
+
 // ---- Reactive super-admin flag — bypasses all team filters ----
 let _isSuperAdmin: boolean = false;
 let _superAdminListeners: (() => void)[] = [];
@@ -476,11 +505,16 @@ export function useMutation<T = DocumentData>(collectionName: string) {
       if (teamScopedCollections.has(collectionName) && !teamId) {
         throw new Error(`Cannot create ${collectionName} document without an active team`);
       }
-      const autoTeamId = teamScopedCollections.has(collectionName) && teamId
-        ? { teamId }
+      // Two-level tenancy: stamp businessId (isolation key) alongside teamId. Prefer
+      // an explicit value, else the active business, else fall back to the teamId so
+      // single-level data stays self-consistent until the business layer is set up.
+      const explicitBusinessId = (data as any)?.businessId as string | undefined;
+      const businessId = explicitBusinessId || getGlobalBusinessId() || teamId || undefined;
+      const autoScope = teamScopedCollections.has(collectionName) && teamId
+        ? { teamId, ...(businessId ? { businessId } : {}) }
         : {};
       const docData = removeUndefined({
-        ...autoTeamId,
+        ...autoScope,
         ...data,
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),

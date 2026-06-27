@@ -1,6 +1,6 @@
 import { doc, collection, setDoc, Timestamp } from 'firebase/firestore';
 import { db } from './firebase';
-import { setGlobalTeamId } from '../hooks/useFirestore';
+import { setGlobalTeamId, setGlobalBusinessId } from '../hooks/useFirestore';
 
 /**
  * Creates a brand-new, isolated SaaS tenant for a freshly registered owner.
@@ -28,14 +28,17 @@ export async function createTenant({ uid, companyName, ownerName, ownerEmail }: 
   const now = Timestamp.now();
   const trialEndsAt = Timestamp.fromDate(new Date(Date.now() + TRIAL_DAYS * 24 * 60 * 60 * 1000));
 
+  // Two-level model: a tenant is a BUSINESS (isolation boundary) containing a
+  // default TEAM (department). Data is scoped by businessId; teamId sub-groups.
+  const businessRef = doc(collection(db, 'businesses'));
+  const businessId = businessRef.id;
   const teamRef = doc(collection(db, 'teams'));
   const teamId = teamRef.id;
 
-  // 1. Tenant (team). createdByUserId = owner → usePermissions grants them full
-  //    owner access scoped to this team, and isTeamOwner() rules pass.
-  await setDoc(teamRef, {
+  // 1. Business (the tenant). ownerId = owner.
+  await setDoc(businessRef, {
     name,
-    createdByUserId: uid,
+    ownerId: uid,
     ownerEmail: email,
     plan: 'trial',
     status: 'trialing',
@@ -44,11 +47,21 @@ export async function createTenant({ uid, companyName, ownerName, ownerEmail }: 
     updatedAt: now,
   });
 
-  // 2. Owner membership — keyed {teamId}_{uid} so a future ownsTeamDoc() rule can
-  //    tighten reads (Phase 2). usePermissions queries by userId/email, not by id,
-  //    so the deterministic key is purely forward-compatibility.
+  // 2. Default team/department inside the business. createdByUserId = owner →
+  //    usePermissions grants full owner access; businessId links it to the tenant.
+  await setDoc(teamRef, {
+    name: 'Përgjithshëm',
+    businessId,
+    createdByUserId: uid,
+    ownerEmail: email,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  // 3. Owner membership — keyed {teamId}_{uid} for a future ownsTeamDoc() rule.
   await setDoc(doc(db, 'teamMembers', `${teamId}_${uid}`), {
     teamId,
+    businessId,
     userId: uid,
     email,
     displayName: ownerName.trim(),
@@ -64,7 +77,7 @@ export async function createTenant({ uid, companyName, ownerName, ownerEmail }: 
     updatedAt: now,
   });
 
-  // 3. Default per-tenant configuration (the tenant fills the rest in Settings).
+  // 4. Default configuration (keyed by the default team for now).
   await setDoc(doc(db, 'teamSettings', teamId), {
     companyName: name,
     companyEmail: email,
@@ -75,10 +88,11 @@ export async function createTenant({ uid, companyName, ownerName, ownerEmail }: 
     updatedAt: now,
   }, { merge: true });
 
-  // 4. Active-team marker read by the security rules' isTeamMember(teamId), plus the
-  //    in-memory global scope so the very first queries hit the right tenant.
-  await setDoc(doc(db, 'users', uid), { teamId, updatedAt: now }, { merge: true });
+  // 5. Markers read by security rules + in-memory global scope so the first queries
+  //    hit the right tenant immediately.
+  await setDoc(doc(db, 'users', uid), { teamId, businessId, updatedAt: now }, { merge: true });
   setGlobalTeamId(teamId);
+  setGlobalBusinessId(businessId);
 
   return teamId;
 }
