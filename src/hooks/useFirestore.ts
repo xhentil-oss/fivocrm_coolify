@@ -262,14 +262,14 @@ export function useCollection<T = DocumentData>(
   // Two-level tenancy: isolation is by businessId (the tenant). teamId is now a
   // sub-group (department) within a business, so it no longer scopes reads.
   const reactiveBusinessId = useGlobalBusinessId();
-  const superAdmin = useIsSuperAdmin();
-  // A staff user (has a resolved businessId) reading a CRM collection is ALWAYS scoped
-  // to their business, even if the caller passed skipTeamFilter — otherwise that flag
-  // bypasses tenant isolation. Portal clients have no businessId, so they may still
-  // skipTeamFilter to read their own customer's data; super-admins bypass entirely.
+  // Tenant isolation is the same for EVERYONE — including super-admins. Reads scope to
+  // the active business; the only way to read cross-tenant is an explicit opt-in via
+  // skipBusinessFilter (used solely by the super-admin "Relax CRM" console). This
+  // removes the old global super-admin read-bypass that leaked one tenant's data into
+  // another tenant's /app. Portal clients have no businessId and pass skipTeamFilter to
+  // read their own customer's data (scoped server-side by isPortalClientFor).
   const forceBusinessScope = !!reactiveBusinessId && businessIsolatedAlways.has(collectionName) && !options?.skipBusinessFilter;
   const isTeamScoped = teamScopedCollections.has(collectionName)
-    && !superAdmin
     && !globalReadCollections.has(collectionName)
     && (forceBusinessScope || !options?.skipTeamFilter);
   const scopeId = isTeamScoped ? reactiveBusinessId : null;
@@ -450,7 +450,7 @@ export function useCollection<T = DocumentData>(
         }
       }
     };
-  }, [collectionName, whereKey, orderKey, skipTeamFilter, limitVal, scopeId, superAdmin, options?.skip, user?.uid]);
+  }, [collectionName, whereKey, orderKey, skipTeamFilter, limitVal, scopeId, options?.skip, user?.uid]);
 
   return { data, loading, error };
 }

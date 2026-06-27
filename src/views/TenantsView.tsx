@@ -59,7 +59,9 @@ const TenantsView: React.FC = () => {
   const { user } = useAuth();
   const { toast } = useToast();
   const { data: teams } = useCollection<Team>('teams', { skipTeamFilter: true });
-  const { data: members } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
+  // Cross-tenant: the platform console must see members across ALL businesses, so
+  // it explicitly opts out of business scoping (the only place this is allowed).
+  const { data: members } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true, skipBusinessFilter: true });
   const { data: businesses } = useCollection<Business>('businesses', { skipTeamFilter: true });
   const [search, setSearch] = useState('');
   const [migrating, setMigrating] = useState(false);
