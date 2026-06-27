@@ -2536,7 +2536,7 @@ const ChatView: React.FC = () => {
           conversations={((): UnifiedConv[] => {
             const convs: UnifiedConv[] = [];
             // FivoAI — always pinned at top.
-            convs.push({ key: 'ai', type: 'ai', name: 'FivoAI', preview: 'Asistenti juaj personal', time: Number.MAX_SAFE_INTEGER, unread: 0, pinned: true, initials: 'AI', isActive: chatMode === 'ai', onSelect: handleSelectAi });
+            convs.push({ key: 'ai', type: 'ai', name: 'FivoAI', preview: 'Asistenti juaj personal', time: 0, unread: 0, pinned: true, initials: 'AI', isActive: chatMode === 'ai', onSelect: handleSelectAi });
             // Groups
             (myGroups || []).forEach(g => convs.push({
               key: 'g-' + g.id, type: 'group', name: g.name || 'Grup',

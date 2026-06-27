@@ -127,6 +127,7 @@ const ConversationRow: React.FC<{ c: UnifiedConv }> = ({ c }) => {
 function formatShort(ms: number): string {
   if (!ms) return '';
   const d = new Date(ms);
+  if (isNaN(d.getTime())) return '';
   const now = new Date();
   const sameDay = d.toDateString() === now.toDateString();
   if (sameDay) return d.toLocaleTimeString('sq-AL', { hour: '2-digit', minute: '2-digit' });
@@ -219,7 +220,7 @@ const UnifiedChatList: React.FC<Props> = ({ conversations, canCreateGroups, onCr
       </div>
 
       {/* List */}
-      <div className="flex-1 overflow-y-auto px-2 py-1">
+      <div className="flex-1 overflow-y-auto no-scrollbar px-2 py-1">
         {canCreateGroups && onCreateGroup && (
           <button
             onClick={onCreateGroup}
