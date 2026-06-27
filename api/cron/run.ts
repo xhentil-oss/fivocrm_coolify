@@ -1552,25 +1552,28 @@ const BACKFILL_COLLECTIONS = [
   // Phase 3b businessId flip) and the owner doesn't need them tagged with businessId.
 ];
 
-async function runBackfillBusinessId(onlyCol?: string) {
-  // List mode: client fetches the collection list, then loops one call per collection.
-  if (onlyCol === '__list__') return { collections: BACKFILL_COLLECTIONS };
+async function runBackfillBusinessId(opts?: { reset?: boolean }) {
+  // Resumable + time-budgeted: each call processes as many collections as fit in the
+  // budget, records completed ones in a state doc, and returns what's left. The client
+  // calls repeatedly until done. Completed collections are SKIPPED (not re-read), so a
+  // resumed run costs no extra Firestore reads — important on a quota-limited project.
+  const stateRef = db.collection('migrations').doc('businessIdBackfill');
+  const stateSnap = await stateRef.get();
+  const done: string[] = (opts?.reset || !stateSnap.exists) ? [] : (stateSnap.data()?.done || []);
 
   const teamsSnap = await db.collection('teams').get();
   const teamToBusiness = new Map<string, string>();
   teamsSnap.docs.forEach(d => { const b = (d.data() as any).businessId; if (b) teamToBusiness.set(d.id, b); });
   if (teamToBusiness.size === 0) return { error: 'No teams linked to a business yet — run Phase 1 first.' };
 
-  // Process one collection per call when ?col= is given — keeps each request well
-  // under the serverless timeout on large datasets (the client loops the list).
-  const cols = onlyCol
-    ? (BACKFILL_COLLECTIONS.includes(onlyCol) ? [onlyCol] : [])
-    : BACKFILL_COLLECTIONS;
-  if (onlyCol && cols.length === 0) return { error: `Unknown collection: ${onlyCol}`, collections: BACKFILL_COLLECTIONS };
-
+  const pending = BACKFILL_COLLECTIONS.filter(c => !done.includes(c));
+  const started = Date.now();
+  const BUDGET_MS = 45000; // leave margin under the 60s function limit
   let totalUpdated = 0;
   const results: { collection: string; scanned: number; updated: number }[] = [];
-  for (const col of cols) {
+
+  for (const col of pending) {
+    if (Date.now() - started > BUDGET_MS) break;
     let scanned = 0, updated = 0;
     try {
       const snap = await db.collection(col).get();
@@ -1587,13 +1590,19 @@ async function runBackfillBusinessId(onlyCol?: string) {
         updated += Math.min(400, toUpdate.length - i);
       }
       totalUpdated += updated;
+      done.push(col);
       results.push({ collection: col, scanned, updated });
     } catch (err: any) {
       console.error(`[backfill] ${col} failed:`, err?.message || err);
       results.push({ collection: col, scanned, updated: -1 });
+      // Stop on quota errors — there's no point hammering an exhausted project.
+      if (String(err?.message || err).includes('RESOURCE_EXHAUSTED')) break;
     }
   }
-  return { totalUpdated, businesses: teamToBusiness.size, results };
+
+  await stateRef.set({ done, updatedAt: admin.firestore.Timestamp.now() }, { merge: true });
+  const remaining = BACKFILL_COLLECTIONS.filter(c => !done.includes(c));
+  return { totalUpdated, businesses: teamToBusiness.size, results, completed: done.length, total: BACKFILL_COLLECTIONS.length, remaining };
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
@@ -1625,7 +1634,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         result = await runRecurringInvoices();
         break;
       case 'backfill-businessid':
-        result = await runBackfillBusinessId(req.query.col as string | undefined);
+        result = await runBackfillBusinessId({ reset: req.query.reset === '1' });
         break;
       case 'project-completion-reminder':
         result = await runProjectCompletionReminder();

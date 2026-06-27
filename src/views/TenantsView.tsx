@@ -65,21 +65,38 @@ const TenantsView: React.FC = () => {
     setBackfilling(true);
     setBackfillProgress('po nis…');
     try {
-      // Single server call (Admin SDK, bypasses rules) — authenticates ONCE and
-      // processes all collections, avoiding the per-call re-auth that hammered the
-      // Firestore quota and produced 401s. WhatsApp collections are excluded server-side.
+      // Resumable backfill (Admin SDK): each call processes a time-budgeted chunk and
+      // returns what's left; loop until done. Completed collections are skipped, so
+      // resuming costs no extra reads (matters on a quota-limited project).
       const token = await user.getIdToken(true);
-      const res = await fetch('/api/cron/run?job=backfill-businessid&manual=1', {
-        method: 'GET', headers: { Authorization: `Bearer ${token}` },
-      });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || `Gabim serveri (${res.status})`);
-      if (data.error) throw new Error(data.error);
-      const failed = (data.results || []).filter((r: any) => r.updated === -1).map((r: any) => r.collection);
-      toast({
-        title: 'Faza 2 u krye (server)',
-        description: `${data.totalUpdated} dokumente u stampuan me businessId${failed.length ? ` · dështuan: ${failed.join(', ')}` : ' · pa dështime'}.`,
-      });
+      let totalUpdated = 0;
+      const failedSet = new Set<string>();
+      let remaining: string[] = [];
+      let guard = 0;
+      let quotaHit = false;
+      do {
+        const res = await fetch('/api/cron/run?job=backfill-businessid&manual=1', {
+          method: 'GET', headers: { Authorization: `Bearer ${token}` },
+        });
+        const data = await res.json();
+        if (!res.ok || data.error) {
+          if (String(data.error || '').includes('RESOURCE_EXHAUSTED') || res.status === 401) { quotaHit = true; break; }
+          throw new Error(data.error || `Gabim serveri (${res.status})`);
+        }
+        totalUpdated += data.totalUpdated || 0;
+        (data.results || []).filter((r: any) => r.updated === -1).forEach((r: any) => failedSet.add(r.collection));
+        remaining = data.remaining || [];
+        setBackfillProgress(`${data.completed}/${data.total} koleksione · mbetur ${remaining.length}`);
+      } while (remaining.length > 0 && ++guard < 25);
+
+      if (quotaHit) {
+        toast({ title: 'Kuota e Firestore u rraskapit', description: 'Progresi u ruajt. Vazhdo pas reset-it ditor ose kalo te plani Blaze.', variant: 'destructive' });
+      } else {
+        toast({
+          title: 'Faza 2 u krye (server)',
+          description: `${totalUpdated} dokumente u stampuan${failedSet.size ? ` · dështuan: ${[...failedSet].join(', ')}` : ' · pa dështime'}.`,
+        });
+      }
     } catch (err: any) {
       toast({ title: 'Backfill dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
     } finally {
