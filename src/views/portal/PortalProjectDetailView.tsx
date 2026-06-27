@@ -377,8 +377,11 @@ const PortalProjectDetailView: React.FC = () => {
       createdByUserId: user.uid,
     });
 
-    // Notify team
-    const adminMembers = allTeamMembers?.filter(m => m.role === 'Admin') || [];
+    // Notify team — only admins of THIS project's tenant (allTeamMembers is read
+    // cross-tenant, so scope by the project's businessId to avoid notifying other
+    // tenants' admins / the platform super-admin).
+    const projBiz = (project as any)?.businessId;
+    const adminMembers = allTeamMembers?.filter(m => m.role === 'Admin' && (!projBiz || (m as any).businessId === projBiz)) || [];
     const assignedMembers = assignedTeamId
       ? allTeamMembers?.filter(m => m.teamId === assignedTeamId) || []
       : [];

@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { useClientPortal } from '../../hooks/useClientPortal';
+import { usePortalTenant } from '../../hooks/usePortalTenant';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCollection, useMutation } from '../../hooks/useFirestore';
 import { addDoc, collection, Timestamp } from 'firebase/firestore';
@@ -18,6 +19,7 @@ import type { Invoice, InvoiceItem, Service, ServiceInquiry, Notification } from
 const PortalServicesView: React.FC = () => {
   const { user } = useAuth();
   const { customerId } = useClientPortal();
+  const { tenantBusinessId } = usePortalTenant();
   const { toast } = useToast();
   const [isQuestionnaireOpen, setIsQuestionnaireOpen] = useState(false);
   const [preselectedService, setPreselectedService] = useState<string | undefined>();
@@ -168,7 +170,8 @@ const PortalServicesView: React.FC = () => {
     const taskPriority = formData.timeline === 'Menjëherë' || formData.isUrgent === 'Po' ? 'urgent' : 'high';
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    const salesAdminMembers = activeTeamMembers?.filter((m: any) => m.role === 'Admin' || m.canAccessCRM) || [];
+    // Scope recipients to this client's tenant (activeTeamMembers is read cross-tenant).
+    const salesAdminMembers = activeTeamMembers?.filter((m: any) => (m.role === 'Admin' || m.canAccessCRM) && (!tenantBusinessId || m.businessId === tenantBusinessId)) || [];
     
     await addDoc(collection(db, 'tasks'), {
       title: `Kontakto lead: ${formData.contactName} (${formData.businessName})`,

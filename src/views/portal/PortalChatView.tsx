@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { addDoc, collection, doc, updateDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useClientPortal } from '../../hooks/useClientPortal';
+import { usePortalTenant } from '../../hooks/usePortalTenant';
 import { useCollection, useMutation, useDocument } from '../../hooks/useFirestore';
 import { useFileUpload } from '../../hooks/useFileUpload';
 import { useAuth } from '../../contexts/AuthContext';
@@ -20,6 +21,7 @@ const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 const PortalChatView: React.FC = () => {
   const { user } = useAuth();
   const { customerId } = useClientPortal();
+  const { tenantBusinessId } = usePortalTenant();
   const { toast } = useToast();
   const [messageText, setMessageText] = useState('');
   const [attachmentUrl, setAttachmentUrl] = useState('');
@@ -122,7 +124,7 @@ const PortalChatView: React.FC = () => {
     } else if (teamMembers) {
       const proj = selectedProjectId ? customerProjects?.find(x => x.id === selectedProjectId) : null;
       const teamFallback = proj?.teamId ? teamMembers.filter((m: any) => m.teamId === proj.teamId && m.status === 'Active') : [];
-      const pool = teamFallback.length ? teamFallback : teamMembers.filter((m: any) => m.role === 'Admin' || m.canAccessCRM);
+      const pool = teamFallback.length ? teamFallback : teamMembers.filter((m: any) => (m.role === 'Admin' || m.canAccessCRM) && (!tenantBusinessId || (m as any).businessId === tenantBusinessId));
       recipients = pool.map((m: any) => m.userId);
     }
     const preview = content.length > 100 ? content.slice(0, 100) + '...' : content;

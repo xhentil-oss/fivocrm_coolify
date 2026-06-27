@@ -231,10 +231,14 @@ export function useClientPortal() {
           source: 'Portal - Google Sign In',
         }).catch(() => { /* non-critical */ });
 
-        // Notify admin team members
-        const admins = allTeamMembers?.filter(
-          (m: any) => m.role === 'Admin'
-        ) || [];
+        // Notify admin team members — ONLY of this client's tenant. allTeamMembers
+        // is read cross-tenant (skipTeamFilter), so without the businessId filter a
+        // new client would notify every tenant's admins, including the platform
+        // super-admin. On the apex/agency host (no tenantBusinessId) we keep the
+        // existing behavior.
+        const admins = (allTeamMembers || []).filter(
+          (m: any) => m.role === 'Admin' && (!tenantBusinessId || m.businessId === tenantBusinessId)
+        );
         for (const admin of admins) {
           createDoc('notifications', {
             userId: admin.userId,
@@ -259,7 +263,7 @@ export function useClientPortal() {
       });
       })(); // end async IIFE
     }
-  }, [user, authLoading, anyByUserId, anyByEmail, byUserIdLoading, byEmailLoading, matchingCustomers, customersLoading, teamMembersLoading, autoCreating, createDoc, allTeamMembers]);
+  }, [user, authLoading, anyByUserId, anyByEmail, byUserIdLoading, byEmailLoading, matchingCustomers, customersLoading, teamMembersLoading, autoCreating, createDoc, allTeamMembers, tenantBusinessId]);
 
   const access = (activeByUserId.find(a => a.customerId) || activeByUserId[0])
     || (activeByEmail.find(a => a.customerId) || activeByEmail[0])
