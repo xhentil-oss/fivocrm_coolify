@@ -1606,6 +1606,26 @@ async function runBackfillBusinessId(opts?: { reset?: boolean }) {
   return { totalUpdated, businesses: teamToBusiness.size, results, completed: done.length, total: BACKFILL_COLLECTIONS.length, remaining };
 }
 
+// ── JOB: set-superadmin-claim ────────────────────────────────────────────────
+// Sets a Firebase custom claim { superAdmin: true } on the caller IF their email
+// is in the super-admin allowlist (server reads the same env the client uses).
+// Needed before hardening rules so the super-admin's cross-tenant reads (and the
+// isSuperAdmin() rule) keep working. Caller must sign out/in afterwards to refresh.
+async function runSetSuperAdminClaim(req: VercelRequest) {
+  const token = (req.headers.authorization as string | undefined)?.slice(7) || '';
+  let decoded: any;
+  try { decoded = await adminAuth.verifyIdToken(token); }
+  catch (err: any) { return { error: `Token invalid: ${err?.message || err}` }; }
+  const email = String(decoded.email || '').toLowerCase();
+  const allow = String(process.env.SUPER_ADMIN_EMAILS || process.env.VITE_SUPER_ADMIN_EMAILS || '')
+    .split(',').map(e => e.trim().toLowerCase()).filter(Boolean);
+  if (!allow.includes(email)) {
+    return { error: `Email "${email}" is not in the super-admin allowlist.` };
+  }
+  await adminAuth.setCustomUserClaims(decoded.uid, { superAdmin: true });
+  return { success: true, uid: decoded.uid, email, note: 'Dil dhe hyr sërish që token-i të marrë claim-in.' };
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const isManual = req.query.manual === '1';
@@ -1636,6 +1656,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'backfill-businessid':
         result = await runBackfillBusinessId({ reset: req.query.reset === '1' });
+        break;
+      case 'set-superadmin-claim':
+        result = await runSetSuperAdminClaim(req);
         break;
       case 'project-completion-reminder':
         result = await runProjectCompletionReminder();

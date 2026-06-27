@@ -53,6 +53,24 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.teamId == teamId;
     }
 
+    // Two-level tenancy isolation key. usePermissions writes users/{uid}.businessId
+    // on every load. Mirrors isTeamMember but for the businessId (tenant) boundary.
+    function isBusinessMember(businessId) {
+      return isAuth()
+        && businessId is string
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessId == businessId;
+    }
+
+    // Portal client reading their own customer's data. clientPortalAccess is re-keyed
+    // to the user's uid so rules can resolve uid → customerId deterministically.
+    function isPortalClientFor(customerId) {
+      return isAuth()
+        && customerId is string
+        && exists(/databases/$(database)/documents/clientPortalAccess/$(request.auth.uid))
+        && get(/databases/$(database)/documents/clientPortalAccess/$(request.auth.uid)).data.customerId == customerId;
+    }
+
     // ── Team-Scoped Collections ──
     // Reads: authenticated only.  The client fetches all docs and filters by
     // teamId client-side (to support legacy docs without teamId and to avoid

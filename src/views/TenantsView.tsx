@@ -41,6 +41,25 @@ const TenantsView: React.FC = () => {
   const [migrating, setMigrating] = useState(false);
   const [backfilling, setBackfilling] = useState(false);
   const [backfillProgress, setBackfillProgress] = useState('');
+  const [claiming, setClaiming] = useState(false);
+
+  const runSetClaim = async () => {
+    if (claiming || !user) return;
+    setClaiming(true);
+    try {
+      const token = await user.getIdToken(true);
+      const res = await fetch('/api/cron/run?job=set-superadmin-claim&manual=1', {
+        method: 'GET', headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || `Gabim (${res.status})`);
+      toast({ title: 'Claim u vendos', description: 'Dil dhe hyr sërish që të aktivizohet. Pastaj mund të shtrëngojmë rregullat.' });
+    } catch (err: any) {
+      toast({ title: 'Dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
+    } finally {
+      setClaiming(false);
+    }
+  };
 
   const linkedTeams = useMemo(() => (teams || []).filter(t => (t as any).businessId).length, [teams]);
 
@@ -190,6 +209,21 @@ const TenantsView: React.FC = () => {
           </div>
           <Button size="sm" variant="outline" onClick={runPhase2} disabled={backfilling || migrating} className="flex-shrink-0">
             {backfilling ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> Po ekzekuton…</> : 'Ekzekuto Fazën 2'}
+          </Button>
+        </div>
+
+        <div className="flex items-start gap-3 mt-4 pt-4 border-t border-border/50">
+          <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+            <Layers className="h-4 w-4 text-primary" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-medium text-sm">Faza 4 — Aktivizo super-admin claim</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              Vendos custom claim-in server-side që rregullat e shtrënguara të mos të bllokojnë. Pas kësaj: <strong>dil dhe hyr sërish</strong>.
+            </p>
+          </div>
+          <Button size="sm" variant="outline" onClick={runSetClaim} disabled={claiming} className="flex-shrink-0">
+            {claiming ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> …</> : 'Vendos claim-in'}
           </Button>
         </div>
       </Card>
