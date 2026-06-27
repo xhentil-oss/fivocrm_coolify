@@ -2730,28 +2730,6 @@ const ChatView: React.FC = () => {
             </>
           )}
 
-          {/* Client Requests */}
-          <div className="h-px bg-border/50 mx-2 my-2" />
-          <button
-            onClick={() => { setChatMode('requests'); setShowSidebar(false); }}
-            className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-left ${
-              chatMode === 'requests'
-                ? 'bg-amber-500/10 border border-amber-300/30 dark:border-amber-700/30 shadow-sm'
-                : 'hover:bg-accent/50'
-            }`}
-          >
-            <div className={`h-9 w-9 rounded-xl flex items-center justify-center flex-shrink-0 ${chatMode === 'requests' ? 'bg-amber-500' : 'bg-amber-100 dark:bg-amber-900/30'}`}>
-              <ClipboardList className={`h-4 w-4 ${chatMode === 'requests' ? 'text-white' : 'text-amber-600 dark:text-amber-400'}`} />
-            </div>
-            <div className="flex-1 min-w-0">
-              <p className={`text-sm font-medium ${chatMode === 'requests' ? 'text-amber-700 dark:text-amber-300' : ''}`}>Kërkesat</p>
-              <p className="text-[11px] text-muted-foreground truncate">Kërkesat e klientëve</p>
-            </div>
-            {newRequestsCount > 0 && (
-              <Badge className="bg-amber-500 text-white text-[10px] border-0">{newRequestsCount}</Badge>
-            )}
-          </button>
-
           {/* Direct Messages */}
           <div className="h-px bg-border/50 mx-2 my-2" />
           <p className="px-2 pt-1 pb-1 text-[10px] font-semibold uppercase tracking-widest text-muted-foreground/60">Mesazhe Direkte</p>
