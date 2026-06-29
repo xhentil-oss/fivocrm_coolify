@@ -177,6 +177,15 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     (allTasks || []).forEach(t => ((t as any).labels as string[] | undefined)?.forEach(l => s.add(l)));
     return Array.from(s).sort();
   }, [allTasks]);
+  // Per-task activity history (Jira-style audit tab). Single where = index-free.
+  const { data: rawTaskActivities } = useCollection<any>('activities', {
+    skip: !task.id,
+    where: [{ field: 'entityId', operator: '==', value: task.id }],
+  });
+  const taskActivities = useMemo(() => {
+    const ms = (d: any) => d instanceof Date ? d.getTime() : (d?.toMillis?.() ?? 0);
+    return [...(rawTaskActivities || [])].sort((a, b) => ms(b.createdAt) - ms(a.createdAt)).slice(0, 30);
+  }, [rawTaskActivities]);
 
   const { data: userProfiles } = useCollection<any>('userProfiles');
   const { data: teams } = useCollection<any>('teams');
@@ -1343,6 +1352,25 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               </div>
             </div>
           </div>
+
+          {/* Activity history (audit trail) */}
+          {taskActivities.length > 0 && (
+            <div className="pt-4 border-t">
+              <h4 className="text-sm font-medium text-muted-foreground mb-2">Historik</h4>
+              <ul className="space-y-1.5">
+                {taskActivities.map((a) => (
+                  <li key={a.id} className="flex items-start gap-2 text-xs text-muted-foreground">
+                    <span className="mt-1 h-1.5 w-1.5 rounded-full bg-primary/50 flex-shrink-0" />
+                    <span className="flex-1 min-w-0">
+                      <span className="text-foreground font-medium">{a.createdByUserId ? getUserDisplayName(a.createdByUserId) : 'Sistemi'}</span>{' '}
+                      {a.description || a.message || a.type}
+                      <span className="block text-[10px] opacity-60">{formatDateCompact(a.createdAt instanceof Date ? a.createdAt : new Date(a.createdAt?.toMillis?.() || Date.now()))}</span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
 
           {/* Description - Rich Text Editor */}
           <div className="pt-4 border-t">
