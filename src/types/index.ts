@@ -217,6 +217,8 @@ export interface Task {
   endDate?: Date;
   parentTaskId?: string;
   dependsOn?: string[];
+  /** Free-form colored labels/tags (Asana/Jira-style) for slicing tasks. */
+  labels?: string[];
   estimatedHours?: number;
   isRecurring?: boolean;
   recurringFrequency?: 'daily' | 'weekly' | 'monthly' | 'yearly';

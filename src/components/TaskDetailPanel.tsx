@@ -1,5 +1,6 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
+import { TaskLabels, LabelEditor } from './TaskLabels';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { buildNextRecurringTask } from '../lib/recurringUtils';
 import { useAuth } from '../contexts/AuthContext';
@@ -169,6 +170,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
   const teamMembers = useUniqueTeamMembers(rawTeamMembers);
+  // Label autocomplete: every label already used across the workspace's tasks.
+  const labelSuggestions = useMemo(() => {
+    const s = new Set<string>();
+    (allTasks || []).forEach(t => ((t as any).labels as string[] | undefined)?.forEach(l => s.add(l)));
+    return Array.from(s).sort();
+  }, [allTasks]);
 
   const { data: userProfiles } = useCollection<any>('userProfiles');
   const { data: teams } = useCollection<any>('teams');
@@ -1260,6 +1267,22 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                   <SelectItem value="urgent">Urgjent</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+
+            {/* Labels */}
+            <div className="flex items-start gap-3 sm:gap-4">
+              <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0 pt-1.5">Etiketat</span>
+              <div className="flex-1 min-w-0">
+                {isGuestMode ? (
+                  <TaskLabels labels={(task as any).labels} />
+                ) : (
+                  <LabelEditor
+                    value={(task as any).labels || []}
+                    onChange={(labels) => onUpdate(task.id, { labels } as any)}
+                    suggestions={labelSuggestions}
+                  />
+                )}
+              </div>
             </div>
           </div>
 

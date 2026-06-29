@@ -34,6 +34,7 @@ import { toast } from '../hooks/use-toast';
 import type { Task, TaskComment, Project, Notification, TaskCollaborator, UserProfile, TimeEntry, Customer, Invoice } from '../types';
 import TaskDetailPanel from '../components/TaskDetailPanel';
 import SmartSuggestions from '../components/SmartSuggestions';
+import { TaskLabels, LabelEditor } from '../components/TaskLabels';
 
 /** Generate a deterministic HSL background colour from a name string */
 function hashColor(name: string): string {
@@ -47,9 +48,15 @@ const TasksView: React.FC = () => {
   const { user } = useAuth();
   const permissions = usePermissions();
   const logActivity = useActivityLogger();
-  const [viewMode, setViewMode] = useState<'board' | 'calendar' | 'list'>('list');
-  const [filterStatus, setFilterStatus] = useState<string>('all');
-  const [groupBy, setGroupBy] = useState<'none' | 'assignee' | 'priority' | 'project' | 'dueDate'>('none');
+  // Persisted view preferences (Asana-style: the view/filter you left is remembered).
+  const [viewMode, setViewMode] = useState<'board' | 'calendar' | 'list'>(() => (localStorage.getItem('tasks_viewMode') as any) || 'list');
+  const [filterStatus, setFilterStatus] = useState<string>(() => localStorage.getItem('tasks_filterStatus') || 'all');
+  const [groupBy, setGroupBy] = useState<'none' | 'assignee' | 'priority' | 'project' | 'dueDate'>(() => (localStorage.getItem('tasks_groupBy') as any) || 'none');
+  useEffect(() => {
+    localStorage.setItem('tasks_viewMode', viewMode);
+    localStorage.setItem('tasks_filterStatus', filterStatus);
+    localStorage.setItem('tasks_groupBy', groupBy);
+  }, [viewMode, filterStatus, groupBy]);
   const PAGE_SIZE = 50;
   const [page, setPage] = useState(0);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -86,6 +93,12 @@ const TasksView: React.FC = () => {
   // in the business share them — no extra per-team filter. Role-based filtering
   // still narrows Member/Viewer to their assigned tasks.
   const allTasks = useFilteredTasks(rawTasks || []);
+  // All labels used across the workspace — powers the label autocomplete + filter.
+  const allLabels = useMemo(() => {
+    const s = new Set<string>();
+    (allTasks || []).forEach(t => ((t as any).labels as string[] | undefined)?.forEach(l => s.add(l)));
+    return Array.from(s).sort();
+  }, [allTasks]);
   const { data: projects, loading: projectsLoading } = useCollection<Project>('projects');
   const { data: customers } = useCollection<Customer>('customers');
   const { data: invoices } = useCollection<Invoice>('invoices');
@@ -262,6 +275,9 @@ const TasksView: React.FC = () => {
     try { dependsOn = dependsOnRaw ? JSON.parse(dependsOnRaw) : []; } catch { dependsOn = []; }
     let collaboratorIds: string[] = [];
     try { collaboratorIds = collaboratorIdsRaw ? JSON.parse(collaboratorIdsRaw) : []; } catch { collaboratorIds = []; }
+    const labelsRaw = formData.get('labels') as string;
+    let labels: string[] = [];
+    try { labels = labelsRaw ? JSON.parse(labelsRaw) : []; } catch { labels = []; }
     const isRecurring = isRecurringRaw === 'true';
     const recurringDayOfWeek = recurringDayOfWeekRaw ? parseInt(recurringDayOfWeekRaw) : undefined;
     const recurringDayOfMonth = recurringDayOfMonthRaw ? parseInt(recurringDayOfMonthRaw) : undefined;
@@ -313,6 +329,7 @@ const TasksView: React.FC = () => {
       priority,
       parentTaskId: parentTaskId || undefined,
       collaboratorIds: collaboratorIds,
+      labels: labels.length > 0 ? labels : undefined,
       dueNotificationSent: false,
       isRecurring,
       recurringFrequency: isRecurring ? recurringFrequency : undefined,
@@ -583,6 +600,8 @@ const TasksView: React.FC = () => {
                 <MessageSquare className="w-2.5 h-2.5" />{commentCount}
               </span>
             )}
+            {/* Labels */}
+            <TaskLabels labels={(task as any).labels} max={4} />
           </div>
           {/* Subtask progress bar */}
           {subtaskInfo && (
@@ -784,6 +803,7 @@ const TasksView: React.FC = () => {
                     teamMembers={teamMembers?.filter((m: any) => !businessId || m.businessId === businessId) || []}
                     canAssignTasks={permissions.canAssignTasks}
                     currentUserId={user?.uid || ''}
+                    allLabels={allLabels}
                   />
                 </DialogContent>
               </Dialog>
@@ -972,6 +992,8 @@ const TasksView: React.FC = () => {
                                   <MessageSquare className="w-2.5 h-2.5" />{commentCount}
                                 </span>
                               )}
+                              {/* Labels */}
+                              <TaskLabels labels={(task as any).labels} max={4} />
                             </div>
                             {/* Subtask progress bar */}
                             {subtaskInfo && (
@@ -1298,7 +1320,9 @@ const TaskForm: React.FC<{
   teamMembers?: any[];
   canAssignTasks?: boolean;
   currentUserId?: string;
-}> = ({ onSubmit, projects, initialData, allTasks = [], teamMembers = [], canAssignTasks = false, currentUserId = '' }) => {
+  allLabels?: string[];
+}> = ({ onSubmit, projects, initialData, allTasks = [], teamMembers = [], canAssignTasks = false, currentUserId = '', allLabels = [] }) => {
+  const [labels, setLabels] = useState<string[]>((initialData as any)?.labels || []);
   const [startDate, setStartDate] = useState<Date | undefined>(
     initialData?.startDate ? new Date(initialData.startDate) : new Date()
   );
@@ -1445,6 +1469,12 @@ const TaskForm: React.FC<{
             </SelectContent>
           </Select>
         </div>
+      </div>
+
+      <div>
+        <Label>Etiketat</Label>
+        <input type="hidden" name="labels" value={JSON.stringify(labels)} />
+        <LabelEditor value={labels} onChange={setLabels} suggestions={allLabels} />
       </div>
 
       <div>
