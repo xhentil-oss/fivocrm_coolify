@@ -699,39 +699,45 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
   const timeStr = (d?: Date) => d ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '';
 
+  // Auto-adjust instead of silently blocking, so intra-day edits always apply
+  // (Asana-style): if start moves past end, end follows; if end moves before
+  // start, start follows.
   const handleStartDateChange = async (date: Date | undefined) => {
     if (!date) return;
-    // Preserve the existing time-of-day when only the date is picked.
     const nd = new Date(date);
     nd.setHours(startDate.getHours(), startDate.getMinutes(), 0, 0);
-    if (nd > endDate) return; // start can't be after end
     setStartDate(nd);
-    await onUpdate(task.id, { startDate: nd });
+    const patch: Partial<Task> = { startDate: nd };
+    if (nd > endDate) { setEndDate(nd); patch.endDate = nd; }
+    await onUpdate(task.id, patch);
   };
 
   const handleEndDateChange = async (date: Date | undefined) => {
     if (!date) return;
     const nd = new Date(date);
     nd.setHours(endDate.getHours(), endDate.getMinutes(), 0, 0);
-    if (nd < startDate) return; // end can't be before start
     setEndDate(nd);
-    await onUpdate(task.id, { endDate: nd });
+    const patch: Partial<Task> = { endDate: nd };
+    if (nd < startDate) { setStartDate(nd); patch.startDate = nd; }
+    await onUpdate(task.id, patch);
   };
 
   // Intra-day scheduling: edit just the time-of-day (same-day tasks, e.g. 09:00–11:00).
   const handleStartTimeChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const [h, m] = e.target.value.split(':').map(Number);
     const nd = new Date(startDate); nd.setHours(h || 0, m || 0, 0, 0);
-    if (nd > endDate) return;
     setStartDate(nd);
-    await onUpdate(task.id, { startDate: nd });
+    const patch: Partial<Task> = { startDate: nd };
+    if (nd > endDate) { setEndDate(nd); patch.endDate = nd; }
+    await onUpdate(task.id, patch);
   };
   const handleEndTimeChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const [h, m] = e.target.value.split(':').map(Number);
     const nd = new Date(endDate); nd.setHours(h || 0, m || 0, 0, 0);
-    if (nd < startDate) return;
     setEndDate(nd);
-    await onUpdate(task.id, { endDate: nd });
+    const patch: Partial<Task> = { endDate: nd };
+    if (nd < startDate) { setStartDate(nd); patch.startDate = nd; }
+    await onUpdate(task.id, patch);
   };
 
   const handleSendChatMessage = async () => {
