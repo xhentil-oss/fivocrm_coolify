@@ -423,6 +423,21 @@ const TasksView: React.FC = () => {
     setActiveTaskId(String(event.active.id));
   };
 
+  // Reorder against the FULL workspace task list (not just the filtered/paginated
+  // subset), so a manual move while a filter or search is active doesn't drop the
+  // order of every hidden task to the end.
+  const applyReorder = (taskId: string, overId: string) => {
+    const full = listOrder.length ? [...listOrder] : [];
+    for (const t of allTasks) if (!full.includes(t.id)) full.push(t.id);
+    const oldIndex = full.indexOf(taskId);
+    const newIndex = full.indexOf(overId);
+    if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return;
+    const reordered = arrayMove(full, oldIndex, newIndex);
+    setListOrder(reordered);
+    localStorage.setItem('tasks_list_order', JSON.stringify(reordered));
+    if (teamId) saveTeamSettings(teamId, { taskListOrder: reordered });
+  };
+
   const handleDragEnd = async (event: DragEndEvent) => {
     setActiveTaskId(null);
     const { active, over } = event;
@@ -431,27 +446,23 @@ const TasksView: React.FC = () => {
     const overId = String(over.id);
 
     if (viewMode === 'list') {
-      // Reorder within the list
-      const currentOrder = orderedTasks.map(t => t.id);
-      const oldIndex = currentOrder.indexOf(taskId);
-      const newIndex = currentOrder.indexOf(overId);
-      if (oldIndex !== -1 && newIndex !== -1 && oldIndex !== newIndex) {
-        const reordered = arrayMove(currentOrder, oldIndex, newIndex);
-        setListOrder(reordered);
-        localStorage.setItem('tasks_list_order', JSON.stringify(reordered));
-        if (teamId) saveTeamSettings(teamId, { taskListOrder: reordered });
-      }
+      if (taskId !== overId) applyReorder(taskId, overId);
       return;
     }
 
-    // Board: move to target column
-    const targetStatus = columns.find(c => c.status === overId)?.status
-      || columns.find(c => tasks.filter(t => t.status === c.status).some(t => t.id === overId))?.status;
-    if (targetStatus) {
-      const task = tasks.find(t => t.id === taskId);
-      if (task && task.status !== targetStatus) {
-        await taskMutation.update(taskId, { status: targetStatus });
-      }
+    // Board: dropped either over a column (empty area) or over another card.
+    const overTask = tasks.find(t => t.id === overId);
+    const targetStatus = overTask?.status
+      || columns.find(c => c.status === overId)?.status;
+    if (!targetStatus) return;
+
+    // Persist manual order within the column when dropped over a specific card,
+    // so cards keep their position instead of jumping to the end.
+    if (overTask && taskId !== overId) applyReorder(taskId, overId);
+
+    const task = tasks.find(t => t.id === taskId);
+    if (task && task.status !== targetStatus) {
+      await taskMutation.update(taskId, { status: targetStatus });
     }
   };
 
@@ -462,16 +473,19 @@ const TasksView: React.FC = () => {
     { id: 'Done', title: 'Përfunduar', status: 'Done' },
   ];
 
-  // Apply saved manual order for the list view
-  const orderedTasks = useMemo(() => {
-    if (!listOrder.length) return tasks;
-    const orderMap = new Map(listOrder.map((id, i) => [id, i]));
-    return [...tasks].sort((a, b) => {
+  // Shared manual-order map (used by both the list view and board columns).
+  const orderMap = useMemo(() => new Map(listOrder.map((id, i) => [id, i])), [listOrder]);
+  const sortByOrder = React.useCallback((arr: Task[]) => {
+    if (!listOrder.length) return arr;
+    return [...arr].sort((a, b) => {
       const ai = orderMap.has(a.id) ? orderMap.get(a.id)! : 99999;
       const bi = orderMap.has(b.id) ? orderMap.get(b.id)! : 99999;
       return ai - bi;
     });
-  }, [tasks, listOrder]);
+  }, [listOrder, orderMap]);
+
+  // Apply saved manual order for the list view
+  const orderedTasks = useMemo(() => sortByOrder(tasks), [tasks, sortByOrder]);
 
   // Page-based pagination (50 per page) — applies to both flat and grouped views.
   const totalPages = Math.max(1, Math.ceil(orderedTasks.length / PAGE_SIZE));
@@ -1087,7 +1101,7 @@ const TasksView: React.FC = () => {
             <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
               <div className="flex gap-3 sm:gap-4 p-3 sm:p-4 h-full overflow-x-auto pb-4">
                 {columns.map((column) => {
-                  const columnTasks = tasks.filter(task => task.status === column.status);
+                  const columnTasks = sortByOrder(tasks.filter(task => task.status === column.status));
                   const columnColor = column.status === 'Todo' ? 'bg-gray-400' : column.status === 'In Progress' ? 'bg-blue-500' : column.status === 'Review' ? 'bg-amber-500' : 'bg-emerald-500';
                   
                   return (

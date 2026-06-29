@@ -380,6 +380,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       projectId: task.projectId,
       parentTaskId: task.id,
       collaboratorIds: [],
+      // Inherit the parent task's tenancy scope so a subtask of a cross-department
+      // task lands in the parent's team/business, not the viewer's active context.
+      teamId: (task as any).teamId,
+      businessId: (task as any).businessId,
     });
 
     // Notify assigned user for subtask
