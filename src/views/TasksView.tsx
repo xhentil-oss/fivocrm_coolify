@@ -4,7 +4,7 @@ import { DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useS
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { getStatusColor, getPriorityColor } from '../lib/statusColors';
-import { useCollection, useMutation, useGlobalTeamId } from '../hooks/useFirestore';
+import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -61,6 +61,7 @@ const TasksView: React.FC = () => {
     try { return JSON.parse(localStorage.getItem('tasks_list_order') || '[]'); } catch { return []; }
   });
   const teamId = useGlobalTeamId();
+  const businessId = useGlobalBusinessId();
   const teamSettingsData = useTeamSettingsData();
   const listOrderLoaded = React.useRef(false);
   // Load task list order from Firestore once (Firestore takes priority over localStorage)
@@ -80,14 +81,11 @@ const TasksView: React.FC = () => {
     orderBy: { field: 'createdAt', direction: 'desc' },
     skipTeamFilter: true,
   });
-  // Role-based filtering: Member/Viewer see only assigned tasks
-  const allTasks = useFilteredTasks(
-    // Client-side team filtering: show only tasks that explicitly belong to this team
-    useMemo(() => {
-      if (!rawTasks || !permissions.teamId) return rawTasks || [];
-      return rawTasks.filter(t => (t as any).teamId === permissions.teamId);
-    }, [rawTasks, permissions.teamId])
-  );
+  // Workspace-wide tasks (Asana/Monday-style): tasks are already scoped to the
+  // active business server-side (businessIsolatedAlways), so all departments/teams
+  // in the business share them — no extra per-team filter. Role-based filtering
+  // still narrows Member/Viewer to their assigned tasks.
+  const allTasks = useFilteredTasks(rawTasks || []);
   const { data: projects, loading: projectsLoading } = useCollection<Project>('projects');
   const { data: customers } = useCollection<Customer>('customers');
   const { data: invoices } = useCollection<Invoice>('invoices');
@@ -238,8 +236,13 @@ const TasksView: React.FC = () => {
   const handleCreateTask = async (formData: FormData) => {
     const title = formData.get('title') as string;
     const description = formData.get('description') as string;
-    const startDate = new Date(formData.get('startDate') as string);
-    const endDate = new Date(formData.get('endDate') as string);
+    // Dates are optional (only the title is required) — guard against Invalid Date.
+    const startRaw = formData.get('startDate') as string;
+    const endRaw = formData.get('endDate') as string;
+    const sd = startRaw ? new Date(startRaw) : null;
+    const ed = endRaw ? new Date(endRaw) : null;
+    const startDate = sd && !isNaN(sd.getTime()) ? sd : undefined;
+    const endDate = ed && !isNaN(ed.getTime()) ? ed : undefined;
     // Default to current user if not specified
     const assignedToUserId = (formData.get('assignedToUserId') as string) || user?.uid || '';
     const projectId = formData.get('projectId') as string;
@@ -294,7 +297,7 @@ const TasksView: React.FC = () => {
           nextRecurringDate.setMonth(nextRecurringDate.getMonth() + 1);
         }
       } else if (recurringFrequency === 'yearly') {
-        const baseDate = new Date(endDate);
+        const baseDate = new Date(endDate || now);
         nextRecurringDate = new Date(baseDate.setFullYear(baseDate.getFullYear() + 1));
       }
     }
@@ -649,8 +652,8 @@ const TasksView: React.FC = () => {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="text-sm">
               <DropdownMenuItem onClick={async () => {
-                const { id, ...rest } = task;
-                await taskMutation.create({ ...rest, title: rest.title + ' (kopje)' });
+                const { id, isRecurring, recurringFrequency, recurringDayOfWeek, recurringDayOfMonth, recurringDaysOfWeek, nextRecurringDate, dueNotificationSent, overdueNotificationSent, ...rest } = task as any;
+                await taskMutation.create({ ...rest, title: rest.title + ' (kopje)', status: 'Todo' });
                 toast({ title: 'Detyrë u kopjua' });
               }}>
                 Kopjo
@@ -778,7 +781,7 @@ const TasksView: React.FC = () => {
                     onSubmit={handleCreateTask}
                     projects={projects || []}
                     allTasks={tasks}
-                    teamMembers={teamMembers?.filter((m: any) => m.teamId === permissions.teamId) || []}
+                    teamMembers={teamMembers?.filter((m: any) => !businessId || m.businessId === businessId) || []}
                     canAssignTasks={permissions.canAssignTasks}
                     currentUserId={user?.uid || ''}
                   />
@@ -1038,8 +1041,8 @@ const TasksView: React.FC = () => {
                               </DropdownMenuTrigger>
                               <DropdownMenuContent align="end" className="text-sm">
                                 <DropdownMenuItem onClick={async () => {
-                                  const { id, ...rest } = task;
-                                  await taskMutation.create({ ...rest, title: rest.title + ' (kopje)' });
+                                  const { id, isRecurring, recurringFrequency, recurringDayOfWeek, recurringDayOfMonth, recurringDaysOfWeek, nextRecurringDate, dueNotificationSent, overdueNotificationSent, ...rest } = task as any;
+                                  await taskMutation.create({ ...rest, title: rest.title + ' (kopje)', status: 'Todo' });
                                   toast({ title: 'Detyrë u kopjua' });
                                 }}>
                                   Kopjo
