@@ -136,7 +136,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   // Date editing state
   const [startDate, setStartDate] = useState<Date>(parseDate(task.startDate));
   const [endDate, setEndDate] = useState<Date>(parseDate(task.endDate));
-  
+  const [blockerSearch, setBlockerSearch] = useState('');
+
   // Time tracking state
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -687,24 +688,41 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
   const totalMinutes = timeEntries?.reduce((sum, entry) => sum + (entry.duration || 0), 0) || 0;
 
+  const timeStr = (d?: Date) => d ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '';
+
   const handleStartDateChange = async (date: Date | undefined) => {
-    if (date) {
-      if (date > endDate) {
-        return; // Data e fillimit nuk mund të jetë pas përfundimit
-      }
-      setStartDate(date);
-      await onUpdate(task.id, { startDate: date });
-    }
+    if (!date) return;
+    // Preserve the existing time-of-day when only the date is picked.
+    const nd = new Date(date);
+    nd.setHours(startDate.getHours(), startDate.getMinutes(), 0, 0);
+    if (nd > endDate) return; // start can't be after end
+    setStartDate(nd);
+    await onUpdate(task.id, { startDate: nd });
   };
 
   const handleEndDateChange = async (date: Date | undefined) => {
-    if (date) {
-      if (date < startDate) {
-        return; // Afati i përfundimit nuk mund të jetë para fillimit
-      }
-      setEndDate(date);
-      await onUpdate(task.id, { endDate: date });
-    }
+    if (!date) return;
+    const nd = new Date(date);
+    nd.setHours(endDate.getHours(), endDate.getMinutes(), 0, 0);
+    if (nd < startDate) return; // end can't be before start
+    setEndDate(nd);
+    await onUpdate(task.id, { endDate: nd });
+  };
+
+  // Intra-day scheduling: edit just the time-of-day (same-day tasks, e.g. 09:00–11:00).
+  const handleStartTimeChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const [h, m] = e.target.value.split(':').map(Number);
+    const nd = new Date(startDate); nd.setHours(h || 0, m || 0, 0, 0);
+    if (nd > endDate) return;
+    setStartDate(nd);
+    await onUpdate(task.id, { startDate: nd });
+  };
+  const handleEndTimeChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const [h, m] = e.target.value.split(':').map(Number);
+    const nd = new Date(endDate); nd.setHours(h || 0, m || 0, 0, 0);
+    if (nd < startDate) return;
+    setEndDate(nd);
+    await onUpdate(task.id, { endDate: nd });
   };
 
   const handleSendChatMessage = async () => {
@@ -1057,14 +1075,18 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                   </button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar 
-                    mode="single" 
-                    selected={endDate} 
+                  <Calendar
+                    mode="single"
+                    selected={endDate}
                     onSelect={handleEndDateChange}
                     initialFocus
                   />
                 </PopoverContent>
               </Popover>
+              {!isGuestMode && (
+                <input type="time" value={timeStr(endDate)} onChange={handleEndTimeChange}
+                  className="h-7 px-1.5 text-xs rounded border border-border/50 bg-muted/40 focus:outline-none focus:ring-1 focus:ring-primary" />
+              )}
             </div>
 
             {/* Start Date - Compact (optional, smaller) */}
@@ -1078,14 +1100,18 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                   </button>
                 </PopoverTrigger>
                 <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar 
-                    mode="single" 
-                    selected={startDate} 
+                  <Calendar
+                    mode="single"
+                    selected={startDate}
                     onSelect={handleStartDateChange}
                     initialFocus
                   />
                 </PopoverContent>
               </Popover>
+              {!isGuestMode && (
+                <input type="time" value={timeStr(startDate)} onChange={handleStartTimeChange}
+                  className="h-6 px-1.5 text-[11px] rounded border border-border/50 bg-muted/40 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
+              )}
             </div>
 
             {/* Recurring Info */}
@@ -1167,37 +1193,69 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               </div>
             )}
 
-            {/* Dependencies */}
-            {task.dependsOn && task.dependsOn.length > 0 && (
+            {/* Dependencies / blockers */}
+            {(!isGuestMode || (task.dependsOn && task.dependsOn.length > 0)) && (
               <div className="flex items-start gap-3 sm:gap-4">
-                <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0 pt-0.5">Varet nga</span>
-                <div className="flex flex-col gap-1">
-                  {task.dependsOn.map((depId) => {
-                    // Look up the dependency among subtasks + any task we might have
-                    const allKnown = [...(subtasks || [])];
-                    const dep = allKnown.find((t) => t.id === depId);
-                    const isDone = dep?.status === 'Done';
-                    return (
-                      <span
-                        key={depId}
-                        className={`inline-flex items-center gap-1.5 text-xs px-2 py-0.5 rounded-full border ${
-                          isDone
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300'
-                            : 'bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950 dark:text-orange-300'
-                        }`}
-                      >
-                        {isDone ? '✓' : '🔒'}
-                        <span className="truncate max-w-[160px]">
-                          {dep?.title || depId.slice(0, 8) + '…'}
+                <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0 pt-0.5">Bllokohet nga</span>
+                <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+                  <div className="flex flex-wrap gap-1.5">
+                    {(task.dependsOn || []).map((depId) => {
+                      // Resolve across ALL workspace tasks (not just subtasks) so cross-project blockers show their title.
+                      const dep = allTasks?.find((t) => t.id === depId);
+                      const isDone = dep?.status === 'Done';
+                      return (
+                        <span
+                          key={depId}
+                          className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border ${
+                            isDone
+                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300'
+                              : 'bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950 dark:text-orange-300'
+                          }`}
+                        >
+                          {isDone ? '✓' : '🔒'}
+                          <span className="truncate max-w-[160px]">{dep?.title || depId.slice(0, 8) + '…'}</span>
+                          {!isGuestMode && (
+                            <button type="button" onClick={() => onUpdate(task.id, { dependsOn: (task.dependsOn || []).filter((x) => x !== depId) } as any)} className="hover:opacity-70" aria-label="Hiq bllokuesin">
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
                         </span>
-                        {dep && (
-                          <span className="text-[10px] opacity-70">
-                            ({dep.status === 'Done' ? 'Kryer' : dep.status === 'In Progress' ? 'Në progres' : dep.status === 'Review' ? 'Rishikim' : 'Në pritje'})
-                          </span>
-                        )}
-                      </span>
-                    );
-                  })}
+                      );
+                    })}
+                    {(!task.dependsOn || task.dependsOn.length === 0) && (
+                      <span className="text-xs text-muted-foreground">Asnjë bllokues</span>
+                    )}
+                  </div>
+                  {!isGuestMode && (
+                    <Popover>
+                      <PopoverTrigger asChild>
+                        <button type="button" className="self-start inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                          <Plus className="w-3 h-3" /> Shto bllokues
+                        </button>
+                      </PopoverTrigger>
+                      <PopoverContent className="w-72 p-2" align="start">
+                        <Input value={blockerSearch} onChange={(e) => setBlockerSearch(e.target.value)} placeholder="Kërko detyrë…" className="h-8 text-sm mb-2" />
+                        <div className="max-h-52 overflow-y-auto space-y-0.5">
+                          {(allTasks || [])
+                            .filter((t) => t.id !== task.id && !(task.dependsOn || []).includes(t.id) && (!blockerSearch.trim() || t.title.toLowerCase().includes(blockerSearch.toLowerCase())))
+                            .slice(0, 25)
+                            .map((t) => (
+                              <button
+                                key={t.id}
+                                type="button"
+                                onClick={() => { onUpdate(task.id, { dependsOn: [...(task.dependsOn || []), t.id] } as any); setBlockerSearch(''); }}
+                                className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-accent truncate"
+                              >
+                                {t.title}
+                              </button>
+                            ))}
+                          {(allTasks || []).filter((t) => t.id !== task.id && !(task.dependsOn || []).includes(t.id) && (!blockerSearch.trim() || t.title.toLowerCase().includes(blockerSearch.toLowerCase()))).length === 0 && (
+                            <p className="text-xs text-muted-foreground px-2 py-1.5">Asnjë detyrë.</p>
+                          )}
+                        </div>
+                      </PopoverContent>
+                    </Popover>
+                  )}
                 </div>
               </div>
             )}

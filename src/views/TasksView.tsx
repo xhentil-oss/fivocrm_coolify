@@ -1327,7 +1327,8 @@ const TaskForm: React.FC<{
     initialData?.startDate ? new Date(initialData.startDate) : new Date()
   );
   const [endDate, setEndDate] = useState<Date | undefined>(
-    initialData?.endDate ? new Date(initialData.endDate) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
+    // Default to the same day as start — many tasks are done within a day. Extend if needed.
+    initialData?.endDate ? new Date(initialData.endDate) : new Date()
   );
   const [status, setStatus] = useState(initialData?.status || 'Todo');
   const [descriptionHtml, setDescriptionHtml] = useState(initialData?.description || '');
@@ -1378,6 +1379,22 @@ const TaskForm: React.FC<{
     onSubmit(formData);
   };
 
+  // Date+time helpers so a task can be scheduled within a single day (e.g. 09:00–11:00).
+  const timeStr = (d?: Date) => d ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '';
+  const pickDateKeepTime = (setter: (d?: Date) => void, prev?: Date) => (d?: Date) => {
+    if (!d) { setter(undefined); return; }
+    const nd = new Date(d);
+    if (prev) nd.setHours(prev.getHours(), prev.getMinutes(), 0, 0);
+    else nd.setHours(9, 0, 0, 0);
+    setter(nd);
+  };
+  const setTimeOnDate = (setter: (d?: Date) => void, prev?: Date) => (e: React.ChangeEvent<HTMLInputElement>) => {
+    const [h, m] = e.target.value.split(':').map(Number);
+    const nd = prev ? new Date(prev) : new Date();
+    nd.setHours(h || 0, m || 0, 0, 0);
+    setter(nd);
+  };
+
   const availableTasks = allTasks.filter(t => t.id !== initialData?.id);
 
   return (
@@ -1399,43 +1416,39 @@ const TaskForm: React.FC<{
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
-          <Label>Data e Fillimit</Label>
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="outline" className="w-full justify-start text-sm" type="button">
-                <CalendarIcon className="mr-2 h-4 w-4" />
-                {startDate ? startDate.toLocaleDateString() : "Zgjidh"}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-              <Calendar 
-                mode="single" 
-                selected={startDate} 
-                onSelect={setStartDate}
-                initialFocus
-              />
-            </PopoverContent>
-          </Popover>
+          <Label>Data/ora e fillimit</Label>
+          <div className="flex gap-2">
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="flex-1 justify-start text-sm" type="button">
+                  <CalendarIcon className="mr-2 h-4 w-4" />
+                  {startDate ? startDate.toLocaleDateString() : "Zgjidh"}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="start">
+                <Calendar mode="single" selected={startDate} onSelect={pickDateKeepTime(setStartDate, startDate)} initialFocus />
+              </PopoverContent>
+            </Popover>
+            <Input type="time" value={timeStr(startDate)} onChange={setTimeOnDate(setStartDate, startDate)} className="w-[110px] text-sm" />
+          </div>
         </div>
 
         <div>
-          <Label>Afati</Label>
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="outline" className="w-full justify-start text-sm" type="button">
-                <CalendarIcon className="mr-2 h-4 w-4" />
-                {endDate ? endDate.toLocaleDateString() : "Zgjidh"}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-              <Calendar 
-                mode="single" 
-                selected={endDate} 
-                onSelect={setEndDate}
-                initialFocus
-              />
-            </PopoverContent>
-          </Popover>
+          <Label>Data/ora e afatit</Label>
+          <div className="flex gap-2">
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="flex-1 justify-start text-sm" type="button">
+                  <CalendarIcon className="mr-2 h-4 w-4" />
+                  {endDate ? endDate.toLocaleDateString() : "Zgjidh"}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0" align="start">
+                <Calendar mode="single" selected={endDate} onSelect={pickDateKeepTime(setEndDate, endDate)} initialFocus />
+              </PopoverContent>
+            </Popover>
+            <Input type="time" value={timeStr(endDate)} onChange={setTimeOnDate(setEndDate, endDate)} className="w-[110px] text-sm" />
+          </div>
         </div>
       </div>
 
