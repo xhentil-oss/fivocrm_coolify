@@ -521,6 +521,25 @@ const TasksView: React.FC = () => {
   }, [groupBy, visibleTasks, getUserName, getProjectName]);
 
   // Single task row — shared by the flat (drag-sortable) list and the grouped view.
+  // Bulk multi-select (Asana/Monday) — list view.
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const toggleSelect = (id: string) => setSelectedIds(prev => { const s = new Set(prev); if (s.has(id)) s.delete(id); else s.add(id); return s; });
+  const clearSelection = () => setSelectedIds(new Set());
+  const bulkUpdate = async (patch: Partial<Task>) => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    await Promise.all(ids.map(id => taskMutation.update(id, patch)));
+    toast({ title: `${ids.length} detyra u përditësuan` });
+    clearSelection();
+  };
+  const bulkDelete = async () => {
+    const ids = [...selectedIds];
+    if (!ids.length) return;
+    await Promise.all(ids.map(id => taskMutation.remove(id)));
+    toast({ title: `${ids.length} detyra u fshinë` });
+    clearSelection();
+  };
+
   const renderTaskRow = (task: Task) => {
     const dateInfo = formatDateCompact(new Date(task.endDate));
     const isSelected = selectedTask?.id === task.id;
@@ -542,6 +561,13 @@ const TasksView: React.FC = () => {
         } ${isOverdue ? 'bg-destructive/5' : ''}`}
         onClick={() => setSelectedTask(task)}
       >
+        {/* Bulk-select checkbox (shows on hover or when a selection is active) */}
+        <div
+          onClick={(e) => e.stopPropagation()}
+          className={`flex items-center pt-1 flex-shrink-0 transition-opacity ${selectedIds.size > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+        >
+          <Checkbox checked={selectedIds.has(task.id)} onCheckedChange={() => toggleSelect(task.id)} aria-label="Përzgjidh detyrën" />
+        </div>
         {/* Drag handle */}
         <div className="mt-1.5 cursor-grab opacity-0 group-hover:opacity-30 hover:!opacity-70 text-muted-foreground flex-shrink-0 hidden sm:block">
           <GripVertical className="w-3.5 h-3.5" />
@@ -1126,6 +1152,43 @@ const TasksView: React.FC = () => {
                   <p>Asnjë detyrë</p>
                 </div>
               )}
+            </div>
+          )}
+
+          {/* Bulk action bar (floating) */}
+          {selectedIds.size > 0 && (
+            <div className="fixed bottom-20 sm:bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3 py-2 rounded-xl bg-card border shadow-lg flex-wrap max-w-[95vw]">
+              <span className="text-sm font-medium px-1">{selectedIds.size} të zgjedhura</span>
+              <Select onValueChange={(v) => bulkUpdate({ status: v as any })}>
+                <SelectTrigger className="h-8 w-[120px] text-xs"><SelectValue placeholder="Statusi" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Todo">Për të bërë</SelectItem>
+                  <SelectItem value="In Progress">Në progres</SelectItem>
+                  <SelectItem value="Review">Rishikim</SelectItem>
+                  <SelectItem value="Done">Përfunduar</SelectItem>
+                </SelectContent>
+              </Select>
+              <Select onValueChange={(v) => bulkUpdate({ priority: v as any })}>
+                <SelectTrigger className="h-8 w-[110px] text-xs"><SelectValue placeholder="Prioriteti" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="low">I ulët</SelectItem>
+                  <SelectItem value="medium">Mesatar</SelectItem>
+                  <SelectItem value="high">I lartë</SelectItem>
+                  <SelectItem value="urgent">Urgjent</SelectItem>
+                </SelectContent>
+              </Select>
+              {permissions.canAssignTasks && (
+                <Select onValueChange={(v) => bulkUpdate({ assignedToUserId: v })}>
+                  <SelectTrigger className="h-8 w-[120px] text-xs"><SelectValue placeholder="Cakto te" /></SelectTrigger>
+                  <SelectContent>
+                    {(teamMembers || []).filter((m: any) => !businessId || m.businessId === businessId).map((m: any) => (
+                      <SelectItem key={m.userId} value={m.userId}>{getUserName(m.userId)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+              <Button variant="destructive" size="sm" className="h-8" onClick={bulkDelete}><Trash2 className="w-3.5 h-3.5 mr-1" />Fshi</Button>
+              <Button variant="ghost" size="sm" className="h-8 px-2" onClick={clearSelection}><X className="w-4 h-4" /></Button>
             </div>
           )}
 
