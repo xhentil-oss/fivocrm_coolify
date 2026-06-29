@@ -585,10 +585,19 @@ const TasksView: React.FC = () => {
         />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Priority flag icon */}
-            {task.priority && (
-              <Flag className="w-3 h-3 flex-shrink-0" style={{ color: priorityFlagColor }} />
-            )}
+            {/* Priority flag — inline change */}
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button onClick={(e) => e.stopPropagation()} title="Ndrysho prioritetin" className="flex-shrink-0 hover:opacity-70">
+                  <Flag className="w-3 h-3" style={{ color: priorityFlagColor }} />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start" onClick={(e) => e.stopPropagation()}>
+                {(([['urgent', 'Urgjent'], ['high', 'I lartë'], ['medium', 'Mesatar'], ['low', 'I ulët']]) as const).map(([p, label]) => (
+                  <DropdownMenuItem key={p} onClick={() => taskMutation.update(task.id, { priority: p })}>{label}</DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
             <span className={`text-sm font-medium ${task.status === 'Done' ? 'line-through text-muted-foreground' : ''}`}>
               {task.title}
             </span>
@@ -655,11 +664,32 @@ const TasksView: React.FC = () => {
             {initials}
           </div>
         </div>
-        {/* Date */}
-        <div className={`flex items-center gap-1 text-xs whitespace-nowrap flex-shrink-0 mt-0.5 ${dateInfo.className}`}>
-          {dateInfo.overdue && <AlertTriangle className="w-3 h-3" />}
-          {dateInfo.text}
-        </div>
+        {/* Date — inline reschedule (preserves time-of-day) */}
+        <Popover>
+          <PopoverTrigger asChild>
+            <button
+              onClick={(e) => e.stopPropagation()}
+              title="Ndrysho afatin"
+              className={`flex items-center gap-1 text-xs whitespace-nowrap flex-shrink-0 mt-0.5 hover:bg-muted rounded px-1 py-0.5 transition-colors ${dateInfo.className}`}
+            >
+              {dateInfo.overdue && <AlertTriangle className="w-3 h-3" />}
+              {dateInfo.text}
+            </button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="end" onClick={(e) => e.stopPropagation()}>
+            <Calendar
+              mode="single"
+              selected={task.endDate ? new Date(task.endDate) : undefined}
+              onSelect={async (d) => {
+                if (!d) return;
+                const nd = new Date(d);
+                const cur = task.endDate ? new Date(task.endDate) : null;
+                nd.setHours(cur?.getHours() ?? 9, cur?.getMinutes() ?? 0, 0, 0);
+                await taskMutation.update(task.id, { endDate: nd });
+              }}
+            />
+          </PopoverContent>
+        </Popover>
         {/* Hover quick actions */}
         <div
           className="absolute right-4 top-2.5 hidden group-hover:flex items-center gap-0.5 bg-background border border-border rounded-md shadow-sm px-0.5 py-0.5 z-10"
