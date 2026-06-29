@@ -166,6 +166,7 @@ const ProjectDetailView: React.FC = () => {
     const endDate = endDateStr ? new Date(endDateStr) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
     if (startDate > endDate) return;
     const assignedToUserId = formData.get('assignedToUserId') as string || user?.uid || '';
+    const section = (formData.get('section') as string || '').trim();
     const priority = formData.get('priority') as string || 'medium';
     const status = formData.get('status') as string || 'Todo';
     const isRecurring = formData.get('isRecurring') === 'true';
@@ -188,6 +189,7 @@ const ProjectDetailView: React.FC = () => {
       status,
       priority,
       collaboratorIds: [],
+      ...(section ? { section } : {}),
       // Stamp the project's team so creation works even when there's no global
       // active team (e.g. a super-admin viewing across teams).
       ...(project?.teamId ? { teamId: project.teamId } : {}),
@@ -664,14 +666,23 @@ const ProjectDetailView: React.FC = () => {
           {viewMode === 'list' && (
             <div className="flex-1 overflow-y-auto">
               <div className="divide-y">
-                {tasks.map((task) => {
+                {(() => {
+                  // Group by section/phase (Asana-style): inject a header when the
+                  // section changes. Tasks without a section fall under "Pa seksion".
+                  const listTasks = [...tasks].sort((a, b) => ((a as any).section || '~~~').localeCompare((b as any).section || '~~~'));
+                  const hasSections = tasks.some(t => (t as any).section);
+                  return listTasks.map((task, idx) => {
                   const dateInfo = formatDateCompact(new Date(task.endDate));
                   const isSelected = selectedTask?.id === task.id;
                   const isOverdue = new Date(task.endDate) < new Date() && task.status !== 'Done';
-                  
+                  const sec = (task as any).section || 'Pa seksion';
+                  const showHeader = hasSections && (idx === 0 || ((listTasks[idx - 1] as any).section || 'Pa seksion') !== sec);
                   return (
+                    <React.Fragment key={task.id}>
+                    {showHeader && (
+                      <div className="sticky top-0 z-[1] px-6 py-1.5 bg-muted/60 backdrop-blur border-b text-xs font-semibold text-foreground">{sec}</div>
+                    )}
                     <div
-                      key={task.id}
                       className={`flex items-center gap-3 px-6 py-3 cursor-pointer hover:bg-muted/50 transition-colors ${
                         isSelected ? 'bg-primary/5 border-l-2 border-l-primary' : ''
                       } ${isOverdue ? 'bg-error/5' : ''}`}
@@ -720,9 +731,11 @@ const ProjectDetailView: React.FC = () => {
                         {dateInfo.text}
                       </span>
                     </div>
+                    </React.Fragment>
                   );
-                })}
-                
+                  });
+                })()}
+
                 {tasks.length === 0 && (
                   <div className="text-center py-12 text-muted-foreground">
                     <CheckSquare className="w-12 h-12 mx-auto mb-4 opacity-50" />
@@ -1072,6 +1085,11 @@ const TaskForm: React.FC<{
       <div>
         <Label htmlFor="title">Titulli</Label>
         <Input id="title" name="title" required defaultValue={initialData?.title} placeholder="Emri i detyrës" />
+      </div>
+
+      <div>
+        <Label htmlFor="section">Seksioni (opsional)</Label>
+        <Input id="section" name="section" defaultValue={(initialData as any)?.section || ''} placeholder="p.sh. Dizajn, Zhvillim, Testim" />
       </div>
 
       <div>

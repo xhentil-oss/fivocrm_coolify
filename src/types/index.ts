@@ -219,6 +219,8 @@ export interface Task {
   dependsOn?: string[];
   /** Free-form colored labels/tags (Asana/Jira-style) for slicing tasks. */
   labels?: string[];
+  /** Optional section/phase within a project (Asana sections), free-text. */
+  section?: string;
   estimatedHours?: number;
   isRecurring?: boolean;
   recurringFrequency?: 'daily' | 'weekly' | 'monthly' | 'yearly';
