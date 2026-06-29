@@ -477,7 +477,10 @@ const TasksView: React.FC = () => {
     const taskDate = new Date(date);
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     const dateStr = `${months[taskDate.getMonth()]} ${taskDate.getDate()}`;
-    const diffDays = Math.ceil((taskDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    // Compare CALENDAR days (ignore time-of-day) so a task due later today isn't
+    // labeled "Nesër" — intra-day times made the hour-based diff round up.
+    const sod = (d: Date) => { const n = new Date(d); n.setHours(0, 0, 0, 0); return n.getTime(); };
+    const diffDays = Math.round((sod(taskDate) - sod(now)) / (1000 * 60 * 60 * 24));
     if (diffDays < 0) return { text: dateStr, overdue: true, className: 'text-destructive font-medium' };
     if (diffDays === 0) return { text: 'Sot · ' + dateStr, overdue: false, className: 'text-warning font-medium' };
     if (diffDays === 1) return { text: 'Nesër · ' + dateStr, overdue: false, className: 'text-warning' };
