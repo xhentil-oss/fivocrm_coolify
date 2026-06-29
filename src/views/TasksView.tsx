@@ -35,6 +35,8 @@ import type { Task, TaskComment, Project, Notification, TaskCollaborator, UserPr
 import TaskDetailPanel from '../components/TaskDetailPanel';
 import SmartSuggestions from '../components/SmartSuggestions';
 import { TaskLabels, LabelEditor } from '../components/TaskLabels';
+import TaskTimeline from '../components/TaskTimeline';
+import { GanttChart } from 'lucide-react';
 
 /** Generate a deterministic HSL background colour from a name string */
 function hashColor(name: string): string {
@@ -49,7 +51,7 @@ const TasksView: React.FC = () => {
   const permissions = usePermissions();
   const logActivity = useActivityLogger();
   // Persisted view preferences (Asana-style: the view/filter you left is remembered).
-  const [viewMode, setViewMode] = useState<'board' | 'calendar' | 'list'>(() => (localStorage.getItem('tasks_viewMode') as any) || 'list');
+  const [viewMode, setViewMode] = useState<'board' | 'calendar' | 'list' | 'timeline'>(() => (localStorage.getItem('tasks_viewMode') as any) || 'list');
   const [filterStatus, setFilterStatus] = useState<string>(() => localStorage.getItem('tasks_filterStatus') || 'all');
   const [groupBy, setGroupBy] = useState<'none' | 'assignee' | 'priority' | 'project' | 'dueDate'>(() => (localStorage.getItem('tasks_groupBy') as any) || 'none');
   useEffect(() => {
@@ -808,6 +810,7 @@ const TasksView: React.FC = () => {
               {([
                 { v: 'list' as const, label: 'Listë', Icon: List },
                 { v: 'board' as const, label: 'Board', Icon: LayoutGrid },
+                { v: 'timeline' as const, label: 'Timeline', Icon: GanttChart },
                 { v: 'calendar' as const, label: 'Kalendar', Icon: CalendarDays },
               ]).map(({ v, label, Icon }) => (
                 <button
@@ -1332,6 +1335,10 @@ const TasksView: React.FC = () => {
                 ) : null}
               </DragOverlay>
             </DndContext>
+          )}
+
+          {viewMode === 'timeline' && (
+            <TaskTimeline tasks={tasks} onTaskClick={setSelectedTask} />
           )}
 
           {viewMode === 'calendar' && (
