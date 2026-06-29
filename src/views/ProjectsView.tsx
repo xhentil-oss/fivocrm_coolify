@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { useToast } from '../hooks/use-toast';
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
@@ -51,6 +51,26 @@ const ProjectsView: React.FC = () => {
   const { data: allTasks } = useCollection<Task>('tasks');
   // Role-based filtering: Member/Viewer see only projects they're involved in
   const projects = useFilteredProjects(rawProjects, allTasks);
+  // Portfolio health (Monday-style): per-project progress + RAG, and aggregate.
+  const projectHealth = useMemo(() => {
+    const map = new Map<string, { total: number; done: number; overdue: number; pct: number; health: 'on' | 'risk' | 'off' }>();
+    const now = Date.now();
+    (projects || []).forEach(p => {
+      const ts = (allTasks || []).filter(t => (t as any).projectId === p.id);
+      const total = ts.length;
+      const done = ts.filter(t => t.status === 'Done').length;
+      const overdue = ts.filter(t => t.status !== 'Done' && (t as any).endDate && new Date((t as any).endDate).getTime() < now).length;
+      const pct = total ? Math.round((done / total) * 100) : 0;
+      const health: 'on' | 'risk' | 'off' = (overdue >= 3 || (total > 0 && overdue / total > 0.3)) ? 'off' : overdue > 0 ? 'risk' : 'on';
+      map.set(p.id, { total, done, overdue, pct, health });
+    });
+    return map;
+  }, [projects, allTasks]);
+  const portfolio = useMemo(() => {
+    let total = 0, done = 0, overdue = 0, atRisk = 0;
+    projectHealth.forEach(h => { total += h.total; done += h.done; overdue += h.overdue; if (h.health !== 'on') atRisk++; });
+    return { activeProjects: projects?.length || 0, avgPct: total ? Math.round((done / total) * 100) : 0, overdue, atRisk };
+  }, [projectHealth, projects]);
   const { data: teams } = useCollection<Team>('teams');
   const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
@@ -606,6 +626,21 @@ const ProjectsView: React.FC = () => {
             Pastro filtrat
           </Button>
         )}
+      </div>
+
+      {/* Portfolio summary (health dashboard) */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        {[
+          { label: 'Projekte', val: String(portfolio.activeProjects), cls: '' },
+          { label: 'Progres mesatar', val: `${portfolio.avgPct}%`, cls: 'text-primary' },
+          { label: 'Detyra vonë', val: String(portfolio.overdue), cls: portfolio.overdue > 0 ? 'text-destructive' : '' },
+          { label: 'Projekte në rrezik', val: String(portfolio.atRisk), cls: portfolio.atRisk > 0 ? 'text-amber-600' : '' },
+        ].map(s => (
+          <div key={s.label} className="p-3 rounded-lg border bg-card">
+            <p className={`text-2xl font-bold ${s.cls}`}>{s.val}</p>
+            <p className="text-xs text-muted-foreground">{s.label}</p>
+          </div>
+        ))}
       </div>
 
       {/* Projects Table */}
