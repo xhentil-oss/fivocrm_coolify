@@ -312,6 +312,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   }, [runningEntry]);
 
   // Reset state when task changes
+  // Reset local edit state ONLY when switching to a different task. Keying on
+  // task.title/description/dates would re-run on every live Firestore update and
+  // clobber an in-progress edit (e.g. rescheduling the date while typing the
+  // description would wipe the draft).
   useEffect(() => {
     setTitleText(task.title);
     setDescriptionText(task.description || '');
@@ -322,7 +326,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     setIsEditingTitle(false);
     resetSubtaskForm();
     setChatMessageText('');
-  }, [task.id, task.title, task.description, task.startDate, task.endDate]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [task.id]);
 
   // Focus title input when editing
   useEffect(() => {
