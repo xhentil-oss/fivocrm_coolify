@@ -1661,11 +1661,16 @@ const CalendarView: React.FC<{
     0
   ).getDate();
 
-  const firstDay = new Date(
+  // Monday-first week (Albanian convention): convert JS getDay() (0=Sun..6=Sat)
+  // to a Monday-based index (Mon=0..Sun=6).
+  const firstDay = (new Date(
     currentDate.getFullYear(),
     currentDate.getMonth(),
     1
-  ).getDay();
+  ).getDay() + 6) % 7;
+
+  const sod = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
+  const todayStr = new Date().toDateString();
 
   const days = [];
   for (let i = 0; i < firstDay; i++) {
@@ -1674,14 +1679,20 @@ const CalendarView: React.FC<{
 
   for (let day = 1; day <= daysInMonth; day++) {
     const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+    const cell = sod(date);
+    // A task occupies every calendar day within [startDate, endDate] (falls back
+    // to endDate-only when it has no start), so multi-day tasks span their range.
     const dayTasks = tasks.filter(task => {
-      const taskDate = new Date(task.endDate);
-      return taskDate.toDateString() === date.toDateString();
+      if (!task.endDate) return false;
+      const end = sod(new Date(task.endDate));
+      const start = task.startDate ? sod(new Date(task.startDate)) : end;
+      return cell >= Math.min(start, end) && cell <= Math.max(start, end);
     });
+    const isToday = date.toDateString() === todayStr;
 
     days.push(
-      <div key={day} className="min-h-[50px] sm:min-h-[80px] border border-border p-0.5 sm:p-1 bg-background">
-        <div className="font-medium text-[10px] sm:text-xs mb-0.5 sm:mb-1 text-muted-foreground">
+      <div key={day} className={`min-h-[50px] sm:min-h-[80px] border p-0.5 sm:p-1 ${isToday ? 'border-primary border-2 bg-primary/5' : 'border-border bg-background'}`}>
+        <div className={`font-medium text-[10px] sm:text-xs mb-0.5 sm:mb-1 ${isToday ? 'text-primary font-bold' : 'text-muted-foreground'}`}>
           {day}
         </div>
         <div className="space-y-0.5 sm:space-y-1">
@@ -1726,7 +1737,7 @@ const CalendarView: React.FC<{
         </Button>
       </div>
       <div className="grid grid-cols-7 gap-px bg-border">
-        {['Di', 'Hë', 'Ma', 'Më', 'En', 'Pr', 'Sh'].map(day => (
+        {['Hë', 'Ma', 'Më', 'En', 'Pr', 'Sh', 'Di'].map(day => (
           <div key={day} className="bg-muted p-0.5 sm:p-1 text-center text-[10px] sm:text-xs font-medium">
             {day}
           </div>
