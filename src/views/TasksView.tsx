@@ -4,6 +4,7 @@ import { DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useS
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { getStatusColor, getPriorityColor } from '../lib/statusColors';
+import { addFrequency } from '../lib/recurringUtils';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
@@ -1738,6 +1739,36 @@ const CalendarView: React.FC<{
   const sod = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
   const todayStr = new Date().toDateString();
 
+  // Projected recurring occurrences for the displayed month. Recurring tasks
+  // materialise one cycle at a time (only when the current one is completed), so
+  // future cycles have no doc yet and wouldn't otherwise appear on the calendar.
+  // Here we project the "tip" of each series (nextCycleCreated !== true) forward
+  // from its endDate using the same recurrence rule and show those dates as
+  // lightweight ghosts — so e.g. a monthly task is visible in July before it's
+  // generated. Clicking opens the source task.
+  const monthStart = sod(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1));
+  const monthEnd = sod(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0));
+  const projectionsByDay = React.useMemo(() => {
+    const map = new Map<number, Task[]>();
+    tasks.forEach((task) => {
+      const t = task as any;
+      if (!t.isRecurring || !t.recurringFrequency || t.nextCycleCreated === true || !task.endDate) return;
+      let d = new Date(task.endDate);
+      let guard = 0;
+      while (guard++ < 500) {
+        d = addFrequency(d, t.recurringFrequency, t.recurringDayOfWeek, t.recurringDayOfMonth, t.recurringInterval, t.recurringDaysOfWeek);
+        const ds = sod(d);
+        if (ds > monthEnd) break;
+        if (ds >= monthStart) {
+          const dayNum = new Date(ds).getDate();
+          if (!map.has(dayNum)) map.set(dayNum, []);
+          map.get(dayNum)!.push(task);
+        }
+      }
+    });
+    return map;
+  }, [tasks, monthStart, monthEnd]);
+
   const days = [];
   for (let i = 0; i < firstDay; i++) {
     days.push(<div key={`empty-${i}`} className="min-h-[80px] bg-muted/20" />);
@@ -1755,6 +1786,11 @@ const CalendarView: React.FC<{
       return cell >= Math.min(start, end) && cell <= Math.max(start, end);
     });
     const isToday = date.toDateString() === todayStr;
+    // Projected recurring occurrences for this day (not real docs yet).
+    const dayProjections = projectionsByDay.get(day) || [];
+    const realShown = dayTasks.slice(0, 2);
+    const projShown = dayProjections.slice(0, Math.max(0, 2 - realShown.length));
+    const overflow = (dayTasks.length + dayProjections.length) - realShown.length - projShown.length;
 
     days.push(
       <div key={day} className={`min-h-[50px] sm:min-h-[80px] border p-0.5 sm:p-1 ${isToday ? 'border-primary border-2 bg-primary/5' : 'border-border bg-background'}`}>
@@ -1762,7 +1798,7 @@ const CalendarView: React.FC<{
           {day}
         </div>
         <div className="space-y-0.5 sm:space-y-1">
-          {dayTasks.slice(0, 2).map(task => (
+          {realShown.map(task => (
             <div
               key={task.id}
               className="text-[10px] sm:text-xs p-0.5 sm:p-1 bg-primary/10 rounded cursor-pointer hover:bg-primary/20 truncate"
@@ -1771,9 +1807,19 @@ const CalendarView: React.FC<{
               {task.title}
             </div>
           ))}
-          {dayTasks.length > 2 && (
+          {projShown.map((task, i) => (
+            <div
+              key={`proj-${task.id}-${i}`}
+              className="text-[10px] sm:text-xs p-0.5 sm:p-1 rounded cursor-pointer truncate border border-dashed border-violet-300 text-violet-600 dark:text-violet-300 dark:border-violet-700 bg-violet-50/50 dark:bg-violet-950/30 hover:bg-violet-100 dark:hover:bg-violet-900/40 italic"
+              title={`Përsëritet — ${task.title}`}
+              onClick={() => onTaskClick(task)}
+            >
+              🔄 {task.title}
+            </div>
+          ))}
+          {overflow > 0 && (
             <div className="text-[10px] sm:text-xs text-muted-foreground">
-              +{dayTasks.length - 2}
+              +{overflow}
             </div>
           )}
         </div>

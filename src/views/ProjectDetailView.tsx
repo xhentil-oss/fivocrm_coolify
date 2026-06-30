@@ -30,7 +30,7 @@ import {
 import TaskDetailPanel from '../components/TaskDetailPanel';
 import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
-import { buildNextRecurringTask } from '../lib/recurringUtils';
+import { buildNextRecurringTask, addFrequency } from '../lib/recurringUtils';
 import type { Task, Project, Team, TeamMember, TimeEntry } from '../types';
 
 const ProjectDetailView: React.FC = () => {
@@ -1385,6 +1385,32 @@ const ProjectCalendarView: React.FC<{
   const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
   const firstDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
 
+  const sod = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
+  const monthStart = sod(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1));
+  const monthEnd = sod(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0));
+  // Project future recurring occurrences (which materialise only on completion) so
+  // they're visible on the calendar ahead of time — see TasksView for the rationale.
+  const projectionsByDay = React.useMemo(() => {
+    const map = new Map<number, Task[]>();
+    tasks.forEach((task) => {
+      const t = task as any;
+      if (!t.isRecurring || !t.recurringFrequency || t.nextCycleCreated === true || !task.endDate) return;
+      let d = new Date(task.endDate);
+      let guard = 0;
+      while (guard++ < 500) {
+        d = addFrequency(d, t.recurringFrequency, t.recurringDayOfWeek, t.recurringDayOfMonth, t.recurringInterval, t.recurringDaysOfWeek);
+        const ds = sod(d);
+        if (ds > monthEnd) break;
+        if (ds >= monthStart) {
+          const dayNum = new Date(ds).getDate();
+          if (!map.has(dayNum)) map.set(dayNum, []);
+          map.get(dayNum)!.push(task);
+        }
+      }
+    });
+    return map;
+  }, [tasks, monthStart, monthEnd]);
+
   const days = [];
   for (let i = 0; i < firstDay; i++) {
     days.push(<div key={`empty-${i}`} className="min-h-[80px] bg-muted/20" />);
@@ -1396,12 +1422,16 @@ const ProjectCalendarView: React.FC<{
       const taskDate = new Date(task.endDate);
       return taskDate.toDateString() === date.toDateString();
     });
+    const dayProjections = projectionsByDay.get(day) || [];
+    const realShown = dayTasks.slice(0, 2);
+    const projShown = dayProjections.slice(0, Math.max(0, 2 - realShown.length));
+    const overflow = (dayTasks.length + dayProjections.length) - realShown.length - projShown.length;
 
     days.push(
       <div key={day} className="min-h-[80px] border border-border p-1 bg-background">
         <div className="font-medium text-xs mb-1 text-muted-foreground">{day}</div>
         <div className="space-y-1">
-          {dayTasks.slice(0, 2).map(task => (
+          {realShown.map(task => (
             <div
               key={task.id}
               className="text-xs p-1 bg-primary/10 rounded cursor-pointer hover:bg-primary/20 truncate"
@@ -1410,8 +1440,18 @@ const ProjectCalendarView: React.FC<{
               {task.title}
             </div>
           ))}
-          {dayTasks.length > 2 && (
-            <div className="text-xs text-muted-foreground">+{dayTasks.length - 2} më shumë</div>
+          {projShown.map((task, i) => (
+            <div
+              key={`proj-${task.id}-${i}`}
+              className="text-xs p-1 rounded cursor-pointer truncate border border-dashed border-violet-300 text-violet-600 dark:text-violet-300 dark:border-violet-700 bg-violet-50/50 dark:bg-violet-950/30 hover:bg-violet-100 dark:hover:bg-violet-900/40 italic"
+              title={`Përsëritet — ${task.title}`}
+              onClick={() => onTaskClick(task)}
+            >
+              🔄 {task.title}
+            </div>
+          ))}
+          {overflow > 0 && (
+            <div className="text-xs text-muted-foreground">+{overflow} më shumë</div>
           )}
         </div>
       </div>
