@@ -62,6 +62,13 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessId == businessId;
     }
 
+    // Staff write guard for tenant CRM records. Safe because reads are already
+    // businessId-scoped, so any doc a staff user can open to edit carries a
+    // businessId matching their own; super-admins manage cross-tenant.
+    function canManageBusinessDoc() {
+      return isBusinessMember(resource.data.businessId) || isSuperAdmin();
+    }
+
     // Portal client reading their own customer's data. useClientPortal mirrors the
     // portal user's customerId onto users/{uid}.customerId (uid-keyed), so rules can
     // resolve uid → customerId deterministically without re-keying clientPortalAccess.
@@ -107,7 +114,8 @@ service cloud.firestore {
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
       allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc()
+        || isPortalClientFor(resource.data.customerId);
     }
 
     // ── Phase 4.3b: crown-jewel CRM records — server-side tenant RLS.
@@ -120,7 +128,8 @@ service cloud.firestore {
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc()
+        || isPortalClientFor(resource.data.customerId);
     }
 
     match /customers/{docId} {
@@ -135,7 +144,8 @@ service cloud.firestore {
             && resource.data.email == request.auth.token.email.lower())
         || isSuperAdmin();
       allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc()
+        || isPortalClientDoc(docId);
     }
 
     match /leads/{docId} {
@@ -167,19 +177,19 @@ service cloud.firestore {
     match /expenses/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc();
     }
 
     match /goals/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc();
     }
 
     match /timeEntries/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc();
     }
 
     match /projects/{docId} {
@@ -191,7 +201,8 @@ service cloud.firestore {
             && request.auth.uid in resource.data.memberUserIds)
         || isSuperAdmin();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc()
+        || isPortalClientFor(resource.data.customerId);
     }
 
     match /channels/{docId} {
@@ -226,7 +237,7 @@ service cloud.firestore {
     match /dailyReports/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc();
     }
 
     match /invoiceItems/{docId} {
@@ -235,7 +246,8 @@ service cloud.firestore {
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc()
+        || isPortalClientFor(resource.data.customerId);
     }
 
     match /taskComments/{docId} {
@@ -255,7 +267,7 @@ service cloud.firestore {
     match /taskCollaborators/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc();
     }
 
     match /clientRequests/{docId} {
@@ -264,13 +276,14 @@ service cloud.firestore {
         || isSuperAdmin();
       // Portal users may not have teamId resolved yet
       allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc()
+        || isPortalClientFor(resource.data.customerId);
     }
 
     match /customIndustries/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc();
     }
 
     match /expenseCategories/{docId} {
@@ -303,13 +316,14 @@ service cloud.firestore {
         || isSuperAdmin();
       // Portal clients can submit inquiries
       allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc()
+        || (isAuth() && resource.data.clientUserId == request.auth.uid);
     }
 
     match /standups/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc();
     }
 
     match /quotes/{docId} {
@@ -332,7 +346,9 @@ service cloud.firestore {
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      // Portal client may respond to / sign their own contract.
+      allow update, delete: if canManageBusinessDoc()
+        || isPortalClientFor(resource.data.customerId);
     }
 
     // ── Global Collections (not team-scoped) ──
@@ -461,7 +477,7 @@ service cloud.firestore {
     match /milestones/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      allow update, delete: if canManageBusinessDoc();
     }
 
     match /workspaceFolders/{docId} {
