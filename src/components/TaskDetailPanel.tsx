@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { TaskLabels, LabelEditor } from './TaskLabels';
 import { useCollection, useMutation } from '../hooks/useFirestore';
-import { buildNextRecurringTask } from '../lib/recurringUtils';
+import { buildNextRecurringTask, recurrenceHasEnded } from '../lib/recurringUtils';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
@@ -801,14 +801,20 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             }
 
             // "After completion" recurring: when marked Done, immediately spawn the next cycle
+            // (unless the recurrence's "repeat until" date has passed).
             if (newStatus === 'Done' && task.isRecurring && task.recurringFrequency && !task.nextCycleCreated) {
               try {
-                const nextTask = buildNextRecurringTask(task);
-                await taskMutation.create(nextTask as any);
+                const ended = recurrenceHasEnded(task);
+                if (!ended) {
+                  const nextTask = buildNextRecurringTask(task);
+                  await taskMutation.create(nextTask as any);
+                }
                 // Mark completed task so cron doesn't create a duplicate
                 await onUpdate(task.id, { status: 'Done', nextCycleCreated: true });
                 const freqLabel: Record<string, string> = { daily: 'ditore', weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
-                toast({ title: '✅ Detyrë e kryer + cikli i ri!', description: `Detyra periodike ${freqLabel[task.recurringFrequency] ?? ''} u rigjenerua automatikisht.` });
+                toast(ended
+                  ? { title: '✅ Detyrë e kryer', description: 'Cikli i fundit i përsëritjes — nuk u krijua tjetër.' }
+                  : { title: '✅ Detyrë e kryer + cikli i ri!', description: `Detyra periodike ${freqLabel[task.recurringFrequency] ?? ''} u rigjenerua automatikisht.` });
               } catch (err) {
                 console.error('[Recurring] krijimi i ciklit tjetër dështoi:', err);
                 await onUpdate(task.id, { status: 'Done' });
@@ -1213,6 +1219,20 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                       </div>
                     </div>
                   )}
+                  {/* Repeat-until — bounds the recurrence (e.g. repeat weekly for 4 months) */}
+                  <div className="flex items-center gap-2 mt-2">
+                    <span className="text-[11px] text-muted-foreground">Deri më:</span>
+                    <input
+                      type="date"
+                      defaultValue={(task as any).recurringEndDate ? new Date((task as any).recurringEndDate).toISOString().slice(0, 10) : ''}
+                      disabled={!permissions.canEdit}
+                      onChange={(e) => onUpdate(task.id, { recurringEndDate: e.target.value ? new Date(e.target.value) : (null as any) } as any)}
+                      className="h-6 px-1.5 text-[11px] rounded border border-border/50 bg-muted/40 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
+                    />
+                    {(task as any).recurringEndDate
+                      ? <button type="button" onClick={() => onUpdate(task.id, { recurringEndDate: null as any } as any)} className="text-[11px] text-muted-foreground hover:text-foreground underline">Hiq</button>
+                      : <span className="text-[11px] text-muted-foreground/70">pa fund</span>}
+                  </div>
                 </div>
               </div>
             )}

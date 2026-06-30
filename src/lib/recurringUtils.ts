@@ -80,10 +80,21 @@ export function buildNextRecurringTask(task: Task): Omit<Task, 'id' | 'createdAt
     recurringDayOfWeek: dow ?? undefined,
     recurringDaysOfWeek: dows ?? undefined,
     recurringDayOfMonth: dom ?? undefined,
+    recurringEndDate: task.recurringEndDate ?? undefined,
     nextRecurringDate: newNext,
     nextCycleCreated: false,
     dueNotificationSent: false,
     collaboratorIds: task.collaboratorIds ?? undefined,
     createdByUserId: task.createdByUserId,
   };
+}
+
+/** True when the next cycle would fall after the recurrence's "repeat until" date,
+ *  i.e. the series is complete and no further occurrence should be created. */
+export function recurrenceHasEnded(task: Task): boolean {
+  if (!task.recurringEndDate || !task.recurringFrequency) return false;
+  const parse = (d: any): Date => (d && d.toDate ? d.toDate() : new Date(d));
+  const sod = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
+  const next = buildNextRecurringTask(task);
+  return sod(parse(next.startDate)) > sod(parse(task.recurringEndDate));
 }

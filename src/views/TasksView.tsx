@@ -308,6 +308,7 @@ const TasksView: React.FC = () => {
     const recurringDayOfWeekRaw = formData.get('recurringDayOfWeek') as string;
     const recurringDayOfMonthRaw = formData.get('recurringDayOfMonth') as string;
     const recurringDaysOfWeekRaw = formData.get('recurringDaysOfWeek') as string;
+    const recurringEndDateRaw = formData.get('recurringEndDate') as string;
     const estimatedHoursRaw = formData.get('estimatedHours') as string;
     const dependsOnRaw = formData.get('dependsOn') as string;
 
@@ -383,6 +384,7 @@ const TasksView: React.FC = () => {
       recurringDaysOfWeek: isRecurring && recurringFrequency === 'daily' && recurringDaysOfWeekRaw
         ? (() => { try { return JSON.parse(recurringDaysOfWeekRaw); } catch { return [1,2,3,4,5]; } })()
         : undefined,
+      recurringEndDate: isRecurring && recurringEndDateRaw ? new Date(recurringEndDateRaw) : undefined,
       nextRecurringDate,
       estimatedHours: estimatedHoursRaw ? (v => !isNaN(v) ? v : undefined)(parseFloat(estimatedHoursRaw)) : undefined,
       dependsOn: dependsOn.length > 0 ? dependsOn : undefined,
@@ -1673,6 +1675,17 @@ const TaskForm: React.FC<{
               </div>
             )}
 
+            <div>
+              <Label>Përsërit deri më (opsionale)</Label>
+              <input
+                type="date"
+                name="recurringEndDate"
+                defaultValue={(initialData as any)?.recurringEndDate ? new Date((initialData as any).recurringEndDate).toISOString().slice(0, 10) : ''}
+                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+              />
+              <p className="text-xs text-muted-foreground mt-1">Lëre bosh që të përsëritet pa fund. P.sh. vendos datën pas 4 muajve që të ndalojë atëherë.</p>
+            </div>
+
             <input type="hidden" name="isRecurring" value={isRecurring.toString()} />
             <input type="hidden" name="recurringFrequency" value={recurringFrequency} />
             <input type="hidden" name="recurringDayOfWeek" value={String(recurringDayOfWeek)} />
@@ -1753,12 +1766,14 @@ const CalendarView: React.FC<{
     tasks.forEach((task) => {
       const t = task as any;
       if (!t.isRecurring || !t.recurringFrequency || t.nextCycleCreated === true || !task.endDate) return;
+      const recEnd = t.recurringEndDate ? sod(new Date(t.recurringEndDate)) : null;
       let d = new Date(task.endDate);
       let guard = 0;
       while (guard++ < 500) {
         d = addFrequency(d, t.recurringFrequency, t.recurringDayOfWeek, t.recurringDayOfMonth, t.recurringInterval, t.recurringDaysOfWeek);
         const ds = sod(d);
         if (ds > monthEnd) break;
+        if (recEnd && ds > recEnd) break; // stop at the "repeat until" date
         if (ds >= monthStart) {
           const dayNum = new Date(ds).getDate();
           if (!map.has(dayNum)) map.set(dayNum, []);

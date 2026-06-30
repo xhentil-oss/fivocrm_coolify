@@ -30,7 +30,7 @@ import {
 import TaskDetailPanel from '../components/TaskDetailPanel';
 import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
-import { buildNextRecurringTask, addFrequency } from '../lib/recurringUtils';
+import { buildNextRecurringTask, addFrequency, recurrenceHasEnded } from '../lib/recurringUtils';
 import type { Task, Project, Team, TeamMember, TimeEntry } from '../types';
 
 const ProjectDetailView: React.FC = () => {
@@ -401,10 +401,13 @@ const ProjectDetailView: React.FC = () => {
     if (!task || task.status === targetStatus) return;
 
     // "After completion" recurring: kanban drag to Done spawns next cycle immediately
+    // (unless the recurrence's "repeat until" date has passed).
     if (targetStatus === 'Done' && task.isRecurring && task.recurringFrequency && !task.nextCycleCreated) {
       try {
-        const nextTask = buildNextRecurringTask(task);
-        await taskMutation.create(nextTask as any);
+        if (!recurrenceHasEnded(task as any)) {
+          const nextTask = buildNextRecurringTask(task);
+          await taskMutation.create(nextTask as any);
+        }
         await handleTaskUpdate(taskId, { status: 'Done', nextCycleCreated: true });
       } catch (err) {
         console.error('[Recurring] krijimi i ciklit tjetër dështoi (drag):', err);
@@ -1395,12 +1398,14 @@ const ProjectCalendarView: React.FC<{
     tasks.forEach((task) => {
       const t = task as any;
       if (!t.isRecurring || !t.recurringFrequency || t.nextCycleCreated === true || !task.endDate) return;
+      const recEnd = t.recurringEndDate ? sod(new Date(t.recurringEndDate)) : null;
       let d = new Date(task.endDate);
       let guard = 0;
       while (guard++ < 500) {
         d = addFrequency(d, t.recurringFrequency, t.recurringDayOfWeek, t.recurringDayOfMonth, t.recurringInterval, t.recurringDaysOfWeek);
         const ds = sod(d);
         if (ds > monthEnd) break;
+        if (recEnd && ds > recEnd) break; // stop at the "repeat until" date
         if (ds >= monthStart) {
           const dayNum = new Date(ds).getDate();
           if (!map.has(dayNum)) map.set(dayNum, []);

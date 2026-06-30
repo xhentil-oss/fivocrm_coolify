@@ -228,6 +228,7 @@ export interface Task {
   recurringDayOfWeek?: number; // 0=Sunday, 1=Monday, ... 6=Saturday
   recurringDaysOfWeek?: number[]; // for daily: which weekdays to include (e.g. [1,2,3,4,5] = Mon-Fri)
   recurringDayOfMonth?: number; // 1-31
+  recurringEndDate?: Date; // optional "repeat until" — no occurrences after this date
   nextRecurringDate?: Date;
   nextCycleCreated?: boolean;
   dueNotificationSent?: boolean;
