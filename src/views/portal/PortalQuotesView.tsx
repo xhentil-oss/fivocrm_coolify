@@ -29,51 +29,49 @@ const PortalQuotesView: React.FC = () => {
     skipTeamFilter: true,
   });
 
-  const { data: quotes, loading } = useCollection<Quote>('quotes', {
-    skip: !customerId,
-    skipTeamFilter: true,
-  });
-
   // Read only the client's own customer doc (server-side RLS: isPortalClientDoc).
   const { data: customer } = useDocument<Customer>('customers', customerId || undefined);
 
-  // Find leads that belong to this customer (lead.customerId or lead.email match)
+  // Leads linked to this customer — server-side scoped to customerId (server RLS
+  // only authorizes leads stamped with the client's own customerId).
   const { data: leads } = useCollection<Lead>('leads', {
     skip: !customerId,
+    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });
-  const customerLeadId = (customer as any)?.leadId;
-  const customerEmail = customer?.email?.toLowerCase();
+  // Only leads we can prove belong to this customer (each carries customerId == mine),
+  // capped at 10 for the Firestore `in` query below.
+  const leadIdList = React.useMemo(
+    () => (leads || []).map(l => l.id).slice(0, 10),
+    [leads]
+  );
 
-  // Collect all lead IDs linked to this customer
-  const linkedLeadIds = React.useMemo(() => {
-    const ids = new Set<string>();
-    if (customerLeadId) ids.add(customerLeadId);
-    if (leads && customerId) {
-      leads.forEach(l => {
-        // Lead was created with customerId pointing to this customer
-        if ((l as any).customerId === customerId) ids.add(l.id);
-        // Lead email matches customer email
-        if (customerEmail && l.email?.toLowerCase() === customerEmail) ids.add(l.id);
-      });
-    }
-    return ids;
-  }, [leads, customerId, customerLeadId, customerEmail]);
+  // Quotes are read with two narrowed queries the server RLS authorizes:
+  // by the client's customerId, and by leadId for their own leads.
+  const { data: quotesByCustomer, loading: loadingByCustomer } = useCollection<Quote>('quotes', {
+    skip: !customerId,
+    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
+    skipTeamFilter: true,
+  });
+  const { data: quotesByLead } = useCollection<Quote>('quotes', {
+    skip: leadIdList.length === 0,
+    where: [{ field: 'leadId', operator: 'in', value: leadIdList }],
+    skipTeamFilter: true,
+  });
+  const loading = loadingByCustomer;
 
   const myQuotes = React.useMemo(() => {
-    if (!quotes) return [];
-    return quotes
-      .filter(q =>
-        q.customerId === customerId ||
-        (q.leadId && linkedLeadIds.has(q.leadId))
-      )
+    const merged = [...(quotesByCustomer || []), ...(quotesByLead || [])];
+    const seen = new Set<string>();
+    return merged
+      .filter(q => { if (seen.has(q.id)) return false; seen.add(q.id); return true; })
       .filter(q => q.status !== 'Draft') // Don't show drafts to clients
       .sort((a, b) => {
         const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : (a.createdAt as any)?.toMillis?.() ?? 0;
         const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : (b.createdAt as any)?.toMillis?.() ?? 0;
         return tb - ta;
       });
-  }, [quotes, customerId, linkedLeadIds]);
+  }, [quotesByCustomer, quotesByLead]);
 
   if (loading) {
     return (

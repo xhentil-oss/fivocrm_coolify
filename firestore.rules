@@ -81,6 +81,18 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.customerId == docId;
     }
 
+    // A quote is accessible to a portal client when it is stamped with their
+    // customerId, OR it is linked to a lead that belongs to their customer.
+    // The portal queries quotes by `customerId ==` and by `leadId in [my leads]`,
+    // so the per-doc rule holds for both narrowed queries. The lead lookup costs
+    // one get() per quote read (quotes are few per client).
+    function quoteAccessibleByPortal() {
+      return isPortalClientFor(resource.data.customerId)
+        || (resource.data.leadId is string
+            && exists(/databases/$(database)/documents/leads/$(resource.data.leadId))
+            && isPortalClientFor(get(/databases/$(database)/documents/leads/$(resource.data.leadId)).data.customerId));
+    }
+
     // ── Team-Scoped Collections ──
     // Reads: authenticated only.  The client fetches all docs and filters by
     // teamId client-side (to support legacy docs without teamId and to avoid
@@ -127,9 +139,17 @@ service cloud.firestore {
     }
 
     match /leads/{docId} {
-      allow read: if isAuth();
+      // Staff read their business's leads (queries are businessId-scoped); the
+      // portal client reads only leads stamped with their own customerId (portal
+      // query is `where customerId == myId`). Was `if isAuth()` — a cross-tenant
+      // leak letting any signed-in user (incl. portal clients) read every tenant's
+      // pipeline. Create stays open (useClientPortal auto-creates a lead on first
+      // portal login before businessId is resolved).
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
       allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow update, delete: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
     }
 
     match /services/{docId} {
@@ -293,9 +313,18 @@ service cloud.firestore {
     }
 
     match /quotes/{docId} {
-      allow read: if isAuth();
+      // Staff read via businessId; the portal client reads quotes for their own
+      // customer (or a lead linked to it). Was `if isAuth()` — leaked every
+      // tenant's quotes (incl. Draft pricing) to any signed-in user. Portal
+      // accept/reject is an update, so the portal clause is allowed on update too.
+      allow read: if isBusinessMember(resource.data.businessId)
+        || quoteAccessibleByPortal()
+        || isSuperAdmin();
       allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      allow update: if isBusinessMember(resource.data.businessId)
+        || quoteAccessibleByPortal()
+        || isSuperAdmin();
+      allow delete: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
     }
 
     match /contracts/{docId} {

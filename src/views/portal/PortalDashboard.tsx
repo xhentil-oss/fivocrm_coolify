@@ -132,39 +132,37 @@ const PortalDashboard: React.FC = () => {
   const activeRequests = requests?.filter(r => r.status !== 'Completed' && r.status !== 'Rejected').length || 0;
 
   // Quotes / Preventiva
-  const { data: allQuotes } = useCollection<Quote>('quotes', {
+  // Leads scoped server-side to this customer (server RLS only authorizes leads
+  // stamped with the client's own customerId).
+  const { data: leadsScoped } = useCollection<Lead>('leads', {
     skip: !customerId,
+    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });
-  const { data: allLeads } = useCollection<Lead>('leads', {
-    skip: !customerId,
-    skipTeamFilter: true,
-  });
-  // Read only the client's own customer doc (server-side RLS: isPortalClientDoc).
-  const { data: myCustomer } = useDocument<any>('customers', customerId || undefined);
-  const customerEmail = myCustomer?.email?.toLowerCase();
+  const leadIdList = React.useMemo(
+    () => (leadsScoped || []).map(l => l.id).slice(0, 10),
+    [leadsScoped]
+  );
 
-  const linkedLeadIds = React.useMemo(() => {
-    const ids = new Set<string>();
-    if ((myCustomer as any)?.leadId) ids.add((myCustomer as any).leadId);
-    if (allLeads && customerId) {
-      allLeads.forEach(l => {
-        if ((l as any).customerId === customerId) ids.add(l.id);
-        if (customerEmail && l.email?.toLowerCase() === customerEmail) ids.add(l.id);
-      });
-    }
-    return ids;
-  }, [allLeads, customerId, myCustomer, customerEmail]);
+  // Two narrowed quote queries the server RLS authorizes (by customerId, by own leadIds).
+  const { data: quotesByCustomer } = useCollection<Quote>('quotes', {
+    skip: !customerId,
+    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
+    skipTeamFilter: true,
+  });
+  const { data: quotesByLead } = useCollection<Quote>('quotes', {
+    skip: leadIdList.length === 0,
+    where: [{ field: 'leadId', operator: 'in', value: leadIdList }],
+    skipTeamFilter: true,
+  });
 
   const myQuotes = React.useMemo(() => {
-    if (!allQuotes) return [];
-    return allQuotes
-      .filter(q =>
-        q.customerId === customerId ||
-        (q.leadId && linkedLeadIds.has(q.leadId))
-      )
+    const merged = [...(quotesByCustomer || []), ...(quotesByLead || [])];
+    const seen = new Set<string>();
+    return merged
+      .filter(q => { if (seen.has(q.id)) return false; seen.add(q.id); return true; })
       .filter(q => q.status !== 'Draft');
-  }, [allQuotes, customerId, linkedLeadIds]);
+  }, [quotesByCustomer, quotesByLead]);
 
   const quotesCount = myQuotes.length;
 
