@@ -1224,9 +1224,9 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                     <span className="text-[11px] text-muted-foreground">Deri më:</span>
                     <input
                       type="date"
-                      defaultValue={(task as any).recurringEndDate ? new Date((task as any).recurringEndDate).toISOString().slice(0, 10) : ''}
+                      defaultValue={(task as any).recurringEndDate ? (() => { const d = new Date((task as any).recurringEndDate); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; })() : ''}
                       disabled={!permissions.canEdit}
-                      onChange={(e) => onUpdate(task.id, { recurringEndDate: e.target.value ? new Date(e.target.value) : (null as any) } as any)}
+                      onChange={(e) => { const v = e.target.value; const nd = v ? (() => { const [y, mo, dd] = v.split('-').map(Number); return new Date(y, mo - 1, dd); })() : (null as any); onUpdate(task.id, { recurringEndDate: nd } as any); }}
                       className="h-6 px-1.5 text-[11px] rounded border border-border/50 bg-muted/40 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
                     />
                     {(task as any).recurringEndDate

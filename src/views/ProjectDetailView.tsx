@@ -855,6 +855,7 @@ const ProjectDetailView: React.FC = () => {
         {selectedTask && (
           <div className="fixed inset-0 z-50 bg-background lg:relative lg:inset-auto lg:z-auto lg:w-1/2 h-full max-h-[100dvh] overflow-y-auto pt-[72px] lg:pt-0">
             <TaskDetailPanel
+              key={selectedTask.id}
               task={selectedTask}
               onClose={() => setSelectedTask(null)}
               comments={comments?.filter(c => c.taskId === selectedTask.id) || []}
@@ -1386,7 +1387,8 @@ const ProjectCalendarView: React.FC<{
   const [currentDate, setCurrentDate] = useState(new Date());
 
   const daysInMonth = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
-  const firstDay = new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay();
+  // Monday-first (matches the Tasks calendar and Albanian convention).
+  const firstDay = (new Date(currentDate.getFullYear(), currentDate.getMonth(), 1).getDay() + 6) % 7;
 
   const sod = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
   const monthStart = sod(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1));
@@ -1397,7 +1399,7 @@ const ProjectCalendarView: React.FC<{
     const map = new Map<number, Task[]>();
     tasks.forEach((task) => {
       const t = task as any;
-      if (!t.isRecurring || !t.recurringFrequency || t.nextCycleCreated === true || !task.endDate) return;
+      if (!t.isRecurring || !t.recurringFrequency || t.nextCycleCreated === true || task.status === 'Done' || !task.endDate) return;
       const recEnd = t.recurringEndDate ? sod(new Date(t.recurringEndDate)) : null;
       let d = new Date(task.endDate);
       let guard = 0;
@@ -1477,7 +1479,7 @@ const ProjectCalendarView: React.FC<{
         </Button>
       </div>
       <div className="grid grid-cols-7 gap-px bg-border">
-        {['Diel', 'Hën', 'Mar', 'Mër', 'Enj', 'Pre', 'Sht'].map(day => (
+        {['Hën', 'Mar', 'Mër', 'Enj', 'Pre', 'Sht', 'Diel'].map(day => (
           <div key={day} className="bg-muted p-1 text-center text-xs font-medium">{day}</div>
         ))}
         {days}

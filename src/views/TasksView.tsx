@@ -384,7 +384,9 @@ const TasksView: React.FC = () => {
       recurringDaysOfWeek: isRecurring && recurringFrequency === 'daily' && recurringDaysOfWeekRaw
         ? (() => { try { return JSON.parse(recurringDaysOfWeekRaw); } catch { return [1,2,3,4,5]; } })()
         : undefined,
-      recurringEndDate: isRecurring && recurringEndDateRaw ? new Date(recurringEndDateRaw) : undefined,
+      recurringEndDate: isRecurring && recurringEndDateRaw
+        ? (() => { const [y, mo, d] = recurringEndDateRaw.split('-').map(Number); return new Date(y, mo - 1, d); })()
+        : undefined,
       nextRecurringDate,
       estimatedHours: estimatedHoursRaw ? (v => !isNaN(v) ? v : undefined)(parseFloat(estimatedHoursRaw)) : undefined,
       dependsOn: dependsOn.length > 0 ? dependsOn : undefined,
@@ -1298,6 +1300,7 @@ const TasksView: React.FC = () => {
           shadow-2xl lg:shadow-none border-t lg:border-t-0 lg:border-l
         `}>
           <TaskDetailPanel
+            key={selectedTask.id}
             task={selectedTask}
             onClose={() => { setSelectedTask(null); setPanelExpanded(false); }}
             onExpand={() => setPanelExpanded(p => !p)}
@@ -1680,7 +1683,7 @@ const TaskForm: React.FC<{
               <input
                 type="date"
                 name="recurringEndDate"
-                defaultValue={(initialData as any)?.recurringEndDate ? new Date((initialData as any).recurringEndDate).toISOString().slice(0, 10) : ''}
+                defaultValue={(initialData as any)?.recurringEndDate ? (() => { const d = new Date((initialData as any).recurringEndDate); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; })() : ''}
                 className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
               />
               <p className="text-xs text-muted-foreground mt-1">Lëre bosh që të përsëritet pa fund. P.sh. vendos datën pas 4 muajve që të ndalojë atëherë.</p>
@@ -1765,7 +1768,7 @@ const CalendarView: React.FC<{
     const map = new Map<number, Task[]>();
     tasks.forEach((task) => {
       const t = task as any;
-      if (!t.isRecurring || !t.recurringFrequency || t.nextCycleCreated === true || !task.endDate) return;
+      if (!t.isRecurring || !t.recurringFrequency || t.nextCycleCreated === true || task.status === 'Done' || !task.endDate) return;
       const recEnd = t.recurringEndDate ? sod(new Date(t.recurringEndDate)) : null;
       let d = new Date(task.endDate);
       let guard = 0;

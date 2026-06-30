@@ -425,7 +425,8 @@ async function runRecurringTasks() {
     // Honor "repeat until": if the next occurrence is past recurringEndDate, stop
     // the series (mark done so it isn't reprocessed) without creating a new cycle.
     const recEnd: Date | null = task.recurringEndDate ? (task.recurringEndDate.toDate ? task.recurringEndDate.toDate() : new Date(task.recurringEndDate)) : null;
-    if (recEnd && !isNaN(recEnd.getTime()) && newStart.getTime() > recEnd.getTime()) {
+    const startOfDayMs = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
+    if (recEnd && !isNaN(recEnd.getTime()) && startOfDayMs(newStart) > startOfDayMs(recEnd)) {
       ops.push(doc.ref.update({ nextCycleCreated: true, updatedAt: admin.firestore.Timestamp.now() }));
       continue;
     }
