@@ -64,12 +64,17 @@ const TasksView: React.FC = () => {
   // Persisted view preferences (Asana-style: the view/filter you left is remembered).
   const [viewMode, setViewMode] = useState<'board' | 'calendar' | 'list' | 'timeline'>(() => (localStorage.getItem('tasks_viewMode') as any) || 'list');
   const [filterStatus, setFilterStatus] = useState<string>(() => localStorage.getItem('tasks_filterStatus') || 'all');
+  // Filter by assignee (a teamMember userId, 'all', or 'unassigned'). Applies to
+  // every view — list, board, calendar and timeline — so e.g. picking Elton shows
+  // exactly what Elton has to do, including on the calendar.
+  const [filterAssignee, setFilterAssignee] = useState<string>(() => localStorage.getItem('tasks_filterAssignee') || 'all');
   const [groupBy, setGroupBy] = useState<'none' | 'assignee' | 'priority' | 'project' | 'dueDate'>(() => (localStorage.getItem('tasks_groupBy') as any) || 'none');
   useEffect(() => {
     localStorage.setItem('tasks_viewMode', viewMode);
     localStorage.setItem('tasks_filterStatus', filterStatus);
+    localStorage.setItem('tasks_filterAssignee', filterAssignee);
     localStorage.setItem('tasks_groupBy', groupBy);
-  }, [viewMode, filterStatus, groupBy]);
+  }, [viewMode, filterStatus, filterAssignee, groupBy]);
   const PAGE_SIZE = 50;
   const [page, setPage] = useState(0);
   const [searchQuery, setSearchQuery] = useState<string>('');
@@ -194,6 +199,14 @@ const TasksView: React.FC = () => {
   const baseTasksForStats = React.useMemo(() => {
     if (!allTasks) return [];
     let filtered = allTasks.filter(t => !t.parentTaskId);
+    // Assignee filter applies before stats so the status counts (and every view)
+    // reflect the selected person — picking Elton shows Elton's tasks broken down
+    // by status, on the list, board, calendar and timeline alike.
+    if (filterAssignee !== 'all') {
+      filtered = filterAssignee === 'unassigned'
+        ? filtered.filter(t => !t.assignedToUserId)
+        : filtered.filter(t => t.assignedToUserId === filterAssignee);
+    }
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
       filtered = filtered.filter(t =>
@@ -202,18 +215,31 @@ const TasksView: React.FC = () => {
       );
     }
     return filtered;
-  }, [allTasks, searchQuery]);
+  }, [allTasks, searchQuery, filterAssignee]);
 
   // Final tasks list: additionally filtered by status for the displayed list.
   // 'overdue' is a computed pseudo-status (past due date and not yet Done).
   const tasks = React.useMemo(() => {
     if (filterStatus === 'all') return baseTasksForStats;
     if (filterStatus === 'overdue') {
-      const now = new Date();
       return baseTasksForStats.filter(t => isOverdueDate(t.endDate) && t.status !== 'Done');
     }
     return baseTasksForStats.filter(t => t.status === filterStatus);
   }, [baseTasksForStats, filterStatus]);
+
+  // Assignee filter options — team members of the active business, labelled by
+  // display name (falling back to the email local-part), sorted alphabetically.
+  const assigneeOptions = React.useMemo(() => {
+    return (teamMembers || [])
+      .filter((m: any) => m.userId && (!businessId || !m.businessId || m.businessId === businessId))
+      .map((m: any) => ({
+        userId: m.userId as string,
+        label: m.displayName || (m.email ? m.email.split('@')[0] : m.userId),
+        email: m.email || '',
+      }))
+      .filter((m: any, i: number, arr: any[]) => arr.findIndex(x => x.userId === m.userId) === i)
+      .sort((a: any, b: any) => a.label.localeCompare(b.label));
+  }, [teamMembers, businessId]);
 
   const myTasks = React.useMemo(() => {
     if (!user || !allTasks) return [];
@@ -490,7 +516,7 @@ const TasksView: React.FC = () => {
   // Page-based pagination (50 per page) — applies to both flat and grouped views.
   const totalPages = Math.max(1, Math.ceil(orderedTasks.length / PAGE_SIZE));
   // Reset to first page whenever the underlying set changes.
-  React.useEffect(() => { setPage(0); }, [filterStatus, searchQuery, groupBy]);
+  React.useEffect(() => { setPage(0); }, [filterStatus, filterAssignee, searchQuery, groupBy]);
   // Clamp if the current page falls out of range (e.g. after deletions).
   React.useEffect(() => { if (page > totalPages - 1) setPage(totalPages - 1); }, [page, totalPages]);
   const visibleTasks = useMemo(
@@ -961,6 +987,32 @@ const TasksView: React.FC = () => {
                 className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
                   filterStatus === 'overdue' ? 'bg-red-500 text-white' : 'bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-300'}`}>
                 <AlertTriangle className="w-3 h-3" />Vonuar <span className="tabular-nums">{taskStats.overdue}</span>
+              </button>
+            )}
+          </div>
+          {/* Assignee filter — applies to every view (list, board, calendar, timeline) */}
+          <div className="flex items-center gap-2 mt-2">
+            <User className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+            <Select value={filterAssignee} onValueChange={setFilterAssignee}>
+              <SelectTrigger className="h-8 text-xs w-full sm:w-[240px]">
+                <SelectValue placeholder="Filtro sipas personit" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Të gjithë personat</SelectItem>
+                <SelectItem value="unassigned">Pa caktuar</SelectItem>
+                {assigneeOptions.map((m: any) => (
+                  <SelectItem key={m.userId} value={m.userId}>
+                    {m.label}{m.email ? ` · ${m.email}` : ''}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {filterAssignee !== 'all' && (
+              <button
+                onClick={() => setFilterAssignee('all')}
+                className="text-xs text-muted-foreground hover:text-foreground underline whitespace-nowrap"
+              >
+                Pastro
               </button>
             )}
           </div>
