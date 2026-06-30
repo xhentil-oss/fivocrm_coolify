@@ -80,7 +80,8 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
         { field: 'senderType', operator: '==', value: 'client' },
         { field: 'isRead', operator: '==', value: false },
       ],
-      skipTeamFilter: true,
+      // Scope to the active business server-side (messages RLS forbids cross-tenant reads).
+      teamScopedWhere: true,
     };
   }, [user]);
   const { data: unreadClientMessages, loading: unreadClientLoading } = useCollection<any>('messages', unreadClientQuery);

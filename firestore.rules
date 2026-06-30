@@ -88,6 +88,24 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.customerId == docId;
     }
 
+    // Access control for client-channel chat messages (channelId = `client-<cid>`
+    // or `client-<cid>-project-<pid>`). The portal client owns their own channel;
+    // staff are authorized via the message's businessId in the messages rule, with
+    // a get(customer) fallback here for legacy messages that predate businessId
+    // stamping. Only evaluated when the cheaper businessId clause already failed.
+    function canAccessClientChannel(channelId) {
+      return isAuth()
+        && channelId is string
+        && channelId.size() >= 8
+        && channelId[0:7] == 'client-'
+        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
+        && (
+          channelId.split('-')[1] == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.customerId
+          || (exists(/databases/$(database)/documents/customers/$(channelId.split('-')[1]))
+              && isBusinessMember(get(/databases/$(database)/documents/customers/$(channelId.split('-')[1])).data.businessId))
+        );
+    }
+
     // A quote is accessible to a portal client when it is stamped with their
     // customerId, OR it is linked to a lead that belongs to their customer.
     // The portal queries quotes by `customerId ==` and by `leadId in [my leads]`,
@@ -212,7 +230,17 @@ service cloud.firestore {
     }
 
     match /messages/{docId} {
-      allow read: if isAuth();
+      // Was `if isAuth()` — every DM and channel message readable cross-tenant.
+      // Now: business members read their tenant's messages; a user always reads
+      // their own DMs (sender/receiver); a portal client reads their own client
+      // channel; staff reach legacy client-channel messages via canAccessClientChannel.
+      // Sweep queries (Sidebar/MobileBottomNav unread-client, ChatView recent-client)
+      // were de-scoped to businessId so they no longer span tenants.
+      allow read: if isBusinessMember(resource.data.businessId)
+        || resource.data.senderId == request.auth.uid
+        || resource.data.receiverId == request.auth.uid
+        || canAccessClientChannel(resource.data.channelId)
+        || isSuperAdmin();
       // Staff create with teamId; portal clients create with senderType == 'client' (no teamId required)
       allow create: if isAuth() && (
         request.resource.data.teamId is string ||

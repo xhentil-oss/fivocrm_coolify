@@ -30,7 +30,8 @@ const MobileBottomNav: React.FC = () => {
       { field: 'senderType', operator: '==', value: 'client' },
       { field: 'isRead', operator: '==', value: false },
     ],
-    skipTeamFilter: true,
+    // Scope to the active business server-side (messages RLS forbids cross-tenant reads).
+    teamScopedWhere: true,
   }, [user]);
   const { data: unreadClientMsgs } = useCollection<any>('messages', unreadClientQuery);
 
