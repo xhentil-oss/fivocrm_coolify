@@ -48,6 +48,9 @@ const ProjectDetailView: React.FC = () => {
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deletingProject, setDeletingProject] = useState(false);
   const [filterStatus, setFilterStatus] = useState<string>('all');
+  // Filter by assignee (a member userId, 'all', or 'unassigned'). Applies to every
+  // view in this project — list, board and calendar.
+  const [filterAssignee, setFilterAssignee] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
 
   // Fetch project data
@@ -100,23 +103,29 @@ const ProjectDetailView: React.FC = () => {
 
   const { getName, getInitials } = useUserNames(teamMembers || []);
 
-  // Filter tasks
+  // Filter tasks — applies to list, board AND calendar.
   const tasks = React.useMemo(() => {
     if (!allTasks) return [];
     let filtered = allTasks.filter(t => !t.parentTaskId);
-    
+
+    if (filterAssignee !== 'all') {
+      filtered = filterAssignee === 'unassigned'
+        ? filtered.filter(t => !t.assignedToUserId)
+        : filtered.filter(t => t.assignedToUserId === filterAssignee);
+    }
+
     if (filterStatus !== 'all') {
       filtered = filtered.filter(t => t.status === filterStatus);
     }
-    
+
     if (searchQuery) {
-      filtered = filtered.filter(t => 
+      filtered = filtered.filter(t =>
         t.title.toLowerCase().includes(searchQuery.toLowerCase())
       );
     }
-    
+
     return filtered;
-  }, [allTasks, filterStatus, searchQuery]);
+  }, [allTasks, filterStatus, filterAssignee, searchQuery]);
 
   const team = teams?.find(t => t.id === project?.teamId);
   // Respect explicit memberUserIds; fall back to full team
@@ -577,6 +586,22 @@ const ProjectDetailView: React.FC = () => {
                 <SelectItem value="In Progress">Në progres</SelectItem>
                 <SelectItem value="Review">Rishikim</SelectItem>
                 <SelectItem value="Done">Përfunduar</SelectItem>
+              </SelectContent>
+            </Select>
+            {/* Assignee filter — applies to list, board and calendar */}
+            <Select value={filterAssignee} onValueChange={setFilterAssignee}>
+              <SelectTrigger className="w-full sm:w-[190px] h-8 text-xs">
+                <Users className="w-3 h-3 mr-1" />
+                <SelectValue placeholder="Personi" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">Të gjithë personat</SelectItem>
+                <SelectItem value="unassigned">Pa caktuar</SelectItem>
+                {projectMembers.map((m) => (
+                  <SelectItem key={m.userId} value={m.userId}>
+                    {getName(m.userId)}
+                  </SelectItem>
+                ))}
               </SelectContent>
             </Select>
             {!isGuestOnProject && (
