@@ -1777,17 +1777,17 @@ const CalendarView: React.FC<{
   for (let day = 1; day <= daysInMonth; day++) {
     const date = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
     const cell = sod(date);
-    // A task occupies every calendar day within [startDate, endDate] (falls back
-    // to endDate-only when it has no start), so genuine multi-day tasks span their
-    // range. But a task with an over-long span (e.g. a weekly-recurring task whose
-    // end date was set months out) would otherwise paint every single day — so
-    // beyond SPAN_CAP_DAYS we show it only on its due date.
+    // A recurring task is a single-day occurrence on its due date (the "afat") —
+    // the frequency, not a multi-day span, drives repetition. A non-recurring task
+    // may span [startDate, endDate], capped so an over-long span doesn't paint
+    // every single day (it then collapses to the due date).
     const SPAN_CAP_DAYS = 14;
     const dayTasks = tasks.filter(task => {
       if (!task.endDate) return false;
       const end = sod(new Date(task.endDate));
       let start = task.startDate ? sod(new Date(task.startDate)) : end;
-      if (Math.abs(end - start) / 86400000 > SPAN_CAP_DAYS) start = end;
+      if ((task as any).isRecurring) start = end;
+      else if (Math.abs(end - start) / 86400000 > SPAN_CAP_DAYS) start = end;
       return cell >= Math.min(start, end) && cell <= Math.max(start, end);
     });
     const isToday = date.toDateString() === todayStr;
