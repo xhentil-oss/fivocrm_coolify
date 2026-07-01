@@ -378,6 +378,17 @@ const ChatView: React.FC = () => {
   }), [activeChannel, usesServerLimit, channelLimit]);
   const { data: channelMessages, loading: channelPending, error: channelError } = useCollection<ChatMessage>('messages', channelMsgQuery);
 
+  // If the selected channel can't be read (a stale link to another tenant's client
+  // channel, or a deleted conversation), server-side RLS returns permission-denied.
+  // Clear the selection gracefully so chat falls back to the list instead of
+  // surfacing "Missing or insufficient permissions" and appearing broken.
+  React.useEffect(() => {
+    if (activeChannel && (channelError as any)?.code === 'permission-denied') {
+      setActiveChannel('');
+      setShowSidebar(true);
+    }
+  }, [channelError, activeChannel]);
+
   // Background query: ALL unread client messages — drives per-channel unread badges
   const allUnreadClientQuery = useMemo(() => ({
     where: [
