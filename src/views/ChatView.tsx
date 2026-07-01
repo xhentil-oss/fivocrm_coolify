@@ -3443,7 +3443,7 @@ const ChatView: React.FC = () => {
 
                                 {/* Hover actions — desktop only (hidden on mobile; the mobile quick-actions row below handles touch, so the emoji picker isn't duplicated) */}
                                 {!isDeleted && !isEditing && (
-                                  <div className={`absolute -top-3.5 ${isOwn ? 'left-1' : 'right-1'} hidden sm:flex opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-all items-center flex-wrap max-w-[90vw] bg-background border rounded-xl shadow-lg px-1 py-0.5 z-10 gap-0.5`}>
+                                  <div className={`absolute -top-9 ${isOwn ? 'right-1' : 'left-1'} hidden sm:flex opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-all items-center flex-nowrap whitespace-nowrap bg-background border rounded-xl shadow-lg px-1 py-0.5 z-20 gap-0.5`}>
                                     <div className="relative">
                                       <button className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors"
                                         onClick={() => setShowEmojiPicker(showEmojiPicker === message.id ? null : message.id)}>
