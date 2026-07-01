@@ -297,6 +297,11 @@ export function useCollection<T = DocumentData>(
     if (!user) { setData([]); setLoading(false); return; }
     if (isTeamScoped && !scopeId) { setData([]); setLoading(true); return; }
 
+    // Reset any error from a previous query params set — otherwise a stale error
+    // (e.g. permission-denied from a prior channel) bleeds into the new query and
+    // can trip consumers that react to `error` (e.g. ChatView clearing the channel).
+    setError(null);
+
     const cacheKey = buildCacheKey(collectionName, whereKey, orderKey, limitVal, skipTeamFilter, scopeId);
     const isStatic = staticCollections.has(collectionName);
 
