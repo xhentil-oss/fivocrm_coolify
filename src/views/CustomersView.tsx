@@ -73,6 +73,12 @@ const CustomersView: React.FC = () => {
   const [selectedRequest, setSelectedRequest] = useState<ClientRequest | null>(null);
   const [requestStatusFilter, setRequestStatusFilter] = useState<string>('__all__');
 
+  // Show 20 rows initially (lighter page), grow via "Shfaq më shumë". NOTE: this is
+  // display-only — the status-count cards, search and duplicate-detection need the
+  // whole tenant in memory, so the fetch still loads all customers. Cutting reads
+  // would require server-side counts + cursor pagination (a larger refactor).
+  const [visibleCount, setVisibleCount] = useState(20);
+
   // Data Fetching
   const { data: rawCustomers, loading: customersLoading } = useCollection<Customer>('customers', {
     orderBy: { field: 'createdAt', direction: 'desc' },
@@ -169,8 +175,7 @@ const CustomersView: React.FC = () => {
 
   // Cap rendered rows so large customer lists don't mount hundreds of DOM nodes
   // at once (mobile jank). "Load more" reveals the rest of the filtered set.
-  const [visibleCount, setVisibleCount] = useState(50);
-  useEffect(() => { setVisibleCount(50); }, [searchQuery, statusFilter, industryFilter, creditLimitFilter]);
+  useEffect(() => { setVisibleCount(20); }, [searchQuery, statusFilter, industryFilter, creditLimitFilter]);
   const visibleCustomers = useMemo(
     () => filteredCustomers.slice(0, visibleCount),
     [filteredCustomers, visibleCount]
@@ -729,7 +734,7 @@ const CustomersView: React.FC = () => {
               })
             )}
             {filteredCustomers.length > visibleCount && (
-              <Button variant="outline" className="w-full" onClick={() => setVisibleCount((c) => c + 50)}>
+              <Button variant="outline" className="w-full" onClick={() => setVisibleCount((c) => c + 20)}>
                 Shfaq më shumë ({filteredCustomers.length - visibleCount})
               </Button>
             )}
@@ -832,7 +837,7 @@ const CustomersView: React.FC = () => {
             </div>
             {filteredCustomers.length > visibleCount && (
               <div className="p-3 border-t border-border">
-                <Button variant="outline" className="w-full" onClick={() => setVisibleCount((c) => c + 50)}>
+                <Button variant="outline" className="w-full" onClick={() => setVisibleCount((c) => c + 20)}>
                   Shfaq më shumë ({filteredCustomers.length - visibleCount})
                 </Button>
               </div>
