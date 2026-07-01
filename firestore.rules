@@ -251,7 +251,7 @@ service cloud.firestore {
       allow update: if isAuth() && (
         resource.data.senderId == request.auth.uid ||
         request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['isRead', 'readAt', 'updatedAt', 'reactions', 'isPinned', 'pinnedAt', 'pinnedBy'])
+          .hasOnly(['isRead', 'readAt', 'readBy', 'updatedAt', 'reactions', 'isPinned', 'pinnedAt', 'pinnedBy'])
       );
       allow delete: if isAuth() && resource.data.senderId == request.auth.uid;
     }

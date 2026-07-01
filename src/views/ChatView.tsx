@@ -142,6 +142,7 @@ const ChatView: React.FC = () => {
 
   // #42 Edit history viewer
   const [editHistoryMessageId, setEditHistoryMessageId] = useState<string | null>(null);
+  const [readReceiptFor, setReadReceiptFor] = useState<string | null>(null); // group message id → show who read
 
   // Search filters
   const [showSearchFilters, setShowSearchFilters] = useState(false);
@@ -2353,7 +2354,12 @@ const ChatView: React.FC = () => {
     if (chatMode !== 'channel' || !user || !channelMessages) return;
     // Snapshot the active channel — guard against rapid switches (mirror of the DM path)
     const snapshotChannel = activeChannel;
-    const unread = channelMessages.filter(m => m.senderId !== user.uid && !m.isRead && !markedAsReadRef.current.has(m.id));
+    // In a group, "read" is per-member (readBy), so a message stays unread FOR ME
+    // until my uid is in readBy — even after another member has read it (isRead=true).
+    const unread = channelMessages.filter(m => {
+      if (m.senderId === user.uid || markedAsReadRef.current.has(m.id)) return false;
+      return isGroupChannel ? !((m as any).readBy || []).includes(user.uid) : !m.isRead;
+    });
     if (unread.length === 0) return;
     const ids = unread.map(m => m.id);
     ids.forEach(id => markedAsReadRef.current.add(id));
@@ -2362,13 +2368,17 @@ const ChatView: React.FC = () => {
       return;
     }
     const batch = writeBatch(db);
-    const extra: any = isClientChannel ? { readAt: new Date() } : {};
-    ids.forEach(id => batch.update(doc(db, 'messages', id), { isRead: true, ...extra }));
+    ids.forEach(id => {
+      const patch: any = { isRead: true };
+      if (isGroupChannel) patch.readBy = arrayUnion(user.uid); // WhatsApp-style per-member read receipts
+      else if (isClientChannel) patch.readAt = new Date();
+      batch.update(doc(db, 'messages', id), patch);
+    });
     batch.commit().catch((err) => {
       ids.forEach(id => markedAsReadRef.current.delete(id));
       console.error('[ChatView] markAsRead channel batch failed', err);
     });
-  }, [chatMode, channelMessages, user, activeChannel, isClientChannel]);
+  }, [chatMode, channelMessages, user, activeChannel, isClientChannel, isGroupChannel]);
 
   // Auto-resize textarea + @mention detection
   const handleTextareaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -3431,7 +3441,23 @@ const ChatView: React.FC = () => {
                                           {' '}· ndryshuar
                                         </button>
                                       )}
-                                      {isOwn && <Check className="h-2.5 w-2.5 opacity-70" />}
+                                      {isOwn && !isGroupChannel && <Check className="h-2.5 w-2.5 opacity-70" />}
+                                      {isOwn && isGroupChannel && (() => {
+                                        const gm = (getChannelMeta(activeChannel)?.group?.members || []).filter((uid: string) => uid !== user?.uid);
+                                        const readers = ((message as any).readBy || []).filter((uid: string) => uid !== user?.uid && gm.includes(uid));
+                                        const allRead = gm.length > 0 && readers.length >= gm.length;
+                                        return (
+                                          <button
+                                            type="button"
+                                            onClick={(e) => { e.stopPropagation(); setReadReceiptFor(message.id); }}
+                                            className="inline-flex items-center gap-0.5 hover:opacity-100"
+                                            title="Kush e ka lexuar"
+                                          >
+                                            <CheckCheck className={`h-3 w-3 ${allRead ? 'text-sky-400' : 'opacity-60'}`} />
+                                            {gm.length > 0 && <span className="text-[9px]">{readers.length}/{gm.length}</span>}
+                                          </button>
+                                        );
+                                      })()}
                                       {isOwn && isClientChannel && (message as any).readAt && (
                                         <span className="opacity-80 text-[9px]">
                                           · Parë {(() => { const d = (message as any).readAt?.toDate?.() ?? (message as any).readAt; return d instanceof Date ? d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : ''; })()}
@@ -4517,6 +4543,44 @@ const ChatView: React.FC = () => {
                     <div className="text-sm whitespace-pre-wrap break-words opacity-80">{h.content}</div>
                   </div>
                 ))}
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* Group read receipts — who has read this message and who hasn't */}
+      <Dialog open={!!readReceiptFor} onOpenChange={(o) => !o && setReadReceiptFor(null)}>
+        <DialogContent className="max-w-xs">
+          <DialogHeader>
+            <DialogTitle className="text-base flex items-center gap-2">
+              <CheckCheck className="h-4 w-4 text-sky-500" /> Lexuar nga
+            </DialogTitle>
+          </DialogHeader>
+          {(() => {
+            const m = messages?.find(x => x.id === readReceiptFor) as any;
+            if (!m) return <p className="text-sm text-muted-foreground">Nuk u gjet.</p>;
+            const gmembers = (getChannelMeta(activeChannel)?.group?.members || []).filter((uid: string) => uid !== m.senderId);
+            const readBy: string[] = Array.isArray(m.readBy) ? m.readBy : [];
+            const read = gmembers.filter((uid: string) => readBy.includes(uid));
+            const unread = gmembers.filter((uid: string) => !readBy.includes(uid));
+            const Row = ({ uid, seen }: { uid: string; seen: boolean }) => (
+              <div className="flex items-center gap-2 py-1.5">
+                <div className="w-7 h-7 rounded-full bg-primary/10 flex items-center justify-center text-[11px] font-semibold text-primary flex-shrink-0">
+                  {getUserDisplayName(uid).slice(0, 2).toUpperCase()}
+                </div>
+                <span className="text-sm truncate flex-1">{getUserDisplayName(uid)}</span>
+                {seen ? <CheckCheck className="h-4 w-4 text-sky-500 flex-shrink-0" /> : <Check className="h-4 w-4 text-muted-foreground/40 flex-shrink-0" />}
+              </div>
+            );
+            return (
+              <div className="max-h-[60vh] overflow-y-auto">
+                <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide mt-1 mb-0.5">Lexuar · {read.length}</div>
+                {read.length === 0 && <p className="text-xs text-muted-foreground py-1">Askush ende.</p>}
+                {read.map(uid => <Row key={uid} uid={uid} seen />)}
+                <div className="text-[11px] font-medium text-muted-foreground uppercase tracking-wide mt-3 mb-0.5">Pa lexuar · {unread.length}</div>
+                {unread.length === 0 && <p className="text-xs text-muted-foreground py-1">Të gjithë e kanë lexuar 🎉</p>}
+                {unread.map(uid => <Row key={uid} uid={uid} seen={false} />)}
               </div>
             );
           })()}
