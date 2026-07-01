@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { LabelEditor, labelColor } from './TaskLabels';
+import { LabelEditor } from './TaskLabels';
 
 // Suggested starter tags so users pick from a consistent set instead of retyping
 // (and creating near-duplicates like "Prioritet" / "prioritet"). Existing tags in
@@ -49,22 +49,12 @@ export const ContactTagsField: React.FC<Props> = ({ name = 'tags', initial, sugg
 
   const update = (next: string[]) => { setTags(next); onChange?.(next); };
 
-  // Quick-pick chips for suggestions not already selected.
-  const quickPicks = merged.filter((s) => !tags.some((t) => t.toLowerCase() === s.toLowerCase())).slice(0, 12);
-
   return (
     <div className="space-y-2">
+      {/* LabelEditor renders the selected chips + its own suggestion chips (from
+          `merged`), so we don't render a second suggestion row here (that caused
+          duplicate chips). */}
       <LabelEditor value={tags} onChange={update} suggestions={merged} placeholder="Shto etiketë (Enter)…" />
-      {quickPicks.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {quickPicks.map((s) => (
-            <button key={s} type="button" onClick={() => update([...tags, s])}
-              className={`px-1.5 py-0.5 rounded text-[10px] font-medium hover:opacity-80 ${labelColor(s)}`}>
-              + {s}
-            </button>
-          ))}
-        </div>
-      )}
       <input type="hidden" name={name} value={tags.join(', ')} />
     </div>
   );
