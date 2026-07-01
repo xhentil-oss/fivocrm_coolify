@@ -20,6 +20,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
+import ContactTagsField, { parseTags } from '../components/ContactTagsField';
 import { Calendar } from '../components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
@@ -235,6 +236,7 @@ const CRMView: React.FC = () => {
       source: source || undefined,
       businessCategory,
       notes: notes || undefined,
+      tags: (() => { const t = parseTags(formData.get('tags') as string); return t.length ? t : undefined; })(),
       estimatedValue: estimatedValue && !isNaN(parseFloat(estimatedValue)) ? parseFloat(estimatedValue) : undefined,
       probability: STAGE_PROBABILITY[status] ?? 10,
       score: calculateLeadScore({ name, email, phoneNumber, company, estimatedValue: estimatedValue && !isNaN(parseFloat(estimatedValue)) ? parseFloat(estimatedValue) : undefined }),
@@ -323,6 +325,7 @@ const CRMView: React.FC = () => {
         source: source || undefined,
         businessCategory,
         notes: notes || undefined,
+        tags: (() => { const t = parseTags(formData.get('tags') as string); return t.length ? t : undefined; })(),
         estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined,
         probability: STAGE_PROBABILITY[status] ?? editLead.probability,
         score: calculateLeadScore({ name, email, phoneNumber, company, estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined }),
@@ -795,6 +798,14 @@ const CRMView: React.FC = () => {
     (leads || []).forEach(l => (l.tags || []).forEach(t => t && s.add(t)));
     return Array.from(s).sort((a, b) => a.localeCompare(b));
   }, [leads]);
+  // Suggestions for the tag picker in the lead form — leads + customers, so tags
+  // stay consistent across both and users don't create near-duplicates.
+  const tagSuggestions = React.useMemo(() => {
+    const s = new Set<string>();
+    (leads || []).forEach((l: any) => parseTags(l.tags).forEach(t => s.add(t)));
+    (customers || []).forEach((c: any) => parseTags(c.tags).forEach(t => s.add(t)));
+    return Array.from(s);
+  }, [leads, customers]);
 
   // Reset window when filters/sort change
   useEffect(() => {
@@ -1036,7 +1047,7 @@ const CRMView: React.FC = () => {
               <DialogHeader>
                 <DialogTitle>Krijo Lead të Ri</DialogTitle>
               </DialogHeader>
-              <LeadForm onSubmit={(data) => { setDirty(false); handleCreateLead(data); }} disabled={saving} teamMembers={teamMembers || []} getName={getName} onDirtyChange={setDirty} />
+              <LeadForm onSubmit={(data) => { setDirty(false); handleCreateLead(data); }} disabled={saving} teamMembers={teamMembers || []} getName={getName} onDirtyChange={setDirty} tagSuggestions={tagSuggestions} />
             </DialogContent>
           </Dialog>
         )}
@@ -2309,6 +2320,7 @@ const CRMView: React.FC = () => {
               teamMembers={teamMembers || []}
               getName={getName}
               onDirtyChange={setDirty}
+              tagSuggestions={tagSuggestions}
             />
           )}
         </DialogContent>
@@ -2374,7 +2386,8 @@ const LeadForm: React.FC<{
   teamMembers?: TeamMember[];
   getName?: (userId: string | null | undefined, fallback?: string) => string;
   onDirtyChange?: (dirty: boolean) => void;
-}> = ({ onSubmit, initialData, disabled, teamMembers = [], getName, onDirtyChange }) => {
+  tagSuggestions?: string[];
+}> = ({ onSubmit, initialData, disabled, teamMembers = [], getName, onDirtyChange, tagSuggestions = [] }) => {
   // Split existing phoneNumber into prefix + local
   const PHONE_PREFIXES = ['+355','+383','+389','+381','+382','+385','+387','+386','+49','+43','+41','+39','+44','+1','+33','+34','+30','+90'];
   const parsePhone = (phone?: string) => {
@@ -2572,6 +2585,11 @@ const LeadForm: React.FC<{
           </Select>
         </div>
       )}
+
+      <div>
+        <Label>Etiketat</Label>
+        <ContactTagsField name="tags" initial={initialData?.tags} suggestions={tagSuggestions} />
+      </div>
 
       <div>
         <Label htmlFor="notes">Shënime</Label>

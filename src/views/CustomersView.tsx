@@ -19,6 +19,7 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
+import ContactTagsField, { parseTags } from '../components/ContactTagsField';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../components/ui/alert-dialog';
 import { Textarea } from '../components/ui/textarea';
@@ -79,6 +80,14 @@ const CustomersView: React.FC = () => {
   // Role-based filtering: Member/Viewer see only customers they created
   const customers = useFilteredByOwner(rawCustomers);
   const { data: leads } = useCollection<Lead>('leads', { skipTeamFilter: true });
+  // Existing tags across customers + leads → feed the tag picker so users reuse
+  // tags instead of creating near-duplicates.
+  const tagSuggestions = useMemo(() => {
+    const s = new Set<string>();
+    (rawCustomers || []).forEach((c: any) => parseTags(c.tags).forEach(t => s.add(t)));
+    (leads || []).forEach((l: any) => parseTags(l.tags).forEach(t => s.add(t)));
+    return [...s];
+  }, [rawCustomers, leads]);
   const { data: portalAccess } = useCollection<ClientPortalAccess>('clientPortalAccess', {
     skipTeamFilter: true,
   });
@@ -488,7 +497,7 @@ const CustomersView: React.FC = () => {
               <DialogHeader>
                 <DialogTitle>Krijo Klient te Ri</DialogTitle>
               </DialogHeader>
-              <CustomerForm onSubmit={(data) => { setDirty(false); handleCreateCustomer(data); }} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} onDirtyChange={setDirty} teamMembers={teamMembers || []} getName={getName} canAssign={permissions.canManageMembers || permissions.role === 'Admin' || permissions.role === 'Manager'} />
+              <CustomerForm onSubmit={(data) => { setDirty(false); handleCreateCustomer(data); }} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} onDirtyChange={setDirty} teamMembers={teamMembers || []} getName={getName} canAssign={permissions.canManageMembers || permissions.role === 'Admin' || permissions.role === 'Manager'} tagSuggestions={tagSuggestions} />
             </DialogContent>
           </Dialog>
         )}
@@ -852,7 +861,7 @@ const CustomersView: React.FC = () => {
                 <DialogHeader>
                   <DialogTitle>Ndrysho Klientin</DialogTitle>
                 </DialogHeader>
-                <CustomerForm onSubmit={(data) => { setDirty(false); handleUpdateCustomer(data); }} initialData={selectedCustomer} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} onDirtyChange={setDirty} teamMembers={teamMembers || []} getName={getName} canAssign={permissions.canManageMembers || permissions.role === 'Admin' || permissions.role === 'Manager'} />
+                <CustomerForm onSubmit={(data) => { setDirty(false); handleUpdateCustomer(data); }} initialData={selectedCustomer} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} onDirtyChange={setDirty} teamMembers={teamMembers || []} getName={getName} canAssign={permissions.canManageMembers || permissions.role === 'Admin' || permissions.role === 'Manager'} tagSuggestions={tagSuggestions} />
               </DialogContent>
             </Dialog>
           )}
@@ -1198,7 +1207,8 @@ const CustomerForm: React.FC<{
   teamMembers?: TeamMember[];
   getName?: (userId: string | null | undefined, fallback?: string) => string;
   canAssign?: boolean;
-}> = ({ onSubmit, initialData, industries = INDUSTRY_OPTIONS, onAddIndustry, onDirtyChange, teamMembers = [], getName, canAssign }) => {
+  tagSuggestions?: string[];
+}> = ({ onSubmit, initialData, industries = INDUSTRY_OPTIONS, onAddIndustry, onDirtyChange, teamMembers = [], getName, canAssign, tagSuggestions = [] }) => {
   const init = initialData as any;
   const [status, setStatus] = useState(init?.status || 'Active');
   const [industry, setIndustry] = useState(init?.industry || '');
@@ -1338,8 +1348,8 @@ const CustomerForm: React.FC<{
       </div>
 
       <div>
-        <Label htmlFor="tags">Etiketat (te ndara me presje)</Label>
-        <Input id="tags" name="tags" defaultValue={init?.tags} placeholder="p.sh. VIP, Prioritet, Lokal" />
+        <Label>Etiketat</Label>
+        <ContactTagsField name="tags" initial={init?.tags} suggestions={tagSuggestions} />
       </div>
 
       <div>
