@@ -14,6 +14,11 @@ const db = admin.firestore();
   const teamBiz = {}; // teamId -> businessId
   const learn = (teamId, businessId) => { if (teamId && businessId && !teamBiz[teamId]) teamBiz[teamId] = businessId; };
 
+  // Authoritative source first: the teams collection (this is what usePermissions
+  // uses to resolve a user's active businessId).
+  const teamsSnap = await db.collection('teams').get();
+  teamsSnap.docs.forEach(d => learn(d.id, d.data().businessId));
+
   const tmSnap = await db.collection('teamMembers').get();
   tmSnap.docs.forEach(d => { const x = d.data(); learn(x.teamId, x.businessId); });
   // Augment the map from team-scoped data that carries both fields.
@@ -29,7 +34,8 @@ const db = admin.firestore();
   const memberBizByUid = {}; // uid -> businessId (after fix)
   tmSnap.docs.forEach(d => {
     const x = d.data();
-    let biz = x.businessId || (x.teamId ? teamBiz[x.teamId] : null);
+    // Match usePermissions exactly: team.businessId, else the teamId itself.
+    let biz = x.businessId || (x.teamId ? (teamBiz[x.teamId] || x.teamId) : null);
     if (x.userId && biz) memberBizByUid[x.userId] = biz;
     if (!x.businessId) {
       if (biz) { tmFixed++; if (APPLY) tmWrites.push(d.ref.update({ businessId: biz })); }
