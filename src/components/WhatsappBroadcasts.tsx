@@ -67,7 +67,9 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
   const connectedAgents = (waAccounts || []).filter((a) => a.enabled);
 
   const [sendChannel, setSendChannel] = useState<'meta' | 'baileys'>('meta');
-  const [audience, setAudience] = useState<('leads' | 'customers')[]>(['leads']);
+  // Default to BOTH audiences so tags set on customers (not just leads) are counted
+  // out of the box — otherwise a customer-only tag matches 0 and "doesn't show up".
+  const [audience, setAudience] = useState<('leads' | 'customers')[]>(['leads', 'customers']);
   const [name, setName] = useState('');
   const [templateId, setTemplateId] = useState('');
   const [channelId, setChannelId] = useState('');
