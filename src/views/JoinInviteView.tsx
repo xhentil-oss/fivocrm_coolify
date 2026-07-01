@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate, Link } from 'react-router-dom';
-import { collection, query, where, getDocs, doc, updateDoc, addDoc, Timestamp } from 'firebase/firestore';
+import { collection, query, where, getDocs, doc, getDoc, updateDoc, addDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { Card } from '../components/ui/card';
@@ -121,6 +121,19 @@ const JoinInviteView: React.FC = () => {
 
     setAccepting(true);
     try {
+      // Resolve the team's businessId (the tenant isolation key) so we can stamp it
+      // on the member AND on users/{uid} immediately — server-side RLS (isBusinessMember)
+      // reads users/{uid}.businessId, so without this a new member can't read chat/CRM
+      // until usePermissions happens to write it on a later app load.
+      let businessId: string = invite.teamId;
+      try {
+        const teamSnap = await getDoc(doc(db, 'teams', invite.teamId));
+        if (teamSnap.exists() && (teamSnap.data() as any).businessId) businessId = (teamSnap.data() as any).businessId;
+      } catch { /* fall back to teamId */ }
+
+      // Stamp the isolation keys on the user doc up front (idempotent, both paths).
+      await setDoc(doc(db, 'users', user.uid), { teamId: invite.teamId, businessId, updatedAt: Timestamp.now() }, { merge: true }).catch(() => {});
+
       // Guard against duplicate member (race condition: double-click or retry after partial failure)
       const existingMember = await getDocs(
         query(collection(db, 'teamMembers'),
@@ -142,6 +155,7 @@ const JoinInviteView: React.FC = () => {
         email: user.email || invite.email || '',
         displayName: user.displayName || user.email?.split('@')[0] || '',
         teamId: invite.teamId,
+        businessId,
         role: invite.role,
         canAccessProjects: invite.canAccessProjects ?? false,
         canAccessTasks: invite.canAccessTasks ?? false,
