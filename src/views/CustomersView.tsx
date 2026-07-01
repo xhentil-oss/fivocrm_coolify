@@ -20,6 +20,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import ContactTagsField, { parseTags } from '../components/ContactTagsField';
+import { TaskLabels } from '../components/TaskLabels';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../components/ui/alert-dialog';
 import { Textarea } from '../components/ui/textarea';
@@ -722,7 +723,7 @@ const CustomersView: React.FC = () => {
                         <div className="flex items-center gap-1"><Phone className="w-3 h-3" />{customer.phone}</div>
                       )}
                     </div>
-
+                    {parseTags(cust.tags).length > 0 && <TaskLabels labels={parseTags(cust.tags)} />}
                   </Card>
                 );
               })
@@ -774,6 +775,7 @@ const CustomersView: React.FC = () => {
                               <p className="font-medium truncate max-w-[120px] sm:max-w-none">{customer.name}</p>
                               {cust.taxId && <p className="text-sm text-muted-foreground hidden sm:block">NIPT: {cust.taxId}</p>}
                               {cust.contactPerson && <p className="text-sm text-muted-foreground hidden sm:block">Kontakt: {cust.contactPerson}</p>}
+                              <TaskLabels labels={parseTags(cust.tags)} max={4} />
                             </div>
                           </td>
                           <td className="px-3 sm:px-6 py-3 sm:py-4 hidden md:table-cell">
