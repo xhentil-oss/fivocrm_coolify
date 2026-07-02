@@ -175,6 +175,8 @@ const ChatView: React.FC = () => {
   const getScroller = (root: HTMLElement | null): HTMLElement | null =>
     root?.querySelector<HTMLElement>('[data-radix-scroll-area-viewport]') ?? null;
   const markedAsReadRef = useRef<Set<string>>(new Set());
+  // Notification docs (bell) already dismissed this session so we don't re-batch them.
+  const markedNotifReadRef = useRef<Set<string>>(new Set());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatTextareaRef = useRef<HTMLTextAreaElement>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
@@ -467,6 +469,18 @@ const ChatView: React.FC = () => {
   }), [user?.uid]);
   const { data: allUnreadTeamMsgs } = useCollection<ChatMessage>('messages', allUnreadChannelQuery);
   const { data: bgReceivedDMs } = useCollection<ChatMessage>('messages', bgDmQuery);
+
+  // My unread bell notifications — used to auto-dismiss a chat notification (client
+  // message / @mention) the moment I open its linked conversation. Without this the
+  // message badge cleared but the bell count lingered until manually tapped.
+  const myUnreadNotifQuery = useMemo(() => ({
+    skip: !user?.uid,
+    where: user?.uid ? [
+      { field: 'userId', operator: '==' as const, value: user.uid },
+      { field: 'isRead', operator: '==' as const, value: false },
+    ] : undefined,
+  }), [user?.uid]);
+  const { data: myUnreadNotifs } = useCollection<any>('notifications', myUnreadNotifQuery);
 
   const { data: sentDirectMessages, loading: sentPending } = useCollection<ChatMessage>('messages', directMsgQuery);
   const { data: receivedDirectMessages, loading: receivedPending } = useCollection<ChatMessage>('messages', directMsgReceivedQuery);
@@ -2379,6 +2393,25 @@ const ChatView: React.FC = () => {
       console.error('[ChatView] markAsRead channel batch failed', err);
     });
   }, [chatMode, channelMessages, user, activeChannel, isClientChannel, isGroupChannel]);
+
+  // Dismiss the bell notification(s) tied to the conversation I just opened.
+  // Chat notifications (client_message, @mention) carry linkTo = the channel id;
+  // opening that channel should clear them just like tapping them in the bell would.
+  useEffect(() => {
+    if (chatMode !== 'channel' || !activeChannel || !myUnreadNotifs?.length) return;
+    const toClear = myUnreadNotifs.filter(
+      (n: any) => n.linkTo === activeChannel && !markedNotifReadRef.current.has(n.id),
+    );
+    if (toClear.length === 0) return;
+    const ids = toClear.map((n: any) => n.id);
+    ids.forEach((id: string) => markedNotifReadRef.current.add(id));
+    const batch = writeBatch(db);
+    ids.forEach((id: string) => batch.update(doc(db, 'notifications', id), { isRead: true }));
+    batch.commit().catch((err) => {
+      ids.forEach((id: string) => markedNotifReadRef.current.delete(id));
+      console.error('[ChatView] dismiss chat notifications failed', err);
+    });
+  }, [chatMode, activeChannel, myUnreadNotifs]);
 
   // Auto-resize textarea + @mention detection
   const handleTextareaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
