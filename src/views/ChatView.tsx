@@ -2369,12 +2369,20 @@ const ChatView: React.FC = () => {
   }, [activeDirectUserId, bgReceivedDMs, allDirectMessages, user, chatMode]);
 
   useEffect(() => {
-    if (chatMode !== 'channel' || !user || !channelMessages) return;
+    if (chatMode !== 'channel' || !user || !activeChannel) return;
     // Snapshot the active channel — guard against rapid switches (mirror of the DM path)
     const snapshotChannel = activeChannel;
+    // Union the open conversation's messages with the ALWAYS-ON background unread
+    // queries (client/team), filtered to this channel — so opening a conversation
+    // clears its badge immediately, even before its own messages have loaded (a
+    // quick open+leave otherwise left it unread).
+    const bg = (isClientChannel ? (allUnreadClientMsgs || []) : (allUnreadTeamMsgs || []))
+      .filter(m => (m as any).channelId === activeChannel);
+    const byId = new Map<string, any>();
+    [...(channelMessages || []), ...bg].forEach(m => byId.set(m.id, m));
     // In a group, "read" is per-member (readBy), so a message stays unread FOR ME
     // until my uid is in readBy — even after another member has read it (isRead=true).
-    const unread = channelMessages.filter(m => {
+    const unread = [...byId.values()].filter(m => {
       if (m.senderId === user.uid || markedAsReadRef.current.has(m.id)) return false;
       return isGroupChannel ? !((m as any).readBy || []).includes(user.uid) : !m.isRead;
     });
@@ -2396,7 +2404,7 @@ const ChatView: React.FC = () => {
       ids.forEach(id => markedAsReadRef.current.delete(id));
       console.error('[ChatView] markAsRead channel batch failed', err);
     });
-  }, [chatMode, channelMessages, user, activeChannel, isClientChannel, isGroupChannel]);
+  }, [chatMode, channelMessages, allUnreadClientMsgs, allUnreadTeamMsgs, user, activeChannel, isClientChannel, isGroupChannel]);
 
   // Dismiss the bell notification(s) tied to the conversation I just opened.
   // Chat notifications (client_message, @mention) carry linkTo = the channel id;
