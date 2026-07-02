@@ -401,9 +401,9 @@ const ChatView: React.FC = () => {
     where: [{ field: 'senderType', operator: '==' as const, value: 'client' }],
     orderBy: { field: 'createdAt', direction: 'desc' as const },
     limit: 200,
-    // Scope to the active business (server-side businessId + senderType) instead of
-    // spanning all tenants — the messages RLS rule no longer permits a cross-tenant read.
-    teamScopedWhere: true,
+    // Scope to the active business (server-side businessId only; senderType is
+    // filtered client-side) instead of spanning all tenants. NOT teamScopedWhere —
+    // that pushes senderType server-side too and would need a composite index.
   }), []);
   const { data: recentClientMsgs } = useCollection<ChatMessage>('messages', recentClientMsgsQuery);
 
