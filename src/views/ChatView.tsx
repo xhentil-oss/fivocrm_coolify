@@ -2619,6 +2619,11 @@ const ChatView: React.FC = () => {
             // Clients (dedup by customerId)
             (portalAccess || []).filter((a, i, arr) => arr.findIndex(x => x.customerId === a.customerId) === i).forEach(a => {
               const c = customers?.find(cu => cu.id === a.customerId);
+              // Skip clients whose customer isn't in THIS business (customers is
+              // business-scoped): a cross-tenant/orphan client channel can't be read
+              // under RLS, so listing it would only produce a permission-denied that
+              // kills the live listener when opened.
+              if (!c) return;
               const cid = `client-${a.customerId}`;
               const repId = (c as any)?.assignedToUserId;
               const denorm = (c as any)?.lastClientMessageAt ? getTimestampMs((c as any).lastClientMessageAt) : 0;
