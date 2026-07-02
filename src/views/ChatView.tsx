@@ -2350,7 +2350,11 @@ const ChatView: React.FC = () => {
     if (!activeDirectUserId || !user || chatMode !== 'direct') return;
     // Snapshot the current conversation — guard against rapid switches
     const snapshotDmUserId = activeDirectUserId;
-    const unread = allDirectMessages.filter(m => m.senderId === snapshotDmUserId && m.receiverId === user.uid && !m.isRead && !markedAsReadRef.current.has(m.id));
+    // Source from bgReceivedDMs (an always-on background listener) rather than
+    // allDirectMessages (which only loads AFTER entering the DM) — so opening a
+    // conversation clears its unread badge immediately, even on a quick open+leave.
+    const source = bgReceivedDMs || [];
+    const unread = source.filter(m => !(m as any).channelId && m.senderId === snapshotDmUserId && m.receiverId === user.uid && !m.isRead && !markedAsReadRef.current.has(m.id));
     if (unread.length === 0) return;
     // ── #32 Batched read receipts ──
     const ids = unread.map(m => m.id);
@@ -2362,7 +2366,7 @@ const ChatView: React.FC = () => {
       ids.forEach(id => markedAsReadRef.current.delete(id));
       console.error('[ChatView] markAsRead DM batch failed', err);
     });
-  }, [activeDirectUserId, allDirectMessages, user, chatMode]);
+  }, [activeDirectUserId, bgReceivedDMs, allDirectMessages, user, chatMode]);
 
   useEffect(() => {
     if (chatMode !== 'channel' || !user || !channelMessages) return;
