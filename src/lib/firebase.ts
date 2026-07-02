@@ -18,10 +18,18 @@ const app = initializeApp(firebaseConfig);
 // Initialize services
 export const auth = getAuth(app);
 
-// Firestore with offline persistence (multi-tab safe)
+// Firestore with offline persistence (multi-tab safe).
+//
+// Transport: we FORCE long-polling instead of auto-detect. `experimentalAutoDetectLongPolling`
+// probes the connection type on startup, but that probe is known to get stuck in restrictive
+// networks (proxies, some mobile carriers) and — critically — inside the Capacitor Android
+// WebView: the initial load succeeds but subsequent server pushes never stream, so onSnapshot
+// listeners look "dead" until a full page refresh reopens the channel (real-time chat + live
+// notification clearing appeared broken for exactly this reason). Forced long-polling keeps a
+// held-open channel that delivers updates in real time and works reliably everywhere.
 export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
-  experimentalAutoDetectLongPolling: true,
+  experimentalForceLongPolling: true,
 });
 
 export const storage = getStorage(app);

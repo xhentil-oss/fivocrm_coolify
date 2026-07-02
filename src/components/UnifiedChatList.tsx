@@ -59,6 +59,10 @@ const TAGS: Record<ConvType, { label: string; cls: string } | null> = {
 
 const ConversationRow: React.FC<{ c: UnifiedConv }> = ({ c }) => {
   const tag = TAGS[c.type];
+  // The open conversation is being read right now — never show its unread badge
+  // (mark-as-read clears the underlying count async; this hides it instantly and
+  // keeps the WhatsApp/Slack rule that the active chat is never "unread").
+  const showUnread = c.unread > 0 && !c.isActive;
   return (
     <button
       onClick={c.onSelect}
@@ -101,7 +105,7 @@ const ConversationRow: React.FC<{ c: UnifiedConv }> = ({ c }) => {
               <AlertTriangle className="h-3 w-3 flex-shrink-0" /> Pa përgjegjës
             </p>
           ) : (
-            <p className={`mt-0.5 text-[13px] truncate ${c.unread > 0 ? 'text-foreground/80 font-medium' : 'text-muted-foreground'}`}>
+            <p className={`mt-0.5 text-[13px] truncate ${showUnread ? 'text-foreground/80 font-medium' : 'text-muted-foreground'}`}>
               {c.preview}
             </p>
           )}
@@ -109,11 +113,11 @@ const ConversationRow: React.FC<{ c: UnifiedConv }> = ({ c }) => {
         {/* Meta */}
         <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
           {c.time > 0 && (
-            <span className={`text-[11px] ${c.unread > 0 ? 'font-bold text-violet-600 dark:text-violet-400' : 'text-muted-foreground/60'}`}>
+            <span className={`text-[11px] ${showUnread ? 'font-bold text-violet-600 dark:text-violet-400' : 'text-muted-foreground/60'}`}>
               {formatShort(c.time)}
             </span>
           )}
-          {c.unread > 0 && (
+          {showUnread && (
             <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-violet-600 text-white text-[11px] font-bold">
               {c.unread > 99 ? '99+' : c.unread}
             </span>
