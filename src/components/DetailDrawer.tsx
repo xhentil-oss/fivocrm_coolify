@@ -3,6 +3,17 @@ import { X } from 'lucide-react';
 import { Button } from './ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import { ScrollArea } from './ui/scroll-area';
+import { isDateLike, formatDateTime } from '../lib/utils';
+
+/** Render any Firestore field value in a human-readable way (dates, booleans, arrays…). */
+function renderFieldValue(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—';
+  if (isDateLike(value)) return formatDateTime(value);
+  if (typeof value === 'boolean') return value ? 'Po' : 'Jo';
+  if (Array.isArray(value)) return value.length ? value.map(v => renderFieldValue(v)).join(', ') : '—';
+  if (typeof value === 'object') return JSON.stringify(value);
+  return String(value);
+}
 
 interface ExtraTab {
   value: string;
@@ -66,20 +77,22 @@ const DetailDrawer: React.FC<DetailDrawerProps> = ({ open, onClose, title, data,
 
           <ScrollArea className="flex-1">
             <Tabs defaultValue="overview" className="p-6">
-              <TabsList className="w-full bg-muted">
-                <TabsTrigger value="overview" className="flex-1 data-[state=active]:bg-background data-[state=active]:text-primary">
-                  Overview
+              {/* Wrap tabs onto multiple rows instead of a cramped horizontal scroll
+                  with arrow controls — the drawer is only ~480px wide. */}
+              <TabsList className="w-full bg-muted flex flex-wrap h-auto gap-1 justify-start">
+                <TabsTrigger value="overview" className="flex-1 min-w-[30%] data-[state=active]:bg-background data-[state=active]:text-primary">
+                  Përmbledhje
                 </TabsTrigger>
                 {extraTabs?.map(tab => (
-                  <TabsTrigger key={tab.value} value={tab.value} className="flex-1 data-[state=active]:bg-background data-[state=active]:text-primary">
+                  <TabsTrigger key={tab.value} value={tab.value} className="flex-1 min-w-[30%] data-[state=active]:bg-background data-[state=active]:text-primary">
                     {tab.label}
                   </TabsTrigger>
                 ))}
-                <TabsTrigger value="activity" className="flex-1 data-[state=active]:bg-background data-[state=active]:text-primary">
-                  Activity
+                <TabsTrigger value="activity" className="flex-1 min-w-[30%] data-[state=active]:bg-background data-[state=active]:text-primary">
+                  Aktiviteti
                 </TabsTrigger>
-                <TabsTrigger value="notes" className="flex-1 data-[state=active]:bg-background data-[state=active]:text-primary">
-                  Notes
+                <TabsTrigger value="notes" className="flex-1 min-w-[30%] data-[state=active]:bg-background data-[state=active]:text-primary">
+                  Shënime
                 </TabsTrigger>
               </TabsList>
 
@@ -92,8 +105,8 @@ const DetailDrawer: React.FC<DetailDrawerProps> = ({ open, onClose, title, data,
                         <p className="text-body-sm text-muted-foreground capitalize">
                           {key.replace(/([A-Z])/g, ' $1').trim()}
                         </p>
-                        <p className="text-body text-foreground">
-                          {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                        <p className="text-body text-foreground whitespace-pre-wrap break-words">
+                          {renderFieldValue(value)}
                         </p>
                       </div>
                     );

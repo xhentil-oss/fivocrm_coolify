@@ -215,6 +215,8 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
                 key={item.path}
                 to={item.path}
                 onClick={onCloseMobile}
+                title={collapsed ? item.label : undefined}
+                aria-label={item.label}
                 className={({ isActive }) =>
                   cn(
                     'group flex items-center gap-3 px-3 py-3 min-h-[44px] rounded-lg transition-all duration-200',

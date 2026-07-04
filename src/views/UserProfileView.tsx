@@ -526,10 +526,10 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
                   <Input 
                     value={newSkill}
                     onChange={(e) => setNewSkill(e.target.value)}
-                    placeholder="Add a skill"
+                    placeholder="Shto një aftësi"
                     onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddSkill())}
                   />
-                  <Button type="button" onClick={handleAddSkill}>Add</Button>
+                  <Button type="button" onClick={handleAddSkill}>Shto</Button>
                 </div>
                 <div className="flex flex-wrap gap-2">
                   {skills.map(skill => (

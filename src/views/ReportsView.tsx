@@ -1,6 +1,7 @@
 import React, { useMemo, useState, Suspense, lazy } from 'react';
 import { TrendingUp, TrendingDown, DollarSign, Users, CheckCircle, Clock, Building2, Receipt, Target, FileText, UserPlus, CreditCard, ClipboardList, FolderKanban, ListChecks } from 'lucide-react';
 import { Card } from '../components/ui/card';
+import { SkeletonLoader } from '../components/PageSkeleton';
 import { useCollection, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -896,7 +897,10 @@ const ReportsView: React.FC = () => {
   const profit = periodPnl.profit;
   const activeProjects = projects?.filter(p => p.status === 'Active').length || 0;
   const totalCustomers = customers?.length || 0;
-  const wonLeads = leads?.filter(l => l.status === 'Won').length || 0;
+  // A lead counts as "converted" when it reached a closed-won state. The CRM
+  // conversion flow marks leads as 'Converted' (a customer is spun up); older/manual
+  // deals may use 'Won'. Count both so this matches the CRM module's converted count.
+  const wonLeads = leads?.filter(l => l.status === 'Won' || l.status === 'Converted').length || 0;
   const totalLeads = leads?.length || 0;
   const conversionRate = totalLeads > 0 ? Math.round((wonLeads / totalLeads) * 100) : 0;
 
@@ -955,16 +959,7 @@ const ReportsView: React.FC = () => {
 
       <TabsContent value="overview" className="mt-0">
         {isLoading ? (
-          <div className="space-y-8">
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              {[1, 2, 3, 4].map(i => (
-                <div key={i} className="p-6 bg-card rounded-lg border space-y-3">
-                  <div className="h-4 w-28 skeleton rounded" />
-                  <div className="h-8 w-24 skeleton rounded" />
-                </div>
-              ))}
-            </div>
-          </div>
+          <SkeletonLoader variant="page" />
         ) : isPersonalOnly ? (
     /* ── MEMBER / VIEWER: Personal Dashboard ── */
     <div className="space-y-8">

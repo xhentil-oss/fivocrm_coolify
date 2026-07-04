@@ -879,8 +879,8 @@ const TasksView: React.FC = () => {
             <div className="inline-flex h-8 items-center rounded-lg bg-muted p-0.5">
               {([
                 { v: 'list' as const, label: 'Listë', Icon: List },
-                { v: 'board' as const, label: 'Board', Icon: LayoutGrid },
-                { v: 'timeline' as const, label: 'Timeline', Icon: GanttChart },
+                { v: 'board' as const, label: 'Bordi', Icon: LayoutGrid },
+                { v: 'timeline' as const, label: 'Kronologji', Icon: GanttChart },
                 { v: 'calendar' as const, label: 'Kalendar', Icon: CalendarDays },
               ]).map(({ v, label, Icon }) => (
                 <button

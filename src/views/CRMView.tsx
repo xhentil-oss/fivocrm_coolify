@@ -1166,7 +1166,7 @@ const CRMView: React.FC = () => {
         </div>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3 stagger-children">
+      <div className="grid gap-2 sm:gap-3 stagger-children" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
         <Card className="p-3 sm:p-4 card-hover">
           <div className="flex items-center gap-1.5 text-muted-foreground">
             <Building className="w-3.5 h-3.5" />

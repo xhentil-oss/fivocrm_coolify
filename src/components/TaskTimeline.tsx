@@ -101,7 +101,7 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
                 <div className="absolute left-0 top-1/2 -translate-y-1/2 pr-2 truncate text-xs text-foreground/80 z-[6] bg-background" style={{ width: LABEL_W }} title={task.title}>{task.title}</div>
                 <button
                   onClick={() => onTaskClick(task)}
-                  title={`${task.title} · ${start.toLocaleDateString()} → ${end.toLocaleDateString()}`}
+                  title={`${task.title} · ${start.toLocaleDateString('sq-AL')} → ${end.toLocaleDateString('sq-AL')}`}
                   className={`absolute top-1/2 -translate-y-1/2 h-5 rounded ${barColor(task)} ${task.status === 'Done' ? 'opacity-60' : ''} hover:ring-2 hover:ring-offset-1 hover:ring-violet-400 transition-all flex items-center px-1.5`}
                   style={{ left, width: Math.max(width, 12) }}
                 >

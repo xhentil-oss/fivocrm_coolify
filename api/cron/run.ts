@@ -713,7 +713,22 @@ async function runProjectCompletionReminder() {
   let notified = 0;
   const ops: Promise<any>[] = [];
 
+  // Dedup window: don't send a second open-projects reminder while the user still
+  // has a recent unread one (guards against the job running more than once/week).
+  const DEDUP_MS = 3 * 24 * 60 * 60 * 1000; // 3 days
+  const cutoffMs = now.getTime() - DEDUP_MS;
+
   for (const [userId, userProjects] of userProjectMap) {
+    // Query by userId only (index-free) and filter type/read/recency in memory.
+    const existing = await db.collection('notifications').where('userId', '==', userId).get();
+    const hasRecentReminder = existing.docs.some(d => {
+      const n = d.data();
+      if (n.type !== 'project_open_reminder' || n.isRead) return false;
+      const ms = typeof n.createdAt?.toMillis === 'function' ? n.createdAt.toMillis() : 0;
+      return ms >= cutoffMs;
+    });
+    if (hasRecentReminder) continue;
+
     ops.push(db.collection('notifications').add({ userId, type: 'project_open_reminder', title: `📋 ${userProjects.length} projekt${userProjects.length > 1 ? 'e' : ''} akoma të hapura`, message: `Ke ${userProjects.length} projekt${userProjects.length > 1 ? 'e' : ''} të hapur${userProjects.length > 1 ? 'a' : ''} pa mbyllur këtë javë.`, isRead: false, createdAt: admin.firestore.Timestamp.now() }));
     if (transporter && smtpUser) {
       try {

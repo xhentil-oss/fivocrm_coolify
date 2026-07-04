@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare, Copy, Phone, Cloud, UserCircle, QrCode, Wifi, WifiOff, ScrollText } from 'lucide-react';
-import { WhatsAppAccount, TeamMember } from '../types';
+import { WhatsAppAccount, TeamMember, UserProfile } from '../types';
 import { MetaChannel } from '../hooks/useTeamSettings';
 import { swiftKeyDown, ibanChange } from '../lib/utils';
 import { Card } from '../components/ui/card';
@@ -192,6 +192,48 @@ const SettingsView: React.FC = () => {
   const [qrLoading, setQrLoading] = useState(false);
   const qrPollRef = React.useRef<ReturnType<typeof setInterval> | null>(null);
   const { user } = useAuth();
+
+  // ── Profile (Cilësimet > Profili) ──
+  const { data: myProfiles } = useCollection<UserProfile>('userProfiles', {
+    skip: !user,
+    where: user ? [{ field: 'userId', operator: '==', value: user.uid }] : undefined,
+    skipTeamFilter: true,
+  });
+  const myProfile = myProfiles?.[0];
+  const profileMutation = useMutation<UserProfile>('userProfiles');
+  const [profileForm, setProfileForm] = useState({ firstName: '', lastName: '', bio: '' });
+  const [profileSaving, setProfileSaving] = useState(false);
+  const [profileSaved, setProfileSaved] = useState(false);
+
+  // Prefill from the saved profile (falls back to the auth display name).
+  const fillProfileForm = useCallback(() => {
+    const full = (myProfile?.displayName || user?.displayName || '').trim();
+    const parts = full ? full.split(/\s+/) : [];
+    setProfileForm({
+      firstName: parts[0] || '',
+      lastName: parts.slice(1).join(' '),
+      bio: myProfile?.bio || '',
+    });
+  }, [myProfile?.displayName, myProfile?.bio, user?.displayName]);
+  useEffect(() => { fillProfileForm(); }, [fillProfileForm]);
+
+  const handleSaveProfile = async () => {
+    if (!user) return;
+    setProfileSaving(true);
+    try {
+      const displayName = `${profileForm.firstName} ${profileForm.lastName}`.trim();
+      const data = { userId: user.uid, displayName, bio: profileForm.bio };
+      if (myProfile) await profileMutation.update(myProfile.id, data);
+      else await profileMutation.create(data as any);
+      setProfileSaved(true);
+      toast({ title: 'Profili u ruajt', description: 'Ndryshimet u ruajtën me sukses.' });
+      setTimeout(() => setProfileSaved(false), 2500);
+    } catch {
+      toast({ title: 'Gabim', description: 'Ruajtja e profilit dështoi.', variant: 'destructive' });
+    } finally {
+      setProfileSaving(false);
+    }
+  };
 
   // ── Notification preferences (shared shape with NotificationsCenter / cron) ──
   const [notifPrefs, setNotifPrefs] = useState({
@@ -524,6 +566,8 @@ const SettingsView: React.FC = () => {
                     <input
                       type="text"
                       placeholder="Emri"
+                      value={profileForm.firstName}
+                      onChange={(e) => setProfileForm(f => ({ ...f, firstName: e.target.value }))}
                       className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                     />
                   </div>
@@ -532,6 +576,8 @@ const SettingsView: React.FC = () => {
                     <input
                       type="text"
                       placeholder="Mbiemri"
+                      value={profileForm.lastName}
+                      onChange={(e) => setProfileForm(f => ({ ...f, lastName: e.target.value }))}
                       className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
                     />
                   </div>
@@ -541,7 +587,10 @@ const SettingsView: React.FC = () => {
                   <input
                     type="email"
                     placeholder="email@shembull.com"
-                    className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+                    value={user?.email || ''}
+                    readOnly
+                    title="Email-i menaxhohet nga llogaria (Firebase Auth) dhe nuk ndryshohet këtu."
+                    className="w-full h-11 px-4 bg-muted border border-border rounded-md text-body text-muted-foreground cursor-not-allowed focus:outline-none"
                   />
                 </div>
                 <div className="space-y-2">
@@ -549,6 +598,8 @@ const SettingsView: React.FC = () => {
                   <textarea
                     placeholder="Na trego për veten..."
                     rows={4}
+                    value={profileForm.bio}
+                    onChange={(e) => setProfileForm(f => ({ ...f, bio: e.target.value }))}
                     className="w-full px-4 py-3 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary resize-none"
                   />
                 </div>
@@ -556,11 +607,20 @@ const SettingsView: React.FC = () => {
             </div>
             <Separator />
             <div className="flex flex-col sm:flex-row sm:justify-end gap-2 sm:gap-3">
-              <Button variant="outline" className="bg-background text-foreground border-border hover:bg-muted w-full sm:w-auto">
+              <Button
+                variant="outline"
+                className="bg-background text-foreground border-border hover:bg-muted w-full sm:w-auto"
+                onClick={fillProfileForm}
+                disabled={profileSaving}
+              >
                 Anulo
               </Button>
-              <Button className="bg-primary text-primary-foreground hover:bg-primary-hover w-full sm:w-auto">
-                Ruaj Ndryshimet
+              <Button
+                className="bg-primary text-primary-foreground hover:bg-primary-hover w-full sm:w-auto"
+                onClick={handleSaveProfile}
+                disabled={profileSaving}
+              >
+                {profileSaving ? 'Duke ruajtur...' : profileSaved ? 'U ruajt ✓' : 'Ruaj Ndryshimet'}
               </Button>
             </div>
           </Card>

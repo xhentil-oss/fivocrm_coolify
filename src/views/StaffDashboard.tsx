@@ -217,21 +217,30 @@ const StaffDashboard: React.FC = () => {
   }, [unreadClientMsgs]);
 
   // ── Computed data ──
+  // teamMembers.userId (and therefore task.assignedToUserId) may be stored as the
+  // Firebase UID *or* the user's email, so match against both — otherwise tasks
+  // assigned by email are invisible on the dashboard while showing in the Tasks module.
+  const myIds = useMemo(() => {
+    if (!user) return [] as string[];
+    return user.email ? [user.uid, user.email] : [user.uid];
+  }, [user]);
+  const isMine = (t: Task) => !!t.assignedToUserId && myIds.includes(t.assignedToUserId);
+
   const myTasks = useMemo(() => {
     if (!tasks || !user) return [];
-    return tasks.filter(t => t.assignedToUserId === user.uid && t.status !== 'Done');
-  }, [tasks, user]);
+    return tasks.filter(t => isMine(t) && t.status !== 'Done');
+  }, [tasks, user, myIds]);
 
   const myCompletedToday = useMemo(() => {
     if (!tasks || !user) return [];
     const today = new Date();
     today.setHours(0, 0, 0, 0);
     return tasks.filter(t => {
-      if (t.assignedToUserId !== user.uid || t.status !== 'Done') return false;
+      if (!isMine(t) || t.status !== 'Done') return false;
       const updated = t.updatedAt instanceof Date ? t.updatedAt : new Date(t.updatedAt);
       return updated >= today;
     });
-  }, [tasks, user]);
+  }, [tasks, user, myIds]);
 
   const myOverdueTasks = useMemo(() => {
     const now = new Date();
@@ -490,7 +499,7 @@ const StaffDashboard: React.FC = () => {
             </div>
             <div>
               <div className="text-2xl font-bold text-foreground">{myTasks.length}</div>
-              <div className="text-xs text-muted-foreground">Detyra aktive</div>
+              <div className="text-xs text-muted-foreground">Detyrat e mia aktive</div>
             </div>
           </div>
         </Card>

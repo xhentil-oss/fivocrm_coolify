@@ -12,6 +12,7 @@ import { useToast } from '../hooks/use-toast';
 import { getTimestampMs } from '../lib/utils';
 import { DEAL_STAGES, OPEN_STAGES, dealWeighted, dealProbability, curSymbol } from '../lib/dealStages';
 import { Card } from '../components/ui/card';
+import { SkeletonLoader } from '../components/PageSkeleton';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
@@ -177,7 +178,7 @@ const DealsView: React.FC = () => {
 
       {/* Pipeline board */}
       {loading ? (
-        <p className="text-sm text-muted-foreground text-center py-10">Duke ngarkuar…</p>
+        <SkeletonLoader variant="kanban" />
       ) : (
         <DndContext sensors={sensors} onDragStart={(e: DragStartEvent) => setActiveId(String(e.active.id))} onDragEnd={handleDragEnd}>
           <div className="flex gap-3 overflow-x-auto pb-4">

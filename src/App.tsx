@@ -10,7 +10,6 @@ import Sidebar from './components/Sidebar';
 import LoginView from './views/LoginView';
 import RegisterView from './views/RegisterView';
 import WorkspaceSignupView from './views/WorkspaceSignupView';
-import FloatingActionButton from './components/FloatingActionButton';
 import MobileBottomNav from './components/MobileBottomNav';
 import { AndroidBackButton } from './components/AndroidBackButton';
 import DailyReportPopup from './components/DailyReportPopup';
@@ -325,7 +324,6 @@ function AppContent() {
             </div>
 
             <MobileBottomNav />
-            <FloatingActionButton />
             <DailyReportPopup />
             <CommandPalette 
               open={commandPaletteOpen} 

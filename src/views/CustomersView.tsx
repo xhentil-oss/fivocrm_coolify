@@ -15,6 +15,7 @@ import {
   ExternalLink, Globe, Trash2, MoreVertical, PlusCircle, UserCheck,
 } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
+import { SkeletonLoader } from '../components/PageSkeleton';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
@@ -458,7 +459,7 @@ const CustomersView: React.FC = () => {
     portalAccess?.find(a => a.customerId === customerId);
 
   if (customersLoading) {
-    return <div className="flex items-center justify-center h-96">Duke ngarkuar klientet...</div>;
+    return <SkeletonLoader variant="page" />;
   }
 
   const portalActiveCount = portalAccess?.filter(a => a.status === 'Active').length || 0;
@@ -510,7 +511,7 @@ const CustomersView: React.FC = () => {
       </div>
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+      <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))' }}>
         <Card className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => setActiveTab('customers')}>
           <CardContent className="pt-6 flex items-center gap-3">
             <div className="p-2 bg-blue-100 rounded-lg">
@@ -563,7 +564,7 @@ const CustomersView: React.FC = () => {
         {/* TAB: Klientet */}
         <TabsContent value="customers" className="space-y-4">
           {/* Status Quick Filters */}
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
+          <div className="grid gap-3" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))' }}>
             {STATUS_OPTIONS.map((st) => {
               const count = statusCounts[st.value] || 0;
               const Icon = st.icon;

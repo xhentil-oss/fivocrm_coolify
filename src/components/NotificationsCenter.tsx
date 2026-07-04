@@ -119,6 +119,12 @@ interface NotifGroup {
 
 const ONE_HOUR = 60 * 60 * 1000;
 
+// Two notifications are exact duplicates when they carry the same type + content.
+// The cron may emit identical reminders days apart, so these must collapse even
+// when they fall outside the 1-hour "burst" window.
+const isSameContent = (a: Notification, b: Notification) =>
+  a.type === b.type && a.title === b.title && (a.message || '') === (b.message || '');
+
 function groupNotifications(notifs: Notification[]): NotifGroup[] {
   const result: NotifGroup[] = [];
   let i = 0;
@@ -130,7 +136,8 @@ function groupNotifications(notifs: Notification[]): NotifGroup[] {
       const c = notifs[j];
       if (c.type !== n.type) break;
       const diff = Math.abs(new Date(n.createdAt).getTime() - new Date(c.createdAt).getTime());
-      if (diff > ONE_HOUR) break;
+      // Group same-type bursts within an hour, OR exact-duplicate content any time apart.
+      if (diff > ONE_HOUR && !isSameContent(n, c)) break;
       group.push(c);
       j++;
     }
@@ -643,6 +650,7 @@ const GROUP_TYPE_LABEL: Record<string, string> = {
   lead_assigned:           'lead të caktuar',
   lead_follow_up:          'rikontaktime lead',
   recurring_task_created:  'detyra periodike',
+  project_open_reminder:   'kujtesa projektesh',
 };
 
 // ── Grouped notification item ──────────────────────────────────────────────────

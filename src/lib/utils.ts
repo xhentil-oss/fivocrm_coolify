@@ -228,3 +228,32 @@ export function getTimestampMs(ts: any): number {
   if (typeof ts === 'number') return ts;
   return new Date(ts).getTime() || 0;
 }
+
+/**
+ * True if a value looks like a date: a JS Date, a Firestore Timestamp
+ * ({seconds}/toDate), or an ISO-8601 string (e.g. "2026-06-24T11:50:33.608Z").
+ */
+export function isDateLike(v: any): boolean {
+  if (v instanceof Date) return true;
+  if (v && typeof v === 'object' && (typeof v.toDate === 'function' || typeof v.seconds === 'number')) return true;
+  if (typeof v === 'string') return /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v);
+  return false;
+}
+
+/** Coerce a Date / Firestore Timestamp / ISO string / millis into a Date, or null. */
+export function toDate(v: any): Date | null {
+  const ms = getTimestampMs(v);
+  return ms ? new Date(ms) : null;
+}
+
+/** Format a date-like value as a localized date (sq-AL). Returns '' when empty/invalid. */
+export function formatDate(v: any, opts: Intl.DateTimeFormatOptions = { day: '2-digit', month: '2-digit', year: 'numeric' }): string {
+  const d = toDate(v);
+  return d ? d.toLocaleDateString('sq-AL', opts) : '';
+}
+
+/** Format a date-like value as a localized date + time (sq-AL). Returns '' when empty/invalid. */
+export function formatDateTime(v: any): string {
+  const d = toDate(v);
+  return d ? d.toLocaleString('sq-AL', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+}

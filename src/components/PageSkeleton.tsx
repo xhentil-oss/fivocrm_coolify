@@ -63,3 +63,30 @@ export function KanbanSkeleton() {
     </div>
   );
 }
+
+/** A simple list of stacked rows (e.g. table/list views). */
+export function ListSkeleton({ rows = 6 }: { rows?: number }) {
+  return (
+    <Card className="p-4 space-y-3">
+      {Array.from({ length: rows }).map((_, i) => (
+        <Skeleton key={i} className="h-12 w-full" />
+      ))}
+    </Card>
+  );
+}
+
+export type SkeletonVariant = 'page' | 'kanban' | 'card' | 'list';
+
+/**
+ * Single reusable loading placeholder. Prefer this over ad-hoc
+ * "Duke ngarkuar..." text so every module shows a consistent skeleton.
+ */
+export function SkeletonLoader({ variant = 'page', rows }: { variant?: SkeletonVariant; rows?: number }) {
+  switch (variant) {
+    case 'kanban': return <KanbanSkeleton />;
+    case 'card': return <CardSkeleton />;
+    case 'list': return <ListSkeleton rows={rows} />;
+    case 'page':
+    default: return <PageSkeleton />;
+  }
+}
