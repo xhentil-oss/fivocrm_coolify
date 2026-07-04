@@ -2,6 +2,7 @@ import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, runTransaction, doc, Timestamp } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
+import { formatInvoiceNumber } from './invoiceNumber';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -47,11 +48,15 @@ export async function getNextInvoiceNumber(teamId: string, fallbackMax = 0): Pro
   const counterRef = doc(db, 'counters', `invoices_${teamId}`);
   const next = await runTransaction(db, async (transaction) => {
     const snap = await transaction.get(counterRef);
-    const newLast = snap.exists() ? (snap.data().last as number) + 1 : fallbackMax + 1;
+    const stored = snap.exists() ? (snap.data().last as number) : 0;
+    // Always advance past BOTH the stored counter and the highest existing number.
+    // If the counter ever drifted low (e.g. seeded before invoices had loaded), this
+    // self-heals instead of reissuing a number that collides with an existing invoice.
+    const newLast = Math.max(Number(stored) || 0, Number(fallbackMax) || 0) + 1;
     transaction.set(counterRef, { last: newLast, updatedAt: Timestamp.now() });
     return newLast;
   });
-  return `FAT-${String(next).padStart(3, '0')}`;
+  return formatInvoiceNumber(next);
 }
 
 export default app;

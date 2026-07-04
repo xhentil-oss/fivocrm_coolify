@@ -94,3 +94,20 @@ export function getTaskStatusLabel(status: string | null | undefined): string {
     default: return status || '';
   }
 }
+
+/**
+ * Albanian label for an Invoice status enum value ('Draft' | 'Pending' | 'Paid' |
+ * 'Overdue' | 'Partial' | 'Cancelled'). Single source of truth for every label in
+ * the Invoices module (badges, filters, the create/edit form, inline editor).
+ */
+export function getInvoiceStatusLabel(status: string | null | undefined): string {
+  switch (status) {
+    case 'Draft': return 'Draft';
+    case 'Pending': return 'Pritje';
+    case 'Paid': return 'Paguar';
+    case 'Overdue': return 'Vonuar';
+    case 'Partial': return 'Pjesore';
+    case 'Cancelled': return 'Anuluar';
+    default: return status || '';
+  }
+}

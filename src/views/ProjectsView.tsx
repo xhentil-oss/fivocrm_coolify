@@ -221,9 +221,19 @@ const ProjectsView: React.FC = () => {
       serviceIds: selectedServiceIds && selectedServiceIds.length > 0 ? selectedServiceIds : undefined,
     });
 
-    // Always create a Draft invoice when a project is created
+    // Only auto-create an invoice when there is something to bill: an explicit
+    // budget, or selected services with a price. A project with neither would
+    // otherwise spawn a 0.00 invoice — and, if recurring, email the client a blank
+    // "Pending" invoice. A billable total also fixes the old bug where the invoice
+    // total was `budget || 0` (0) even when priced services were attached.
     const now = new Date();
     const dueDate = new Date(now.getFullYear(), now.getMonth() + 1, 0); // last day of month
+
+    const servicesTotal = (selectedServiceIds || []).reduce((sum, id) => {
+      const s = services?.find(x => x.id === id);
+      return sum + (s?.price || 0);
+    }, 0);
+    const billableTotal = budget && budget > 0 ? budget : servicesTotal;
 
     // Compute seed from existing invoices so the Firebase counter starts correctly
     let maxInvNum = 0;
@@ -234,6 +244,7 @@ const ProjectsView: React.FC = () => {
       }
     }
 
+    if (billableTotal > 0) {
     if (isRecurring) {
       const invoiceLabel = resolvedTeamId
         ? await getNextInvoiceNumber(resolvedTeamId, maxInvNum)
@@ -243,9 +254,9 @@ const ProjectsView: React.FC = () => {
         projectId: newProject.id,
         customerId: resolvedCustomerId,
         teamId: resolvedTeamId,
-        amount: budget || 0,
-        subtotal: budget || 0,
-        total: budget || 0,
+        amount: billableTotal,
+        subtotal: billableTotal,
+        total: billableTotal,
         tax: 0,
         status: 'Draft',
         notes: `Faturë e gjeneruar automatikisht për projektin periodik "${name}".`,
@@ -301,9 +312,9 @@ const ProjectsView: React.FC = () => {
         projectId: newProject.id,
         customerId: resolvedCustomerId,
         teamId: resolvedTeamId,
-        amount: budget || 0,
-        subtotal: budget || 0,
-        total: budget || 0,
+        amount: billableTotal,
+        subtotal: billableTotal,
+        total: billableTotal,
         tax: 0,
         status: 'Draft',
         notes: `Faturë draft e krijuar automatikisht për projektin "${name}".`,
@@ -326,6 +337,7 @@ const ProjectsView: React.FC = () => {
         }
       }
     }
+    } // end: only when billableTotal > 0
 
     logActivity('project_created', `Projekt i ri: ${name}`, { entityType: 'project', entityId: newProject.id });
 
