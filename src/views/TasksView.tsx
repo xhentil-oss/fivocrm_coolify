@@ -3,7 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useSensors, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { getStatusColor, getPriorityColor } from '../lib/statusColors';
+import { getStatusColor, getPriorityColor, getTaskStatusLabel } from '../lib/statusColors';
 import { addFrequency } from '../lib/recurringUtils';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
@@ -30,7 +30,7 @@ import {
   DropdownMenuTrigger,
 } from '../components/ui/dropdown-menu';
 import { useActivityLogger } from '../hooks/useActivityLogger';
-import { useFilteredTasks } from '../hooks/useRoleFilteredData';
+import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { toast } from '../hooks/use-toast';
 import type { Task, TaskComment, Project, Notification, TaskCollaborator, UserProfile, TimeEntry, Customer, Invoice } from '../types';
 import TaskDetailPanel from '../components/TaskDetailPanel';
@@ -128,7 +128,10 @@ const TasksView: React.FC = () => {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
     skipTeamFilter: true,
   });
-  
+  // One record per (user, team) — dedupe by userId for any assignee selector so a
+  // person who belongs to several teams isn't listed (or rendered) multiple times.
+  const uniqueTeamMembers = useUniqueTeamMembers(teamMembers);
+
   // Get all active time entries to show who's working on what
   const { data: activeTimeEntries } = useCollection<TimeEntry>('timeEntries', {
     where: [{ field: 'endTime', operator: '==', value: null }]
@@ -693,7 +696,7 @@ const TasksView: React.FC = () => {
               : task.status === 'Review' ? 'bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-300'
               : 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300'
             }`}>
-              {task.status === 'Todo' ? 'Për të bërë' : task.status === 'In Progress' ? 'Në progres' : task.status === 'Review' ? 'Rishikim' : 'Përfunduar'}
+              {getTaskStatusLabel(task.status)}
             </span>
             {/* Project name */}
             {projectName && (
@@ -867,7 +870,7 @@ const TasksView: React.FC = () => {
           : 'flex flex-col w-full'
       } transition-all duration-300`}>
         {/* Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between p-4 border-b gap-3">
+        <div className="shrink-0 flex flex-col sm:flex-row sm:items-center justify-between p-4 border-b gap-3">
           <div>
             <h1 className="text-lg sm:text-xl font-semibold text-foreground">Detyrat</h1>
             <p className="text-xs sm:text-sm text-muted-foreground">
@@ -941,7 +944,7 @@ const TasksView: React.FC = () => {
         </div>
 
         {/* Stats Bar — pill filters on ≥sm, dropdown on mobile */}
-        <div className="px-4 py-2 border-b bg-muted/20">
+        <div className="shrink-0 px-4 py-2 border-b bg-muted/20">
           {/* Mobile: single Select dropdown */}
           <div className="sm:hidden">
             <Select value={filterStatus} onValueChange={setFilterStatus}>
@@ -1143,7 +1146,7 @@ const TasksView: React.FC = () => {
                 <Select onValueChange={(v) => bulkUpdate({ assignedToUserId: v })}>
                   <SelectTrigger className="h-8 w-[120px] text-xs"><SelectValue placeholder="Cakto te" /></SelectTrigger>
                   <SelectContent>
-                    {(teamMembers || []).filter((m: any) => !businessId || !m.businessId || m.businessId === businessId).map((m: any) => (
+                    {uniqueTeamMembers.filter((m: any) => !businessId || !m.businessId || m.businessId === businessId).map((m: any) => (
                       <SelectItem key={m.userId} value={m.userId}>{getUserName(m.userId)}</SelectItem>
                     ))}
                   </SelectContent>
@@ -1352,6 +1355,11 @@ const TaskForm: React.FC<{
   currentUserId?: string;
   allLabels?: string[];
 }> = ({ onSubmit, projects, initialData, allTasks = [], teamMembers = [], canAssignTasks = false, currentUserId = '', allLabels = [] }) => {
+  // A user who belongs to multiple teams has one teamMember record per team. Without
+  // deduping by userId the assignee <Select> renders several <SelectItem>s with the
+  // same value, and Radix concatenates all their labels in the trigger
+  // ("xhentil (ti)Xhentil Kanina (ti)…"). Dedupe so each person appears once.
+  const uniqueMembers = useUniqueTeamMembers(teamMembers);
   const [labels, setLabels] = useState<string[]>((initialData as any)?.labels || []);
   const [startDate, setStartDate] = useState<Date | undefined>(
     initialData?.startDate ? new Date(initialData.startDate) : new Date()
@@ -1528,10 +1536,10 @@ const TaskForm: React.FC<{
               <SelectValue placeholder="Zgjidh anëtarin" />
             </SelectTrigger>
             <SelectContent>
-              {teamMembers.map((m: any) => (
+              {uniqueMembers.map((m: any) => (
                 <SelectItem key={m.userId} value={m.userId}>
                   {m.displayName || m.email?.split('@')[0] || m.userId}
-                  {m.userId === currentUserId ? ' (ti)' : ''}
+                  {m.userId === currentUserId ? ' (Ti)' : ''}
                 </SelectItem>
               ))}
             </SelectContent>
@@ -1540,8 +1548,8 @@ const TaskForm: React.FC<{
           <>
             <input type="hidden" name="assignedToUserId" value={currentUserId} />
             <div className="flex items-center h-9 px-3 rounded-md border bg-muted text-sm text-muted-foreground">
-              {teamMembers.find((m: any) => m.userId === currentUserId)?.displayName ||
-               teamMembers.find((m: any) => m.userId === currentUserId)?.email?.split('@')[0] ||
+              {uniqueMembers.find((m: any) => m.userId === currentUserId)?.displayName ||
+               uniqueMembers.find((m: any) => m.userId === currentUserId)?.email?.split('@')[0] ||
                'Ti'} <span className="ml-1 text-xs">(vetëm ti)</span>
             </div>
             <p className="text-xs text-muted-foreground mt-1">Vetëm Admin/Manager mund të caktojnë te anëtarë të tjerë.</p>
@@ -1714,7 +1722,7 @@ const TaskForm: React.FC<{
                   }}
                 />
                 <span className="truncate">{t.title}</span>
-                <Badge variant="outline" className="text-[10px] ml-auto flex-shrink-0">{t.status}</Badge>
+                <Badge variant="outline" className="text-[10px] ml-auto flex-shrink-0">{getTaskStatusLabel(t.status)}</Badge>
               </label>
             ))}
           </div>

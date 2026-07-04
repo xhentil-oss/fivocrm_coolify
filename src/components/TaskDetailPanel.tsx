@@ -3,6 +3,7 @@ import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { TaskLabels, LabelEditor } from './TaskLabels';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { buildNextRecurringTask, recurrenceHasEnded } from '../lib/recurringUtils';
+import { entryDurationMinutes, totalTrackedMinutes } from '../lib/timeTracking';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
@@ -446,6 +447,19 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const startTimer = async () => {
     if (!user) return;
 
+    // Enforce a single running timer per user: close any entry left open from a
+    // previous session/task first. Overlapping running timers were the root cause
+    // of corrupt totals (a stop computed its duration against the wrong start).
+    const myRunning = (allActiveTimeEntries || []).filter(
+      (e: any) => e.userId === user.uid && !e.endTime,
+    );
+    for (const e of myRunning) {
+      const endTimeVal = new Date();
+      const start = new Date(e.startTime?.toDate ? e.startTime.toDate() : e.startTime);
+      const duration = Math.max(0, Math.floor((endTimeVal.getTime() - start.getTime()) / 60000));
+      await timeEntryMutation.update(e.id, { endTime: endTimeVal, duration });
+    }
+
     await timeEntryMutation.create({
       userId: user.uid,
       taskId: task.id,
@@ -704,7 +718,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     });
   };
 
-  const totalMinutes = timeEntries?.reduce((sum, entry) => sum + (entry.duration || 0), 0) || 0;
+  // Derive the total from each entry's start/end (source of truth) rather than the
+  // stored `duration` field, which can be stale/corrupt when overlapping timers were
+  // stopped against the wrong start (caused "2h log → 49h total"). See lib/timeTracking.
+  const totalMinutes = totalTrackedMinutes(timeEntries);
 
   const timeStr = (d?: Date) => d ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '';
 
@@ -1518,7 +1535,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                     .map((entry: any) => {
                       const start = new Date(entry.startTime?.toDate ? entry.startTime.toDate() : entry.startTime);
                       const end = new Date(entry.endTime?.toDate ? entry.endTime.toDate() : entry.endTime);
-                      const dur = entry.duration || Math.floor((end.getTime() - start.getTime()) / 60000);
+                      // Same source of truth as the Total — never the stored `duration`.
+                      const dur = entryDurationMinutes(entry);
                       return (
                         <div key={entry.id} className="flex items-center justify-between text-xs text-muted-foreground bg-muted/40 rounded px-2 py-1">
                           <span>{start.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}</span>

@@ -23,12 +23,17 @@ interface ScoredTask {
 }
 
 // Priority scoring algorithm
+const DAY_MS = 1000 * 60 * 60 * 24;
+
 function computeTaskScore(
   task: Task & { id: string },
   allTasks: (Task & { id: string })[],
   projectMap: Map<string, Project & { id: string }>,
   customerRevenueMap: Map<string, number>,
   projectCustomerMap: Map<string, string>,
+  // Single reference "now" (epoch ms) shared by every task in a run so scores are
+  // a pure function of the data + the current day — identical across reloads.
+  nowMs: number,
 ): ScoredTask {
   let score = 0;
   const reasons: string[] = [];
@@ -43,9 +48,8 @@ function computeTaskScore(
   // 2. Deadline proximity (0-35 points)
   const dueDate = task.endDate || task.dueDate;
   if (dueDate) {
-    const now = new Date();
     const due = dueDate instanceof Date ? dueDate : new Date(dueDate);
-    const daysUntilDue = Math.ceil((due.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+    const daysUntilDue = Math.ceil((due.getTime() - nowMs) / DAY_MS);
 
     if (daysUntilDue < 0) {
       score += 35; // Overdue — maximum urgency
@@ -184,12 +188,15 @@ const SmartSuggestions: React.FC<SmartSuggestionsProps> = ({
       t => t.status !== 'Done' && !t.parentTaskId // Only parent, non-done tasks
     );
 
+    const nowMs = Date.now(); // one reference for the whole ranking pass
     const scored = activeTasks.map(task =>
-      computeTaskScore(task, tasks, projectMap, customerRevenueMap, projectCustomerMap)
+      computeTaskScore(task, tasks, projectMap, customerRevenueMap, projectCustomerMap, nowMs)
     );
 
     return scored
-      .sort((a, b) => b.score - a.score)
+      // Deterministic tiebreak by id so equal-score tasks never reorder between
+      // reloads just because the source array arrived in a different order.
+      .sort((a, b) => b.score - a.score || a.task.id.localeCompare(b.task.id))
       .slice(0, maxSuggestions);
   }, [tasks, projectMap, customerRevenueMap, projectCustomerMap, maxSuggestions]);
 

@@ -79,3 +79,18 @@ export function getPriorityColor(priority: string | null | undefined): string {
   if (!priority) return 'bg-muted text-muted-foreground';
   return PRIORITY_MAP[priority.toLowerCase()] || 'bg-muted text-muted-foreground';
 }
+
+/**
+ * Albanian label for a Task status enum value ('Todo' | 'In Progress' |
+ * 'Review' | 'Done'). Single source of truth so the list, dependency badges,
+ * board columns, etc. never show two different labels for the same value.
+ */
+export function getTaskStatusLabel(status: string | null | undefined): string {
+  switch (status) {
+    case 'Todo': return 'Për të bërë';
+    case 'In Progress': return 'Në progres';
+    case 'Review': return 'Rishikim';
+    case 'Done': return 'Përfunduar';
+    default: return status || '';
+  }
+}

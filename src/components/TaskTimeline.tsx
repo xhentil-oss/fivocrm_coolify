@@ -63,27 +63,61 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
   const gridW = range.days * DAY_W;
   const contentW = LABEL_W + gridW;
 
+  // Top axis tier: group consecutive days by calendar month so the Gantt has a
+  // clear month reference above the day numbers.
+  const monthGroups: { label: string; days: number }[] = [];
+  cols.forEach(d => {
+    const label = d.toLocaleDateString('sq-AL', { month: 'long', year: '2-digit' });
+    const last = monthGroups[monthGroups.length - 1];
+    if (last && last.label === label) last.days += 1;
+    else monthGroups.push({ label, days: 1 });
+  });
+
   return (
-    <div className="overflow-auto p-2">
+    // Own the vertical scroll (h-full) so the sticky axis stays pinned while the
+    // task rows scroll — otherwise the parent scroller carries the axis off-screen.
+    <div className="h-full overflow-auto p-2">
       {/* Single coordinate origin: everything is positioned from the left edge of
           this `contentW`-wide track. Labels occupy [0, LABEL_W); the day grid
           occupies [LABEL_W, LABEL_W + gridW). Header, bars and the today marker
           all share that origin so they line up exactly. */}
       <div style={{ width: contentW }}>
-        {/* Date header */}
-        <div className="flex sticky top-0 z-10 bg-background">
-          <div className="flex-shrink-0" style={{ width: LABEL_W }} />
-          {cols.map((d, i) => {
-            const isMonthStart = d.getDate() === 1 || i === 0;
-            const isToday = startOfDay(d).getTime() === startOfDay(new Date()).getTime();
-            const weekend = d.getDay() === 0 || d.getDay() === 6;
-            return (
-              <div key={i} style={{ width: DAY_W }} className={`flex-shrink-0 text-center border-l border-border/40 ${weekend ? 'bg-muted/30' : ''}`}>
-                {isMonthStart && <div className="text-[10px] font-semibold text-muted-foreground truncate">{d.toLocaleDateString('sq-AL', { month: 'short' })}</div>}
-                <div className={`text-[11px] ${isToday ? 'font-bold text-violet-600' : 'text-muted-foreground'}`}>{d.getDate()}</div>
+        {/* Two-tier date axis (months on top, days below) — sticky above the bars. */}
+        <div className="sticky top-0 z-10 bg-background border-b border-border">
+          {/* Month tier */}
+          <div className="flex">
+            <div className="flex-shrink-0" style={{ width: LABEL_W }} />
+            {monthGroups.map((g, i) => (
+              <div
+                key={i}
+                style={{ width: g.days * DAY_W }}
+                className="flex-shrink-0 border-l border-border/60 px-1 text-[11px] font-semibold text-foreground/70 capitalize truncate"
+              >
+                {g.label}
               </div>
-            );
-          })}
+            ))}
+          </div>
+          {/* Day tier (weekday initial + date), week starts marked stronger */}
+          <div className="flex">
+            <div className="flex-shrink-0 flex items-end px-1 pb-0.5 text-[10px] font-medium text-muted-foreground" style={{ width: LABEL_W }}>
+              Detyra
+            </div>
+            {cols.map((d, i) => {
+              const isToday = startOfDay(d).getTime() === startOfDay(new Date()).getTime();
+              const weekend = d.getDay() === 0 || d.getDay() === 6;
+              const isWeekStart = d.getDay() === 1; // Monday
+              return (
+                <div
+                  key={i}
+                  style={{ width: DAY_W }}
+                  className={`flex-shrink-0 text-center ${isWeekStart ? 'border-l border-border' : 'border-l border-border/30'} ${weekend ? 'bg-muted/30' : ''}`}
+                >
+                  <div className="text-[9px] uppercase text-muted-foreground/70">{d.toLocaleDateString('sq-AL', { weekday: 'narrow' })}</div>
+                  <div className={`text-[11px] ${isToday ? 'font-bold text-violet-600' : 'text-muted-foreground'}`}>{d.getDate()}</div>
+                </div>
+              );
+            })}
+          </div>
         </div>
 
         {/* Rows */}
