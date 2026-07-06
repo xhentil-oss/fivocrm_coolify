@@ -216,7 +216,7 @@ const DealsView: React.FC = () => {
               <Label>Titulli</Label>
               <Input value={form.title || ''} onChange={(e) => setForm(f => ({ ...f, title: e.target.value }))} placeholder="p.sh. Website + SEO — Kompania X" />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label>Vlera</Label>
                 <Input type="number" value={form.amount ?? 0} onChange={(e) => setForm(f => ({ ...f, amount: Number(e.target.value) }))} />
@@ -229,7 +229,7 @@ const DealsView: React.FC = () => {
                 </Select>
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label>Faza</Label>
                 <Select value={form.stage || 'Qualification'} onValueChange={(v) => setForm(f => ({ ...f, stage: v as DealStage }))}>
@@ -244,7 +244,7 @@ const DealsView: React.FC = () => {
                   onChange={(e) => setForm(f => ({ ...f, expectedCloseDate: e.target.value ? new Date(e.target.value) : undefined }))} />
               </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <Label>Klienti</Label>
                 <Select value={form.customerId || '__none__'} onValueChange={(v) => setForm(f => ({ ...f, customerId: v === '__none__' ? '' : v }))}>

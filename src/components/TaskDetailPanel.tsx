@@ -1685,7 +1685,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                             onClick={(e) => e.stopPropagation()}
                             className="text-sm min-h-[60px]"
                           />
-                          <div className="grid grid-cols-2 gap-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                             <Select
                               value={subtaskForm.status}
                               onValueChange={(value) => setSubtaskForm({ ...subtaskForm, status: value })}
@@ -1715,7 +1715,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                               </SelectContent>
                             </Select>
                           </div>
-                          <div className="grid grid-cols-2 gap-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                             <Popover>
                               <PopoverTrigger asChild>
                                 <Button variant="outline" size="sm" className="justify-start text-sm">

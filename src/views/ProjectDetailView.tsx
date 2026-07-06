@@ -432,7 +432,7 @@ const ProjectDetailView: React.FC = () => {
   }
 
   return (
-    <div className="h-[calc(100vh-120px)] flex flex-col">
+    <div className="h-[calc(100dvh-120px)] flex flex-col">
       {/* Project Header */}
       <div className="border-b bg-background">
         <div className="flex flex-wrap items-center gap-4 px-4 sm:px-6 py-4">
@@ -554,15 +554,15 @@ const ProjectDetailView: React.FC = () => {
             <TabsList className="h-8">
               <TabsTrigger value="list" className="text-xs px-3">
                 <List className="w-3 h-3 mr-1" />
-                List
+                Lista
               </TabsTrigger>
               <TabsTrigger value="board" className="text-xs px-3">
                 <LayoutGrid className="w-3 h-3 mr-1" />
-                Board
+                Bordi
               </TabsTrigger>
               <TabsTrigger value="calendar" className="text-xs px-3">
                 <CalendarIcon className="w-3 h-3 mr-1" />
-                Calendar
+                Kalendar
               </TabsTrigger>
             </TabsList>
           </Tabs>
@@ -1131,7 +1131,7 @@ const TaskForm: React.FC<{
         <Textarea id="description" name="description" defaultValue={initialData?.description} placeholder="Përshkruaj detyrën..." rows={3} />
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label>Data e Fillimit</Label>
           <Popover>
@@ -1173,7 +1173,7 @@ const TaskForm: React.FC<{
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label htmlFor="status">Statusi</Label>
           <Select value={status} onValueChange={setStatus}>

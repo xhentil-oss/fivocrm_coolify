@@ -98,7 +98,7 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
         <div className="sticky top-0 z-10 bg-background border-b border-border">
           {/* Month tier */}
           <div className="flex">
-            <div className="flex-shrink-0" style={{ width: labelW }} />
+            <div className="flex-shrink-0 sticky left-0 z-20 bg-background" style={{ width: labelW }} />
             {monthGroups.map((g, i) => (
               <div
                 key={i}
@@ -111,7 +111,7 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
           </div>
           {/* Day tier (weekday initial + date), week starts marked stronger */}
           <div className="flex">
-            <div className="flex-shrink-0 flex items-end px-1 pb-0.5 text-[10px] font-medium text-muted-foreground" style={{ width: labelW }}>
+            <div className="flex-shrink-0 sticky left-0 z-20 bg-background border-r border-border/40 flex items-end px-1 pb-0.5 text-[10px] font-medium text-muted-foreground" style={{ width: labelW }}>
               Detyra
             </div>
             {cols.map((d, i) => {
@@ -143,8 +143,9 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
             const span = Math.max(1, daysBetween(start, end) + 1);
             const width = span * DAY_W - 6;
             return (
-              <div key={task.id} className="relative border-b border-border/30" style={{ height: ROW_H }}>
-                <div className="absolute left-0 top-1/2 -translate-y-1/2 pr-2 truncate text-xs text-foreground/80 z-[6] bg-background" style={{ width: labelW }} title={task.title}>{task.title}</div>
+              <div key={task.id} className="relative flex items-center border-b border-border/30" style={{ height: ROW_H }}>
+                {/* Sticky-left so the task name stays visible while scrolling the grid. */}
+                <div className="sticky left-0 shrink-0 z-[6] pr-2 truncate text-xs text-foreground/80 bg-background border-r border-border/40" style={{ width: labelW }} title={task.title}>{task.title}</div>
                 <button
                   onClick={() => onTaskClick(task)}
                   title={`${task.title} · ${start.toLocaleDateString('sq-AL')} → ${end.toLocaleDateString('sq-AL')}`}

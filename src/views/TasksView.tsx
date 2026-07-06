@@ -867,7 +867,7 @@ const TasksView: React.FC = () => {
   }
 
   return (
-    <div className="h-[calc(100vh-120px)] flex flex-col lg:flex-row">
+    <div className="h-[calc(100dvh-120px)] flex flex-col lg:flex-row">
       {/* Left Side - Task List */}
       <div className={`${
         selectedTask
