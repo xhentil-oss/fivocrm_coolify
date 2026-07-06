@@ -652,17 +652,46 @@ const TasksView: React.FC = () => {
         <div className="mt-1.5 cursor-grab opacity-0 group-hover:opacity-30 hover:!opacity-70 text-muted-foreground flex-shrink-0 hidden sm:block">
           <GripVertical className="w-3.5 h-3.5" />
         </div>
-        <Checkbox
-          checked={task.status === 'Done'}
-          onCheckedChange={async (checked) => {
+        {/* Completion toggle — compact circular checkbox (Todoist-style): small
+            visual, comfortable tap area, satisfying fill-and-check on complete. */}
+        <button
+          type="button"
+          aria-label={task.status === 'Done' ? 'Shëno si të pabërë' : 'Shëno si të përfunduar'}
+          aria-pressed={task.status === 'Done'}
+          onClick={async (e) => {
+            e.stopPropagation();
+            const checked = task.status !== 'Done';
             const newStatus = checked ? 'Done' : 'Todo';
             await taskMutation.update(task.id, { status: newStatus });
             toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${checked ? 'Përfunduar' : 'Për të bërë'}` });
             if (checked) logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
           }}
-          onClick={(e) => e.stopPropagation()}
-          className={`mt-1 flex-shrink-0 ${task.status === 'Done' ? 'bg-success border-success' : ''}`}
-        />
+          className="group/check mt-0.5 -m-1 p-1 flex items-center justify-center shrink-0 active:scale-90 transition-transform"
+        >
+          <span
+            className={`flex items-center justify-center w-5 h-5 rounded-full border-2 transition-all duration-200 ${
+              task.status === 'Done'
+                ? 'bg-emerald-500 border-emerald-500'
+                : 'border-muted-foreground/30 group-hover/check:border-emerald-500/60'
+            }`}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth={3.5}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className={`w-3 h-3 transition-opacity duration-150 ${
+                task.status === 'Done'
+                  ? 'text-white opacity-100'
+                  : 'text-emerald-500 opacity-0 group-hover/check:opacity-40'
+              }`}
+            >
+              <path d="M20 6L9 17l-5-5" />
+            </svg>
+          </span>
+        </button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             {/* Priority flag — inline change */}
