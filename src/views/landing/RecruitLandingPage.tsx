@@ -7,6 +7,7 @@ import {
   X, Lock, Briefcase, UserCheck, Search, Globe, Award,
 } from 'lucide-react';
 import { LangSwitcher, type Lang } from './LangSwitcher';
+import LandingMobileMenu from './LandingMobileMenu';
 
 function useInView(threshold = 0.15) {
   const ref = useRef<HTMLDivElement>(null);
@@ -263,6 +264,18 @@ export default function RecruitLandingPage() {
           <div className="flex items-center gap-3">
             <LangSwitcher lang={lang} setLang={setLang} accentClass="bg-blue-600" />
             <button onClick={() => scrollToContact()} className="px-5 py-2.5 text-sm font-semibold text-white rounded-full bg-gradient-to-r from-blue-500 to-indigo-600 hover:shadow-lg hover:shadow-blue-500/25 transition-all hover:-translate-y-0.5">{t.nav.cta}</button>
+            <LandingMobileMenu
+              links={[
+                { href: '#results', label: t.nav.results },
+                { href: '#process', label: t.nav.process },
+                { href: '#packages', label: t.nav.packages },
+                { href: '#addons', label: t.nav.addons },
+                { href: '#testimonials', label: t.nav.testimonials },
+              ]}
+              ctaLabel={t.nav.cta}
+              onCta={() => scrollToContact()}
+              accentClass="bg-gradient-to-r from-blue-500 to-indigo-600"
+            />
           </div>
         </div>
       </nav>

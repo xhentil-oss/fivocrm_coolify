@@ -5,6 +5,7 @@ import {
   ChevronDown, Phone, ArrowUpRight, Sparkles, Rocket, Languages,
   Gauge, Search,
 } from 'lucide-react';
+import LandingMobileMenu from './LandingMobileMenu';
 
 /* ─── scroll-in animation ─── */
 function useInView(threshold = 0.15) {
@@ -510,6 +511,18 @@ export default function WebsiteLandingPage() {
               className="px-5 py-2.5 text-sm font-semibold text-white rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg hover:shadow-blue-500/25 transition-all hover:-translate-y-0.5">
               {t.nav.cta}
             </button>
+            <LandingMobileMenu
+              links={[
+                { href: '#why', label: t.nav.results },
+                { href: '#process', label: t.nav.process },
+                { href: '#packages', label: t.nav.packages },
+                { href: '#maintenance', label: t.nav.maintenance },
+                { href: '#faq', label: t.nav.faq },
+              ]}
+              ctaLabel={t.nav.cta}
+              onCta={() => scrollTo('contact')}
+              accentClass="bg-gradient-to-r from-blue-600 to-indigo-600"
+            />
           </div>
         </div>
       </nav>

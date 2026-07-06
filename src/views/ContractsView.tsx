@@ -408,7 +408,42 @@ const ContractsView: React.FC = () => {
               </p>
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <>
+            {/* Mobile: stacked cards (the 8-column table is unreadable on a phone) */}
+            <div className="sm:hidden divide-y">
+              {filteredContracts.map(c => (
+                <div key={c.id} className="p-4 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="font-medium truncate">{c.title}</div>
+                      {c.packageSummary && <div className="text-xs text-muted-foreground truncate">{c.packageSummary.label}</div>}
+                    </div>
+                    <Badge variant="secondary" className={STATUS_COLORS[c.status] || ''}>{STATUS_LABELS[c.status] || c.status}</Badge>
+                  </div>
+                  <div className="flex items-center gap-1.5 text-sm">
+                    <User className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                    <span className="truncate">{c.clientName}</span>
+                  </div>
+                  <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs text-muted-foreground">
+                    <span>Krijuar: {formatDate(c.createdAt)}</span>
+                    {c.sentAt && <span>Dërguar: {formatDate(c.sentAt)}</span>}
+                    {c.signedAt && <span className="text-green-600 font-medium">Nënshkruar: {formatDate(c.signedAt)}</span>}
+                  </div>
+                  <div className="flex items-center gap-1 pt-1">
+                    <Button size="sm" variant="outline" className="h-9 flex-1" onClick={() => setViewContract(c)}><Eye className="w-4 h-4 mr-1" />Shiko</Button>
+                    {c.status === 'Draft' && (
+                      <>
+                        <Button size="sm" variant="ghost" className="h-9 w-9 p-0" onClick={() => openEdit(c)} title="Edito"><Pencil className="w-4 h-4" /></Button>
+                        <Button size="sm" variant="ghost" className="h-9 w-9 p-0 text-blue-600 hover:text-blue-700" onClick={() => handleSend(c)} disabled={sendingId === c.id} title="Dërgo te klienti">{sendingId === c.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}</Button>
+                        <Button size="sm" variant="ghost" className="h-9 w-9 p-0 text-red-500 hover:text-red-600" onClick={() => handleDelete(c)} disabled={deletingId === c.id} title="Fshi">{deletingId === c.id ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}</Button>
+                      </>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            {/* Desktop: table */}
+            <div className="hidden sm:block overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-muted border-b">
                   <tr>
@@ -494,6 +529,7 @@ const ContractsView: React.FC = () => {
                 </tbody>
               </table>
             </div>
+            </>
           )}
         </CardContent>
       </Card>

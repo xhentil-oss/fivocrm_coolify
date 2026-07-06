@@ -7,6 +7,7 @@ import {
   Shield, Award, Camera, Globe, Megaphone,
 } from 'lucide-react';
 import { LangSwitcher, type Lang } from './LangSwitcher';
+import LandingMobileMenu from './LandingMobileMenu';
 
 /* ─── Intersection Observer ─── */
 function useInView<T extends Element = HTMLDivElement>(threshold = 0.15) {
@@ -362,6 +363,17 @@ const SocialMediaLandingPage: React.FC = () => {
           <div className="flex items-center gap-3">
             <LangSwitcher lang={lang} setLang={setLang} accentClass="bg-purple-600" />
             <button onClick={() => scrollToContact()} className="bg-gradient-to-r from-pink-500 to-violet-600 hover:opacity-90 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-opacity shadow-sm">{t.nav.cta}</button>
+            <LandingMobileMenu
+              links={[
+                { href: '#problemi', label: t.nav.problem },
+                { href: '#packages', label: t.nav.packages },
+                { href: '#procesi', label: t.nav.process },
+                { href: '#faq', label: t.nav.faq },
+              ]}
+              ctaLabel={t.nav.cta}
+              onCta={() => scrollToContact()}
+              accentClass="bg-gradient-to-r from-pink-500 to-violet-600"
+            />
           </div>
         </div>
       </header>

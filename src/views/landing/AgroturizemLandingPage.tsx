@@ -7,6 +7,7 @@ import {
   X, Search, Globe, Sun, Trees,
 } from 'lucide-react';
 import { LangSwitcher, type Lang } from './LangSwitcher';
+import LandingMobileMenu from './LandingMobileMenu';
 
 function useInView(threshold = 0.15) {
   const ref = useRef<HTMLDivElement>(null);
@@ -250,6 +251,18 @@ export default function AgroturizemLandingPage() {
           <div className="flex items-center gap-3">
             <LangSwitcher lang={lang} setLang={setLang} accentClass="bg-emerald-600" />
             <button onClick={() => scrollToContact()} className="px-5 py-2.5 text-sm font-semibold text-white rounded-full bg-gradient-to-r from-amber-500 to-emerald-600 hover:shadow-lg hover:shadow-emerald-500/25 transition-all hover:-translate-y-0.5">{t.nav.cta}</button>
+            <LandingMobileMenu
+              links={[
+                { href: '#results', label: t.nav.results },
+                { href: '#process', label: t.nav.process },
+                { href: '#packages', label: t.nav.packages },
+                { href: '#testimonials', label: t.nav.testimonials },
+                { href: '#faq', label: t.nav.faq },
+              ]}
+              ctaLabel={t.nav.cta}
+              onCta={() => scrollToContact()}
+              accentClass="bg-gradient-to-r from-amber-500 to-emerald-600"
+            />
           </div>
         </div>
       </nav>

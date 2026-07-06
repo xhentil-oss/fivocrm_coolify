@@ -6,6 +6,7 @@ import {
   ArrowUpRight, Sparkles, Camera, Megaphone, BarChart3,
   X, Lock, Search, Share2, Mail, MousePointerClick, MapPin,
 } from 'lucide-react';
+import LandingMobileMenu from './LandingMobileMenu';
 
 /* ─── Animacioni në scroll ─── */
 function useInView(threshold = 0.15) {
@@ -381,6 +382,18 @@ export default function PergolaLandingPage() {
           <div className="flex items-center gap-3">
             <Link to="/login" className="hidden sm:inline-flex text-sm font-medium text-gray-600 hover:text-orange-600 transition-colors">Hyr</Link>
             <button onClick={() => scrollToContact()} className="px-5 py-2.5 text-sm font-semibold text-white rounded-full bg-gradient-to-r from-amber-500 to-orange-600 hover:shadow-lg hover:shadow-orange-500/25 transition-all hover:-translate-y-0.5">Konsultim Falas</button>
+            <LandingMobileMenu
+              links={[
+                { href: '#sherbimet', label: 'Shërbimet' },
+                { href: '#procesi', label: 'Procesi' },
+                { href: '#packages', label: 'Paketat' },
+                { href: '#deshmite', label: 'Dëshmitë' },
+                { href: '#faq', label: 'Pyetjet' },
+              ]}
+              ctaLabel="Konsultim Falas"
+              onCta={() => scrollToContact()}
+              accentClass="bg-gradient-to-r from-amber-500 to-orange-600"
+            />
           </div>
         </div>
       </nav>

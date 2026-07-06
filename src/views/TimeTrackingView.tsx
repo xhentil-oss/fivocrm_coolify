@@ -416,7 +416,45 @@ const TimeTrackingView: React.FC = () => {
         </TabsContent>
 
         <TabsContent value="entries" className="space-y-6">
-          <Card className="overflow-hidden">
+          {/* Mobile: stacked cards (the 6-column table needs too much horizontal scroll) */}
+          <div className="sm:hidden space-y-3">
+            {timeEntries?.map((entry) => {
+              const task = tasks?.find(t => t.id === entry.taskId);
+              const project = projects?.find(p => p.id === entry.projectId);
+              return (
+                <Card key={entry.id} className="p-4 space-y-2">
+                  <div className="flex items-start justify-between gap-2">
+                    <p className="font-medium text-foreground">{entry.description || 'Pa përshkrim'}</p>
+                    {entry.endTime ? (
+                      <span className="text-sm font-semibold whitespace-nowrap">{formatDuration(entry.duration || 0)}</span>
+                    ) : (
+                      <Badge variant="default">Aktive</Badge>
+                    )}
+                  </div>
+                  {(task || project) && (
+                    <p className="text-xs text-muted-foreground">{[task?.title, project?.name].filter(Boolean).join(' · ')}</p>
+                  )}
+                  <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                    <span>{new Date(entry.startTime).toLocaleString()}</span>
+                    {entry.isBillable ? (
+                      <Badge className="bg-success-100 text-success-800">Faturueshme</Badge>
+                    ) : (
+                      <Badge variant="secondary">Jo-faturueshme</Badge>
+                    )}
+                    {entry.isPomodoroSession && (
+                      <Badge variant="secondary"><Timer className="w-3 h-3 mr-1" />Pomodoro</Badge>
+                    )}
+                  </div>
+                  <div className="flex gap-2 pt-1">
+                    <Button variant="outline" size="sm" className="flex-1" disabled={!entry.endTime} onClick={() => { setSelectedEntry(entry); setIsEditDialogOpen(true); }}>Ndrysho</Button>
+                    <Button variant="outline" size="sm" className="flex-1" onClick={() => handleDeleteEntry(entry.id)}>Fshi</Button>
+                  </div>
+                </Card>
+              );
+            })}
+          </div>
+          {/* Desktop: table */}
+          <Card className="hidden sm:block overflow-hidden">
             <div className="overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-muted">

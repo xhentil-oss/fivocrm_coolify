@@ -6,6 +6,7 @@ import {
   Play, CalendarCheck, Download, Utensils, Coffee, Scissors,
   ShoppingBag, Building2, Gift, UserPlus, Plus,
 } from 'lucide-react';
+import LandingMobileMenu from './LandingMobileMenu';
 
 /* ─── Animacioni në scroll ─── */
 function useInView(threshold = 0.15) {
@@ -242,6 +243,17 @@ export default function FotoVideoLandingPage() {
           <div className="flex items-center gap-3">
             <Link to="/login" className="hidden sm:inline-flex text-sm font-medium text-gray-600 hover:text-fuchsia-600 transition-colors">Hyr</Link>
             <button onClick={() => scrollToContact()} className="px-5 py-2.5 text-sm font-semibold text-white rounded-full bg-gradient-to-r from-fuchsia-600 to-pink-600 hover:shadow-lg hover:shadow-fuchsia-500/25 transition-all hover:-translate-y-0.5">Rezervo Tani</button>
+            <LandingMobileMenu
+              links={[
+                { href: '#pse', label: 'Pse' },
+                { href: '#si-funksionon', label: 'Si funksionon' },
+                { href: '#packages', label: 'Paketat' },
+                { href: '#faq', label: 'Pyetjet' },
+              ]}
+              ctaLabel="Rezervo Tani"
+              onCta={() => scrollToContact()}
+              accentClass="bg-gradient-to-r from-fuchsia-600 to-pink-600"
+            />
           </div>
         </div>
       </nav>

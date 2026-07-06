@@ -492,7 +492,31 @@ const Customer360View: React.FC = () => {
               {customerInvoices.length === 0 ? (
                 <p className="text-sm text-muted-foreground text-center py-8">Nuk ka fatura për këtë klient</p>
               ) : (
-                <div className="overflow-x-auto">
+                <>
+                {/* Mobile: stacked cards */}
+                <div className="sm:hidden space-y-2">
+                  {customerInvoices.map(inv => (
+                    <div key={inv.id} className="p-3 rounded-lg border bg-card">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="font-mono text-sm">{inv.invoiceNumber || inv.id.slice(0, 8)}</span>
+                        <Badge className={getStatusColor(inv.status)} variant="secondary">{inv.status}</Badge>
+                      </div>
+                      <div className="mt-1 flex items-center justify-between text-sm">
+                        <span className="font-semibold">{(inv.total || inv.amount || 0).toLocaleString()} {(inv as any).currency === 'EUR' ? '€' : 'L'}</span>
+                        <span className="text-xs text-muted-foreground">Afati: {inv.dueDate instanceof Date ? inv.dueDate.toLocaleDateString('sq-AL') : '-'}</span>
+                      </div>
+                      <div className="mt-1 text-xs text-muted-foreground">
+                        {inv.createdAt instanceof Date ? inv.createdAt.toLocaleDateString('sq-AL') : ''} · {inv.paymentMethod || '-'}
+                      </div>
+                    </div>
+                  ))}
+                  <div className="flex items-center justify-between p-3 rounded-lg bg-muted font-semibold text-sm">
+                    <span>Totali</span>
+                    <span>{totalRevenue.toLocaleString()} ALL</span>
+                  </div>
+                </div>
+                {/* Desktop: table */}
+                <div className="hidden sm:block overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead className="bg-muted">
                       <tr>
@@ -525,6 +549,7 @@ const Customer360View: React.FC = () => {
                     </tfoot>
                   </table>
                 </div>
+                </>
               )}
             </CardContent>
           </Card>
@@ -726,7 +751,45 @@ const Customer360View: React.FC = () => {
                   </Button>
                 </div>
               ) : (
-                <div className="overflow-x-auto">
+                <>
+                {/* Mobile: stacked cards (8-column table is too wide for a phone) */}
+                <div className="sm:hidden space-y-2">
+                  {customerQuotes.map(q => {
+                    const cur = q.currency === 'EUR' ? '€' : q.currency === 'USD' ? '$' : 'L';
+                    return (
+                      <div key={q.id} className="p-3 rounded-lg border bg-card space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="font-medium truncate">{q.label || q.result?.suggestedLabel || '-'}</span>
+                          <Badge variant="secondary" className={
+                            q.status === 'Accepted' ? 'bg-green-100 text-green-700' :
+                            q.status === 'Rejected' ? 'bg-red-100 text-red-700' :
+                            q.status === 'Sent' ? 'bg-blue-100 text-blue-700' :
+                            'bg-gray-100 text-gray-700'
+                          }>{q.status}</Badge>
+                        </div>
+                        <div className="flex items-center justify-between text-sm">
+                          <span className="font-semibold tabular-nums">{(q.result?.grandTotal ?? 0).toLocaleString()} {cur}</span>
+                          <span className="text-xs text-muted-foreground">{q.createdAt instanceof Date ? q.createdAt.toLocaleDateString('sq-AL') : ''}</span>
+                        </div>
+                        <div className="text-xs text-muted-foreground">
+                          One-time: {(q.result?.totalOneTime ?? 0).toLocaleString()} {cur} · Mujore: {(q.result?.totalMonthly ?? 0).toLocaleString()} {cur} · {q.result?.enabledServicesCount ?? 0} shërbime
+                        </div>
+                        {q.status === 'Draft' && (
+                          <Button size="sm" variant="outline" className="w-full h-9 gap-1 text-blue-600 border-blue-200 hover:bg-blue-50" disabled={sendingQuoteId === q.id} onClick={async () => {
+                            setSendingQuoteId(q.id);
+                            try { await quoteMutation.update(q.id, { status: 'Sent' }); toast({ title: '✅ Preventiva u dërgua te klienti!' }); }
+                            catch { toast({ title: 'Gabim', description: 'Ndodhi një gabim', variant: 'destructive' }); }
+                            finally { setSendingQuoteId(null); }
+                          }}>
+                            <Send className="w-3.5 h-3.5" /> Dërgo
+                          </Button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                {/* Desktop: table */}
+                <div className="hidden sm:block overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead className="bg-muted">
                       <tr>
@@ -789,6 +852,7 @@ const Customer360View: React.FC = () => {
                     </tbody>
                   </table>
                 </div>
+                </>
               )}
             </CardContent>
           </Card>
@@ -818,7 +882,44 @@ const Customer360View: React.FC = () => {
                       <Send className="w-3.5 h-3.5 mr-1.5" /> Krijo Kontratë të Re
                     </Button>
                   </div>
-                  <div className="overflow-x-auto">
+                  {/* Mobile: stacked cards */}
+                  <div className="sm:hidden space-y-2">
+                    {customerContracts.map(c => {
+                      const fmtDate = (d: any) => { if (!d) return '—'; const date = d instanceof Date ? d : d?.toDate?.(); return date ? date.toLocaleDateString('sq-AL') : '—'; };
+                      const statusLabel = c.status === 'Draft' ? 'Draft' : c.status === 'Sent' ? 'Dërguar' : c.status === 'Signed' ? 'Nënshkruar' : c.status === 'Rejected' ? 'Refuzuar' : 'Skaduar';
+                      return (
+                        <div key={c.id} className="p-3 rounded-lg border bg-card space-y-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="font-medium truncate">{c.title}</span>
+                            <Badge variant="secondary" className={
+                              c.status === 'Signed' ? 'bg-green-100 text-green-700' :
+                              c.status === 'Rejected' ? 'bg-red-100 text-red-700' :
+                              c.status === 'Sent' ? 'bg-blue-100 text-blue-700' :
+                              c.status === 'Expired' ? 'bg-orange-100 text-orange-700' :
+                              'bg-gray-100 text-gray-700'
+                            }>{statusLabel}</Badge>
+                          </div>
+                          <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-muted-foreground">
+                            <span>Krijuar: {fmtDate(c.createdAt)}</span>
+                            {c.sentAt && <span>Dërguar: {fmtDate(c.sentAt)}</span>}
+                            {c.signedAt && <span className="text-green-600 font-medium">Nënshkruar: {fmtDate(c.signedAt)}</span>}
+                          </div>
+                          {c.status === 'Draft' && (
+                            <Button size="sm" variant="outline" className="w-full h-9 gap-1 text-blue-600 border-blue-200 hover:bg-blue-50" disabled={sendingContractId === c.id} onClick={async () => {
+                              setSendingContractId(c.id);
+                              try { await contractMutation.update(c.id, { status: 'Sent', sentAt: new Date(), updatedAt: new Date() } as any); toast({ title: '✅ Kontrata u dërgua te klienti!' }); }
+                              catch { toast({ title: 'Gabim', variant: 'destructive' }); }
+                              finally { setSendingContractId(null); }
+                            }}>
+                              <Send className="w-3.5 h-3.5" /> Dërgo
+                            </Button>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                  {/* Desktop: table */}
+                  <div className="hidden sm:block overflow-x-auto">
                     <table className="w-full text-sm">
                       <thead className="bg-muted">
                         <tr>

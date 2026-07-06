@@ -7,6 +7,7 @@ import {
   Video, Instagram, Search, MessageSquare, X, Play,
 } from 'lucide-react';
 import { LangSwitcher, type Lang } from './LangSwitcher';
+import LandingMobileMenu from './LandingMobileMenu';
 
 function useInView(threshold = 0.15) {
   const ref = useRef<HTMLDivElement>(null);
@@ -303,6 +304,17 @@ const EducationLandingPage: React.FC = () => {
           <div className="flex items-center gap-3">
             <LangSwitcher lang={lang} setLang={setLang} accentClass="bg-indigo-600" />
             <button onClick={() => scrollToContact()} className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-4 py-2 rounded-lg transition-colors">{t.nav.cta}</button>
+            <LandingMobileMenu
+              links={[
+                { href: '#problemi', label: t.nav.problem },
+                { href: '#packages', label: t.nav.packages },
+                { href: '#procesi', label: t.nav.process },
+                { href: '#faq', label: t.nav.faq },
+              ]}
+              ctaLabel={t.nav.cta}
+              onCta={() => scrollToContact()}
+              accentClass="bg-indigo-600"
+            />
           </div>
         </div>
       </header>
