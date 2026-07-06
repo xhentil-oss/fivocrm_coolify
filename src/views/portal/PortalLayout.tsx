@@ -89,8 +89,11 @@ const PortalLayout: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
-      {/* Top Bar */}
-      <header className="fixed top-0 left-0 right-0 z-50 h-16 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 flex items-center px-4 lg:px-6">
+      {/* Top Bar — grows by the top safe-area inset so it clears the notch/status bar */}
+      <header
+        style={{ height: 'calc(4rem + env(safe-area-inset-top))', paddingTop: 'env(safe-area-inset-top)' }}
+        className="fixed top-0 left-0 right-0 z-50 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 flex items-center px-4 lg:px-6"
+      >
         <Button
           variant="ghost"
           size="icon"
@@ -125,9 +128,10 @@ const PortalLayout: React.FC = () => {
         />
       )}
 
-      {/* Sidebar */}
+      {/* Sidebar — top tracks the header height (incl. top safe-area inset) */}
       <aside
-        className={`fixed top-16 left-0 bottom-0 z-40 w-[240px] bg-card border-r transition-transform duration-200 lg:translate-x-0 ${
+        style={{ top: 'calc(4rem + env(safe-area-inset-top))' }}
+        className={`fixed left-0 bottom-0 z-40 w-[240px] bg-card border-r transition-transform duration-200 lg:translate-x-0 ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -156,15 +160,21 @@ const PortalLayout: React.FC = () => {
         </nav>
       </aside>
 
-      {/* Main content */}
-      <main className="lg:ml-[240px] pt-16">
-        <div className="p-4 pb-20 sm:p-6 sm:pb-20 lg:p-8">
+      {/* Main content — top clears the (inset-grown) header, bottom clears the
+          (inset-grown) mobile nav. */}
+      <main className="lg:ml-[240px]" style={{ paddingTop: 'calc(4rem + env(safe-area-inset-top))' }}>
+        <div className="p-4 sm:p-6 lg:p-8" style={{ paddingBottom: 'calc(5rem + env(safe-area-inset-bottom))' }}>
           <Outlet />
         </div>
       </main>
 
       {/* ── Mobile bottom navigation (hidden on lg+) ── */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 h-16 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 border-t flex items-stretch lg:hidden">
+      {/* Height grows by the bottom safe-area inset; padding lifts the tabs above the
+          gesture bar / home indicator. */}
+      <nav
+        style={{ height: 'calc(4rem + env(safe-area-inset-bottom))', paddingBottom: 'env(safe-area-inset-bottom)' }}
+        className="fixed bottom-0 left-0 right-0 z-40 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 border-t flex items-stretch lg:hidden"
+      >
         {navItems.map(item => {
           const Icon = item.icon;
           const isChatItem = item.to === '/portal/chat';

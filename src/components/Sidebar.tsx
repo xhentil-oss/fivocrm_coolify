@@ -180,8 +180,13 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
 
       {/* Sidebar */}
       <aside
+        // Offset/height track the header, which grows by the top safe-area inset.
+        style={{
+          top: 'calc(72px + env(safe-area-inset-top))',
+          height: 'calc(100vh - 72px - env(safe-area-inset-top))',
+        }}
         className={cn(
-          'fixed left-0 top-[72px] h-[calc(100vh-72px)] bg-card border-r transition-all duration-300 z-40 flex flex-col',
+          'fixed left-0 bg-card border-r transition-all duration-300 z-40 flex flex-col',
           collapsed ? 'w-16' : 'w-64',
           mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'
         )}

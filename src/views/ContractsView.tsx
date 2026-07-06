@@ -503,7 +503,7 @@ const ContractsView: React.FC = () => {
         open={isFormOpen}
         onOpenChange={(open) => { if (!open) { editorRef.current?.setContent(''); setShowCreate(false); setEditContract(null); resetForm(); } }}
       >
-        <DialogContent className="max-w-[1180px] w-[96vw] h-[90vh] flex flex-col p-0 gap-0">
+        <DialogContent className="max-w-[1180px] w-[96vw] h-[90dvh] flex flex-col p-0 gap-0">
           {/* Header */}
           <DialogHeader className="px-6 pt-5 pb-4 border-b shrink-0">
             <DialogTitle className="flex items-center gap-2">
@@ -672,10 +672,11 @@ const ContractsView: React.FC = () => {
             </div>
           </div>
 
-          {/* Main: services panel + editor */}
-          <div className="flex flex-1 overflow-hidden">
-            {/* Services drag panel */}
-            <div className="w-56 border-r flex flex-col shrink-0 bg-muted/10">
+          {/* Main: services panel + editor. Stacks vertically on mobile (the fixed
+              224px side panel would leave almost no room for the editor on a phone). */}
+          <div className="flex flex-col md:flex-row flex-1 overflow-hidden">
+            {/* Services panel — full-width capped strip on mobile, fixed side column on desktop */}
+            <div className="w-full md:w-56 max-h-40 md:max-h-none border-b md:border-b-0 md:border-r flex flex-col md:shrink-0 bg-muted/10">
               <div className="px-3 pt-3 pb-2 border-b shrink-0">
                 <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
                   <Package className="w-3.5 h-3.5" /> Shërbime
@@ -709,9 +710,10 @@ const ContractsView: React.FC = () => {
                       </div>
                       <button
                         type="button"
-                        className="text-xs text-primary opacity-0 group-hover:opacity-100 transition-opacity font-medium shrink-0"
+                        className="text-base md:text-xs text-primary opacity-100 md:opacity-0 md:group-hover:opacity-100 transition-opacity font-medium shrink-0 px-1"
                         onClick={() => editorRef.current?.insertContent(buildServiceHTML(svc))}
                         title="Shto në kontratë"
+                        aria-label="Shto shërbimin në kontratë"
                       >
                         +
                       </button>

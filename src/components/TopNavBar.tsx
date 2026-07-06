@@ -58,7 +58,12 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
 
   return (
     <>
-      <header className="fixed top-0 left-0 right-0 z-50 h-[72px] bg-gradient-primary border-b border-border/20">
+      {/* height grows by the top safe-area inset; padding pushes the content below
+          the status bar / notch on edge-to-edge Android/iOS. */}
+      <header
+        className="fixed top-0 left-0 right-0 z-50 bg-gradient-primary border-b border-border/20"
+        style={{ height: 'calc(72px + env(safe-area-inset-top))', paddingTop: 'env(safe-area-inset-top)' }}
+      >
         <div className="h-full px-3 sm:px-4 lg:px-6 flex items-center justify-between">
         <div className="flex items-center gap-2 sm:gap-4">
           <Button
@@ -230,7 +235,10 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
 
     {/* Preview mode banner */}
     {isOwner && previewRole && (
-      <div className="fixed top-[72px] left-0 right-0 z-40 flex items-center justify-between px-4 py-1.5 bg-yellow-400 text-yellow-900 text-sm font-medium">
+      <div
+        className="fixed left-0 right-0 z-40 flex items-center justify-between px-4 py-1.5 bg-yellow-400 text-yellow-900 text-sm font-medium"
+        style={{ top: 'calc(72px + env(safe-area-inset-top))' }}
+      >
         <span>
           <Eye className="inline w-4 h-4 mr-1.5 mb-0.5" />
           Po shikoni si: <strong>{roleLabelMap[previewRole]}</strong> — kjo është vetëm një preview, të dhënat janë reale.

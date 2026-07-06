@@ -79,12 +79,14 @@ const MobileBottomNav: React.FC = () => {
         />
       )}
 
-      {/* "Më shumë" slide-up drawer */}
+      {/* "Më shumë" slide-up drawer — sits directly above the bottom nav, whose
+          height grows by the bottom safe-area inset. */}
       <div
+        style={{ bottom: 'calc(4rem + env(safe-area-inset-bottom))' }}
         className={`fixed left-0 right-0 z-50 bg-card border-t rounded-t-2xl shadow-xl lg:hidden transition-all duration-300 ease-out ${
           showMore
-            ? 'bottom-16 opacity-100 translate-y-0'
-            : 'bottom-16 opacity-0 translate-y-full pointer-events-none'
+            ? 'opacity-100 translate-y-0'
+            : 'opacity-0 translate-y-full pointer-events-none'
         }`}
       >
         <div className="flex items-center justify-between px-4 pt-4 pb-2 border-b">
@@ -123,7 +125,12 @@ const MobileBottomNav: React.FC = () => {
       </div>
 
       {/* ── Bottom navigation bar ── */}
-      <nav className="fixed bottom-0 left-0 right-0 z-40 h-16 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 border-t flex items-stretch lg:hidden">
+      {/* Height grows by the bottom safe-area inset; padding pushes the tabs above the
+          gesture bar / home indicator so they stay tappable on edge-to-edge devices. */}
+      <nav
+        style={{ height: 'calc(4rem + env(safe-area-inset-bottom))', paddingBottom: 'env(safe-area-inset-bottom)' }}
+        className="fixed bottom-0 left-0 right-0 z-40 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 border-t flex items-stretch lg:hidden"
+      >
         {primaryItems.map(item => {
           const Icon = item.icon;
           const isChatItem = item.to === '/app/chat';

@@ -267,14 +267,21 @@ function AppContent() {
                 onCloseMobile={() => setMobileMenuOpen(false)}
               />
               
-              <main 
+              <main
                 className={`flex-1 transition-all duration-normal ease-in-out ${
-                  isOwner && previewRole ? 'mt-[108px]' : 'mt-[72px]'
-                } ${
                   sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'
                 }`}
+                style={{
+                  // Clear the fixed header (72px, +36px when the preview banner shows)
+                  // plus the top safe-area inset so content never hides under the notch.
+                  marginTop: `calc(${isOwner && previewRole ? '108px' : '72px'} + env(safe-area-inset-top))`,
+                }}
               >
-                <div className="p-3 pb-20 sm:p-6 sm:pb-20 lg:p-8">
+                <div
+                  className="p-3 sm:p-6 lg:p-8"
+                  // Clear the fixed mobile bottom nav (~5rem) + the bottom safe-area inset.
+                  style={{ paddingBottom: 'calc(5rem + env(safe-area-inset-bottom))' }}
+                >
                   <PendingInvitesBanner />
                   <ErrorBoundary>
                     <Suspense fallback={<LazyFallback />}>
