@@ -641,10 +641,10 @@ const TasksView: React.FC = () => {
         } ${isOverdue ? 'bg-destructive/5' : ''}`}
         onClick={() => setSelectedTask(task)}
       >
-        {/* Bulk-select checkbox (shows on hover or when a selection is active) */}
+        {/* Bulk-select checkbox — hover on desktop; hidden on touch unless a selection is active */}
         <div
           onClick={(e) => e.stopPropagation()}
-          className={`flex items-center pt-1 flex-shrink-0 transition-opacity ${selectedIds.size > 0 ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'}`}
+          className={`items-center pt-1 flex-shrink-0 transition-opacity ${selectedIds.size > 0 ? 'flex opacity-100' : 'hidden sm:flex opacity-0 group-hover:opacity-100'}`}
         >
           <Checkbox checked={selectedIds.has(task.id)} onCheckedChange={() => toggleSelect(task.id)} aria-label="Përzgjidh detyrën" />
         </div>
@@ -874,59 +874,22 @@ const TasksView: React.FC = () => {
           ? `hidden lg:flex lg:flex-col lg:border-r ${panelExpanded ? 'lg:w-1/3 lg:min-w-[400px]' : 'lg:w-1/2'}`
           : 'flex flex-col w-full'
       } transition-all duration-300`}>
-        {/* Header */}
-        <div className="shrink-0 flex flex-col sm:flex-row sm:items-center justify-between p-4 border-b gap-3">
-          <div>
-            <h1 className="text-lg sm:text-xl font-semibold text-foreground">Detyrat</h1>
-            <p className="text-xs sm:text-sm text-muted-foreground">
-              {tasks.length} detyra · {myTasks.length} të miat
-            </p>
-          </div>
-          <div className="flex items-center gap-2 flex-wrap">
-            {/* View switcher — plain buttons (reliable onClick) instead of Radix Tabs */}
-            <div className="inline-flex h-8 items-center rounded-lg bg-muted p-0.5">
-              {([
-                { v: 'list' as const, label: 'Listë', Icon: List },
-                { v: 'board' as const, label: 'Bordi', Icon: LayoutGrid },
-                { v: 'timeline' as const, label: 'Kronologji', Icon: GanttChart },
-                { v: 'calendar' as const, label: 'Kalendar', Icon: CalendarDays },
-              ]).map(({ v, label, Icon }) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setViewMode(v)}
-                  className={`inline-flex items-center gap-1 rounded-md px-2 py-1 text-xs font-medium transition-colors ${
-                    viewMode === v ? 'bg-background text-foreground shadow' : 'text-muted-foreground hover:text-foreground'
-                  }`}
-                >
-                  <Icon className="w-3 h-3 sm:mr-0.5" />
-                  <span className="hidden sm:inline">{label}</span>
-                </button>
-              ))}
+        {/* ── Header ── */}
+        <div className="shrink-0 border-b bg-background">
+          {/* Title + primary action */}
+          <div className="flex items-center justify-between gap-3 px-4 pt-3.5 pb-3">
+            <div className="min-w-0">
+              <h1 className="text-lg sm:text-xl font-semibold text-foreground leading-tight">Detyrat</h1>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                {tasks.length} detyra · <span className="font-medium text-foreground/70">{myTasks.length} të miat</span>
+              </p>
             </div>
-
-            {viewMode === 'list' && (
-              <Select value={groupBy} onValueChange={(v) => setGroupBy(v as any)}>
-                <SelectTrigger className="h-8 text-xs w-full sm:w-[140px]">
-                  <Users className="w-3 h-3 mr-1 shrink-0" />
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="none">Pa grupim</SelectItem>
-                  <SelectItem value="assignee">Sipas personit</SelectItem>
-                  <SelectItem value="priority">Sipas prioritetit</SelectItem>
-                  <SelectItem value="project">Sipas projektit</SelectItem>
-                  <SelectItem value="dueDate">Sipas afatit</SelectItem>
-                </SelectContent>
-              </Select>
-            )}
-
             {permissions.canEdit && (
               <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
                 <DialogTrigger asChild>
-                  <Button size="sm" className="bg-primary text-primary-foreground">
-                    <Plus className="w-4 h-4 sm:mr-1" />
-                    <span className="hidden sm:inline">Detyrë e Re</span>
+                  <Button size="sm" className="bg-primary text-primary-foreground shadow-sm gap-1.5 rounded-lg shrink-0">
+                    <Plus className="w-4 h-4" />
+                    <span className="hidden xs:inline">Detyrë e Re</span>
                   </Button>
                 </DialogTrigger>
                 <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
@@ -946,69 +909,77 @@ const TasksView: React.FC = () => {
               </Dialog>
             )}
           </div>
+          {/* View switcher — segmented control, full width on mobile */}
+          <div className="px-4 pb-3">
+            <div className="flex sm:inline-flex w-full sm:w-auto items-center rounded-lg bg-muted p-1 gap-0.5">
+              {([
+                { v: 'list' as const, label: 'Listë', Icon: List },
+                { v: 'board' as const, label: 'Bordi', Icon: LayoutGrid },
+                { v: 'timeline' as const, label: 'Kronologji', Icon: GanttChart },
+                { v: 'calendar' as const, label: 'Kalendar', Icon: CalendarDays },
+              ]).map(({ v, label, Icon }) => (
+                <button
+                  key={v}
+                  type="button"
+                  onClick={() => setViewMode(v)}
+                  className={`flex-1 sm:flex-none inline-flex items-center justify-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-medium transition-all ${
+                    viewMode === v ? 'bg-background text-foreground shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  <Icon className="w-4 h-4" />
+                  <span className="hidden sm:inline">{label}</span>
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
 
-        {/* Stats Bar — pill filters on ≥sm, dropdown on mobile */}
-        <div className="shrink-0 px-4 py-2 border-b bg-muted/20">
-          {/* Mobile: single Select dropdown */}
-          <div className="sm:hidden">
-            <Select value={filterStatus} onValueChange={setFilterStatus}>
-              <SelectTrigger className="h-8 text-xs">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">Të gjitha ({baseTasksForStats.length})</SelectItem>
-                <SelectItem value="Todo">Për të bërë ({taskStats.todo})</SelectItem>
-                <SelectItem value="In Progress">Në progres ({taskStats.inProgress})</SelectItem>
-                <SelectItem value="Review">Rishikim ({taskStats.review})</SelectItem>
-                <SelectItem value="Done">Përfunduar ({taskStats.done})</SelectItem>
-                {taskStats.overdue > 0 && (
-                  <SelectItem value="overdue">Vonuar ({taskStats.overdue})</SelectItem>
-                )}
-              </SelectContent>
-            </Select>
-          </div>
-          {/* Desktop: pill buttons */}
-          <div className="hidden sm:flex items-center gap-2 flex-wrap">
-            <button onClick={() => setFilterStatus('all')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                filterStatus === 'all' ? 'bg-slate-500 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-600 dark:bg-slate-800 dark:hover:bg-slate-700 dark:text-slate-300'}`}>
-              Të gjitha <span className="tabular-nums">{baseTasksForStats.length}</span>
-            </button>
-            <button onClick={() => setFilterStatus('Todo')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                filterStatus === 'Todo' ? 'bg-slate-600 text-white' : 'bg-slate-100 hover:bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300'}`}>
-              <CircleDot className="w-3 h-3" />Për të bërë <span className="tabular-nums">{taskStats.todo}</span>
-            </button>
-            <button onClick={() => setFilterStatus('In Progress')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                filterStatus === 'In Progress' ? 'bg-blue-500 text-white' : 'bg-blue-50 hover:bg-blue-100 text-blue-600 dark:bg-blue-950 dark:text-blue-300'}`}>
-              <Play className="w-3 h-3" />Në progres <span className="tabular-nums">{taskStats.inProgress}</span>
-            </button>
-            <button onClick={() => setFilterStatus('Review')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                filterStatus === 'Review' ? 'bg-amber-500 text-white' : 'bg-amber-50 hover:bg-amber-100 text-amber-600 dark:bg-amber-950 dark:text-amber-300'}`}>
-              <Clock className="w-3 h-3" />Rishikim <span className="tabular-nums">{taskStats.review}</span>
-            </button>
-            <button onClick={() => setFilterStatus('Done')}
-              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                filterStatus === 'Done' ? 'bg-emerald-500 text-white' : 'bg-emerald-50 hover:bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-300'}`}>
-              <CheckCircle2 className="w-3 h-3" />Përfunduar <span className="tabular-nums">{taskStats.done}</span>
-            </button>
-            {taskStats.overdue > 0 && (
-              <button onClick={() => setFilterStatus('overdue')}
-                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium transition-colors ${
-                  filterStatus === 'overdue' ? 'bg-red-500 text-white' : 'bg-red-50 hover:bg-red-100 text-red-600 dark:bg-red-950 dark:text-red-300'}`}>
-                <AlertTriangle className="w-3 h-3" />Vonuar <span className="tabular-nums">{taskStats.overdue}</span>
+        {/* ── Search + filters ── */}
+        <div className="shrink-0 border-b bg-muted/20 px-4 py-2.5 space-y-2.5">
+          {/* Search */}
+          <div className="relative">
+            <svg className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+            </svg>
+            <input
+              type="text"
+              placeholder="Kërko detyra..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full h-9 pl-9 pr-9 text-base sm:text-sm rounded-lg border bg-background focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary"
+            />
+            {searchQuery && (
+              <button onClick={() => setSearchQuery('')} className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground">
+                <X className="w-4 h-4" />
               </button>
             )}
           </div>
-          {/* Assignee filter — applies to every view (list, board, calendar, timeline) */}
-          <div className="flex items-center gap-2 mt-2">
-            <User className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
+          {/* Status chips — horizontally scrollable */}
+          <div className="flex items-center gap-2 overflow-x-auto -mx-1 px-1 [-ms-overflow-style:none] [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+            {([
+              { key: 'all', label: 'Të gjitha', count: baseTasksForStats.length, Icon: null, on: 'bg-slate-600 text-white', off: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300' },
+              { key: 'Todo', label: 'Për të bërë', count: taskStats.todo, Icon: CircleDot, on: 'bg-slate-700 text-white', off: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300' },
+              { key: 'In Progress', label: 'Në progres', count: taskStats.inProgress, Icon: Play, on: 'bg-blue-500 text-white', off: 'bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-300' },
+              { key: 'Review', label: 'Rishikim', count: taskStats.review, Icon: Clock, on: 'bg-amber-500 text-white', off: 'bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-300' },
+              { key: 'Done', label: 'Përfunduar', count: taskStats.done, Icon: CheckCircle2, on: 'bg-emerald-500 text-white', off: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-300' },
+              ...(taskStats.overdue > 0 ? [{ key: 'overdue', label: 'Vonuar', count: taskStats.overdue, Icon: AlertTriangle, on: 'bg-red-500 text-white', off: 'bg-red-50 text-red-600 dark:bg-red-950 dark:text-red-300' }] : []),
+            ]).map(({ key, label, count, Icon, on, off }) => (
+              <button
+                key={key}
+                onClick={() => setFilterStatus(key)}
+                className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium whitespace-nowrap shrink-0 transition-colors ${filterStatus === key ? on : off}`}
+              >
+                {Icon && <Icon className="w-3 h-3" />}{label}
+                <span className="tabular-nums opacity-80">{count}</span>
+              </button>
+            ))}
+          </div>
+          {/* Assignee + grouping */}
+          <div className="flex items-center gap-2">
             <Select value={filterAssignee} onValueChange={setFilterAssignee}>
-              <SelectTrigger className="h-8 text-xs w-full sm:w-[240px]">
-                <SelectValue placeholder="Filtro sipas personit" />
+              <SelectTrigger className="h-9 text-xs flex-1 min-w-0">
+                <User className="w-3.5 h-3.5 mr-1 shrink-0 text-muted-foreground" />
+                <SelectValue placeholder="Të gjithë personat" />
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Të gjithë personat</SelectItem>
@@ -1020,10 +991,25 @@ const TasksView: React.FC = () => {
                 ))}
               </SelectContent>
             </Select>
+            {viewMode === 'list' && (
+              <Select value={groupBy} onValueChange={(v) => setGroupBy(v as any)}>
+                <SelectTrigger className="h-9 text-xs flex-1 min-w-0">
+                  <Users className="w-3.5 h-3.5 mr-1 shrink-0 text-muted-foreground" />
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">Pa grupim</SelectItem>
+                  <SelectItem value="assignee">Sipas personit</SelectItem>
+                  <SelectItem value="priority">Sipas prioritetit</SelectItem>
+                  <SelectItem value="project">Sipas projektit</SelectItem>
+                  <SelectItem value="dueDate">Sipas afatit</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
             {filterAssignee !== 'all' && (
               <button
                 onClick={() => setFilterAssignee('all')}
-                className="text-xs text-muted-foreground hover:text-foreground underline whitespace-nowrap"
+                className="text-xs text-muted-foreground hover:text-foreground underline whitespace-nowrap shrink-0"
               >
                 Pastro
               </button>
@@ -1043,30 +1029,6 @@ const TasksView: React.FC = () => {
             getUserName={getUserName}
           />
         )}
-
-        {/* Search Bar */}
-        <div className="px-4 py-2 border-b bg-muted/30">
-          <div className="relative">
-            <input
-              type="text"
-              placeholder="Kërko detyra..."
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full h-8 pl-8 pr-3 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/20"
-            />
-            <svg className="w-4 h-4 absolute left-2.5 top-2 text-muted-foreground" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
-            </svg>
-            {searchQuery && (
-              <button 
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2 top-2 text-muted-foreground hover:text-foreground"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            )}
-          </div>
-        </div>
 
         {/* Task List Content */}
         <div className="flex-1 overflow-y-auto">
