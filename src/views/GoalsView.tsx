@@ -596,7 +596,7 @@ const GoalForm: React.FC<{
       {/* Metric Tracking */}
       <div>
         <Label className="mb-2 block text-muted-foreground text-xs uppercase tracking-wider">Metrika (opsionale)</Label>
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
             <Label htmlFor="targetValue" className="text-xs">Vlera Target</Label>
             <Input id="targetValue" name="targetValue" type="number" placeholder="p.sh. 50000" defaultValue={initialData?.targetValue || ''} />

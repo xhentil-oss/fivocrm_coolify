@@ -23,6 +23,10 @@ const config: CapacitorConfig = {
     StatusBar: {
       style: 'DARK',
       backgroundColor: '#09090B',
+      // Edge-to-edge: let the webview draw under the status bar. The fixed top/bottom
+      // bars compensate with env(safe-area-inset-*) padding (see index.css / TopNavBar /
+      // MobileBottomNav / PortalLayout) so nothing hides under the notch or gesture bar.
+      overlaysWebView: true,
     },
     Keyboard: {
       resize: 'body',

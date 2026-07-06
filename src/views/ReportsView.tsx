@@ -1196,7 +1196,7 @@ const ReportsView: React.FC = () => {
                 </div>
               </div>
             </div>
-            <div className="grid grid-cols-12 gap-1.5 sm:gap-2">
+            <div className="grid grid-cols-3 sm:grid-cols-6 md:grid-cols-12 gap-1.5 sm:gap-2">
               {revenueByMonth.map((m, i) => {
                 const barH = maxMonthRevRpt > 0 ? Math.max((m.paid / maxMonthRevRpt) * 100, m.paid > 0 ? 4 : 0) : 0;
                 const isCurMonth = i === new Date().getMonth() && selectedRevenueYear === new Date().getFullYear();
@@ -1485,7 +1485,7 @@ const ReportsView: React.FC = () => {
                   <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
                     <div className="h-full bg-green-500 rounded-full transition-all" style={{ width: `${paidPct}%` }} />
                   </div>
-                  <div className="grid grid-cols-12 gap-1">
+                  <div className="grid grid-cols-6 md:grid-cols-12 gap-1">
                     {dept.monthlyPaid.map((m, idx) => (
                       <div
                         key={`${dept.department}-${idx}`}

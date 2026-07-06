@@ -592,8 +592,8 @@ const CustomersView: React.FC = () => {
           {/* Search & Filters */}
           <Card className="p-4">
             <div className="flex flex-col gap-4">
-              <div className="flex gap-3">
-                <div className="relative flex-1">
+              <div className="flex flex-wrap gap-3">
+                <div className="relative flex-1 min-w-[180px]">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground" />
                   <Input
                     placeholder="Kerko sipas emrit, email, telefon, NIPT, kompani..."
@@ -1043,7 +1043,7 @@ const CustomersView: React.FC = () => {
 
       {/* Request Detail Dialog */}
       <Dialog open={!!selectedRequest} onOpenChange={(open) => { if (!open) setSelectedRequest(null); }}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[90dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>{selectedRequest?.title}</DialogTitle>
           </DialogHeader>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { DndContext, DragOverlay, closestCorners, PointerSensor, useSensor, useSensors, useDroppable, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
+import { DndContext, DragOverlay, closestCorners, MouseSensor, TouchSensor, useSensor, useSensors, useDroppable, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { getStatusColor } from '../lib/statusColors';
@@ -379,7 +379,12 @@ const ProjectDetailView: React.FC = () => {
   }, [taskMutation, project, rawProjectTasks, projectMutation, notificationMutation, user]);
 
   // --- @dnd-kit drag-and-drop for kanban ---
-  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 5 } }));
+  // Mouse drags on a small move; touch drags only after a 200ms hold so scrolling
+  // the board on a phone isn't hijacked into a drag.
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 8 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 200, tolerance: 8 } }),
+  );
   const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
 
   const handleDragStart = (event: DragStartEvent) => {
@@ -430,7 +435,7 @@ const ProjectDetailView: React.FC = () => {
     <div className="h-[calc(100vh-120px)] flex flex-col">
       {/* Project Header */}
       <div className="border-b bg-background">
-        <div className="flex items-center gap-4 px-6 py-4">
+        <div className="flex flex-wrap items-center gap-4 px-4 sm:px-6 py-4">
           <Button variant="ghost" size="sm" onClick={() => navigate('/app/projects')}>
             <ArrowLeft className="w-4 h-4 mr-2" />
             Projektet
@@ -544,7 +549,7 @@ const ProjectDetailView: React.FC = () => {
         </div>
 
         {/* Tabs and Actions */}
-        <div className="flex items-center justify-between px-6 pb-2">
+        <div className="flex flex-wrap items-center justify-between gap-2 px-4 sm:px-6 pb-2">
           <Tabs value={viewMode} onValueChange={(v) => setViewMode(v as any)}>
             <TabsList className="h-8">
               <TabsTrigger value="list" className="text-xs px-3">
@@ -562,20 +567,20 @@ const ProjectDetailView: React.FC = () => {
             </TabsList>
           </Tabs>
 
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             {isGuestOnProject && (
               <Badge variant="outline" className="text-xs text-amber-700 border-amber-200 flex items-center gap-1">
                 <Eye className="w-3 h-3" />
                 Vetëm shikimi + komente
               </Badge>
             )}
-            <div className="relative">
+            <div className="relative flex-1 min-w-[140px] sm:flex-none">
               <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="Kërko detyra..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="pl-9 h-8 w-48 text-sm"
+                className="pl-9 h-8 w-full sm:w-48 text-sm"
               />
             </div>
             <Select value={filterStatus} onValueChange={setFilterStatus}>
@@ -1420,7 +1425,7 @@ const ProjectCalendarView: React.FC<{
 
   const days = [];
   for (let i = 0; i < firstDay; i++) {
-    days.push(<div key={`empty-${i}`} className="min-h-[80px] bg-muted/20" />);
+    days.push(<div key={`empty-${i}`} className="min-h-[56px] sm:min-h-[80px] bg-muted/20" />);
   }
 
   for (let day = 1; day <= daysInMonth; day++) {
@@ -1435,7 +1440,7 @@ const ProjectCalendarView: React.FC<{
     const overflow = (dayTasks.length + dayProjections.length) - realShown.length - projShown.length;
 
     days.push(
-      <div key={day} className="min-h-[80px] border border-border p-1 bg-background">
+      <div key={day} className="min-h-[56px] sm:min-h-[80px] border border-border p-1 bg-background">
         <div className="font-medium text-xs mb-1 text-muted-foreground">{day}</div>
         <div className="space-y-1">
           {realShown.map(task => (
@@ -1480,7 +1485,10 @@ const ProjectCalendarView: React.FC<{
       </div>
       <div className="grid grid-cols-7 gap-px bg-border">
         {['Hën', 'Mar', 'Mër', 'Enj', 'Pre', 'Sht', 'Diel'].map(day => (
-          <div key={day} className="bg-muted p-1 text-center text-xs font-medium">{day}</div>
+          <div key={day} className="bg-muted p-1 text-center text-[10px] sm:text-xs font-medium">
+            <span className="sm:hidden">{day.slice(0, 2)}</span>
+            <span className="hidden sm:inline">{day}</span>
+          </div>
         ))}
         {days}
       </div>

@@ -290,7 +290,7 @@ const PortalContractsView: React.FC = () => {
 
       {/* Sign Dialog */}
       <Dialog open={!!signingContract} onOpenChange={(open) => { if (!open) setSigningContract(null); }}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-w-md max-h-[90dvh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Nënshkruaj Kontratën</DialogTitle>
           </DialogHeader>

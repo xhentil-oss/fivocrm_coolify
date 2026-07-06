@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect } from 'react';
 import type { Task } from '../types';
 
 // Lightweight Timeline / Gantt view (Jira/Monday/Asana Timeline-inspired).
@@ -8,7 +8,18 @@ import type { Task } from '../types';
 const DAY = 24 * 60 * 60 * 1000;
 const DAY_W = 44; // px per day
 const ROW_H = 34;
-const LABEL_W = 200; // px — fixed task-label column on the left
+// Task-label column width. Narrow on phones so the day grid isn't crushed; wider
+// on ≥sm where there's room. Kept as a hook so it reacts to rotation/resize.
+function useLabelWidth(): number {
+  const get = () => (typeof window !== 'undefined' && window.innerWidth < 640 ? 116 : 200);
+  const [w, setW] = useState(get);
+  useEffect(() => {
+    const onResize = () => setW(get());
+    window.addEventListener('resize', onResize);
+    return () => window.removeEventListener('resize', onResize);
+  }, []);
+  return w;
+}
 
 const startOfDay = (d: Date) => { const n = new Date(d); n.setHours(0, 0, 0, 0); return n; };
 const daysBetween = (a: Date, b: Date) => Math.round((startOfDay(b).getTime() - startOfDay(a).getTime()) / DAY);
@@ -28,6 +39,7 @@ interface Props {
 }
 
 const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
+  const labelW = useLabelWidth();
   const dated = useMemo(
     () => tasks
       .filter(t => t.startDate || t.endDate)
@@ -61,7 +73,7 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
 
   const cols = Array.from({ length: range.days }, (_, i) => new Date(range.start.getTime() + i * DAY));
   const gridW = range.days * DAY_W;
-  const contentW = LABEL_W + gridW;
+  const contentW = labelW + gridW;
 
   // Top axis tier: group consecutive days by calendar month so the Gantt has a
   // clear month reference above the day numbers.
@@ -86,7 +98,7 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
         <div className="sticky top-0 z-10 bg-background border-b border-border">
           {/* Month tier */}
           <div className="flex">
-            <div className="flex-shrink-0" style={{ width: LABEL_W }} />
+            <div className="flex-shrink-0" style={{ width: labelW }} />
             {monthGroups.map((g, i) => (
               <div
                 key={i}
@@ -99,7 +111,7 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
           </div>
           {/* Day tier (weekday initial + date), week starts marked stronger */}
           <div className="flex">
-            <div className="flex-shrink-0 flex items-end px-1 pb-0.5 text-[10px] font-medium text-muted-foreground" style={{ width: LABEL_W }}>
+            <div className="flex-shrink-0 flex items-end px-1 pb-0.5 text-[10px] font-medium text-muted-foreground" style={{ width: labelW }}>
               Detyra
             </div>
             {cols.map((d, i) => {
@@ -124,15 +136,15 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
         <div className="relative">
           {/* Today marker — same origin as the bars (LABEL_W + offset days) */}
           {todayOffset >= 0 && todayOffset < range.days && (
-            <div className="absolute top-0 bottom-0 w-px bg-violet-500/50 z-[5]" style={{ left: LABEL_W + todayOffset * DAY_W + DAY_W / 2 }} />
+            <div className="absolute top-0 bottom-0 w-px bg-violet-500/50 z-[5]" style={{ left: labelW + todayOffset * DAY_W + DAY_W / 2 }} />
           )}
           {dated.map(({ task, start, end }) => {
-            const left = LABEL_W + daysBetween(range.start, start) * DAY_W;
+            const left = labelW + daysBetween(range.start, start) * DAY_W;
             const span = Math.max(1, daysBetween(start, end) + 1);
             const width = span * DAY_W - 6;
             return (
               <div key={task.id} className="relative border-b border-border/30" style={{ height: ROW_H }}>
-                <div className="absolute left-0 top-1/2 -translate-y-1/2 pr-2 truncate text-xs text-foreground/80 z-[6] bg-background" style={{ width: LABEL_W }} title={task.title}>{task.title}</div>
+                <div className="absolute left-0 top-1/2 -translate-y-1/2 pr-2 truncate text-xs text-foreground/80 z-[6] bg-background" style={{ width: labelW }} title={task.title}>{task.title}</div>
                 <button
                   onClick={() => onTaskClick(task)}
                   title={`${task.title} · ${start.toLocaleDateString('sq-AL')} → ${end.toLocaleDateString('sq-AL')}`}
