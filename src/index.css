@@ -8,6 +8,7 @@
 @layer utilities {
   .no-scrollbar::-webkit-scrollbar { display: none; }
   .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+  .bg-brand-gradient { background: linear-gradient(135deg, hsl(258 80% 56%), hsl(218 70% 54%)); }
 }
 
 @layer base {

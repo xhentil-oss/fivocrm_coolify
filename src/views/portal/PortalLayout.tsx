@@ -103,18 +103,21 @@ const PortalLayout: React.FC = () => {
           {mobileOpen ? <X className="h-5 w-5" /> : <Menu className="h-5 w-5" />}
         </Button>
 
-        <div className="flex items-center gap-2">
-          <div className="h-8 w-8 rounded-lg bg-primary flex items-center justify-center">
-            <span className="text-primary-foreground font-bold text-sm">CP</span>
+        <div className="flex items-center gap-2.5">
+          <div className="h-9 w-9 rounded-xl bg-brand-gradient flex items-center justify-center shadow-sm">
+            <span className="text-white font-bold text-sm">CP</span>
           </div>
-          <span className="font-semibold text-lg hidden sm:block">Portali i Klientit</span>
+          <span className="font-semibold text-lg hidden sm:block tracking-tight">Portali i Klientit</span>
         </div>
 
-        <div className="ml-auto flex items-center gap-3">
-          <span className="text-sm text-muted-foreground hidden sm:block">
-            {user.email}
-          </span>
-          <Button variant="ghost" size="icon" onClick={() => { logout(); navigate('/login'); }}>
+        <div className="ml-auto flex items-center gap-2 sm:gap-3">
+          <div className="flex items-center gap-2 rounded-full border bg-background/60 pl-1 pr-1 sm:pr-3 py-1">
+            <div className="h-7 w-7 rounded-full bg-brand-gradient flex items-center justify-center flex-shrink-0">
+              <span className="text-white text-[11px] font-semibold">{(user.email || 'K').slice(0, 2).toUpperCase()}</span>
+            </div>
+            <span className="text-sm text-muted-foreground hidden sm:block max-w-[200px] truncate">{user.email}</span>
+          </div>
+          <Button variant="outline" size="icon" className="rounded-full" onClick={() => { logout(); navigate('/login'); }} title="Dil">
             <LogOut className="h-4 w-4" />
           </Button>
         </div>
@@ -131,13 +134,15 @@ const PortalLayout: React.FC = () => {
       {/* Sidebar — top tracks the header height (incl. top safe-area inset) */}
       <aside
         style={{ top: 'calc(4rem + env(safe-area-inset-top))' }}
-        className={`fixed left-0 bottom-0 z-40 w-[240px] bg-card border-r transition-transform duration-200 lg:translate-x-0 ${
+        className={`fixed left-0 bottom-0 z-40 w-[240px] bg-card border-r transition-transform duration-200 lg:translate-x-0 flex flex-col ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <nav className="p-4 space-y-1">
+        <nav className="p-4 space-y-1 flex-1 overflow-y-auto">
+          <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Menuja</p>
           {navItems.map((item) => {
             const Icon = item.icon;
+            const isChatItem = item.to === '/portal/chat';
             return (
               <NavLink
                 key={item.to}
@@ -145,19 +150,38 @@ const PortalLayout: React.FC = () => {
                 end={item.end}
                 onClick={() => setMobileOpen(false)}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
                     isActive
-                      ? 'bg-primary text-primary-foreground'
+                      ? 'bg-brand-gradient text-white shadow-md shadow-primary/20'
                       : 'text-muted-foreground hover:bg-accent hover:text-foreground'
                   }`
                 }
               >
-                <Icon className="h-4 w-4" />
-                {item.label}
+                <Icon className="h-4 w-4 flex-shrink-0" />
+                <span className="flex-1">{item.label}</span>
+                {isChatItem && unreadStaffMsgs > 0 && (
+                  <span className="min-w-[18px] h-[18px] px-1 bg-red-500 text-white rounded-full flex items-center justify-center text-[10px] font-bold">
+                    {unreadStaffMsgs > 9 ? '9+' : unreadStaffMsgs}
+                  </span>
+                )}
               </NavLink>
             );
           })}
         </nav>
+
+        {/* Quick-help card → opens the support chat */}
+        <div className="p-3">
+          <NavLink to="/portal/chat" onClick={() => setMobileOpen(false)}
+            className="block rounded-xl border bg-gradient-to-br from-primary/5 to-primary/10 p-3 hover:from-primary/10 hover:to-primary/15 transition-colors">
+            <div className="flex items-center gap-1.5 text-sm font-semibold text-primary">
+              <MessageSquare className="h-4 w-4" /> Ndihmë e shpejtë
+            </div>
+            <p className="text-xs text-muted-foreground mt-1 leading-snug">Keni pyetje? Ekipi ynë përgjigjet brenda 24 orëve.</p>
+            <div className="mt-2 inline-flex items-center gap-1.5 rounded-lg border bg-background px-2.5 py-1.5 text-xs font-medium">
+              <MessageSquare className="h-3.5 w-3.5" /> Kontakto ekipin
+            </div>
+          </NavLink>
+        </div>
       </aside>
 
       {/* Main content — top clears the (inset-grown) header, bottom clears the
