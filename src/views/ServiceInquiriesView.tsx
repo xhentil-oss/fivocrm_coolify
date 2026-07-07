@@ -17,8 +17,10 @@ import {
   ExternalLink, Tag, Calendar, CheckCircle2, Eye, AlertCircle,
   Instagram, Facebook, Linkedin, ArrowRight, Trash2,
 } from 'lucide-react';
-import type { ServiceInquiry, Lead } from '../types';
+import type { ServiceInquiry, Lead, Project } from '../types';
 import { safeHref } from '../lib/utils';
+import { buildProjectDescription, appendBrief } from '../lib/inquiryBrief';
+import { FolderKanban } from 'lucide-react';
 
 const ServiceInquiriesView: React.FC = () => {
   const permissions = usePermissions();
@@ -27,6 +29,7 @@ const ServiceInquiriesView: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [convertingId, setConvertingId] = useState<string | null>(null);
+  const [convertingProjectId, setConvertingProjectId] = useState<string | null>(null);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
@@ -39,6 +42,7 @@ const ServiceInquiriesView: React.FC = () => {
   });
   const inquiryMutation = useMutation<ServiceInquiry>('serviceInquiries');
   const leadMutation = useMutation<Lead>('leads');
+  const projectMutation = useMutation<Project>('projects');
 
   const filtered = React.useMemo(() => {
     if (!inquiries) return [];
@@ -132,7 +136,8 @@ const ServiceInquiriesView: React.FC = () => {
         jobTitle: inquiry.jobTitle,
         website: inquiry.website,
         source: 'Website',
-        notes: inquiry.projectNeedDescription,
+        // Full structured brief so sales sees every answer without opening the inquiry.
+        notes: buildProjectDescription(inquiry),
         status: 'New',
         serviceInquiryId: inquiry.id,
         score,
@@ -150,6 +155,45 @@ const ServiceInquiriesView: React.FC = () => {
       toast({ title: 'Gabim', description: 'Nuk u krijua lead-i. Provo sërish.', variant: 'destructive' });
     } finally {
       setConvertingId(null);
+    }
+  };
+
+  // Konverto anketën direkt në një Projekt, me brief-in e plotë te description.
+  const handleConvertToProject = async (inquiry: ServiceInquiry) => {
+    if (convertingProjectId) return;
+    if ((inquiry as any).projectId) {
+      toast({ title: 'Ekziston tashmë', description: 'Kjo kërkesë është konvertuar më parë në projekt.' });
+      return;
+    }
+    setConvertingProjectId(inquiry.id);
+    try {
+      const brief = buildProjectDescription(inquiry);
+      const projectName =
+        (inquiry as any).serviceTitle ||
+        [inquiry.businessName, inquiry.servicesInterestedIn?.[0]].filter(Boolean).join(' — ') ||
+        'Projekt i ri';
+
+      const newProject = await projectMutation.create({
+        name: projectName,
+        description: appendBrief('', brief),
+        status: 'Planning',
+        sourceQuestionnaireId: inquiry.id,
+        ...((inquiry as any).customerId ? { customerId: (inquiry as any).customerId } : {}),
+        ...((inquiry as any).teamId ? { teamId: (inquiry as any).teamId } : {}),
+      } as Partial<Project>);
+
+      if (newProject?.id) {
+        await inquiryMutation.update(inquiry.id, {
+          status: 'Converted',
+          projectId: newProject.id,
+        } as any);
+        setSelectedInquiry(prev => prev ? { ...prev, status: 'Converted', projectId: newProject.id } as any : null);
+        toast({ title: 'Projekti u krijua', description: `"${projectName}" u krijua me brief-in e anketës.` });
+      }
+    } catch {
+      toast({ title: 'Gabim', description: 'Nuk u krijua projekti. Provo sërish.', variant: 'destructive' });
+    } finally {
+      setConvertingProjectId(null);
     }
   };
 
@@ -401,6 +445,18 @@ const ServiceInquiriesView: React.FC = () => {
                       >
                         <CheckCircle2 className="w-3.5 h-3.5 mr-1" />
                         {convertingId === selectedInquiry.id ? 'Duke krijuar...' : 'Konverto në Lead'}
+                      </Button>
+                    )}
+                    {!(selectedInquiry as any).projectId && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="border-primary/30 text-primary hover:bg-primary/10"
+                        disabled={convertingProjectId === selectedInquiry.id}
+                        onClick={() => handleConvertToProject(selectedInquiry)}
+                      >
+                        <FolderKanban className="w-3.5 h-3.5 mr-1" />
+                        {convertingProjectId === selectedInquiry.id ? 'Duke krijuar...' : 'Konverto në Projekt'}
                       </Button>
                     )}
                     {canDelete && (

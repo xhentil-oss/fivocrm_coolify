@@ -74,6 +74,7 @@ const PortalInvoicesView = lazyRetry(() => import('./views/portal/PortalInvoices
 const PortalServicesView = lazyRetry(() => import('./views/portal/PortalServicesView'));
 const PortalChatView = lazyRetry(() => import('./views/portal/PortalChatView'));
 const PortalProjectsView = lazyRetry(() => import('./views/portal/PortalProjectsView'));
+const PortalInquiryView = lazyRetry(() => import('./views/portal/PortalInquiryView'));
 const PortalProjectDetailView = lazyRetry(() => import('./views/portal/PortalProjectDetailView'));
 const PortalQuotesView = lazyRetry(() => import('./views/portal/PortalQuotesView'));
 const OnboardingWizard = lazyRetry(() => import('./components/OnboardingWizard'));
@@ -230,6 +231,7 @@ function AppContent() {
         {/* Requests removed — chat is now the single support channel. Redirect old links. */}
         <Route path="requests" element={<Navigate to="/portal/chat" replace />} />
         <Route path="projects" element={<Suspense fallback={<LazyFallback />}><PortalProjectsView /></Suspense>} />
+        <Route path="projects/inquiry/:inquiryId" element={<Suspense fallback={<LazyFallback />}><PortalInquiryView /></Suspense>} />
         <Route path="projects/:projectId" element={<Suspense fallback={<LazyFallback />}><PortalProjectDetailView /></Suspense>} />
         <Route path="preventiva" element={<Suspense fallback={<LazyFallback />}><PortalQuotesView /></Suspense>} />
         <Route path="contracts" element={<Suspense fallback={<LazyFallback />}><PortalContractsView /></Suspense>} />

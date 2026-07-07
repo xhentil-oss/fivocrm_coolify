@@ -112,6 +112,7 @@ export interface Project {
   responsibleUserId?: string;
   memberUserIds?: string[];
   guestUserIds?: string[];  // Users with read-only + comment access to this project
+  sourceQuestionnaireId?: string; // ServiceInquiry that this project was created from
   // Recurring project support
   isRecurring?: boolean;
   recurringFrequency?: 'weekly' | 'monthly';
