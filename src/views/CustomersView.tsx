@@ -12,7 +12,7 @@ import {
   Building2, Plus, Mail, Phone, Search, Filter, X,
   CheckCircle2, XCircle, AlertCircle, Star, Users,
   ShieldCheck, ClipboardList, UserPlus, Ban, Clock,
-  ExternalLink, Globe, Trash2, MoreVertical, PlusCircle, UserCheck,
+  ExternalLink, Globe, Trash2, MoreVertical, PlusCircle, UserCheck, Download,
 } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { SkeletonLoader } from '../components/PageSkeleton';
@@ -26,6 +26,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from 
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../components/ui/alert-dialog';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { Checkbox } from '../components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Separator } from '../components/ui/separator';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
@@ -63,7 +64,10 @@ const CustomersView: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('__all__');
   const [industryFilter, setIndustryFilter] = useState<string>('__all__');
   const [creditLimitFilter, setCreditLimitFilter] = useState<string>('__all__');
+  const [tagFilter, setTagFilter] = useState<string>('__all__');
+  const [sortBy, setSortBy] = useState<'recent' | 'name'>('recent');
   const [showFilters, setShowFilters] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // Portal State
   const [portalSearchQuery, setPortalSearchQuery] = useState('');
@@ -142,7 +146,7 @@ const CustomersView: React.FC = () => {
   // Customers Logic
   const filteredCustomers = useMemo(() => {
     if (!customers) return [];
-    return customers.filter((customer) => {
+    const list = customers.filter((customer) => {
       const q = searchQuery.toLowerCase().trim();
       if (q) {
         const match =
@@ -171,17 +175,32 @@ const CustomersView: React.FC = () => {
           case 'high': if (limit <= 50000) return false; break;
         }
       }
+      if (tagFilter !== '__all__') {
+        if (!parseTags((customer as any).tags).some(t => t.toLowerCase() === tagFilter.toLowerCase())) return false;
+      }
       return true;
     });
-  }, [customers, searchQuery, statusFilter, industryFilter, creditLimitFilter]);
+    // Sort: newest first (createdAt desc) or alphabetically by name.
+    const ms = (d: any) => { const x = d?.toDate ? d.toDate() : d; const t = x instanceof Date ? x.getTime() : Date.parse(x); return isNaN(t) ? 0 : t; };
+    return [...list].sort((a, b) => sortBy === 'name'
+      ? (a.name || '').localeCompare(b.name || '')
+      : ms((b as any).createdAt) - ms((a as any).createdAt));
+  }, [customers, searchQuery, statusFilter, industryFilter, creditLimitFilter, tagFilter, sortBy]);
 
   // Cap rendered rows so large customer lists don't mount hundreds of DOM nodes
   // at once (mobile jank). "Load more" reveals the rest of the filtered set.
-  useEffect(() => { setVisibleCount(20); }, [searchQuery, statusFilter, industryFilter, creditLimitFilter]);
+  useEffect(() => { setVisibleCount(20); }, [searchQuery, statusFilter, industryFilter, creditLimitFilter, tagFilter, sortBy]);
   const visibleCustomers = useMemo(
     () => filteredCustomers.slice(0, visibleCount),
     [filteredCustomers, visibleCount]
   );
+
+  // Tags actually used on customers (for the filter dropdown).
+  const customerTagOptions = useMemo(() => {
+    const s = new Set<string>();
+    (rawCustomers || []).forEach((c: any) => parseTags(c.tags).forEach(t => s.add(t)));
+    return [...s].sort((a, b) => a.localeCompare(b));
+  }, [rawCustomers]);
 
   const statusCounts = useMemo(() => {
     if (!customers) return {};
@@ -192,13 +211,46 @@ const CustomersView: React.FC = () => {
     }, {} as Record<string, number>);
   }, [customers]);
 
-  const hasActiveFilters = searchQuery || statusFilter !== '__all__' || industryFilter !== '__all__' || creditLimitFilter !== '__all__';
+  const hasActiveFilters = searchQuery || statusFilter !== '__all__' || industryFilter !== '__all__' || creditLimitFilter !== '__all__' || tagFilter !== '__all__';
 
   const clearFilters = () => {
     setSearchQuery('');
     setStatusFilter('__all__');
     setIndustryFilter('__all__');
     setCreditLimitFilter('__all__');
+    setTagFilter('__all__');
+  };
+
+  // Export the currently-filtered customers to a CSV file.
+  const exportCsv = () => {
+    const rows = filteredCustomers;
+    if (!rows.length) { toast({ title: 'Asnjë klient për të eksportuar' }); return; }
+    const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
+    const headers = ['Emri', 'Email', 'Telefoni', 'Kompania', 'Industria', 'Statusi', 'Etiketat', 'NIPT'];
+    const lines = rows.map((c: any) => [c.name, c.email, c.phone, c.company, c.industry, c.status || 'Active', parseTags(c.tags).join('; '), c.taxId].map(esc).join(','));
+    const csv = '﻿' + [headers.join(','), ...lines].join('\n'); // BOM for Excel UTF-8
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `kliente-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click(); URL.revokeObjectURL(url);
+  };
+
+  // Bulk selection helpers
+  const toggleSelect = (id: string) => setSelectedIds(prev => { const s = new Set(prev); s.has(id) ? s.delete(id) : s.add(id); return s; });
+  const clearSelection = () => setSelectedIds(new Set());
+  const bulkSetStatus = async (status: string) => {
+    const ids = [...selectedIds];
+    const res = await Promise.allSettled(ids.map(id => customerMutation.update(id, { status } as any)));
+    const failed = res.filter(r => r.status === 'rejected').length;
+    toast(failed ? { title: `${ids.length - failed}/${ids.length} u përditësuan`, variant: 'destructive' } : { title: `${ids.length} klientë u përditësuan` });
+    clearSelection();
+  };
+  const bulkDelete = async () => {
+    const ids = [...selectedIds];
+    for (const id of ids) { try { await handleDeleteCustomer(id); } catch { /* handled inside */ } }
+    toast({ title: `${ids.length} klientë u fshinë` });
+    clearSelection();
   };
 
   const handleCreateCustomer = async (formData: FormData) => {
@@ -277,30 +329,48 @@ const CustomersView: React.FC = () => {
   };
 
   const handleDeleteCustomer = async (id: string) => {
-    await customerMutation.remove(id);
-    const [invoicesSnap, accessSnap, requestsSnap, projectsSnap, activitiesSnap, inquiriesSnap] = await Promise.all([
-      getDocs(query(collection(db, 'invoices'), where('customerId', '==', id))),
-      getDocs(query(collection(db, 'clientPortalAccess'), where('customerId', '==', id))),
-      getDocs(query(collection(db, 'clientRequests'), where('customerId', '==', id))),
-      getDocs(query(collection(db, 'projects'), where('customerId', '==', id))),
-      getDocs(query(collection(db, 'activities'), where('customerId', '==', id))),
-      getDocs(query(collection(db, 'serviceInquiries'), where('customerId', '==', id))),
-    ]);
-    // Collect invoice IDs to also delete their line items
-    const invoiceIds = invoicesSnap.docs.map(d => d.id);
-    const itemSnapshots = await Promise.all(
-      invoiceIds.map(invId => getDocs(query(collection(db, 'invoiceItems'), where('invoiceId', '==', invId))))
-    );
-    await Promise.all([
-      ...invoicesSnap.docs.map(d => deleteDoc(doc(db, 'invoices', d.id))),
-      ...accessSnap.docs.map(d => deleteDoc(doc(db, 'clientPortalAccess', d.id))),
-      ...requestsSnap.docs.map(d => deleteDoc(doc(db, 'clientRequests', d.id))),
-      ...projectsSnap.docs.map(d => deleteDoc(doc(db, 'projects', d.id))),
-      ...activitiesSnap.docs.map(d => deleteDoc(doc(db, 'activities', d.id))),
-      ...inquiriesSnap.docs.map(d => deleteDoc(doc(db, 'serviceInquiries', d.id))),
-      ...itemSnapshots.flatMap(snap => snap.docs.map(d => deleteDoc(doc(db, 'invoiceItems', d.id)))),
-    ]);
-    toast({ title: 'Klienti u fshi!', description: 'Faturat, projektet, CRM dhe të dhënat e lidhura u fshinë gjithashtu.' });
+    try {
+      // 1) Read everything linked to the customer up front.
+      const [invoicesSnap, accessSnap, requestsSnap, projectsSnap, activitiesSnap, inquiriesSnap, quotesSnap, contractsSnap] = await Promise.all([
+        getDocs(query(collection(db, 'invoices'), where('customerId', '==', id))),
+        getDocs(query(collection(db, 'clientPortalAccess'), where('customerId', '==', id))),
+        getDocs(query(collection(db, 'clientRequests'), where('customerId', '==', id))),
+        getDocs(query(collection(db, 'projects'), where('customerId', '==', id))),
+        getDocs(query(collection(db, 'activities'), where('customerId', '==', id))),
+        getDocs(query(collection(db, 'serviceInquiries'), where('customerId', '==', id))),
+        getDocs(query(collection(db, 'quotes'), where('customerId', '==', id))),
+        getDocs(query(collection(db, 'contracts'), where('customerId', '==', id))),
+      ]);
+      const invoiceIds = invoicesSnap.docs.map(d => d.id);
+      const projectIds = projectsSnap.docs.map(d => d.id);
+      // Line items (per invoice) + project-linked tasks & time entries.
+      const [itemSnapshots, taskSnapshots, timeSnapshots] = await Promise.all([
+        Promise.all(invoiceIds.map(invId => getDocs(query(collection(db, 'invoiceItems'), where('invoiceId', '==', invId))))),
+        Promise.all(projectIds.map(pid => getDocs(query(collection(db, 'tasks'), where('projectId', '==', pid))))),
+        Promise.all(projectIds.map(pid => getDocs(query(collection(db, 'timeEntries'), where('projectId', '==', pid))))),
+      ]);
+      // 2) Delete all related docs.
+      await Promise.all([
+        ...invoicesSnap.docs.map(d => deleteDoc(doc(db, 'invoices', d.id))),
+        ...accessSnap.docs.map(d => deleteDoc(doc(db, 'clientPortalAccess', d.id))),
+        ...requestsSnap.docs.map(d => deleteDoc(doc(db, 'clientRequests', d.id))),
+        ...projectsSnap.docs.map(d => deleteDoc(doc(db, 'projects', d.id))),
+        ...activitiesSnap.docs.map(d => deleteDoc(doc(db, 'activities', d.id))),
+        ...inquiriesSnap.docs.map(d => deleteDoc(doc(db, 'serviceInquiries', d.id))),
+        ...quotesSnap.docs.map(d => deleteDoc(doc(db, 'quotes', d.id))),
+        ...contractsSnap.docs.map(d => deleteDoc(doc(db, 'contracts', d.id))),
+        ...itemSnapshots.flatMap(snap => snap.docs.map(d => deleteDoc(doc(db, 'invoiceItems', d.id)))),
+        ...taskSnapshots.flatMap(snap => snap.docs.map(d => deleteDoc(doc(db, 'tasks', d.id)))),
+        ...timeSnapshots.flatMap(snap => snap.docs.map(d => deleteDoc(doc(db, 'timeEntries', d.id)))),
+      ]);
+      // 3) Delete the customer LAST — so a failure above doesn't leave a
+      //    half-deleted graph with the customer already gone.
+      await customerMutation.remove(id);
+      toast({ title: 'Klienti u fshi!', description: 'Faturat, projektet, detyrat, kuotat, kontratat dhe të dhënat e lidhura u fshinë gjithashtu.' });
+    } catch (err) {
+      console.error('[CustomersView] delete customer failed', err);
+      toast({ title: 'Gabim gjatë fshirjes', description: 'Disa të dhëna të lidhura mund të mos u fshinë. Provo përsëri.', variant: 'destructive' });
+    }
     setCustomerToDelete(null);
   };
   const handleUpdateCustomer = async (formData: FormData) => {
@@ -618,9 +688,19 @@ const CustomersView: React.FC = () => {
                   Filtrat
                   {hasActiveFilters && (
                     <Badge variant="secondary" className="ml-1 h-5 w-5 p-0 flex items-center justify-center text-xs">
-                      {[statusFilter !== '__all__', industryFilter !== '__all__', creditLimitFilter !== '__all__'].filter(Boolean).length}
+                      {[statusFilter !== '__all__', industryFilter !== '__all__', creditLimitFilter !== '__all__', tagFilter !== '__all__'].filter(Boolean).length}
                     </Badge>
                   )}
+                </Button>
+                <Select value={sortBy} onValueChange={(v) => setSortBy(v as any)}>
+                  <SelectTrigger className="w-[150px]"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="recent">Më të rejat</SelectItem>
+                    <SelectItem value="name">Sipas emrit (A–Z)</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Button variant="outline" onClick={exportCsv} className="gap-2" title="Eksporto listën e filtruar në CSV">
+                  <Download className="w-4 h-4" /> <span className="hidden sm:inline">Eksporto</span>
                 </Button>
                 {hasActiveFilters && (
                   <Button variant="ghost" onClick={clearFilters} className="gap-2 text-muted-foreground">
@@ -630,7 +710,7 @@ const CustomersView: React.FC = () => {
               </div>
 
               {showFilters && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4 pt-2 border-t">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 pt-2 border-t">
                   <div>
                     <Label className="text-sm text-muted-foreground mb-2 block">Statusi</Label>
                     <Select value={statusFilter} onValueChange={setStatusFilter}>
@@ -668,10 +748,37 @@ const CustomersView: React.FC = () => {
                       </SelectContent>
                     </Select>
                   </div>
+                  <div>
+                    <Label className="text-sm text-muted-foreground mb-2 block">Etiketa</Label>
+                    <Select value={tagFilter} onValueChange={setTagFilter}>
+                      <SelectTrigger><SelectValue placeholder="Të gjitha etiketat" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__all__">Të gjitha etiketat</SelectItem>
+                        {customerTagOptions.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
+                      </SelectContent>
+                    </Select>
+                  </div>
                 </div>
               )}
             </div>
           </Card>
+
+          {/* Bulk action bar (floating) */}
+          {selectedIds.size > 0 && (
+            <div className="fixed bottom-20 sm:bottom-6 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-3 py-2 rounded-xl bg-card border shadow-lg flex-wrap max-w-[95vw]">
+              <span className="text-sm font-medium px-1">{selectedIds.size} të zgjedhur</span>
+              <Select onValueChange={(v) => bulkSetStatus(v)}>
+                <SelectTrigger className="h-8 w-[130px] text-xs"><SelectValue placeholder="Ndrysho statusin" /></SelectTrigger>
+                <SelectContent>
+                  {STATUS_OPTIONS.map(s => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
+                </SelectContent>
+              </Select>
+              <Button size="sm" variant="destructive" className="h-8 text-xs gap-1" onClick={() => { if (confirm(`Fshi ${selectedIds.size} klientë dhe të dhënat e tyre?`)) bulkDelete(); }}>
+                <Trash2 className="w-3.5 h-3.5" /> Fshi
+              </Button>
+              <Button size="sm" variant="ghost" className="h-8 text-xs" onClick={clearSelection}>Anulo</Button>
+            </div>
+          )}
 
           {/* Customer Mobile Cards */}
           <div className="sm:hidden space-y-3">
@@ -694,11 +801,16 @@ const CustomersView: React.FC = () => {
                 const StatusIcon = statusOpt?.icon || CheckCircle2;
                 const portalAcc = getPortalAccessFor(customer.id);
                 return (
-                  <Card key={customer.id} className="p-4 space-y-3">
+                  <Card key={customer.id} className={`p-4 space-y-3 ${selectedIds.has(customer.id) ? 'ring-1 ring-primary' : ''}`}>
                     <div className="flex items-start justify-between">
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium truncate">{customer.name}</p>
-                        {customer.company && <p className="text-sm text-muted-foreground">{customer.company}</p>}
+                      <div className="flex items-start gap-2 flex-1 min-w-0">
+                        {permissions.canEdit && (
+                          <Checkbox className="mt-0.5 flex-shrink-0" checked={selectedIds.has(customer.id)} onCheckedChange={() => toggleSelect(customer.id)} aria-label="Përzgjidh klientin" />
+                        )}
+                        <div className="flex-1 min-w-0">
+                          <p className="font-medium truncate">{customer.name}</p>
+                          {customer.company && <p className="text-sm text-muted-foreground">{customer.company}</p>}
+                        </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0 ml-2">
                         {portalAcc && (
@@ -758,6 +870,15 @@ const CustomersView: React.FC = () => {
               <table className="w-full">
                 <thead className="bg-muted">
                   <tr>
+                    {permissions.canEdit && (
+                      <th className="px-3 sm:px-4 py-3 w-10">
+                        <Checkbox
+                          checked={visibleCustomers.length > 0 && visibleCustomers.every(c => selectedIds.has(c.id))}
+                          onCheckedChange={(v) => setSelectedIds(v ? new Set(visibleCustomers.map(c => c.id)) : new Set())}
+                          aria-label="Zgjidh të gjithë"
+                        />
+                      </th>
+                    )}
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-sm font-medium">Klienti</th>
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-sm font-medium hidden md:table-cell">Kontakti</th>
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-sm font-medium hidden lg:table-cell">Info Kompanie</th>
@@ -768,7 +889,7 @@ const CustomersView: React.FC = () => {
                 <tbody className="divide-y divide-border">
                   {filteredCustomers.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="px-6 py-12 text-center">
+                      <td colSpan={6} className="px-6 py-12 text-center">
                         <Users className="w-12 h-12 mx-auto text-muted-foreground/50 mb-3" />
                         <p className="text-muted-foreground">
                           {hasActiveFilters ? 'Nuk u gjet asnje klient me keto filtra' : 'Nuk ka kliente ende'}
@@ -786,7 +907,12 @@ const CustomersView: React.FC = () => {
                       const portalAcc = getPortalAccessFor(customer.id);
 
                       return (
-                        <tr key={customer.id} className="hover:bg-muted/50 transition-colors">
+                        <tr key={customer.id} className={`hover:bg-muted/50 transition-colors ${selectedIds.has(customer.id) ? 'bg-primary/5' : ''}`}>
+                          {permissions.canEdit && (
+                            <td className="px-3 sm:px-4 py-3 sm:py-4">
+                              <Checkbox checked={selectedIds.has(customer.id)} onCheckedChange={() => toggleSelect(customer.id)} aria-label="Përzgjidh klientin" />
+                            </td>
+                          )}
                           <td className="px-3 sm:px-6 py-3 sm:py-4">
                             <div className="space-y-1">
                               <p className="font-medium truncate max-w-[120px] sm:max-w-none">{customer.name}</p>

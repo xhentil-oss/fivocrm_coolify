@@ -79,24 +79,34 @@ export function safeHref(url: string | undefined | null): string {
   return '#';
 }
 
-// ── EUR → ALL exchange rate ──
-// Stored in localStorage so admins can update it from settings.
-const DEFAULT_EUR_ALL_RATE = 100;
+// ── Foreign currency → ALL exchange rates ──
+// Stored in localStorage so admins can update them from settings. Defaults are
+// approximate; admins should set the real rate. ALL is the base (rate 1).
+const DEFAULT_RATES: Record<string, number> = { EUR: 100, USD: 92, GBP: 118, ALL: 1, LEK: 1 };
+const RATE_KEYS: Record<string, string> = { EUR: 'eur_all_rate', USD: 'usd_all_rate', GBP: 'gbp_all_rate' };
 
-export function getEurToAllRate(): number {
+// Rate to convert one unit of `currency` into ALL. Unknown/empty currency → 1
+// (treated as already-ALL) so a missing currency never silently 100x a total.
+export function getRateToAll(currency?: string): number {
+  const cur = (currency || 'ALL').toUpperCase();
+  if (cur === 'ALL' || cur === 'LEK' || cur === '') return 1;
   try {
-    const stored = localStorage.getItem('eur_all_rate');
-    if (stored) {
-      const rate = parseFloat(stored);
-      if (rate > 0 && isFinite(rate)) return rate;
+    const key = RATE_KEYS[cur];
+    if (key) {
+      const stored = localStorage.getItem(key);
+      if (stored) { const r = parseFloat(stored); if (r > 0 && isFinite(r)) return r; }
     }
   } catch { /* ignore */ }
-  return DEFAULT_EUR_ALL_RATE;
+  return DEFAULT_RATES[cur] ?? 1;
 }
 
+// Kept for existing callers that specifically read the EUR rate.
+export function getEurToAllRate(): number { return getRateToAll('EUR'); }
+
+// Normalize any amount to ALL. Now handles EUR/USD/GBP (was EUR-only, so USD/GBP
+// were silently counted 1:1 and understated ~90-120x).
 export function toAll(amount: number, currency?: string): number {
-  if (currency === 'EUR') return amount * getEurToAllRate();
-  return amount;
+  return (amount || 0) * getRateToAll(currency);
 }
 
 // ── Currency / date formatting ──

@@ -261,8 +261,9 @@ const Customer360View: React.FC = () => {
       if (accepted) label = accepted.label || accepted.result?.suggestedLabel;
       else if (recent) label = recent.label || recent.result?.suggestedLabel;
       if (!label && customerInvoices.length > 0) {
-        // fallback: look for invoice line items? Use invoice description/title if available
-        label = (customerInvoices[0] as any).description || (customerInvoices[0] as any).invoiceNumber;
+        // Fallback to an invoice DESCRIPTION only — an invoice NUMBER (e.g. FAT-0007)
+        // is meaningless as a service label, so don't stamp it.
+        label = (customerInvoices[0] as any).description || undefined;
       }
       if (!label) {
         toast({ title: 'Nuk u gjet shërbim për tu vendosur automatikisht' });
