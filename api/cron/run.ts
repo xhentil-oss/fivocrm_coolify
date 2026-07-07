@@ -418,14 +418,25 @@ async function runRecurringTasks() {
     const endDate: Date = task.endDate?.toDate ? task.endDate.toDate() : new Date(task.endDate);
     if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) continue;
 
-    const newStart = addFrequency(startDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
-    const newEnd = addFrequency(endDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
-    const newNext = addFrequency(nextRecurringDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
+    let newStart = addFrequency(startDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
+    let newEnd = addFrequency(endDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
+    let newNext = addFrequency(nextRecurringDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
+
+    const startOfDayMs = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
+    // Roll forward so a task completed (or picked up) late never spawns an
+    // already-overdue occurrence — the next due date is always the first future
+    // one (same behaviour as the client-side buildNextRecurringTask / Asana).
+    const todayMs = startOfDayMs(now);
+    let rollGuard = 0;
+    while (startOfDayMs(newStart) < todayMs && rollGuard++ < 500) {
+      newStart = addFrequency(newStart, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
+      newEnd = addFrequency(newEnd, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
+      newNext = addFrequency(newNext, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
+    }
 
     // Honor "repeat until": if the next occurrence is past recurringEndDate, stop
     // the series (mark done so it isn't reprocessed) without creating a new cycle.
     const recEnd: Date | null = task.recurringEndDate ? (task.recurringEndDate.toDate ? task.recurringEndDate.toDate() : new Date(task.recurringEndDate)) : null;
-    const startOfDayMs = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
     if (recEnd && !isNaN(recEnd.getTime()) && startOfDayMs(newStart) > startOfDayMs(recEnd)) {
       ops.push(doc.ref.update({ nextCycleCreated: true, updatedAt: admin.firestore.Timestamp.now() }));
       continue;

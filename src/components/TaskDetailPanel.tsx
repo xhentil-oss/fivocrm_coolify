@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { TaskLabels, LabelEditor } from './TaskLabels';
 import { useCollection, useMutation } from '../hooks/useFirestore';
-import { buildNextRecurringTask, recurrenceHasEnded } from '../lib/recurringUtils';
+import { completeTask } from '../lib/recurringUtils';
 import { entryDurationMinutes, totalTrackedMinutes } from '../lib/timeTracking';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -806,38 +806,31 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           value={task.status}
           disabled={isGuestMode}
           onValueChange={async (newStatus) => {
-            if (newStatus === 'Done' && task.dependsOn && task.dependsOn.length > 0 && allTasks) {
-              const blockers = task.dependsOn.filter(depId => {
-                const dep = allTasks.find(t => t.id === depId);
-                return dep && dep.status !== 'Done';
+            if (newStatus === 'Done') {
+              const outcome = await completeTask(task, {
+                createTask: (data) => taskMutation.create(data as any),
+                updateTask: (id, data) => onUpdate(id, data),
+                allTasks,
               });
-              if (blockers.length > 0) {
-                toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${blockers.length} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
-                return;
+              const freqLabel: Record<string, string> = { daily: 'ditore', weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
+              switch (outcome.kind) {
+                case 'blocked':
+                  toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
+                  return;
+                case 'recurring-created':
+                  toast({ title: '✅ Detyrë e kryer + cikli i ri!', description: `Detyra periodike ${freqLabel[task.recurringFrequency ?? ''] ?? ''} u rigjenerua automatikisht.` });
+                  return;
+                case 'recurring-ended':
+                  toast({ title: '✅ Detyrë e kryer', description: 'Cikli i fundit i përsëritjes — nuk u krijua tjetër.' });
+                  return;
+                case 'error':
+                  console.error('[Recurring] krijimi i ciklit tjetër dështoi:', outcome.error);
+                  toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
+                  return;
+                default:
+                  toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
+                  return;
               }
-            }
-
-            // "After completion" recurring: when marked Done, immediately spawn the next cycle
-            // (unless the recurrence's "repeat until" date has passed).
-            if (newStatus === 'Done' && task.isRecurring && task.recurringFrequency && !task.nextCycleCreated) {
-              try {
-                const ended = recurrenceHasEnded(task);
-                if (!ended) {
-                  const nextTask = buildNextRecurringTask(task);
-                  await taskMutation.create(nextTask as any);
-                }
-                // Mark completed task so cron doesn't create a duplicate
-                await onUpdate(task.id, { status: 'Done', nextCycleCreated: true });
-                const freqLabel: Record<string, string> = { daily: 'ditore', weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
-                toast(ended
-                  ? { title: '✅ Detyrë e kryer', description: 'Cikli i fundit i përsëritjes — nuk u krijua tjetër.' }
-                  : { title: '✅ Detyrë e kryer + cikli i ri!', description: `Detyra periodike ${freqLabel[task.recurringFrequency] ?? ''} u rigjenerua automatikisht.` });
-              } catch (err) {
-                console.error('[Recurring] krijimi i ciklit tjetër dështoi:', err);
-                await onUpdate(task.id, { status: 'Done' });
-                toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
-              }
-              return;
             }
 
             await onUpdate(task.id, { status: newStatus });

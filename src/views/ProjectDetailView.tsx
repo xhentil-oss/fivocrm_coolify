@@ -30,7 +30,7 @@ import {
 import TaskDetailPanel from '../components/TaskDetailPanel';
 import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
-import { buildNextRecurringTask, addFrequency, recurrenceHasEnded } from '../lib/recurringUtils';
+import { addFrequency, completeTask } from '../lib/recurringUtils';
 import type { Task, Project, Team, TeamMember, TimeEntry } from '../types';
 
 const ProjectDetailView: React.FC = () => {
@@ -405,18 +405,19 @@ const ProjectDetailView: React.FC = () => {
     const task = allTasksFlat.find(t => t.id === taskId);
     if (!task || task.status === targetStatus) return;
 
-    // "After completion" recurring: kanban drag to Done spawns next cycle immediately
-    // (unless the recurrence's "repeat until" date has passed).
-    if (targetStatus === 'Done' && task.isRecurring && task.recurringFrequency && !task.nextCycleCreated) {
-      try {
-        if (!recurrenceHasEnded(task as any)) {
-          const nextTask = buildNextRecurringTask(task);
-          await taskMutation.create(nextTask as any);
-        }
-        await handleTaskUpdate(taskId, { status: 'Done', nextCycleCreated: true });
-      } catch (err) {
-        console.error('[Recurring] krijimi i ciklit tjetër dështoi (drag):', err);
-        await handleTaskUpdate(taskId, { status: 'Done' });
+    // Completing via kanban drag goes through the shared completeTask() so the
+    // dependency guard and "after completion" recurrence behave exactly as in
+    // the list and detail panel.
+    if (targetStatus === 'Done') {
+      const outcome = await completeTask(task, {
+        createTask: (data) => taskMutation.create(data as any),
+        updateTask: (id, data) => handleTaskUpdate(id, data),
+        allTasks: allTasksFlat,
+      });
+      if (outcome.kind === 'blocked') {
+        toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
+      } else if (outcome.kind === 'error') {
+        console.error('[Recurring] krijimi i ciklit tjetër dështoi (drag):', outcome.error);
       }
     } else {
       await handleTaskUpdate(taskId, { status: targetStatus });

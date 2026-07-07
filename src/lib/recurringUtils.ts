@@ -57,9 +57,22 @@ export function buildNextRecurringTask(task: Task): Omit<Task, 'id' | 'createdAt
   const baseEnd = parseDate(task.endDate);
   const baseNext = task.nextRecurringDate ? parseDate(task.nextRecurringDate) : new Date();
 
-  const newStart = addFrequency(baseStart, freq, dow, dom, interval, dows);
-  const newEnd = addFrequency(baseEnd, freq, dow, dom, interval, dows);
-  const newNext = addFrequency(baseNext, freq, dow, dom, interval, dows);
+  let newStart = addFrequency(baseStart, freq, dow, dom, interval, dows);
+  let newEnd = addFrequency(baseEnd, freq, dow, dom, interval, dows);
+  let newNext = addFrequency(baseNext, freq, dow, dom, interval, dows);
+
+  // Roll forward so the next occurrence never lands in the past — matches how
+  // Asana/Todoist behave when a recurring task is completed late: the next due
+  // date is always the first *future* one, not blindly (previous due + interval).
+  // All three dates advance in lockstep so the span and trigger offset are kept.
+  const sod = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
+  const todayMs = sod(new Date());
+  let guard = 0;
+  while (sod(newStart) < todayMs && guard++ < 500) {
+    newStart = addFrequency(newStart, freq, dow, dom, interval, dows);
+    newEnd = addFrequency(newEnd, freq, dow, dom, interval, dows);
+    newNext = addFrequency(newNext, freq, dow, dom, interval, dows);
+  }
 
   return {
     title: task.title,
@@ -87,6 +100,62 @@ export function buildNextRecurringTask(task: Task): Omit<Task, 'id' | 'createdAt
     collaboratorIds: task.collaboratorIds ?? undefined,
     createdByUserId: task.createdByUserId,
   };
+}
+
+/** Result of a completion attempt — lets each caller render the right toast
+ *  while the actual logic (blockers, recurrence, flags) lives in one place. */
+export type CompleteTaskOutcome =
+  | { kind: 'blocked'; blockers: number }
+  | { kind: 'completed' }
+  | { kind: 'recurring-created' }
+  | { kind: 'recurring-ended' }
+  | { kind: 'error'; error: unknown };
+
+export interface CompleteTaskDeps {
+  createTask: (data: Omit<Task, 'id' | 'createdAt' | 'updatedAt'>) => Promise<unknown>;
+  updateTask: (id: string, data: Partial<Task>) => Promise<unknown>;
+  /** All tasks in scope — used to enforce the dependency (blocker) guard. */
+  allTasks?: Task[];
+}
+
+/**
+ * Single source of truth for completing a task, used by every surface that can
+ * mark one Done (list toggle, list quick-action, detail panel, kanban drag).
+ *
+ * It enforces the dependency guard, spawns the next recurring cycle ("after
+ * completion" model, unless the "repeat until" date has passed), and sets
+ * `nextCycleCreated` so the cron backstop never produces a duplicate. Callers
+ * map the returned outcome to their own toast.
+ */
+export async function completeTask(task: Task, deps: CompleteTaskDeps): Promise<CompleteTaskOutcome> {
+  // Dependency guard: cannot complete a task whose blockers are still open.
+  if (task.dependsOn && task.dependsOn.length > 0 && deps.allTasks) {
+    const openBlockers = task.dependsOn.filter(depId => {
+      const dep = deps.allTasks!.find(t => t.id === depId);
+      return dep && dep.status !== 'Done';
+    });
+    if (openBlockers.length > 0) return { kind: 'blocked', blockers: openBlockers.length };
+  }
+
+  // "After completion" recurring: on Done, immediately spawn the next cycle
+  // (unless the recurrence has ended) and flag the current one so cron skips it.
+  if (task.isRecurring && task.recurringFrequency && !task.nextCycleCreated) {
+    try {
+      const ended = recurrenceHasEnded(task);
+      if (!ended) {
+        await deps.createTask(buildNextRecurringTask(task) as Omit<Task, 'id' | 'createdAt' | 'updatedAt'>);
+      }
+      await deps.updateTask(task.id, { status: 'Done', nextCycleCreated: true });
+      return ended ? { kind: 'recurring-ended' } : { kind: 'recurring-created' };
+    } catch (error) {
+      // Best effort: still mark it Done so the user isn't stuck.
+      await deps.updateTask(task.id, { status: 'Done' });
+      return { kind: 'error', error };
+    }
+  }
+
+  await deps.updateTask(task.id, { status: 'Done' });
+  return { kind: 'completed' };
 }
 
 /** True when the next cycle would fall after the recurrence's "repeat until" date,
