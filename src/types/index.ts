@@ -395,6 +395,11 @@ export interface Service {
   price: number;
   category?: string;
   currency?: string;
+  // Optional catalog-card fields (portal service catalog). All degrade gracefully.
+  features?: string[];      // bullet points (e.g. "Monitorim live 24/7")
+  duration?: string;        // delivery/term label (e.g. "1–2 ditë", "3 muaj")
+  billingPeriod?: string;   // e.g. "në muaj", "një herë"
+  featured?: boolean;       // highlight as "Më e zgjedhura"
   teamId?: string;
   createdAt: Date;
   updatedAt: Date;

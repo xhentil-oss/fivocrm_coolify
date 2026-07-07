@@ -6,6 +6,7 @@ import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
+import { Textarea } from '../components/ui/textarea';
 import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
@@ -62,12 +63,21 @@ const ServicesView: React.FC = () => {
     await categoryMutation.remove(id);
   };
 
+  // Parse the optional catalog-card fields shown on the client portal.
+  const readCatalogFields = (formData: FormData) => ({
+    features: (formData.get('features') as string || '').split('\n').map(s => s.trim()).filter(Boolean),
+    duration: (formData.get('duration') as string || '').trim() || undefined,
+    billingPeriod: (formData.get('billingPeriod') as string || '').trim() || undefined,
+    featured: formData.get('featured') === 'true',
+  });
+
   const handleCreateService = async (formData: FormData) => {
     const title = formData.get('title') as string;
     const description = formData.get('description') as string;
     const price = parseFloat(formData.get('price') as string);
     const category = formData.get('category') as string;
     const currency = formData.get('currency') as string;
+    const cat = readCatalogFields(formData);
 
     await serviceMutation.create({
       title,
@@ -75,7 +85,11 @@ const ServicesView: React.FC = () => {
       price,
       category,
       currency: currency || 'ALL',
-    });
+      features: cat.features.length ? cat.features : undefined,
+      duration: cat.duration,
+      billingPeriod: cat.billingPeriod,
+      featured: cat.featured,
+    } as any);
 
     setIsCreateDialogOpen(false);
   };
@@ -88,6 +102,7 @@ const ServicesView: React.FC = () => {
     const price = parseFloat(formData.get('price') as string);
     const category = formData.get('category') as string;
     const currency = formData.get('currency') as string;
+    const cat = readCatalogFields(formData);
 
     await serviceMutation.update(selectedService.id, {
       title,
@@ -95,7 +110,11 @@ const ServicesView: React.FC = () => {
       price,
       category,
       currency: currency || 'ALL',
-    });
+      features: cat.features,
+      duration: cat.duration ?? '',
+      billingPeriod: cat.billingPeriod ?? '',
+      featured: cat.featured,
+    } as any);
 
     setIsEditDialogOpen(false);
     setSelectedService(null);
@@ -265,6 +284,7 @@ const ServiceForm: React.FC<{
   const [showNewCategoryInput, setShowNewCategoryInput] = useState(false);
   const [newCategoryName, setNewCategoryName] = useState('');
   const [selectedCategory, setSelectedCategory] = useState(initialData?.category || categories[0] || 'Web Design');
+  const [featured, setFeatured] = useState<boolean>(!!(initialData as any)?.featured);
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -400,6 +420,30 @@ const ServiceForm: React.FC<{
           placeholder="Shkruaj përshkrimin e shërbimit..."
           minHeight="200px"
         />
+      </div>
+
+      {/* Catalog-card fields — shown on the client portal service cards */}
+      <div className="rounded-lg border p-3 space-y-3 bg-muted/20">
+        <p className="text-xs font-medium text-muted-foreground">Kartela në portal (opsionale)</p>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <Label htmlFor="duration">Kohëzgjatja</Label>
+            <Input id="duration" name="duration" placeholder="p.sh. 1–2 ditë, 3 muaj" defaultValue={(initialData as any)?.duration} />
+          </div>
+          <div>
+            <Label htmlFor="billingPeriod">Periudha e çmimit</Label>
+            <Input id="billingPeriod" name="billingPeriod" placeholder="p.sh. në muaj, një herë" defaultValue={(initialData as any)?.billingPeriod} />
+          </div>
+        </div>
+        <div>
+          <Label htmlFor="features">Pikat kryesore (një për rresht)</Label>
+          <Textarea id="features" name="features" rows={4} placeholder={'Monitorim live 24/7\nRaporte të detajuara\nInstalim & konfigurim falas'} defaultValue={Array.isArray((initialData as any)?.features) ? (initialData as any).features.join('\n') : ''} />
+        </div>
+        <label className="flex items-center gap-2 text-sm cursor-pointer">
+          <input type="checkbox" checked={featured} onChange={(e) => setFeatured(e.target.checked)} className="h-4 w-4 rounded border-input" />
+          <span>Shëno si <strong>"Më e zgjedhura"</strong> (theksohet në portal)</span>
+        </label>
+        <input type="hidden" name="featured" value={featured ? 'true' : 'false'} />
       </div>
 
       <Button type="submit" className="w-full">

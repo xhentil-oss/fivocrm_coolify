@@ -10,11 +10,24 @@ import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
-import { ShoppingBag, Tag, DollarSign, FileText, CheckCircle2, Eye, Edit3, Send } from 'lucide-react';
+import { ShoppingBag, Tag, DollarSign, FileText, CheckCircle2, Eye, Edit3, Send, Check, Clock, Star, TrendingUp, Megaphone, Navigation, Sparkles, Globe } from 'lucide-react';
 import { sanitizeHtml } from '../../lib/utils';
 import { useToast } from '../../hooks/use-toast';
 import ServiceQuestionnaireForm from '../../components/ServiceQuestionnaireForm';
 import type { Invoice, InvoiceItem, Service, ServiceInquiry, Notification } from '../../types';
+
+// Per-category icon + color for the catalog cards. Unknown categories fall back
+// to a neutral bag icon.
+const CATEGORY_VISUALS: Record<string, { Icon: any; box: string; tag: string }> = {
+  'Web Design': { Icon: Navigation, box: 'bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300', tag: 'text-violet-600 border-violet-200 dark:border-violet-800' },
+  'SEO': { Icon: TrendingUp, box: 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300', tag: 'text-blue-600 border-blue-200 dark:border-blue-800' },
+  'Social Media': { Icon: Megaphone, box: 'bg-pink-100 text-pink-600 dark:bg-pink-900/30 dark:text-pink-300', tag: 'text-pink-600 border-pink-200 dark:border-pink-800' },
+  'Marketing': { Icon: Sparkles, box: 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300', tag: 'text-amber-600 border-amber-200 dark:border-amber-800' },
+  'Website': { Icon: Globe, box: 'bg-teal-100 text-teal-600 dark:bg-teal-900/30 dark:text-teal-300', tag: 'text-teal-600 border-teal-200 dark:border-teal-800' },
+};
+function serviceVisual(category?: string) {
+  return (category && CATEGORY_VISUALS[category]) || { Icon: ShoppingBag, box: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300', tag: 'text-slate-600 border-slate-200 dark:border-slate-700' };
+}
 
 const PortalServicesView: React.FC = () => {
   const { user } = useAuth();
@@ -430,42 +443,69 @@ const PortalServicesView: React.FC = () => {
             </CardContent>
           </Card>
         ) : (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 items-stretch">
             {allServices.map(service => {
               const isPurchased = purchasedServiceDetails.some(p => p.service.id === service.id);
+              const vis = serviceVisual(service.category);
+              const Icon = vis.Icon;
+              const featured = !!(service as any).featured;
+              const features: string[] = Array.isArray((service as any).features) ? (service as any).features : [];
+              const duration = (service as any).duration as string | undefined;
+              const period = (service as any).billingPeriod as string | undefined;
               return (
-                <Card key={service.id} className={`transition-shadow hover:shadow-md ${isPurchased ? 'border-primary/30' : ''}`}>
-                  <CardContent className="pt-6">
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <h3 className="font-semibold truncate">{service.title || service.name}</h3>
-                          {isPurchased && (
-                            <Badge className="bg-primary/10 text-primary text-xs">Aktiv</Badge>
-                          )}
-                        </div>
-                        {service.description && (
-                          <div className="text-sm text-muted-foreground mt-1 line-clamp-3 prose prose-sm dark:prose-invert max-w-none"
-                            dangerouslySetInnerHTML={{ __html: sanitizeHtml(service.description) }}
-                          />
-                        )}
+                <Card key={service.id} className={`relative flex flex-col overflow-hidden transition-all hover:shadow-lg hover:-translate-y-0.5 ${featured ? 'ring-2 ring-primary shadow-md' : ''} ${isPurchased ? 'border-primary/40' : ''}`}>
+                  {/* Top accent bar */}
+                  <div className={`h-1 w-full ${featured ? 'bg-gradient-to-r from-violet-500 to-fuchsia-500' : 'bg-gradient-to-r from-violet-400/40 to-fuchsia-400/40'}`} />
+                  <CardContent className="pt-5 flex flex-col flex-1">
+                    {/* Header: icon box + (featured badge XOR category tag) — never overlap */}
+                    <div className="flex items-start justify-between gap-2 mb-3">
+                      <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${vis.box}`}>
+                        <Icon className="w-5 h-5" />
                       </div>
+                      {featured ? (
+                        <Badge className="gap-1 bg-primary text-primary-foreground"><Star className="w-3 h-3" /> Më e zgjedhura</Badge>
+                      ) : service.category ? (
+                        <Badge variant="outline" className={`gap-1 text-xs ${vis.tag}`}><Tag className="w-3 h-3" />{service.category}</Badge>
+                      ) : null}
                     </div>
-                    <div className="flex items-center justify-between mt-4">
-                      {service.category && (
-                        <Badge variant="secondary" className="gap-1 text-xs">
-                          <Tag className="h-3 w-3" />
-                          {service.category}
-                        </Badge>
+
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-semibold text-lg">{service.title || service.name}</h3>
+                      {isPurchased && <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 text-[10px]">Aktiv</Badge>}
+                    </div>
+                    {service.description && (
+                      <div className="text-sm text-muted-foreground mt-1 line-clamp-3 prose prose-sm dark:prose-invert max-w-none"
+                        dangerouslySetInnerHTML={{ __html: sanitizeHtml(service.description) }}
+                      />
+                    )}
+
+                    {features.length > 0 && (
+                      <ul className="mt-3 space-y-1.5">
+                        {features.slice(0, 6).map((f, i) => (
+                          <li key={i} className="flex items-start gap-2 text-sm">
+                            <Check className="w-4 h-4 text-emerald-500 mt-0.5 flex-shrink-0" />
+                            <span className="text-foreground/80">{f}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+
+                    {/* Price + duration pinned to the bottom for aligned cards */}
+                    <div className="mt-auto pt-4 border-t flex items-end justify-between gap-2">
+                      <div>
+                        <div className="font-bold text-2xl leading-none">
+                          {service.price.toLocaleString()} <span className="text-sm font-medium text-muted-foreground">{service.currency || 'ALL'}</span>
+                        </div>
+                        {period && <div className="text-xs text-muted-foreground mt-1">{period}</div>}
+                      </div>
+                      {duration && (
+                        <Badge variant="secondary" className="gap-1 text-xs flex-shrink-0"><Clock className="w-3 h-3" />{duration}</Badge>
                       )}
-                      <span className="font-bold text-lg">
-                        {service.price.toLocaleString()} {service.currency || 'ALL'}
-                      </span>
                     </div>
                     <Button
-                      variant="outline"
+                      variant={featured ? 'default' : 'outline'}
                       size="sm"
-                      className="w-full mt-3 gap-1"
+                      className="w-full mt-4 gap-1"
                       onClick={() => openQuestionnaire(service.category)}
                     >
                       <FileText className="w-3.5 h-3.5" />
