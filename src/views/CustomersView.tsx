@@ -580,7 +580,7 @@ const CustomersView: React.FC = () => {
               <DialogHeader>
                 <DialogTitle>Krijo Klient te Ri</DialogTitle>
               </DialogHeader>
-              <CustomerForm onSubmit={(data) => { setDirty(false); handleCreateCustomer(data); }} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} onDirtyChange={setDirty} teamMembers={teamMembers || []} getName={getName} canAssign={permissions.canManageMembers || permissions.role === 'Admin' || permissions.role === 'Manager'} tagSuggestions={tagSuggestions} />
+              <CustomerForm onSubmit={(data) => { setDirty(false); return handleCreateCustomer(data); }} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} onDirtyChange={setDirty} teamMembers={teamMembers || []} getName={getName} canAssign={permissions.canManageMembers || permissions.role === 'Admin' || permissions.role === 'Manager'} tagSuggestions={tagSuggestions} />
             </DialogContent>
           </Dialog>
         )}
@@ -1013,7 +1013,7 @@ const CustomersView: React.FC = () => {
                 <DialogHeader>
                   <DialogTitle>Ndrysho Klientin</DialogTitle>
                 </DialogHeader>
-                <CustomerForm onSubmit={(data) => { setDirty(false); handleUpdateCustomer(data); }} initialData={selectedCustomer} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} onDirtyChange={setDirty} teamMembers={teamMembers || []} getName={getName} canAssign={permissions.canManageMembers || permissions.role === 'Admin' || permissions.role === 'Manager'} tagSuggestions={tagSuggestions} />
+                <CustomerForm onSubmit={(data) => { setDirty(false); return handleUpdateCustomer(data); }} initialData={selectedCustomer} industries={allIndustries} onAddIndustry={() => setShowAddIndustry(true)} onDirtyChange={setDirty} teamMembers={teamMembers || []} getName={getName} canAssign={permissions.canManageMembers || permissions.role === 'Admin' || permissions.role === 'Manager'} tagSuggestions={tagSuggestions} />
               </DialogContent>
             </Dialog>
           )}
@@ -1351,7 +1351,7 @@ const CustomersView: React.FC = () => {
 };
 
 const CustomerForm: React.FC<{
-  onSubmit: (data: FormData) => void;
+  onSubmit: (data: FormData) => void | Promise<void>;
   initialData?: Customer;
   industries?: string[];
   onAddIndustry?: () => void;
@@ -1367,14 +1367,17 @@ const CustomerForm: React.FC<{
   const [assignedTo, setAssignedTo] = useState(init?.assignedToUserId || 'unassigned');
   const [disableOverdue, setDisableOverdue] = useState(!!init?.disableOverdueReminders);
 
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+  const [submitting, setSubmitting] = useState(false);
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (submitting) return; // guard against double-submit → duplicate customers
     const formData = new FormData(e.currentTarget);
     formData.set('status', status);
     formData.set('industry', industry);
     formData.set('assignedToUserId', assignedTo);
     formData.set('disableOverdueReminders', String(disableOverdue));
-    onSubmit(formData);
+    setSubmitting(true);
+    try { await onSubmit(formData); } finally { setSubmitting(false); }
   };
 
   return (
@@ -1517,8 +1520,8 @@ const CustomerForm: React.FC<{
         </span>
       </label>
 
-      <Button type="submit" className="w-full">
-        {initialData ? 'Perditeso Klientin' : 'Krijo Klientin'}
+      <Button type="submit" className="w-full" disabled={submitting}>
+        {submitting ? 'Duke ruajtur…' : (initialData ? 'Perditeso Klientin' : 'Krijo Klientin')}
       </Button>
     </form>
   );
