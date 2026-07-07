@@ -8,9 +8,16 @@ export type PreviewRole = 'Admin' | 'Sales' | 'SalesAgent' | 'Manager' | 'Member
 export interface PermissionsContextValue extends UserPermissions {
   previewRole: PreviewRole;
   setPreviewRole: (role: PreviewRole) => void;
+  // Admin "view as customer" — when set, the app renders the client portal as
+  // this customer (read-only preview). Only applied for real staff (owner/admin).
+  previewCustomerId: string | null;
+  previewCustomerName: string | null;
+  setPreviewCustomer: (id: string | null, name?: string | null) => void;
 }
 
 const SESSION_KEY = 'role_preview';
+const CUSTOMER_PREVIEW_ID_KEY = 'customer_preview_id';
+const CUSTOMER_PREVIEW_NAME_KEY = 'customer_preview_name';
 
 /** Build simulated permissions for a given role (used by owner preview mode). */
 function simulateRole(role: PreviewRole, base: UserPermissions): UserPermissions {
@@ -126,6 +133,28 @@ export const PermissionsProvider: React.FC<{ children: React.ReactNode }> = ({ c
     setPreviewRoleState(role);
   };
 
+  const [previewCustomerId, setPreviewCustomerIdState] = useState<string | null>(() => {
+    try { return sessionStorage.getItem(CUSTOMER_PREVIEW_ID_KEY) || null; } catch { return null; }
+  });
+  const [previewCustomerName, setPreviewCustomerNameState] = useState<string | null>(() => {
+    try { return sessionStorage.getItem(CUSTOMER_PREVIEW_NAME_KEY) || null; } catch { return null; }
+  });
+
+  const setPreviewCustomer = (id: string | null, name: string | null = null) => {
+    try {
+      if (id) {
+        sessionStorage.setItem(CUSTOMER_PREVIEW_ID_KEY, id);
+        if (name) sessionStorage.setItem(CUSTOMER_PREVIEW_NAME_KEY, name);
+        else sessionStorage.removeItem(CUSTOMER_PREVIEW_NAME_KEY);
+      } else {
+        sessionStorage.removeItem(CUSTOMER_PREVIEW_ID_KEY);
+        sessionStorage.removeItem(CUSTOMER_PREVIEW_NAME_KEY);
+      }
+    } catch { /* ignore */ }
+    setPreviewCustomerIdState(id);
+    setPreviewCustomerNameState(id ? name : null);
+  };
+
   const permissions = useMemo((): PermissionsContextValue => {
     // Only the real owner can preview roles; while loading, never apply preview
     const effective =
@@ -133,8 +162,8 @@ export const PermissionsProvider: React.FC<{ children: React.ReactNode }> = ({ c
         ? simulateRole(previewRole, realPermissions)
         : realPermissions;
 
-    return { ...effective, previewRole, setPreviewRole };
-  }, [realPermissions, previewRole]);
+    return { ...effective, previewRole, setPreviewRole, previewCustomerId, previewCustomerName, setPreviewCustomer };
+  }, [realPermissions, previewRole, previewCustomerId, previewCustomerName]);
 
   return (
     <PermissionsContext.Provider value={permissions}>
@@ -149,5 +178,5 @@ export function usePermissions(): PermissionsContextValue {
   if (ctx) return ctx;
   // eslint-disable-next-line react-hooks/rules-of-hooks
   const base = usePermissionsBase();
-  return { ...base, previewRole: null, setPreviewRole: () => {} };
+  return { ...base, previewRole: null, setPreviewRole: () => {}, previewCustomerId: null, previewCustomerName: null, setPreviewCustomer: () => {} };
 }

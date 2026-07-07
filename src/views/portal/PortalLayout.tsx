@@ -2,7 +2,7 @@ import React, { useState, useMemo } from 'react';
 import { NavLink, Outlet, useNavigate, Navigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useClientPortal } from '../../hooks/useClientPortal';
-import { usePermissions } from '../../hooks/usePermissions';
+import { usePermissions } from '../../contexts/PermissionsContext';
 import { useCollection } from '../../hooks/useFirestore';
 import {
   LayoutDashboard,
@@ -17,6 +17,8 @@ import {
   Menu,
   X,
   User,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Loader2 } from 'lucide-react';
@@ -49,11 +51,23 @@ const PortalLayout: React.FC = () => {
     [portalNotifs]
   );
 
+  // Admin "view as customer" preview — a real staff member is inspecting a
+  // specific client's portal. Keep them here instead of bouncing to /app.
+  const previewCustomerId = permissions.previewCustomerId;
+  const previewCustomerName = permissions.previewCustomerName;
+
   // Staff members should never land on the client portal.
   // Redirect them to the main app before useClientPortal can auto-create client records.
-  if (!permissions.isLoading && (permissions.role || permissions.isOwner)) {
+  // Exception: an active customer preview (they explicitly chose to view a client).
+  if (!permissions.isLoading && (permissions.role || permissions.isOwner) && !previewCustomerId) {
     return <Navigate to="/app/dashboard" replace />;
   }
+
+  const exitPreview = () => {
+    const id = previewCustomerId;
+    permissions.setPreviewCustomer(null);
+    navigate(id ? `/app/customers/${id}` : '/app/customers');
+  };
 
   if (isLoading || permissions.isLoading) {
     return (
@@ -86,6 +100,12 @@ const PortalLayout: React.FC = () => {
       </div>
     );
   }
+
+  // When an admin previews the portal, a banner sits under the header; everything
+  // below the header shifts down by its height so nothing is hidden.
+  const headerTop = 'calc(4rem + env(safe-area-inset-top))';
+  const headerPlusBanner = 'calc(4rem + env(safe-area-inset-top) + 40px)';
+  const contentTop = previewCustomerId ? headerPlusBanner : headerTop;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -123,6 +143,27 @@ const PortalLayout: React.FC = () => {
         </div>
       </header>
 
+      {/* Admin "view as customer" banner — fixed just under the header */}
+      {previewCustomerId && (
+        <div
+          className="fixed left-0 right-0 z-40 h-10 flex items-center justify-between gap-2 px-4 lg:px-6 bg-amber-400 text-amber-950 text-sm font-medium"
+          style={{ top: headerTop }}
+        >
+          <span className="flex items-center gap-1.5 min-w-0">
+            <Eye className="w-4 h-4 flex-shrink-0" />
+            <span className="truncate">
+              Po shikoni portalin si klient{previewCustomerName ? <>: <strong>{previewCustomerName}</strong></> : null} — vetëm pamje.
+            </span>
+          </span>
+          <button
+            onClick={exitPreview}
+            className="flex items-center gap-1 whitespace-nowrap underline hover:no-underline flex-shrink-0"
+          >
+            <EyeOff className="w-4 h-4" /> Dil nga pamja
+          </button>
+        </div>
+      )}
+
       {/* Mobile overlay */}
       {mobileOpen && (
         <div
@@ -133,7 +174,7 @@ const PortalLayout: React.FC = () => {
 
       {/* Sidebar — top tracks the header height (incl. top safe-area inset) */}
       <aside
-        style={{ top: 'calc(4rem + env(safe-area-inset-top))' }}
+        style={{ top: contentTop }}
         className={`fixed left-0 bottom-0 z-40 w-[240px] bg-card border-r transition-transform duration-200 lg:translate-x-0 flex flex-col ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
@@ -186,7 +227,7 @@ const PortalLayout: React.FC = () => {
 
       {/* Main content — top clears the (inset-grown) header, bottom clears the
           (inset-grown) mobile nav. */}
-      <main className="lg:ml-[240px]" style={{ paddingTop: 'calc(4rem + env(safe-area-inset-top))' }}>
+      <main className="lg:ml-[240px]" style={{ paddingTop: contentTop }}>
         <div className="p-4 sm:p-6 lg:p-8" style={{ paddingBottom: 'calc(5rem + env(safe-area-inset-bottom))' }}>
           <Outlet />
         </div>

@@ -7,8 +7,9 @@ import { getStatusColor } from '../lib/statusColors';
 import {
   ArrowLeft, Building2, Mail, Phone, FileText, DollarSign,
   ClipboardList, Calendar, Plus, Clock, Target, Calculator, Send,
-  Archive, Trash2, CheckSquare, Square
+  Archive, Trash2, CheckSquare, Square, Eye
 } from 'lucide-react';
+import { usePermissions } from '../contexts/PermissionsContext';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -26,6 +27,8 @@ const Customer360View: React.FC = () => {
   const { customerId } = useParams<{ customerId: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
+  const permissions = usePermissions();
+  const canPreviewAsCustomer = permissions.isOwner || permissions.isAdmin || (permissions as any).isSuperAdmin;
   const { toast } = useToast();
   const [isActivityDialogOpen, setIsActivityDialogOpen] = useState(false);
   const [activityType, setActivityType] = useState<string>('note');
@@ -311,6 +314,21 @@ const Customer360View: React.FC = () => {
             )}
           </div>
         </div>
+        {canPreviewAsCustomer && customerId && (
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-1.5"
+            onClick={() => {
+              permissions.setPreviewCustomer(customerId, customer.name);
+              navigate('/portal');
+            }}
+            title="Hap portalin e klientit ashtu si e sheh ai"
+          >
+            <Eye className="w-4 h-4" />
+            Shiko si klient
+          </Button>
+        )}
         <Badge className={getStatusColor((customer as any).status || 'Active')} variant="secondary">
           {(customer as any).status || 'Active'}
         </Badge>

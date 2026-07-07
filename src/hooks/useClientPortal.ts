@@ -2,6 +2,7 @@ import { useEffect, useState, useRef, useCallback } from 'react';
 import { useCollection } from './useFirestore';
 import { usePortalTenant } from './usePortalTenant';
 import { useAuth } from '../contexts/AuthContext';
+import { usePermissions } from '../contexts/PermissionsContext';
 import { collection, addDoc, updateDoc, doc, Timestamp, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import type { ClientPortalAccess, Customer } from '../types';
@@ -25,6 +26,15 @@ let _moduleCreatedForUid: string | null = null;   // uid already created this se
 
 export function useClientPortal() {
   const { user, loading: authLoading } = useAuth();
+
+  // Admin "view as customer": when a real staff member has an active customer
+  // preview, the portal renders as that customer. We short-circuit resolution to
+  // the previewed customerId and — crucially — skip ALL auto-create/link/persist
+  // side effects, so previewing never mutates data on the admin's own account.
+  const perms = usePermissions();
+  const isStaff = perms.isOwner || perms.isAdmin || (perms as any).isSuperAdmin;
+  const previewCustomerId = isStaff && perms.previewCustomerId ? perms.previewCustomerId : null;
+
   const [autoCreating, setAutoCreating] = useState(false);
   const [autoCreated, setAutoCreated] = useState(false);
   const [createdCustomerId, setCreatedCustomerId] = useState<string | null>(null);
@@ -84,6 +94,7 @@ export function useClientPortal() {
 
   // Auto-link: if portal access exists by email but userId is empty, update it
   useEffect(() => {
+    if (previewCustomerId) return; // admin preview — never mutate
     if (!user || byUserIdLoading || byEmailLoading || didAutoLink.current) return;
     if (activeByUserId.length > 0) return; // Already linked
 
@@ -128,6 +139,7 @@ export function useClientPortal() {
 
   // Auto-create: if no portal access exists, create Customer + Access + Lead
   useEffect(() => {
+    if (previewCustomerId) return; // admin preview — never auto-create records
     if (!user?.email || authLoading || byUserIdLoading || byEmailLoading || customersLoading || teamMembersLoading) return;
     if (autoCreating || didAutoCreate.current) return;
     // Block if ANY portal access record already exists (any status), not just Active.
@@ -284,6 +296,7 @@ export function useClientPortal() {
   // reads are hardened. users/{uid} is uid-keyed, so no clientPortalAccess re-key.
   const persistedCustomerIdRef = useRef<string | null>(null);
   useEffect(() => {
+    if (previewCustomerId) return; // admin preview — don't rewrite the admin's own users/{uid}
     if (!user?.uid || !resolvedCustomerId) return;
     if (persistedCustomerIdRef.current === resolvedCustomerId) return;
     persistedCustomerIdRef.current = resolvedCustomerId;
@@ -300,6 +313,16 @@ export function useClientPortal() {
   const queriesLoaded = !byUserIdLoading && !byEmailLoading && !customersLoading && !teamMembersLoading;
   const hasNoAccess = activeByUserId.length === 0 && activeByEmail.length === 0;
   const pendingAutoCreate = !!user?.email && queriesLoaded && hasNoAccess && !autoCreating && !didAutoCreate.current;
+
+  // Admin "view as customer" — resolve directly to the previewed customer.
+  if (previewCustomerId) {
+    return {
+      isClient: true,
+      portalAccess: null,
+      customerId: previewCustomerId,
+      isLoading: false,
+    };
+  }
 
   return {
     isClient: !!access || autoCreating || autoCreated,
