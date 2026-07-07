@@ -152,7 +152,8 @@ const CustomersView: React.FC = () => {
           customer.company?.toLowerCase().includes(q) ||
           (customer as any).taxId?.toLowerCase().includes(q) ||
           (customer as any).contactPerson?.toLowerCase().includes(q) ||
-          (customer as any).industry?.toLowerCase().includes(q);
+          (customer as any).industry?.toLowerCase().includes(q) ||
+          parseTags((customer as any).tags).some(t => t.toLowerCase().includes(q));
         if (!match) return false;
       }
       if (statusFilter !== '__all__') {
@@ -208,17 +209,20 @@ const CustomersView: React.FC = () => {
       const val = formData.get(key) as string;
       if (val) data[key] = val;
     });
+    // "__none__" is the Select sentinel for "no industry" — don't persist it.
+    if (data.industry === '__none__') delete data.industry;
     const creditLimit = formData.get('creditLimit') as string;
     if (creditLimit) data.creditLimit = parseFloat(creditLimit);
     const assignedTo = formData.get('assignedToUserId') as string;
     data.assignedToUserId = assignedTo && assignedTo !== 'unassigned' ? assignedTo : null;
     data.disableOverdueReminders = formData.get('disableOverdueReminders') === 'true';
 
-    // Duplicate check: email vs existing customers + leads
+    // Duplicate check against the WHOLE tenant (rawCustomers) — not the role-filtered
+    // `customers`, or a Member/Viewer would bypass a teammate's existing record.
     const normEmail = data.email?.toLowerCase().trim();
     const normPhone = (data.phone as string | undefined)?.replace(/\D/g, '');
     if (normEmail) {
-      if (customers?.some(c => c.email?.toLowerCase().trim() === normEmail)) {
+      if ((rawCustomers || []).some(c => c.email?.toLowerCase().trim() === normEmail)) {
         toast({ title: 'Ky email ekziston tek Klientët!', description: 'Ka një klient me këtë email.', variant: 'destructive' });
         return;
       }
@@ -228,7 +232,7 @@ const CustomersView: React.FC = () => {
       }
     }
     if (normPhone && normPhone.length >= 7) {
-      if (customers?.some(c => c.phone?.replace(/\D/g, '') === normPhone)) {
+      if ((rawCustomers || []).some(c => c.phone?.replace(/\D/g, '') === normPhone)) {
         toast({ title: 'Ky numër ekziston tek Klientët!', description: 'Ka një klient me këtë numër telefoni.', variant: 'destructive' });
         return;
       }
@@ -309,6 +313,8 @@ const CustomersView: React.FC = () => {
       const val = formData.get(key) as string;
       data[key] = val || '';
     });
+    // "__none__" is the Select sentinel for "no industry" — store empty instead.
+    if (data.industry === '__none__') data.industry = '';
     const creditLimit = formData.get('creditLimit') as string;
     data.creditLimit = creditLimit ? parseFloat(creditLimit) : null;
     const assignedTo = formData.get('assignedToUserId') as string;
@@ -318,9 +324,9 @@ const CustomersView: React.FC = () => {
     const normEmail = (data.email as string | undefined)?.toLowerCase().trim();
     const normPhone = (data.phone as string | undefined)?.replace(/\D/g, '');
 
-    // Duplicate email check (exclude current customer, check leads too)
+    // Duplicate checks against the WHOLE tenant (rawCustomers), excluding this customer.
     if (normEmail) {
-      if (customers?.some(c => c.id !== selectedCustomer.id && c.email?.toLowerCase().trim() === normEmail)) {
+      if ((rawCustomers || []).some(c => c.id !== selectedCustomer.id && c.email?.toLowerCase().trim() === normEmail)) {
         toast({ title: 'Ky email ekziston tek Klientët!', description: 'Ka një klient tjetër me këtë email.', variant: 'destructive' });
         return;
       }
@@ -331,7 +337,7 @@ const CustomersView: React.FC = () => {
     }
     // Duplicate phone check (exclude current customer, check leads too)
     if (normPhone && normPhone.length >= 7) {
-      if (customers?.some(c => c.id !== selectedCustomer.id && c.phone?.replace(/\D/g, '') === normPhone)) {
+      if ((rawCustomers || []).some(c => c.id !== selectedCustomer.id && c.phone?.replace(/\D/g, '') === normPhone)) {
         toast({ title: 'Ky numër ekziston tek Klientët!', description: 'Ka një klient tjetër me këtë numër telefoni.', variant: 'destructive' });
         return;
       }
@@ -695,6 +701,11 @@ const CustomersView: React.FC = () => {
                         {customer.company && <p className="text-sm text-muted-foreground">{customer.company}</p>}
                       </div>
                       <div className="flex items-center gap-2 shrink-0 ml-2">
+                        {portalAcc && (
+                          <Badge variant="outline" className="gap-1 text-[10px] text-emerald-600 border-emerald-200 dark:border-emerald-800" title="Ka akses në portal">
+                            <ExternalLink className="w-2.5 h-2.5" /> Portal
+                          </Badge>
+                        )}
                         <Badge className={`${statusOpt?.color || 'bg-gray-100 text-gray-800'} gap-1`}>
                           <StatusIcon className="w-3 h-3" />
                           {statusOpt?.label || cust.status || 'Aktiv'}
@@ -806,10 +817,17 @@ const CustomersView: React.FC = () => {
                             </div>
                           </td>
                           <td className="px-3 sm:px-6 py-3 sm:py-4">
-                            <Badge className={`${statusOpt?.color || 'bg-gray-100 text-gray-800'} gap-1`}>
-                              <StatusIcon className="w-3 h-3" />
-                              {statusOpt?.label || cust.status || 'Aktiv'}
-                            </Badge>
+                            <div className="flex flex-col items-start gap-1">
+                              <Badge className={`${statusOpt?.color || 'bg-gray-100 text-gray-800'} gap-1`}>
+                                <StatusIcon className="w-3 h-3" />
+                                {statusOpt?.label || cust.status || 'Aktiv'}
+                              </Badge>
+                              {portalAcc && (
+                                <Badge variant="outline" className="gap-1 text-[10px] text-emerald-600 border-emerald-200 dark:border-emerald-800" title="Ka akses në portal">
+                                  <ExternalLink className="w-2.5 h-2.5" /> Portal
+                                </Badge>
+                              )}
+                            </div>
                           </td>
 
                           <td className="px-3 sm:px-6 py-3 sm:py-4">

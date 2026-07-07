@@ -185,8 +185,10 @@ const Customer360View: React.FC = () => {
     });
   }, [allContracts, customerId]);
 
-  // Stats
-  const totalRevenue = customerInvoices.reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
+  // Stats — "revenue" excludes Draft/Cancelled invoices (they aren't billed income).
+  const totalRevenue = customerInvoices
+    .filter(i => i.status !== 'Draft' && i.status !== 'Cancelled')
+    .reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
   const paidRevenue = customerInvoices.filter(i => i.status === 'Paid').reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
   const pendingAmount = customerInvoices.filter(i => i.status === 'Pending' || i.status === 'Overdue').reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
   const activeProjectCount = customerProjects.filter(p => p.status === 'Active').length;
