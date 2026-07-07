@@ -19,6 +19,8 @@ import {
   User,
   Eye,
   EyeOff,
+  Sparkles,
+  MessageCircle,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Loader2 } from 'lucide-react';
@@ -175,12 +177,12 @@ const PortalLayout: React.FC = () => {
       {/* Sidebar — top tracks the header height (incl. top safe-area inset) */}
       <aside
         style={{ top: contentTop }}
-        className={`fixed left-0 bottom-0 z-40 w-[240px] bg-card border-r transition-transform duration-200 lg:translate-x-0 flex flex-col ${
+        className={`fixed left-0 bottom-0 z-40 w-[262px] bg-card border-r transition-transform duration-200 lg:translate-x-0 flex flex-col ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
-        <nav className="p-4 space-y-1 flex-1 overflow-y-auto">
-          <p className="px-3 pb-2 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground/70">Menuja</p>
+        <div className="px-5 pt-5 pb-2 text-[11px] font-semibold uppercase tracking-[0.09em] text-muted-foreground/70">Menuja</div>
+        <nav className="px-4 space-y-1 flex-1 overflow-y-auto">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isChatItem = item.to === '/portal/chat';
@@ -191,10 +193,10 @@ const PortalLayout: React.FC = () => {
                 end={item.end}
                 onClick={() => setMobileOpen(false)}
                 className={({ isActive }) =>
-                  `flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-all ${
+                  `flex items-center gap-3 px-3.5 py-2.5 rounded-xl text-sm font-medium transition-all ${
                     isActive
-                      ? 'bg-brand-gradient text-white shadow-md shadow-primary/20'
-                      : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                      ? 'bg-brand-gradient text-white shadow-lg shadow-primary/30'
+                      : 'text-muted-foreground hover:bg-primary/5 hover:text-foreground'
                   }`
                 }
               >
@@ -211,23 +213,21 @@ const PortalLayout: React.FC = () => {
         </nav>
 
         {/* Quick-help card → opens the support chat */}
-        <div className="p-3">
+        <div className="mt-auto m-4 rounded-2xl border border-primary/15 bg-gradient-to-b from-primary/5 to-primary/10 p-4">
+          <div className="flex items-center gap-1.5 text-[12.5px] font-semibold text-primary mb-1.5">
+            <Sparkles className="h-3.5 w-3.5" /> Ndihmë e shpejtë
+          </div>
+          <p className="text-[12.5px] leading-relaxed text-muted-foreground mb-2.5">Keni pyetje për një shërbim? Ekipi ynë përgjigjet brenda 24 orëve.</p>
           <NavLink to="/portal/chat" onClick={() => setMobileOpen(false)}
-            className="block rounded-xl border bg-gradient-to-br from-primary/5 to-primary/10 p-3 hover:from-primary/10 hover:to-primary/15 transition-colors">
-            <div className="flex items-center gap-1.5 text-sm font-semibold text-primary">
-              <MessageSquare className="h-4 w-4" /> Ndihmë e shpejtë
-            </div>
-            <p className="text-xs text-muted-foreground mt-1 leading-snug">Keni pyetje? Ekipi ynë përgjigjet brenda 24 orëve.</p>
-            <div className="mt-2 inline-flex items-center gap-1.5 rounded-lg border bg-background px-2.5 py-1.5 text-xs font-medium">
-              <MessageSquare className="h-3.5 w-3.5" /> Kontakto ekipin
-            </div>
+            className="flex items-center justify-center gap-1.5 rounded-lg bg-card border border-primary/20 py-2 text-[12.5px] font-semibold text-primary hover:bg-primary/5 transition-colors">
+            <MessageCircle className="h-3.5 w-3.5" /> Kontakto ekipin
           </NavLink>
         </div>
       </aside>
 
       {/* Main content — top clears the (inset-grown) header, bottom clears the
           (inset-grown) mobile nav. */}
-      <main className="lg:ml-[240px]" style={{ paddingTop: contentTop }}>
+      <main className="lg:ml-[262px]" style={{ paddingTop: contentTop }}>
         <div className="p-4 sm:p-6 lg:p-8" style={{ paddingBottom: 'calc(5rem + env(safe-area-inset-bottom))' }}>
           <Outlet />
         </div>

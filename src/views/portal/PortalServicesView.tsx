@@ -10,7 +10,7 @@ import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
-import { ShoppingBag, Tag, DollarSign, FileText, CheckCircle2, Eye, Edit3, Send, Check, Clock, Star, TrendingUp, Megaphone, Navigation, Sparkles, Globe } from 'lucide-react';
+import { ShoppingBag, Tag, DollarSign, FileText, CheckCircle2, Eye, Edit3, Send, Clock, Star, Check, TrendingUp, Megaphone, Navigation, Sparkles, Globe } from 'lucide-react';
 import { sanitizeHtml } from '../../lib/utils';
 import { useToast } from '../../hooks/use-toast';
 import ServiceQuestionnaireForm from '../../components/ServiceQuestionnaireForm';
@@ -18,15 +18,15 @@ import type { Invoice, InvoiceItem, Service, ServiceInquiry, Notification } from
 
 // Per-category icon + color for the catalog cards. Unknown categories fall back
 // to a neutral bag icon.
-const CATEGORY_VISUALS: Record<string, { Icon: any; box: string; tag: string }> = {
-  'Web Design': { Icon: Navigation, box: 'bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300', tag: 'text-violet-600 border-violet-200 dark:border-violet-800' },
-  'SEO': { Icon: TrendingUp, box: 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300', tag: 'text-blue-600 border-blue-200 dark:border-blue-800' },
-  'Social Media': { Icon: Megaphone, box: 'bg-pink-100 text-pink-600 dark:bg-pink-900/30 dark:text-pink-300', tag: 'text-pink-600 border-pink-200 dark:border-pink-800' },
-  'Marketing': { Icon: Sparkles, box: 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300', tag: 'text-amber-600 border-amber-200 dark:border-amber-800' },
-  'Website': { Icon: Globe, box: 'bg-teal-100 text-teal-600 dark:bg-teal-900/30 dark:text-teal-300', tag: 'text-teal-600 border-teal-200 dark:border-teal-800' },
+const CATEGORY_VISUALS: Record<string, { Icon: any; box: string }> = {
+  'Web Design': { Icon: Navigation, box: 'bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300' },
+  'SEO': { Icon: TrendingUp, box: 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300' },
+  'Social Media': { Icon: Megaphone, box: 'bg-pink-100 text-pink-600 dark:bg-pink-900/30 dark:text-pink-300' },
+  'Marketing': { Icon: Sparkles, box: 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300' },
+  'Website': { Icon: Globe, box: 'bg-teal-100 text-teal-600 dark:bg-teal-900/30 dark:text-teal-300' },
 };
 function serviceVisual(category?: string) {
-  return (category && CATEGORY_VISUALS[category]) || { Icon: ShoppingBag, box: 'bg-slate-100 text-slate-600 dark:bg-slate-800 dark:text-slate-300', tag: 'text-slate-600 border-slate-200 dark:border-slate-700' };
+  return (category && CATEGORY_VISUALS[category]) || { Icon: ShoppingBag, box: 'bg-primary/10 text-primary' };
 }
 
 const PortalServicesView: React.FC = () => {
@@ -64,14 +64,12 @@ const PortalServicesView: React.FC = () => {
   const notificationMutation = useMutation<Notification>('notifications');
   const { data: activeTeamMembers } = useCollection<any>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
-    skipTeamFilter: true, // portal client has no businessId → avoids the loading-forever guard
+    skipTeamFilter: true,
   });
-  // Portal users don't have getGlobalTeamId() — resolve from any team member
   const resolvedTeamId = activeTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
 
   // Handle questionnaire submission with CRM automations
   const handleQuestionnaireSubmit = async (formData: any) => {
-    // If editing an existing inquiry, update it
     if (editingInquiry) {
       await inquiryMutation.update(editingInquiry.id, {
         ...formData,
@@ -80,7 +78,6 @@ const PortalServicesView: React.FC = () => {
         clientUserId: user?.uid || undefined,
       });
 
-      // If it was a draft being submitted for the first time, create Lead + Task + Notifications
       if (editingInquiry.status === 'Draft') {
         await createLeadAndAutomations(formData, editingInquiry.id);
       }
@@ -95,7 +92,6 @@ const PortalServicesView: React.FC = () => {
       return;
     }
 
-    // 1. Save inquiry to Firestore (use addDoc — portal users can't use useMutation.create)
     const inquiryRef = await addDoc(collection(db, 'serviceInquiries'), {
       ...formData,
       status: 'New',
@@ -119,10 +115,8 @@ const PortalServicesView: React.FC = () => {
     });
   };
 
-  // Draft auto-save handler
   const handleDraftSave = useCallback(async (formData: any, step: number) => {
     if (editingInquiry?.status === 'Draft') {
-      // Update existing draft
       await inquiryMutation.update(editingInquiry.id, {
         ...formData,
         lastSavedStep: step,
@@ -133,12 +127,9 @@ const PortalServicesView: React.FC = () => {
   }, [editingInquiry, inquiryMutation]);
 
   const createLeadAndAutomations = async (formData: any, inquiryId: string) => {
-
-    // 1b. Check if a lead already exists for this inquiry (prevent duplicate on re-submit)
     const existingLeads = myInquiries?.find(i => i.id === inquiryId && (i as any).leadId);
     if (existingLeads) return;
 
-    // 2. Determine tags
     const tags: string[] = [];
     if (formData.servicesInterestedIn.includes('Web Design')) tags.push('Web Design Lead');
     if (formData.servicesInterestedIn.includes('Social Media Marketing')) tags.push('SMM Lead');
@@ -146,7 +137,6 @@ const PortalServicesView: React.FC = () => {
     if (['100,000–300,000 L', '300,000+ L'].includes(formData.budgetRange)) tags.push('High Value Lead');
     if (formData.timeline === 'Menjëherë') tags.push('Urgent Lead');
 
-    // 3. Estimate value from budget range
     let estimatedValue = 0;
     if (formData.budgetRange === 'Nën 30,000 L') estimatedValue = 20000;
     else if (formData.budgetRange === '30,000–50,000 L') estimatedValue = 40000;
@@ -154,7 +144,6 @@ const PortalServicesView: React.FC = () => {
     else if (formData.budgetRange === '100,000–300,000 L') estimatedValue = 200000;
     else if (formData.budgetRange === '300,000+ L') estimatedValue = 400000;
 
-    // 4. Create Lead in CRM (use addDoc for portal users)
     const leadData: Record<string, any> = {
       name: formData.contactName,
       email: formData.email,
@@ -176,16 +165,13 @@ const PortalServicesView: React.FC = () => {
     const leadRef = await addDoc(collection(db, 'leads'), leadData);
     const lead = { id: leadRef.id };
 
-    // 5. Update inquiry with leadId
     await inquiryMutation.update(inquiryId, { leadId: lead.id });
 
-    // 6. Create task: "Kontakto lead-in brenda 24 orëve"
     const taskPriority = formData.timeline === 'Menjëherë' || formData.isUrgent === 'Po' ? 'urgent' : 'high';
     const tomorrow = new Date();
     tomorrow.setDate(tomorrow.getDate() + 1);
-    // Scope recipients to this client's tenant (activeTeamMembers is read cross-tenant).
     const salesAdminMembers = activeTeamMembers?.filter((m: any) => (m.role === 'Admin' || m.canAccessCRM) && (!tenantBusinessId || m.businessId === tenantBusinessId)) || [];
-    
+
     await addDoc(collection(db, 'tasks'), {
       title: `Kontakto lead: ${formData.contactName} (${formData.businessName})`,
       description: `Lead i ri nga pyetësori i shërbimeve.\n\nShërbime: ${formData.servicesInterestedIn.join(', ')}\nObjektivi: ${formData.mainGoal}\nBuxheti: ${formData.budgetRange}\nAfati: ${formData.timeline}\nKontakt: ${formData.email} / ${formData.phoneNumber}${formData.preferredContactMethod ? '\nMënyra e preferuar: ' + formData.preferredContactMethod : ''}`,
@@ -201,7 +187,6 @@ const PortalServicesView: React.FC = () => {
       createdByUserId: user?.uid || null,
     });
 
-    // 7. Send notification to Admin + Sales (canAccessCRM) team members
     if (salesAdminMembers.length > 0) {
       await Promise.all(
         salesAdminMembers.map((m: any) => notificationMutation.create({
@@ -213,7 +198,6 @@ const PortalServicesView: React.FC = () => {
         }))
       );
     }
-
   };
 
   const openQuestionnaire = (serviceCategory?: string) => {
@@ -234,14 +218,12 @@ const PortalServicesView: React.FC = () => {
     setViewingInquiry(inquiry);
   };
 
-  // Build a map of purchased services from invoice items
   const purchasedServiceDetails = React.useMemo(() => {
     if (!invoices || !invoiceItems || !services) return [];
 
     const invoiceIds = new Set(invoices.map(i => i.id));
     const myItems = invoiceItems.filter(item => invoiceIds.has(item.invoiceId));
 
-    // Group by service
     const serviceMap = new Map<string, { service: Service; totalSpent: number; invoiceCount: number; lastPurchase: Date | null }>();
 
     myItems.forEach(item => {
@@ -272,7 +254,6 @@ const PortalServicesView: React.FC = () => {
     return Array.from(serviceMap.values()).sort((a, b) => b.totalSpent - a.totalSpent);
   }, [invoices, invoiceItems, services]);
 
-  // All available services (for browsing)
   const allServices = services || [];
 
   if (loading) {
@@ -284,23 +265,24 @@ const PortalServicesView: React.FC = () => {
   }
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+    <div className="space-y-10">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
         <div>
           <h1 className="text-3xl font-bold tracking-tight">Shërbimet</h1>
-          <p className="text-muted-foreground mt-1">
+          <p className="text-muted-foreground mt-2 text-[15px]">
             Shërbimet tuaja të blera dhe katalogu i shërbimeve
           </p>
         </div>
-        <Button onClick={() => openQuestionnaire()} className="gap-2">
+        <Button onClick={() => openQuestionnaire()} className="gap-2 rounded-xl bg-brand-gradient shadow-lg shadow-primary/25 hover:opacity-95 transition">
           <FileText className="w-4 h-4" />
           Kërko Shërbim
         </Button>
       </div>
 
-      {/* Success message if just submitted */}
+      {/* Success message */}
       {showSuccess && (
-        <Card className="border-green-200 bg-green-50 dark:bg-green-950/20 dark:border-green-800/40">
+        <Card className="border-green-200 bg-green-50 rounded-2xl dark:bg-green-950/20 dark:border-green-800/40">
           <CardContent className="py-6 flex items-center gap-4">
             <CheckCircle2 className="w-8 h-8 text-green-600 flex-shrink-0" />
             <div>
@@ -316,7 +298,10 @@ const PortalServicesView: React.FC = () => {
       {/* My Inquiries */}
       {myInquiries && myInquiries.length > 0 && (
         <div>
-          <h2 className="text-lg font-semibold mb-4">Kërkesat e Mia</h2>
+          <div className="flex items-center gap-2.5 mb-4">
+            <h2 className="text-lg font-semibold tracking-tight">Kërkesat e Mia</h2>
+            <span className="text-xs font-semibold text-muted-foreground bg-muted rounded-full px-2.5 py-0.5">{myInquiries.length}</span>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {myInquiries.map(inquiry => {
               const statusConfig: Record<string, { label: string; color: string }> = {
@@ -330,7 +315,7 @@ const PortalServicesView: React.FC = () => {
                 ? inquiry.createdAt.toLocaleDateString('sq-AL')
                 : '';
               return (
-                <Card key={inquiry.id} className="hover:shadow-md transition-shadow">
+                <Card key={inquiry.id} className="rounded-2xl transition-all hover:-translate-y-1 hover:shadow-md">
                   <CardContent className="pt-6">
                     <div className="flex items-start justify-between gap-2">
                       <div className="flex-1 min-w-0">
@@ -353,18 +338,18 @@ const PortalServicesView: React.FC = () => {
                     </div>
                     <div className="flex gap-2 mt-3">
                       {inquiry.status === 'Draft' ? (
-                        <Button size="sm" className="gap-1 flex-1" onClick={() => openEditInquiry(inquiry)}>
+                        <Button size="sm" className="gap-1 flex-1 rounded-xl" onClick={() => openEditInquiry(inquiry)}>
                           <Send className="w-3.5 h-3.5" />
                           Vazhdo & Dërgo
                         </Button>
                       ) : (
                         <>
-                          <Button size="sm" variant="outline" className="gap-1 flex-1" onClick={() => openViewInquiry(inquiry)}>
+                          <Button size="sm" variant="outline" className="gap-1 flex-1 rounded-xl" onClick={() => openViewInquiry(inquiry)}>
                             <Eye className="w-3.5 h-3.5" />
                             Shiko
                           </Button>
                           {inquiry.status === 'New' && (
-                            <Button size="sm" variant="outline" className="gap-1" onClick={() => openEditInquiry(inquiry)}>
+                            <Button size="sm" variant="outline" className="gap-1 rounded-xl" onClick={() => openEditInquiry(inquiry)}>
                               <Edit3 className="w-3.5 h-3.5" />
                               Edito
                             </Button>
@@ -382,22 +367,33 @@ const PortalServicesView: React.FC = () => {
 
       {/* Purchased Services */}
       <div>
-        <h2 className="text-lg font-semibold mb-4">Shërbimet e Blera</h2>
+        <div className="flex items-center gap-2.5 mb-4">
+          <h2 className="text-lg font-semibold tracking-tight">Shërbimet e Blera</h2>
+          <span className="text-xs font-semibold text-muted-foreground bg-muted rounded-full px-2.5 py-0.5">{purchasedServiceDetails.length}</span>
+        </div>
         {purchasedServiceDetails.length === 0 ? (
-          <Card>
-            <CardContent className="py-12 text-center">
-              <ShoppingBag className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-              <p className="text-muted-foreground">Nuk keni blerë asnjë shërbim akoma</p>
+          <Card className="rounded-2xl border-border/80">
+            <CardContent className="py-14 text-center">
+              <div className="mx-auto mb-4 flex h-[74px] w-[74px] items-center justify-center rounded-2xl bg-primary/10">
+                <ShoppingBag className="h-8 w-8 text-primary" />
+              </div>
+              <h3 className="font-semibold text-lg">Nuk keni blerë asnjë shërbim akoma</h3>
+              <p className="mx-auto mt-1.5 max-w-sm text-sm text-muted-foreground leading-relaxed">
+                Shfletoni katalogun më poshtë dhe kërkoni shërbimin që i përshtatet biznesit tuaj — ekipi ynë ju kontakton menjëherë.
+              </p>
             </CardContent>
           </Card>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {purchasedServiceDetails.map(({ service, totalSpent, invoiceCount, lastPurchase }) => (
-              <Card key={service.id} className="hover:shadow-md transition-shadow">
+            {purchasedServiceDetails.map(({ service, totalSpent, invoiceCount, lastPurchase }) => {
+              const vis = serviceVisual(service.category);
+              const Icon = vis.Icon;
+              return (
+              <Card key={service.id} className="rounded-2xl transition-all hover:-translate-y-1 hover:shadow-md">
                 <CardContent className="pt-6">
                   <div className="flex items-start gap-4">
-                    <div className="p-2.5 bg-primary/10 rounded-lg flex-shrink-0">
-                      <ShoppingBag className="h-5 w-5 text-primary" />
+                    <div className={`p-2.5 rounded-xl flex-shrink-0 ${vis.box}`}>
+                      <Icon className="h-5 w-5" />
                     </div>
                     <div className="flex-1 min-w-0">
                       <h3 className="font-semibold truncate">{service.title || service.name}</h3>
@@ -408,12 +404,12 @@ const PortalServicesView: React.FC = () => {
                       )}
                       <div className="flex flex-wrap gap-2 mt-3">
                         {service.category && (
-                          <Badge variant="secondary" className="gap-1">
+                          <Badge variant="secondary" className="gap-1 rounded-full">
                             <Tag className="h-3 w-3" />
                             {service.category}
                           </Badge>
                         )}
-                        <Badge variant="outline" className="gap-1">
+                        <Badge variant="outline" className="gap-1 rounded-full">
                           <DollarSign className="h-3 w-3" />
                           {totalSpent.toLocaleString()} {service.currency || 'ALL'}
                         </Badge>
@@ -428,53 +424,73 @@ const PortalServicesView: React.FC = () => {
                   </div>
                 </CardContent>
               </Card>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>
 
       {/* Service Catalog */}
       <div>
-        <h2 className="text-lg font-semibold mb-4">Katalogu i Shërbimeve</h2>
+        <div className="flex items-center gap-2.5 mb-4">
+          <h2 className="text-lg font-semibold tracking-tight">Katalogu i Shërbimeve</h2>
+          <span className="text-xs font-semibold text-muted-foreground bg-muted rounded-full px-2.5 py-0.5">{allServices.length}</span>
+        </div>
         {allServices.length === 0 ? (
-          <Card>
+          <Card className="rounded-2xl">
             <CardContent className="py-12 text-center">
               <p className="text-muted-foreground">Nuk ka shërbime në katalog</p>
             </CardContent>
           </Card>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 items-stretch">
-            {allServices.map(service => {
+            {allServices.map((service) => {
               const isPurchased = purchasedServiceDetails.some(p => p.service.id === service.id);
+              // "Më e zgjedhura" is driven by the real `featured` flag (set by admin).
+              const isPopular = (service as any).featured === true;
               const vis = serviceVisual(service.category);
               const Icon = vis.Icon;
-              const featured = !!(service as any).featured;
               const features: string[] = Array.isArray((service as any).features) ? (service as any).features : [];
               const duration = (service as any).duration as string | undefined;
               const period = (service as any).billingPeriod as string | undefined;
               return (
-                <Card key={service.id} className={`relative flex flex-col overflow-hidden transition-all hover:shadow-lg hover:-translate-y-0.5 ${featured ? 'ring-2 ring-primary shadow-md' : ''} ${isPurchased ? 'border-primary/40' : ''}`}>
-                  {/* Top accent bar */}
-                  <div className={`h-1 w-full ${featured ? 'bg-gradient-to-r from-violet-500 to-fuchsia-500' : 'bg-gradient-to-r from-violet-400/40 to-fuchsia-400/40'}`} />
-                  <CardContent className="pt-5 flex flex-col flex-1">
-                    {/* Header: icon box + (featured badge XOR category tag) — never overlap */}
-                    <div className="flex items-start justify-between gap-2 mb-3">
-                      <div className={`w-11 h-11 rounded-xl flex items-center justify-center flex-shrink-0 ${vis.box}`}>
-                        <Icon className="w-5 h-5" />
+                <Card
+                  key={service.id}
+                  className={`group relative flex flex-col overflow-hidden rounded-2xl border-border/80 shadow-sm transition-all duration-200 hover:-translate-y-1 hover:shadow-[0_18px_44px_-20px_rgba(80,50,160,0.28)] ${
+                    isPopular ? 'ring-1 ring-primary/60' : ''
+                  }`}
+                >
+                  {/* top accent bar */}
+                  <div className="h-1 bg-brand-gradient" />
+
+                  {isPopular && (
+                    <span className="absolute top-4 right-4 z-10 inline-flex items-center gap-1 rounded-full bg-brand-gradient px-2.5 py-1 text-[11.5px] font-semibold text-white shadow-md shadow-primary/40">
+                      <Star className="w-3 h-3 fill-current" />
+                      Më e zgjedhura
+                    </span>
+                  )}
+
+                  <CardContent className="p-6 flex flex-col flex-1">
+                    <div className="flex items-start justify-between mb-4">
+                      <div className={`flex h-11 w-11 items-center justify-center rounded-xl ${vis.box}`}>
+                        <Icon className="h-5 w-5" />
                       </div>
-                      {featured ? (
-                        <Badge className="gap-1 bg-primary text-primary-foreground"><Star className="w-3 h-3" /> Më e zgjedhura</Badge>
-                      ) : service.category ? (
-                        <Badge variant="outline" className={`gap-1 text-xs ${vis.tag}`}><Tag className="w-3 h-3" />{service.category}</Badge>
-                      ) : null}
+                      {!isPopular && service.category && (
+                        <Badge variant="secondary" className="gap-1 rounded-full">
+                          <Tag className="h-3 w-3" />
+                          {service.category}
+                        </Badge>
+                      )}
                     </div>
 
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <h3 className="font-semibold text-lg">{service.title || service.name}</h3>
-                      {isPurchased && <Badge className="bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300 text-[10px]">Aktiv</Badge>}
+                    <div className="flex items-center gap-2">
+                      <h3 className="font-semibold text-lg tracking-tight">{service.title || service.name}</h3>
+                      {isPurchased && (
+                        <Badge className="bg-primary/10 text-primary text-xs rounded-full">Aktiv</Badge>
+                      )}
                     </div>
                     {service.description && (
-                      <div className="text-sm text-muted-foreground mt-1 line-clamp-3 prose prose-sm dark:prose-invert max-w-none"
+                      <div className="text-sm text-muted-foreground mt-1.5 line-clamp-3 prose prose-sm dark:prose-invert max-w-none"
                         dangerouslySetInnerHTML={{ __html: sanitizeHtml(service.description) }}
                       />
                     )}
@@ -490,27 +506,38 @@ const PortalServicesView: React.FC = () => {
                       </ul>
                     )}
 
-                    {/* Price + duration pinned to the bottom for aligned cards */}
-                    <div className="mt-auto pt-4 border-t flex items-end justify-between gap-2">
-                      <div>
-                        <div className="font-bold text-2xl leading-none">
-                          {service.price.toLocaleString()} <span className="text-sm font-medium text-muted-foreground">{service.currency || 'ALL'}</span>
+                    <div className="mt-auto pt-5">
+                      <div className="h-px bg-border mb-4" />
+                      <div className="flex items-end justify-between mb-4 gap-2">
+                        <div>
+                          <div className="flex items-baseline gap-1">
+                            <span className="text-2xl font-bold font-mono tracking-tight">{service.price.toLocaleString()}</span>
+                            <span className="text-sm font-semibold text-muted-foreground">{service.currency || 'ALL'}</span>
+                          </div>
+                          {period && <div className="text-xs text-muted-foreground mt-0.5">{period}</div>}
                         </div>
-                        {period && <div className="text-xs text-muted-foreground mt-1">{period}</div>}
+                        {duration && (
+                          <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2.5 py-1 text-xs font-medium text-muted-foreground whitespace-nowrap flex-shrink-0">
+                            <Clock className="h-3 w-3" />
+                            {duration}
+                          </span>
+                        )}
                       </div>
-                      {duration && (
-                        <Badge variant="secondary" className="gap-1 text-xs flex-shrink-0"><Clock className="w-3 h-3" />{duration}</Badge>
-                      )}
+
+                      <Button
+                        variant={isPopular ? 'default' : 'outline'}
+                        size="sm"
+                        className={`w-full gap-1.5 rounded-xl ${
+                          isPopular
+                            ? 'bg-brand-gradient shadow-md shadow-primary/25 hover:opacity-95'
+                            : 'hover:bg-brand-gradient hover:text-white hover:border-transparent'
+                        }`}
+                        onClick={() => openQuestionnaire(service.category)}
+                      >
+                        <FileText className="w-3.5 h-3.5" />
+                        Kërko këtë shërbim
+                      </Button>
                     </div>
-                    <Button
-                      variant={featured ? 'default' : 'outline'}
-                      size="sm"
-                      className="w-full mt-4 gap-1"
-                      onClick={() => openQuestionnaire(service.category)}
-                    >
-                      <FileText className="w-3.5 h-3.5" />
-                      Kërko këtë shërbim
-                    </Button>
                   </CardContent>
                 </Card>
               );
@@ -605,7 +632,7 @@ const PortalServicesView: React.FC = () => {
               )}
               <div className="pt-3 border-t">
                 {viewingInquiry.status === 'New' && (
-                  <Button size="sm" className="gap-1" onClick={() => { setViewingInquiry(null); openEditInquiry(viewingInquiry); }}>
+                  <Button size="sm" className="gap-1 rounded-xl" onClick={() => { setViewingInquiry(null); openEditInquiry(viewingInquiry); }}>
                     <Edit3 className="w-3.5 h-3.5" />
                     Edito Kërkesën
                   </Button>
