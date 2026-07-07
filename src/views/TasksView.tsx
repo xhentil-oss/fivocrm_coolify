@@ -4,7 +4,7 @@ import { DndContext, DragOverlay, closestCorners, MouseSensor, TouchSensor, useS
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { getStatusColor, getPriorityColor, getTaskStatusLabel } from '../lib/statusColors';
-import { addFrequency } from '../lib/recurringUtils';
+import { addFrequency, completeTask } from '../lib/recurringUtils';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
@@ -308,6 +308,7 @@ const TasksView: React.FC = () => {
     const collaboratorIdsRaw = formData.get('collaboratorIds') as string;
     const isRecurringRaw = formData.get('isRecurring') as string;
     const recurringFrequency = formData.get('recurringFrequency') as string;
+    const recurringIntervalRaw = formData.get('recurringInterval') as string;
     const recurringDayOfWeekRaw = formData.get('recurringDayOfWeek') as string;
     const recurringDayOfMonthRaw = formData.get('recurringDayOfMonth') as string;
     const recurringDaysOfWeekRaw = formData.get('recurringDaysOfWeek') as string;
@@ -382,6 +383,7 @@ const TasksView: React.FC = () => {
       dueNotificationSent: false,
       isRecurring,
       recurringFrequency: isRecurring ? recurringFrequency : undefined,
+      recurringInterval: isRecurring ? Math.max(1, Math.round(parseInt(recurringIntervalRaw) || 1)) : undefined,
       recurringDayOfWeek: isRecurring && recurringFrequency === 'weekly' ? recurringDayOfWeek : undefined,
       recurringDayOfMonth: isRecurring && recurringFrequency === 'monthly' ? recurringDayOfMonth : undefined,
       recurringDaysOfWeek: isRecurring && recurringFrequency === 'daily' && recurringDaysOfWeekRaw
@@ -634,13 +636,27 @@ const TasksView: React.FC = () => {
     const initialsColor = hashColor(assigneeName);
     const priorityFlagColor = task.priority === 'urgent' || task.priority === 'high'
       ? '#EF4444' : task.priority === 'medium' ? '#F97316' : '#9CA3AF';
+    // Status-coded left accent bar color.
+    const accentColor = task.status === 'Todo' ? '#f59e0b'
+      : task.status === 'Done' ? '#10b981'
+      : task.status === 'In Progress' ? '#3b82f6'
+      : '#7c3aed'; // Review / default
     return (
       <div
-        className={`group relative flex items-start gap-3 px-4 py-3 cursor-pointer hover:bg-muted/50 transition-colors ${
-          isSelected ? 'bg-primary/5 border-l-2 border-l-primary' : ''
-        } ${isOverdue ? 'bg-destructive/5' : ''}`}
+        className={`group relative rounded-[14px] bg-white dark:bg-card border shadow-sm cursor-pointer overflow-hidden transition-all duration-[180ms] ease-[cubic-bezier(.4,0,.2,1)] hover:-translate-y-0.5 hover:shadow-md ${
+          isSelected
+            ? 'border-[rgba(124,58,237,0.5)] ring-1 ring-[rgba(124,58,237,0.3)]'
+            : 'border-black/5 dark:border-white/10 hover:border-[rgba(124,58,237,0.3)]'
+        }`}
         onClick={() => setSelectedTask(task)}
       >
+        {/* Status accent bar — brightens & widens slightly on hover */}
+        <span
+          aria-hidden="true"
+          className="absolute left-0 top-0 bottom-0 w-1 group-hover:w-1.5 transition-all duration-[180ms] ease-[cubic-bezier(.4,0,.2,1)] group-hover:brightness-110"
+          style={{ backgroundColor: accentColor }}
+        />
+        <div className={`flex items-start gap-3 pl-4 pr-3 py-3 ${isOverdue ? 'bg-destructive/5' : ''}`}>
         {/* Bulk-select checkbox — hover on desktop; hidden on touch unless a selection is active */}
         <div
           onClick={(e) => e.stopPropagation()}
@@ -661,10 +677,29 @@ const TasksView: React.FC = () => {
           onClick={async (e) => {
             e.stopPropagation();
             const checked = task.status !== 'Done';
-            const newStatus = checked ? 'Done' : 'Todo';
-            await taskMutation.update(task.id, { status: newStatus });
-            toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${checked ? 'Përfunduar' : 'Për të bërë'}` });
-            if (checked) logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
+            if (!checked) {
+              // Un-completing — just flip back to Todo.
+              await taskMutation.update(task.id, { status: 'Todo' });
+              toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Për të bërë` });
+              return;
+            }
+            const outcome = await completeTask(task, {
+              createTask: (data) => taskMutation.create(data as any),
+              updateTask: (id, data) => taskMutation.update(id, data),
+              allTasks: tasks,
+            });
+            if (outcome.kind === 'blocked') {
+              toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
+              return;
+            }
+            if (outcome.kind === 'recurring-created') {
+              toast({ title: '✅ Detyrë e kryer + cikli i ri!', description: `"${task.title}" u rigjenerua automatikisht.` });
+            } else if (outcome.kind === 'recurring-ended') {
+              toast({ title: '✅ Detyrë e kryer', description: 'Cikli i fundit i përsëritjes — nuk u krijua tjetër.' });
+            } else {
+              toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
+            }
+            logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
           }}
           className="group/check mt-0.5 -m-1 p-1 flex items-center justify-center shrink-0 active:scale-90 transition-transform"
         >
@@ -767,7 +802,7 @@ const TasksView: React.FC = () => {
           title={assigneeName}
         >
           <div
-            className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0"
+            className="w-7 h-7 rounded-full flex items-center justify-center text-[11px] font-bold text-white flex-shrink-0 ring-2 ring-white dark:ring-white/80 shadow-sm transition-transform duration-[180ms] ease-[cubic-bezier(.4,0,.2,1)] group-hover:scale-[1.06]"
             style={{ backgroundColor: initialsColor }}
           >
             {initials}
@@ -810,11 +845,24 @@ const TasksView: React.FC = () => {
             className="px-1.5 py-1 rounded text-xs hover:bg-muted text-emerald-600"
             onClick={async (e) => {
               e.stopPropagation();
-              if (task.status !== 'Done') {
-                await taskMutation.update(task.id, { status: 'Done' });
-                toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
-                logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
+              if (task.status === 'Done') return;
+              const outcome = await completeTask(task, {
+                createTask: (data) => taskMutation.create(data as any),
+                updateTask: (id, data) => taskMutation.update(id, data),
+                allTasks: tasks,
+              });
+              if (outcome.kind === 'blocked') {
+                toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
+                return;
               }
+              if (outcome.kind === 'recurring-created') {
+                toast({ title: '✅ Detyrë e kryer + cikli i ri!', description: `"${task.title}" u rigjenerua automatikisht.` });
+              } else if (outcome.kind === 'recurring-ended') {
+                toast({ title: '✅ Detyrë e kryer', description: 'Cikli i fundit i përsëritjes — nuk u krijua tjetër.' });
+              } else {
+                toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
+              }
+              logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
             }}
           >
             <Check className="w-3.5 h-3.5" />
@@ -851,6 +899,7 @@ const TasksView: React.FC = () => {
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
+        </div>
         </div>
       </div>
     );
@@ -1064,7 +1113,7 @@ const TasksView: React.FC = () => {
           {viewMode === 'list' && groupBy === 'none' && (
             <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
               <SortableContext items={visibleTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>
-                <div className="divide-y">
+                <div className="space-y-2 p-3">
                   {visibleTasks.map((task) => (
                     <SortableListItem key={task.id} id={task.id}>
                       {renderTaskRow(task)}
@@ -1101,7 +1150,7 @@ const TasksView: React.FC = () => {
                     <span className="text-xs font-semibold text-foreground">{group.label}</span>
                     <span className="text-xs text-muted-foreground">{group.tasks.length}</span>
                   </div>
-                  <div className="divide-y">
+                  <div className="space-y-2 p-3">
                     {group.tasks.map(task => (
                       <div key={task.id}>{renderTaskRow(task)}</div>
                     ))}
@@ -1376,6 +1425,10 @@ const TaskForm: React.FC<{
   const [recurringDayOfMonth, setRecurringDayOfMonth] = useState<number>(
     (initialData as any)?.recurringDayOfMonth ?? 1
   );
+  // How many periods between occurrences (every N days/weeks/months/years).
+  const [recurringInterval, setRecurringInterval] = useState<number>(
+    (initialData as any)?.recurringInterval ?? 1
+  );
   // For daily recurrence: which days of the week (default Mon-Fri)
   const [recurringDaysOfWeek, setRecurringDaysOfWeek] = useState<number[]>(
     (initialData as any)?.recurringDaysOfWeek ?? [1, 2, 3, 4, 5]
@@ -1601,6 +1654,28 @@ const TaskForm: React.FC<{
               </Select>
             </div>
 
+            <div>
+              <Label htmlFor="recurringInterval">Përsërit çdo</Label>
+              <div className="flex items-center gap-2 mt-1">
+                <Input
+                  id="recurringInterval"
+                  type="number"
+                  min={1}
+                  step={1}
+                  value={recurringInterval}
+                  onChange={(e) => setRecurringInterval(Math.max(1, Math.round(Number(e.target.value) || 1)))}
+                  className="w-20"
+                />
+                <span className="text-sm text-muted-foreground">
+                  {recurringFrequency === 'daily' ? (recurringInterval > 1 ? 'ditë' : 'ditë')
+                    : recurringFrequency === 'weekly' ? (recurringInterval > 1 ? 'javë' : 'javë')
+                    : recurringFrequency === 'monthly' ? (recurringInterval > 1 ? 'muaj' : 'muaj')
+                    : (recurringInterval > 1 ? 'vite' : 'vit')}
+                </span>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-1">P.sh. “2 javë” = çdo dy javë.</p>
+            </div>
+
             {recurringFrequency === 'daily' && (
               <div>
                 <Label>Ditët e javës</Label>
@@ -1695,6 +1770,7 @@ const TaskForm: React.FC<{
 
             <input type="hidden" name="isRecurring" value={isRecurring.toString()} />
             <input type="hidden" name="recurringFrequency" value={recurringFrequency} />
+            <input type="hidden" name="recurringInterval" value={String(recurringInterval)} />
             <input type="hidden" name="recurringDayOfWeek" value={String(recurringDayOfWeek)} />
             <input type="hidden" name="recurringDayOfMonth" value={String(recurringDayOfMonth)} />
             {recurringFrequency === 'daily' && (
