@@ -305,6 +305,17 @@ export function useClientPortal() {
     || preferredCustomer?.id
     || null;
 
+  // The tenant this client belongs to. Prefer the client's own customer record
+  // (most accurate), then any matching customer, then the team-derived fallback.
+  // Portal-created docs (e.g. serviceInquiries) MUST carry this or they fall
+  // outside the admin's business-scoped queries and never appear.
+  const resolvedBusinessId =
+    (preferredCustomer as any)?.businessId
+    || (access as any)?.businessId
+    || (matchingCustomers as any[] | undefined)?.find(c => (c as any).businessId)?.businessId
+    || resolveBusinessId()
+    || null;
+
   // Mirror the portal user's customerId onto users/{uid} so Firestore rules can
   // grant them read access to their own customer's data (isPortalClientFor) once
   // reads are hardened. users/{uid} is uid-keyed, so no clientPortalAccess re-key.
@@ -334,6 +345,7 @@ export function useClientPortal() {
       isClient: true,
       portalAccess: null,
       customerId: previewCustomerId,
+      businessId: null,
       isLoading: false,
     };
   }
@@ -342,6 +354,7 @@ export function useClientPortal() {
     isClient: !!access || autoCreating || autoCreated,
     portalAccess: access,
     customerId: resolvedCustomerId,
+    businessId: resolvedBusinessId,
     isLoading: authLoading || byUserIdLoading || byEmailLoading || teamMembersLoading || autoCreating || pendingAutoCreate,
   };
 }

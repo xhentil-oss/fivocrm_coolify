@@ -35,7 +35,7 @@ function serviceVisual(category?: string) {
  */
 const PortalServicesView: React.FC = () => {
   const { user } = useAuth();
-  const { customerId } = useClientPortal();
+  const { customerId, businessId } = useClientPortal();
   const { toast } = useToast();
   const navigate = useNavigate();
 
@@ -73,6 +73,9 @@ const PortalServicesView: React.FC = () => {
         contactName: user?.displayName || '',
         email: user?.email || '',
         ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+        // Stamp the tenant so the inquiry falls inside the admin's business-scoped
+        // queries (otherwise it is invisible in the staff Service Inquiries list).
+        ...(businessId ? { businessId } : {}),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
         createdByUserId: user?.uid || null,
@@ -81,7 +84,7 @@ const PortalServicesView: React.FC = () => {
     } catch {
       toast({ title: 'Gabim', description: 'Nuk u krijua dot kërkesa. Provoni përsëri.', variant: 'destructive' });
     }
-  }, [customerId, user, resolvedTeamId, navigate, toast]);
+  }, [customerId, businessId, user, resolvedTeamId, navigate, toast]);
 
   const purchasedServiceDetails = useMemo(() => {
     if (!invoices || !invoiceItems || !services) return [];
