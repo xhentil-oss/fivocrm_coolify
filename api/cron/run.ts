@@ -404,8 +404,33 @@ async function runRecurringTasks() {
   let created = 0;
   const ops: Promise<any>[] = [];
 
+  const bizCache = new Map<string, string | null>();
   for (const doc of tasksSnap.docs) {
     const task = doc.data();
+    // Self-heal: a recurring task must carry businessId or it disappears from the
+    // business-scoped list & calendar. If it's missing, derive it from the project
+    // (or team) and patch the source so it (and every future cycle) stays visible.
+    if (!task.businessId) {
+      let bid: string | null = null;
+      if (task.projectId) {
+        if (!bizCache.has('p:' + task.projectId)) {
+          const p = await db.collection('projects').doc(task.projectId).get();
+          bizCache.set('p:' + task.projectId, p.exists ? (p.data()!.businessId ?? null) : null);
+        }
+        bid = bizCache.get('p:' + task.projectId) ?? null;
+      }
+      if (!bid && task.teamId) {
+        if (!bizCache.has('t:' + task.teamId)) {
+          const tm = await db.collection('teamMembers').where('teamId', '==', task.teamId).limit(1).get();
+          bizCache.set('t:' + task.teamId, tm.empty ? null : (tm.docs[0].data().businessId ?? null));
+        }
+        bid = bizCache.get('t:' + task.teamId) ?? null;
+      }
+      if (bid) {
+        task.businessId = bid;
+        ops.push(doc.ref.update({ businessId: bid, updatedAt: admin.firestore.Timestamp.now() }));
+      }
+    }
     if (!task.nextRecurringDate || !task.recurringFrequency) continue;
     // Skip if frontend already created the next cycle ("after completion" model)
     if (task.nextCycleCreated) continue;
@@ -444,7 +469,7 @@ async function runRecurringTasks() {
 
     // Create new task ref first so we can reference its ID in the notification
     const newTaskRef = db.collection('tasks').doc();
-    ops.push(newTaskRef.set({ title: task.title, description: task.description ?? null, status: 'Todo', priority: task.priority ?? null, projectId: task.projectId ?? null, assignedToUserId: task.assignedToUserId ?? null, startDate: admin.firestore.Timestamp.fromDate(newStart), endDate: admin.firestore.Timestamp.fromDate(newEnd), isRecurring: true, recurringFrequency: task.recurringFrequency, recurringInterval: task.recurringInterval ?? 1, recurringDayOfWeek: task.recurringDayOfWeek ?? null, recurringDayOfMonth: task.recurringDayOfMonth ?? null, recurringDaysOfWeek: task.recurringDaysOfWeek ?? null, recurringEndDate: recEnd ? admin.firestore.Timestamp.fromDate(recEnd) : null, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), nextCycleCreated: false, dueNotificationSent: false, parentTaskId: task.parentTaskId ?? null, createdByUserId: task.createdByUserId ?? null, teamId: task.teamId ?? null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
+    ops.push(newTaskRef.set({ title: task.title, description: task.description ?? null, status: 'Todo', priority: task.priority ?? null, projectId: task.projectId ?? null, assignedToUserId: task.assignedToUserId ?? null, startDate: admin.firestore.Timestamp.fromDate(newStart), endDate: admin.firestore.Timestamp.fromDate(newEnd), isRecurring: true, recurringFrequency: task.recurringFrequency, recurringInterval: task.recurringInterval ?? 1, recurringDayOfWeek: task.recurringDayOfWeek ?? null, recurringDayOfMonth: task.recurringDayOfMonth ?? null, recurringDaysOfWeek: task.recurringDaysOfWeek ?? null, recurringEndDate: recEnd ? admin.firestore.Timestamp.fromDate(recEnd) : null, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), nextCycleCreated: false, dueNotificationSent: false, parentTaskId: task.parentTaskId ?? null, createdByUserId: task.createdByUserId ?? null, teamId: task.teamId ?? null, businessId: task.businessId ?? null, customerId: task.customerId ?? null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
     ops.push(doc.ref.update({ nextCycleCreated: true, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), updatedAt: admin.firestore.Timestamp.now() }));
     const notifRecipient = task.assignedToUserId || task.createdByUserId;
     if (notifRecipient) {
