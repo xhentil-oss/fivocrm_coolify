@@ -1845,6 +1845,11 @@ const CalendarView: React.FC<{
   const sod = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
   const todayStr = new Date().toDateString();
 
+  // Tasks with no date at all can't be placed on a day — surface them in a bar so
+  // they're never hidden. Clicking "+N" on a busy day opens the full day list.
+  const undatedTasks = tasks.filter(t => !t.endDate && !t.startDate);
+  const [dayDetail, setDayDetail] = useState<{ label: string; items: Task[] } | null>(null);
+
   // Projected recurring occurrences for the displayed month. Recurring tasks
   // materialise one cycle at a time (only when the current one is completed), so
   // future cycles have no doc yet and wouldn't otherwise appear on the calendar.
@@ -1891,8 +1896,11 @@ const CalendarView: React.FC<{
     // every single day (it then collapses to the due date).
     const SPAN_CAP_DAYS = 14;
     const dayTasks = tasks.filter(task => {
-      if (!task.endDate) return false;
-      const end = sod(new Date(task.endDate));
+      // Anchor on the due date; fall back to the start date so a task with only a
+      // start date still appears. Tasks with NO date at all go to the "Pa afat" bar.
+      const anchor = task.endDate || task.startDate;
+      if (!anchor) return false;
+      const end = sod(new Date(anchor));
       let start = task.startDate ? sod(new Date(task.startDate)) : end;
       if ((task as any).isRecurring) start = end;
       else if (Math.abs(end - start) / 86400000 > SPAN_CAP_DAYS) start = end;
@@ -1931,9 +1939,19 @@ const CalendarView: React.FC<{
             </div>
           ))}
           {overflow > 0 && (
-            <div className="text-[10px] sm:text-xs text-muted-foreground">
-              +{overflow}
-            </div>
+            <button
+              type="button"
+              className="text-[10px] sm:text-xs text-primary font-medium hover:underline"
+              onClick={(e) => {
+                e.stopPropagation();
+                setDayDetail({
+                  label: date.toLocaleDateString('sq-AL', { weekday: 'long', day: 'numeric', month: 'long' }),
+                  items: [...dayTasks, ...dayProjections],
+                });
+              }}
+            >
+              +{overflow} më shumë
+            </button>
           )}
         </div>
       </div>
@@ -1969,6 +1987,49 @@ const CalendarView: React.FC<{
         ))}
         {days}
       </div>
+
+      {/* Tasks with no date at all — never hidden from the calendar. */}
+      {undatedTasks.length > 0 && (
+        <div className="rounded-xl border border-dashed border-border bg-muted/20 p-3">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertCircle className="w-3.5 h-3.5 text-muted-foreground" />
+            <span className="text-xs font-semibold text-muted-foreground">Pa afat ({undatedTasks.length})</span>
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {undatedTasks.map(task => (
+              <button
+                key={task.id}
+                type="button"
+                onClick={() => onTaskClick(task)}
+                className="text-[11px] px-2 py-1 rounded-lg bg-background border hover:bg-accent-soft hover:border-primary/30 transition-colors truncate max-w-[220px]"
+              >
+                {task.title}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Day detail — opened from "+N më shumë"; lists every task for that day. */}
+      <Dialog open={!!dayDetail} onOpenChange={(o) => { if (!o) setDayDetail(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="capitalize">{dayDetail?.label}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-1.5 max-h-[60vh] overflow-y-auto">
+            {(dayDetail?.items || []).map((task, i) => (
+              <button
+                key={`${task.id}-${i}`}
+                type="button"
+                onClick={() => { onTaskClick(task); setDayDetail(null); }}
+                className="w-full text-left text-sm px-3 py-2 rounded-lg bg-muted/50 hover:bg-accent-soft hover:text-primary transition-colors truncate"
+              >
+                {(task as any).isRecurring ? '🔄 ' : ''}{task.title}
+              </button>
+            ))}
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
