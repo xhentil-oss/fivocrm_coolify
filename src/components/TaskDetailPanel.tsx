@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { TaskLabels, LabelEditor } from './TaskLabels';
 import { useCollection, useMutation } from '../hooks/useFirestore';
-import { completeTask } from '../lib/recurringUtils';
+import { completeTask, addFrequency } from '../lib/recurringUtils';
 import { entryDurationMinutes, totalTrackedMinutes } from '../lib/timeTracking';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -146,6 +146,25 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       await onUpdate(task.id, { recurringDaysOfWeek });
     }
     setEditingRecurring(false);
+  };
+  // Turn an existing (non-recurring) task into a recurring one. Anchors on the
+  // task's due date (or today) and seeds the day-of-week/month + next occurrence.
+  const enableRecurring = async (freq: 'daily' | 'weekly' | 'monthly' | 'yearly') => {
+    const base = task.endDate ? new Date(task.endDate) : new Date();
+    const dow = base.getDay();
+    const dom = base.getDate();
+    const defaultDays = [1, 2, 3, 4, 5];
+    const next = addFrequency(base, freq, dow, dom, 1, defaultDays);
+    await onUpdate(task.id, {
+      isRecurring: true,
+      recurringFrequency: freq,
+      recurringInterval: 1,
+      ...(freq === 'weekly' ? { recurringDayOfWeek: dow } : {}),
+      ...(freq === 'monthly' ? { recurringDayOfMonth: dom } : {}),
+      ...(freq === 'daily' ? { recurringDaysOfWeek: defaultDays } : {}),
+      ...(task.endDate ? {} : { endDate: base }), // recurrence needs a date anchor
+      nextRecurringDate: next,
+    } as any);
   };
   const fileInputRef = useRef<HTMLInputElement>(null);
   const titleInputRef = useRef<HTMLInputElement>(null);
@@ -1196,10 +1215,24 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             </div>
 
             {/* Recurring Info */}
-            {task.isRecurring && (
+            {(task.isRecurring || permissions.canEdit) && (
               <div className="flex items-start gap-3 sm:gap-4">
                 <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0 pt-0.5">Përsërit.</span>
                 <div className="flex-1">
+                  {!task.isRecurring ? (
+                    <Select onValueChange={(v) => enableRecurring(v as any)}>
+                      <SelectTrigger className="h-8 w-full max-w-[220px] text-xs">
+                        <SelectValue placeholder="Bëje të përsëritur…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="daily">Çdo ditë</SelectItem>
+                        <SelectItem value="weekly">Çdo javë</SelectItem>
+                        <SelectItem value="monthly">Çdo muaj</SelectItem>
+                        <SelectItem value="yearly">Çdo vit</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                  <>
                   {!editingRecurring ? (
                     <div className="flex items-center gap-2 flex-wrap">
                       <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-primary/10 text-primary px-2.5 py-1 rounded-full">
@@ -1284,6 +1317,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                       ? <button type="button" onClick={() => onUpdate(task.id, { recurringEndDate: null as any } as any)} className="text-[11px] text-muted-foreground hover:text-foreground underline">Hiq</button>
                       : <span className="text-[11px] text-muted-foreground/70">pa fund</span>}
                   </div>
+                  </>
+                  )}
                 </div>
               </div>
             )}
