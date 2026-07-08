@@ -376,6 +376,12 @@ const ChatView: React.FC = () => {
   const channelHasNoSelection = chatMode === 'channel' && !isClientChannel && !isGroupChannel;
   const channelMsgQuery = useMemo(() => ({
     where: [{ field: 'channelId', operator: '==', value: activeChannel }],
+    // Order by time so the limit window is the NEWEST messages. Without this the
+    // group/client path (skipTeamFilter) applied `limit` server-side with no
+    // orderBy → Firestore ordered by document-id (random), so a freshly-sent
+    // message often fell outside the window and only appeared after a refresh.
+    // Index messages(channelId, createdAt DESC) already exists.
+    orderBy: { field: 'createdAt', direction: 'desc' as const },
     limit: channelLimit,
     ...(usesServerLimit ? { skipTeamFilter: true } : {}),
   }), [activeChannel, usesServerLimit, channelLimit]);
