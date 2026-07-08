@@ -9,7 +9,7 @@ import { useCollection, useMutation, useDocument } from '../../hooks/useFirestor
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
-import { ArrowLeft, CheckCircle2, ClipboardList, Info, TrendingUp, Loader2 } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, ClipboardList, Info, TrendingUp, Loader2, Edit3 } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
 import ServiceQuestionnaireForm from '../../components/ServiceQuestionnaireForm';
 import type { ServiceInquiry, Notification } from '../../types';
@@ -30,6 +30,7 @@ const PortalInquiryView: React.FC = () => {
   const { toast } = useToast();
 
   const { data: inquiry, loading } = useDocument<ServiceInquiry>('serviceInquiries', inquiryId || '');
+  const [editing, setEditing] = React.useState(false);
 
   const inquiryMutation = useMutation<ServiceInquiry>('serviceInquiries');
   const notificationMutation = useMutation<Notification>('notifications');
@@ -121,7 +122,11 @@ const PortalInquiryView: React.FC = () => {
       clientUserId: user?.uid || undefined,
     });
     if (wasDraft) await createLeadAndAutomations(formData, inquiryId);
-    toast({ title: 'Anketa u dërgua me sukses!', description: 'Ekipi ynë do t\'ju kontaktojë brenda 24 orëve.' });
+    setEditing(false);
+    toast({
+      title: wasDraft ? 'Anketa u dërgua me sukses!' : 'Anketa u përditësua!',
+      description: 'Ekipi ynë do t\'ju kontaktojë brenda 24 orëve.',
+    });
     // Kërkesa (realtime) bëhet 'New' → komponenti kalon automatikisht te përmbledhja.
   };
 
@@ -152,8 +157,10 @@ const PortalInquiryView: React.FC = () => {
   const serviceTitle = (inquiry as any).serviceTitle || (inquiry.servicesInterestedIn?.[0]) || 'Kërkesë shërbimi';
   const isDraft = inquiry.status === 'Draft';
 
-  // ── Read-only summary (submitted) ──
-  if (!isDraft) {
+  const isConverted = inquiry.status === 'Converted';
+
+  // ── Read-only summary (submitted, not editing) ──
+  if (!isDraft && !editing) {
     const statusLabel = inquiry.status === 'Reviewed' ? 'Në shqyrtim' : inquiry.status === 'Converted' ? 'Konvertuar' : 'Në shqyrtim';
     return (
       <div className="space-y-6 max-w-3xl">
@@ -207,22 +214,36 @@ const PortalInquiryView: React.FC = () => {
           </CardContent>
         </Card>
 
-        <div className="flex items-center justify-between">
-          <p className="inline-flex items-center gap-1.5 text-xs text-muted-foreground"><Info className="h-3.5 w-3.5" />Mund t'i editoni të dhënat derisa ekipi t'i shqyrtojë</p>
-          <Button variant="outline" className="gap-2 rounded-xl" onClick={() => navigate('/portal/projects')}>
-            <ArrowLeft className="h-4 w-4" /> Te Projektet
-          </Button>
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <p className="inline-flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Info className="h-3.5 w-3.5" />
+            {isConverted ? 'Kjo kërkesë është konvertuar — kontaktoni ekipin për ndryshime.' : 'Mund t\'i editoni të dhënat derisa ekipi t\'i shqyrtojë.'}
+          </p>
+          <div className="flex items-center gap-2">
+            {!isConverted && (
+              <Button className="gap-2 rounded-xl bg-brand-gradient shadow-md shadow-primary/25 hover:opacity-95" onClick={() => setEditing(true)}>
+                <Edit3 className="h-4 w-4" /> Edito anketën
+              </Button>
+            )}
+            <Button variant="outline" className="gap-2 rounded-xl" onClick={() => navigate('/portal/projects')}>
+              <ArrowLeft className="h-4 w-4" /> Te Projektet
+            </Button>
+          </div>
         </div>
       </div>
     );
   }
 
-  // ── Draft: fill the questionnaire ──
+  // ── Draft (fill) OR editing an already-submitted inquiry ──
   return (
     <div className="space-y-6 max-w-3xl">
-      <Link to="/portal/projects" className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground">
-        <ArrowLeft className="h-4 w-4" /> Projektet
-      </Link>
+      <button
+        type="button"
+        onClick={() => (editing ? setEditing(false) : navigate('/portal/projects'))}
+        className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground"
+      >
+        <ArrowLeft className="h-4 w-4" /> {editing ? 'Anulo editimin' : 'Projektet'}
+      </button>
 
       <div className="flex items-center gap-4">
         <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-brand-gradient shadow-lg shadow-primary/30">
@@ -231,9 +252,11 @@ const PortalInquiryView: React.FC = () => {
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-bold tracking-tight">{serviceTitle}</h1>
-            <Badge className="bg-primary/10 text-primary rounded-full">Kërkesë e re</Badge>
+            <Badge className="bg-primary/10 text-primary rounded-full">{editing ? 'Duke edituar' : 'Kërkesë e re'}</Badge>
           </div>
-          <p className="text-sm text-muted-foreground">Plotësoni të dhënat e projektit për të vazhduar me propozimin</p>
+          <p className="text-sm text-muted-foreground">
+            {editing ? 'Ndryshoni të dhënat dhe ruani përditësimin.' : 'Plotësoni të dhënat e projektit për të vazhduar me propozimin'}
+          </p>
         </div>
       </div>
 
@@ -245,7 +268,8 @@ const PortalInquiryView: React.FC = () => {
             prefillEmail={user?.email || ''}
             prefillName={user?.displayName || ''}
             initialDraft={{ ...inquiry, id: inquiry.id }}
-            onDraftSave={handleDraftSave}
+            onDraftSave={editing ? undefined : handleDraftSave}
+            isEditing={editing}
           />
         </CardContent>
       </Card>
