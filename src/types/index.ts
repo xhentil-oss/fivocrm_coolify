@@ -685,6 +685,7 @@ export interface TaskComment {
   teamId?: string;
   senderType?: 'client' | 'team';
   createdByUserId?: string;
+  edited?: boolean;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -32,6 +32,8 @@ interface TaskDetailPanelProps {
   isExpanded?: boolean;
   comments: TaskComment[];
   onAddComment: (taskId: string, content: string) => void;
+  onEditComment?: (commentId: string, content: string) => void | Promise<any>;
+  onDeleteComment?: (commentId: string) => void | Promise<any>;
   onUpdate: (id: string, data: any) => Promise<any>;
   onDelete: (id: string) => Promise<any>;
   projects?: { id: string; name: string }[];
@@ -48,6 +50,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   isExpanded,
   comments,
   onAddComment,
+  onEditComment,
+  onDeleteComment,
   onUpdate,
   onDelete,
   projects = [],
@@ -81,6 +85,28 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   };
   const [commentText, setCommentText] = useState('');
   const [mentionMap, setMentionMap] = useState<Record<string, string>>({}); // displayName → uid
+  const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
+  const [editingCommentText, setEditingCommentText] = useState('');
+  const [confirmDeleteCommentId, setConfirmDeleteCommentId] = useState<string | null>(null);
+
+  const startEditComment = (c: TaskComment) => {
+    setConfirmDeleteCommentId(null);
+    setEditingCommentId(c.id);
+    // Show the human-readable text (strip the @[Name](uid) storage format).
+    setEditingCommentText((c.content || '').replace(/@\[([^\]]+)\]\([^)]+\)/g, '@$1'));
+  };
+  const saveEditComment = async () => {
+    const id = editingCommentId;
+    const text = editingCommentText.trim();
+    if (!id || !text) return;
+    await onEditComment?.(id, text);
+    setEditingCommentId(null);
+    setEditingCommentText('');
+  };
+  const deleteComment = async (id: string) => {
+    await onDeleteComment?.(id);
+    setConfirmDeleteCommentId(null);
+  };
 
   // Auto-grow the comment composer so the whole comment is visible (grows on
   // type/mention-insert, shrinks back after submit clears the text).
@@ -1942,15 +1968,47 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                               )}
                             </span>
                           )}
-                          <div className={`px-3 py-2 rounded-2xl text-sm leading-relaxed
-                            ${isCurrentUser
-                              ? 'bg-primary text-primary-foreground rounded-tr-sm'
-                              : 'bg-muted text-foreground rounded-tl-sm'}`}>
-                            {renderCommentWithMentions(comment.content, isCurrentUser)}
-                          </div>
-                          <span className={`text-[10px] text-muted-foreground px-1 ${isCurrentUser ? 'text-right' : 'text-left'}`}>
-                            {timeLabel}
-                          </span>
+                          {editingCommentId === comment.id ? (
+                            <div className="w-full flex flex-col gap-1.5">
+                              <Textarea
+                                value={editingCommentText}
+                                onChange={e => setEditingCommentText(e.target.value)}
+                                rows={2}
+                                autoFocus
+                                className="text-sm min-h-[60px] resize-none"
+                              />
+                              <div className={`flex gap-2 ${isCurrentUser ? 'justify-end' : 'justify-start'}`}>
+                                <Button size="sm" className="h-7 px-3" onClick={saveEditComment} disabled={!editingCommentText.trim()}>Ruaj</Button>
+                                <Button size="sm" variant="ghost" className="h-7 px-3" onClick={() => { setEditingCommentId(null); setEditingCommentText(''); }}>Anulo</Button>
+                              </div>
+                            </div>
+                          ) : (
+                            <>
+                              <div className={`px-3 py-2 rounded-2xl text-sm leading-relaxed
+                                ${isCurrentUser
+                                  ? 'bg-primary text-primary-foreground rounded-tr-sm'
+                                  : 'bg-muted text-foreground rounded-tl-sm'}`}>
+                                {renderCommentWithMentions(comment.content, isCurrentUser)}
+                                {(comment as any).edited && <span className="opacity-60 text-[10px] ml-1">(edituar)</span>}
+                              </div>
+                              <div className={`flex items-center gap-2 px-1 ${isCurrentUser ? 'justify-end' : 'justify-start'}`}>
+                                <span className="text-[10px] text-muted-foreground">{timeLabel}</span>
+                                {isCurrentUser && onEditComment && (
+                                  <button type="button" onClick={() => startEditComment(comment)} className="text-[10px] text-muted-foreground hover:text-foreground transition-colors">Edito</button>
+                                )}
+                                {isCurrentUser && onDeleteComment && (
+                                  confirmDeleteCommentId === comment.id ? (
+                                    <span className="inline-flex items-center gap-1.5">
+                                      <button type="button" onClick={() => deleteComment(comment.id)} className="text-[10px] font-semibold text-red-500 hover:text-red-600">Fshi vërtet</button>
+                                      <button type="button" onClick={() => setConfirmDeleteCommentId(null)} className="text-[10px] text-muted-foreground hover:text-foreground">Jo</button>
+                                    </span>
+                                  ) : (
+                                    <button type="button" onClick={() => setConfirmDeleteCommentId(comment.id)} className="text-[10px] text-muted-foreground hover:text-red-500 transition-colors">Fshi</button>
+                                  )
+                                )}
+                              </div>
+                            </>
+                          )}
                         </div>
                       </div>
                     );

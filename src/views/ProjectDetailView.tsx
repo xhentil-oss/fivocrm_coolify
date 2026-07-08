@@ -288,6 +288,14 @@ const ProjectDetailView: React.FC = () => {
     await commentMutation.create({ taskId, content });
   };
 
+  const handleEditComment = async (commentId: string, content: string) => {
+    await commentMutation.update(commentId, { content, edited: true });
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    await commentMutation.remove(commentId);
+  };
+
   const formatDateCompact = (date: Date) => {
     if (!date || isNaN(new Date(date).getTime())) {
       return { text: 'Pa afat', className: 'text-muted-foreground' };
@@ -870,6 +878,8 @@ const ProjectDetailView: React.FC = () => {
               onClose={() => setSelectedTask(null)}
               comments={comments?.filter(c => c.taskId === selectedTask.id) || []}
               onAddComment={handleAddComment}
+              onEditComment={handleEditComment}
+              onDeleteComment={handleDeleteComment}
               onUpdate={handleTaskUpdate}
               onDelete={taskMutation.remove}
               projects={project ? [project] : undefined}

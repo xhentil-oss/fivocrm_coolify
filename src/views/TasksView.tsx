@@ -451,6 +451,14 @@ const TasksView: React.FC = () => {
     });
   };
 
+  const handleEditComment = async (commentId: string, content: string) => {
+    await commentMutation.update(commentId, { content, edited: true });
+  };
+
+  const handleDeleteComment = async (commentId: string) => {
+    await commentMutation.remove(commentId);
+  };
+
   // --- @dnd-kit drag-and-drop for kanban ---
   // Mouse: drag after a small move. Touch: drag only after a 200ms hold, so normal
   // finger-scrolling through the list/board isn't hijacked into a drag.
@@ -1355,6 +1363,8 @@ const TasksView: React.FC = () => {
             isExpanded={panelExpanded}
             comments={comments?.filter(c => c.taskId === selectedTask.id) || []}
             onAddComment={handleAddComment}
+            onEditComment={handleEditComment}
+            onDeleteComment={handleDeleteComment}
             onUpdate={taskMutation.update}
             onDelete={taskMutation.remove}
             projects={projects}
