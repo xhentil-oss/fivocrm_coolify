@@ -80,6 +80,11 @@ export function buildNextRecurringTask(task: Task): Omit<Task, 'id' | 'createdAt
     status: 'Todo',
     priority: task.priority ?? undefined,
     teamId: task.teamId ?? undefined,
+    // Carry the tenant/customer scope forward — without businessId the generated
+    // cycle falls outside the business-scoped task query and vanishes from the
+    // list & calendar.
+    businessId: (task as any).businessId ?? undefined,
+    customerId: (task as any).customerId ?? undefined,
     projectId: task.projectId ?? undefined,
     assignedToUserId: task.assignedToUserId ?? undefined,
     startDate: newStart,
