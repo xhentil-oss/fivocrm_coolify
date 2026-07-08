@@ -285,9 +285,14 @@ const ChatView: React.FC = () => {
   // accounting for the banner the chat extends 36px over the mobile bottom nav
   // (white bg covering the menu). Add the banner height when it's showing.
   const previewBanner = !!(permissions.isOwner && (permissions as any).previewRole);
+  // Mobile uses svh (small-viewport): with the browser URL bar visible the real
+  // viewport is smaller than dvh, and a dvh-sized panel pushed the fixed bottom
+  // nav below the fold (you had to scroll to reveal the menu). svh + reserving the
+  // bottom-nav height (72px header + 80px nav) keeps the nav on-screen. Desktop
+  // (lg, no bottom nav) keeps dvh.
   const chatHeightClass = previewBanner
-    ? 'h-[calc(100dvh-172px)] lg:h-[calc(100dvh-108px)]'
-    : 'h-[calc(100dvh-136px)] lg:h-[calc(100dvh-72px)]';
+    ? 'h-[calc(100svh-188px)] lg:h-[calc(100dvh-108px)]'
+    : 'h-[calc(100svh-152px)] lg:h-[calc(100dvh-72px)]';
   // Groups the current user belongs to — only members see a group.
   const myGroups = useMemo(
     () => (allGroups || [])
