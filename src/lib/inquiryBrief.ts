@@ -1,44 +1,44 @@
 import type { ServiceInquiry } from '../types';
 
 /**
- * Kompozon të gjitha përgjigjet e një anwhete (ServiceInquiry) në një brief
- * Markdown të strukturuar, gati për t'u ruajtur te `project.description` ose
- * `lead.notes`, që ekipi ta shohë brief-in e plotë pa hapur anketën origjinale.
+ * Burim i VETËM i të dhënave për brief-in e një anketë (ServiceInquiry):
+ * - `getInquirySections()` kthen seksionet e strukturuara (të përdorura nga karta
+ *   e projektit për staff-in).
+ * - `buildProjectDescription()` i kompozon ato në Markdown për `project.description`
+ *   ose `lead.notes`.
  *
- * Rregullat:
- * - 4 seksione me tituj `##`; fushat boshe anashkalohen.
- * - Fushat multi (array) shfaqen si lista me bullet.
- * - Seksioni 3 ("Pyetje Specifike") gjenerohet DINAMIKISHT sipas shërbimeve të
- *   zgjedhura te `servicesInterestedIn` — s'ka hardcode të shërbimeve në rrjedhë.
- * - Nëse `isUrgent` është "Po"/true, shtohet një shenjë ⚠️ URGJENTE në krye.
+ * Rregullat: fushat boshe anashkalohen; array-t bëhen lista; seksioni "Pyetje
+ * Specifike" gjenerohet DINAMIKISHT sipas `servicesInterestedIn` (pa hardcode).
  */
+
+export interface BriefRow { label: string; value: string | string[]; }
+export interface BriefSection { title: string; rows: BriefRow[]; }
+export interface InquiryBrief { urgent: boolean; sections: BriefSection[]; }
 
 // Vlerat "Po"/true i konsiderojmë pozitive.
 const isTruthy = (v: unknown): boolean =>
   v === true || v === 'Po' || v === 'po' || v === 'yes' || v === 'true';
 
-// Kthen true nëse vlera është realisht bosh (null/undefined/""/[] bosh).
+// Kthen true nëse vlera është realisht bosh.
 const isEmpty = (v: unknown): boolean =>
   v == null || (typeof v === 'string' && v.trim() === '') || (Array.isArray(v) && v.length === 0);
 
-// Një rresht `**Label:** value` — kthehet null nëse vlera është bosh.
-const row = (label: string, value: unknown): string | null => {
-  if (isEmpty(value)) return null;
-  if (Array.isArray(value)) return `- **${label}:**\n${value.map(v => `  - ${v}`).join('\n')}`;
-  return `- **${label}:** ${value}`;
+// Ndërton një rresht nëse vlera s'është bosh.
+const mk = (label: string, value: unknown): BriefRow | null =>
+  isEmpty(value) ? null : { label, value: value as string | string[] };
+
+const section = (title: string, rows: (BriefRow | null)[]): BriefSection | null => {
+  const kept = rows.filter(Boolean) as BriefRow[];
+  return kept.length ? { title, rows: kept } : null;
 };
 
-// Bashkon rreshtat jo-bosh me newline.
-const block = (...rows: (string | null)[]): string => rows.filter(Boolean).join('\n');
-
 /**
- * Përkufizimi i seksioneve specifike sipas shërbimit. Çelësi `match` përputhet
- * (case-insensitive, substring) me stringjet e `servicesInterestedIn`, kështu që
- * "Web Design", "Faqe Web", "Website" etj. bien te i njëjti grup fushash.
+ * Përkufizimi i seksioneve specifike sipas shërbimit. `match` përputhet
+ * (case-insensitive, substring) me stringjet e `servicesInterestedIn`.
  */
 interface ServiceSection {
-  match: string[];          // fjalë-kyçe që identifikojnë shërbimin
-  header: string;           // titulli i nën-seksionit
+  match: string[];
+  header: string;
   fields: Array<[keyof ServiceInquiry, string]>;
 }
 
@@ -130,94 +130,101 @@ const SERVICE_SECTIONS: ServiceSection[] = [
   },
 ];
 
+/** Kthen seksionet e strukturuara të anketës (vetëm fushat jo-bosh). */
+export function getInquirySections(inquiry: ServiceInquiry): InquiryBrief {
+  const q = inquiry as ServiceInquiry & Record<string, any>;
+  const sections: BriefSection[] = [];
+
+  // 1. Informacion Bazë
+  const basic = section('Informacion Bazë', [
+    mk('Biznesi', q.businessName),
+    mk('Industria', q.industry),
+    mk('Kontakti', [q.contactName, q.jobTitle].filter(Boolean).join(' — ') || null),
+    mk('Email', q.email),
+    mk('Telefon', q.phoneNumber),
+    mk('Qyteti / Tregu', q.cityMarket),
+    mk('Website', q.website),
+    mk('Instagram', q.instagramLink),
+    mk('Facebook', q.facebookLink),
+    mk('TikTok', q.tiktokLink),
+    mk('LinkedIn', q.linkedinLink),
+  ]);
+  if (basic) sections.push(basic);
+
+  // 2. Shërbimi & Objektivi
+  const goal = section('Shërbimi & Objektivi', [
+    mk('Shërbimet', q.servicesInterestedIn),
+    mk('Objektivi kryesor', q.mainGoal),
+    mk('Nevoja / përshkrimi', q.projectNeedDescription),
+    mk('Sfida aktuale', q.currentMainChallenge),
+    mk('Punë e mëparshme me agjenci', q.hasWorkedWithAgency),
+    mk('Çfarë keni provuar', q.whatHaveYouTried),
+  ]);
+  if (goal) sections.push(goal);
+
+  // 3. Pyetje Specifike (dinamike sipas shërbimeve)
+  const selected = Array.isArray(q.servicesInterestedIn) ? q.servicesInterestedIn : [];
+  const used = new Set<string>();
+  for (const svc of selected) {
+    const key = String(svc).toLowerCase();
+    const svcSec = SERVICE_SECTIONS.find(s => s.match.some(m => key.includes(m)));
+    if (!svcSec || used.has(svcSec.header)) continue;
+    const sec = section(svcSec.header, svcSec.fields.map(([f, label]) => mk(label, q[f as string])));
+    if (sec) { used.add(svcSec.header); sections.push(sec); }
+  }
+
+  // 4. Buxheti & Materialet
+  const budget = section('Buxheti & Materialet', [
+    mk('Buxheti', q.budgetRange),
+    mk('Afati', q.timeline),
+    mk('Urgjente', isTruthy(q.isUrgent) ? 'Po' : (q.isUrgent ? String(q.isUrgent) : null)),
+    mk('Vendimmarrësi', q.decisionMaker),
+    mk('Kontakti i preferuar', q.preferredContactMethod),
+    mk('Materiale ekzistuese', q.hasExistingMaterials),
+    mk('Materialet përfshijnë', q.folderIncludes),
+    mk('Brand guidelines', q.hasBrandGuidelines),
+    mk('Google Drive', q.googleDriveLink),
+  ]);
+  if (budget) sections.push(budget);
+
+  return { urgent: isTruthy(q.isUrgent), sections };
+}
+
 function formatDate(d: Date): string {
   const dd = String(d.getDate()).padStart(2, '0');
   const mm = String(d.getMonth() + 1).padStart(2, '0');
-  const yyyy = d.getFullYear();
-  return `${dd}/${mm}/${yyyy}`;
+  return `${dd}/${mm}/${d.getFullYear()}`;
 }
 
-export function buildProjectDescription(
-  inquiry: ServiceInquiry,
-  opts?: { now?: Date }
-): string {
-  const q = inquiry as ServiceInquiry & Record<string, any>;
+/** Kompozon anketën në një brief Markdown (për project.description / lead.notes). */
+export function buildProjectDescription(inquiry: ServiceInquiry, opts?: { now?: Date }): string {
+  const { urgent, sections } = getInquirySections(inquiry);
   const now = opts?.now || new Date();
-  const parts: string[] = [];
+  const parts: string[] = [`_Brief i gjeneruar automatikisht nga anketa — ${formatDate(now)}_`];
+  if (urgent) parts.push('**⚠️ URGJENTE**');
 
-  // ── Meta + shenja urgjence ──
-  parts.push(`_Brief i gjeneruar automatikisht nga anketa — ${formatDate(now)}_`);
-  if (isTruthy(q.isUrgent)) parts.push('**⚠️ URGJENTE**');
+  // Seksionet e para dy + budget janë "##"; seksionet specifike të shërbimeve i
+  // grupojmë nën "## Pyetje Specifike" me nën-tituj "###".
+  const topLevel = new Set(['Informacion Bazë', 'Shërbimi & Objektivi', 'Buxheti & Materialet']);
+  const specific = sections.filter(s => !topLevel.has(s.title));
 
-  // ── 1. Informacion Bazë ──
-  const socials = block(
-    row('Instagram', q.instagramLink),
-    row('Facebook', q.facebookLink),
-    row('TikTok', q.tiktokLink),
-    row('LinkedIn', q.linkedinLink),
-  );
-  const basic = block(
-    row('Biznesi', q.businessName),
-    row('Industria', q.industry),
-    row('Kontakti', [q.contactName, q.jobTitle].filter(Boolean).join(' — ') || null),
-    row('Email', q.email),
-    row('Telefon', q.phoneNumber),
-    row('Qyteti / Tregu', q.cityMarket),
-    row('Website', q.website),
-  );
-  if (basic || socials) {
-    parts.push(`## Informacion Bazë\n${[basic, socials].filter(Boolean).join('\n')}`);
-  }
+  const renderRows = (rows: BriefRow[]) =>
+    rows.map(r => Array.isArray(r.value)
+      ? `- **${r.label}:**\n${r.value.map(v => `  - ${v}`).join('\n')}`
+      : `- **${r.label}:** ${r.value}`).join('\n');
 
-  // ── 2. Shërbimi & Objektivi ──
-  const serviceGoal = block(
-    row('Shërbimet', q.servicesInterestedIn),
-    row('Objektivi kryesor', q.mainGoal),
-    row('Nevoja / përshkrimi', q.projectNeedDescription),
-    row('Sfida aktuale', q.currentMainChallenge),
-    row('Punë e mëparshme me agjenci', q.hasWorkedWithAgency),
-    row('Çfarë keni provuar', q.whatHaveYouTried),
-  );
-  if (serviceGoal) parts.push(`## Shërbimi & Objektivi\n${serviceGoal}`);
-
-  // ── 3. Pyetje Specifike (dinamike sipas shërbimeve) ──
-  const selected = Array.isArray(q.servicesInterestedIn) ? q.servicesInterestedIn : [];
-  const usedHeaders = new Set<string>();
-  const specificBlocks: string[] = [];
-  for (const svc of selected) {
-    const key = String(svc).toLowerCase();
-    const section = SERVICE_SECTIONS.find(s => s.match.some(m => key.includes(m)));
-    if (!section || usedHeaders.has(section.header)) continue;
-    const rows = section.fields.map(([field, label]) => row(label, q[field as string]));
-    const body = block(...rows);
-    if (body) {
-      usedHeaders.add(section.header);
-      specificBlocks.push(`### ${section.header}\n${body}`);
+  for (const s of sections.filter(s => topLevel.has(s.title))) {
+    // Ruaj renditjen logjike: bazë → objektiv → (specifike) → buxhet
+    if (s.title === 'Buxheti & Materialet' && specific.length) {
+      parts.push(`## Pyetje Specifike\n${specific.map(sp => `### ${sp.title}\n${renderRows(sp.rows)}`).join('\n\n')}`);
     }
+    parts.push(`## ${s.title}\n${renderRows(s.rows)}`);
   }
-  if (specificBlocks.length) parts.push(`## Pyetje Specifike\n${specificBlocks.join('\n\n')}`);
-
-  // ── 4. Buxheti & Materialet ──
-  const budget = block(
-    row('Buxheti', q.budgetRange),
-    row('Afati', q.timeline),
-    row('Urgjente', isTruthy(q.isUrgent) ? 'Po' : (q.isUrgent ? String(q.isUrgent) : null)),
-    row('Vendimmarrësi', q.decisionMaker),
-    row('Kontakti i preferuar', q.preferredContactMethod),
-    row('Materiale ekzistuese', q.hasExistingMaterials),
-    row('Materialet përfshijnë', q.folderIncludes),
-    row('Brand guidelines', q.hasBrandGuidelines),
-    row('Google Drive', q.googleDriveLink),
-  );
-  if (budget) parts.push(`## Buxheti & Materialet\n${budget}`);
 
   return parts.join('\n\n');
 }
 
-/**
- * Bashkëngjit një brief të ri poshtë një përshkrimi ekzistues pa e mbishkruar.
- * Përdoret kur `project.description` ekziston tashmë.
- */
+/** Bashkëngjit një brief poshtë një përshkrimi ekzistues pa e mbishkruar. */
 export function appendBrief(existing: string | undefined, brief: string): string {
   if (!existing || !existing.trim()) return brief;
   return `${existing}\n\n--- Përditësim nga anketa ---\n\n${brief}`;

@@ -28,6 +28,7 @@ import {
   DropdownMenuTrigger,
 } from '../components/ui/dropdown-menu';
 import TaskDetailPanel from '../components/TaskDetailPanel';
+import ProjectClientBrief from '../components/ProjectClientBrief';
 import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
 import { addFrequency, completeTask } from '../lib/recurringUtils';
@@ -548,6 +549,9 @@ const ProjectDetailView: React.FC = () => {
             )}
           </div>
         </div>
+
+        {/* Client questionnaire brief (when the project came from a converted inquiry) */}
+        <ProjectClientBrief inquiryId={project.sourceQuestionnaireId} />
 
         {/* Tabs and Actions */}
         <div className="flex flex-wrap items-center justify-between gap-2 px-4 sm:px-6 pb-2">
