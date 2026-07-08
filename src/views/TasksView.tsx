@@ -4,7 +4,7 @@ import { DndContext, DragOverlay, closestCorners, MouseSensor, TouchSensor, useS
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { getStatusColor, getPriorityColor, getTaskStatusLabel } from '../lib/statusColors';
-import { addFrequency, completeTask } from '../lib/recurringUtils';
+import { completeTask } from '../lib/recurringUtils';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
@@ -1857,30 +1857,40 @@ const CalendarView: React.FC<{
   // from its endDate using the same recurrence rule and show those dates as
   // lightweight ghosts — so e.g. a monthly task is visible in July before it's
   // generated. Clicking opens the source task.
-  const monthStart = sod(new Date(currentDate.getFullYear(), currentDate.getMonth(), 1));
-  const monthEnd = sod(new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0));
+  // A recurring task shows on EVERY occurrence day in the visible month that its
+  // rule matches (weekly→its weekday, monthly→its day, daily→selected weekdays,
+  // yearly→its day). Bounded below by the series start and above by the
+  // "repeat-until" date. NOT suppressed by status=Done — a recurring series must
+  // stay visible on the calendar even after the current cycle is completed.
+  // Old cycles that already spawned their successor (nextCycleCreated) are hidden
+  // so the same series doesn't render twice.
   const projectionsByDay = React.useMemo(() => {
     const map = new Map<number, Task[]>();
+    const daysInMo = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
     tasks.forEach((task) => {
       const t = task as any;
-      if (!t.isRecurring || !t.recurringFrequency || t.nextCycleCreated === true || task.status === 'Done' || !task.endDate) return;
+      if (!t.isRecurring || !t.recurringFrequency || t.nextCycleCreated === true) return;
+      const anchor = task.endDate || task.startDate;
+      if (!anchor) return;
+      const a = new Date(anchor);
+      const lower = task.startDate ? Math.min(sod(new Date(task.startDate)), sod(a)) : sod(a);
       const recEnd = t.recurringEndDate ? sod(new Date(t.recurringEndDate)) : null;
-      let d = new Date(task.endDate);
-      let guard = 0;
-      while (guard++ < 500) {
-        d = addFrequency(d, t.recurringFrequency, t.recurringDayOfWeek, t.recurringDayOfMonth, t.recurringInterval, t.recurringDaysOfWeek);
-        const ds = sod(d);
-        if (ds > monthEnd) break;
-        if (recEnd && ds > recEnd) break; // stop at the "repeat until" date
-        if (ds >= monthStart) {
-          const dayNum = new Date(ds).getDate();
-          if (!map.has(dayNum)) map.set(dayNum, []);
-          map.get(dayNum)!.push(task);
-        }
+      const freq = t.recurringFrequency;
+      for (let day = 1; day <= daysInMo; day++) {
+        const cd = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
+        const cell = sod(cd);
+        if (cell < lower) continue;
+        if (recEnd && cell > recEnd) continue;
+        let hit = false;
+        if (freq === 'daily') { const ds = t.recurringDaysOfWeek; hit = Array.isArray(ds) && ds.length ? ds.includes(cd.getDay()) : true; }
+        else if (freq === 'weekly') hit = cd.getDay() === (t.recurringDayOfWeek ?? a.getDay());
+        else if (freq === 'monthly') hit = cd.getDate() === (t.recurringDayOfMonth ?? a.getDate());
+        else if (freq === 'yearly') hit = cd.getMonth() === a.getMonth() && cd.getDate() === a.getDate();
+        if (hit) { if (!map.has(day)) map.set(day, []); map.get(day)!.push(task); }
       }
     });
     return map;
-  }, [tasks, monthStart, monthEnd]);
+  }, [tasks, currentDate]);
 
   const days = [];
   for (let i = 0; i < firstDay; i++) {
@@ -1900,9 +1910,9 @@ const CalendarView: React.FC<{
       // start date still appears. Tasks with NO date at all go to the "Pa afat" bar.
       const anchor = task.endDate || task.startDate;
       if (!anchor) return false;
+      if ((task as any).isRecurring) return false; // recurring → handled by projectionsByDay
       const end = sod(new Date(anchor));
       const start = task.startDate ? sod(new Date(task.startDate)) : end;
-      if ((task as any).isRecurring) return cell === end; // single-day occurrence
       const lo = Math.min(start, end), hi = Math.max(start, end);
       // ALWAYS show on the start day and the end day; fill the days in between only
       // for short spans (so a long task still marks both ends without painting
