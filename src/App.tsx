@@ -94,6 +94,7 @@ const PergolaLandingPage = lazyRetry(() => import('./views/landing/PergolaLandin
 const FotoVideoLandingPage = lazyRetry(() => import('./views/landing/FotoVideoLandingPage'));
 const PriceCalculatorView = lazyRetry(() => import('./views/PriceCalculatorView'));
 const LandingPagesView = lazyRetry(() => import('./views/LandingPagesView'));
+const PrivacyPolicyView = lazyRetry(() => import('./views/PrivacyPolicyView'));
 const ContractsView = lazyRetry(() => import('./views/ContractsView'));
 const PortalContractsView = lazyRetry(() => import('./views/portal/PortalContractsView'));
 
@@ -221,6 +222,8 @@ function AppContent() {
       <Route path="/website-maintenance" element={<Suspense fallback={<LazyFallback />}><WebsiteMaintenanceLandingPage /></Suspense>} />
       <Route path="/pergola" element={<Suspense fallback={<LazyFallback />}><PergolaLandingPage /></Suspense>} />
       <Route path="/foto-video" element={<Suspense fallback={<LazyFallback />}><FotoVideoLandingPage /></Suspense>} />
+      <Route path="/privacy" element={<Suspense fallback={<LazyFallback />}><PrivacyPolicyView /></Suspense>} />
+      <Route path="/privatesia" element={<Suspense fallback={<LazyFallback />}><PrivacyPolicyView /></Suspense>} />
 
       {/* Client Portal routes */}
       <Route path="/portal" element={<Suspense fallback={<LazyFallback />}><PortalLayout /></Suspense>}>
