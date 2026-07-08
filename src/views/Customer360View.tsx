@@ -365,7 +365,7 @@ const Customer360View: React.FC = () => {
         </Card>
         <Card className="p-4">
           <div className="flex items-center gap-3">
-            <FileText className="w-5 h-5 text-indigo-500" />
+            <FileText className="w-5 h-5 text-primary" />
             <div>
               <p className="text-xs text-muted-foreground">Fatura Gjithsej</p>
               <p className="text-lg font-bold">{customerInvoices.length}</p>
@@ -437,7 +437,7 @@ const Customer360View: React.FC = () => {
                         <div className="mt-0.5">
                           {act.type === 'call' ? <Phone className="w-3.5 h-3.5 text-orange-500" /> :
                            act.type === 'meeting' ? <Calendar className="w-3.5 h-3.5 text-blue-500" /> :
-                           act.type === 'email_sent' ? <Mail className="w-3.5 h-3.5 text-purple-500" /> :
+                           act.type === 'email_sent' ? <Mail className="w-3.5 h-3.5 text-primary" /> :
                            <ClipboardList className="w-3.5 h-3.5 text-gray-500" />}
                         </div>
                         <div className="flex-1 min-w-0">
@@ -731,7 +731,7 @@ const Customer360View: React.FC = () => {
                       <div className="w-8 h-8 rounded-full bg-muted flex items-center justify-center flex-shrink-0 mt-0.5">
                         {act.type === 'call' ? <Phone className="w-4 h-4 text-orange-500" /> :
                          act.type === 'meeting' ? <Calendar className="w-4 h-4 text-blue-500" /> :
-                         act.type === 'email_sent' ? <Mail className="w-4 h-4 text-purple-500" /> :
+                         act.type === 'email_sent' ? <Mail className="w-4 h-4 text-primary" /> :
                          <ClipboardList className="w-4 h-4 text-gray-500" />}
                       </div>
                       <div className="flex-1">

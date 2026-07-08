@@ -344,9 +344,9 @@ const BonusView: React.FC = () => {
                   <div className="text-lg font-bold text-blue-700 dark:text-blue-400">12%</div>
                   <div className="text-xs text-blue-700/70 dark:text-blue-400/70">Niveli 2 · 4× → 5× rrogë</div>
                 </div>
-                <div className="p-3 bg-purple-100 dark:bg-purple-950/40 rounded-lg text-center">
-                  <div className="text-lg font-bold text-purple-700 dark:text-purple-400">18%</div>
-                  <div className="text-xs text-purple-700/70 dark:text-purple-400/70">Niveli 3 · mbi 5× rrogë</div>
+                <div className="p-3 bg-accent-soft dark:bg-primary/10 rounded-lg text-center">
+                  <div className="text-lg font-bold text-primary">18%</div>
+                  <div className="text-xs text-primary/70">Niveli 3 · mbi 5× rrogë</div>
                 </div>
               </div>
               <div className="mt-3 p-3 bg-muted/60 rounded-lg text-xs">
@@ -431,8 +431,8 @@ const BonusView: React.FC = () => {
           </Card>
           <Card className="p-4">
             <div className="flex items-center gap-3">
-              <div className="p-2 bg-purple-100 dark:bg-purple-900/30 rounded-lg">
-                <Users className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+              <div className="p-2 bg-accent-soft dark:bg-primary/10 rounded-lg">
+                <Users className="h-5 w-5 text-primary" />
               </div>
               <div>
                 <p className="text-xs text-muted-foreground">Me Rroge Caktuar</p>
@@ -594,7 +594,7 @@ const BonusView: React.FC = () => {
                         {result.tiers.map((tier, i) => (
                           <div key={i} className={`flex items-center justify-between p-2.5 rounded-lg ${tier.reached ? 'bg-background border' : 'bg-muted/40 opacity-50'}`}>
                             <div className="flex items-center gap-2">
-                              <div className={`h-5 w-5 rounded-full flex items-center justify-center text-[10px] font-bold ${i === 0 ? 'bg-green-100 text-green-700' : i === 1 ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+                              <div className={`h-5 w-5 rounded-full flex items-center justify-center text-[10px] font-bold ${i === 0 ? 'bg-green-100 text-green-700' : i === 1 ? 'bg-blue-100 text-blue-700' : 'bg-accent-soft text-primary'}`}>
                                 {i + 1}
                               </div>
                               <span className="text-sm">{tier.label}</span>

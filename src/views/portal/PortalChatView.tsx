@@ -295,8 +295,8 @@ const PortalChatView: React.FC = () => {
 
   const getAvatarColor = (senderId: string) => {
     const colors = [
-      'bg-blue-500', 'bg-emerald-500', 'bg-purple-500', 'bg-amber-500', 
-      'bg-rose-500', 'bg-cyan-500', 'bg-indigo-500', 'bg-teal-500'
+      'bg-blue-500', 'bg-emerald-500', 'bg-navy-700', 'bg-amber-500',
+      'bg-rose-500', 'bg-cyan-500', 'bg-primary', 'bg-teal-500'
     ];
     let hash = 0;
     for (let i = 0; i < senderId.length; i++) hash = senderId.charCodeAt(i) + ((hash << 5) - hash);

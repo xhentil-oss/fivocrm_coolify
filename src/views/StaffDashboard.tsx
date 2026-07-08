@@ -538,12 +538,12 @@ const StaffDashboard: React.FC = () => {
           </div>
         </Card>
         <Card
-          className="p-4 cursor-pointer hover:shadow-md transition-shadow border-l-4 border-l-purple-500"
+          className="p-4 cursor-pointer hover:shadow-md transition-shadow border-l-4 border-l-primary"
           onClick={() => navigate('/app/projects')}
         >
           <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-purple-100 dark:bg-purple-900/30">
-              <FolderKanban className="w-5 h-5 text-purple-500" />
+            <div className="p-2 rounded-lg bg-accent-soft dark:bg-primary/10">
+              <FolderKanban className="w-5 h-5 text-primary" />
             </div>
             <div>
               <div className="text-2xl font-bold text-foreground">{myProjects.length}</div>
@@ -765,7 +765,7 @@ const StaffDashboard: React.FC = () => {
             <Card className="overflow-hidden">
               <div className="flex items-center justify-between p-4 border-b bg-muted/30">
                 <div className="flex items-center gap-2">
-                  <FolderKanban className="w-4 h-4 text-purple-500" />
+                  <FolderKanban className="w-4 h-4 text-primary" />
                   <h2 className="font-semibold text-foreground">Projektet e mia</h2>
                 </div>
                 <Button variant="ghost" size="sm" onClick={() => navigate('/app/projects')} className="text-xs text-muted-foreground">
@@ -823,9 +823,9 @@ const StaffDashboard: React.FC = () => {
 
           {/* Daily Productivity */}
           <Card className="overflow-hidden">
-            <div className="p-3 border-b bg-gradient-to-r from-indigo-50/80 to-violet-50/80 dark:from-indigo-950/30 dark:to-violet-950/30">
+            <div className="p-3 border-b bg-accent-soft dark:bg-primary/10">
               <div className="flex items-center gap-2">
-                <BarChart3 className="w-4 h-4 text-indigo-500" />
+                <BarChart3 className="w-4 h-4 text-primary" />
                 <h3 className="text-sm font-semibold text-foreground">Produktiviteti i Ditës</h3>
               </div>
             </div>
@@ -903,7 +903,7 @@ const StaffDashboard: React.FC = () => {
                     <div className="h-1.5 bg-muted rounded-full overflow-hidden mt-1">
                       <div
                         className={`h-full rounded-full transition-all duration-500 ${
-                          todayTrackedHours >= 7 ? 'bg-green-500' : 'bg-purple-500'
+                          todayTrackedHours >= 7 ? 'bg-green-500' : 'bg-primary'
                         }`}
                         style={{ width: `${Math.min(100, (todayTrackedHours / 8) * 100)}%` }}
                       />
@@ -1085,7 +1085,7 @@ const StaffDashboard: React.FC = () => {
                 className="justify-start text-xs h-9"
                 onClick={() => navigate('/app/time-tracking')}
               >
-                <Timer className="w-3.5 h-3.5 mr-1.5 text-purple-500" />
+                <Timer className="w-3.5 h-3.5 mr-1.5 text-primary" />
                 Kohë
               </Button>
               <Button

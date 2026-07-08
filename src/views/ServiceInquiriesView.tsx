@@ -611,11 +611,11 @@ const ServiceInquiriesView: React.FC = () => {
                 {/* Section 5: Service-Specific */}
                 {selectedInquiry.servicesInterestedIn?.includes('Social Media Marketing') && (
                   <div className="space-y-3">
-                    <h4 className="text-sm font-semibold flex items-center gap-2 text-purple-600">
+                    <h4 className="text-sm font-semibold flex items-center gap-2 text-primary">
                       <Share2 className="w-4 h-4" />
                       Social Media Marketing
                     </h4>
-                    <div className="bg-purple-50/50 dark:bg-purple-950/10 rounded-lg p-4 space-y-3 border border-purple-100 dark:border-purple-900/30">
+                    <div className="bg-accent-soft dark:bg-primary/10 rounded-lg p-4 space-y-3 border border-primary/30">
                       {selectedInquiry.smm_mainPlatforms && selectedInquiry.smm_mainPlatforms.length > 0 && (
                         <div>
                           <span className="text-xs text-muted-foreground">Platformat</span>

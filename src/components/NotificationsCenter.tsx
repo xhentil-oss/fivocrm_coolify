@@ -52,8 +52,8 @@ const TYPE_CONFIG: Record<string, TypeConfig> = {
   quote_rejected:           { icon: <XCircle className="w-4 h-4 text-red-500" />,          priority: 'warning',  borderColor: 'border-l-red-500',     bgColor: 'bg-red-50/60 dark:bg-red-950/20' },
   // Info — assignments & collaboration
   task_assigned:            { icon: <User className="w-4 h-4 text-blue-500" />,            priority: 'info',     borderColor: 'border-l-blue-500',    bgColor: 'bg-blue-50/60 dark:bg-blue-950/20' },
-  task_collaborator_added:  { icon: <Users className="w-4 h-4 text-violet-500" />,         priority: 'info',     borderColor: 'border-l-violet-500',  bgColor: 'bg-violet-50/60 dark:bg-violet-950/20' },
-  task_mention:             { icon: <MessageSquare className="w-4 h-4 text-violet-500" />, priority: 'info',     borderColor: 'border-l-violet-500',  bgColor: 'bg-violet-50/60 dark:bg-violet-950/20' },
+  task_collaborator_added:  { icon: <Users className="w-4 h-4 text-primary" />,         priority: 'info',     borderColor: 'border-l-primary',  bgColor: 'bg-accent-soft dark:bg-primary/10' },
+  task_mention:             { icon: <MessageSquare className="w-4 h-4 text-primary" />, priority: 'info',     borderColor: 'border-l-primary',  bgColor: 'bg-accent-soft dark:bg-primary/10' },
   lead_assigned:            { icon: <User className="w-4 h-4 text-blue-500" />,            priority: 'info',     borderColor: 'border-l-blue-500',    bgColor: 'bg-blue-50/60 dark:bg-blue-950/20' },
   goal_assigned:            { icon: <Target className="w-4 h-4 text-blue-500" />,          priority: 'info',     borderColor: 'border-l-blue-500',    bgColor: 'bg-blue-50/60 dark:bg-blue-950/20' },
   project_status_changed:   { icon: <Zap className="w-4 h-4 text-blue-500" />,             priority: 'info',     borderColor: 'border-l-blue-500',    bgColor: 'bg-blue-50/60 dark:bg-blue-950/20' },
@@ -67,9 +67,9 @@ const TYPE_CONFIG: Record<string, TypeConfig> = {
   auto_invoice_created:     { icon: <FileText className="w-4 h-4 text-blue-500" />,        priority: 'neutral',  borderColor: '',                     bgColor: '' },
   invoice_created:          { icon: <FileText className="w-4 h-4 text-blue-500" />,        priority: 'neutral',  borderColor: '',                     bgColor: '' },
   // Recurring / automation
-  recurring_task_created:   { icon: <RefreshCw className="w-4 h-4 text-indigo-500" />,     priority: 'neutral',  borderColor: '',                     bgColor: '' },
-  recurring_expense_created:{ icon: <RefreshCw className="w-4 h-4 text-indigo-500" />,     priority: 'neutral',  borderColor: '',                     bgColor: '' },
-  project_cycle_reset:      { icon: <RefreshCw className="w-4 h-4 text-indigo-500" />,     priority: 'neutral',  borderColor: '',                     bgColor: '' },
+  recurring_task_created:   { icon: <RefreshCw className="w-4 h-4 text-tertiary" />,     priority: 'neutral',  borderColor: '',                     bgColor: '' },
+  recurring_expense_created:{ icon: <RefreshCw className="w-4 h-4 text-tertiary" />,     priority: 'neutral',  borderColor: '',                     bgColor: '' },
+  project_cycle_reset:      { icon: <RefreshCw className="w-4 h-4 text-tertiary" />,     priority: 'neutral',  borderColor: '',                     bgColor: '' },
   // Expenses
   expense_submitted:        { icon: <DollarSign className="w-4 h-4 text-blue-500" />,      priority: 'neutral',  borderColor: '',                     bgColor: '' },
   // Guest access
@@ -373,7 +373,7 @@ const NotificationsCenter: React.FC = () => {
                   : unreadClientCount > 0
                   ? 'bg-emerald-500 text-white'
                   : unreadMentionCount > 0
-                  ? 'bg-violet-500 text-white'
+                  ? 'bg-primary text-white'
                   : 'bg-accent text-accent-foreground'
               }`}
             >
@@ -768,7 +768,7 @@ const NotificationItem: React.FC<{
                       : config.priority === 'success'
                       ? 'border-emerald-200 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-700 dark:text-emerald-400'
                       : notification.type === 'task_collaborator_added' || notification.type === 'task_mention'
-                      ? 'border-violet-200 text-violet-700 hover:bg-violet-50 dark:border-violet-700 dark:text-violet-400'
+                      ? 'border-primary/30 text-primary hover:bg-accent-soft dark:border-primary/40 dark:text-primary'
                       : ''
                   }`}
                   onClick={(e) => { e.stopPropagation(); handleAction(); }}

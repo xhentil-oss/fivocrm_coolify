@@ -35,7 +35,7 @@ function getMimeColor(mimeType: string): string {
   if (mimeType.includes('spreadsheet')) return 'text-green-500';
   if (mimeType.includes('presentation')) return 'text-orange-500';
   if (mimeType.startsWith('image/')) return 'text-pink-500';
-  if (mimeType.startsWith('video/')) return 'text-purple-500';
+  if (mimeType.startsWith('video/')) return 'text-navy-700';
   return 'text-gray-500';
 }
 

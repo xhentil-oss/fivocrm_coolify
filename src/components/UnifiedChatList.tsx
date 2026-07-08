@@ -42,7 +42,7 @@ const PASTELS = [
   'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-300',
   'bg-rose-100 text-rose-700 dark:bg-rose-900/30 dark:text-rose-300',
   'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300',
-  'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-300',
+  'bg-[#12468C]/10 text-[#12468C] dark:bg-[#12468C]/30 dark:text-[#7AA4DB]',
 ];
 function pastelFor(key: string): string {
   let h = 0;
@@ -51,8 +51,8 @@ function pastelFor(key: string): string {
 }
 
 const TAGS: Record<ConvType, { label: string; cls: string } | null> = {
-  ai: { label: 'AI', cls: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300' },
-  group: { label: 'Grup', cls: 'bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300' },
+  ai: { label: 'AI', cls: 'bg-accent-soft text-primary dark:bg-primary/10 dark:text-primary' },
+  group: { label: 'Grup', cls: 'bg-accent-soft text-primary dark:bg-primary/10 dark:text-primary' },
   client: { label: 'Klient', cls: 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300' },
   staff: null,
 };
@@ -67,18 +67,18 @@ const ConversationRow: React.FC<{ c: UnifiedConv }> = ({ c }) => {
     <button
       onClick={c.onSelect}
       className={`group/row w-full flex items-stretch gap-3 pl-2 pr-2 rounded-xl text-left transition-colors ${
-        c.isActive ? 'bg-violet-500/10 border border-violet-300/30 dark:border-violet-700/30' : 'hover:bg-accent/50'
+        c.isActive ? 'bg-primary/10 border border-primary/30 dark:border-primary/40' : 'hover:bg-accent/50'
       }`}
     >
       {/* Avatar */}
       <div className="relative flex items-center flex-shrink-0">
         {c.type === 'ai' ? (
-          <div className="h-11 w-11 rounded-full bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-sm">
+          <div className="h-11 w-11 rounded-full bg-gradient-primary flex items-center justify-center shadow-sm">
             <Sparkles className="h-5 w-5 text-white" />
           </div>
         ) : c.type === 'group' ? (
-          <div className="h-11 w-11 rounded-full bg-violet-100 dark:bg-violet-900/30 flex items-center justify-center">
-            <Users className="h-5 w-5 text-violet-600 dark:text-violet-300" />
+          <div className="h-11 w-11 rounded-full bg-accent-soft dark:bg-primary/10 flex items-center justify-center">
+            <Users className="h-5 w-5 text-primary" />
           </div>
         ) : (
           <div className={`h-11 w-11 rounded-full flex items-center justify-center ${pastelFor(c.key)}`}>
@@ -113,12 +113,12 @@ const ConversationRow: React.FC<{ c: UnifiedConv }> = ({ c }) => {
         {/* Meta */}
         <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
           {c.time > 0 && (
-            <span className={`text-[11px] ${showUnread ? 'font-bold text-violet-600 dark:text-violet-400' : 'text-muted-foreground/60'}`}>
+            <span className={`text-[11px] ${showUnread ? 'font-bold text-primary' : 'text-muted-foreground/60'}`}>
               {formatShort(c.time)}
             </span>
           )}
           {showUnread && (
-            <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-violet-600 text-white text-[11px] font-bold">
+            <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-primary text-white text-[11px] font-bold">
               {c.unread > 99 ? '99+' : c.unread}
             </span>
           )}
@@ -185,7 +185,7 @@ const UnifiedChatList: React.FC<Props> = ({ conversations, canCreateGroups, onCr
             value={search}
             onChange={e => setSearch(e.target.value)}
             placeholder="Kërko bisedë, klient ose person…"
-            className="w-full h-10 pl-9 pr-8 text-sm rounded-xl bg-muted/50 border border-border/50 focus:outline-none focus:ring-1 focus:ring-violet-400"
+            className="w-full h-10 pl-9 pr-8 text-sm rounded-xl bg-muted/50 border border-border/50 focus:outline-none focus:ring-1 focus:ring-primary"
           />
           {search && (
             <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2">
@@ -208,7 +208,7 @@ const UnifiedChatList: React.FC<Props> = ({ conversations, canCreateGroups, onCr
               key={f.key}
               onClick={() => setFilter(f.key)}
               className={`h-8 px-3 inline-flex items-center gap-1.5 rounded-full text-[13px] font-bold whitespace-nowrap transition-colors ${
-                active ? 'bg-violet-600 text-white' : 'bg-background text-muted-foreground border border-border'
+                active ? 'bg-primary text-white' : 'bg-background text-muted-foreground border border-border'
               }`}
             >
               {f.key === 'unassigned' && <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />}
@@ -228,7 +228,7 @@ const UnifiedChatList: React.FC<Props> = ({ conversations, canCreateGroups, onCr
         {canCreateGroups && onCreateGroup && (
           <button
             onClick={onCreateGroup}
-            className="w-full flex items-center gap-2 px-3 py-2 mb-1 rounded-xl text-[13px] font-medium text-violet-600 dark:text-violet-400 hover:bg-violet-500/10 transition-colors"
+            className="w-full flex items-center gap-2 px-3 py-2 mb-1 rounded-xl text-[13px] font-medium text-primary hover:bg-primary/10 transition-colors"
           >
             <Plus className="h-4 w-4" /> Krijo grup të ri
           </button>

@@ -10,7 +10,7 @@ const STAGE_PROBABILITY: Record<string, number> = {
 };
 const FUNNEL: { key: string; label: string; color: string }[] = [
   { key: 'New', label: 'Të reja', color: 'bg-blue-500' },
-  { key: 'Contacted', label: 'Kontaktuara', color: 'bg-violet-500' },
+  { key: 'Contacted', label: 'Kontaktuara', color: 'bg-navy-700' },
   { key: 'Qualified', label: 'Kualifikuara', color: 'bg-green-500' },
   { key: 'Follow-up', label: 'Në ndjekje', color: 'bg-amber-500' },
   { key: 'Proposal', label: 'Propozim', color: 'bg-orange-500' },
@@ -163,7 +163,7 @@ const LeadAnalytics: React.FC<{
           {m.leaderboard.length === 0 ? <p className="text-xs text-muted-foreground">Pa të dhëna</p> : (
             <div className="space-y-2">
               {m.leaderboard.map(r => (
-                <Bar key={r.uid} label={r.name} value={r.count} max={lbMax} color="bg-indigo-500"
+                <Bar key={r.uid} label={r.name} value={r.count} max={lbMax} color="bg-primary"
                   right={`${r.converted} konv. · ${r.rate.toFixed(0)}%`} />
               ))}
             </div>

@@ -82,7 +82,7 @@ const PortalProjectsView: React.FC = () => {
     switch (s) {
       case 'Draft': return { label: 'Anketa e papërfunduar', pill: 'bg-yellow-100 text-yellow-800', cta: 'Vazhdo anketën', pct: 25 };
       case 'New': return { label: 'Në shqyrtim', pill: 'bg-blue-100 text-blue-800', cta: 'Shiko', pct: 100 };
-      case 'Reviewed': return { label: 'Në shqyrtim', pill: 'bg-purple-100 text-purple-800', cta: 'Shiko', pct: 100 };
+      case 'Reviewed': return { label: 'Në shqyrtim', pill: 'bg-accent-soft text-primary', cta: 'Shiko', pct: 100 };
       case 'Converted': return { label: 'Konvertuar', pill: 'bg-green-100 text-green-800', cta: 'Shiko', pct: 100 };
       default: return { label: s, pill: 'bg-gray-100 text-gray-800', cta: 'Shiko', pct: 100 };
     }

@@ -648,7 +648,7 @@ const TasksView: React.FC = () => {
     const accentColor = task.status === 'Todo' ? '#f59e0b'
       : task.status === 'Done' ? '#10b981'
       : task.status === 'In Progress' ? '#3b82f6'
-      : '#7c3aed'; // Review / default
+      : '#12468C'; // Review / default
     return (
       <div
         className={`group relative rounded-[14px] bg-white dark:bg-card border shadow-sm cursor-pointer overflow-hidden transition-all duration-[180ms] ease-[cubic-bezier(.4,0,.2,1)] hover:-translate-y-0.5 hover:shadow-md ${
@@ -1923,7 +1923,7 @@ const CalendarView: React.FC<{
           {projShown.map((task, i) => (
             <div
               key={`proj-${task.id}-${i}`}
-              className="text-[10px] sm:text-xs p-0.5 sm:p-1 rounded cursor-pointer truncate border border-dashed border-violet-300 text-violet-600 dark:text-violet-300 dark:border-violet-700 bg-violet-50/50 dark:bg-violet-950/30 hover:bg-violet-100 dark:hover:bg-violet-900/40 italic"
+              className="text-[10px] sm:text-xs p-0.5 sm:p-1 rounded cursor-pointer truncate border border-dashed border-primary/30 text-primary dark:text-primary dark:border-primary/40 bg-accent-soft dark:bg-primary/10 hover:bg-accent-soft dark:hover:bg-primary/20 italic"
               title={`Përsëritet — ${task.title}`}
               onClick={() => onTaskClick(task)}
             >

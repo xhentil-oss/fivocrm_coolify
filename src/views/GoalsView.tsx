@@ -852,7 +852,7 @@ const GoalDetailDialog: React.FC<{
                   const t = tasks.find(x => x.id === id);
                   return t ? (
                     <div key={id} className="flex items-center gap-2 p-2 bg-muted/50 rounded text-sm">
-                      <ListTodo className="w-4 h-4 text-purple-500" />
+                      <ListTodo className="w-4 h-4 text-primary" />
                       <span className="flex-1">{t.title}</span>
                       <Badge variant="outline" className="text-xs">{t.status}</Badge>
                     </div>

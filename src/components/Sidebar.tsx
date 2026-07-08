@@ -224,9 +224,9 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
                 aria-label={item.label}
                 className={({ isActive }) =>
                   cn(
-                    'group flex items-center gap-3 px-3 py-3 min-h-[44px] rounded-lg transition-all duration-200',
-                    'hover:bg-primary/10 hover:text-primary hover:translate-x-1 active:bg-primary/20',
-                    isActive && 'bg-primary/15 text-primary font-medium shadow-sm border-l-2 border-primary',
+                    'group flex items-center gap-3 px-3 py-3 min-h-[44px] rounded-xl transition-all duration-200 text-secondary-foreground',
+                    'hover:bg-accent hover:text-accent-foreground hover:translate-x-1 active:bg-accent',
+                    isActive && 'bg-gradient-primary text-primary-foreground font-semibold shadow-primary hover:text-primary-foreground',
                     collapsed && 'justify-center hover:translate-x-0'
                   )
                 }

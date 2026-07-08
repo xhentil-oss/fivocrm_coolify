@@ -1470,7 +1470,7 @@ const ProjectCalendarView: React.FC<{
           {projShown.map((task, i) => (
             <div
               key={`proj-${task.id}-${i}`}
-              className="text-xs p-1 rounded cursor-pointer truncate border border-dashed border-violet-300 text-violet-600 dark:text-violet-300 dark:border-violet-700 bg-violet-50/50 dark:bg-violet-950/30 hover:bg-violet-100 dark:hover:bg-violet-900/40 italic"
+              className="text-xs p-1 rounded cursor-pointer truncate border border-dashed border-primary/30 text-primary dark:text-primary dark:border-primary/30 bg-accent-soft dark:bg-primary/10 hover:bg-accent dark:hover:bg-primary/20 italic"
               title={`Përsëritet — ${task.title}`}
               onClick={() => onTaskClick(task)}
             >

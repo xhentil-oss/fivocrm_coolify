@@ -179,7 +179,7 @@ const PortalProjectDetailView: React.FC = () => {
     switch (status) {
       case 'Done': return <CheckCircle2 className="h-4 w-4 text-green-500" />;
       case 'In Progress': return <Clock className="h-4 w-4 text-blue-500" />;
-      case 'Review': return <Clock className="h-4 w-4 text-purple-500" />;
+      case 'Review': return <Clock className="h-4 w-4 text-primary" />;
       default: return <Circle className="h-4 w-4 text-muted-foreground" />;
     }
   };
@@ -217,7 +217,7 @@ const PortalProjectDetailView: React.FC = () => {
   const getRequestStatusColor = (status: string) => {
     switch (status) {
       case 'New': return 'bg-blue-100 text-blue-800';
-      case 'In Review': return 'bg-purple-100 text-purple-800';
+      case 'In Review': return 'bg-accent-soft text-primary';
       case 'In Progress': return 'bg-yellow-100 text-yellow-800';
       case 'Completed': return 'bg-green-100 text-green-800';
       case 'Rejected': return 'bg-red-100 text-red-800';

@@ -30,7 +30,7 @@ function barColor(t: Task): string {
   if (t.priority === 'high') return 'bg-orange-500';
   if (t.status === 'In Progress') return 'bg-blue-500';
   if (t.status === 'Review') return 'bg-amber-500';
-  return 'bg-violet-500';
+  return 'bg-primary';
 }
 
 interface Props {
@@ -125,7 +125,7 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
                   className={`flex-shrink-0 text-center ${isWeekStart ? 'border-l border-border' : 'border-l border-border/30'} ${weekend ? 'bg-muted/30' : ''}`}
                 >
                   <div className="text-[9px] uppercase text-muted-foreground/70">{d.toLocaleDateString('sq-AL', { weekday: 'narrow' })}</div>
-                  <div className={`text-[11px] ${isToday ? 'font-bold text-violet-600' : 'text-muted-foreground'}`}>{d.getDate()}</div>
+                  <div className={`text-[11px] ${isToday ? 'font-bold text-primary' : 'text-muted-foreground'}`}>{d.getDate()}</div>
                 </div>
               );
             })}
@@ -136,7 +136,7 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
         <div className="relative">
           {/* Today marker — same origin as the bars (LABEL_W + offset days) */}
           {todayOffset >= 0 && todayOffset < range.days && (
-            <div className="absolute top-0 bottom-0 w-px bg-violet-500/50 z-[5]" style={{ left: labelW + todayOffset * DAY_W + DAY_W / 2 }} />
+            <div className="absolute top-0 bottom-0 w-px bg-primary/50 z-[5]" style={{ left: labelW + todayOffset * DAY_W + DAY_W / 2 }} />
           )}
           {dated.map(({ task, start, end }) => {
             const left = labelW + daysBetween(range.start, start) * DAY_W;
@@ -149,7 +149,7 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
                 <button
                   onClick={() => onTaskClick(task)}
                   title={`${task.title} · ${start.toLocaleDateString('sq-AL')} → ${end.toLocaleDateString('sq-AL')}`}
-                  className={`absolute top-1/2 -translate-y-1/2 h-5 rounded ${barColor(task)} ${task.status === 'Done' ? 'opacity-60' : ''} hover:ring-2 hover:ring-offset-1 hover:ring-violet-400 transition-all flex items-center px-1.5`}
+                  className={`absolute top-1/2 -translate-y-1/2 h-5 rounded ${barColor(task)} ${task.status === 'Done' ? 'opacity-60' : ''} hover:ring-2 hover:ring-offset-1 hover:ring-primary transition-all flex items-center px-1.5`}
                   style={{ left, width: Math.max(width, 12) }}
                 >
                   <span className="text-[10px] text-white truncate">{task.title}</span>

@@ -16,7 +16,7 @@ import type { Invoice, InvoiceItem, Service } from '../../types';
 // Per-category icon + color for the catalog cards. Unknown categories fall back
 // to a neutral bag icon.
 const CATEGORY_VISUALS: Record<string, { Icon: any; box: string }> = {
-  'Web Design': { Icon: Navigation, box: 'bg-violet-100 text-violet-600 dark:bg-violet-900/30 dark:text-violet-300' },
+  'Web Design': { Icon: Navigation, box: 'bg-accent-soft text-primary dark:bg-primary/10 dark:text-primary' },
   'SEO': { Icon: TrendingUp, box: 'bg-blue-100 text-blue-600 dark:bg-blue-900/30 dark:text-blue-300' },
   'Social Media': { Icon: Megaphone, box: 'bg-pink-100 text-pink-600 dark:bg-pink-900/30 dark:text-pink-300' },
   'Marketing': { Icon: Sparkles, box: 'bg-amber-100 text-amber-600 dark:bg-amber-900/30 dark:text-amber-300' },

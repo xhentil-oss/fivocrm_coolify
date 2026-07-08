@@ -61,7 +61,7 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
       {/* height grows by the top safe-area inset; padding pushes the content below
           the status bar / notch on edge-to-edge Android/iOS. */}
       <header
-        className="fixed top-0 left-0 right-0 z-50 bg-gradient-primary border-b border-border/20"
+        className="fixed top-0 left-0 right-0 z-50 bg-brand-navy border-b border-white/10"
         style={{ height: 'calc(72px + env(safe-area-inset-top))', paddingTop: 'env(safe-area-inset-top)' }}
       >
         <div className="h-full px-3 sm:px-4 lg:px-6 flex items-center justify-between">
@@ -70,7 +70,7 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
             variant="ghost"
             size="icon"
             onClick={onToggleMobileMenu}
-            className="lg:hidden bg-white/10 text-primary-foreground hover:bg-white/20"
+            className="lg:hidden bg-white/10 text-white hover:bg-white/20"
             aria-label={mobileMenuOpen ? "Close menu" : "Open menu"}
           >
             {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -80,13 +80,13 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
             variant="ghost"
             size="icon"
             onClick={onToggleSidebar}
-            className="hidden lg:flex bg-white/10 text-primary-foreground hover:bg-white/20"
+            className="hidden lg:flex bg-white/10 text-white hover:bg-white/20"
             aria-label="Hap/Mbyll panelin anësor"
           >
             <Menu className="w-5 h-5" />
           </Button>
 
-          <h1 className="text-h4 text-primary-foreground font-medium">
+          <h1 className="text-h4 text-white font-medium">
             WorkHub
           </h1>
         </div>
@@ -94,7 +94,7 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
         <div className="flex-1 max-w-xs lg:max-w-xl mx-2 lg:mx-8 hidden md:block">
           <button
             onClick={onOpenCommandPalette}
-            className="w-full h-11 px-4 flex items-center gap-3 bg-white/10 backdrop-blur-sm rounded-lg text-primary-foreground/80 hover:bg-white/20 transition-colors duration-fast"
+            className="w-full h-11 px-4 flex items-center gap-3 bg-white/10 backdrop-blur-sm rounded-lg text-white/80 hover:bg-white/20 transition-colors duration-fast"
           >
             <Search className="w-5 h-5" />
             <span className="text-body-sm">Kërko ose shkruaj një komandë...</span>
@@ -109,7 +109,7 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
             variant="ghost"
             size="icon"
             onClick={onOpenCommandPalette}
-            className="md:hidden bg-white/10 text-primary-foreground hover:bg-white/20"
+            className="md:hidden bg-white/10 text-white hover:bg-white/20"
             aria-label="Kërko"
           >
             <Search className="w-5 h-5" />
@@ -120,7 +120,7 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
               <Button 
                 variant="ghost" 
                 size="icon"
-                className="bg-white/10 text-primary-foreground hover:bg-white/20"
+                className="bg-white/10 text-white hover:bg-white/20"
                 aria-label="Shto shpejt"
               >
                 <Plus className="w-5 h-5" />
@@ -148,7 +148,7 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
               <Button 
                 variant="ghost" 
                 size="icon"
-                className={`bg-white/10 text-primary-foreground hover:bg-white/20 ${previewRole ? 'ring-2 ring-yellow-400' : ''}`}
+                className={`bg-white/10 text-white hover:bg-white/20 ${previewRole ? 'ring-2 ring-yellow-400' : ''}`}
                 aria-label="Menyja e përdoruesit"
               >
                 {user?.photoURL ? (

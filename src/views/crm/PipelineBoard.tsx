@@ -28,7 +28,7 @@ type StageKey = 'New' | 'Contacted' | 'Qualified' | 'Follow-up' | 'Converted';
 
 const STAGES: { key: StageKey; label: string; accent: string }[] = [
   { key: 'New', label: 'Të reja', accent: 'border-l-blue-400' },
-  { key: 'Contacted', label: 'Kontaktuara', accent: 'border-l-violet-400' },
+  { key: 'Contacted', label: 'Kontaktuara', accent: 'border-l-navy-700' },
   { key: 'Qualified', label: 'Kualifikuara', accent: 'border-l-green-500' },
   { key: 'Follow-up', label: 'Në ndjekje', accent: 'border-l-yellow-500' },
   { key: 'Converted', label: 'Konvertuara', accent: 'border-l-emerald-600' },

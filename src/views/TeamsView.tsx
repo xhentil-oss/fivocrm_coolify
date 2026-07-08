@@ -13,7 +13,7 @@ function getTeamDeptIcon(department?: string) {
   if (d.includes('seo') || d.includes('search'))
     return { Icon: Search, bg: 'bg-green-100', color: 'text-green-600' };
   if (d.includes('social') || d.includes('media'))
-    return { Icon: Share2, bg: 'bg-purple-100', color: 'text-purple-600' };
+    return { Icon: Share2, bg: 'bg-accent-soft', color: 'text-primary' };
   if (d.includes('content') || d.includes('shkrim') || d.includes('writing'))
     return { Icon: PenTool, bg: 'bg-orange-100', color: 'text-orange-600' };
   if (d.includes('brand') || d.includes('dizajn') || d.includes('design') || d.includes('creative') || d.includes('kreativ'))
@@ -23,7 +23,7 @@ function getTeamDeptIcon(department?: string) {
   if (d.includes('support') || d.includes('suport') || d.includes('helpdesk'))
     return { Icon: HeadphonesIcon, bg: 'bg-sky-100', color: 'text-sky-600' };
   if (d.includes('consult') || d.includes('konsulenc'))
-    return { Icon: Briefcase, bg: 'bg-indigo-100', color: 'text-indigo-600' };
+    return { Icon: Briefcase, bg: 'bg-navy-700/10', color: 'text-navy-700' };
   if (d.includes('financ') || d.includes('account') || d.includes('kontabilitet'))
     return { Icon: DollarSign, bg: 'bg-emerald-100', color: 'text-emerald-600' };
   if (d.includes('sales') || d.includes('shitje'))

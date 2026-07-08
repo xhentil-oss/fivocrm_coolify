@@ -47,7 +47,7 @@ const DailyReportsView = lazy(() => import('./DailyReportsView'));
 // ── Recharts Bar Chart ──
 const BarChart: React.FC<{ data: { label: string; value: number; color?: string }[]; height?: number }> = ({ data, height = 200 }) => {
   if (!data.length) return <div className="text-muted-foreground text-center py-8">Nuk ka të dhëna</div>;
-  const defaultColor = '#6366f1';
+  const defaultColor = '#0EA5E9';
   return (
     <ResponsiveContainer width="100%" height={height}>
       <RechartsBarChart data={data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
@@ -97,7 +97,7 @@ const CashflowChart: React.FC<{ data: { label: string; inflow: number; outflow: 
         <Legend formatter={(value: string) => value === 'inflow' ? 'Të Ardhura' : value === 'outflow' ? 'Shpenzime' : 'Neto'} />
         <Bar dataKey="inflow" fill="#22c55e" fillOpacity={0.85} radius={[3, 3, 0, 0]} />
         <Bar dataKey="outflow" fill="#ef4444" fillOpacity={0.85} radius={[3, 3, 0, 0]} />
-        <Line type="monotone" dataKey="net" stroke="#6366f1" strokeWidth={2.5} dot={{ r: 4, fill: '#fff', stroke: '#6366f1', strokeWidth: 2 }} />
+        <Line type="monotone" dataKey="net" stroke="#0EA5E9" strokeWidth={2.5} dot={{ r: 4, fill: '#fff', stroke: '#0EA5E9', strokeWidth: 2 }} />
       </ComposedChart>
     </ResponsiveContainer>
   );
@@ -273,9 +273,9 @@ const ReportsView: React.FC = () => {
     if (!leads) return [];
     const statuses = [
       { status: 'New', label: 'Të Reja', color: '#3b82f6' },
-      { status: 'Contacted', label: 'Kontaktuar', color: '#8b5cf6' },
+      { status: 'Contacted', label: 'Kontaktuar', color: '#0EA5E9' },
       { status: 'Qualified', label: 'Kualifikuar', color: '#f59e0b' },
-      { status: 'Proposal', label: 'Propozim', color: '#6366f1' },
+      { status: 'Proposal', label: 'Propozim', color: '#0369A1' },
       { status: 'Won', label: 'Fituar', color: '#22c55e' },
       { status: 'Lost', label: 'Humbur', color: '#ef4444' },
     ];
@@ -938,9 +938,9 @@ const ReportsView: React.FC = () => {
   const getActivityIcon = (type: string) => {
     switch (type) {
       case 'invoice_created': case 'invoice_paid': return <FileText className="w-4 h-4 text-blue-500" />;
-      case 'lead_created': case 'lead_converted': return <UserPlus className="w-4 h-4 text-purple-500" />;
+      case 'lead_created': case 'lead_converted': return <UserPlus className="w-4 h-4 text-primary" />;
       case 'task_completed': return <CheckCircle className="w-4 h-4 text-green-500" />;
-      case 'project_created': return <Target className="w-4 h-4 text-indigo-500" />;
+      case 'project_created': return <Target className="w-4 h-4 text-primary" />;
       case 'customer_created': return <Users className="w-4 h-4 text-teal-500" />;
       case 'expense_added': return <Receipt className="w-4 h-4 text-red-500" />;
       case 'meeting': case 'call': return <Clock className="w-4 h-4 text-orange-500" />;
@@ -1025,7 +1025,7 @@ const ReportsView: React.FC = () => {
                     className="h-full rounded-full transition-all duration-500"
                     style={{
                       width: `${p.progress}%`,
-                      background: p.progress >= 80 ? '#22c55e' : p.progress >= 40 ? '#6366f1' : '#f59e0b'
+                      background: p.progress >= 80 ? '#22c55e' : p.progress >= 40 ? '#0EA5E9' : '#f59e0b'
                     }}
                   />
                 </div>
@@ -1104,10 +1104,10 @@ const ReportsView: React.FC = () => {
         </Card>
         )}
         {!isSales && (
-        <Card className="p-5 space-y-2 border-l-4 border-l-indigo-500">
+        <Card className="p-5 space-y-2 border-l-4 border-l-primary">
           <div className="flex items-center justify-between">
             <p className="text-sm text-muted-foreground">Fitimi Neto ({selectedRevenueYear})</p>
-            <TrendingUp className="w-5 h-5 text-indigo-500" />
+            <TrendingUp className="w-5 h-5 text-primary" />
           </div>
           <p className={`text-2xl font-bold ${profit >= 0 ? 'text-green-600' : 'text-red-600'}`}>{Math.round(profit).toLocaleString()} ALL</p>
           <p className="text-xs text-muted-foreground">{accountingBasis === 'accrual' ? 'Të faturuara' : 'Të arkëtuara'} − Shpenzime</p>
@@ -1309,7 +1309,7 @@ const ReportsView: React.FC = () => {
               </div>
               <div className="text-center">
                 <p className="text-xs text-muted-foreground mb-1">Neto</p>
-                <p className={`text-lg font-bold ${cashflowByMonth.reduce((s, m) => s + m.net, 0) >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                <p className={`text-lg font-bold ${cashflowByMonth.reduce((s, m) => s + m.net, 0) >= 0 ? 'text-primary' : 'text-red-600'}`}>
                   {cashflowByMonth.reduce((s, m) => s + m.net, 0).toLocaleString()} ALL
                 </p>
               </div>
@@ -1353,7 +1353,7 @@ const ReportsView: React.FC = () => {
             </div>
             <div className="rounded-md border p-2.5 bg-muted/30">
               <p className="text-[11px] text-muted-foreground">Health Score</p>
-              <p className="text-sm font-semibold text-indigo-600">{projectPortfolioSummary.avgHealth}/100</p>
+              <p className="text-sm font-semibold text-primary">{projectPortfolioSummary.avgHealth}/100</p>
             </div>
           </div>
           {projectPerformance.length === 0 ? (
@@ -1379,7 +1379,7 @@ const ReportsView: React.FC = () => {
                       className="h-full rounded-full transition-all duration-500"
                       style={{
                         width: `${p.progress}%`,
-                        background: p.progress >= 80 ? '#22c55e' : p.progress >= 40 ? '#6366f1' : '#f59e0b'
+                        background: p.progress >= 80 ? '#22c55e' : p.progress >= 40 ? '#0EA5E9' : '#f59e0b'
                       }}
                     />
                   </div>
@@ -1454,7 +1454,7 @@ const ReportsView: React.FC = () => {
             <p className="text-[11px] text-muted-foreground">SEO - Shpenzime</p>
             <p className="text-sm font-semibold text-red-700">{Math.round(seoFinanceSummary.seoExpenses).toLocaleString()} ALL</p>
           </div>
-          <div className="rounded-md border p-2.5 bg-indigo-50/50">
+          <div className="rounded-md border p-2.5 bg-accent-soft">
             <p className="text-[11px] text-muted-foreground">SEO - Fitim Neto</p>
             <p className={`text-sm font-semibold ${seoFinanceSummary.seoProfit >= 0 ? 'text-green-700' : 'text-red-700'}`}>
               {Math.round(seoFinanceSummary.seoProfit).toLocaleString()} ALL
@@ -1544,10 +1544,10 @@ const ReportsView: React.FC = () => {
                   <td className="text-right tabular-nums">{Math.round(r.revenue).toLocaleString()}</td>
                   <td className="text-right tabular-nums text-red-600">−{Math.round(r.directCost).toLocaleString()}</td>
                   <td className="text-right tabular-nums text-amber-600">−{Math.round(r.allocatedOverhead).toLocaleString()}</td>
-                  <td className={`text-right tabular-nums font-semibold ${r.net >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                  <td className={`text-right tabular-nums font-semibold ${r.net >= 0 ? 'text-primary' : 'text-red-600'}`}>
                     {Math.round(r.net).toLocaleString()}
                   </td>
-                  <td className={`text-right tabular-nums ${r.net >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                  <td className={`text-right tabular-nums ${r.net >= 0 ? 'text-primary' : 'text-red-600'}`}>
                     {r.marginPct.toFixed(0)}%
                   </td>
                 </tr>
@@ -1559,7 +1559,7 @@ const ReportsView: React.FC = () => {
                 <td className="text-right tabular-nums">{Math.round(servicePnl.totals.revenue).toLocaleString()}</td>
                 <td className="text-right tabular-nums text-red-600">−{Math.round(servicePnl.totals.directCost).toLocaleString()}</td>
                 <td className="text-right tabular-nums text-amber-600">−{Math.round(servicePnl.totals.overhead).toLocaleString()}</td>
-                <td className={`text-right tabular-nums ${servicePnl.totals.net >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                <td className={`text-right tabular-nums ${servicePnl.totals.net >= 0 ? 'text-primary' : 'text-red-600'}`}>
                   {Math.round(servicePnl.totals.net).toLocaleString()}
                 </td>
                 <td className="text-right tabular-nums text-muted-foreground">
@@ -1588,7 +1588,7 @@ const ReportsView: React.FC = () => {
                 {staffPeriod === 'year' ? `Viti ${selectedRevenueYear}` : 'Të gjitha kohërat'}
               </p>
               <p className="text-[11px] text-muted-foreground mt-0.5">
-                Vlera e plotë i shkon përgjegjësit të faturës/projektit. Stafi i dorëzimit (p.sh. ekipi i Social Media) shihet si <span className="text-indigo-600">Kontribues</span> — vlera e tyre matet te P&L-ja sipas shërbimit (rroga = kosto e shërbimit).
+                Vlera e plotë i shkon përgjegjësit të faturës/projektit. Stafi i dorëzimit (p.sh. ekipi i Social Media) shihet si <span className="text-primary">Kontribues</span> — vlera e tyre matet te P&L-ja sipas shërbimit (rroga = kosto e shërbimit).
               </p>
             </div>
             <div className="flex items-center gap-2 flex-wrap">
@@ -1626,7 +1626,7 @@ const ReportsView: React.FC = () => {
                         <Badge variant="outline" className="text-xs border-muted-foreground/40 text-muted-foreground">Inaktiv</Badge>
                       )}
                       {member.revenue === 0 && (member.projectCount > 0 || member.taskCount > 0) && (
-                        <Badge variant="outline" className="text-xs border-indigo-300 text-indigo-600">Kontribues</Badge>
+                        <Badge variant="outline" className="text-xs border-primary/30 text-primary">Kontribues</Badge>
                       )}
                       <span className="text-xs text-muted-foreground whitespace-nowrap">
                         {member.invoiceCount} fatura · {member.wonLeads} lead · {member.projectCount} projekte · {member.taskCount} detyra
@@ -1645,7 +1645,7 @@ const ReportsView: React.FC = () => {
                       </div>
                       {!isSales && member.salaryCost > 0 && (
                         <div className="text-xs">
-                          <span className={member.netProfit >= 0 ? 'text-indigo-600 font-medium' : 'text-red-600 font-medium'}>
+                          <span className={member.netProfit >= 0 ? 'text-primary font-medium' : 'text-red-600 font-medium'}>
                             Fitim neto: {Math.round(member.netProfit).toLocaleString()} ALL
                           </span>
                           <span className="text-muted-foreground"> (pagë {Math.round(member.salaryCost).toLocaleString()})</span>
@@ -1654,7 +1654,7 @@ const ReportsView: React.FC = () => {
                     </div>
                   </div>
                   <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
-                    <div className="h-full bg-indigo-500 rounded-full transition-all" style={{ width: `${revPct}%` }} />
+                    <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${revPct}%` }} />
                   </div>
                 </div>
               );
@@ -1702,7 +1702,7 @@ const ReportsView: React.FC = () => {
             {!isSales && staffTotals.salaryCost > 0 && (
               <div className="pt-2 flex justify-between text-sm">
                 <span className="text-muted-foreground">Fitim neto i stafit (të ardhura − pagat)</span>
-                <span className={`font-semibold ${staffTotals.netProfit >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                <span className={`font-semibold ${staffTotals.netProfit >= 0 ? 'text-primary' : 'text-red-600'}`}>
                   {Math.round(staffTotals.netProfit).toLocaleString()} ALL
                 </span>
               </div>
@@ -1743,7 +1743,7 @@ const ReportsView: React.FC = () => {
                   <td className="text-right tabular-nums">{r.projects}</td>
                   <td className="text-right tabular-nums">{Math.round(r.value).toLocaleString()}</td>
                   <td className="text-right tabular-nums text-red-600">−{Math.round(r.cost).toLocaleString()}</td>
-                  <td className={`text-right tabular-nums font-semibold ${r.profit >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                  <td className={`text-right tabular-nums font-semibold ${r.profit >= 0 ? 'text-primary' : 'text-red-600'}`}>
                     {Math.round(r.profit).toLocaleString()}
                   </td>
                 </tr>
@@ -1752,7 +1752,7 @@ const ReportsView: React.FC = () => {
             <tfoot>
               <tr className="font-semibold border-t">
                 <td className="py-2" colSpan={4}>Fitimi total nga projektet</td>
-                <td className={`text-right tabular-nums ${staffProjectProfit.totalProfit >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                <td className={`text-right tabular-nums ${staffProjectProfit.totalProfit >= 0 ? 'text-primary' : 'text-red-600'}`}>
                   {Math.round(staffProjectProfit.totalProfit).toLocaleString()} ALL
                 </td>
               </tr>
@@ -1782,7 +1782,7 @@ const ReportsView: React.FC = () => {
                     <span className="text-xs text-muted-foreground">{squad.count} persona</span>
                   </div>
                   <div className="text-right">
-                    <span className={`font-semibold ${squad.netProfit >= 0 ? 'text-indigo-600' : 'text-red-600'}`}>
+                    <span className={`font-semibold ${squad.netProfit >= 0 ? 'text-primary' : 'text-red-600'}`}>
                       {Math.round(squad.netProfit).toLocaleString()} ALL
                     </span>
                     <div className="text-[11px] text-muted-foreground">
@@ -1791,7 +1791,7 @@ const ReportsView: React.FC = () => {
                   </div>
                 </div>
                 <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
-                  <div className={`h-full rounded-full transition-all ${squad.netProfit >= 0 ? 'bg-indigo-500' : 'bg-red-400'}`} style={{ width: `${pct}%` }} />
+                  <div className={`h-full rounded-full transition-all ${squad.netProfit >= 0 ? 'bg-primary' : 'bg-red-400'}`} style={{ width: `${pct}%` }} />
                 </div>
               </div>
             );

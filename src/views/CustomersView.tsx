@@ -612,8 +612,8 @@ const CustomersView: React.FC = () => {
         </Card>
         <Card className="cursor-pointer hover:shadow-md transition-shadow" onClick={() => setActiveTab('requests')}>
           <CardContent className="pt-6 flex items-center gap-3">
-            <div className="p-2 bg-purple-100 rounded-lg">
-              <Clock className="h-5 w-5 text-purple-600" />
+            <div className="p-2 bg-accent-soft dark:bg-primary/10 rounded-lg">
+              <Clock className="h-5 w-5 text-primary" />
             </div>
             <div>
               <p className="text-sm text-muted-foreground">Ne Progres</p>

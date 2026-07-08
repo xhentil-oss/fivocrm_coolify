@@ -336,7 +336,7 @@ const ChatView: React.FC = () => {
     return map[s] ?? s;
   };
   const getReqStatusColor = (s: string) => {
-    const map: Record<string, string> = { New: 'bg-blue-100 text-blue-700', 'In Review': 'bg-yellow-100 text-yellow-700', 'In Progress': 'bg-purple-100 text-purple-700', Completed: 'bg-green-100 text-green-700', Rejected: 'bg-red-100 text-red-700' };
+    const map: Record<string, string> = { New: 'bg-blue-100 text-blue-700', 'In Review': 'bg-yellow-100 text-yellow-700', 'In Progress': 'bg-accent-soft text-primary', Completed: 'bg-green-100 text-green-700', Rejected: 'bg-red-100 text-red-700' };
     return map[s] ?? 'bg-muted text-muted-foreground';
   };
   const getPriorityColor = (p: string) => {
@@ -1521,7 +1521,7 @@ const ChatView: React.FC = () => {
   // (displayNameCache + getUserDisplayName hoisted above near profileMap to fix TDZ.)
 
   const getAvatarColor = useCallback((id: string) => {
-    const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-violet-500', 'bg-amber-500', 'bg-rose-500', 'bg-cyan-500', 'bg-indigo-500', 'bg-teal-500'];
+    const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-navy-700', 'bg-amber-500', 'bg-rose-500', 'bg-cyan-500', 'bg-navy-800', 'bg-teal-500'];
     let hash = 0;
     for (let i = 0; i < id.length; i++) hash = id.charCodeAt(i) + ((hash << 5) - hash);
     return colors[Math.abs(hash) % colors.length];
@@ -2672,18 +2672,18 @@ const ChatView: React.FC = () => {
             onClick={handleSelectAi}
             className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl transition-all text-left ${
               chatMode === 'ai'
-                ? 'bg-gradient-to-r from-violet-500/10 to-purple-500/10 border border-violet-300/30 dark:border-violet-700/30 shadow-sm'
+                ? 'bg-accent-soft dark:bg-primary/10 border border-primary/30 dark:border-primary/40 shadow-sm'
                 : 'hover:bg-accent/50'
             }`}
           >
-            <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center flex-shrink-0 shadow-sm">
+            <div className="h-9 w-9 rounded-xl bg-gradient-primary flex items-center justify-center flex-shrink-0 shadow-sm">
               <Sparkles className="h-4 w-4 text-white" />
             </div>
             <div className="flex-1 min-w-0">
-              <p className={`text-sm font-medium ${chatMode === 'ai' ? 'text-violet-700 dark:text-violet-300' : ''}`}>FivoAI</p>
+              <p className={`text-sm font-medium ${chatMode === 'ai' ? 'text-primary' : ''}`}>FivoAI</p>
               <p className="text-[11px] text-muted-foreground truncate">Asistenti juaj personal</p>
             </div>
-            <Badge className="bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300 text-[9px] border-0 font-normal">AI</Badge>
+            <Badge className="bg-accent-soft dark:bg-primary/10 text-primary text-[9px] border-0 font-normal">AI</Badge>
           </button>
 
           <div className="h-px bg-border/50 mx-2 my-2" />
@@ -2972,7 +2972,7 @@ const ChatView: React.FC = () => {
 
           {chatMode === 'ai' ? (
             <div className="flex items-center gap-3 flex-1">
-              <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center shadow-sm">
+              <div className="h-9 w-9 rounded-xl bg-gradient-primary flex items-center justify-center shadow-sm">
                 <Sparkles className="h-4 w-4 text-white" />
               </div>
               <div>
@@ -3174,7 +3174,7 @@ const ChatView: React.FC = () => {
                 {aiMessages.length === 0 && showAiActions ? (
                   /* Welcome + Quick Actions */
                   <div className="flex flex-col items-center justify-center min-h-[50vh]">
-                    <div className="h-16 w-16 rounded-2xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center mb-5 shadow-lg">
+                    <div className="h-16 w-16 rounded-2xl bg-gradient-primary flex items-center justify-center mb-5 shadow-lg">
                       <Sparkles className="h-8 w-8 text-white" />
                     </div>
                     <h2 className="text-xl font-bold mb-2">Si mund t'ju ndihmoj?</h2>
@@ -3200,7 +3200,7 @@ const ChatView: React.FC = () => {
                     {aiMessages.map(msg => (
                       <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                         {msg.role === 'assistant' && (
-                          <div className="h-8 w-8 rounded-xl bg-gradient-to-br from-violet-500 to-purple-600 flex items-center justify-center flex-shrink-0 mt-1">
+                          <div className="h-8 w-8 rounded-xl bg-gradient-primary flex items-center justify-center flex-shrink-0 mt-1">
                             <Bot className="h-4 w-4 text-white" />
                           </div>
                         )}
@@ -3212,7 +3212,7 @@ const ChatView: React.FC = () => {
                           }`}>
                             {msg.isLoading ? (
                               <div className="flex items-center gap-2 py-1">
-                                <Loader2 className="h-4 w-4 animate-spin text-violet-500" />
+                                <Loader2 className="h-4 w-4 animate-spin text-primary" />
                                 <span className="text-sm text-muted-foreground">Duke menduar...</span>
                               </div>
                             ) : (
@@ -3239,7 +3239,7 @@ const ChatView: React.FC = () => {
 
             {/* AI Input */}
             <div className="px-4 pb-4 pt-2 max-w-3xl mx-auto w-full">
-              <div className="relative flex items-end gap-2 bg-muted/30 border rounded-2xl px-4 py-2 focus-within:border-violet-400/60 focus-within:bg-background focus-within:shadow-md transition-all">
+              <div className="relative flex items-end gap-2 bg-muted/30 border rounded-2xl px-4 py-2 focus-within:border-primary/60 focus-within:bg-background focus-within:shadow-md transition-all">
                 <textarea
                   ref={textareaRef}
                   value={messageText}
@@ -3257,7 +3257,7 @@ const ChatView: React.FC = () => {
                   onClick={() => sendAiMessage(messageText)}
                   disabled={!messageText.trim() || aiLoading}
                   className={`h-8 w-8 rounded-xl flex-shrink-0 transition-all ${
-                    messageText.trim() ? 'bg-violet-600 hover:bg-violet-700 text-white shadow-sm' : 'bg-transparent text-muted-foreground/40'
+                    messageText.trim() ? 'bg-primary hover:bg-primary-hover text-white shadow-sm' : 'bg-transparent text-muted-foreground/40'
                   }`}
                 >
                   {aiLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}

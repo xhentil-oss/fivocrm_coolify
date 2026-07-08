@@ -759,9 +759,9 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
 
         {/* ─── Social Media Marketing ─── */}
         {showSMM && (
-          <Card className="p-4 space-y-4 border-purple-200 bg-purple-50/30 dark:bg-purple-950/10 dark:border-purple-800/40">
+          <Card className="p-4 space-y-4 border-primary/30 bg-accent-soft dark:bg-primary/10 dark:border-primary/30">
             <div className="flex items-center gap-2">
-              <Share2 className="w-5 h-5 text-purple-600" />
+              <Share2 className="w-5 h-5 text-primary" />
               <h3 className="font-semibold text-sm">Social Media Marketing</h3>
             </div>
 

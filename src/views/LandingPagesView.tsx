@@ -23,8 +23,8 @@ const LANDING_PAGES: LandingPageEntry[] = [
     path: '/seo',
     category: 'SEO',
     icon: Search,
-    color: 'text-violet-600',
-    gradient: 'from-violet-500 to-purple-600',
+    color: 'text-primary',
+    gradient: 'from-primary to-navy-700',
     status: 'active',
   },
   {
@@ -68,7 +68,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
     category: 'Social Media',
     icon: Briefcase,
     color: 'text-blue-600',
-    gradient: 'from-blue-500 to-indigo-600',
+    gradient: 'from-blue-500 to-navy-700',
     status: 'active',
   },
   {
@@ -89,8 +89,8 @@ const LANDING_PAGES: LandingPageEntry[] = [
     path: '/arsim',
     category: 'Education',
     icon: GraduationCap,
-    color: 'text-indigo-600',
-    gradient: 'from-indigo-500 to-violet-600',
+    color: 'text-navy-700',
+    gradient: 'from-navy-700 to-navy-900',
     status: 'active',
   },
   {
@@ -101,7 +101,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
     category: 'Social Media',
     icon: Share2,
     color: 'text-pink-600',
-    gradient: 'from-pink-500 to-purple-600',
+    gradient: 'from-pink-500 to-navy-700',
     status: 'active',
   },
   {
@@ -134,7 +134,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
     category: 'Website',
     icon: Code2,
     color: 'text-blue-600',
-    gradient: 'from-blue-500 to-indigo-600',
+    gradient: 'from-blue-500 to-navy-700',
     status: 'active',
   },
   {

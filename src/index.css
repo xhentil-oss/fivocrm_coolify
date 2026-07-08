@@ -1,4 +1,4 @@
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;700&family=IBM+Plex+Mono:wght@300;400;500&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700;800&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -8,54 +8,69 @@
 @layer utilities {
   .no-scrollbar::-webkit-scrollbar { display: none; }
   .no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
-  .bg-brand-gradient { background: linear-gradient(135deg, hsl(258 80% 56%), hsl(218 70% 54%)); }
+  /* Navy brand gradient — used ONLY on hero / login / header / brand tiles */
+  .bg-brand-gradient { background: linear-gradient(150deg, #12468C 0%, #0C2C63 50%, #08183A 100%); }
+  /* Cyan accent gradient — primary actions, active nav, KPI emphasis */
+  .bg-accent-gradient { background: linear-gradient(150deg, #0EA5E9 0%, #0369A1 100%); }
 }
 
 @layer base {
   :root {
-    --color-background: 0 0% 98%;
-    --color-foreground: 222 20% 10%;
-    --color-border: 0 0% 85%;
-    --color-input: 0 0% 85%;
-    --color-ring: 210 70% 54%;
-    
-    --color-primary: 258 80% 55%;
-    --color-primary-foreground: 0 0% 100%;
-    --color-primary-hover: 258 80% 47%;
-    --color-primary-active: 258 80% 41%;
-    
-    --color-secondary: 258 60% 45%;
-    --color-secondary-foreground: 0 0% 100%;
-    --color-secondary-hover: 258 60% 38%;
-    --color-secondary-active: 258 60% 33%;
-    
-    --color-tertiary: 218 70% 54%;
+    /* ── FivoCRM brand tokens (raw hex, for gradients & direct use) ── */
+    --navy-700: #12468C;   /* primary brand — logo, header, brand tiles */
+    --navy-800: #0C2C63;   /* deep navy — gradient mid, sidebar active */
+    --navy-900: #08183A;   /* darkest navy — hero background */
+    --accent: #0EA5E9;     /* cyan — actions, links, active icons */
+    --accent-ink: #0369A1; /* cyan hover / gradient end */
+    --accent-bright: #38BDF8; /* glow / accent over navy */
+    --accent-soft: #E7F6FE;   /* soft icon/chip background */
+    --accent-on: #04223A;     /* text on accent surfaces */
+    --border-strong: #DCE3EC;
+
+    /* ── Semantic tokens (HSL triplets, consumed via hsl(var(--x))) ── */
+    --color-background: 220 38% 97%;      /* #F4F6FA app background */
+    --color-foreground: 217 62% 12%;      /* #0C1B33 primary text */
+    --color-border: 218 27% 94%;          /* #ECEFF4 */
+    --color-input: 218 24% 90%;           /* #DCE3EC border-strong */
+    --color-ring: 199 89% 48%;            /* #0EA5E9 accent */
+
+    --color-primary: 199 89% 48%;         /* #0EA5E9 cyan accent */
+    --color-primary-foreground: 207 87% 12%; /* #04223A text on accent */
+    --color-primary-hover: 201 96% 32%;   /* #0369A1 */
+    --color-primary-active: 201 96% 26%;
+
+    --color-secondary: 218 31% 95%;       /* #EEF1F6 */
+    --color-secondary-foreground: 219 23% 34%; /* #42506A */
+    --color-secondary-hover: 219 24% 91%;
+    --color-secondary-active: 219 22% 87%;
+
+    --color-tertiary: 214 77% 31%;        /* #12468C navy */
     --color-tertiary-foreground: 0 0% 100%;
-    
-    --color-accent: 341 75% 55%;
-    --color-accent-foreground: 0 0% 100%;
-    
-    --color-success: 142 50% 44%;
+
+    --color-accent: 201 92% 95%;          /* #E7F6FE soft cyan hover surface */
+    --color-accent-foreground: 201 96% 32%; /* #0369A1 */
+
+    --color-success: 151 66% 39%;         /* #22A565 */
     --color-success-foreground: 0 0% 100%;
-    
-    --color-warning: 42 100% 47%;
-    --color-warning-foreground: 0 0% 10%;
-    
-    --color-error: 0 75% 50%;
+
+    --color-warning: 37 90% 45%;          /* #D98A0B */
+    --color-warning-foreground: 0 0% 100%;
+
+    --color-error: 0 72% 51%;             /* #DC2626 */
     --color-error-foreground: 0 0% 100%;
-    
-    --color-info: 210 70% 54%;
-    --color-info-foreground: 0 0% 100%;
-    
-    --color-muted: 0 0% 95%;
-    --color-muted-foreground: 0 0% 40%;
-    
-    --color-card: 0 0% 100%;
-    --color-card-foreground: 222 20% 10%;
-    
+
+    --color-info: 199 89% 48%;            /* #0EA5E9 */
+    --color-info-foreground: 207 87% 12%;
+
+    --color-muted: 218 31% 95%;           /* #EEF1F6 */
+    --color-muted-foreground: 218 16% 50%; /* #6B7A93 secondary text */
+
+    --color-card: 0 0% 100%;              /* #FFFFFF */
+    --color-card-foreground: 217 62% 12%;
+
     --color-popover: 0 0% 100%;
-    --color-popover-foreground: 222 20% 10%;
-    
+    --color-popover-foreground: 217 62% 12%;
+
     --font-sans: "DM Sans", sans-serif;
     --font-mono: "IBM Plex Mono", monospace;
     
@@ -71,10 +86,10 @@
     --radius-lg: 8px;
     --radius-full: 9999px;
     
-    --shadow-sm: 0 1px 3px hsla(0, 0%, 0%, 0.08);
-    --shadow-md: 0 3px 6px hsla(0, 0%, 0%, 0.1);
-    --shadow-lg: 0 6px 12px hsla(0, 0%, 0%, 0.12);
-    --shadow-xl: 0 12px 24px hsla(0, 0%, 0%, 0.15);
+    --shadow-sm: 0 1px 3px rgba(12, 27, 51, 0.05);
+    --shadow-md: 0 4px 12px -4px rgba(12, 27, 51, 0.12);
+    --shadow-lg: 0 12px 28px -12px rgba(12, 27, 51, 0.18);
+    --shadow-xl: 0 16px 40px -20px rgba(12, 27, 51, 0.45);
   }
   
   * {
@@ -89,8 +104,8 @@
   }
   
   h1, h2, h3, h4, h5, h6 {
-    font-weight: 500;
-    letter-spacing: -0.025em;
+    font-weight: 600;
+    letter-spacing: -0.02em;
     line-height: 1.2;
   }
 }
@@ -112,27 +127,27 @@
 
 @layer utilities {
   .text-gradient-primary {
-    background: linear-gradient(135deg, hsl(258, 80%, 55%) 0%, hsl(218, 70%, 54%) 100%);
+    background: linear-gradient(150deg, #12468C 0%, #0C2C63 50%, #08183A 100%);
     -webkit-background-clip: text;
     -webkit-text-fill-color: transparent;
     background-clip: text;
   }
-  
+
   /* Card hover effects */
   .card-hover {
     @apply transition-all duration-300 ease-out;
   }
-  
+
   .card-hover:hover {
     @apply shadow-lg -translate-y-1;
-    box-shadow: 0 10px 40px -10px hsla(258, 80%, 55%, 0.15);
+    box-shadow: 0 16px 40px -20px rgba(12, 27, 51, 0.45);
   }
-  
+
   /* Gradient border effect */
   .gradient-border {
     position: relative;
     background: linear-gradient(white, white) padding-box,
-                linear-gradient(135deg, hsl(258, 80%, 55%), hsl(218, 70%, 54%)) border-box;
+                linear-gradient(150deg, #0EA5E9, #0369A1) border-box;
     border: 2px solid transparent;
   }
   
@@ -174,7 +189,7 @@
   
   /* Glow effect on focus */
   .focus-glow:focus-within {
-    box-shadow: 0 0 0 3px hsla(258, 80%, 55%, 0.2);
+    box-shadow: 0 0 0 3px hsla(199, 89%, 48%, 0.25);
   }
   
   /* Status dot pulse */
@@ -197,23 +212,23 @@
   
   /* Metric card gradient backgrounds */
   .metric-card-success {
-    background: linear-gradient(135deg, hsla(142, 50%, 44%, 0.1) 0%, hsla(142, 50%, 44%, 0.05) 100%);
+    background: linear-gradient(150deg, hsla(151, 66%, 39%, 0.12) 0%, hsla(151, 66%, 39%, 0.04) 100%);
   }
-  
+
   .metric-card-warning {
-    background: linear-gradient(135deg, hsla(42, 100%, 47%, 0.1) 0%, hsla(42, 100%, 47%, 0.05) 100%);
+    background: linear-gradient(150deg, hsla(37, 90%, 45%, 0.12) 0%, hsla(37, 90%, 45%, 0.04) 100%);
   }
-  
+
   .metric-card-error {
-    background: linear-gradient(135deg, hsla(0, 75%, 50%, 0.1) 0%, hsla(0, 75%, 50%, 0.05) 100%);
+    background: linear-gradient(150deg, hsla(0, 72%, 51%, 0.12) 0%, hsla(0, 72%, 51%, 0.04) 100%);
   }
-  
+
   .metric-card-primary {
-    background: linear-gradient(135deg, hsla(258, 80%, 55%, 0.1) 0%, hsla(258, 80%, 55%, 0.05) 100%);
+    background: linear-gradient(150deg, hsla(199, 89%, 48%, 0.12) 0%, hsla(199, 89%, 48%, 0.04) 100%);
   }
-  
+
   .metric-card-info {
-    background: linear-gradient(135deg, hsla(210, 70%, 54%, 0.1) 0%, hsla(210, 70%, 54%, 0.05) 100%);
+    background: linear-gradient(150deg, hsla(199, 89%, 48%, 0.12) 0%, hsla(199, 89%, 48%, 0.04) 100%);
   }
 
   /* Responsive heading sizes — scale up on larger screens */

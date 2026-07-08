@@ -55,7 +55,7 @@ interface WorkspaceDriveFile {
 const FOLDER_COLORS = [
   { value: 'blue', label: 'Blu', class: 'bg-blue-500' },
   { value: 'green', label: 'Jeshile', class: 'bg-green-500' },
-  { value: 'purple', label: 'Vjollcë', class: 'bg-purple-500' },
+  { value: 'purple', label: 'Navy', class: 'bg-navy-700' },
   { value: 'orange', label: 'Portokalli', class: 'bg-orange-500' },
   { value: 'pink', label: 'Rozë', class: 'bg-pink-500' },
   { value: 'cyan', label: 'Cyan', class: 'bg-cyan-500' },
@@ -79,7 +79,7 @@ const getMimeColor = (mimeType: string) => {
   if (mimeType?.includes('spreadsheet')) return 'text-green-500';
   if (mimeType?.includes('presentation')) return 'text-orange-500';
   if (mimeType?.startsWith('image/')) return 'text-pink-500';
-  if (mimeType?.startsWith('video/')) return 'text-purple-500';
+  if (mimeType?.startsWith('video/')) return 'text-navy-700';
   return 'text-gray-500';
 };
 

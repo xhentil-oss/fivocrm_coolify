@@ -133,7 +133,7 @@ const ServicesView: React.FC = () => {
       case 'SEO':
         return 'bg-green-100 text-green-800';
       case 'Social Media Marketing':
-        return 'bg-purple-100 text-purple-800';
+        return 'bg-accent-soft text-primary';
       case 'Content Writing':
         return 'bg-orange-100 text-orange-800';
       case 'Branding':
@@ -150,7 +150,7 @@ const ServicesView: React.FC = () => {
       case 'SEO':
         return { Icon: Search, bg: 'bg-green-100', color: 'text-green-600' };
       case 'Social Media Marketing':
-        return { Icon: Share2, bg: 'bg-purple-100', color: 'text-purple-600' };
+        return { Icon: Share2, bg: 'bg-accent-soft', color: 'text-primary' };
       case 'Content Writing':
         return { Icon: PenTool, bg: 'bg-orange-100', color: 'text-orange-600' };
       case 'Branding':

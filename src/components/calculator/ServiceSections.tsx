@@ -218,7 +218,7 @@ export function WebDesignSection({ sel, update }: SectionProps) {
   return (
     <div className="space-y-4">
       <SectionHeader
-        icon={Globe} title="Web Design / Development" color="bg-indigo-500"
+        icon={Globe} title="Web Design / Development" color="bg-navy-700"
         enabled={s.enabled} onToggle={() => up({ enabled: !s.enabled })}
       />
       {s.enabled && (
