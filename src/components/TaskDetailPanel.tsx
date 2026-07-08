@@ -62,6 +62,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const { isConnected: isGoogleConnected } = useGoogleApi();
   const { upload: uploadCommentImage, uploading: commentImageUploading } = useFileUpload();
   const commentFileInputRef = useRef<HTMLInputElement | null>(null);
+  const commentInputRef = useRef<HTMLTextAreaElement | null>(null);
   const handleCommentImageUpload = async (file: File) => {
     if (!/^image\/(png|jpe?g|gif|webp|svg\+xml)$/.test(file.type)) {
       toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP, SVG.', variant: 'destructive' });
@@ -80,6 +81,15 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   };
   const [commentText, setCommentText] = useState('');
   const [mentionMap, setMentionMap] = useState<Record<string, string>>({}); // displayName → uid
+
+  // Auto-grow the comment composer so the whole comment is visible (grows on
+  // type/mention-insert, shrinks back after submit clears the text).
+  useEffect(() => {
+    const el = commentInputRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
+  }, [commentText]);
   const [showSubtasks, setShowSubtasks] = useState(true);
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleText, setTitleText] = useState(task.title);
@@ -1983,7 +1993,9 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                     if (f) await handleCommentImageUpload(f);
                   }}
                 />
-                <Input
+                <Textarea
+                  ref={commentInputRef}
+                  rows={1}
                   placeholder="Shto koment... @emri për të përmendur"
                   value={commentText}
                   onChange={handleCommentChange}
@@ -2002,14 +2014,17 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                     }
                   }}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter' && !showMentionSuggestions) {
+                    // Enter submits; Shift+Enter inserts a newline. Never submit
+                    // while the @mention list is open (Enter picks a suggestion).
+                    if (e.key === 'Enter' && !e.shiftKey && !showMentionSuggestions) {
+                      e.preventDefault();
                       handleAddCommentSubmit();
                     }
                     if (e.key === 'Escape') {
                       setShowMentionSuggestions(false);
                     }
                   }}
-                  className="border-0 bg-transparent focus-visible:ring-0 text-sm p-0 h-auto"
+                  className="border-0 bg-transparent focus-visible:ring-0 text-sm p-0 min-h-0 resize-none leading-snug max-h-40 overflow-y-auto"
                 />
                 {commentText.trim() && (
                   <button

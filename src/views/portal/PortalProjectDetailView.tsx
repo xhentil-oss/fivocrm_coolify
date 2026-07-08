@@ -750,14 +750,17 @@ const PortalProjectDetailView: React.FC = () => {
             </CardContent>
 
             <div className="border-t p-3 flex-shrink-0">
-              <form onSubmit={handleSendComment} className="flex gap-2">
-                <Input
+              <form onSubmit={handleSendComment} className="flex items-end gap-2">
+                <Textarea
                   value={commentText}
                   onChange={e => setCommentText(e.target.value)}
+                  onInput={e => { const t = e.currentTarget; t.style.height = 'auto'; t.style.height = `${Math.min(t.scrollHeight, 160)}px`; }}
+                  onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendComment(e as any); } }}
+                  rows={1}
                   placeholder="Shkruani komentin tuaj..."
-                  className="flex-1"
+                  className="flex-1 min-h-[40px] max-h-40 resize-none leading-snug"
                 />
-                <Button type="submit" size="icon" disabled={!commentText.trim()}>
+                <Button type="submit" size="icon" disabled={!commentText.trim()} className="flex-shrink-0">
                   <Send className="h-4 w-4" />
                 </Button>
               </form>
