@@ -144,6 +144,7 @@ export function getInquirySections(inquiry: ServiceInquiry): InquiryBrief {
     mk('Telefon', q.phoneNumber),
     mk('Qyteti / Tregu', q.cityMarket),
     mk('Website', q.website),
+    mk('Historiku i biznesit', q.businessDescription),
     mk('Instagram', q.instagramLink),
     mk('Facebook', q.facebookLink),
     mk('TikTok', q.tiktokLink),

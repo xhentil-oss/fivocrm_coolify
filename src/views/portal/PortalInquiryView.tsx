@@ -194,6 +194,13 @@ const PortalInquiryView: React.FC = () => {
               <div><p className="text-xs text-muted-foreground">Website</p><p className="text-sm font-semibold">{(inquiry as any).website || '—'}</p></div>
             </div>
 
+            {(inquiry as any).businessDescription && (
+              <div className="mb-6">
+                <p className="text-xs text-muted-foreground">Historiku i biznesit</p>
+                <p className="text-sm leading-relaxed mt-0.5">{(inquiry as any).businessDescription}</p>
+              </div>
+            )}
+
             <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-3">Shërbimi & objektivi</p>
             <div className="flex flex-wrap gap-2 mb-2">
               {(inquiry.servicesInterestedIn || []).map(s => (

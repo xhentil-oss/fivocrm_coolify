@@ -15,8 +15,9 @@ import {
   Target, FileText, DollarSign,
   ChevronRight, ChevronLeft, Check, Instagram, Facebook, Linkedin,
   Share2, Search, Palette, PenTool, Megaphone, Send, AlertCircle, PlusCircle,
-  ShoppingCart, Heart, Save, Clock, Trash2, Upload, Package,
+  ShoppingCart, Heart, Save, Clock, Trash2, Upload, Package, Sparkles, Loader2,
 } from 'lucide-react';
+import { useToast } from '../hooks/use-toast';
 
 // --------------- Types ---------------
 
@@ -30,6 +31,7 @@ interface FormData {
   industry: string;
   cityMarket: string;
   website: string;
+  businessDescription: string;
   instagramLink: string;
   facebookLink: string;
   tiktokLink: string;
@@ -120,7 +122,7 @@ interface FormData {
 
 const initialFormData: FormData = {
   businessName: '', contactName: '', email: '', phoneNumber: '',
-  jobTitle: '', industry: '', cityMarket: '', website: '',
+  jobTitle: '', industry: '', cityMarket: '', website: '', businessDescription: '',
   instagramLink: '', facebookLink: '', tiktokLink: '', linkedinLink: '',
   servicesInterestedIn: [], mainGoal: '', projectNeedDescription: '',
   currentMainChallenge: '', hasWorkedWithAgency: '', whatHaveYouTried: '',
@@ -380,6 +382,61 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
     if (errors[field]) setErrors(prev => { const n = { ...prev }; delete n[field]; return n; });
   };
 
+  // ---------- AI assist: help the client draft the long free-text fields ----------
+  const { toast } = useToast();
+  const [aiField, setAiField] = useState<null | 'businessDescription' | 'projectNeedDescription'>(null);
+
+  const stripHtml = (s: string) => s.replace(/<[^>]*>/g, '').replace(/\n{3,}/g, '\n\n').trim();
+
+  const generateWithAI = async (field: 'businessDescription' | 'projectNeedDescription') => {
+    if (aiField) return;
+    setAiField(field);
+    try {
+      const token = await (user as any)?.getIdToken?.();
+      if (!token) throw new Error('no-auth');
+
+      const ctx = [
+        form.businessName && `Biznesi: ${form.businessName}`,
+        form.industry && `Industria: ${form.industry}`,
+        form.cityMarket && `Qyteti/Tregu: ${form.cityMarket}`,
+        form.website && `Website: ${form.website}`,
+      ].filter(Boolean).join('\n');
+
+      const prompt = field === 'businessDescription'
+        ? `Je duke ndihmuar një klient të plotësojë një anketë shërbimi. Shkruaj një përshkrim/historik të shkurtër dhe profesional të biznesit në SHQIP (3–5 fjali, tekst i thjeshtë, PA HTML dhe PA tituj).\n\nTë dhënat:\n${ctx || '(pak të dhëna)'}\n${form.businessDescription ? `\nShënime nga klienti (përmirësoji): ${form.businessDescription}` : ''}\n\nKthe VETËM tekstin e përshkrimit, pa hyrje si "Ja përshkrimi".`
+        : `Je duke ndihmuar një klient të plotësojë një anketë shërbimi. Shkruaj një përshkrim të qartë të nevojës së projektit në SHQIP (3–6 fjali, tekst i thjeshtë, PA HTML).\n\nTë dhënat:\n${ctx}\nShërbimet e kërkuara: ${form.servicesInterestedIn.join(', ') || '—'}\nObjektivi: ${form.mainGoal || '—'}\n${form.businessDescription ? `Për biznesin: ${form.businessDescription}` : ''}\n${form.projectNeedDescription ? `\nShënime nga klienti (përmirësoji): ${form.projectNeedDescription}` : ''}\n\nKthe VETËM tekstin, pa hyrje.`;
+
+      const res = await fetch('/api/ai-chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ messages: [{ role: 'user', content: prompt }] }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data?.reply) {
+        set(field, stripHtml(String(data.reply)));
+      } else {
+        toast({ title: 'AI nuk u përgjigj', description: data?.error || 'Provoni përsëri pas pak.', variant: 'destructive' });
+      }
+    } catch {
+      toast({ title: 'Gabim', description: 'Ndihma me AI dështoi. Provoni përsëri.', variant: 'destructive' });
+    } finally {
+      setAiField(null);
+    }
+  };
+
+  // Small reusable "Ndihmë me AI" button for a text field.
+  const AiButton: React.FC<{ field: 'businessDescription' | 'projectNeedDescription' }> = ({ field }) => (
+    <button
+      type="button"
+      onClick={() => generateWithAI(field)}
+      disabled={aiField !== null}
+      className="inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs font-semibold text-primary hover:bg-primary/10 disabled:opacity-60 transition"
+    >
+      {aiField === field ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+      {aiField === field ? 'Duke shkruar…' : 'Ndihmë me AI'}
+    </button>
+  );
+
   // Dynamic goals based on selected services
   const availableGoals = useMemo(() => {
     const goals = new Set<string>();
@@ -574,6 +631,20 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
         </div>
       </div>
 
+      <div>
+        <div className="flex items-center justify-between gap-2 mb-1">
+          <Label className="text-sm font-medium">Historiku / Përshkrimi i biznesit</Label>
+          <AiButton field="businessDescription" />
+        </div>
+        <Textarea
+          value={form.businessDescription}
+          onChange={e => set('businessDescription', e.target.value)}
+          placeholder="Tregoni shkurt historikun e biznesit: kur nisi, çfarë ofron, klientët, çfarë e dallon..."
+          className="min-h-[90px]"
+        />
+        <p className="text-xs text-muted-foreground mt-1">Kjo ndihmon ekipin të kuptojë biznesin tuaj. Mund ta shkruani ju ose ta gjeneroni me AI.</p>
+      </div>
+
       <div className="pt-2 border-t">
         <Label className="text-sm font-medium text-muted-foreground mb-3 block">Rrjetet Sociale (opsionale)</Label>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -626,7 +697,10 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
           </div>
 
           <div>
-            <Label className="text-sm font-medium">Përshkruani nevojën tuaj *</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label className="text-sm font-medium">Përshkruani nevojën tuaj *</Label>
+              <AiButton field="projectNeedDescription" />
+            </div>
             <Textarea
               value={form.projectNeedDescription}
               onChange={e => set('projectNeedDescription', e.target.value)}

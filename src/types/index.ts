@@ -566,6 +566,7 @@ export interface ServiceInquiry {
   industry: string;
   cityMarket?: string;
   website?: string;
+  businessDescription?: string;
   instagramLink?: string;
   facebookLink?: string;
   tiktokLink?: string;
