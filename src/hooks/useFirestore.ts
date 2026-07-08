@@ -585,6 +585,12 @@ export function useMutation<T = DocumentData>(collectionName: string) {
         updatedAt: Timestamp.now(),
         createdByUserId: user?.uid || null
       });
+      // Normalize email to lowercase so client login (Google/email) reliably
+      // matches existing customers/leads/portal-access records regardless of the
+      // case a staff member typed. Emails are case-insensitive by spec.
+      if (typeof (docData as any).email === 'string') {
+        (docData as any).email = (docData as any).email.trim().toLowerCase();
+      }
       const docRef = await addDoc(collection(db, collectionName), docData);
       if (staticCollections.has(collectionName)) invalidateCollectionCache(collectionName);
 
@@ -628,10 +634,12 @@ export function useMutation<T = DocumentData>(collectionName: string) {
     setError(null);
     try {
       const docRef = doc(db, collectionName, id);
-      await updateDoc(docRef, removeUndefined({
+      const updateData = removeUndefined({
         ...data,
         updatedAt: Timestamp.now()
-      }) as any);
+      }) as any;
+      if (typeof updateData.email === 'string') updateData.email = updateData.email.trim().toLowerCase();
+      await updateDoc(docRef, updateData);
       if (staticCollections.has(collectionName)) invalidateCollectionCache(collectionName);
       setLoading(false);
     } catch (err) {

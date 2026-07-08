@@ -249,13 +249,32 @@ export function useClientPortal() {
           status: 'Active',
         });
 
-        // Create Lead (so admin sees it in CRM)
-        createDoc('leads', {
-          name: displayName,
-          email: user.email?.toLowerCase(),
-          status: 'New',
-          source: 'Portal - Google Sign In',
-        }).catch(() => { /* non-critical */ });
+        // Link to an existing lead for this email instead of creating a duplicate.
+        // Only create a fresh lead when none exists yet (so the client's login
+        // connects to whatever CRM history is already in the system).
+        try {
+          const leadSnap = await getDocs(
+            query(collection(db, 'leads'), where('email', '==', user.email!.toLowerCase()))
+          );
+          if (leadSnap.empty) {
+            createDoc('leads', {
+              name: displayName,
+              email: user.email?.toLowerCase(),
+              status: 'New',
+              source: 'Portal - Google Sign In',
+              customerId: newCustomer.id,
+            }).catch(() => { /* non-critical */ });
+          } else {
+            // Attach the existing lead to the newly-created customer if unlinked.
+            const leadDoc = leadSnap.docs[0];
+            if (!leadDoc.data().customerId) {
+              updateDoc(doc(db, 'leads', leadDoc.id), {
+                customerId: newCustomer.id,
+                updatedAt: Timestamp.now(),
+              }).catch(() => { /* non-critical */ });
+            }
+          }
+        } catch { /* non-critical */ }
 
         // Notify admin team members — ONLY of this client's tenant. allTeamMembers
         // is read cross-tenant (skipTeamFilter), so without the businessId filter a
