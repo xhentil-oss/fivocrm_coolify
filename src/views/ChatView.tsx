@@ -2587,9 +2587,9 @@ const ChatView: React.FC = () => {
   // =====================================
 
   return (
-    <div className={`flex -mx-3 -mt-3 -mb-20 sm:-mx-6 sm:-mt-6 lg:-m-8 ${chatHeightClass} bg-background overflow-hidden`}>
+    <div className={`flex min-h-0 -mx-3 -mt-3 -mb-20 sm:-mx-6 sm:-mt-6 lg:-m-8 ${chatHeightClass} bg-background overflow-hidden`}>
       {/* SIDEBAR */}
-      <aside className={`w-full lg:w-72 border-r bg-muted/5 flex flex-col flex-shrink-0 transition-all ${showSidebar ? 'flex' : 'hidden lg:flex'}`}>
+      <aside className={`w-full lg:w-72 border-r bg-muted/5 flex flex-col flex-shrink-0 min-h-0 overflow-hidden transition-all ${showSidebar ? 'flex' : 'hidden lg:flex'}`}>
         {/* Sidebar header */}
         <div className="px-4 py-3 border-b flex items-center justify-between">
           <h2 className="font-semibold text-sm">Mesazhe</h2>
