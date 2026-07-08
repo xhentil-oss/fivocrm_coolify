@@ -1520,12 +1520,8 @@ const ChatView: React.FC = () => {
   // Helpers
   // (displayNameCache + getUserDisplayName hoisted above near profileMap to fix TDZ.)
 
-  const getAvatarColor = useCallback((id: string) => {
-    const colors = ['bg-blue-500', 'bg-emerald-500', 'bg-navy-700', 'bg-amber-500', 'bg-rose-500', 'bg-cyan-500', 'bg-navy-800', 'bg-teal-500'];
-    let hash = 0;
-    for (let i = 0; i < id.length; i++) hash = id.charCodeAt(i) + ((hash << 5) - hash);
-    return colors[Math.abs(hash) % colors.length];
-  }, []);
+  // Aurora: all chat avatars use the navy brand gradient (uniform, no rainbow).
+  const getAvatarColor = useCallback((_id: string) => 'bg-brand-gradient', []);
 
   const formatShortTime = useCallback((date: any) => {
     if (!date) return '';
@@ -1800,9 +1796,11 @@ const ChatView: React.FC = () => {
     const now = new Date();
     const startOfDay = (x: Date) => new Date(x.getFullYear(), x.getMonth(), x.getDate()).getTime();
     const diffDays = Math.round((startOfDay(now) - startOfDay(d)) / 86400000);
-    if (diffDays === 0) return 'Sot';
-    if (diffDays === 1) return 'Dje';
-    return d.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' });
+    const full = d.toLocaleDateString('sq-AL', { weekday: 'long', day: 'numeric', month: 'long' });
+    const cap = full.charAt(0).toUpperCase() + full.slice(1);
+    if (diffDays === 0) return `Sot · ${cap}`;
+    if (diffDays === 1) return `Dje · ${cap}`;
+    return cap;
   };
 
   const getDateKey = (date: any) => {
@@ -3363,7 +3361,7 @@ const ChatView: React.FC = () => {
                           {showDateSep && (
                             <div className="flex items-center gap-3 py-5">
                               <div className="flex-1 h-px bg-border/50" />
-                              <span className="text-[11px] font-medium text-muted-foreground/60 bg-background px-3 py-1 rounded-full border border-border/30">{formatDate(message.createdAt)}</span>
+                              <span className="text-[11px] font-semibold text-primary bg-accent-soft px-3 py-1 rounded-full border border-primary/15">{formatDate(message.createdAt)}</span>
                               <div className="flex-1 h-px bg-border/50" />
                             </div>
                           )}
@@ -3382,7 +3380,7 @@ const ChatView: React.FC = () => {
                             {!isOwn && (
                               <div className="hidden sm:flex flex-shrink-0 mr-2 self-end mb-5">
                                 {!sameSender ? (
-                                  <div className={`h-7 w-7 rounded-xl ${getAvatarColor(message.senderId)} flex items-center justify-center shadow-sm`}>
+                                  <div className="h-7 w-7 rounded-full bg-brand-gradient flex items-center justify-center shadow-sm">
                                     <span className="text-[9px] font-bold text-white">{senderName.slice(0, 2).toUpperCase()}</span>
                                   </div>
                                 ) : <div className="w-7" />}
@@ -3403,18 +3401,18 @@ const ChatView: React.FC = () => {
                               {/* Reply preview */}
                               {(message as any).replyToContent && (
                                 <div className={`text-[11px] px-3 py-1.5 mb-1 rounded-xl max-w-full border-l-2 ${
-                                  isOwn ? 'bg-primary/15 border-primary-foreground/30' : 'bg-muted/50 border-primary/30'
+                                  isOwn ? 'bg-white/15 border-white/50' : 'bg-muted/50 border-primary/30'
                                 }`}>
-                                  <span className="font-semibold text-[10px] text-primary">{(message as any).replyToSender}</span>
-                                  <p className="truncate opacity-60 mt-0.5">{(message as any).replyToContent}</p>
+                                  <span className={`font-semibold text-[10px] ${isOwn ? 'text-white' : 'text-primary'}`}>{(message as any).replyToSender}</span>
+                                  <p className="truncate opacity-70 mt-0.5">{(message as any).replyToContent}</p>
                                 </div>
                               )}
 
                               {/* Bubble */}
                               <div className={`relative ${(hasImage || hasAudio) && isPlaceholderContent ? 'p-1.5' : 'px-4 py-2.5'} ${
                                 isOwn
-                                  ? 'bg-primary text-primary-foreground rounded-2xl rounded-br-md'
-                                  : 'bg-muted/60 border border-border/30 rounded-2xl rounded-bl-md'
+                                  ? 'bg-accent-gradient text-white rounded-2xl rounded-br-md shadow-[0_6px_16px_-8px_rgba(14,165,233,0.6)]'
+                                  : 'bg-card text-foreground border border-border rounded-2xl rounded-tl-md shadow-sm'
                               } ${isDeleted ? 'opacity-30 italic pointer-events-none select-none' : ''} ${mentionsMe ? 'ring-2 ring-yellow-400/60 dark:ring-yellow-500/40' : ''} ${isPinned ? 'shadow-md' : ''}`}>
                                 {isPinned && !isDeleted && (
                                   <div className={`absolute -top-2 ${isOwn ? 'left-2' : 'right-2'} flex items-center gap-1 px-1.5 py-0.5 rounded-full bg-amber-100 dark:bg-amber-900/40 text-amber-700 dark:text-amber-300 text-[9px] font-semibold border border-amber-300/40`}>
@@ -3485,7 +3483,7 @@ const ChatView: React.FC = () => {
                                 {/* Time inside bubble — WhatsApp style */}
                                 {!isEditing && (
                                   <div className={`flex items-center gap-1 mt-1.5 ${isOwn ? 'justify-end' : 'justify-start'}`}>
-                                    <span className={`text-[10px] flex items-center gap-1 ${isOwn ? 'text-primary-foreground/55' : 'text-muted-foreground/50'}`}>
+                                    <span className={`text-[10px] flex items-center gap-1 ${isOwn ? 'text-white/80' : 'text-muted-foreground/60'}`}>
                                       {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                       {(message as any).editedAt && (
                                         <button
@@ -4050,8 +4048,8 @@ const ChatView: React.FC = () => {
                   <Button
                     type="submit"
                     size="icon"
-                    className={`h-9 w-9 rounded-full flex-shrink-0 mb-0.5 transition-all ${
-                      messageText.trim() || attachmentUrl.trim() ? 'bg-primary text-primary-foreground shadow-sm hover:bg-primary/90' : 'bg-transparent text-muted-foreground/30'
+                    className={`h-9 w-9 rounded-xl flex-shrink-0 mb-0.5 transition-all ${
+                      messageText.trim() || attachmentUrl.trim() ? 'bg-accent-gradient text-white shadow-[0_8px_18px_-8px_#0EA5E9] hover:opacity-95' : 'bg-muted text-muted-foreground/40'
                     }`}
                     disabled={isSending || (!messageText.trim() && !attachmentUrl.trim()) || (chatMode === 'direct' && !activeDirectUserId)}
                   >
@@ -4060,7 +4058,7 @@ const ChatView: React.FC = () => {
                 </div>
               </form>
               <div className="hidden sm:flex items-center justify-between mt-1.5 px-1">
-                <p className="text-[10px] text-muted-foreground/30">Enter dërgon · Shift+Enter rresht i ri</p>
+                <p className="text-[10px] text-muted-foreground/60">Enter për të dërguar · Shift+Enter për rresht të ri</p>
                 <button className="text-[10px] text-muted-foreground/30 hover:text-primary transition-colors flex items-center gap-1">
                   <Link2 className="h-2.5 w-2.5" /> Lidh me task
                 </button>
