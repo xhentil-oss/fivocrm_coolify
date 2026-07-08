@@ -1901,10 +1901,15 @@ const CalendarView: React.FC<{
       const anchor = task.endDate || task.startDate;
       if (!anchor) return false;
       const end = sod(new Date(anchor));
-      let start = task.startDate ? sod(new Date(task.startDate)) : end;
-      if ((task as any).isRecurring) start = end;
-      else if (Math.abs(end - start) / 86400000 > SPAN_CAP_DAYS) start = end;
-      return cell >= Math.min(start, end) && cell <= Math.max(start, end);
+      const start = task.startDate ? sod(new Date(task.startDate)) : end;
+      if ((task as any).isRecurring) return cell === end; // single-day occurrence
+      const lo = Math.min(start, end), hi = Math.max(start, end);
+      // ALWAYS show on the start day and the end day; fill the days in between only
+      // for short spans (so a long task still marks both ends without painting
+      // every single day).
+      if (cell === lo || cell === hi) return true;
+      if ((hi - lo) / 86400000 <= SPAN_CAP_DAYS) return cell > lo && cell < hi;
+      return false;
     });
     const isToday = date.toDateString() === todayStr;
     // Projected recurring occurrences for this day (not real docs yet).
@@ -1919,15 +1924,27 @@ const CalendarView: React.FC<{
           {day}
         </div>
         <div className="space-y-0.5 sm:space-y-1">
-          {realShown.map(task => (
-            <div
-              key={task.id}
-              className="text-[10px] sm:text-xs p-0.5 sm:p-1 bg-primary/10 rounded cursor-pointer hover:bg-primary/20 truncate"
-              onClick={() => onTaskClick(task)}
-            >
-              {task.title}
-            </div>
-          ))}
+          {realShown.map(task => {
+            // Mark whether this cell is the task's start or end day (multi-day only)
+            // so "fillon" and "mbaron" are both visible on the calendar.
+            const tEnd = sod(new Date(task.endDate || task.startDate!));
+            const tStart = task.startDate ? sod(new Date(task.startDate)) : tEnd;
+            const multiDay = tStart !== tEnd && !(task as any).isRecurring;
+            const isStart = multiDay && cell === tStart;
+            const isEnd = multiDay && cell === tEnd;
+            return (
+              <div
+                key={task.id}
+                className={`text-[10px] sm:text-xs p-0.5 sm:p-1 bg-primary/10 rounded cursor-pointer hover:bg-primary/20 truncate ${isStart ? 'border-l-2 border-emerald-500' : isEnd ? 'border-l-2 border-primary' : ''}`}
+                onClick={() => onTaskClick(task)}
+                title={isStart ? `Fillon — ${task.title}` : isEnd ? `Afati — ${task.title}` : task.title}
+              >
+                {isStart && <span className="text-emerald-600 dark:text-emerald-400 font-semibold mr-0.5">▶</span>}
+                {isEnd && <span className="text-primary font-semibold mr-0.5">■</span>}
+                {task.title}
+              </div>
+            );
+          })}
           {projShown.map((task, i) => (
             <div
               key={`proj-${task.id}-${i}`}
