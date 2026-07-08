@@ -684,11 +684,16 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
 
 
-  const renderCommentWithMentions = (content: string) => {
+  const renderCommentWithMentions = (content: string, isOwn = false) => {
     // Split on mentions OR URLs (so we can detect image URLs and render them inline).
     const tokenRe = /(@\[[^\]]+\]\([^)]+\)|@\S+|https?:\/\/[^\s]+)/g;
     const parts = content.split(tokenRe);
     const isImageUrl = (url: string) => /\.(png|jpe?g|gif|webp|svg)(\?|#|$)/i.test(url) || /firebasestorage\.googleapis\.com|firebasestorage\.app/i.test(url);
+    // On the sender's own (purple) bubble, text-primary is invisible — use a
+    // light-on-purple treatment instead so the @mention stays readable.
+    const mentionCls = isOwn
+      ? 'text-primary-foreground font-semibold bg-white/25 px-1 rounded'
+      : 'text-primary font-medium bg-primary/10 px-1 rounded';
     return parts.map((part, i) => {
       if (!part) return null;
       if (part.startsWith('@')) {
@@ -696,7 +701,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
         const newFmt = part.match(/^@\[([^\]]+)\]\(([^)]+)\)$/);
         if (newFmt) {
           return (
-            <span key={i} className="text-primary font-medium bg-primary/10 px-1 rounded">
+            <span key={i} className={mentionCls}>
               @{newFmt[1]}
             </span>
           );
@@ -705,7 +710,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
         const uid = part.slice(1);
         const displayName = getUserDisplayName(uid);
         return (
-          <span key={i} className="text-primary font-medium bg-primary/10 px-1 rounded">
+          <span key={i} className={mentionCls}>
             @{displayName}
           </span>
         );
@@ -1941,7 +1946,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                             ${isCurrentUser
                               ? 'bg-primary text-primary-foreground rounded-tr-sm'
                               : 'bg-muted text-foreground rounded-tl-sm'}`}>
-                            {renderCommentWithMentions(comment.content)}
+                            {renderCommentWithMentions(comment.content, isCurrentUser)}
                           </div>
                           <span className={`text-[10px] text-muted-foreground px-1 ${isCurrentUser ? 'text-right' : 'text-left'}`}>
                             {timeLabel}
