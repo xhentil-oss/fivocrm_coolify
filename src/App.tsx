@@ -95,6 +95,7 @@ const FotoVideoLandingPage = lazyRetry(() => import('./views/landing/FotoVideoLa
 const PriceCalculatorView = lazyRetry(() => import('./views/PriceCalculatorView'));
 const LandingPagesView = lazyRetry(() => import('./views/LandingPagesView'));
 const PrivacyPolicyView = lazyRetry(() => import('./views/PrivacyPolicyView'));
+const DeleteAccountView = lazyRetry(() => import('./views/DeleteAccountView'));
 const ContractsView = lazyRetry(() => import('./views/ContractsView'));
 const PortalContractsView = lazyRetry(() => import('./views/portal/PortalContractsView'));
 
@@ -224,6 +225,8 @@ function AppContent() {
       <Route path="/foto-video" element={<Suspense fallback={<LazyFallback />}><FotoVideoLandingPage /></Suspense>} />
       <Route path="/privacy" element={<Suspense fallback={<LazyFallback />}><PrivacyPolicyView /></Suspense>} />
       <Route path="/privatesia" element={<Suspense fallback={<LazyFallback />}><PrivacyPolicyView /></Suspense>} />
+      <Route path="/delete-account" element={<Suspense fallback={<LazyFallback />}><DeleteAccountView /></Suspense>} />
+      <Route path="/fshi-llogarine" element={<Suspense fallback={<LazyFallback />}><DeleteAccountView /></Suspense>} />
 
       {/* Client Portal routes */}
       <Route path="/portal" element={<Suspense fallback={<LazyFallback />}><PortalLayout /></Suspense>}>
