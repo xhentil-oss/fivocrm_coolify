@@ -120,14 +120,28 @@ export function useClientPortal() {
     return tenantTeamId || allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
   }, [tenantTeamId, allTeamMembers]);
 
+  // Resolve the businessId to stamp on client-created docs. On a tenant subdomain
+  // this is the tenant's businessId. On the apex/agency host there is no tenant
+  // context, so we fall back to the businessId of the SAME team we're stamping
+  // (keeps teamId ↔ businessId consistent) — else any team member's businessId.
+  // Without this fallback, apex-host clients were created with no businessId and
+  // became invisible in the business-scoped admin views.
+  const resolveBusinessId = useCallback(() => {
+    if (tenantBusinessId) return tenantBusinessId;
+    const teamId = resolveTeamId();
+    const sameTeam = allTeamMembers?.find((m: any) => m.teamId === teamId && m.businessId);
+    return sameTeam?.businessId || allTeamMembers?.find((m: any) => m.businessId)?.businessId || null;
+  }, [tenantBusinessId, resolveTeamId, allTeamMembers]);
+
   const createDoc = useCallback(async (collName: string, data: Record<string, any>) => {
     const teamId = resolveTeamId();
+    const businessId = resolveBusinessId();
     const docData = Object.fromEntries(
       Object.entries({
         ...data,
         ...(teamId ? { teamId } : {}),
         // Stamp the tenant boundary so this client's records isolate to their tenant.
-        ...(tenantBusinessId ? { businessId: tenantBusinessId } : {}),
+        ...(businessId ? { businessId } : {}),
         createdAt: Timestamp.now(),
         updatedAt: Timestamp.now(),
         createdByUserId: user?.uid || null,
@@ -135,7 +149,7 @@ export function useClientPortal() {
     );
     const ref = await addDoc(collection(db, collName), docData);
     return { id: ref.id, ...docData };
-  }, [user?.uid, resolveTeamId, tenantBusinessId]);
+  }, [user?.uid, resolveTeamId, resolveBusinessId]);
 
   // Auto-create: if no portal access exists, create Customer + Access + Lead
   useEffect(() => {
