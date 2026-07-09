@@ -104,14 +104,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (teamId && typeof teamId === 'string') {
     try {
-      // Verify the caller belongs to this team before reading its secrets
-      const memberSnap = await adminDb.collection('teamMembers')
-        .where('teamId', '==', teamId)
-        .where('userId', '==', uid)
-        .limit(1)
-        .get();
+      // Authorize the caller for this team, either as a staff member OR as a
+      // portal client linked to it (clientPortalAccess). The AI key is only
+      // ever used server-side and never returned to the client, so this gate
+      // exists to prevent cross-team quota abuse — not key exfiltration.
+      const [memberSnap, portalSnap] = await Promise.all([
+        adminDb.collection('teamMembers')
+          .where('teamId', '==', teamId)
+          .where('userId', '==', uid)
+          .limit(1)
+          .get(),
+        adminDb.collection('clientPortalAccess')
+          .where('userId', '==', uid)
+          .limit(20)
+          .get(),
+      ]);
 
-      if (!memberSnap.empty) {
+      const isMember = !memberSnap.empty;
+      const isPortalClient = portalSnap.docs.some((d) => d.data()?.teamId === teamId);
+
+      if (isMember || isPortalClient) {
         const settingsSnap = await adminDb.collection('teamSettings').doc(teamId).get();
         const s = settingsSnap.data() || {};
         if (s.aiApiKey) {
