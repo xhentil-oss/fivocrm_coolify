@@ -22,6 +22,17 @@ import type { ServiceInquiry, Notification } from '../../types';
  * Logjika e automatizimeve (Lead + Task + Notifications) është identike me atë
  * që ishte më parë te PortalServicesView.
  */
+/** Nxjerr një vlerë të përafërt (në Lekë) nga një gamë buxheti tekst, sipas monedhës. */
+const parseBudgetToAll = (range?: string, currency?: string): number => {
+  if (!range) return 0;
+  const nums = (range.match(/[\d.,]+/g) || [])
+    .map(n => parseInt(n.replace(/[.,]/g, ''), 10))
+    .filter(n => !Number.isNaN(n));
+  if (nums.length === 0) return 0;
+  const val = nums.length >= 2 ? Math.round((nums[0] + nums[1]) / 2) : nums[0];
+  return currency === 'EUR' ? val * 100 : val;
+};
+
 const PortalInquiryView: React.FC = () => {
   const { inquiryId } = useParams<{ inquiryId: string }>();
   const navigate = useNavigate();
@@ -48,15 +59,9 @@ const PortalInquiryView: React.FC = () => {
     if (formData.servicesInterestedIn.includes('Web Design')) tags.push('Web Design Lead');
     if (formData.servicesInterestedIn.includes('Social Media Marketing')) tags.push('SMM Lead');
     if (formData.servicesInterestedIn.includes('Paid Ads')) tags.push('Ads Lead');
-    if (['100,000–300,000 L', '300,000+ L'].includes(formData.budgetRange)) tags.push('High Value Lead');
+    const estimatedValue = parseBudgetToAll(formData.budgetRange, formData.currency);
+    if (estimatedValue >= 150000) tags.push('High Value Lead');
     if (formData.timeline === 'Menjëherë') tags.push('Urgent Lead');
-
-    let estimatedValue = 0;
-    if (formData.budgetRange === 'Nën 30,000 L') estimatedValue = 20000;
-    else if (formData.budgetRange === '30,000–50,000 L') estimatedValue = 40000;
-    else if (formData.budgetRange === '50,000–100,000 L') estimatedValue = 75000;
-    else if (formData.budgetRange === '100,000–300,000 L') estimatedValue = 200000;
-    else if (formData.budgetRange === '300,000+ L') estimatedValue = 400000;
 
     const leadData: Record<string, any> = {
       name: formData.contactName,

@@ -44,6 +44,37 @@ interface ServiceSection {
 
 const SERVICE_SECTIONS: ServiceSection[] = [
   {
+    // Vendoset PARA "Web Design" që "website maintenance" të mos kapet nga 'web'.
+    match: ['maintenance', 'mirëmbajtje', 'mirembajtje'],
+    header: 'Mirëmbajtje Website',
+    fields: [
+      ['maint_hasWebsite', 'Ka website'],
+      ['maint_platform', 'Platforma'],
+      ['maint_needs', 'Çfarë nevojitet'],
+      ['maint_supportLevel', 'Niveli i mbështetjes'],
+    ],
+  },
+  {
+    match: ['google maps', 'maps', 'google business'],
+    header: 'Google Maps',
+    fields: [
+      ['gmb_hasProfile', 'Profil ekzistues'],
+      ['gmb_locations', 'Vendndodhje'],
+      ['gmb_needs', 'Çfarë nevojitet'],
+    ],
+  },
+  {
+    match: ['email', 'whatsapp'],
+    header: 'Email / WhatsApp Marketing',
+    fields: [
+      ['email_channels', 'Kanalet'],
+      ['email_hasList', 'Ka listë kontaktesh'],
+      ['email_listSize', 'Madhësia e listës'],
+      ['email_frequency', 'Frekuenca'],
+      ['email_goalNote', 'Objektivi'],
+    ],
+  },
+  {
     match: ['web', 'faqe', 'website', 'site'],
     header: 'Web Design',
     fields: [
@@ -53,6 +84,9 @@ const SERVICE_SECTIONS: ServiceSection[] = [
       ['web_estimatedPages', 'Numri i faqeve'],
       ['web_hasTextsAndPhotos', 'Tekste & foto gati'],
       ['web_features', 'Funksionalitete'],
+      ['web_languages', 'Gjuhët'],
+      ['web_needsCopywriting', 'Tekstet (copywriting)'],
+      ['web_hasDomainHosting', 'Domain & hosting'],
       ['web_websitesYouLike', 'Referenca / faqe që pëlqen'],
     ],
   },
@@ -64,6 +98,9 @@ const SERVICE_SECTIONS: ServiceSection[] = [
       ['smm_organicOrAds', 'Organik apo reklama'],
       ['smm_hasContent', 'Ka përmbajtje'],
       ['smm_postingFrequency', 'Frekuenca e postimeve'],
+      ['smm_reelsPerMonth', 'Reels / video në muaj'],
+      ['smm_shootDays', 'Ditë xhirimi / muaj'],
+      ['smm_communityManagement', 'Community management'],
       ['smm_toneOfCommunication', 'Toni i komunikimit'],
       ['smm_contentTypes', 'Llojet e përmbajtjes'],
     ],
@@ -74,8 +111,11 @@ const SERVICE_SECTIONS: ServiceSection[] = [
     fields: [
       ['ads_platforms', 'Platformat'],
       ['ads_mainConversionAction', 'Veprimi kryesor i konvertimit'],
+      ['ads_targetMarket', 'Tregu i synuar'],
       ['ads_monthlyBudget', 'Buxheti mujor i reklamave'],
       ['ads_hasRunAdsBefore', 'Ka pasur reklama më parë'],
+      ['ads_hasTracking', 'Tracking i instaluar'],
+      ['ads_wantsRemarketing', 'Remarketing'],
       ['ads_pastResults', 'Rezultatet e mëparshme'],
       ['ads_hasLandingPage', 'Ka landing page'],
     ],
@@ -88,6 +128,10 @@ const SERVICE_SECTIONS: ServiceSection[] = [
       ['seo_websitePlatform', 'Platforma e website-it'],
       ['seo_targetKeywords', 'Fjalët kyçe të synuara'],
       ['seo_targetMarket', 'Tregu i synuar'],
+      ['seo_hasGoogleBusiness', 'Profil Google Maps/Business'],
+      ['seo_wantsBacklinks', 'Backlinks / autoritet'],
+      ['seo_wantsBlog', 'Artikuj blog'],
+      ['seo_analyticsAccess', 'Akses Analytics/Search Console'],
       ['seo_hasDoneSEO', 'Ka bërë SEO më parë'],
       ['seo_competitors', 'Konkurrentët'],
     ],
@@ -111,6 +155,10 @@ const SERVICE_SECTIONS: ServiceSection[] = [
       ['content_types', 'Llojet e përmbajtjes'],
       ['content_platforms', 'Platformat'],
       ['content_frequency', 'Frekuenca'],
+      ['content_scope', 'Fushëveprimi (prodhim/editim)'],
+      ['content_location', 'Vendi i xhirimit'],
+      ['content_needsDrone', 'Dron / ajror'],
+      ['content_quantity', 'Sasia e materialit'],
       ['content_hasModels', 'Ka modele'],
       ['content_visualStyle', 'Stili vizual'],
     ],
@@ -191,6 +239,7 @@ export function getInquirySections(inquiry: ServiceInquiry): InquiryBrief {
   // 4. Buxheti & Materialet
   const budget = section('Buxheti & Materialet', [
     mk('Buxheti', q.budgetRange),
+    mk('Buxheti i reklamave (ad spend)', q.adBudget),
     mk('Afati', q.timeline),
     mk('Urgjente', isTruthy(q.isUrgent) ? 'Po' : (q.isUrgent ? String(q.isUrgent) : null)),
     mk('Vendimmarrësi', q.decisionMaker),

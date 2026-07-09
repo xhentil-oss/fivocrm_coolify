@@ -13,14 +13,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import {
   FileText, Search, Building, User, Mail, Phone, Globe, MapPin, Target,
-  DollarSign, Clock, FolderOpen, Share2, Megaphone, Palette,
-  ExternalLink, Tag, Calendar, CheckCircle2, Eye, AlertCircle,
+  DollarSign, Clock, FolderOpen, Share2, Palette,
+  ExternalLink, Tag, CheckCircle2, Eye, AlertCircle,
   Instagram, Facebook, Linkedin, ArrowRight, Trash2,
   Image as ImageIcon, Briefcase,
 } from 'lucide-react';
 import type { ServiceInquiry, Lead, Project } from '../types';
 import { safeHref } from '../lib/utils';
-import { buildProjectDescription, appendBrief, getInquiryCompleteness } from '../lib/inquiryBrief';
+import { buildProjectDescription, appendBrief, getInquiryCompleteness, getInquirySections } from '../lib/inquiryBrief';
 import { FolderKanban } from 'lucide-react';
 
 const ServiceInquiriesView: React.FC = () => {
@@ -692,90 +692,33 @@ const ServiceInquiriesView: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Section 5: Service-Specific */}
-                {selectedInquiry.servicesInterestedIn?.includes('Social Media Marketing') && (
-                  <div className="space-y-3">
-                    <h4 className="text-sm font-semibold flex items-center gap-2 text-primary">
-                      <Share2 className="w-4 h-4" />
-                      Social Media Marketing
-                    </h4>
-                    <div className="bg-accent-soft dark:bg-primary/10 rounded-lg p-4 space-y-3 border border-primary/30">
-                      {selectedInquiry.smm_mainPlatforms && selectedInquiry.smm_mainPlatforms.length > 0 && (
-                        <div>
-                          <span className="text-xs text-muted-foreground">Platformat</span>
-                          <div className="flex flex-wrap gap-1.5 mt-1">
-                            {selectedInquiry.smm_mainPlatforms.map(p => (
-                              <Badge key={p} variant="outline" className="text-xs">{p}</Badge>
-                            ))}
+                {/* Section 5: Service-Specific (dinamik nga inquiryBrief — mbulon të gjitha shërbimet) */}
+                {(() => {
+                  const TOP = new Set(['Informacion Bazë', 'Shërbimet e biznesit', 'Shërbimi & Objektivi', 'Buxheti & Materialet']);
+                  const specific = getInquirySections(selectedInquiry).sections.filter(s => !TOP.has(s.title));
+                  return specific.map(sec => (
+                    <div key={sec.title} className="space-y-3">
+                      <h4 className="text-sm font-semibold flex items-center gap-2 text-primary">
+                        <Target className="w-4 h-4" />
+                        {sec.title}
+                      </h4>
+                      <div className="bg-muted/30 rounded-lg p-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        {sec.rows.map(row => (
+                          <div key={row.label} className={Array.isArray(row.value) ? 'sm:col-span-2' : ''}>
+                            <span className="text-xs text-muted-foreground">{row.label}</span>
+                            {Array.isArray(row.value) ? (
+                              <div className="flex flex-wrap gap-1.5 mt-1">
+                                {row.value.map((v, i) => <Badge key={i} variant="outline" className="text-xs">{v}</Badge>)}
+                              </div>
+                            ) : (
+                              <p className="text-sm mt-0.5 whitespace-pre-wrap">{row.value}</p>
+                            )}
                           </div>
-                        </div>
-                      )}
-                      <InfoRow icon={Share2} label="Organik/Ads" value={selectedInquiry.smm_organicOrAds || '—'} />
-                      <InfoRow icon={FolderOpen} label="Ka përmbajtje" value={selectedInquiry.smm_hasContent || '—'} />
-                      <InfoRow icon={Calendar} label="Frekuenca" value={selectedInquiry.smm_postingFrequency || '—'} />
-                      <InfoRow icon={User} label="Toni" value={selectedInquiry.smm_toneOfCommunication || '—'} />
+                        ))}
+                      </div>
                     </div>
-                  </div>
-                )}
-
-                {selectedInquiry.servicesInterestedIn?.includes('Web Design') && (
-                  <div className="space-y-3">
-                    <h4 className="text-sm font-semibold flex items-center gap-2 text-blue-600">
-                      <Globe className="w-4 h-4" />
-                      Web Design
-                    </h4>
-                    <div className="bg-blue-50/50 dark:bg-blue-950/10 rounded-lg p-4 space-y-3 border border-blue-100 dark:border-blue-900/30">
-                      <InfoRow icon={Globe} label="Ka website" value={selectedInquiry.web_hasExistingWebsite || '—'} />
-                      {selectedInquiry.web_existingWebsiteLink && (
-                        <div className="flex items-center gap-2">
-                          <ExternalLink className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-                          <a href={safeHref(selectedInquiry.web_existingWebsiteLink)} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline truncate">
-                            {selectedInquiry.web_existingWebsiteLink}
-                          </a>
-                        </div>
-                      )}
-                      <InfoRow icon={Target} label="Qëllimi" value={selectedInquiry.web_mainPurpose || '—'} />
-                      <InfoRow icon={FileText} label="Nr. faqeve" value={selectedInquiry.web_estimatedPages || '—'} />
-                      <InfoRow icon={FolderOpen} label="Tekste/foto gati" value={selectedInquiry.web_hasTextsAndPhotos || '—'} />
-                      {selectedInquiry.web_websitesYouLike && (
-                        <div>
-                          <span className="text-xs text-muted-foreground">Website-e shembull</span>
-                          <p className="text-sm mt-1 whitespace-pre-wrap">{selectedInquiry.web_websitesYouLike}</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-
-                {selectedInquiry.servicesInterestedIn?.includes('Paid Ads') && (
-                  <div className="space-y-3">
-                    <h4 className="text-sm font-semibold flex items-center gap-2 text-orange-600">
-                      <Megaphone className="w-4 h-4" />
-                      Paid Ads
-                    </h4>
-                    <div className="bg-orange-50/50 dark:bg-orange-950/10 rounded-lg p-4 space-y-3 border border-orange-100 dark:border-orange-900/30">
-                      {selectedInquiry.ads_platforms && selectedInquiry.ads_platforms.length > 0 && (
-                        <div>
-                          <span className="text-xs text-muted-foreground">Platformat</span>
-                          <div className="flex flex-wrap gap-1.5 mt-1">
-                            {selectedInquiry.ads_platforms.map(p => (
-                              <Badge key={p} variant="outline" className="text-xs">{p}</Badge>
-                            ))}
-                          </div>
-                        </div>
-                      )}
-                      <InfoRow icon={Target} label="Konvertimi" value={selectedInquiry.ads_mainConversionAction || '—'} />
-                      <InfoRow icon={DollarSign} label="Buxheti mujor" value={selectedInquiry.ads_monthlyBudget || '—'} />
-                      <InfoRow icon={Megaphone} label="Ka bërë ads" value={selectedInquiry.ads_hasRunAdsBefore || '—'} />
-                      {selectedInquiry.ads_pastResults && (
-                        <div>
-                          <span className="text-xs text-muted-foreground">Rezultate të kaluara</span>
-                          <p className="text-sm mt-1 whitespace-pre-wrap">{selectedInquiry.ads_pastResults}</p>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
+                  ));
+                })()}
 
                 {/* Linked Lead */}
                 {selectedInquiry.leadId && (

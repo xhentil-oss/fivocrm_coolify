@@ -660,6 +660,46 @@ export interface ServiceInquiry {
   coach_needsPayment?: string;
   coach_contentNeeds?: string[];
   coach_socialPresence?: string;
+  // Currency + separate ad spend
+  currency?: 'EUR' | 'ALL';
+  adBudget?: string;
+  // SEO extra
+  seo_hasGoogleBusiness?: string;
+  seo_wantsBacklinks?: string;
+  seo_wantsBlog?: string;
+  seo_analyticsAccess?: string;
+  // SMM extra
+  smm_reelsPerMonth?: string;
+  smm_shootDays?: string;
+  smm_communityManagement?: string;
+  // Web Design extra
+  web_languages?: string[];
+  web_needsCopywriting?: string;
+  web_hasDomainHosting?: string;
+  // Paid Ads extra
+  ads_hasTracking?: string;
+  ads_wantsRemarketing?: string;
+  ads_targetMarket?: string;
+  // Content extra
+  content_scope?: string;
+  content_location?: string;
+  content_needsDrone?: string;
+  content_quantity?: string;
+  // Google Maps / Google Business Profile
+  gmb_hasProfile?: string;
+  gmb_locations?: string;
+  gmb_needs?: string[];
+  // Website Maintenance
+  maint_hasWebsite?: string;
+  maint_platform?: string;
+  maint_needs?: string[];
+  maint_supportLevel?: string;
+  // Email / WhatsApp Marketing
+  email_channels?: string[];
+  email_hasList?: string;
+  email_listSize?: string;
+  email_frequency?: string;
+  email_goalNote?: string;
   // Meta
   status: 'Draft' | 'New' | 'Reviewed' | 'Converted';
   isDraft?: boolean;

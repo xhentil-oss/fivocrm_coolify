@@ -16,7 +16,7 @@ import {
   ChevronRight, ChevronLeft, Check, Instagram, Facebook, Linkedin,
   Share2, Search, Palette, PenTool, Megaphone, Send, AlertCircle, PlusCircle,
   ShoppingCart, Heart, Save, Clock, Trash2, Upload, Package, Sparkles, Loader2,
-  Image as ImageIcon, X, Briefcase,
+  Image as ImageIcon, X, Briefcase, MapPin, Mail, Wrench,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { useFileUpload } from '../hooks/useFileUpload';
@@ -125,6 +125,46 @@ interface FormData {
   folderIncludes: string[];
   hasBrandGuidelines: string;
   materialFiles: { url: string; name: string }[];
+  // Currency + separate ad spend
+  currency: 'EUR' | 'ALL';
+  adBudget: string;
+  // SEO extra
+  seo_hasGoogleBusiness: string;
+  seo_wantsBacklinks: string;
+  seo_wantsBlog: string;
+  seo_analyticsAccess: string;
+  // SMM extra
+  smm_reelsPerMonth: string;
+  smm_shootDays: string;
+  smm_communityManagement: string;
+  // Web Design extra
+  web_languages: string[];
+  web_needsCopywriting: string;
+  web_hasDomainHosting: string;
+  // Paid Ads extra
+  ads_hasTracking: string;
+  ads_wantsRemarketing: string;
+  ads_targetMarket: string;
+  // Content extra
+  content_scope: string;
+  content_location: string;
+  content_needsDrone: string;
+  content_quantity: string;
+  // Google Maps / Google Business Profile
+  gmb_hasProfile: string;
+  gmb_locations: string;
+  gmb_needs: string[];
+  // Website Maintenance
+  maint_hasWebsite: string;
+  maint_platform: string;
+  maint_needs: string[];
+  maint_supportLevel: string;
+  // Email / WhatsApp Marketing
+  email_channels: string[];
+  email_hasList: string;
+  email_listSize: string;
+  email_frequency: string;
+  email_goalNote: string;
 }
 
 const initialFormData: FormData = {
@@ -159,23 +199,35 @@ const initialFormData: FormData = {
   hasExistingMaterials: '', googleDriveLink: '', secondGoogleDriveLink: '',
   folderIncludes: [], hasBrandGuidelines: '',
   materialFiles: [],
+  currency: 'EUR', adBudget: '',
+  seo_hasGoogleBusiness: '', seo_wantsBacklinks: '', seo_wantsBlog: '', seo_analyticsAccess: '',
+  smm_reelsPerMonth: '', smm_shootDays: '', smm_communityManagement: '',
+  web_languages: [], web_needsCopywriting: '', web_hasDomainHosting: '',
+  ads_hasTracking: '', ads_wantsRemarketing: '', ads_targetMarket: '',
+  content_scope: '', content_location: '', content_needsDrone: '', content_quantity: '',
+  gmb_hasProfile: '', gmb_locations: '', gmb_needs: [],
+  maint_hasWebsite: '', maint_platform: '', maint_needs: [], maint_supportLevel: '',
+  email_channels: [], email_hasList: '', email_listSize: '', email_frequency: '', email_goalNote: '',
 };
 
 // --------------- Constants ---------------
 
 const INDUSTRIES = [
-  'Restorant', 'Hotel', 'Klinikë', 'Retail', 'Real Estate', 'Edukim', 'Tjetër',
+  'Restorant', 'Hotel', 'Klinikë', 'Retail', 'Real Estate', 'Edukim',
+  'Coaching / Trajnime', 'Transport / NCC', 'Tjetër',
 ];
 
 const SERVICES = [
   { value: 'Social Media Marketing', label: 'Social Media Marketing', icon: Share2 },
   { value: 'Web Design', label: 'Web Design', icon: Globe },
+  { value: 'SEO', label: 'SEO', icon: Search },
   { value: 'Paid Ads', label: 'Paid Ads', icon: Megaphone },
+  { value: 'Google Maps', label: 'Google Maps', icon: MapPin },
+  { value: 'E-commerce', label: 'E-commerce', icon: ShoppingCart },
   { value: 'Branding', label: 'Branding', icon: Palette },
   { value: 'Content Creation', label: 'Content Creation', icon: PenTool },
-  { value: 'SEO', label: 'SEO', icon: Search },
-  { value: 'E-commerce', label: 'E-commerce', icon: ShoppingCart },
-  { value: 'Coaching', label: 'Coaching', icon: Heart },
+  { value: 'Email/WhatsApp Marketing', label: 'Email / WhatsApp', icon: Mail },
+  { value: 'Website Maintenance', label: 'Mirëmbajtje Website', icon: Wrench },
   { value: 'Tjetër', label: 'Tjetër', icon: FileText },
 ];
 
@@ -187,7 +239,9 @@ const SERVICE_GOALS: Record<string, string[]> = {
   'Content Creation': ['Foto profesionale', 'Video marketing', 'Reels & TikTok', 'Copywriting'],
   'SEO': ['Pozicionim në Google', 'SEO lokal', 'Më shumë trafik organik', 'Analizë konkurrentësh'],
   'E-commerce': ['Dyqan online i ri', 'Migrim platforme', 'Rritje shitjesh online', 'Integrim pagesash', 'Menaxhim inventari'],
-  'Coaching': ['Platform online coaching', 'Website personal', 'Booking & Pagesa', 'Kurse online', 'Rritje audience'],
+  'Google Maps': ['Profil i ri në Google Maps', 'Optimizim i profilit', 'Më shumë vlerësime (reviews)', 'Renditje më e lartë lokale'],
+  'Email/WhatsApp Marketing': ['Fushata promocionale', 'Automatizime (welcome, follow-up)', 'Mbajtja e klientëve ekzistues', 'Rritje shitjesh nga lista'],
+  'Website Maintenance': ['Përditësime & siguri', 'Backup & monitorim', 'Optimizim shpejtësie', 'Mbështetje teknike e vazhdueshme'],
 };
 
 const SERVICE_DESCRIPTION_HINTS: Record<string, string> = {
@@ -198,14 +252,25 @@ const SERVICE_DESCRIPTION_HINTS: Record<string, string> = {
   'Content Creation': 'Përshkruani llojin e përmbajtjes që ju nevojitet dhe ku do ta përdorni...',
   'SEO': 'Përshkruani website-in tuaj, fjalët kyçe target, dhe çfarë dëshironi të arrini...',
   'E-commerce': 'Përshkruani produktet që shisni, audiencën target, dhe çfarë funksionalitetesh dëshironi...',
-  'Coaching': 'Përshkruani llojin e coaching-ut, audiencën target, dhe si dëshironi ta ofroni shërbimin...',
+  'Google Maps': 'Na tregoni ku ndodheni, zonën që mbuloni dhe nëse keni profil ekzistues në Google...',
+  'Email/WhatsApp Marketing': 'Na tregoni për listën e kontakteve, çfarë doni të komunikoni dhe sa shpesh...',
+  'Website Maintenance': 'Na tregoni për website-in tuaj dhe çfarë mbështetjeje ju nevojitet...',
 };
 
-const SERVICES_WITH_QUESTIONS = ['Social Media Marketing', 'Web Design', 'Paid Ads', 'Branding', 'Content Creation', 'SEO', 'E-commerce', 'Coaching'];
+const SERVICES_WITH_QUESTIONS = ['Social Media Marketing', 'Web Design', 'Paid Ads', 'Branding', 'Content Creation', 'SEO', 'E-commerce', 'Google Maps', 'Email/WhatsApp Marketing', 'Website Maintenance'];
 
-const BUDGETS = [
-  'Nën 30,000 L', '30,000–50,000 L', '50,000–100,000 L', '100,000–300,000 L', '300,000+ L',
-];
+// Shërbime me çmim njëherësh (projekt); të tjerat janë mujore (retainer).
+const ONE_TIME_SERVICES = ['Web Design', 'E-commerce'];
+
+// Buxheti — sipas monedhës dhe modelit të faturimit (mujor vs njëherësh).
+const BUDGETS_MONTHLY_EUR = ['Nën €500', '€500–1.000', '€1.000–2.000', '€2.000–3.000', 'Mbi €3.000'];
+const BUDGETS_ONETIME_EUR = ['Nën €800', '€800–1.500', '€1.500–2.500', '€2.500–5.000', 'Mbi €5.000'];
+const BUDGETS_MONTHLY_ALL = ['Nën 50.000 L', '50.000–100.000 L', '100.000–200.000 L', '200.000–400.000 L', 'Mbi 400.000 L'];
+const BUDGETS_ONETIME_ALL = ['Nën 80.000 L', '80.000–150.000 L', '150.000–300.000 L', '300.000–600.000 L', 'Mbi 600.000 L'];
+
+// Buxheti i reklamave — i ndarë nga tarifa e menaxhimit.
+const AD_BUDGETS_EUR = ['€100–300 / muaj', '€300–1.000 / muaj', '€1.000–3.000 / muaj', 'Mbi €3.000 / muaj', 'Do ta vendosim bashkë'];
+const AD_BUDGETS_ALL = ['10.000–30.000 L / muaj', '30.000–100.000 L / muaj', '100.000–300.000 L / muaj', 'Mbi 300.000 L / muaj', 'Do ta vendosim bashkë'];
 
 const TIMELINES = [
   'Menjëherë', 'Brenda 30 ditësh', 'Brenda 3 muajsh', 'Vetëm po informohem',
@@ -511,6 +576,20 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
     return 'Përshkruani nevojën tuaj...';
   }, [form.servicesInterestedIn]);
 
+  // Buxheti sipas monedhës + modelit (mujor vs njëherësh) + a duhet ad spend.
+  const budgetContext = useMemo(() => {
+    const svcs = form.servicesInterestedIn;
+    const isOneTime = svcs.length > 0
+      && svcs.every(s => ONE_TIME_SERVICES.includes(s) || s === 'Tjetër')
+      && svcs.some(s => ONE_TIME_SERVICES.includes(s));
+    const budgetOptions = form.currency === 'EUR'
+      ? (isOneTime ? BUDGETS_ONETIME_EUR : BUDGETS_MONTHLY_EUR)
+      : (isOneTime ? BUDGETS_ONETIME_ALL : BUDGETS_MONTHLY_ALL);
+    const adBudgetOptions = form.currency === 'EUR' ? AD_BUDGETS_EUR : AD_BUDGETS_ALL;
+    const showAdBudget = svcs.includes('Paid Ads') || ['Organik + Ads', 'Vetëm Ads'].includes(form.smm_organicOrAds);
+    return { isOneTime, budgetOptions, adBudgetOptions, showAdBudget, billingLabel: isOneTime ? 'njëherësh' : 'në muaj' };
+  }, [form.servicesInterestedIn, form.currency, form.smm_organicOrAds]);
+
   // Determine if step 3 (service-specific) should show
   const hasServiceSpecific = form.servicesInterestedIn.some(s =>
     SERVICES_WITH_QUESTIONS.includes(s)
@@ -554,7 +633,6 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
       if (form.servicesInterestedIn.includes('Paid Ads')) {
         if (form.ads_platforms.length === 0) e.ads_platforms = 'Zgjidhni të paktën një platformë';
         if (!form.ads_mainConversionAction) e.ads_mainConversionAction = 'E detyrueshme';
-        if (!form.ads_monthlyBudget) e.ads_monthlyBudget = 'E detyrueshme';
       }
       if (form.servicesInterestedIn.includes('Branding')) {
         if (form.brand_whatYouNeed.length === 0) e.brand_whatYouNeed = 'Zgjidhni të paktën një opsion';
@@ -886,6 +964,9 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
     const showSEO = form.servicesInterestedIn.includes('SEO');
     const showEcommerce = form.servicesInterestedIn.includes('E-commerce');
     const showCoaching = form.servicesInterestedIn.includes('Coaching');
+    const showGmb = form.servicesInterestedIn.includes('Google Maps');
+    const showMaint = form.servicesInterestedIn.includes('Website Maintenance');
+    const showEmail = form.servicesInterestedIn.includes('Email/WhatsApp Marketing');
 
     return (
       <div className="space-y-6">
@@ -909,10 +990,11 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                   { value: 'Facebook', label: 'Facebook' },
                   { value: 'TikTok', label: 'TikTok' },
                   { value: 'LinkedIn', label: 'LinkedIn' },
+                  { value: 'YouTube', label: 'YouTube' },
                 ]}
                 selected={form.smm_mainPlatforms}
                 onChange={v => set('smm_mainPlatforms', v)}
-                columns={4}
+                columns={3}
               />
               <FieldError field="smm_mainPlatforms" />
             </div>
@@ -967,6 +1049,8 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                     <SelectItem value="8 posts/month">8 postime/muaj</SelectItem>
                     <SelectItem value="12 posts/month">12 postime/muaj</SelectItem>
                     <SelectItem value="16 posts/month">16 postime/muaj</SelectItem>
+                    <SelectItem value="24 posts/month">24 postime/muaj</SelectItem>
+                    <SelectItem value="32+ posts/month">32+ postime/muaj</SelectItem>
                     <SelectItem value="ta rekomandojë agjensia">Ta rekomandojë agjensia</SelectItem>
                   </SelectContent>
                 </Select>
@@ -984,6 +1068,47 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Reels / video në muaj</Label>
+                <Select value={form.smm_reelsPerMonth} onValueChange={v => set('smm_reelsPerMonth', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Pa reels">Pa reels</SelectItem>
+                    <SelectItem value="4-8 reels">4–8 reels</SelectItem>
+                    <SelectItem value="8-14 reels">8–14 reels</SelectItem>
+                    <SelectItem value="14-20 reels">14–20 reels</SelectItem>
+                    <SelectItem value="20+ reels">20+ reels</SelectItem>
+                    <SelectItem value="ta rekomandojë agjensia">Ta rekomandojë agjensia</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Ditë xhirimi te ju në muaj?</Label>
+                <Select value={form.smm_shootDays} onValueChange={v => set('smm_shootDays', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Pa xhirim">Jo, kam përmbajtjen vetë</SelectItem>
+                    <SelectItem value="1 ditë/muaj">1 ditë/muaj</SelectItem>
+                    <SelectItem value="2 ditë/muaj">2 ditë/muaj</SelectItem>
+                    <SelectItem value="3+ ditë/muaj">3+ ditë/muaj</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium">Menaxhim i komenteve & mesazheve (community management)?</Label>
+              <Select value={form.smm_communityManagement} onValueChange={v => set('smm_communityManagement', v)}>
+                <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Po, plotësisht">Po — përgjigje te komentet dhe DM-të</SelectItem>
+                  <SelectItem value="Vetëm monitorim">Vetëm monitorim (na njoftoni)</SelectItem>
+                  <SelectItem value="Jo">Jo, e menaxhoj vetë</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
           </Card>
         )}
@@ -1056,6 +1181,9 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                   { value: 'Galeri', label: 'Galeri' },
                   { value: 'Sistem Booking', label: 'Sistem Booking' },
                   { value: 'Dyqan online', label: 'Dyqan online' },
+                  { value: 'Pagesa online', label: 'Pagesa online' },
+                  { value: 'Google Reviews', label: 'Google Reviews' },
+                  { value: 'Harta Google (Maps)', label: 'Harta Google (Maps)' },
                 ]}
                 selected={form.web_features}
                 onChange={v => set('web_features', v)}
@@ -1073,6 +1201,47 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                   <SelectItem value="Pjesërisht">Pjesërisht</SelectItem>
                 </SelectContent>
               </Select>
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium mb-2 block">Në cilat gjuhë do jetë website-i?</Label>
+              <MultiSelectChips
+                options={[
+                  { value: 'Shqip', label: 'Shqip' },
+                  { value: 'Anglisht', label: 'Anglisht' },
+                  { value: 'Italisht', label: 'Italisht' },
+                  { value: 'Tjetër', label: 'Tjetër' },
+                ]}
+                selected={form.web_languages}
+                onChange={v => set('web_languages', v)}
+                columns={4}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Kush i shkruan tekstet?</Label>
+                <Select value={form.web_needsCopywriting} onValueChange={v => set('web_needsCopywriting', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="I kam gati">I kam gati tekstet</SelectItem>
+                    <SelectItem value="Doni t'i shkruani ju">Dua t'i shkruani ju</SelectItem>
+                    <SelectItem value="Pjesërisht">Pjesërisht — kam disa</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Keni domain & hosting?</Label>
+                <Select value={form.web_hasDomainHosting} onValueChange={v => set('web_hasDomainHosting', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po, të dyja">Po, të dyja</SelectItem>
+                    <SelectItem value="Vetëm domain">Vetëm domain</SelectItem>
+                    <SelectItem value="Jo, na ndihmoni">Jo — na ndihmoni ju</SelectItem>
+                    <SelectItem value="Nuk e di">Nuk e di</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             <div>
@@ -1098,10 +1267,12 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                   { value: 'Facebook Ads', label: 'Facebook Ads' },
                   { value: 'Instagram Ads', label: 'Instagram Ads' },
                   { value: 'TikTok Ads', label: 'TikTok Ads' },
+                  { value: 'YouTube Ads', label: 'YouTube Ads' },
+                  { value: 'LinkedIn Ads', label: 'LinkedIn Ads' },
                 ]}
                 selected={form.ads_platforms}
                 onChange={v => set('ads_platforms', v)}
-                columns={4}
+                columns={3}
               />
               <FieldError field="ads_platforms" />
             </div>
@@ -1122,19 +1293,18 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                 <FieldError field="ads_mainConversionAction" />
               </div>
               <div>
-                <Label className="text-sm font-medium">Buxheti mujor për reklama *</Label>
-                <Select value={form.ads_monthlyBudget} onValueChange={v => set('ads_monthlyBudget', v)}>
+                <Label className="text-sm font-medium">Tregu që doni të synoni</Label>
+                <Select value={form.ads_targetMarket} onValueChange={v => set('ads_targetMarket', v)}>
                   <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="Nën 30,000 L">Nën 30,000 L</SelectItem>
-                    <SelectItem value="30,000–50,000 L">30,000–50,000 L</SelectItem>
-                    <SelectItem value="50,000–100,000 L">50,000–100,000 L</SelectItem>
-                    <SelectItem value="100,000+ L">100,000+ L</SelectItem>
+                    <SelectItem value="Lokal (qytet/zonë)">Lokal (qytet/zonë)</SelectItem>
+                    <SelectItem value="Kombëtar">Kombëtar</SelectItem>
+                    <SelectItem value="Ndërkombëtar">Ndërkombëtar</SelectItem>
                   </SelectContent>
                 </Select>
-                <FieldError field="ads_monthlyBudget" />
               </div>
             </div>
+            <p className="text-xs text-muted-foreground -mt-1">Buxhetin e reklamave (që shkon te platformat) e caktoni te hapi i fundit — është i ndarë nga tarifa e menaxhimit.</p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
@@ -1155,6 +1325,31 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                     <SelectItem value="Po">Po</SelectItem>
                     <SelectItem value="Jo">Jo</SelectItem>
                     <SelectItem value="Duhet ndërtuar">Duhet ndërtuar</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Keni tracking të instaluar? (Pixel / conversion)</Label>
+                <Select value={form.ads_hasTracking} onValueChange={v => set('ads_hasTracking', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po">Po, është i instaluar</SelectItem>
+                    <SelectItem value="Jo">Jo</SelectItem>
+                    <SelectItem value="Nuk e di">Nuk e di</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Doni remarketing / retargeting?</Label>
+                <Select value={form.ads_wantsRemarketing} onValueChange={v => set('ads_wantsRemarketing', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po">Po</SelectItem>
+                    <SelectItem value="Jo">Jo</SelectItem>
+                    <SelectItem value="Ma rekomandoni">Ma rekomandoni ju</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -1187,6 +1382,8 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                   { value: 'Rifreskim brandi', label: 'Rifreskim brandi' },
                   { value: 'Naming / Emërtim', label: 'Naming / Emërtim' },
                   { value: 'Materiale printimi', label: 'Materiale printimi' },
+                  { value: 'Template social media', label: 'Template social media' },
+                  { value: 'Prezantim / Pitch deck', label: 'Prezantim / Pitch deck' },
                 ]}
                 selected={form.brand_whatYouNeed}
                 onChange={v => set('brand_whatYouNeed', v)}
@@ -1323,6 +1520,50 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                 </SelectContent>
               </Select>
             </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Çfarë ju nevojitet?</Label>
+                <Select value={form.content_scope} onValueChange={v => set('content_scope', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Prodhim i plotë">Prodhim i plotë (xhirim + editim)</SelectItem>
+                    <SelectItem value="Vetëm editim">Vetëm editim (kam materialin)</SelectItem>
+                    <SelectItem value="Vetëm xhirim">Vetëm xhirim</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Ku do bëhet xhirimi?</Label>
+                <Select value={form.content_location} onValueChange={v => set('content_location', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Te biznesi im">Te biznesi im</SelectItem>
+                    <SelectItem value="Në studio">Në studio</SelectItem>
+                    <SelectItem value="Në terren / lokacion">Në terren / lokacion</SelectItem>
+                    <SelectItem value="Mix">Mix</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Doni xhirim me dron (ajror)?</Label>
+                <Select value={form.content_needsDrone} onValueChange={v => set('content_needsDrone', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po">Po</SelectItem>
+                    <SelectItem value="Jo">Jo</SelectItem>
+                    <SelectItem value="Ndoshta">Ndoshta</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Sa material ju nevojitet? (approx)</Label>
+                <Input value={form.content_quantity} onChange={e => set('content_quantity', e.target.value)} placeholder="p.sh. 20 foto + 4 video" className="mt-1" />
+              </div>
+            </div>
           </Card>
         )}
 
@@ -1390,6 +1631,57 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                     <SelectItem value="Po">Po</SelectItem>
                     <SelectItem value="Jo">Jo</SelectItem>
                     <SelectItem value="Nuk e di">Nuk e di</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Keni profil në Google Maps / Business?</Label>
+                <Select value={form.seo_hasGoogleBusiness} onValueChange={v => set('seo_hasGoogleBusiness', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po, i optimizuar">Po, i optimizuar</SelectItem>
+                    <SelectItem value="Po, por i papërfunduar">Po, por i papërfunduar</SelectItem>
+                    <SelectItem value="Jo">Jo</SelectItem>
+                    <SelectItem value="Nuk e di">Nuk e di</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Keni akses në Analytics / Search Console?</Label>
+                <Select value={form.seo_analyticsAccess} onValueChange={v => set('seo_analyticsAccess', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po">Po</SelectItem>
+                    <SelectItem value="Jo">Jo</SelectItem>
+                    <SelectItem value="Duhet konfiguruar">Duhet konfiguruar</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Doni ndërtim linqesh (backlinks / autoritet)?</Label>
+                <Select value={form.seo_wantsBacklinks} onValueChange={v => set('seo_wantsBacklinks', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po">Po</SelectItem>
+                    <SelectItem value="Jo">Jo</SelectItem>
+                    <SelectItem value="Ma rekomandoni">Ma rekomandoni ju</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Doni artikuj blog / përmbajtje?</Label>
+                <Select value={form.seo_wantsBlog} onValueChange={v => set('seo_wantsBlog', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po, rregullisht">Po, rregullisht</SelectItem>
+                    <SelectItem value="Herë pas here">Herë pas here</SelectItem>
+                    <SelectItem value="Jo">Jo</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -1639,6 +1931,8 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                   { value: 'Multi-currency', label: 'Multi-currency' },
                   { value: 'Abonime / Subscription', label: 'Abonime / Subscription' },
                   { value: 'Integrim social media', label: 'Integrim social media' },
+                  { value: 'Shumëgjuhësh', label: 'Shumëgjuhësh' },
+                  { value: 'SEO për dyqanin', label: 'SEO për dyqanin' },
                 ]}
                 selected={form.ecom_features}
                 onChange={v => set('ecom_features', v)}
@@ -1763,6 +2057,194 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
             </div>
           </Card>
         )}
+
+        {/* ─── Google Maps / Google Business Profile ─── */}
+        {showGmb && (
+          <Card className="p-4 space-y-4 border-red-200 bg-red-50/30 dark:bg-red-950/10 dark:border-red-800/40">
+            <div className="flex items-center gap-2">
+              <MapPin className="w-5 h-5 text-red-600" />
+              <h3 className="font-semibold text-sm">Google Maps</h3>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Keni profil ekzistues?</Label>
+                <Select value={form.gmb_hasProfile} onValueChange={v => set('gmb_hasProfile', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po, i verifikuar">Po, i verifikuar</SelectItem>
+                    <SelectItem value="Po, i paverifikuar">Po, por i paverifikuar</SelectItem>
+                    <SelectItem value="Jo">Jo</SelectItem>
+                    <SelectItem value="Nuk e di">Nuk e di</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Sa vendndodhje keni?</Label>
+                <Select value={form.gmb_locations} onValueChange={v => set('gmb_locations', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="1">1</SelectItem>
+                    <SelectItem value="2-3">2–3</SelectItem>
+                    <SelectItem value="4-10">4–10</SelectItem>
+                    <SelectItem value="10+">10+</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium mb-2 block">Çfarë ju nevojitet?</Label>
+              <MultiSelectChips
+                options={[
+                  { value: 'Hapje profili', label: 'Hapje profili' },
+                  { value: 'Optimizim i profilit', label: 'Optimizim i profilit' },
+                  { value: 'Strategji vlerësimesh (reviews)', label: 'Strategji reviews' },
+                  { value: 'Postime periodike', label: 'Postime periodike' },
+                  { value: 'Foto profesionale', label: 'Foto profesionale' },
+                  { value: 'Renditje "afër meje"', label: 'Renditje "afër meje"' },
+                ]}
+                selected={form.gmb_needs}
+                onChange={v => set('gmb_needs', v)}
+                columns={3}
+              />
+            </div>
+          </Card>
+        )}
+
+        {/* ─── Website Maintenance ─── */}
+        {showMaint && (
+          <Card className="p-4 space-y-4 border-slate-200 bg-slate-50/40 dark:bg-slate-900/20 dark:border-slate-700/40">
+            <div className="flex items-center gap-2">
+              <Wrench className="w-5 h-5 text-slate-600" />
+              <h3 className="font-semibold text-sm">Mirëmbajtje Website</h3>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Keni website për t'u mirëmbajtur?</Label>
+                <Select value={form.maint_hasWebsite} onValueChange={v => set('maint_hasWebsite', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po">Po</SelectItem>
+                    <SelectItem value="Jo, do ndërtohet">Jo, do ndërtohet së pari</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Në cilën platformë?</Label>
+                <Select value={form.maint_platform} onValueChange={v => set('maint_platform', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="WordPress">WordPress</SelectItem>
+                    <SelectItem value="Shopify">Shopify</SelectItem>
+                    <SelectItem value="Wix">Wix</SelectItem>
+                    <SelectItem value="Custom">Custom</SelectItem>
+                    <SelectItem value="Nuk e di">Nuk e di</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium mb-2 block">Çfarë ju nevojitet?</Label>
+              <MultiSelectChips
+                options={[
+                  { value: 'Përditësime & plugins', label: 'Përditësime & plugins' },
+                  { value: 'Backup i rregullt', label: 'Backup i rregullt' },
+                  { value: 'Siguri & patch-e', label: 'Siguri & patch-e' },
+                  { value: 'Monitorim uptime', label: 'Monitorim uptime' },
+                  { value: 'Optimizim shpejtësie', label: 'Optimizim shpejtësie' },
+                  { value: 'Ndryshime të vogla', label: 'Ndryshime të vogla' },
+                ]}
+                selected={form.maint_needs}
+                onChange={v => set('maint_needs', v)}
+                columns={3}
+              />
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium">Sa mbështetje ju duhet?</Label>
+              <Select value={form.maint_supportLevel} onValueChange={v => set('maint_supportLevel', v)}>
+                <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Bazë">Bazë (pak orë/muaj)</SelectItem>
+                  <SelectItem value="Standard">Standard</SelectItem>
+                  <SelectItem value="E lartë / prioritare">E lartë / prioritare</SelectItem>
+                  <SelectItem value="24/7 emergjencë">24/7 emergjencë</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </Card>
+        )}
+
+        {/* ─── Email / WhatsApp Marketing ─── */}
+        {showEmail && (
+          <Card className="p-4 space-y-4 border-indigo-200 bg-indigo-50/30 dark:bg-indigo-950/10 dark:border-indigo-800/40">
+            <div className="flex items-center gap-2">
+              <Mail className="w-5 h-5 text-indigo-600" />
+              <h3 className="font-semibold text-sm">Email / WhatsApp Marketing</h3>
+            </div>
+
+            <div>
+              <Label className="text-sm font-medium mb-2 block">Cilat kanale?</Label>
+              <MultiSelectChips
+                options={[
+                  { value: 'Email', label: 'Email' },
+                  { value: 'WhatsApp', label: 'WhatsApp' },
+                  { value: 'SMS', label: 'SMS' },
+                ]}
+                selected={form.email_channels}
+                onChange={v => set('email_channels', v)}
+                columns={3}
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Keni listë kontaktesh?</Label>
+                <Select value={form.email_hasList} onValueChange={v => set('email_hasList', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Po">Po</SelectItem>
+                    <SelectItem value="Jo, duhet ndërtuar">Jo, duhet ndërtuar</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Sa e madhe është lista?</Label>
+                <Select value={form.email_listSize} onValueChange={v => set('email_listSize', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Nën 500">Nën 500</SelectItem>
+                    <SelectItem value="500-2000">500–2.000</SelectItem>
+                    <SelectItem value="2000-10000">2.000–10.000</SelectItem>
+                    <SelectItem value="10000+">10.000+</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <Label className="text-sm font-medium">Sa shpesh doni të dërgoni?</Label>
+                <Select value={form.email_frequency} onValueChange={v => set('email_frequency', v)}>
+                  <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Javore">Javore</SelectItem>
+                    <SelectItem value="2 herë/muaj">2 herë/muaj</SelectItem>
+                    <SelectItem value="Mujore">Mujore</SelectItem>
+                    <SelectItem value="Sipas fushatave">Sipas fushatave</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label className="text-sm font-medium">Çfarë doni të arrini?</Label>
+                <Input value={form.email_goalNote} onChange={e => set('email_goalNote', e.target.value)} placeholder="p.sh. oferta, njoftime, rikthim klientësh..." className="mt-1" />
+              </div>
+            </div>
+          </Card>
+        )}
       </div>
     );
   };
@@ -1771,16 +2253,43 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
 
   const renderStep4BudgetMaterials = () => (
     <div className="space-y-5">
-      <div>
-        <Label className="text-sm font-medium">Buxheti i parashikuar *</Label>
-        <Select value={form.budgetRange} onValueChange={v => set('budgetRange', v)}>
-          <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh buxhetin" /></SelectTrigger>
-          <SelectContent>
-            {BUDGETS.map(b => <SelectItem key={b} value={b}>{b}</SelectItem>)}
-          </SelectContent>
-        </Select>
-        <FieldError field="budgetRange" />
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div>
+          <Label className="text-sm font-medium">Monedha</Label>
+          <Select value={form.currency} onValueChange={v => set('currency', v)}>
+            <SelectTrigger className="mt-1"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="EUR">€ Euro</SelectItem>
+              <SelectItem value="ALL">L Lekë</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="sm:col-span-2">
+          <Label className="text-sm font-medium">
+            Buxheti i parashikuar ({budgetContext.billingLabel}) *
+          </Label>
+          <Select value={form.budgetRange} onValueChange={v => set('budgetRange', v)}>
+            <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh buxhetin" /></SelectTrigger>
+            <SelectContent>
+              {budgetContext.budgetOptions.map(b => <SelectItem key={b} value={b}>{b}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <FieldError field="budgetRange" />
+        </div>
       </div>
+
+      {budgetContext.showAdBudget && (
+        <div>
+          <Label className="text-sm font-medium">Buxheti mujor i reklamave (i ndarë nga menaxhimi)</Label>
+          <Select value={form.adBudget} onValueChange={v => set('adBudget', v)}>
+            <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
+            <SelectContent>
+              {budgetContext.adBudgetOptions.map(b => <SelectItem key={b} value={b}>{b}</SelectItem>)}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground mt-1">Kjo shumë shkon direkt te platformat (Meta/Google/TikTok) — nuk përfshihet te tarifa jonë.</p>
+        </div>
+      )}
 
       <div>
         <Label className="text-sm font-medium">Afati kohor *</Label>
