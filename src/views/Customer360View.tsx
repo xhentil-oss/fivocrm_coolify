@@ -196,6 +196,18 @@ const Customer360View: React.FC = () => {
   const pendingAmount = customerInvoices.filter(i => i.status === 'Pending' || i.status === 'Overdue').reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
   const activeProjectCount = customerProjects.filter(p => p.status === 'Active').length;
 
+  // Per-client P&L: billed revenue − cost (labor + project expenses, rolled up
+  // daily onto each project's `spent`/`laborCost` by the project-spend-rollup cron).
+  const clientPnl = useMemo(() => {
+    const revenue = totalRevenue;
+    const laborCost = customerProjects.reduce((s, p: any) => s + (Number(p.laborCost) || 0), 0);
+    const cost = customerProjects.reduce((s, p: any) => s + (Number(p.spent) || 0), 0);
+    const expensesCost = Math.max(0, cost - laborCost);
+    const margin = revenue - cost;
+    const marginPct = revenue > 0 ? Math.round((margin / revenue) * 100) : 0;
+    return { revenue, cost, laborCost, expensesCost, margin, marginPct };
+  }, [totalRevenue, customerProjects]);
+
   // Project task progress
   const projectProgress = useMemo(() => {
     return customerProjects.map(p => {
@@ -373,6 +385,37 @@ const Customer360View: React.FC = () => {
           </div>
         </Card>
       </div>
+
+      {/* Per-client P&L */}
+      <Card className="p-4">
+        <div className="flex items-center justify-between gap-2 mb-3">
+          <h3 className="text-sm font-semibold text-foreground">Fitim/Humbje (P&amp;L) e klientit</h3>
+          <span className={`text-sm font-bold tabular-nums ${clientPnl.margin < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+            Marzh: {clientPnl.margin.toLocaleString()} ALL {clientPnl.revenue > 0 && `(${clientPnl.marginPct}%)`}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
+          <div className="rounded-lg border p-3">
+            <p className="text-xs text-muted-foreground">Të ardhura (faturuar)</p>
+            <p className="font-bold tabular-nums text-emerald-600">{clientPnl.revenue.toLocaleString()} ALL</p>
+          </div>
+          <div className="rounded-lg border p-3">
+            <p className="text-xs text-muted-foreground">Kosto pune</p>
+            <p className="font-bold tabular-nums">{clientPnl.laborCost.toLocaleString()} ALL</p>
+          </div>
+          <div className="rounded-lg border p-3">
+            <p className="text-xs text-muted-foreground">Shpenzime</p>
+            <p className="font-bold tabular-nums">{clientPnl.expensesCost.toLocaleString()} ALL</p>
+          </div>
+          <div className="rounded-lg border p-3">
+            <p className="text-xs text-muted-foreground">Kosto totale</p>
+            <p className="font-bold tabular-nums text-red-600">{clientPnl.cost.toLocaleString()} ALL</p>
+          </div>
+        </div>
+        <p className="text-[11px] text-muted-foreground mt-2">
+          Kostoja e punës = orët e loguara × tarifa e kostos së anëtarit; përditësohet nga rollup-i ditor.
+        </p>
+      </Card>
 
       {/* Tabs */}
       <Tabs defaultValue="overview" className="space-y-4">

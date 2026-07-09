@@ -1106,6 +1106,7 @@ const EditMemberForm: React.FC<{
   const [canAccessSettings, setCanAccessSettings] = useState(member.canAccessSettings ?? false);
   const [status, setStatus] = useState(member.status);
   const [monthlySalary, setMonthlySalary] = useState(member.monthlySalary?.toString() || '');
+  const [hourlyCostRate, setHourlyCostRate] = useState(member.hourlyCostRate?.toString() || '');
   const [serviceLines, setServiceLines] = useState<string[]>(
     Array.isArray(member.serviceLines) && member.serviceLines.length
       ? member.serviceLines
@@ -1138,6 +1139,7 @@ const EditMemberForm: React.FC<{
       displayName: displayName.trim() || undefined,
       email: email.trim() || undefined,
       monthlySalary: monthlySalary ? parseFloat(monthlySalary) : undefined,
+      hourlyCostRate: hourlyCostRate ? parseFloat(hourlyCostRate) : undefined,
       serviceLines: serviceLines.length ? serviceLines : undefined,
     });
   };
@@ -1317,6 +1319,20 @@ const EditMemberForm: React.FC<{
           placeholder="p.sh. 800"
           className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
         />
+        <div className="pt-1">
+          <Label htmlFor="hourlyCostRate" className="text-xs text-amber-800 dark:text-amber-300">Tarifa e kostos / orë (L)</Label>
+          <p className="text-[11px] text-muted-foreground">Kosto e brendshme për orë pune (P&amp;L per-klient + buxheti). Bosh = llogaritet nga rroga / 160.</p>
+          <input
+            id="hourlyCostRate"
+            type="number"
+            min="0"
+            step="0.01"
+            value={hourlyCostRate}
+            onChange={(e) => setHourlyCostRate(e.target.value)}
+            placeholder={monthlySalary ? `auto ≈ ${Math.round((parseFloat(monthlySalary) || 0) / 160)}` : 'p.sh. 5'}
+            className="mt-1 w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+          />
+        </div>
         <div className="pt-1">
           <Label className="text-xs text-amber-800 dark:text-amber-300">Shërbimet (për P&L)</Label>
           <p className="text-[11px] text-muted-foreground">Zgjidh një ose disa shërbime. Rroga ndahet baras mes tyre si kosto direkte. Asnjë = overhead i përbashkët.</p>

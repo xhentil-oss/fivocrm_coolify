@@ -10,7 +10,7 @@ import { useUserNames } from '../hooks/useUserNames';
 import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useToast } from '../hooks/use-toast';
 import { getTimestampMs } from '../lib/utils';
-import { DEAL_STAGES, OPEN_STAGES, dealWeighted, dealProbability, curSymbol } from '../lib/dealStages';
+import { DEAL_STAGES, OPEN_STAGES, dealProbability, dealAmountAll, dealWeightedAll, curSymbol } from '../lib/dealStages';
 import { Card } from '../components/ui/card';
 import { SkeletonLoader } from '../components/PageSkeleton';
 import { Button } from '../components/ui/button';
@@ -89,9 +89,9 @@ const DealsView: React.FC = () => {
     const open = all.filter(d => OPEN_STAGES.includes(d.stage));
     const won = all.filter(d => d.stage === 'Won');
     const lost = all.filter(d => d.stage === 'Lost');
-    const pipeline = open.reduce((s, d) => s + (d.amount || 0), 0);
-    const weighted = open.reduce((s, d) => s + dealWeighted(d), 0);
-    const wonTotal = won.reduce((s, d) => s + (d.amount || 0), 0);
+    const pipeline = open.reduce((s, d) => s + dealAmountAll(d), 0);
+    const weighted = open.reduce((s, d) => s + dealWeightedAll(d), 0);
+    const wonTotal = won.reduce((s, d) => s + dealAmountAll(d), 0);
     const winRate = (won.length + lost.length) ? (won.length / (won.length + lost.length)) * 100 : 0;
     return { openCount: open.length, pipeline, weighted, wonTotal, wonCount: won.length, winRate };
   }, [deals]);
@@ -184,7 +184,7 @@ const DealsView: React.FC = () => {
           <div className="flex gap-3 overflow-x-auto pb-4">
             {DEAL_STAGES.map(s => {
               const items = byStage[s.key] || [];
-              const total = items.reduce((sum, d) => sum + (d.amount || 0), 0);
+              const total = items.reduce((sum, d) => sum + dealAmountAll(d), 0);
               return (
                 <StageColumn key={s.key} stage={s.key}>
                   <div className="flex items-center gap-2 mb-2 px-1">

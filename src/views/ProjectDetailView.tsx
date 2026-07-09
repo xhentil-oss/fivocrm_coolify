@@ -32,7 +32,10 @@ import ProjectClientBrief from '../components/ProjectClientBrief';
 import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
 import { addFrequency, completeTask } from '../lib/recurringUtils';
-import type { Task, Project, Team, TeamMember, TimeEntry } from '../types';
+import { formatCurrency, toAll } from '../lib/utils';
+import { computeProjectLabor } from '../lib/finance/laborCost';
+import { AlertTriangle } from 'lucide-react';
+import type { Task, Project, Team, TeamMember, TimeEntry, Expense } from '../types';
 
 const ProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -84,6 +87,33 @@ const ProjectDetailView: React.FC = () => {
     skip: !projectId,
     skipTeamFilter: true,
   });
+
+  // Project expenses (for budget burn-down = labor cost + expenses)
+  const { data: projectExpenses } = useCollection<Expense>('expenses', {
+    where: projectId ? [{ field: 'projectId', operator: '==', value: projectId }] : undefined,
+    skip: !projectId,
+    skipTeamFilter: true,
+  });
+
+  // Budget burn-down: labor cost (logged hours × member cost-rate) + expenses,
+  // compared to the project budget. Plus realization (billable value vs cost).
+  const budgetStats = React.useMemo(() => {
+    const budget = Number(project?.budget) || 0;
+    const membersByUserId = new Map<string, TeamMember>();
+    (teamMembers || []).forEach(m => { if (m.userId) membersByUserId.set(m.userId, m); });
+    const labor = computeProjectLabor(timeEntries || [], membersByUserId);
+    const expensesTotal = (projectExpenses || []).reduce((s, e: any) => s + toAll(Number(e.amount) || 0, e.currency), 0);
+    const spent = labor.cost + expensesTotal;
+    const pct = budget > 0 ? Math.round((spent / budget) * 100) : 0;
+    return {
+      budget, laborCost: labor.cost, expensesTotal, spent, pct,
+      overBudget: budget > 0 && spent > budget,
+      remaining: budget - spent,
+      billableValue: labor.billableValue,
+      billableHours: labor.billableHours,
+      margin: budget > 0 ? budget - spent : labor.billableValue - spent,
+    };
+  }, [project?.budget, teamMembers, timeEntries, projectExpenses]);
 
   // Total hours logged for the project and per task
   const { totalHours, hoursByTask } = React.useMemo(() => {
@@ -557,6 +587,42 @@ const ProjectDetailView: React.FC = () => {
             )}
           </div>
         </div>
+
+        {/* Budget burn-down (labor cost + expenses vs budget) */}
+        {(budgetStats.budget > 0 || budgetStats.spent > 0) && (
+          <div className="px-6 pb-4">
+            <div className={`rounded-lg border p-3 ${budgetStats.overBudget ? 'border-red-300 bg-red-50 dark:bg-red-950/20' : 'border-border bg-muted/20'}`}>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                  {budgetStats.overBudget && <AlertTriangle className="w-3.5 h-3.5 text-red-500" />}
+                  Buxheti
+                </span>
+                <span className={`text-xs font-semibold tabular-nums ${budgetStats.overBudget ? 'text-red-600' : 'text-foreground'}`}>
+                  {formatCurrency(budgetStats.spent, 'ALL')} / {formatCurrency(budgetStats.budget, 'ALL')} ({budgetStats.pct}%)
+                </span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                <div
+                  className={`h-full transition-all ${budgetStats.overBudget ? 'bg-red-500' : budgetStats.pct >= 80 ? 'bg-amber-500' : 'bg-primary'}`}
+                  style={{ width: `${Math.min(100, budgetStats.pct)}%` }}
+                />
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[11px] text-muted-foreground">
+                <span>Punë: <strong className="text-foreground tabular-nums">{formatCurrency(budgetStats.laborCost, 'ALL')}</strong></span>
+                <span>Shpenzime: <strong className="text-foreground tabular-nums">{formatCurrency(budgetStats.expensesTotal, 'ALL')}</strong></span>
+                {budgetStats.billableValue > 0 && (
+                  <span>Vlerë e faturueshme: <strong className="text-foreground tabular-nums">{formatCurrency(budgetStats.billableValue, 'ALL')}</strong></span>
+                )}
+                <span className={budgetStats.margin < 0 ? 'text-red-600' : 'text-emerald-600'}>
+                  Marzh: <strong className="tabular-nums">{formatCurrency(budgetStats.margin, 'ALL')}</strong>
+                </span>
+              </div>
+              {budgetStats.overBudget && (
+                <p className="text-[11px] text-red-600 mt-1.5">⚠ Projekti ka kaluar buxhetin me {formatCurrency(budgetStats.spent - budgetStats.budget, 'ALL')}.</p>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* Client questionnaire brief (when the project came from a converted inquiry) */}
         <ProjectClientBrief inquiryId={project.sourceQuestionnaireId} />

@@ -188,6 +188,12 @@ export interface TeamMember {
   canAccessExpenses?: boolean;
   canAccessProfile?: boolean;
   monthlySalary?: number;
+  /** Internal labor cost per hour (ALL). Used to cost logged time into project
+   *  spend & per-client P&L. If unset, derived from monthlySalary / 160. */
+  hourlyCostRate?: number;
+  /** Optional billing rate per hour (ALL) — what the client is charged for this
+   *  member's time. Used for realization (billable value vs logged cost). */
+  hourlyBillRate?: number;
   /** Service line(s) this member's labor belongs to (match service categories).
    *  Their salary is charged as a direct cost of these services in the P&L,
    *  split equally across them. `serviceLine` (singular) kept for back-compat. */
@@ -797,6 +803,10 @@ export interface TimeEntry {
   duration?: number;
   isBillable?: boolean;
   isPomodoroSession?: boolean;
+  /** Billing rate captured on the entry (ALL/hr); falls back to the member rate. */
+  hourlyRate?: number;
+  tags?: string[];
+  pomodoroCount?: number;
   createdAt: Date;
   updatedAt: Date;
 }

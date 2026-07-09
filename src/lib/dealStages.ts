@@ -1,4 +1,5 @@
 import type { Deal, DealStage } from '../types';
+import { toAll } from './utils';
 
 export const DEAL_STAGES: { key: DealStage; label: string; prob: number; color: string; accent: string }[] = [
   { key: 'Qualification', label: 'Kualifikim', prob: 25, color: 'bg-blue-500',     accent: 'border-l-blue-400' },
@@ -18,6 +19,16 @@ export function dealProbability(d: Pick<Deal, 'stage' | 'probability'>): number 
 
 export function dealWeighted(d: Pick<Deal, 'stage' | 'probability' | 'amount'>): number {
   return (d.amount || 0) * dealProbability(d) / 100;
+}
+
+// Currency-normalized variants (→ ALL) for aggregating mixed-currency deals.
+// Per-deal cards keep their own currency; only totals/KPIs must normalize.
+export function dealAmountAll(d: Pick<Deal, 'amount' | 'currency'>): number {
+  return toAll(d.amount || 0, d.currency);
+}
+
+export function dealWeightedAll(d: Pick<Deal, 'stage' | 'probability' | 'amount' | 'currency'>): number {
+  return dealAmountAll(d) * dealProbability(d) / 100;
 }
 
 export function stageLabel(stage: string): string {

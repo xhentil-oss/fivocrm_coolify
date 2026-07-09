@@ -1930,6 +1930,82 @@ async function runInquiryMaterialsReminders() {
   return { sent, skipped };
 }
 
+// ── JOB: project-spend-rollup ────────────────────────────────────────────────
+// Rolls logged time (hours × member cost-rate) + project-tagged expenses into
+// each project's `spent`, so Reports/Customer360 margins reflect real labor cost
+// instead of the stale creation-time 0. Also stores laborCost/billableValue/
+// loggedHours for realization. Mirrors src/lib/finance/laborCost.ts — keep in sync.
+async function runProjectSpendRollup() {
+  const SERVER_RATES: Record<string, number> = { EUR: 100, USD: 92, GBP: 118, ALL: 1, LEK: 1 };
+  const toAllServer = (amount: number, currency?: string) =>
+    (amount || 0) * (SERVER_RATES[(currency || 'ALL').toUpperCase()] ?? 1);
+  const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
+  const entryHours = (e: any): number => {
+    if (typeof e.duration === 'number' && e.duration > 0) return e.duration / 60;
+    const s = ms(e.startTime), en = ms(e.endTime);
+    return (s && en && en > s) ? (en - s) / 3_600_000 : 0;
+  };
+
+  const [projectsSnap, entriesSnap, membersSnap, expensesSnap] = await Promise.all([
+    db.collection('projects').get(),
+    db.collection('timeEntries').get(),
+    db.collection('teamMembers').get(),
+    db.collection('expenses').get(),
+  ]);
+
+  const costByUser = new Map<string, number>();
+  for (const m of membersSnap.docs) {
+    const d = m.data();
+    const rate = (d.hourlyCostRate && d.hourlyCostRate > 0)
+      ? d.hourlyCostRate
+      : (d.monthlySalary && d.monthlySalary > 0 ? d.monthlySalary / 160 : 0);
+    if (d.userId) costByUser.set(d.userId, rate);
+  }
+  const billByUser = new Map<string, number>();
+  for (const m of membersSnap.docs) {
+    const d = m.data();
+    if (d.userId) billByUser.set(d.userId, (d.hourlyBillRate && d.hourlyBillRate > 0) ? d.hourlyBillRate : (costByUser.get(d.userId) || 0));
+  }
+
+  const labor = new Map<string, { cost: number; billableValue: number; hours: number }>();
+  for (const doc of entriesSnap.docs) {
+    const e = doc.data();
+    if (!e.projectId) continue;
+    const h = entryHours(e);
+    if (h <= 0) continue;
+    const agg = labor.get(e.projectId) || { cost: 0, billableValue: 0, hours: 0 };
+    agg.cost += h * (costByUser.get(e.userId) || 0);
+    agg.hours += h;
+    if (e.isBillable) agg.billableValue += h * ((e.hourlyRate && e.hourlyRate > 0) ? e.hourlyRate : (billByUser.get(e.userId) || 0));
+    labor.set(e.projectId, agg);
+  }
+
+  const expByProject = new Map<string, number>();
+  for (const doc of expensesSnap.docs) {
+    const x = doc.data();
+    if (!x.projectId) continue;
+    expByProject.set(x.projectId, (expByProject.get(x.projectId) || 0) + toAllServer(Number(x.amount) || 0, x.currency));
+  }
+
+  const now = admin.firestore.Timestamp.now();
+  let updated = 0;
+  const ops: Promise<any>[] = [];
+  for (const doc of projectsSnap.docs) {
+    const p = doc.data();
+    const l = labor.get(doc.id) || { cost: 0, billableValue: 0, hours: 0 };
+    const spent = Math.round(l.cost + (expByProject.get(doc.id) || 0));
+    const laborCost = Math.round(l.cost);
+    const billableValue = Math.round(l.billableValue);
+    const loggedHours = Math.round(l.hours * 10) / 10;
+    if ((p.spent || 0) !== spent || (p.laborCost || 0) !== laborCost || (p.billableValue || 0) !== billableValue) {
+      ops.push(doc.ref.update({ spent, laborCost, billableValue, loggedHours, updatedAt: now }));
+      updated++;
+    }
+  }
+  await settleAll(ops, 'project-spend-rollup');
+  return { updated, projects: projectsSnap.size };
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const isManual = req.query.manual === '1';
@@ -2015,9 +2091,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'inquiry-materials-reminders':
         result = await runInquiryMaterialsReminders();
         break;
+      case 'project-spend-rollup':
+        result = await runProjectSpendRollup();
+        break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, whmcs, inquiryReminders] = await Promise.allSettled([
+        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, whmcs, inquiryReminders, projectRollup] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
           runOverdueReminders(),
@@ -2035,6 +2114,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           runWhatsappBroadcasts(),
           runWhmcsSync(),
           runInquiryMaterialsReminders(),
+          runProjectSpendRollup(),
         ]);
         const settled = (r: PromiseSettledResult<any>) =>
           r.status === 'fulfilled' ? r.value : { error: (r.reason as Error)?.message || 'failed' };
@@ -2056,6 +2136,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           whatsappBroadcasts: settled(waBroadcasts),
           whmcsSync: settled(whmcs),
           inquiryMaterialsReminders: settled(inquiryReminders),
+          projectSpendRollup: settled(projectRollup),
         };
         break;
       }
