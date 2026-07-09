@@ -72,6 +72,9 @@ export interface TeamSettings {
   // `inquiry-materials-reminders`.
   inquiryMaterialsReminderEnabled?: boolean;
   inquiryMaterialsReminderDays?: number;   // wait N days before (re)sending; default 3
+  // Automated lead follow-up cadence: day-offsets (from enrollment) at which a
+  // follow-up task is auto-created. Default [1, 3, 7, 14].
+  leadCadenceDays?: number[];
 }
 
 /** Write partial teamSettings to Firestore (merge, not overwrite). */

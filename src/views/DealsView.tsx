@@ -21,7 +21,9 @@ import { Badge } from '../components/ui/badge';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { DollarSign, TrendingUp, Trophy, Plus, GripVertical, Percent, CalendarDays, Trash2 } from 'lucide-react';
-import type { Deal, DealStage, Customer, TeamMember } from '../types';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../lib/firebase';
+import type { Deal, DealStage, Customer, TeamMember, Lead } from '../types';
 
 const fmt = (n: number) => Math.round(n).toLocaleString('sq-AL');
 
@@ -70,6 +72,19 @@ const DealsView: React.FC = () => {
   const teamMembers = useUniqueTeamMembers(rawMembers);
   const { getName } = useUserNames(teamMembers || []);
   const dealMutation = useMutation<Deal>('deals');
+  const leadMutation = useMutation<Lead>('leads');
+
+  // Keep the origin lead in sync when a deal is won/lost (single source of truth).
+  const syncLeadStage = async (leadId?: string, stage?: DealStage) => {
+    if (!leadId || (stage !== 'Won' && stage !== 'Lost')) return;
+    try {
+      const snap = await getDoc(doc(db, 'leads', leadId));
+      if (!snap.exists()) return;
+      const cur = (snap.data() as any).status;
+      if (cur === 'Converted' || cur === stage) return; // don't downgrade / no-op
+      await leadMutation.update(leadId, { status: stage } as any);
+    } catch { /* best-effort */ }
+  };
 
   const [activeId, setActiveId] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -116,7 +131,10 @@ const DealsView: React.FC = () => {
     const patch: any = { stage: newStage, lastActivityAt: new Date() };
     if (newStage === 'Won') patch.wonAt = new Date();
     if (newStage === 'Lost') patch.lostAt = new Date();
-    try { await dealMutation.update(deal.id, patch); }
+    try {
+      await dealMutation.update(deal.id, patch);
+      syncLeadStage(deal.leadId, newStage);
+    }
     catch { toast({ title: 'Gabim', description: 'Faza nuk u ndryshua', variant: 'destructive' }); }
   };
 
@@ -138,8 +156,13 @@ const DealsView: React.FC = () => {
         expectedCloseDate: form.expectedCloseDate ? new Date(getTimestampMs(form.expectedCloseDate)) : undefined,
         lastActivityAt: new Date(),
       };
-      if (editId) await dealMutation.update(editId, payload);
-      else await dealMutation.create(payload);
+      if (editId) {
+        await dealMutation.update(editId, payload);
+        const leadId = (deals || []).find(d => d.id === editId)?.leadId;
+        syncLeadStage(leadId, payload.stage);
+      } else {
+        await dealMutation.create(payload);
+      }
       toast({ title: editId ? 'Marrëveshja u përditësua' : 'Marrëveshje u krijua' });
       setDialogOpen(false);
     } catch {

@@ -1930,6 +1930,100 @@ async function runInquiryMaterialsReminders() {
   return { sent, skipped };
 }
 
+// ── JOB: lead-cadence-steps ──────────────────────────────────────────────────
+// Automated follow-up sequences: for each lead with cadenceActive, create a
+// follow-up task for the assigned rep at each configured day-offset (from
+// cadenceStartedAt), advancing cadenceStep. Stops when steps run out or the
+// lead reaches a terminal status (Won/Converted/Lost).
+async function runLeadCadenceSteps() {
+  const now = Date.now();
+  const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
+  const TERMINAL = ['Won', 'Converted', 'Lost'];
+
+  const tsCache = new Map<string, number[]>();
+  const cadenceDays = async (teamId: string): Promise<number[]> => {
+    if (!teamId) return [1, 3, 7, 14];
+    if (tsCache.has(teamId)) return tsCache.get(teamId)!;
+    let days = [1, 3, 7, 14];
+    try {
+      const d = await db.collection('teamSettings').doc(teamId).get();
+      const raw = d.exists ? (d.data() as any).leadCadenceDays : null;
+      if (Array.isArray(raw) && raw.length) days = raw.map((n: any) => Number(n)).filter((n: number) => n >= 0).sort((a, b) => a - b);
+    } catch { /* default */ }
+    tsCache.set(teamId, days);
+    return days;
+  };
+
+  const snap = await db.collection('leads').where('cadenceActive', '==', true).get();
+  if (snap.empty) return { created: 0, completed: 0 };
+
+  let created = 0, completed = 0;
+  const ops: Promise<any>[] = [];
+
+  for (const doc of snap.docs) {
+    const lead = doc.data();
+    if (TERMINAL.includes(lead.status)) {
+      ops.push(doc.ref.update({ cadenceActive: false, updatedAt: admin.firestore.Timestamp.now() }));
+      completed++;
+      continue;
+    }
+    const days = await cadenceDays(lead.teamId);
+    const step = Number(lead.cadenceStep) || 0;
+    if (step >= days.length) {
+      ops.push(doc.ref.update({ cadenceActive: false, updatedAt: admin.firestore.Timestamp.now() }));
+      completed++;
+      continue;
+    }
+    const startedMs = ms(lead.cadenceStartedAt) || ms(lead.createdAt);
+    const dueMs = startedMs + days[step] * 86_400_000;
+    if (now < dueMs) continue; // not due yet
+
+    const recipientId = lead.assignedToUserId || lead.createdByUserId;
+    const due = admin.firestore.Timestamp.fromDate(new Date(now));
+    ops.push(db.collection('tasks').add({
+      title: `Ndjekje ${step + 1}: ${lead.name || 'Lead'}`,
+      description: `Hapi ${step + 1}/${days.length} i sekuencës së ndjekjes. Rikontakto lead-in.`,
+      status: 'Todo',
+      priority: 'medium',
+      assignedToUserId: recipientId || null,
+      createdByUserId: lead.createdByUserId || null,
+      teamId: lead.teamId || null,
+      businessId: lead.businessId || null,
+      startDate: due,
+      endDate: due,
+      dueDate: due,
+      dueNotificationSent: false,
+      relatedLeadId: doc.id,
+      createdAt: admin.firestore.Timestamp.now(),
+      updatedAt: admin.firestore.Timestamp.now(),
+    }));
+    if (recipientId) {
+      ops.push(db.collection('notifications').add({
+        userId: recipientId,
+        type: 'lead_cadence_step',
+        title: `🔁 Ndjekje: ${lead.name || 'Lead'}`,
+        message: `Hapi ${step + 1}/${days.length} i sekuencës — koha për rikontakt.`,
+        isRead: false,
+        actionUrl: '/app/crm',
+        actionLabel: 'Shiko CRM',
+        createdAt: admin.firestore.Timestamp.now(),
+      }));
+    }
+    const nextStep = step + 1;
+    ops.push(doc.ref.update({
+      cadenceStep: nextStep,
+      cadenceActive: nextStep < days.length,
+      nextFollowUpDate: due,
+      updatedAt: admin.firestore.Timestamp.now(),
+    }));
+    created++;
+    if (nextStep >= days.length) completed++;
+  }
+
+  await settleAll(ops, 'lead-cadence-steps');
+  return { created, completed };
+}
+
 // ── JOB: project-spend-rollup ────────────────────────────────────────────────
 // Rolls logged time (hours × member cost-rate) + project-tagged expenses into
 // each project's `spent`, so Reports/Customer360 margins reflect real labor cost
@@ -2094,9 +2188,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'project-spend-rollup':
         result = await runProjectSpendRollup();
         break;
+      case 'lead-cadence-steps':
+        result = await runLeadCadenceSteps();
+        break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, whmcs, inquiryReminders, projectRollup] = await Promise.allSettled([
+        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, whmcs, inquiryReminders, projectRollup, leadCadence] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
           runOverdueReminders(),
@@ -2115,6 +2212,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           runWhmcsSync(),
           runInquiryMaterialsReminders(),
           runProjectSpendRollup(),
+          runLeadCadenceSteps(),
         ]);
         const settled = (r: PromiseSettledResult<any>) =>
           r.status === 'fulfilled' ? r.value : { error: (r.reason as Error)?.message || 'failed' };
@@ -2137,6 +2235,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           whmcsSync: settled(whmcs),
           inquiryMaterialsReminders: settled(inquiryReminders),
           projectSpendRollup: settled(projectRollup),
+          leadCadenceSteps: settled(leadCadence),
         };
         break;
       }

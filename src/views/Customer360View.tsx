@@ -7,8 +7,9 @@ import { getStatusColor } from '../lib/statusColors';
 import {
   ArrowLeft, Building2, Mail, Phone, FileText, DollarSign,
   ClipboardList, Calendar, Plus, Clock, Target, Calculator, Send,
-  Archive, Trash2, CheckSquare, Square, Eye
+  Archive, Trash2, CheckSquare, Square, Eye, Download, Copy
 } from 'lucide-react';
+import { downloadQuotePdf } from '../lib/quotePdf';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -35,6 +36,18 @@ const Customer360View: React.FC = () => {
   const [activityTitle, setActivityTitle] = useState('');
   const [activityDesc, setActivityDesc] = useState('');
   const [sendingQuoteId, setSendingQuoteId] = useState<string | null>(null);
+
+  // Duplicate a quote as a new Draft revision (version+1, same root).
+  const createQuoteVersion = async (q: Quote) => {
+    const root = q.parentQuoteId || q.id;
+    const siblings = customerQuotes.filter(x => (x.parentQuoteId || x.id) === root);
+    const maxV = Math.max(1, ...siblings.map(x => x.version || 1));
+    const { id, createdAt, updatedAt, ...rest } = q as any;
+    try {
+      await quoteMutation.create({ ...rest, status: 'Draft', version: maxV + 1, parentQuoteId: root });
+      toast({ title: `Version i ri (v${maxV + 1}) u krijua si Draft` });
+    } catch { toast({ title: 'Gabim', description: 'Versioni nuk u krijua', variant: 'destructive' }); }
+  };
   const [sendingContractId, setSendingContractId] = useState<string | null>(null);
   const [selectedRequestIds, setSelectedRequestIds] = useState<Set<string>>(new Set());
   const [showArchivedRequests, setShowArchivedRequests] = useState(false);
@@ -823,7 +836,10 @@ const Customer360View: React.FC = () => {
                     return (
                       <div key={q.id} className="p-3 rounded-lg border bg-card space-y-1.5">
                         <div className="flex items-center justify-between gap-2">
-                          <span className="font-medium truncate">{q.label || q.result?.suggestedLabel || '-'}</span>
+                          <span className="font-medium truncate flex items-center gap-1.5">
+                            {q.label || q.result?.suggestedLabel || '-'}
+                            {q.version && q.version > 1 && <Badge variant="outline" className="text-[10px] px-1.5">v{q.version}</Badge>}
+                          </span>
                           <Badge variant="secondary" className={
                             q.status === 'Accepted' ? 'bg-green-100 text-green-700' :
                             q.status === 'Rejected' ? 'bg-red-100 text-red-700' :
@@ -848,6 +864,14 @@ const Customer360View: React.FC = () => {
                             <Send className="w-3.5 h-3.5" /> Dërgo
                           </Button>
                         )}
+                        <div className="flex gap-2">
+                          <Button size="sm" variant="outline" className="flex-1 h-8 gap-1 text-xs" onClick={() => downloadQuotePdf(q)}>
+                            <Download className="w-3.5 h-3.5" /> PDF
+                          </Button>
+                          <Button size="sm" variant="outline" className="flex-1 h-8 gap-1 text-xs" onClick={() => createQuoteVersion(q)}>
+                            <Copy className="w-3.5 h-3.5" /> Version i ri
+                          </Button>
+                        </div>
                       </div>
                     );
                   })}

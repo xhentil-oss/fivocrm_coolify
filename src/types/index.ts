@@ -512,6 +512,11 @@ export interface Lead {
   slaBreachNotified?: boolean;  // cron debounce: first-response SLA breach alerted
   staleNotifiedAt?: Date;       // cron debounce: last staleness alert
   waAutoReminderAt?: Date;      // cron debounce: last WhatsApp auto-reminder sent
+  // Automated follow-up cadence: when active, the cron auto-creates a follow-up
+  // task at each configured day-offset until the steps run out or the lead closes.
+  cadenceActive?: boolean;
+  cadenceStartedAt?: Date;
+  cadenceStep?: number;         // next step index to fire (0-based)
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
@@ -958,6 +963,10 @@ export interface Quote {
   status: 'Draft' | 'Sent' | 'Accepted' | 'Rejected';
   validUntil?: Date;
   notes?: string;
+  /** Revision number (1 = original). Higher = newer revision. */
+  version?: number;
+  /** Root quote this is a revision of (the first version's id). */
+  parentQuoteId?: string;
   teamId?: string;
   createdAt: Date;
   updatedAt: Date;

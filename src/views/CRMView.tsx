@@ -31,6 +31,8 @@ import { Textarea } from '../components/ui/textarea';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
 import DetailDrawer from '../components/DetailDrawer';
 import LeadTimeline, { logLeadActivity } from '../components/LeadTimeline';
+import { collection, query, where, getDocs } from 'firebase/firestore';
+import { db } from '../lib/firebase';
 import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
 import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
@@ -599,6 +601,17 @@ const CRMView: React.FC = () => {
     }
   };
 
+  // Keep the linked deal in sync when a lead is won/lost/converted (single
+  // source of truth). Finds the deal by leadId and advances its stage.
+  const syncDealFromLead = async (leadId: string, stage: 'Won' | 'Lost') => {
+    try {
+      const snap = await getDocs(query(collection(db, 'deals'), where('leadId', '==', leadId)));
+      await Promise.all(snap.docs
+        .filter(d => { const s = d.data().stage; return s !== 'Won' && s !== 'Lost'; })
+        .map(d => dealMutation.update(d.id, { stage, ...(stage === 'Won' ? { wonAt: new Date() } : { lostAt: new Date() }), lastActivityAt: new Date() } as any)));
+    } catch { /* best-effort */ }
+  };
+
   const handleStatusChange = async (lead: Lead, newStatus: string) => {
     // If status is "Lost", prompt for reason before proceeding
     if (newStatus === 'Lost') {
@@ -705,6 +718,7 @@ const CRMView: React.FC = () => {
     setOptimisticStatus(prev => ({ ...prev, [lead.id]: newStatus }));
     try {
       await leadMutation.update(lead.id, update);
+      if (newStatus === 'Won') syncDealFromLead(lead.id, 'Won');
       logLead(lead.id, 'status_changed', `Statusi: ${getStatusLabel(lead.status)} → ${getStatusLabel(newStatus)}`, undefined, { from: lead.status, to: newStatus });
       // Clear optimistic entry once Firestore confirms (next snapshot will carry it)
       setOptimisticStatus(prev => {
@@ -728,10 +742,23 @@ const CRMView: React.FC = () => {
       probability: 0,
       lostReason: lostReason || undefined,
     });
+    syncDealFromLead(lostReasonLead.id, 'Lost');
     logLead(lostReasonLead.id, 'lost', 'Shënuar si i humbur', lostReason || undefined);
     toast({ title: 'Lead u shënja si i humbur', description: lostReason ? `Arsyeja: ${lostReason}` : undefined });
     setLostReasonLead(null);
     setLostReason('');
+  };
+
+  // Enroll / stop the automated follow-up cadence for a lead.
+  const toggleCadence = async (lead: Lead) => {
+    const active = !lead.cadenceActive;
+    try {
+      await leadMutation.update(lead.id, active
+        ? ({ cadenceActive: true, cadenceStartedAt: new Date(), cadenceStep: 0 } as any)
+        : ({ cadenceActive: false } as any));
+      logLead(lead.id, 'followup_scheduled', active ? 'Sekuenca e ndjekjes u aktivizua' : 'Sekuenca e ndjekjes u ndal');
+      toast({ title: active ? '🔁 Sekuenca e ndjekjes u aktivizua' : 'Sekuenca u ndal' });
+    } catch { toast({ title: 'Gabim', variant: 'destructive' }); }
   };
 
   const filteredLeads = React.useMemo(() => {
@@ -2108,6 +2135,27 @@ const CRMView: React.FC = () => {
                         )}
                       </div>
                     </div>
+                  </div>
+
+                  {/* ── Automated follow-up cadence ── */}
+                  <div className="border-t pt-4 space-y-2">
+                    <div className="flex items-center gap-2">
+                      <Bell className="w-4 h-4 text-primary" />
+                      <p className="text-sm font-semibold">Sekuencë Automatike Ndjekjeje</p>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      Krijon automatikisht detyra rikontakti sipas ditëve të konfiguruara (parazgjedhje: 1, 3, 7, 14 ditë), derisa lead-i të mbyllet.
+                    </p>
+                    <Button
+                      size="sm"
+                      variant={selectedLead.cadenceActive ? 'outline' : 'default'}
+                      className={selectedLead.cadenceActive ? 'w-full text-destructive border-destructive/30' : 'w-full'}
+                      onClick={() => toggleCadence(selectedLead)}
+                    >
+                      {selectedLead.cadenceActive
+                        ? `Ndal sekuencën (hapi ${(selectedLead.cadenceStep || 0) + 1})`
+                        : 'Nis sekuencën e ndjekjes'}
+                    </Button>
                   </div>
 
                   {/* ── Send message now ── */}

@@ -67,6 +67,7 @@ export default function PriceCalculatorView() {
           manualDiscountAmount: result.manualDiscountAmount || 0,
         },
         status: 'Draft',
+        version: 1,
       };
       if (linkedLead) { doc.leadId = linkedId; doc.leadName = linkedLead.name; }
       if (linkedCustomer) { doc.customerId = linkedId; doc.customerName = linkedCustomer.name; }
