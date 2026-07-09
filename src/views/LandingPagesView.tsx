@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Shield, Sun, Camera } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Shield, Sun, Camera, Car } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -168,6 +168,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Camera,
     color: 'text-fuchsia-600',
     gradient: 'from-fuchsia-600 to-pink-600',
+    status: 'active',
+  },
+  {
+    id: 'transfer',
+    title: 'Transfer & NCC (IT)',
+    description: 'Landing page në italisht për kompani transfer/NCC — Ridizajn website (€1.500 një herë) + paketa mujore Crescita & Prenotazioni (€900/muaj, min. 3 muaj): SEO, Google Ads, Google Maps, autoritet domaini, rritje rezervimesh. Me funnel bindës.',
+    path: '/transfer',
+    category: 'Marketing',
+    icon: Car,
+    color: 'text-blue-600',
+    gradient: 'from-blue-600 to-cyan-500',
     status: 'active',
   },
 ];
