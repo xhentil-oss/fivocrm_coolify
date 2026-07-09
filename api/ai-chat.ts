@@ -199,7 +199,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } catch (err: any) {
     console.error('AI Chat error:', err);
     if (err?.status === 429 || err?.statusCode === 429) {
-      return res.status(429).json({ error: 'Serveri AI është i ngarkuar. Provoni përsëri.' });
+      return res.status(429).json({
+        error: 'Serveri AI është i ngarkuar. Provoni përsëri.',
+        detail: String(err?.message || err).slice(0, 400),
+      });
     }
     return res.status(500).json({
       error: 'Gabim i brendshëm',
@@ -217,7 +220,7 @@ async function callGemini(
   msgs: ChatMsg[],
   modelOverride?: string,
 ): Promise<{ reply: string; tokensUsed: number; model: string }> {
-  const model = modelOverride || process.env.GEMINI_MODEL || 'gemini-2.5-flash';
+  const model = modelOverride || process.env.GEMINI_MODEL || 'gemini-2.0-flash';
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
   // Gemini uses 'user' / 'model' roles instead of 'user' / 'assistant'
