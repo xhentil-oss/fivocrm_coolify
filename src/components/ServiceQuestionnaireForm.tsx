@@ -16,10 +16,11 @@ import {
   ChevronRight, ChevronLeft, Check, Instagram, Facebook, Linkedin,
   Share2, Search, Palette, PenTool, Megaphone, Send, AlertCircle, PlusCircle,
   ShoppingCart, Heart, Save, Clock, Trash2, Upload, Package, Sparkles, Loader2,
-  Image as ImageIcon, X, Briefcase, MapPin, Mail, Wrench,
+  Image as ImageIcon, X, Briefcase, MapPin, Mail, Wrench, ClipboardCheck,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { useFileUpload } from '../hooks/useFileUpload';
+import { getInquiryCompleteness } from '../lib/inquiryBrief';
 
 // --------------- Types ---------------
 
@@ -305,6 +306,7 @@ const MultiSelectChips: React.FC<{
           <button
             key={opt.value}
             type="button"
+            aria-pressed={isActive}
             onClick={() => toggle(opt.value)}
             className={`flex items-center gap-2 px-3 py-2.5 rounded-lg border text-sm font-medium transition-all text-left ${
               isActive
@@ -322,6 +324,53 @@ const MultiSelectChips: React.FC<{
   );
 };
 
+// --------------- Validation & formatting helpers ---------------
+
+/** Prepend https:// when a non-empty URL has no scheme. */
+const normalizeUrl = (v: string): string => {
+  const t = (v || '').trim();
+  if (!t) return '';
+  return /^https?:\/\//i.test(t) ? t : `https://${t}`;
+};
+
+/** Empty is valid (fields are optional); otherwise require a parseable URL with a TLD. */
+const isValidUrl = (v: string): boolean => {
+  const t = (v || '').trim();
+  if (!t) return true;
+  try { new URL(normalizeUrl(t)); return /\.[a-z]{2,}/i.test(t); } catch { return false; }
+};
+
+/** Loose international phone check: 6–15 digits ignoring spaces/+/-/(). */
+const isValidPhone = (v: string): boolean => {
+  const digits = (v || '').replace(/\D/g, '');
+  return digits.length >= 6 && digits.length <= 15;
+};
+
+// --------------- Inline field helpers (module-level to avoid remounts) ---------------
+
+const FieldError: React.FC<{ field: string; errors: Record<string, string> }> = ({ field, errors }) =>
+  errors[field] ? (
+    <p id={`err-${field}`} className="text-xs text-red-500 mt-1 flex items-center gap-1">
+      <AlertCircle className="w-3 h-3" />{errors[field]}
+    </p>
+  ) : null;
+
+const AiButton: React.FC<{
+  field: 'businessDescription' | 'projectNeedDescription';
+  aiField: null | 'businessDescription' | 'projectNeedDescription';
+  onGenerate: (field: 'businessDescription' | 'projectNeedDescription') => void;
+}> = ({ field, aiField, onGenerate }) => (
+  <button
+    type="button"
+    onClick={() => onGenerate(field)}
+    disabled={aiField !== null}
+    className="inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs font-semibold text-primary hover:bg-primary/10 disabled:opacity-60 transition"
+  >
+    {aiField === field ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
+    {aiField === field ? 'Duke shkruar…' : 'Ndihmë me AI'}
+  </button>
+);
+
 // --------------- Steps ---------------
 
 const STEPS = [
@@ -329,6 +378,7 @@ const STEPS = [
   { id: 2, title: 'Shërbimi & Objektivi', icon: Target },
   { id: 3, title: 'Pyetje Specifike', icon: FileText },
   { id: 4, title: 'Buxheti & Materialet', icon: DollarSign },
+  { id: 5, title: 'Rishiko & Dërgo', icon: ClipboardCheck },
 ];
 
 // --------------- Component ---------------
@@ -343,9 +393,11 @@ interface Props {
   isEditing?: boolean;
 }
 
-const DRAFT_STORAGE_KEY = 'fivocrm_inquiry_draft';
-
 const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedService, prefillEmail, prefillName, initialDraft, onDraftSave, isEditing }) => {
+  // Per-inquiry draft key so two different inquiries (or services) in the same
+  // browser don't overwrite each other's autosaved draft.
+  const draftKey = 'fivocrm_inquiry_draft'
+    + (initialDraft?.id ? `_${initialDraft.id}` : (preselectedService ? `_${preselectedService}` : ''));
   const [step, setStep] = useState(() => initialDraft?.lastSavedStep || 1);
   const [form, setForm] = useState<FormData>(() => {
     // Priority: initialDraft prop > localStorage draft > fresh form
@@ -353,7 +405,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
       return { ...initialFormData, ...initialDraft };
     }
     try {
-      const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
+      const saved = localStorage.getItem(draftKey);
       if (saved) {
         const parsed = JSON.parse(saved);
         return { ...initialFormData, ...parsed.form };
@@ -370,10 +422,13 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [draftSavedAt, setDraftSavedAt] = useState<string | null>(null);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const headingRef = useRef<HTMLHeadingElement>(null);
+  const stepContentRef = useRef<HTMLDivElement>(null);
+  const didMountRef = useRef(false);
   const [showDraftBanner, setShowDraftBanner] = useState(() => {
     if (initialDraft) return false;
     try {
-      return !!localStorage.getItem(DRAFT_STORAGE_KEY);
+      return !!localStorage.getItem(draftKey);
     } catch { return false; }
   });
 
@@ -381,7 +436,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
   useEffect(() => {
     if (!initialDraft) {
       try {
-        const saved = localStorage.getItem(DRAFT_STORAGE_KEY);
+        const saved = localStorage.getItem(draftKey);
         if (saved) {
           const parsed = JSON.parse(saved);
           if (parsed.step) setStep(parsed.step);
@@ -393,7 +448,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
   // Auto-save to localStorage on every form/step change (debounced 1s)
   const saveDraft = useCallback(() => {
     try {
-      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ form, step, savedAt: new Date().toISOString() }));
+      localStorage.setItem(draftKey, JSON.stringify({ form, step, savedAt: new Date().toISOString() }));
       setDraftSavedAt(new Date().toLocaleTimeString('sq-AL', { hour: '2-digit', minute: '2-digit' }));
     } catch { /* ignore */ }
     if (onDraftSave) {
@@ -409,8 +464,16 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
 
   // Clear draft on successful submit
   const clearDraft = useCallback(() => {
-    try { localStorage.removeItem(DRAFT_STORAGE_KEY); } catch { /* ignore */ }
+    try { localStorage.removeItem(draftKey); } catch { /* ignore */ }
   }, []);
+
+  // On step change (not initial mount), move focus to the step heading so
+  // keyboard/screen-reader users are oriented to the new content.
+  useEffect(() => {
+    if (!didMountRef.current) { didMountRef.current = true; return; }
+    headingRef.current?.focus();
+    stepContentRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, [step]);
 
   // Custom industries
   const { data: customIndustries } = useCollection<any>('customIndustries', {
@@ -537,19 +600,6 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
     }
   };
 
-  // Small reusable "Ndihmë me AI" button for a text field.
-  const AiButton: React.FC<{ field: 'businessDescription' | 'projectNeedDescription' }> = ({ field }) => (
-    <button
-      type="button"
-      onClick={() => generateWithAI(field)}
-      disabled={aiField !== null}
-      className="inline-flex items-center gap-1.5 rounded-lg border border-primary/30 bg-primary/5 px-2.5 py-1 text-xs font-semibold text-primary hover:bg-primary/10 disabled:opacity-60 transition"
-    >
-      {aiField === field ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
-      {aiField === field ? 'Duke shkruar…' : 'Ndihmë me AI'}
-    </button>
-  );
-
   // Dynamic goals based on selected services
   const availableGoals = useMemo(() => {
     const goals = new Set<string>();
@@ -616,7 +666,9 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
       if (!form.email.trim()) e.email = 'E detyrueshme';
       else if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(form.email)) e.email = 'Email i pavlefshëm';
       if (!form.phoneNumber.trim()) e.phoneNumber = 'E detyrueshme';
+      else if (!isValidPhone(form.phoneNumber)) e.phoneNumber = 'Numër telefoni i pavlefshëm';
       if (!form.industry) e.industry = 'E detyrueshme';
+      if (form.website.trim() && !isValidUrl(form.website)) e.website = 'Link i pavlefshëm (p.sh. https://faqja.com)';
     } else if (actual === 2) {
       if (form.servicesInterestedIn.length === 0) e.servicesInterestedIn = 'Zgjidhni të paktën një shërbim';
       if (!form.mainGoal) e.mainGoal = 'E detyrueshme';
@@ -654,35 +706,74 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
         if (!form.coach_niche.trim()) e.coach_niche = 'E detyrueshme';
         if (form.coach_deliveryMethod.length === 0) e.coach_deliveryMethod = 'Zgjidhni të paktën një metodë';
       }
+      if (form.servicesInterestedIn.includes('Google Maps')) {
+        if (form.gmb_needs.length === 0) e.gmb_needs = 'Zgjidhni të paktën një opsion';
+      }
+      if (form.servicesInterestedIn.includes('Email/WhatsApp Marketing')) {
+        if (form.email_channels.length === 0) e.email_channels = 'Zgjidhni të paktën një kanal';
+      }
+      if (form.servicesInterestedIn.includes('Website Maintenance')) {
+        if (form.maint_needs.length === 0) e.maint_needs = 'Zgjidhni të paktën një opsion';
+      }
+      if (form.web_existingWebsiteLink.trim() && !isValidUrl(form.web_existingWebsiteLink)) {
+        e.web_existingWebsiteLink = 'Link i pavlefshëm';
+      }
     } else if (actual === 4) {
       if (!form.budgetRange) e.budgetRange = 'E detyrueshme';
       if (!form.timeline) e.timeline = 'E detyrueshme';
       if (!form.decisionMaker) e.decisionMaker = 'E detyrueshme';
     }
     setErrors(e);
-    return Object.keys(e).length === 0;
+    return e;
+  };
+
+  // Move focus (and scroll) to the first field with an error, so keyboard and
+  // screen-reader users land on what needs fixing.
+  const focusFirstError = (e: Record<string, string>) => {
+    const firstKey = Object.keys(e)[0];
+    if (!firstKey) return;
+    const el = typeof document !== 'undefined' ? document.getElementById(`field-${firstKey}`) : null;
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      (el as HTMLElement).focus({ preventScroll: true });
+    } else {
+      stepContentRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    }
   };
 
   const next = () => {
-    if (validateStep(step)) {
-      setStep(Math.min(step + 1, totalSteps));
-    }
+    const e = validateStep(step);
+    if (Object.keys(e).length === 0) setStep(Math.min(step + 1, totalSteps));
+    else focusFirstError(e);
   };
   const prev = () => setStep(Math.max(step - 1, 1));
 
+  // Normalize URLs + email/phone right before persisting.
+  const normalizeForm = (f: FormData): FormData => ({
+    ...f,
+    email: f.email.trim().toLowerCase(),
+    phoneNumber: f.phoneNumber.trim(),
+    website: normalizeUrl(f.website),
+    web_existingWebsiteLink: normalizeUrl(f.web_existingWebsiteLink),
+    googleDriveLink: normalizeUrl(f.googleDriveLink),
+    secondGoogleDriveLink: normalizeUrl(f.secondGoogleDriveLink),
+    instagramLink: normalizeUrl(f.instagramLink),
+    facebookLink: normalizeUrl(f.facebookLink),
+    tiktokLink: normalizeUrl(f.tiktokLink),
+    linkedinLink: normalizeUrl(f.linkedinLink),
+  });
+
   const handleSubmit = async () => {
-    if (!validateStep(step)) return;
+    const e = validateStep(step);
+    if (Object.keys(e).length) { focusFirstError(e); return; }
     setSubmitting(true);
     try {
-      await onSubmit(form);
+      await onSubmit(normalizeForm(form));
       clearDraft();
     } finally {
       setSubmitting(false);
     }
   };
-
-  const FieldError: React.FC<{ field: string }> = ({ field }) =>
-    errors[field] ? <p className="text-xs text-red-500 mt-1 flex items-center gap-1"><AlertCircle className="w-3 h-3" />{errors[field]}</p> : null;
 
   // ---------- Step 1: Basic Info ----------
 
@@ -691,25 +782,25 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label className="text-sm font-medium">Emri i Biznesit *</Label>
-          <Input value={form.businessName} onChange={e => set('businessName', e.target.value)} placeholder="p.sh. Fivo Studio" className="mt-1" />
-          <FieldError field="businessName" />
+          <Input id="field-businessName" value={form.businessName} onChange={e => set('businessName', e.target.value)} placeholder="p.sh. Fivo Studio" className="mt-1" aria-invalid={!!errors.businessName} aria-describedby={errors.businessName ? 'err-businessName' : undefined} />
+          <FieldError errors={errors} field="businessName" />
         </div>
         <div>
           <Label className="text-sm font-medium">Emri i Kontaktit *</Label>
-          <Input value={form.contactName} onChange={e => set('contactName', e.target.value)} placeholder="p.sh. Andi Hoxha" className="mt-1" />
-          <FieldError field="contactName" />
+          <Input id="field-contactName" value={form.contactName} onChange={e => set('contactName', e.target.value)} placeholder="p.sh. Andi Hoxha" className="mt-1" aria-invalid={!!errors.contactName} aria-describedby={errors.contactName ? 'err-contactName' : undefined} />
+          <FieldError errors={errors} field="contactName" />
         </div>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div>
           <Label className="text-sm font-medium">Email *</Label>
-          <Input type="email" value={form.email} onChange={e => set('email', e.target.value)} placeholder="email@example.com" className="mt-1" />
-          <FieldError field="email" />
+          <Input id="field-email" type="email" value={form.email} onChange={e => set('email', e.target.value)} placeholder="email@example.com" className="mt-1" aria-invalid={!!errors.email} aria-describedby={errors.email ? 'err-email' : undefined} />
+          <FieldError errors={errors} field="email" />
         </div>
         <div>
           <Label className="text-sm font-medium">Numri i Telefonit *</Label>
-          <Input type="tel" inputMode="numeric" maxLength={20} onKeyDown={phoneKeyDown} value={form.phoneNumber} onChange={e => set('phoneNumber', e.target.value)} placeholder="+355 69 xxx xxxx" className="mt-1" />
-          <FieldError field="phoneNumber" />
+          <Input id="field-phoneNumber" type="tel" inputMode="numeric" maxLength={20} onKeyDown={phoneKeyDown} value={form.phoneNumber} onChange={e => set('phoneNumber', e.target.value)} placeholder="+355 69 xxx xxxx" className="mt-1" aria-invalid={!!errors.phoneNumber} aria-describedby={errors.phoneNumber ? 'err-phoneNumber' : undefined} />
+          <FieldError errors={errors} field="phoneNumber" />
         </div>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -743,7 +834,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
               </Button>
             </div>
           )}
-          <FieldError field="industry" />
+          <FieldError errors={errors} field="industry" />
         </div>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -753,14 +844,15 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
         </div>
         <div>
           <Label className="text-sm font-medium">Website</Label>
-          <Input value={form.website} onChange={e => set('website', e.target.value)} placeholder="https://..." className="mt-1" />
+          <Input id="field-website" value={form.website} onChange={e => set('website', e.target.value)} placeholder="https://..." className="mt-1" aria-invalid={!!errors.website} aria-describedby={errors.website ? 'err-website' : undefined} />
+          <FieldError errors={errors} field="website" />
         </div>
       </div>
 
       <div>
         <div className="flex items-center justify-between gap-2 mb-1">
           <Label className="text-sm font-medium">Historiku / Përshkrimi i biznesit</Label>
-          <AiButton field="businessDescription" />
+          <AiButton aiField={aiField} onGenerate={generateWithAI} field="businessDescription" />
         </div>
         <Textarea
           value={form.businessDescription}
@@ -894,7 +986,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
           selected={form.servicesInterestedIn}
           onChange={v => set('servicesInterestedIn', v)}
         />
-        <FieldError field="servicesInterestedIn" />
+        <FieldError errors={errors} field="servicesInterestedIn" />
       </div>
 
       {form.servicesInterestedIn.length > 0 && (
@@ -907,13 +999,13 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                 {availableGoals.map(g => <SelectItem key={g} value={g}>{g}</SelectItem>)}
               </SelectContent>
             </Select>
-            <FieldError field="mainGoal" />
+            <FieldError errors={errors} field="mainGoal" />
           </div>
 
           <div>
             <div className="flex items-center justify-between gap-2">
               <Label className="text-sm font-medium">Përshkruani nevojën tuaj *</Label>
-              <AiButton field="projectNeedDescription" />
+              <AiButton aiField={aiField} onGenerate={generateWithAI} field="projectNeedDescription" />
             </div>
             <Textarea
               value={form.projectNeedDescription}
@@ -921,7 +1013,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
               placeholder={descriptionPlaceholder}
               className="mt-1 min-h-[100px]"
             />
-            <FieldError field="projectNeedDescription" />
+            <FieldError errors={errors} field="projectNeedDescription" />
           </div>
 
           <div>
@@ -996,7 +1088,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                 onChange={v => set('smm_mainPlatforms', v)}
                 columns={3}
               />
-              <FieldError field="smm_mainPlatforms" />
+              <FieldError errors={errors} field="smm_mainPlatforms" />
             </div>
 
             <div>
@@ -1025,7 +1117,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                     <SelectItem value="Vetëm Ads">Vetëm Ads</SelectItem>
                   </SelectContent>
                 </Select>
-                <FieldError field="smm_organicOrAds" />
+                <FieldError errors={errors} field="smm_organicOrAds" />
               </div>
               <div>
                 <Label className="text-sm font-medium">Keni përmbajtje foto/video?</Label>
@@ -1131,12 +1223,13 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                     <SelectItem value="Jo">Jo</SelectItem>
                   </SelectContent>
                 </Select>
-                <FieldError field="web_hasExistingWebsite" />
+                <FieldError errors={errors} field="web_hasExistingWebsite" />
               </div>
               {form.web_hasExistingWebsite === 'Po' && (
                 <div>
                   <Label className="text-sm font-medium">Linku i website-it</Label>
-                  <Input value={form.web_existingWebsiteLink} onChange={e => set('web_existingWebsiteLink', e.target.value)} placeholder="https://..." className="mt-1" />
+                  <Input value={form.web_existingWebsiteLink} onChange={e => set('web_existingWebsiteLink', e.target.value)} placeholder="https://..." className="mt-1" aria-invalid={!!errors.web_existingWebsiteLink} />
+                  <FieldError errors={errors} field="web_existingWebsiteLink" />
                 </div>
               )}
             </div>
@@ -1155,7 +1248,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                     <SelectItem value="Tjetër">Tjetër</SelectItem>
                   </SelectContent>
                 </Select>
-                <FieldError field="web_mainPurpose" />
+                <FieldError errors={errors} field="web_mainPurpose" />
               </div>
               <div>
                 <Label className="text-sm font-medium">Numri i faqeve</Label>
@@ -1274,7 +1367,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                 onChange={v => set('ads_platforms', v)}
                 columns={3}
               />
-              <FieldError field="ads_platforms" />
+              <FieldError errors={errors} field="ads_platforms" />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1290,7 +1383,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                     <SelectItem value="Booking">Booking</SelectItem>
                   </SelectContent>
                 </Select>
-                <FieldError field="ads_mainConversionAction" />
+                <FieldError errors={errors} field="ads_mainConversionAction" />
               </div>
               <div>
                 <Label className="text-sm font-medium">Tregu që doni të synoni</Label>
@@ -1389,7 +1482,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                 onChange={v => set('brand_whatYouNeed', v)}
                 columns={3}
               />
-              <FieldError field="brand_whatYouNeed" />
+              <FieldError errors={errors} field="brand_whatYouNeed" />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1402,7 +1495,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                     <SelectItem value="Jo">Jo</SelectItem>
                   </SelectContent>
                 </Select>
-                <FieldError field="brand_hasExistingLogo" />
+                <FieldError errors={errors} field="brand_hasExistingLogo" />
               </div>
               <div>
                 <Label className="text-sm font-medium">Stili i preferuar</Label>
@@ -1461,7 +1554,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                 onChange={v => set('content_types', v)}
                 columns={3}
               />
-              <FieldError field="content_types" />
+              <FieldError errors={errors} field="content_types" />
             </div>
 
             <div>
@@ -1585,7 +1678,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                     <SelectItem value="Jo">Jo</SelectItem>
                   </SelectContent>
                 </Select>
-                <FieldError field="seo_hasWebsite" />
+                <FieldError errors={errors} field="seo_hasWebsite" />
               </div>
               {form.seo_hasWebsite === 'Po' && (
                 <div>
@@ -1621,7 +1714,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                     <SelectItem value="Ndërkombëtar">Ndërkombëtar</SelectItem>
                   </SelectContent>
                 </Select>
-                <FieldError field="seo_targetMarket" />
+                <FieldError errors={errors} field="seo_targetMarket" />
               </div>
               <div>
                 <Label className="text-sm font-medium">Keni bërë SEO më parë?</Label>
@@ -1715,7 +1808,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                     <SelectItem value="Nuk e di">Nuk e di, këshillomëni</SelectItem>
                   </SelectContent>
                 </Select>
-                <FieldError field="ecom_platform" />
+                <FieldError errors={errors} field="ecom_platform" />
               </div>
               <div>
                 <Label className="text-sm font-medium">Sa produkte keni? *</Label>
@@ -1728,7 +1821,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                     <SelectItem value="200+">200+</SelectItem>
                   </SelectContent>
                 </Select>
-                <FieldError field="ecom_productsCount" />
+                <FieldError errors={errors} field="ecom_productsCount" />
               </div>
             </div>
 
@@ -1772,7 +1865,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                 onChange={v => set('ecom_paymentMethods', v)}
                 columns={3}
               />
-              <FieldError field="ecom_paymentMethods" />
+              <FieldError errors={errors} field="ecom_paymentMethods" />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1953,7 +2046,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
             <div>
               <Label className="text-sm font-medium">Nisha / Fusha e coaching-ut *</Label>
               <Input value={form.coach_niche} onChange={e => set('coach_niche', e.target.value)} placeholder="p.sh. Life coaching, Business coaching, Fitness..." className="mt-1" />
-              <FieldError field="coach_niche" />
+              <FieldError errors={errors} field="coach_niche" />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1990,7 +2083,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                 onChange={v => set('coach_deliveryMethod', v)}
                 columns={3}
               />
-              <FieldError field="coach_deliveryMethod" />
+              <FieldError errors={errors} field="coach_deliveryMethod" />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2108,6 +2201,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                 onChange={v => set('gmb_needs', v)}
                 columns={3}
               />
+              <FieldError errors={errors} field="gmb_needs" />
             </div>
           </Card>
         )}
@@ -2161,6 +2255,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                 onChange={v => set('maint_needs', v)}
                 columns={3}
               />
+              <FieldError errors={errors} field="maint_needs" />
             </div>
 
             <div>
@@ -2198,6 +2293,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
                 onChange={v => set('email_channels', v)}
                 columns={3}
               />
+              <FieldError errors={errors} field="email_channels" />
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2251,8 +2347,65 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
 
   // ---------- Step 4: Budget & Materials ----------
 
+  // Live "profile completeness" meter — mirrors the CRM's getInquiryCompleteness.
+  const renderCompleteness = () => {
+    const c = getInquiryCompleteness(form as any);
+    return (
+      <div className="rounded-lg border p-4 bg-muted/20 space-y-2">
+        <div className="flex items-center justify-between">
+          <span className="text-sm font-medium">Plotësimi i profilit</span>
+          <span className="text-sm font-semibold text-primary">{c.percent}%</span>
+        </div>
+        <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+          <div className="h-full bg-primary transition-all" style={{ width: `${c.percent}%` }} />
+        </div>
+        {c.missing.length > 0 ? (
+          <div className="flex flex-wrap items-center gap-1.5 pt-1">
+            <span className="text-xs text-muted-foreground">Mund të shtoni:</span>
+            {c.missing.map(m => (
+              <span key={m.key} className="text-xs rounded-full border px-2 py-0.5 text-muted-foreground">{m.label}</span>
+            ))}
+          </div>
+        ) : (
+          <p className="text-xs text-success flex items-center gap-1"><Check className="w-3 h-3" /> Gjithçka e plotësuar — faleminderit!</p>
+        )}
+      </div>
+    );
+  };
+
+  const renderReview = () => {
+    const row = (label: string, value: string) => (
+      <div className="flex justify-between gap-3 py-1.5 border-b border-border/60 last:border-0">
+        <span className="text-xs text-muted-foreground">{label}</span>
+        <span className="text-sm font-medium text-right break-words max-w-[60%]">{value || '—'}</span>
+      </div>
+    );
+    return (
+      <div className="space-y-5">
+        {renderCompleteness()}
+        <div className="rounded-lg border p-4">
+          <h4 className="font-semibold text-sm mb-2">Përmbledhje</h4>
+          {row('Biznesi', form.businessName)}
+          {row('Kontakti', form.contactName)}
+          {row('Email', form.email)}
+          {row('Telefon', form.phoneNumber)}
+          {row('Industria', form.industry)}
+          {row('Shërbimet', form.servicesInterestedIn.join(', '))}
+          {row('Objektivi', form.mainGoal)}
+          {row('Buxheti', form.budgetRange)}
+          {row('Afati', form.timeline)}
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Kontrolloni të dhënat më sipër dhe kthehuni pas nëse doni t'i ndryshoni. Kur të jeni gati, klikoni
+          &nbsp;<strong>{isEditing ? 'Përditëso Kërkesën' : 'Dërgo Formularin'}</strong>.
+        </p>
+      </div>
+    );
+  };
+
   const renderStep4BudgetMaterials = () => (
     <div className="space-y-5">
+      {renderCompleteness()}
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div>
           <Label className="text-sm font-medium">Monedha</Label>
@@ -2274,7 +2427,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
               {budgetContext.budgetOptions.map(b => <SelectItem key={b} value={b}>{b}</SelectItem>)}
             </SelectContent>
           </Select>
-          <FieldError field="budgetRange" />
+          <FieldError errors={errors} field="budgetRange" />
         </div>
       </div>
 
@@ -2299,7 +2452,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
             {TIMELINES.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
           </SelectContent>
         </Select>
-        <FieldError field="timeline" />
+        <FieldError errors={errors} field="timeline" />
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -2322,7 +2475,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
               <SelectItem value="Jo, ka edhe persona të tjerë">Jo, ka edhe persona të tjerë</SelectItem>
             </SelectContent>
           </Select>
-          <FieldError field="decisionMaker" />
+          <FieldError errors={errors} field="decisionMaker" />
         </div>
       </div>
 
@@ -2443,6 +2596,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
       case 2: return renderStep2();
       case 3: return renderStep3ServiceSpecific();
       case 4: return renderStep4BudgetMaterials();
+      case 5: return renderReview();
       default: return null;
     }
   };
@@ -2462,7 +2616,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
           </div>
           <div className="flex gap-2">
             <Button size="sm" variant="outline" onClick={() => {
-              localStorage.removeItem(DRAFT_STORAGE_KEY);
+              localStorage.removeItem(draftKey);
               setForm({ ...initialFormData, servicesInterestedIn: preselectedService ? [preselectedService] : [], email: prefillEmail || '', contactName: prefillName || '' });
               setStep(1);
               setShowDraftBanner(false);
@@ -2492,6 +2646,8 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
               {i > 0 && <div className={`h-px flex-1 min-w-[16px] ${isCompleted ? 'bg-primary' : 'bg-border'}`} />}
               <button
                 type="button"
+                aria-current={isActive ? 'step' : undefined}
+                aria-label={`Hapi ${i + 1}: ${s.title}`}
                 onClick={() => { if (isCompleted) setStep(i + 1); }}
                 className={`flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
                   isActive
@@ -2515,8 +2671,8 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
       </div>
 
       {/* Step title */}
-      <div>
-        <h3 className="text-lg font-semibold">{currentStepTitle}</h3>
+      <div ref={stepContentRef}>
+        <h3 ref={headingRef} tabIndex={-1} className="text-lg font-semibold outline-none">{currentStepTitle}</h3>
       </div>
 
       {/* Step content */}
