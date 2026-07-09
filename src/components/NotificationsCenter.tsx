@@ -356,7 +356,7 @@ const NotificationsCenter: React.FC = () => {
         <Button
           variant="ghost"
           size="icon"
-          className="bg-white/10 text-primary-foreground hover:bg-white/20 relative"
+          className="bg-white/10 text-white hover:bg-white/20 relative"
           aria-label="Notifications"
         >
           {unreadClientCount > 0
@@ -373,7 +373,7 @@ const NotificationsCenter: React.FC = () => {
                   : unreadClientCount > 0
                   ? 'bg-emerald-500 text-white'
                   : unreadMentionCount > 0
-                  ? 'bg-primary text-white'
+                  ? 'bg-primary text-primary-foreground'
                   : 'bg-accent text-accent-foreground'
               }`}
             >

@@ -867,6 +867,7 @@ const ChatView: React.FC = () => {
             content: `Përmblidh shkurt këtë bisedë në shqip. Jep:\n1. Tema kryesore (1 fjali)\n2. Vendimet e marra (lista)\n3. Hapat e ardhshëm / detyrat (lista me përgjegjësin nëse përmendet)\n4. Pyetjet e hapura (nëse ka)\n\nBiseda:\n\n${transcript}`,
           }],
           context: { userRole: 'staff' },
+          teamId: getGlobalTeamId(),
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -899,6 +900,7 @@ const ChatView: React.FC = () => {
             content: `Përmirëso këtë mesazh në shqip për një bisedë profesionale (qartë, e sjellshme, pa gabime, pa shtuar informacione të reja, ruaj kuptimin dhe gjatësinë e ngjashme). Ktheji VETËM tekstin e përmirësuar, pa shpjegime ose thonjëza.\n\nMesazhi:\n${raw}`,
           }],
           context: { userRole: 'staff' },
+          teamId: getGlobalTeamId(),
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -947,6 +949,7 @@ const ChatView: React.FC = () => {
             content: `Bazuar në këtë bisedë, sugjero 3 përgjigje TË SHKURTRA e profesionale në shqip (maksimum 12 fjalë secila), si "Unë" do të përgjigjej te mesazhi i fundit i marrë. Ktheji VETËM si JSON array me 3 stringje, pa shpjegim. Shembull: ["Po, dakord", "Mund të flasim nesër?", "Faleminderit, e mora"].\n\nBiseda:\n${lastFew}`,
           }],
           context: { userRole: 'staff' },
+          teamId: getGlobalTeamId(),
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -995,6 +998,7 @@ const ChatView: React.FC = () => {
             content: `Përkthe këtë tekst në shqip (nëse është tashmë në shqip, përktheje në anglisht). Ktheji VETËM tekstin e përkthyer, pa shpjegim ose thonjëza.\n\nTeksti:\n${plain}`,
           }],
           context: { userRole: 'staff' },
+          teamId: getGlobalTeamId(),
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1041,6 +1045,7 @@ const ChatView: React.FC = () => {
             content: `Lexo këtë bisedë dhe nxirr VETËM detyrat konkrete që dikush duhet të kryejë (action items). Ktheji si JSON array, pa shpjegim, formati:\n[{"title":"...","priority":"low|medium|high","assignee":"emri ose null"}]\nNëse nuk ka detyra, kthe [].\n\nBiseda:\n${transcript}`,
           }],
           context: { userRole: 'staff' },
+          teamId: getGlobalTeamId(),
         }),
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -2188,6 +2193,7 @@ const ChatView: React.FC = () => {
         body: JSON.stringify({
           messages: [...aiMessages.filter(m => !m.isLoading), userMsg].map(m => ({ role: m.role, content: m.content })),
           context: { userRole: 'staff' },
+          teamId: getGlobalTeamId(),
         }),
       });
 
@@ -3260,7 +3266,7 @@ const ChatView: React.FC = () => {
                   onClick={() => sendAiMessage(messageText)}
                   disabled={!messageText.trim() || aiLoading}
                   className={`h-8 w-8 rounded-xl flex-shrink-0 transition-all ${
-                    messageText.trim() ? 'bg-primary hover:bg-primary-hover text-white shadow-sm' : 'bg-transparent text-muted-foreground/40'
+                    messageText.trim() ? 'bg-primary hover:bg-primary-hover text-primary-foreground shadow-sm' : 'bg-transparent text-muted-foreground/40'
                   }`}
                 >
                   {aiLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Send className="h-4 w-4" />}

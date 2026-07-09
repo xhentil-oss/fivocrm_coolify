@@ -199,7 +199,7 @@ const PortalInquiryView: React.FC = () => {
                   <Badge key={m.key} variant="outline" className="rounded-full border-amber-300 text-amber-800 dark:text-amber-200">{m.label}</Badge>
                 ))}
               </div>
-              <Button size="sm" className="gap-2 rounded-xl bg-brand-gradient shadow-md shadow-primary/25 hover:opacity-95" onClick={() => setEditing(true)}>
+              <Button size="sm" className="gap-2 rounded-xl bg-brand-gradient text-white shadow-md shadow-primary/25 hover:opacity-95" onClick={() => setEditing(true)}>
                 <Edit3 className="h-4 w-4" /> Plotëso tani
               </Button>
             </div>
@@ -255,7 +255,7 @@ const PortalInquiryView: React.FC = () => {
           </p>
           <div className="flex items-center gap-2">
             {!isConverted && (
-              <Button className="gap-2 rounded-xl bg-brand-gradient shadow-md shadow-primary/25 hover:opacity-95" onClick={() => setEditing(true)}>
+              <Button className="gap-2 rounded-xl bg-brand-gradient text-white shadow-md shadow-primary/25 hover:opacity-95" onClick={() => setEditing(true)}>
                 <Edit3 className="h-4 w-4" /> Edito anketën
               </Button>
             )}

@@ -129,7 +129,7 @@ const PortalServicesView: React.FC = () => {
             Shërbimet tuaja të blera dhe katalogu i shërbimeve
           </p>
         </div>
-        <Button onClick={() => startInquiry()} className="gap-2 rounded-xl bg-brand-gradient shadow-lg shadow-primary/25 hover:opacity-95 transition">
+        <Button onClick={() => startInquiry()} className="gap-2 rounded-xl bg-brand-gradient text-white shadow-lg shadow-primary/25 hover:opacity-95 transition">
           <FileText className="w-4 h-4" />
           Kërko Shërbim
         </Button>
@@ -269,7 +269,7 @@ const PortalServicesView: React.FC = () => {
                         )}
                       </div>
                       <Button variant={isPopular ? 'default' : 'outline'} size="sm"
-                        className={`w-full gap-1.5 rounded-xl ${isPopular ? 'bg-brand-gradient shadow-md shadow-primary/25 hover:opacity-95' : 'hover:bg-brand-gradient hover:text-white hover:border-transparent'}`}
+                        className={`w-full gap-1.5 rounded-xl ${isPopular ? 'bg-brand-gradient text-white shadow-md shadow-primary/25 hover:opacity-95' : 'hover:bg-brand-gradient hover:text-white hover:border-transparent'}`}
                         onClick={() => startInquiry(service)}>
                         <FileText className="w-3.5 h-3.5" />Kërko këtë shërbim
                       </Button>

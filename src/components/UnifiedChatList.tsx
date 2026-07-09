@@ -118,7 +118,7 @@ const ConversationRow: React.FC<{ c: UnifiedConv }> = ({ c }) => {
             </span>
           )}
           {showUnread && (
-            <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-primary text-white text-[11px] font-bold">
+            <span className="h-5 min-w-5 px-1.5 flex items-center justify-center rounded-full bg-primary text-primary-foreground text-[11px] font-bold">
               {c.unread > 99 ? '99+' : c.unread}
             </span>
           )}
@@ -208,13 +208,13 @@ const UnifiedChatList: React.FC<Props> = ({ conversations, canCreateGroups, onCr
               key={f.key}
               onClick={() => setFilter(f.key)}
               className={`h-8 px-3 inline-flex items-center gap-1.5 rounded-full text-[13px] font-bold whitespace-nowrap transition-colors ${
-                active ? 'bg-primary text-white' : 'bg-background text-muted-foreground border border-border'
+                active ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground border border-border'
               }`}
             >
               {f.key === 'unassigned' && <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />}
               {f.label}
               {showCount && (
-                <span className={`text-[11px] px-1.5 rounded-full ${active ? 'bg-white/25 text-white' : 'bg-muted text-muted-foreground'}`}>
+                <span className={`text-[11px] px-1.5 rounded-full ${active ? 'bg-white/40 text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
                   {unassignedCount}
                 </span>
               )}
