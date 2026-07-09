@@ -111,6 +111,10 @@ const SettingsView: React.FC = () => {
   const [aiProvider, setAiProvider] = useState<'gemini' | 'openai'>('gemini');
   const [aiApiKey, setAiApiKey] = useState('');
   const [aiModel, setAiModel] = useState('');
+  // Auto-reminder for inquiries missing materials
+  const [inquiryReminderOn, setInquiryReminderOn] = useState(false);
+  const [inquiryReminderDays, setInquiryReminderDays] = useState('3');
+  const [inquiryReminderSaved, setInquiryReminderSaved] = useState(false);
   const [aiSaved, setAiSaved] = useState(false);
 
   // ── Company info (used in contract templates) ──
@@ -171,6 +175,8 @@ const SettingsView: React.FC = () => {
     if (firestoreSettings.aiProvider) setAiProvider(firestoreSettings.aiProvider);
     if (firestoreSettings.aiApiKey) setAiApiKey(firestoreSettings.aiApiKey);
     if (firestoreSettings.aiModel) setAiModel(firestoreSettings.aiModel);
+    if (firestoreSettings.inquiryMaterialsReminderEnabled !== undefined) setInquiryReminderOn(firestoreSettings.inquiryMaterialsReminderEnabled);
+    if (firestoreSettings.inquiryMaterialsReminderDays !== undefined) setInquiryReminderDays(String(firestoreSettings.inquiryMaterialsReminderDays));
     // Meta Cloud API
     if (firestoreSettings.metaEnabled !== undefined) setMetaEnabled(firestoreSettings.metaEnabled);
     if (firestoreSettings.metaChannels) setMetaChannels(firestoreSettings.metaChannels);
@@ -438,6 +444,18 @@ const SettingsView: React.FC = () => {
     });
     setAiSaved(true);
     setTimeout(() => setAiSaved(false), 3000);
+  };
+
+  const handleSaveInquiryReminder = () => {
+    if (!teamId) return;
+    const days = Math.max(1, Math.min(30, Number(inquiryReminderDays) || 3));
+    saveTeamSettings(teamId, {
+      inquiryMaterialsReminderEnabled: inquiryReminderOn,
+      inquiryMaterialsReminderDays: days,
+    });
+    setInquiryReminderDays(String(days));
+    setInquiryReminderSaved(true);
+    setTimeout(() => setInquiryReminderSaved(false), 3000);
   };
 
   const handleSaveCompanyInfo = () => {
@@ -970,6 +988,48 @@ const SettingsView: React.FC = () => {
             <div className="flex justify-end">
               <Button onClick={handleSaveAiSettings} disabled={!aiApiKey.trim()} className="gap-2">
                 {aiSaved ? <><Check className="w-4 h-4" /> Ruajtur</> : 'Ruaj Konfigurimin'}
+              </Button>
+            </div>
+          </Card>
+
+          {/* Auto-reminder: inquiries missing materials */}
+          <Card className="p-6 space-y-5">
+            <div className="flex items-start justify-between gap-4">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-primary/10 rounded-lg">
+                  <Bell className="w-5 h-5 text-primary" />
+                </div>
+                <div>
+                  <h3 className="text-h4 text-foreground">Kujtesë për materialet e anketës</h3>
+                  <p className="text-body-sm text-muted-foreground">
+                    Dërgo email automatik klientit nëse pas dërgimit të anketës mungojnë materiale (logo, foto, përshkrimi, etj.)
+                  </p>
+                </div>
+              </div>
+              <Switch checked={inquiryReminderOn} onCheckedChange={setInquiryReminderOn} />
+            </div>
+            {inquiryReminderOn && (
+              <>
+                <Separator />
+                <div className="flex items-end gap-3 flex-wrap">
+                  <div className="space-y-1.5">
+                    <Label>Dërgo pas (ditë)</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={30}
+                      value={inquiryReminderDays}
+                      onChange={e => setInquiryReminderDays(e.target.value)}
+                      className="w-28"
+                    />
+                    <p className="text-xs text-muted-foreground">Ripërsëritet çdo {inquiryReminderDays || '3'} ditë, maks. 3 herë.</p>
+                  </div>
+                </div>
+              </>
+            )}
+            <div className="flex justify-end">
+              <Button onClick={handleSaveInquiryReminder} className="gap-2">
+                {inquiryReminderSaved ? <><Check className="w-4 h-4" /> Ruajtur</> : 'Ruaj'}
               </Button>
             </div>
           </Card>

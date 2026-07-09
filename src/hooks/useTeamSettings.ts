@@ -67,6 +67,11 @@ export interface TeamSettings {
   aiProvider?: 'gemini' | 'openai';
   aiApiKey?: string;        // stored in Firestore; read server-side by /api/ai-chat
   aiModel?: string;         // optional model override (e.g. gemini-2.5-flash, gpt-4o-mini)
+  // Auto-reminder e-mails to clients whose submitted questionnaire is still
+  // missing materials (logo/photos/services/…). Handled by the cron job
+  // `inquiry-materials-reminders`.
+  inquiryMaterialsReminderEnabled?: boolean;
+  inquiryMaterialsReminderDays?: number;   // wait N days before (re)sending; default 3
 }
 
 /** Write partial teamSettings to Firestore (merge, not overwrite). */

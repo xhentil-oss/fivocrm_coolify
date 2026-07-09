@@ -1806,6 +1806,130 @@ async function runSetSuperAdminClaim(req: VercelRequest) {
   return { success: true, uid: decoded.uid, email, note: 'Dil dhe hyr sërish që token-i të marrë claim-in.' };
 }
 
+// ── JOB: inquiry-materials-reminders ─────────────────────────────────────────
+// Emails the CLIENT a gentle reminder listing the materials still missing from
+// their submitted questionnaire (logo, photos, business services, description,
+// website, socials). Opt-in per team via teamSettings.inquiryMaterialsReminderEnabled;
+// re-sends every N days (default 3), up to 3 times. Mirrors the completeness
+// logic in src/lib/inquiryBrief.ts (getInquiryCompleteness) — keep in sync.
+function inquiryMissingMaterials(q: any): { key: string; label: string }[] {
+  const isEmpty = (v: any) =>
+    v == null || (typeof v === 'string' && v.trim() === '') || (Array.isArray(v) && v.length === 0);
+  const hasServices = Array.isArray(q.businessServices)
+    && q.businessServices.some((s: any) => s && String(s.title || '').trim());
+  const hasMaterials = (Array.isArray(q.materialFiles) && q.materialFiles.length > 0)
+    || !isEmpty(q.googleDriveLink)
+    || (Array.isArray(q.folderIncludes) && q.folderIncludes.length > 0);
+  const hasSocial = !isEmpty(q.instagramLink) || !isEmpty(q.facebookLink)
+    || !isEmpty(q.tiktokLink) || !isEmpty(q.linkedinLink);
+  const items = [
+    { key: 'logo', label: 'Logo e biznesit', done: !isEmpty(q.logoUrl) },
+    { key: 'photos', label: 'Foto / materiale', done: hasMaterials },
+    { key: 'services', label: 'Shërbimet e biznesit', done: hasServices },
+    { key: 'description', label: 'Përshkrimi i biznesit', done: !isEmpty(q.businessDescription) },
+    { key: 'website', label: 'Website', done: !isEmpty(q.website) },
+    { key: 'social', label: 'Rrjetet sociale', done: hasSocial },
+  ];
+  return items.filter((i) => !i.done).map(({ key, label }) => ({ key, label }));
+}
+
+function buildInquiryMaterialsEmail(firstName: string, missingLabels: string[], link: string): string {
+  const items = missingLabels.map((l) => `<li style="margin:4px 0;">${l}</li>`).join('');
+  return `
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;background:#ffffff;">
+      <h2 style="color:#12468C;margin:0 0 8px;">Plotësoni materialet e projektit tuaj</h2>
+      <p style="font-size:15px;color:#374151;">Përshëndetje <strong>${firstName}</strong>,</p>
+      <p style="font-size:15px;color:#4b5563;line-height:1.6;">
+        Faleminderit që dërguat anketën! Për të nisur punën sa më mirë për ju, na mungojnë ende disa materiale:
+      </p>
+      <ul style="font-size:15px;color:#111827;padding-left:20px;">${items}</ul>
+      <p style="margin:24px 0;">
+        <a href="${link}" style="background:#0EA5E9;color:#ffffff;text-decoration:none;padding:12px 24px;border-radius:8px;font-weight:600;display:inline-block;">
+          Plotëso tani
+        </a>
+      </p>
+      <p style="font-size:13px;color:#9ca3af;">Nuk është e detyrueshme, por sa më shumë të dimë, aq më mirë punojmë për ju.</p>
+      <p style="font-size:12px;color:#9ca3af;border-top:1px solid #e5e7eb;padding-top:12px;margin-top:24px;">FivoCRM — Kujtesë automatike</p>
+    </div>
+  `;
+}
+
+async function runInquiryMaterialsReminders() {
+  const transporter = makeTransporter();
+  const smtpUser = process.env.SMTP_USER;
+  if (!transporter || !smtpUser) return { sent: 0, skipped: 0 };
+
+  const now = Date.now();
+  const MAX_REMINDERS = 3;
+  const PORTAL_BASE = process.env.APP_URL || 'https://fivocrm.com';
+  const isValidEmail = (e: string) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e) && !e.includes('\n') && !e.includes('\r');
+  const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
+  const daysSince = (t: number) => (t ? (now - t) / 86_400_000 : Infinity);
+
+  const snap = await db.collection('serviceInquiries').get();
+  if (snap.empty) return { sent: 0, skipped: 0 };
+
+  const tsCache = new Map<string, any>();
+  const getTeamSettings = async (teamId: string) => {
+    if (tsCache.has(teamId)) return tsCache.get(teamId);
+    const d = await db.collection('teamSettings').doc(teamId).get();
+    const data = d.exists ? d.data() : null;
+    tsCache.set(teamId, data);
+    return data;
+  };
+
+  let sent = 0, skipped = 0;
+  const ops: Promise<any>[] = [];
+
+  for (const doc of snap.docs) {
+    const q = doc.data();
+    // Only submitted, still-open inquiries with a team + valid client email
+    if (q.isDraft === true) { skipped++; continue; }
+    if (q.status !== 'New' && q.status !== 'Reviewed') { skipped++; continue; }
+    if (!q.teamId || !q.email || !isValidEmail(q.email)) { skipped++; continue; }
+
+    const settings = await getTeamSettings(q.teamId);
+    if (!settings?.inquiryMaterialsReminderEnabled) { skipped++; continue; }
+    const days = Math.max(1, Number(settings.inquiryMaterialsReminderDays) || 3);
+
+    const missing = inquiryMissingMaterials(q);
+    if (missing.length === 0) { skipped++; continue; }
+
+    const count = Number(q.materialsReminderCount) || 0;
+    if (count >= MAX_REMINDERS) { skipped++; continue; }
+
+    // Wait `days` since last activity (updatedAt) AND since the previous reminder.
+    const lastActivity = ms(q.updatedAt) || ms(q.createdAt);
+    const lastReminder = ms(q.materialsReminderSentAt);
+    if (daysSince(lastActivity) < days) { skipped++; continue; }
+    if (lastReminder && daysSince(lastReminder) < days) { skipped++; continue; }
+
+    const firstName = String(q.contactName || q.businessName || 'Klient').split(' ')[0];
+    const link = `${PORTAL_BASE}/portal/projects/inquiry/${doc.id}`;
+    const html = buildInquiryMaterialsEmail(firstName, missing.map((m) => m.label), link);
+
+    ops.push(
+      transporter.sendMail({
+        from: `"FivoCRM" <${smtpUser}>`,
+        to: q.email,
+        subject: 'Kujtesë: plotësoni materialet e projektit tuaj',
+        html,
+      })
+        // Only touch the reminder fields — do NOT bump updatedAt (that would
+        // reset the activity clock and delay the next reminder indefinitely).
+        .then(() => doc.ref.update({
+          materialsReminderSentAt: admin.firestore.Timestamp.now(),
+          materialsReminderCount: count + 1,
+        }))
+        .catch((e) => console.error('[inquiry-materials-reminder]', e))
+    );
+    sent++;
+  }
+
+  await settleAll(ops, 'inquiry-materials-reminders');
+  return { sent, skipped };
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const isManual = req.query.manual === '1';
@@ -1888,9 +2012,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'notification-digest':
         result = await runNotificationDigest();
         break;
+      case 'inquiry-materials-reminders':
+        result = await runInquiryMaterialsReminders();
+        break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, whmcs] = await Promise.allSettled([
+        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, whmcs, inquiryReminders] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
           runOverdueReminders(),
@@ -1907,6 +2034,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           runNotificationDigest(),
           runWhatsappBroadcasts(),
           runWhmcsSync(),
+          runInquiryMaterialsReminders(),
         ]);
         const settled = (r: PromiseSettledResult<any>) =>
           r.status === 'fulfilled' ? r.value : { error: (r.reason as Error)?.message || 'failed' };
@@ -1927,6 +2055,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           digest: settled(digest),
           whatsappBroadcasts: settled(waBroadcasts),
           whmcsSync: settled(whmcs),
+          inquiryMaterialsReminders: settled(inquiryReminders),
         };
         break;
       }
