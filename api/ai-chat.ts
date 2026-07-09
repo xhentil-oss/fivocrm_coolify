@@ -101,6 +101,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   let teamProvider: 'gemini' | 'openai' | undefined;
   let teamApiKey: string | undefined;
   let teamModel: string | undefined;
+  let teamAuthorized = false; // caller verified as member/portal-client of teamId
 
   if (teamId && typeof teamId === 'string') {
     try {
@@ -123,7 +124,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const isMember = !memberSnap.empty;
       const isPortalClient = portalSnap.docs.some((d) => d.data()?.teamId === teamId);
 
-      if (isMember || isPortalClient) {
+      teamAuthorized = isMember || isPortalClient;
+      if (teamAuthorized) {
         const settingsSnap = await adminDb.collection('teamSettings').doc(teamId).get();
         const s = settingsSnap.data() || {};
         if (s.aiApiKey) {
@@ -141,7 +143,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const openaiKey = teamProvider === 'openai' ? teamApiKey : process.env.OPENAI_API_KEY;
 
   if (!geminiKey && !openaiKey) {
-    return res.status(500).json({ error: 'AI service not configured' });
+    return res.status(500).json({
+      error: 'AI service not configured',
+      detail: `teamId=${teamId ? 'sent' : 'none'}, authorized=${teamAuthorized}, teamKey=${!!teamApiKey}, envGemini=${!!process.env.GEMINI_API_KEY}, envOpenAI=${!!process.env.OPENAI_API_KEY}`,
+    });
   }
 
   // Last 10 messages, capped at 4000 chars each
@@ -196,7 +201,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (err?.status === 429 || err?.statusCode === 429) {
       return res.status(429).json({ error: 'Serveri AI është i ngarkuar. Provoni përsëri.' });
     }
-    return res.status(500).json({ error: 'Gabim i brendshëm' });
+    return res.status(500).json({
+      error: 'Gabim i brendshëm',
+      detail: String(err?.message || err).slice(0, 400),
+    });
   }
 }
 
