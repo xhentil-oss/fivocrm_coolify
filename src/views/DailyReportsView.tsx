@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
+import { auth } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useUserNames } from '../hooks/useUserNames';
@@ -148,14 +149,19 @@ const DailyReportsView: React.FC = () => {
         ].filter(Boolean).join('\n');
       }).join('\n\n');
 
+      const token = await auth.currentUser?.getIdToken();
       const res = await fetch('/api/ai-chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({
           messages: [{
             role: 'user',
             content: `Analizoji raportet ditore të ekipit dhe jepe një përmbledhje të shkurtër (3-5 pika) në shqip. Identifiko produktivitetin, problemet dhe pengesat kryesore.\n\nRaportet:\n${reportText}`,
           }],
+          teamId: getGlobalTeamId(),
         }),
       });
 

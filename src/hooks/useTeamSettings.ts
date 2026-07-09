@@ -63,6 +63,10 @@ export interface TeamSettings {
   stripePublishableKey?: string;
   stripeMode?: 'test' | 'live';
   taskListOrder?: string[];
+  // AI Assistant (FivoAI) — configured per-team from Settings → Integrime
+  aiProvider?: 'gemini' | 'openai';
+  aiApiKey?: string;        // stored in Firestore; read server-side by /api/ai-chat
+  aiModel?: string;         // optional model override (e.g. gemini-2.5-flash, gpt-4o-mini)
 }
 
 /** Write partial teamSettings to Firestore (merge, not overwrite). */

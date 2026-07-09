@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare, Copy, Phone, Cloud, UserCircle, QrCode, Wifi, WifiOff, ScrollText } from 'lucide-react';
+import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare, Copy, Phone, Cloud, UserCircle, QrCode, Wifi, WifiOff, ScrollText, Sparkles } from 'lucide-react';
 import { WhatsAppAccount, TeamMember, UserProfile } from '../types';
 import { MetaChannel } from '../hooks/useTeamSettings';
 import { swiftKeyDown, ibanChange } from '../lib/utils';
@@ -107,6 +107,12 @@ const SettingsView: React.FC = () => {
   const [stripeMode, setStripeMode] = useState<'test' | 'live'>('test');
   const [stripeSaved, setStripeSaved] = useState(false);
 
+  // ── AI Assistant (FivoAI) ──
+  const [aiProvider, setAiProvider] = useState<'gemini' | 'openai'>('gemini');
+  const [aiApiKey, setAiApiKey] = useState('');
+  const [aiModel, setAiModel] = useState('');
+  const [aiSaved, setAiSaved] = useState(false);
+
   // ── Company info (used in contract templates) ──
   const [companyName, setCompanyName] = useState('');
   const [companyAddress, setCompanyAddress] = useState('');
@@ -161,6 +167,10 @@ const SettingsView: React.FC = () => {
     if (firestoreSettings.cronSettings) setCronSettings(firestoreSettings.cronSettings);
     if (firestoreSettings.stripePublishableKey) setStripePublishableKey(firestoreSettings.stripePublishableKey);
     if (firestoreSettings.stripeMode) setStripeMode(firestoreSettings.stripeMode);
+    // AI Assistant
+    if (firestoreSettings.aiProvider) setAiProvider(firestoreSettings.aiProvider);
+    if (firestoreSettings.aiApiKey) setAiApiKey(firestoreSettings.aiApiKey);
+    if (firestoreSettings.aiModel) setAiModel(firestoreSettings.aiModel);
     // Meta Cloud API
     if (firestoreSettings.metaEnabled !== undefined) setMetaEnabled(firestoreSettings.metaEnabled);
     if (firestoreSettings.metaChannels) setMetaChannels(firestoreSettings.metaChannels);
@@ -417,6 +427,17 @@ const SettingsView: React.FC = () => {
     if (teamId) saveTeamSettings(teamId, { stripePublishableKey, stripeMode });
     setStripeSaved(true);
     setTimeout(() => setStripeSaved(false), 3000);
+  };
+
+  const handleSaveAiSettings = () => {
+    if (!teamId) return;
+    saveTeamSettings(teamId, {
+      aiProvider,
+      aiApiKey: aiApiKey.trim(),
+      aiModel: aiModel.trim(),
+    });
+    setAiSaved(true);
+    setTimeout(() => setAiSaved(false), 3000);
   };
 
   const handleSaveCompanyInfo = () => {
@@ -847,6 +868,112 @@ const SettingsView: React.FC = () => {
         </TabsContent>
 
         <TabsContent value="integrations" className="space-y-6">
+          {/* AI Assistant (FivoAI) */}
+          <Card className="p-6 space-y-6">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-primary/10 rounded-lg">
+                  <Sparkles className="w-6 h-6 text-primary" />
+                </div>
+                <div>
+                  <h3 className="text-h4 text-foreground">Asistenti AI (FivoAI)</h3>
+                  <p className="text-body-sm text-muted-foreground">
+                    Zgjidhni ofruesin dhe vendosni çelësin API për asistentin inteligjent
+                  </p>
+                </div>
+              </div>
+              <a
+                href={aiProvider === 'gemini'
+                  ? 'https://aistudio.google.com/app/apikey'
+                  : 'https://platform.openai.com/api-keys'}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline text-sm flex items-center gap-1 shrink-0"
+              >
+                Merr çelësin <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+
+            <Separator />
+
+            {/* Provider selection */}
+            <div className="space-y-3">
+              <label className="text-body-sm text-foreground font-medium">Ofruesi</label>
+              <div className="flex flex-col sm:flex-row gap-3 sm:gap-4">
+                <label className={`flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-all ${aiProvider === 'gemini' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground'}`}>
+                  <input
+                    type="radio"
+                    name="aiProvider"
+                    value="gemini"
+                    checked={aiProvider === 'gemini'}
+                    onChange={() => setAiProvider('gemini')}
+                    className="w-4 h-4 text-primary"
+                  />
+                  <div>
+                    <p className="font-medium text-foreground">Google Gemini</p>
+                    <p className="text-xs text-success">Falas — rekomandohet</p>
+                  </div>
+                </label>
+                <label className={`flex items-center gap-3 p-4 border rounded-lg cursor-pointer transition-all ${aiProvider === 'openai' ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground'}`}>
+                  <input
+                    type="radio"
+                    name="aiProvider"
+                    value="openai"
+                    checked={aiProvider === 'openai'}
+                    onChange={() => setAiProvider('openai')}
+                    className="w-4 h-4 text-primary"
+                  />
+                  <div>
+                    <p className="font-medium text-foreground">OpenAI</p>
+                    <p className="text-xs text-muted-foreground">Me pagesë (GPT)</p>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              <div className="space-y-2">
+                <label className="text-body-sm text-foreground font-medium flex items-center gap-2">
+                  <Key className="w-4 h-4" />
+                  Çelësi API
+                </label>
+                <input
+                  type="password"
+                  value={aiApiKey}
+                  onChange={(e) => setAiApiKey(e.target.value)}
+                  placeholder={aiProvider === 'gemini' ? 'AIza...' : 'sk-...'}
+                  autoComplete="off"
+                  className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  {aiProvider === 'gemini'
+                    ? 'Merreni falas te Google AI Studio (pa kartë krediti). Ruhet i sigurt dhe përdoret vetëm nga serveri.'
+                    : 'Merreni te platform.openai.com. Ruhet i sigurt dhe përdoret vetëm nga serveri.'}
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-body-sm text-foreground font-medium">Modeli (opsional)</label>
+                <input
+                  type="text"
+                  value={aiModel}
+                  onChange={(e) => setAiModel(e.target.value)}
+                  placeholder={aiProvider === 'gemini' ? 'gemini-2.5-flash (parazgjedhje)' : 'gpt-4o-mini (parazgjedhje)'}
+                  className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono text-sm"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Lëreni bosh për të përdorur modelin e parazgjedhur.
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <Button onClick={handleSaveAiSettings} disabled={!aiApiKey.trim()} className="gap-2">
+                {aiSaved ? <><Check className="w-4 h-4" /> Ruajtur</> : 'Ruaj Konfigurimin'}
+              </Button>
+            </div>
+          </Card>
+
           {/* Company Info — used in contract templates */}
           <Card className="p-6 space-y-5">
             <div className="flex items-center gap-3">
