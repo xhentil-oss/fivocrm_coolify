@@ -152,6 +152,20 @@ export function getInquirySections(inquiry: ServiceInquiry): InquiryBrief {
   ]);
   if (basic) sections.push(basic);
 
+  // 1b. Shërbimet e biznesit (katalogu i vetë klientit: titull + përshkrim)
+  const bServices = Array.isArray(q.businessServices)
+    ? q.businessServices.filter((s: any) => s && (String(s.title || '').trim() || String(s.description || '').trim()))
+    : [];
+  if (bServices.length) {
+    sections.push({
+      title: 'Shërbimet e biznesit',
+      rows: bServices.map((s: any) => ({
+        label: String(s.title || '').trim() || 'Shërbim',
+        value: String(s.description || '').trim() || '—',
+      })),
+    });
+  }
+
   // 2. Shërbimi & Objektivi
   const goal = section('Shërbimi & Objektivi', [
     mk('Shërbimet', q.servicesInterestedIn),
@@ -185,6 +199,8 @@ export function getInquirySections(inquiry: ServiceInquiry): InquiryBrief {
     mk('Materialet përfshijnë', q.folderIncludes),
     mk('Brand guidelines', q.hasBrandGuidelines),
     mk('Google Drive', q.googleDriveLink),
+    mk('Logo', isEmpty(q.logoUrl) ? null : 'E ngarkuar ✓'),
+    mk('Foto/materiale të ngarkuara', Array.isArray(q.materialFiles) ? q.materialFiles.map((f: any) => f?.name).filter(Boolean) : null),
   ]);
   if (budget) sections.push(budget);
 
@@ -229,4 +245,48 @@ export function buildProjectDescription(inquiry: ServiceInquiry, opts?: { now?: 
 export function appendBrief(existing: string | undefined, brief: string): string {
   if (!existing || !existing.trim()) return brief;
   return `${existing}\n\n--- Përditësim nga anketa ---\n\n${brief}`;
+}
+
+/**
+ * Plotësimi i anketës: kontrollon të dhënat "e buta" por të vlefshme që klientët
+ * shpesh i lënë bosh (logo, foto, shërbimet e biznesit...). Përdoret në CRM për
+ * t'i treguar ekipit "çfarë s'ka dërguar akoma klienti".
+ */
+export interface CompletenessItem { key: string; label: string; done: boolean; }
+
+export function getInquiryCompleteness(inquiry: ServiceInquiry): {
+  items: CompletenessItem[];
+  missing: CompletenessItem[];
+  filled: number;
+  total: number;
+  percent: number;
+} {
+  const q = inquiry as ServiceInquiry & Record<string, any>;
+
+  const hasServices = Array.isArray(q.businessServices)
+    && q.businessServices.some((s: any) => s && String(s.title || '').trim());
+  const hasMaterials = (Array.isArray(q.materialFiles) && q.materialFiles.length > 0)
+    || !isEmpty(q.googleDriveLink)
+    || (Array.isArray(q.folderIncludes) && q.folderIncludes.length > 0);
+  const hasSocial = !isEmpty(q.instagramLink) || !isEmpty(q.facebookLink)
+    || !isEmpty(q.tiktokLink) || !isEmpty(q.linkedinLink);
+
+  const items: CompletenessItem[] = [
+    { key: 'logo', label: 'Logo e biznesit', done: !isEmpty(q.logoUrl) },
+    { key: 'photos', label: 'Foto / materiale', done: hasMaterials },
+    { key: 'services', label: 'Shërbimet e biznesit', done: hasServices },
+    { key: 'description', label: 'Përshkrimi i biznesit', done: !isEmpty(q.businessDescription) },
+    { key: 'website', label: 'Website', done: !isEmpty(q.website) },
+    { key: 'social', label: 'Rrjetet sociale', done: hasSocial },
+  ];
+
+  const missing = items.filter(i => !i.done);
+  const filled = items.length - missing.length;
+  return {
+    items,
+    missing,
+    filled,
+    total: items.length,
+    percent: Math.round((filled / items.length) * 100),
+  };
 }

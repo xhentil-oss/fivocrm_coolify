@@ -16,8 +16,10 @@ import {
   ChevronRight, ChevronLeft, Check, Instagram, Facebook, Linkedin,
   Share2, Search, Palette, PenTool, Megaphone, Send, AlertCircle, PlusCircle,
   ShoppingCart, Heart, Save, Clock, Trash2, Upload, Package, Sparkles, Loader2,
+  Image as ImageIcon, X, Briefcase,
 } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
+import { useFileUpload } from '../hooks/useFileUpload';
 
 // --------------- Types ---------------
 
@@ -36,6 +38,10 @@ interface FormData {
   facebookLink: string;
   tiktokLink: string;
   linkedinLink: string;
+  // Logo + business's own services catalog
+  logoUrl: string;
+  logoName: string;
+  businessServices: { title: string; description: string }[];
   // Step 2: Service Interest
   servicesInterestedIn: string[];
   mainGoal: string;
@@ -118,12 +124,14 @@ interface FormData {
   secondGoogleDriveLink: string;
   folderIncludes: string[];
   hasBrandGuidelines: string;
+  materialFiles: { url: string; name: string }[];
 }
 
 const initialFormData: FormData = {
   businessName: '', contactName: '', email: '', phoneNumber: '',
   jobTitle: '', industry: '', cityMarket: '', website: '', businessDescription: '',
   instagramLink: '', facebookLink: '', tiktokLink: '', linkedinLink: '',
+  logoUrl: '', logoName: '', businessServices: [],
   servicesInterestedIn: [], mainGoal: '', projectNeedDescription: '',
   currentMainChallenge: '', hasWorkedWithAgency: '', whatHaveYouTried: '',
   smm_mainPlatforms: [], smm_organicOrAds: '', smm_hasContent: '',
@@ -150,6 +158,7 @@ const initialFormData: FormData = {
   preferredContactMethod: '',
   hasExistingMaterials: '', googleDriveLink: '', secondGoogleDriveLink: '',
   folderIncludes: [], hasBrandGuidelines: '',
+  materialFiles: [],
 };
 
 // --------------- Constants ---------------
@@ -385,6 +394,45 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
   // ---------- AI assist: help the client draft the long free-text fields ----------
   const { toast } = useToast();
   const [aiField, setAiField] = useState<null | 'businessDescription' | 'projectNeedDescription'>(null);
+
+  // ---------- File uploads: logo + fotot/materialet ----------
+  const { upload } = useFileUpload();
+  const [logoUploading, setLogoUploading] = useState(false);
+  const [materialsUploading, setMaterialsUploading] = useState(false);
+
+  const handleLogoUpload = async (file?: File) => {
+    if (!file) return;
+    if (!file.type.startsWith('image/')) {
+      toast({ title: 'Na duhet një imazh', description: 'Logon ngarkojeni si imazh (PNG, JPG ose SVG).', variant: 'destructive' });
+      return;
+    }
+    setLogoUploading(true);
+    try {
+      const res = await upload(file, 'inquiry-logos');
+      setForm(prev => ({ ...prev, logoUrl: res.url, logoName: res.name || file.name }));
+    } catch (err: any) {
+      toast({ title: 'Ngarkimi nuk u krye', description: err?.message || 'Provojeni edhe një herë, ju lutem.', variant: 'destructive' });
+    } finally {
+      setLogoUploading(false);
+    }
+  };
+
+  const handleMaterialsUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    setMaterialsUploading(true);
+    try {
+      const uploaded: { url: string; name: string }[] = [];
+      for (const file of Array.from(files)) {
+        const res = await upload(file, 'inquiry-materials');
+        uploaded.push({ url: res.url, name: res.name || file.name });
+      }
+      setForm(prev => ({ ...prev, materialFiles: [...prev.materialFiles, ...uploaded] }));
+    } catch (err: any) {
+      toast({ title: 'Ngarkimi nuk u krye', description: err?.message || 'Provojeni edhe një herë, ju lutem.', variant: 'destructive' });
+    } finally {
+      setMaterialsUploading(false);
+    }
+  };
 
   const stripHtml = (s: string) => s.replace(/<[^>]*>/g, '').replace(/\n{3,}/g, '\n\n').trim();
 
@@ -642,10 +690,98 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
           placeholder="Tregoni shkurt historikun e biznesit: kur nisi, çfarë ofron, klientët, çfarë e dallon..."
           className="min-h-[90px]"
         />
-        <p className="text-xs text-muted-foreground mt-1">Kjo ndihmon ekipin të kuptojë biznesin tuaj. Mund ta shkruani ju ose ta gjeneroni me AI.</p>
+        <p className="text-xs text-muted-foreground mt-1">Kjo na ndihmon të njohim biznesin tuaj. Shkruajeni ju vetë ose lëreni AI-në t'ju ndihmojë.</p>
       </div>
 
-      <div className="pt-2 border-t">
+      {/* Logo e biznesit */}
+      <div className="pt-4 border-t">
+        <Label className="text-sm font-medium flex items-center gap-1.5"><ImageIcon className="w-4 h-4 text-primary" /> Logo e biznesit</Label>
+        <p className="text-xs text-muted-foreground mb-2 mt-0.5">Nëse e keni gati, ngarkojeni këtu — na ndihmon të kapim menjëherë stilin tuaj.</p>
+        {form.logoUrl ? (
+          <div className="flex items-center gap-3 rounded-lg border p-3 bg-muted/30">
+            <img src={form.logoUrl} alt="Logo" className="h-14 w-14 rounded-md object-contain bg-white border" />
+            <div className="flex-1 min-w-0">
+              <p className="text-sm font-medium truncate">{form.logoName || 'Logo e ngarkuar'}</p>
+              <p className="text-xs text-green-600 flex items-center gap-1"><Check className="w-3 h-3" /> U ngarkua me sukses</p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setForm(prev => ({ ...prev, logoUrl: '', logoName: '' }))}
+              className="h-8 w-8 flex items-center justify-center text-muted-foreground hover:text-destructive rounded transition-colors"
+              aria-label="Hiq logon"
+            >
+              <X className="w-4 h-4" />
+            </button>
+          </div>
+        ) : (
+          <label className="flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border hover:border-primary/40 hover:bg-muted/40 cursor-pointer py-6 transition-colors">
+            <input type="file" accept="image/*" className="hidden" disabled={logoUploading} onChange={e => { handleLogoUpload(e.target.files?.[0]); e.target.value = ''; }} />
+            {logoUploading ? (
+              <><Loader2 className="w-4 h-4 animate-spin text-primary" /><span className="text-sm text-muted-foreground">Duke ngarkuar...</span></>
+            ) : (
+              <><Upload className="w-4 h-4 text-primary" /><span className="text-sm font-medium text-primary">Ngarko logon</span></>
+            )}
+          </label>
+        )}
+      </div>
+
+      {/* Shërbimet / produktet e biznesit */}
+      <div className="pt-4 border-t">
+        <Label className="text-sm font-medium flex items-center gap-1.5"><Briefcase className="w-4 h-4 text-primary" /> Shërbimet tuaja</Label>
+        <p className="text-xs text-muted-foreground mb-3 mt-0.5">
+          Na tregoni shërbimet ose produktet kryesore që ofroni — një titull dhe një përshkrim i shkurtër për secilin. Kështu e dimë saktë çfarë po promovojmë për ju.
+        </p>
+        {form.businessServices.length > 0 && (
+          <div className="space-y-3">
+            {form.businessServices.map((svc, idx) => (
+              <div key={idx} className="rounded-lg border p-3 space-y-2 bg-muted/20">
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={svc.title}
+                    onChange={e => {
+                      const updated = [...form.businessServices];
+                      updated[idx] = { ...updated[idx], title: e.target.value };
+                      set('businessServices', updated);
+                    }}
+                    placeholder="Titulli i shërbimit (p.sh. Transfer Aeroporti)"
+                    className="h-9"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => set('businessServices', form.businessServices.filter((_, i) => i !== idx))}
+                    className="h-9 w-9 flex-shrink-0 flex items-center justify-center text-muted-foreground hover:text-destructive rounded transition-colors"
+                    aria-label="Hiq shërbimin"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                </div>
+                <Textarea
+                  value={svc.description}
+                  onChange={e => {
+                    const updated = [...form.businessServices];
+                    updated[idx] = { ...updated[idx], description: e.target.value };
+                    set('businessServices', updated);
+                  }}
+                  placeholder="Përshkrim i shkurtër: çfarë përfshin, për kë është, çmimi nëse doni..."
+                  className="min-h-[60px]"
+                />
+              </div>
+            ))}
+          </div>
+        )}
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          className="gap-1.5 text-xs mt-3"
+          onClick={() => set('businessServices', [...form.businessServices, { title: '', description: '' }])}
+        >
+          <PlusCircle className="w-3.5 h-3.5" />
+          Shto shërbim
+        </Button>
+      </div>
+
+      <div className="pt-4 border-t">
         <Label className="text-sm font-medium text-muted-foreground mb-3 block">Rrjetet Sociale (opsionale)</Label>
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <div className="flex items-center gap-2">
@@ -754,7 +890,7 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
     return (
       <div className="space-y-6">
         <div className="bg-muted/30 rounded-lg p-3 text-sm text-muted-foreground">
-          Pyetje specifike bazuar në shërbimet që zgjodhët. Kjo na ndihmon të përgatisim një propozim të personalizuar.
+          Disa pyetje të shpejta sipas shërbimeve që zgjodhët. Na ndihmojnë t'ju përgatisim një propozim vërtet për ju — jo një të gatshëm për të gjithë.
         </div>
 
         {/* ─── Social Media Marketing ─── */}
@@ -1696,11 +1832,50 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
       {/* Materials section */}
       <div className="pt-4 border-t space-y-4">
         <div className="bg-muted/50 rounded-lg p-3 text-sm text-muted-foreground">
-          A keni materiale ekzistuese për projektin? (foto, video, logo, dokumente)
+          Keni foto, dokumente apo materiale që na ndihmojnë? Ngarkojini këtu ose ndajini me një link — sa më shumë të kemi, aq më mirë punojmë për ju.
+        </div>
+
+        {/* Ngarko foto / materiale drejtpërdrejt */}
+        <div>
+          <Label className="text-sm font-medium flex items-center gap-1.5"><ImageIcon className="w-4 h-4 text-primary" /> Foto & materiale</Label>
+          <p className="text-xs text-muted-foreground mb-2 mt-0.5">Foto, dizajne, dokumente — çfarëdo që keni gati. Mund të zgjidhni disa njëherësh.</p>
+          {form.materialFiles.length > 0 && (
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 mb-2">
+              {form.materialFiles.map((f, idx) => {
+                const isImg = /\.(png|jpe?g|gif|webp|svg|bmp)$/i.test(f.name) || /\.(png|jpe?g|gif|webp|svg|bmp)/i.test(f.url);
+                return (
+                  <div key={idx} className="relative group rounded-lg border p-2 bg-muted/20 flex items-center gap-2">
+                    {isImg ? (
+                      <img src={f.url} alt={f.name} className="h-10 w-10 rounded object-cover bg-white border flex-shrink-0" />
+                    ) : (
+                      <div className="h-10 w-10 rounded bg-primary/10 flex items-center justify-center flex-shrink-0"><FileText className="w-4 h-4 text-primary" /></div>
+                    )}
+                    <span className="text-xs truncate flex-1">{f.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => set('materialFiles', form.materialFiles.filter((_, i) => i !== idx))}
+                      className="h-6 w-6 flex-shrink-0 flex items-center justify-center text-muted-foreground hover:text-destructive rounded transition-colors"
+                      aria-label="Hiq skedarin"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+          <label className="flex items-center justify-center gap-2 rounded-lg border-2 border-dashed border-border hover:border-primary/40 hover:bg-muted/40 cursor-pointer py-5 transition-colors">
+            <input type="file" multiple accept="image/*,application/pdf" className="hidden" disabled={materialsUploading} onChange={e => { handleMaterialsUpload(e.target.files); e.target.value = ''; }} />
+            {materialsUploading ? (
+              <><Loader2 className="w-4 h-4 animate-spin text-primary" /><span className="text-sm text-muted-foreground">Duke ngarkuar...</span></>
+            ) : (
+              <><Upload className="w-4 h-4 text-primary" /><span className="text-sm font-medium text-primary">Ngarko foto / materiale</span></>
+            )}
+          </label>
         </div>
 
         <div>
-          <Label className="text-sm font-medium">Keni materiale ekzistuese?</Label>
+          <Label className="text-sm font-medium">A keni edhe materiale në një dosje (Drive)?</Label>
           <Select value={form.hasExistingMaterials} onValueChange={v => set('hasExistingMaterials', v)}>
             <SelectTrigger className="mt-1"><SelectValue placeholder="Zgjidh" /></SelectTrigger>
             <SelectContent>
@@ -1791,8 +1966,9 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
       {/* Header text */}
       <div className="bg-muted/30 rounded-lg p-4 border">
         <p className="text-sm text-muted-foreground leading-relaxed">
-          Ky formular na ndihmon të kuptojmë më mirë biznesin tuaj, objektivat dhe materialet që keni aktualisht. 
-          Sa më të plota të jenë përgjigjet, aq më e saktë do të jetë zgjidhja dhe propozimi ynë.
+          Le të njihemi pak më mirë 👋 Sa më shumë të na tregoni për biznesin tuaj — çfarë ofroni, ku doni të shkoni
+          dhe çfarë keni tashmë në dorë — aq më e menduar do të jetë zgjidhja që përgatisim për ju. Mos u shqetësoni
+          nëse s'i keni të gjitha gati: plotësoni ç'të mundeni tani, pjesën tjetër e shtoni kur t'ju vijë më mbarë.
         </p>
       </div>
 

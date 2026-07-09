@@ -16,10 +16,11 @@ import {
   DollarSign, Clock, FolderOpen, Share2, Megaphone, Palette,
   ExternalLink, Tag, Calendar, CheckCircle2, Eye, AlertCircle,
   Instagram, Facebook, Linkedin, ArrowRight, Trash2,
+  Image as ImageIcon, Briefcase,
 } from 'lucide-react';
 import type { ServiceInquiry, Lead, Project } from '../types';
 import { safeHref } from '../lib/utils';
-import { buildProjectDescription, appendBrief } from '../lib/inquiryBrief';
+import { buildProjectDescription, appendBrief, getInquiryCompleteness } from '../lib/inquiryBrief';
 import { FolderKanban } from 'lucide-react';
 
 const ServiceInquiriesView: React.FC = () => {
@@ -314,6 +315,7 @@ const ServiceInquiriesView: React.FC = () => {
           {filtered.map(inquiry => {
             const isUrgent = inquiry.timeline === 'Menjëherë' || inquiry.isUrgent === 'Po';
             const isHighValue = ['100,000–300,000 L', '300,000+ L'].includes(inquiry.budgetRange);
+            const missingCount = getInquiryCompleteness(inquiry).missing.length;
 
             return (
               <Card
@@ -369,6 +371,12 @@ const ServiceInquiriesView: React.FC = () => {
                         <span className="flex items-center gap-0.5 text-red-600">
                           <AlertCircle className="w-3 h-3" />
                           Urgjent
+                        </span>
+                      )}
+                      {missingCount > 0 && (
+                        <span className="flex items-center gap-0.5 text-amber-600">
+                          <AlertCircle className="w-3 h-3" />
+                          {missingCount} pa dërguar
                         </span>
                       )}
                     </div>
@@ -473,6 +481,27 @@ const ServiceInquiriesView: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Çfarë s'ka dërguar akoma klienti */}
+                {(() => {
+                  const c = getInquiryCompleteness(selectedInquiry);
+                  if (c.missing.length === 0) return null;
+                  return (
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 p-4 dark:bg-amber-950/20 dark:border-amber-800/40">
+                      <p className="text-sm font-semibold text-amber-800 dark:text-amber-300 flex items-center gap-1.5 mb-2">
+                        <AlertCircle className="h-4 w-4" /> Klienti nuk ka dërguar akoma
+                      </p>
+                      <ol className="space-y-1.5">
+                        {c.missing.map((m, i) => (
+                          <li key={m.key} className="text-sm text-amber-900 dark:text-amber-200 flex items-center gap-2">
+                            <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-amber-200 text-[11px] font-bold text-amber-800 dark:bg-amber-800/50 dark:text-amber-200">{i + 1}</span>
+                            {m.label}
+                          </li>
+                        ))}
+                      </ol>
+                    </div>
+                  );
+                })()}
+
                 {/* Section 1: Basic Info */}
                 <div className="space-y-3">
                   <h4 className="text-sm font-semibold flex items-center gap-2 text-primary">
@@ -515,6 +544,37 @@ const ServiceInquiriesView: React.FC = () => {
                     </div>
                   )}
                 </div>
+
+                {/* Logo */}
+                {selectedInquiry.logoUrl && (
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-semibold flex items-center gap-2 text-primary">
+                      <ImageIcon className="w-4 h-4" />
+                      Logo
+                    </h4>
+                    <a href={safeHref(selectedInquiry.logoUrl)} target="_blank" rel="noopener noreferrer">
+                      <img src={selectedInquiry.logoUrl} alt="Logo e biznesit" className="h-20 rounded-lg border bg-white object-contain p-1.5" />
+                    </a>
+                  </div>
+                )}
+
+                {/* Shërbimet e biznesit */}
+                {Array.isArray(selectedInquiry.businessServices) && selectedInquiry.businessServices.some(s => s?.title?.trim()) && (
+                  <div className="space-y-3">
+                    <h4 className="text-sm font-semibold flex items-center gap-2 text-primary">
+                      <Briefcase className="w-4 h-4" />
+                      Shërbimet e biznesit
+                    </h4>
+                    <div className="bg-muted/30 rounded-lg p-4 space-y-2.5">
+                      {selectedInquiry.businessServices.filter(s => s?.title?.trim() || s?.description?.trim()).map((s, i) => (
+                        <div key={i} className="border-b border-border/60 last:border-0 pb-2.5 last:pb-0">
+                          <p className="text-sm font-semibold">{s.title?.trim() || 'Shërbim'}</p>
+                          {s.description?.trim() && <p className="text-sm text-muted-foreground mt-0.5 whitespace-pre-wrap">{s.description}</p>}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* Section 2: Service Interest */}
                 <div className="space-y-3">
@@ -604,6 +664,30 @@ const ServiceInquiriesView: React.FC = () => {
                     )}
                     {selectedInquiry.hasBrandGuidelines && (
                       <InfoRow icon={Palette} label="Brand Guidelines" value={selectedInquiry.hasBrandGuidelines} />
+                    )}
+                    {Array.isArray(selectedInquiry.materialFiles) && selectedInquiry.materialFiles.length > 0 && (
+                      <div>
+                        <span className="text-xs text-muted-foreground">Foto & materiale të ngarkuara</span>
+                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mt-1.5">
+                          {selectedInquiry.materialFiles.map((f, i) => {
+                            const isImg = /\.(png|jpe?g|gif|webp|svg|bmp)/i.test(f.name) || /\.(png|jpe?g|gif|webp|svg|bmp)/i.test(f.url);
+                            return (
+                              <a key={i} href={safeHref(f.url)} target="_blank" rel="noopener noreferrer" className="group rounded-lg border bg-background overflow-hidden" title={f.name}>
+                                {isImg ? (
+                                  <img src={f.url} alt={f.name} className="h-20 w-full object-cover" />
+                                ) : (
+                                  <div className="h-20 w-full flex flex-col items-center justify-center gap-1 text-muted-foreground">
+                                    <FileText className="h-5 w-5" />
+                                  </div>
+                                )}
+                                <div className="flex items-center gap-1 px-1.5 py-1 text-[10px] text-muted-foreground group-hover:text-primary">
+                                  <ExternalLink className="h-3 w-3 flex-shrink-0" /><span className="truncate">{f.name}</span>
+                                </div>
+                              </a>
+                            );
+                          })}
+                        </div>
+                      </div>
                     )}
                   </div>
                 </div>

@@ -571,6 +571,11 @@ export interface ServiceInquiry {
   facebookLink?: string;
   tiktokLink?: string;
   linkedinLink?: string;
+  // Business's own service/product catalog (title + description per item)
+  businessServices?: { title: string; description: string }[];
+  // Logo uploaded by the client (hosted on the VPS file server)
+  logoUrl?: string;
+  logoName?: string;
   // 2. Service Interest
   servicesInterestedIn: string[];
   mainGoal: string;
@@ -590,6 +595,8 @@ export interface ServiceInquiry {
   secondGoogleDriveLink?: string;
   folderIncludes?: string[];
   hasBrandGuidelines?: string;
+  // Photos / files uploaded directly by the client (hosted on the VPS file server)
+  materialFiles?: { url: string; name: string }[];
   // 5. Service-specific: Social Media
   smm_mainPlatforms?: string[];
   smm_organicOrAds?: string;

@@ -12,6 +12,7 @@ import { Button } from '../../components/ui/button';
 import { ArrowLeft, CheckCircle2, ClipboardList, Info, TrendingUp, Loader2, Edit3 } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
 import ServiceQuestionnaireForm from '../../components/ServiceQuestionnaireForm';
+import { getInquiryCompleteness } from '../../lib/inquiryBrief';
 import type { ServiceInquiry, Notification } from '../../types';
 
 /**
@@ -178,6 +179,27 @@ const PortalInquiryView: React.FC = () => {
           </div>
           <Badge className="bg-yellow-100 text-yellow-800 rounded-full whitespace-nowrap">{statusLabel}</Badge>
         </div>
+
+        {!isConverted && (() => {
+          const c = getInquiryCompleteness(inquiry);
+          if (c.missing.length === 0) return null;
+          return (
+            <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 dark:bg-amber-950/20 dark:border-amber-800/40">
+              <p className="font-semibold text-amber-800 dark:text-amber-300">Dëshironi ta plotësoni edhe pak?</p>
+              <p className="text-sm text-amber-900/80 dark:text-amber-200/80 mt-0.5 mb-3">
+                S'është e detyrueshme, por sa më shumë të dimë, aq më mirë punojmë për ju. Mund të shtoni:
+              </p>
+              <div className="flex flex-wrap gap-2 mb-4">
+                {c.missing.map(m => (
+                  <Badge key={m.key} variant="outline" className="rounded-full border-amber-300 text-amber-800 dark:text-amber-200">{m.label}</Badge>
+                ))}
+              </div>
+              <Button size="sm" className="gap-2 rounded-xl bg-brand-gradient shadow-md shadow-primary/25 hover:opacity-95" onClick={() => setEditing(true)}>
+                <Edit3 className="h-4 w-4" /> Plotëso tani
+              </Button>
+            </div>
+          );
+        })()}
 
         <Card className="rounded-2xl">
           <CardContent className="pt-6">
