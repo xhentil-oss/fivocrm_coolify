@@ -4,7 +4,7 @@ import { toAll } from '../lib/utils';
 import { MONTH_LABELS_SQ, getExpenseDate } from '../lib/finance/financialAnalytics';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil, Search, Check, X, ThumbsUp, ThumbsDown, Clock } from 'lucide-react';
+import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil, Search, Check, X, ThumbsUp, ThumbsDown, Clock, Pause, Play, CircleStop, AlertTriangle } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -27,6 +27,11 @@ const ExpensesView: React.FC = () => {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
+  // Delete flow: a recurring parent opens a choice dialog (stop / delete one /
+  // delete whole series); everything else deletes directly with a confirm.
+  const [deleteTarget, setDeleteTarget] = useState<Expense | null>(null);
+  const [deleteMode, setDeleteMode] = useState<'stop' | 'one' | 'series'>('stop');
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   const { data: rawExpenses, loading: expensesLoading } = useCollection<Expense>('expenses', {
     orderBy: { field: 'createdAt', direction: 'desc' },
@@ -54,6 +59,7 @@ const ExpensesView: React.FC = () => {
     const isRecurring = formData.get('isRecurring') === 'true';
     const recurringFrequency = formData.get('recurringFrequency') as string;
     const nextRecurringDate = formData.get('nextRecurringDate') as string;
+    const recurringEndDate = formData.get('recurringEndDate') as string;
     const status = formData.get('status') as string;
     const paidDate = formData.get('paidDate') as string;
     const projectId = formData.get('projectId') as string;
@@ -71,6 +77,7 @@ const ExpensesView: React.FC = () => {
       isRecurring,
       recurringFrequency: isRecurring ? recurringFrequency : undefined,
       nextRecurringDate: isRecurring && nextRecurringDate ? new Date(nextRecurringDate) : undefined,
+      recurringEndDate: isRecurring && recurringEndDate ? new Date(recurringEndDate) : undefined,
       status: status || 'Active',
       approvalStatus: isAdminOrManager ? 'Approved' : 'Submitted',
       approvedByUserId: isAdminOrManager ? user?.uid : undefined,
@@ -115,6 +122,7 @@ const ExpensesView: React.FC = () => {
     const isRecurring = formData.get('isRecurring') === 'true';
     const recurringFrequency = formData.get('recurringFrequency') as string;
     const nextRecurringDate = formData.get('nextRecurringDate') as string;
+    const recurringEndDate = formData.get('recurringEndDate') as string;
     const status = formData.get('status') as string;
     const paidDate = formData.get('paidDate') as string;
     const projectId = formData.get('projectId') as string;
@@ -130,7 +138,11 @@ const ExpensesView: React.FC = () => {
       departmentId: departmentId || undefined,
       isRecurring,
       recurringFrequency: isRecurring ? recurringFrequency : undefined,
-      nextRecurringDate: isRecurring && nextRecurringDate ? new Date(nextRecurringDate) : undefined,
+      nextRecurringDate: isRecurring && nextRecurringDate ? new Date(nextRecurringDate) : null,
+      // Turning recurrence off clears the schedule fields so a stale end-date/pause
+      // can't silently resurrect the series later.
+      recurringEndDate: isRecurring ? (recurringEndDate ? new Date(recurringEndDate) : null) : null,
+      isRecurringPaused: isRecurring ? ((selectedExpense as any).isRecurringPaused ?? false) : false,
       status: status || 'Active',
       paidDate: paidDate ? new Date(paidDate) : undefined,
       projectId: projectId && projectId !== '__none__' ? projectId : undefined,
@@ -141,6 +153,23 @@ const ExpensesView: React.FC = () => {
     setSelectedExpense(null);
   };
 
+  // Pause/resume generation without ending the series.
+  const handleTogglePause = async (expense: Expense) => {
+    await expenseMutation.update(expense.id, {
+      isRecurringPaused: !(expense as any).isRecurringPaused,
+    } as any);
+  };
+
+  // Stop recurrence for good: keep this record and all past occurrences, just
+  // never generate again. This is the correct "interrupt" — no history is lost.
+  const handleStopRecurrence = async (expense: Expense) => {
+    await expenseMutation.update(expense.id, {
+      isRecurring: false,
+      isRecurringPaused: false,
+      nextRecurringDate: null,
+    } as any);
+  };
+
   const handleApproveExpense = async (id: string) => {
     await expenseMutation.update(id, { approvalStatus: 'Approved', approvedByUserId: user?.uid } as any);
   };
@@ -149,9 +178,44 @@ const ExpensesView: React.FC = () => {
     await expenseMutation.update(id, { approvalStatus: 'Rejected', approvedByUserId: user?.uid } as any);
   };
 
-  const handleDeleteExpense = async (id: string) => {
+  // Count of auto-generated occurrences for a parent (drives the delete dialog copy).
+  const childrenOf = (parentId: string) =>
+    (rawExpenses || []).filter(e => (e as any).parentExpenseId === parentId);
+
+  const handleDeleteExpense = async (expense: Expense) => {
+    const isRecurringParent = expense.isRecurring && !(expense as any).autoGenerated;
+    const hasChildren = childrenOf(expense.id).length > 0;
+    // A recurring parent (or one that already spawned occurrences) needs the
+    // choice dialog; a plain/one-off/child entry just confirms.
+    if (isRecurringParent || hasChildren) {
+      setDeleteTarget(expense);
+      setDeleteMode(expense.isRecurring ? 'stop' : 'one');
+      return;
+    }
     if (confirm('Je i sigurt që dëshiron të fshish këtë shpenzim?')) {
-      await expenseMutation.remove(id);
+      await expenseMutation.remove(expense.id);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return;
+    setDeleteBusy(true);
+    try {
+      if (deleteMode === 'stop') {
+        // Interrupt only: keep the record + all past occurrences.
+        await handleStopRecurrence(deleteTarget);
+      } else if (deleteMode === 'one') {
+        // Remove just this record; past/future occurrences are untouched.
+        await expenseMutation.remove(deleteTarget.id);
+      } else {
+        // Destructive: remove the parent AND every generated occurrence (history included).
+        const kids = childrenOf(deleteTarget.id);
+        await Promise.all(kids.map(k => expenseMutation.remove(k.id)));
+        await expenseMutation.remove(deleteTarget.id);
+      }
+      setDeleteTarget(null);
+    } finally {
+      setDeleteBusy(false);
     }
   };
 
@@ -349,9 +413,20 @@ const ExpensesView: React.FC = () => {
                 {team && <span className="text-xs text-muted-foreground">· {team.name}</span>}
               </div>
               {expense.isRecurring && (
-                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                   <Repeat className="w-3 h-3 text-tertiary" />
-                  Periodike: {expense.recurringFrequency}
+                  Periodike: {getFreqLabel(expense.recurringFrequency)}
+                  {(expense as any).recurringEndDate && (
+                    <span>· deri më {new Date((expense as any).recurringEndDate).toLocaleDateString()}</span>
+                  )}
+                  {(expense as any).isRecurringPaused && (
+                    <Badge className="bg-amber-100 text-amber-800 text-[10px] py-0"><Pause className="w-2.5 h-2.5 mr-0.5" />Në pauzë</Badge>
+                  )}
+                </div>
+              )}
+              {(expense as any).autoGenerated && (
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <Repeat className="w-3 h-3" /> Gjeneruar automatikisht
                 </div>
               )}
               {(expense as any).approvalStatus && (
@@ -366,6 +441,16 @@ const ExpensesView: React.FC = () => {
                   <Button variant="outline" size="sm" className="flex-1 gap-1" onClick={() => { setSelectedExpense(expense); setIsEditDialogOpen(true); }}>
                     <Pencil className="w-3.5 h-3.5" /> Ndrysho
                   </Button>
+                  {expense.isRecurring && !(expense as any).autoGenerated && (
+                    <Button
+                      variant="outline" size="sm"
+                      className="text-amber-600 hover:text-amber-700 border-amber-200"
+                      title={(expense as any).isRecurringPaused ? 'Rifillo përsëritjen' : 'Pauzo përsëritjen'}
+                      onClick={() => handleTogglePause(expense)}
+                    >
+                      {(expense as any).isRecurringPaused ? <Play className="w-3.5 h-3.5" /> : <Pause className="w-3.5 h-3.5" />}
+                    </Button>
+                  )}
                   {isAdminOrManager && (expense as any).approvalStatus === 'Submitted' && (
                     <>
                       <Button variant="outline" size="sm" className="text-green-600 hover:text-green-700 border-green-200" onClick={() => handleApproveExpense(expense.id)}>
@@ -376,7 +461,7 @@ const ExpensesView: React.FC = () => {
                       </Button>
                     </>
                   )}
-                  <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => handleDeleteExpense(expense.id)}>
+                  <Button variant="outline" size="sm" className="text-destructive hover:text-destructive" onClick={() => handleDeleteExpense(expense)}>
                     <Trash2 className="w-3.5 h-3.5" />
                   </Button>
                 </div>
@@ -454,12 +539,22 @@ const ExpensesView: React.FC = () => {
                     </td>
                     <td className="px-6 py-4">
                       {expense.isRecurring ? (
-                        <div className="flex items-center gap-2">
-                          <Repeat className="w-4 h-4 text-tertiary" />
-                          <span className="text-body-sm text-foreground">
-                            {expense.recurringFrequency}
-                          </span>
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-2">
+                            <Repeat className="w-4 h-4 text-tertiary" />
+                            <span className="text-body-sm text-foreground">
+                              {getFreqLabel(expense.recurringFrequency)}
+                            </span>
+                            {(expense as any).isRecurringPaused && (
+                              <Badge className="bg-amber-100 text-amber-800 text-[10px] py-0"><Pause className="w-2.5 h-2.5 mr-0.5" />Pauzë</Badge>
+                            )}
+                          </div>
+                          {(expense as any).recurringEndDate && (
+                            <span className="text-[11px] text-muted-foreground">deri më {new Date((expense as any).recurringEndDate).toLocaleDateString()}</span>
+                          )}
                         </div>
+                      ) : (expense as any).autoGenerated ? (
+                        <span className="text-body-sm text-muted-foreground flex items-center gap-1"><Repeat className="w-3.5 h-3.5" />Auto</span>
                       ) : (
                         <span className="text-body-sm text-muted-foreground">Njëherësh</span>
                       )}
@@ -488,6 +583,15 @@ const ExpensesView: React.FC = () => {
                             Ndrysho
                           </Button>
                         )}
+                        {permissions.canEdit && expense.isRecurring && !(expense as any).autoGenerated && (
+                          <Button
+                            variant="outline" size="sm"
+                            className="text-amber-600 hover:text-amber-700 border-amber-200 gap-1"
+                            onClick={() => handleTogglePause(expense)}
+                          >
+                            {(expense as any).isRecurringPaused ? <><Play className="w-3.5 h-3.5" /> Rifillo</> : <><Pause className="w-3.5 h-3.5" /> Pauzo</>}
+                          </Button>
+                        )}
                         {isAdminOrManager && (expense as any).approvalStatus === 'Submitted' && (
                           <>
                             <Button variant="outline" size="sm" className="text-green-600 hover:text-green-700 border-green-200 gap-1" onClick={() => handleApproveExpense(expense.id)}>
@@ -503,7 +607,7 @@ const ExpensesView: React.FC = () => {
                             variant="outline"
                             size="sm"
                             className="text-destructive hover:text-destructive"
-                            onClick={() => handleDeleteExpense(expense.id)}
+                            onClick={() => handleDeleteExpense(expense)}
                           >
                             <Trash2 className="w-4 h-4" />
                           </Button>
@@ -528,9 +632,76 @@ const ExpensesView: React.FC = () => {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* Recurring-aware delete: stop vs delete-one vs delete-whole-series */}
+      <Dialog open={!!deleteTarget} onOpenChange={(o) => { if (!o) setDeleteTarget(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Fshi / ndërprit shpenzimin periodik</DialogTitle>
+          </DialogHeader>
+          {deleteTarget && (() => {
+            const kids = childrenOf(deleteTarget.id).length;
+            return (
+              <div className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  <span className="font-medium text-foreground">{deleteTarget.title}</span> është periodik
+                  {kids > 0 && <> me <span className="font-medium text-foreground">{kids}</span> regjistrime të gjeneruara</>}.
+                  Zgjidh çfarë të bëhet:
+                </p>
+
+                <div className="space-y-2">
+                  {deleteTarget.isRecurring && (
+                    <label className={`flex gap-3 rounded-lg border p-3 cursor-pointer ${deleteMode === 'stop' ? 'border-primary bg-primary/5' : ''}`}>
+                      <input type="radio" name="delmode" className="mt-1" checked={deleteMode === 'stop'} onChange={() => setDeleteMode('stop')} />
+                      <div>
+                        <div className="text-sm font-medium flex items-center gap-1.5"><CircleStop className="w-4 h-4 text-emerald-600" /> Ndërprit përsëritjen <Badge className="bg-emerald-100 text-emerald-800 text-[10px] py-0">Rekomanduar</Badge></div>
+                        <p className="text-xs text-muted-foreground mt-0.5">Nuk gjenerohen më muaj të rinj. Ky regjistrim dhe të gjithë muajt e kaluar mbeten të paprekur.</p>
+                      </div>
+                    </label>
+                  )}
+
+                  <label className={`flex gap-3 rounded-lg border p-3 cursor-pointer ${deleteMode === 'one' ? 'border-primary bg-primary/5' : ''}`}>
+                    <input type="radio" name="delmode" className="mt-1" checked={deleteMode === 'one'} onChange={() => setDeleteMode('one')} />
+                    <div>
+                      <div className="text-sm font-medium flex items-center gap-1.5"><Trash2 className="w-4 h-4" /> Fshi vetëm këtë regjistrim</div>
+                      <p className="text-xs text-muted-foreground mt-0.5">Fshihet vetëm ky zë. {deleteTarget.isRecurring && 'Përsëritja vazhdon dhe muajt e gjeneruar mbeten.'}</p>
+                    </div>
+                  </label>
+
+                  <label className={`flex gap-3 rounded-lg border p-3 cursor-pointer ${deleteMode === 'series' ? 'border-destructive bg-destructive/5' : ''}`}>
+                    <input type="radio" name="delmode" className="mt-1" checked={deleteMode === 'series'} onChange={() => setDeleteMode('series')} />
+                    <div>
+                      <div className="text-sm font-medium flex items-center gap-1.5 text-destructive"><AlertTriangle className="w-4 h-4" /> Fshi gjithë serinë</div>
+                      <p className="text-xs text-muted-foreground mt-0.5">Fshihet ky zë <span className="font-medium text-foreground">dhe të gjithë muajt e kaluar</span> ({kids}). Kjo prek raportet dhe P&L-në e së kaluarës — s'ka kthim.</p>
+                    </div>
+                  </label>
+                </div>
+
+                <div className="flex justify-end gap-2 pt-1">
+                  <Button variant="outline" onClick={() => setDeleteTarget(null)} disabled={deleteBusy}>Anulo</Button>
+                  <Button
+                    className={deleteMode === 'series' ? 'bg-destructive hover:bg-destructive/90' : ''}
+                    onClick={confirmDelete}
+                    disabled={deleteBusy}
+                  >
+                    {deleteBusy ? 'Duke ruajtur…' : deleteMode === 'stop' ? 'Ndërprit' : 'Fshi'}
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };
+
+const FREQ_LABELS: Record<string, string> = {
+  weekly: 'Javore',
+  monthly: 'Mujore',
+  yearly: 'Vjetore',
+};
+const getFreqLabel = (f?: string) => (f ? (FREQ_LABELS[f] || f) : '');
 
 const DEFAULT_CATEGORIES: { value: string; label: string }[] = [
   { value: 'Salary', label: 'Paga' },
@@ -585,6 +756,9 @@ const ExpenseForm: React.FC<{
   const [nextRecurringDate, setNextRecurringDate] = useState<Date | undefined>(
     initialData?.nextRecurringDate ? new Date(initialData.nextRecurringDate) : undefined
   );
+  const [recurringEndDate, setRecurringEndDate] = useState<Date | undefined>(
+    (initialData as any)?.recurringEndDate ? new Date((initialData as any).recurringEndDate) : undefined
+  );
   const [paidDate, setPaidDate] = useState<Date | undefined>(
     initialData?.paidDate ? new Date(initialData.paidDate) : undefined
   );
@@ -595,6 +769,9 @@ const ExpenseForm: React.FC<{
     formData.set('isRecurring', isRecurring.toString());
     if (nextRecurringDate) {
       formData.set('nextRecurringDate', nextRecurringDate.toISOString());
+    }
+    if (recurringEndDate) {
+      formData.set('recurringEndDate', recurringEndDate.toISOString());
     }
     if (paidDate) {
       formData.set('paidDate', paidDate.toISOString());
@@ -798,6 +975,29 @@ const ExpenseForm: React.FC<{
                 <Calendar mode="single" selected={nextRecurringDate} onSelect={setNextRecurringDate} />
               </PopoverContent>
             </Popover>
+          </div>
+
+          <div>
+            <Label>Përsërit deri më (opsionale)</Label>
+            <Popover>
+              <PopoverTrigger asChild>
+                <Button variant="outline" className="w-full justify-start">
+                  <CalendarIcon className="mr-2 h-4 w-4" />
+                  {recurringEndDate ? recurringEndDate.toLocaleDateString() : "Pa fund (deri e ndërpret)"}
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-auto p-0">
+                <Calendar mode="single" selected={recurringEndDate} onSelect={setRecurringEndDate} />
+                {recurringEndDate && (
+                  <div className="p-2 border-t">
+                    <Button type="button" variant="ghost" size="sm" className="w-full text-xs" onClick={() => setRecurringEndDate(undefined)}>
+                      Hiq datën e fundit
+                    </Button>
+                  </div>
+                )}
+              </PopoverContent>
+            </Popover>
+            <p className="text-[11px] text-muted-foreground mt-1">Pas kësaj date, sistemi ndalon automatikisht gjenerimin. Muajt e kaluar mbeten.</p>
           </div>
         </div>
       )}
