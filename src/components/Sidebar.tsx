@@ -40,7 +40,7 @@ const allNavItems: NavItem[] = [
   { path: '/app/workspace', label: 'Workspace', icon: Briefcase, permissionKey: 'canAccessProjects' },
   { path: '/app/chat', label: 'Chat', icon: MessageSquare, permissionKey: 'canAccessChat' },
   { path: '/app/whatsapp', label: 'WhatsApp', icon: MessageCircle, permissionKey: 'canAccessWhatsapp' },
-  { path: '/app/finances', label: 'Financat', icon: Wallet, permissionKey: 'isOwner' },
+  { path: '/app/finances', label: 'Financat', icon: Wallet, permissionKey: 'isAdmin' },
   { path: '/app/reports', label: 'Raportet', icon: BarChart3, permissionKey: 'canAccessReports' },
   { path: '/app/workload', label: 'Ngarkesa', icon: PieChart, permissionKey: 'canAccessReports' },
   { path: '/app/price-calculator', label: 'Kalkulatori', icon: Calculator, permissionKey: 'canAccessServices' },

@@ -61,7 +61,7 @@ const MobileBottomNav: React.FC = () => {
     { to: '/app/expenses',      icon: DollarSign,   label: 'Shpenzimet',  perm: 'canAccessExpenses' },
     { to: '/app/goals',         icon: Target,       label: 'Objektivat',  perm: 'canAccessGoals' },
     { to: '/app/teams',         icon: UsersRound,   label: 'Ekipet',      perm: 'canAccessTeams' },
-    { to: '/app/finances',      icon: Wallet,       label: 'Financat',    perm: 'isOwner' },
+    { to: '/app/finances',      icon: Wallet,       label: 'Financat',    perm: 'isAdmin' },
     { to: '/app/reports',       icon: BarChart3,    label: 'Raportet',    perm: 'canAccessReports' },
     { to: '/app/time-tracking', icon: Timer,        label: 'Orari',       perm: 'canAccessTimeTracking' },
     { to: '/app/workspace',     icon: Briefcase,    label: 'Workspace',   perm: 'canAccessProjects' },
