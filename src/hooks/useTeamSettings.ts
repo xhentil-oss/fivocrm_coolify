@@ -67,6 +67,18 @@ export interface TeamSettings {
   aiProvider?: 'gemini' | 'openai';
   aiApiKey?: string;        // stored in Firestore; read server-side by /api/ai-chat
   aiModel?: string;         // optional model override (e.g. gemini-2.5-flash, gpt-4o-mini)
+  // Email marketing provider — configured per-team from Settings → Integrime.
+  // Read server-side by api/_mailer.ts (via teamSettings) when sending campaigns.
+  emailProvider?: 'resend' | 'sendgrid' | 'mailgun' | 'smtp';
+  emailApiKey?: string;         // Resend / SendGrid / Mailgun API key
+  emailFromEmail?: string;      // verified sender address (e.g. marketing@domain.com)
+  emailFromName?: string;       // default display name
+  emailMailgunDomain?: string;  // Mailgun only: sending domain
+  emailMailgunRegion?: 'us' | 'eu'; // Mailgun only: API region (default 'us')
+  emailSmtpHost?: string;       // custom SMTP (falls back to env SMTP_* if empty)
+  emailSmtpPort?: number;
+  emailSmtpUser?: string;
+  emailSmtpPass?: string;
   // Auto-reminder e-mails to clients whose submitted questionnaire is still
   // missing materials (logo/photos/services/…). Handled by the cron job
   // `inquiry-materials-reminders`.

@@ -1,8 +1,16 @@
 import React, { useState, lazy, Suspense } from 'react';
-import { Megaphone, Mail, MessageCircle, LayoutTemplate, Send, Info } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { Megaphone, Mail, MessageCircle, LayoutTemplate, Send, Info, CheckCircle2, Settings } from 'lucide-react';
 import EmailCampaigns from '../components/EmailCampaigns';
 import EmailTemplateManager from '../components/EmailTemplateManager';
 import { Button } from '../components/ui/button';
+import { useTeamSettingsData } from '../hooks/useTeamSettings';
+
+// Which provider the client can tell is configured (env-only setups read as
+// "platform default" since the browser can't see server env vars).
+const PROVIDER_LABEL: Record<string, string> = {
+  resend: 'Resend', sendgrid: 'SendGrid', mailgun: 'Mailgun', smtp: 'SMTP',
+};
 
 // The WhatsApp broadcast composer already exists as a modal; reuse it as-is.
 const WhatsappBroadcasts = lazy(() => import('../components/WhatsappBroadcasts'));
@@ -18,6 +26,13 @@ const TABS: { key: Tab; label: string; icon: React.ComponentType<{ className?: s
 const MarketingView: React.FC = () => {
   const [tab, setTab] = useState<Tab>('email');
   const [waOpen, setWaOpen] = useState(false);
+  const settings = useTeamSettingsData();
+
+  // Is an email provider configured in Settings? (SMTP needs host+user+pass.)
+  const configuredProvider =
+    settings?.emailProvider === 'smtp'
+      ? (settings?.emailSmtpHost && settings?.emailSmtpUser && settings?.emailSmtpPass ? 'smtp' : null)
+      : (settings?.emailApiKey ? (settings?.emailProvider || 'resend') : null);
 
   return (
     <div className="p-4 sm:p-6 max-w-4xl mx-auto space-y-5">
@@ -31,15 +46,27 @@ const MarketingView: React.FC = () => {
         </div>
       </div>
 
-      {/* Config note */}
+      {/* Config note — reflects the provider configured in Settings → Integrime */}
       {tab !== 'whatsapp' && (
-        <div className="flex gap-2 text-[12px] px-3 py-2 rounded-md bg-muted/60 border border-border text-muted-foreground">
-          <Info className="w-4 h-4 shrink-0 mt-0.5" />
-          <span>
-            Dërgimi kërkon një shërbim email të konfiguruar në Vercel: <code>RESEND_API_KEY</code> + <code>MARKETING_FROM_EMAIL</code> (rekomandohet),
-            ose kredencialet <code>SMTP_*</code> si alternativë. Fushatat dërgohen në grupe (batch) përmes cron-it.
-          </span>
-        </div>
+        configuredProvider ? (
+          <div className="flex gap-2 text-[12px] px-3 py-2 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-400">
+            <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              Ofruesi i email-it: <strong>{PROVIDER_LABEL[configuredProvider] || configuredProvider}</strong>
+              {settings?.emailFromEmail ? <> · dërgues <strong>{settings.emailFromEmail}</strong></> : null}.
+              {' '}<Link to="/app/settings" className="underline">Ndrysho</Link>
+            </span>
+          </div>
+        ) : (
+          <div className="flex gap-2 text-[12px] px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-amber-700 dark:text-amber-400">
+            <Info className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              Asnjë ofrues email i konfiguruar. Shko te{' '}
+              <Link to="/app/settings" className="underline font-medium inline-flex items-center gap-0.5"><Settings className="w-3 h-3" /> Settings → Integrime</Link>
+              {' '}dhe zgjidh një ofrues (Resend, SendGrid, Mailgun ose SMTP) që fushatat të dërgohen.
+            </span>
+          </div>
+        )
       )}
 
       {/* Tabs */}

@@ -1,13 +1,17 @@
-// Shared marketing mailer. Prefers a dedicated ESP (Resend) for bulk sends so
-// marketing blasts never touch the transactional SMTP reputation; falls back to
-// the existing SMTP transport when RESEND_API_KEY is not configured (dev/test).
+// Shared marketing mailer. Supports multiple ESP providers so blasts never
+// touch the transactional SMTP reputation. Provider + credentials are resolved
+// per-team from teamSettings (configured in Settings → Integrime); when a team
+// hasn't configured one, we fall back to platform-wide env vars.
 //
-// Env:
-//   RESEND_API_KEY        — Resend API key (enables ESP path)
-//   MARKETING_FROM_EMAIL  — verified sender, e.g. "marketing@fivocrm.com"
-//   MARKETING_FROM_NAME   — default display name (fallback "FivoCRM")
-//   SMTP_HOST/PORT/USER/PASS — fallback transactional transport (already used)
+// Providers: Resend, SendGrid, Mailgun, or custom/plain SMTP.
+//
+// Per-team config (teamSettings): emailProvider, emailApiKey, emailFromEmail,
+//   emailFromName, emailMailgunDomain, emailMailgunRegion, emailSmtp*.
+// Env fallback: RESEND_API_KEY | SENDGRID_API_KEY | MAILGUN_API_KEY+MAILGUN_DOMAIN
+//   | SMTP_HOST/PORT/USER/PASS, plus MARKETING_FROM_EMAIL / MARKETING_FROM_NAME.
 import nodemailer from 'nodemailer';
+
+export type MailProvider = 'resend' | 'sendgrid' | 'mailgun' | 'smtp';
 
 export interface MailMessage {
   to: string;
@@ -20,37 +24,100 @@ export interface SendResult {
   error?: string;
 }
 
-const RESEND_ENDPOINT = 'https://api.resend.com/emails/batch';
-const RESEND_BATCH_MAX = 100; // Resend batch API hard limit
-
-export function mailerMode(): 'resend' | 'smtp' | 'none' {
-  if (process.env.RESEND_API_KEY) return 'resend';
-  if (process.env.SMTP_USER && process.env.SMTP_PASS) return 'smtp';
-  return 'none';
+// Per-team config as stored in teamSettings (all optional).
+export interface MailerConfig {
+  emailProvider?: MailProvider;
+  emailApiKey?: string;
+  emailFromEmail?: string;
+  emailFromName?: string;
+  emailMailgunDomain?: string;
+  emailMailgunRegion?: 'us' | 'eu';
+  emailSmtpHost?: string;
+  emailSmtpPort?: number;
+  emailSmtpUser?: string;
+  emailSmtpPass?: string;
 }
 
-function resolveFrom(fromName?: string, viaResend?: boolean): string {
-  const name = (fromName || process.env.MARKETING_FROM_NAME || 'FivoCRM').replace(/["<>]/g, '');
-  const email = viaResend
-    ? process.env.MARKETING_FROM_EMAIL || process.env.SMTP_USER || 'onboarding@resend.dev'
-    : process.env.SMTP_USER!;
-  return `"${name}" <${email}>`;
+// Fully-resolved transport (team config merged over env fallback).
+interface ResolvedMailer {
+  provider: MailProvider | 'none';
+  apiKey?: string;
+  fromEmail: string;
+  fromName: string;
+  mailgunDomain?: string;
+  mailgunRegion: 'us' | 'eu';
+  smtp: { host: string; port: number; user?: string; pass?: string };
 }
 
-async function sendViaResend(messages: MailMessage[], from: string): Promise<SendResult[]> {
+const RESEND_BATCH_MAX = 100;
+
+function resolveMailer(cfg: MailerConfig = {}, fromNameOverride?: string): ResolvedMailer {
+  // Pick provider: explicit team choice wins, else auto-detect from whatever
+  // credentials exist (team config first, then env).
+  let provider: MailProvider | 'none';
+  if (cfg.emailProvider) {
+    provider = cfg.emailProvider;
+  } else if (cfg.emailApiKey) {
+    provider = 'resend'; // a bare API key with no provider defaults to Resend
+  } else if (process.env.RESEND_API_KEY) {
+    provider = 'resend';
+  } else if (process.env.SENDGRID_API_KEY) {
+    provider = 'sendgrid';
+  } else if (process.env.MAILGUN_API_KEY && process.env.MAILGUN_DOMAIN) {
+    provider = 'mailgun';
+  } else if ((cfg.emailSmtpUser && cfg.emailSmtpPass) || (process.env.SMTP_USER && process.env.SMTP_PASS)) {
+    provider = 'smtp';
+  } else {
+    provider = 'none';
+  }
+
+  const apiKey =
+    cfg.emailApiKey ||
+    (provider === 'resend' ? process.env.RESEND_API_KEY : undefined) ||
+    (provider === 'sendgrid' ? process.env.SENDGRID_API_KEY : undefined) ||
+    (provider === 'mailgun' ? process.env.MAILGUN_API_KEY : undefined);
+
+  const fromEmail =
+    cfg.emailFromEmail ||
+    process.env.MARKETING_FROM_EMAIL ||
+    cfg.emailSmtpUser ||
+    process.env.SMTP_USER ||
+    'onboarding@resend.dev';
+
+  const fromName = (fromNameOverride || cfg.emailFromName || process.env.MARKETING_FROM_NAME || 'FivoCRM')
+    .replace(/["<>]/g, '');
+
+  return {
+    provider,
+    apiKey,
+    fromEmail,
+    fromName,
+    mailgunDomain: cfg.emailMailgunDomain || process.env.MAILGUN_DOMAIN,
+    mailgunRegion: cfg.emailMailgunRegion || (process.env.MAILGUN_REGION as 'eu') || 'us',
+    smtp: {
+      host: cfg.emailSmtpHost || process.env.SMTP_HOST || 'mail.fivoo.net',
+      port: cfg.emailSmtpPort || Number(process.env.SMTP_PORT) || 465,
+      user: cfg.emailSmtpUser || process.env.SMTP_USER,
+      pass: cfg.emailSmtpPass || process.env.SMTP_PASS,
+    },
+  };
+}
+
+function fromHeader(r: ResolvedMailer): string {
+  return `"${r.fromName}" <${r.fromEmail}>`;
+}
+
+// ── Resend (native batch) ────────────────────────────────────────────────────
+async function sendViaResend(messages: MailMessage[], r: ResolvedMailer): Promise<SendResult[]> {
+  const from = fromHeader(r);
   const results: SendResult[] = [];
   for (let i = 0; i < messages.length; i += RESEND_BATCH_MAX) {
     const chunk = messages.slice(i, i + RESEND_BATCH_MAX);
     try {
-      const resp = await fetch(RESEND_ENDPOINT, {
+      const resp = await fetch('https://api.resend.com/emails/batch', {
         method: 'POST',
-        headers: {
-          Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(
-          chunk.map((m) => ({ from, to: [m.to], subject: m.subject, html: m.html })),
-        ),
+        headers: { Authorization: `Bearer ${r.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(chunk.map((m) => ({ from, to: [m.to], subject: m.subject, html: m.html }))),
         signal: AbortSignal.timeout(20_000),
       });
       const ok = resp.ok;
@@ -63,16 +130,76 @@ async function sendViaResend(messages: MailMessage[], from: string): Promise<Sen
   return results;
 }
 
-async function sendViaSmtp(messages: MailMessage[], from: string): Promise<SendResult[]> {
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'mail.fivoo.net',
-    port: Number(process.env.SMTP_PORT) || 465,
-    secure: true,
-    auth: { user: process.env.SMTP_USER!, pass: process.env.SMTP_PASS! },
-  });
+// ── SendGrid (one request per message; merge tokens differ per recipient) ─────
+async function sendViaSendgrid(messages: MailMessage[], r: ResolvedMailer): Promise<SendResult[]> {
   const results: SendResult[] = [];
-  // Sequential + tiny delay: shared transactional SMTP can't handle a burst and
-  // we don't want to trip rate limits that would also hurt invoices/invites.
+  for (const m of messages) {
+    try {
+      const resp = await fetch('https://api.sendgrid.com/v3/mail/send', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${r.apiKey}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          personalizations: [{ to: [{ email: m.to }] }],
+          from: { email: r.fromEmail, name: r.fromName },
+          subject: m.subject,
+          content: [{ type: 'text/html', value: m.html }],
+        }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      // SendGrid returns 202 Accepted on success (empty body).
+      const ok = resp.status === 202 || resp.ok;
+      const detail = ok ? '' : await resp.text().catch(() => `HTTP ${resp.status}`);
+      results.push({ to: m.to, ok, ...(ok ? {} : { error: detail.slice(0, 200) }) });
+    } catch (err: any) {
+      results.push({ to: m.to, ok: false, error: err?.message || 'SendGrid error' });
+    }
+  }
+  return results;
+}
+
+// ── Mailgun (form-encoded, HTTP basic auth "api:KEY") ─────────────────────────
+async function sendViaMailgun(messages: MailMessage[], r: ResolvedMailer): Promise<SendResult[]> {
+  const results: SendResult[] = [];
+  if (!r.mailgunDomain) {
+    return messages.map((m) => ({ to: m.to, ok: false, error: 'Mailgun domain mungon' }));
+  }
+  const base = r.mailgunRegion === 'eu' ? 'https://api.eu.mailgun.net' : 'https://api.mailgun.net';
+  const auth = Buffer.from(`api:${r.apiKey}`).toString('base64');
+  const from = fromHeader(r);
+  for (const m of messages) {
+    try {
+      const form = new URLSearchParams({ from, to: m.to, subject: m.subject, html: m.html });
+      const resp = await fetch(`${base}/v3/${r.mailgunDomain}/messages`, {
+        method: 'POST',
+        headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: form.toString(),
+        signal: AbortSignal.timeout(20_000),
+      });
+      const ok = resp.ok;
+      const detail = ok ? '' : await resp.text().catch(() => `HTTP ${resp.status}`);
+      results.push({ to: m.to, ok, ...(ok ? {} : { error: detail.slice(0, 200) }) });
+    } catch (err: any) {
+      results.push({ to: m.to, ok: false, error: err?.message || 'Mailgun error' });
+    }
+  }
+  return results;
+}
+
+// ── SMTP (nodemailer) ─────────────────────────────────────────────────────────
+async function sendViaSmtp(messages: MailMessage[], r: ResolvedMailer): Promise<SendResult[]> {
+  if (!r.smtp.user || !r.smtp.pass) {
+    return messages.map((m) => ({ to: m.to, ok: false, error: 'SMTP credentials mungojnë' }));
+  }
+  const transporter = nodemailer.createTransport({
+    host: r.smtp.host,
+    port: r.smtp.port,
+    secure: r.smtp.port === 465,
+    auth: { user: r.smtp.user, pass: r.smtp.pass },
+  });
+  const from = `"${r.fromName}" <${r.smtp.user}>`;
+  const results: SendResult[] = [];
+  // Sequential + tiny delay: shared SMTP can't handle a burst and we don't want
+  // to trip rate limits that would also hurt invoices/invites.
   for (const m of messages) {
     try {
       await transporter.sendMail({ from, to: m.to, subject: m.subject, html: m.html });
@@ -80,23 +207,36 @@ async function sendViaSmtp(messages: MailMessage[], from: string): Promise<SendR
     } catch (err: any) {
       results.push({ to: m.to, ok: false, error: err?.message || 'SMTP error' });
     }
-    await new Promise((r) => setTimeout(r, 150));
+    await new Promise((res) => setTimeout(res, 150));
   }
   return results;
 }
 
+/** Which provider will actually be used for the given team config (for status UI/logs). */
+export function resolveProvider(cfg: MailerConfig = {}): MailProvider | 'none' {
+  return resolveMailer(cfg).provider;
+}
+
 /**
- * Send a batch of marketing emails via the best available transport.
- * Never throws — returns a per-recipient result array for idempotent accounting.
+ * Send a batch of marketing emails via the team's configured provider (with env
+ * fallback). Never throws — returns a per-recipient result array for idempotent
+ * accounting.
  */
-export async function sendBulkEmail(messages: MailMessage[], fromName?: string): Promise<SendResult[]> {
+export async function sendBulkEmail(
+  messages: MailMessage[],
+  cfg: MailerConfig = {},
+  fromNameOverride?: string,
+): Promise<SendResult[]> {
   if (messages.length === 0) return [];
-  const mode = mailerMode();
-  if (mode === 'none') {
-    return messages.map((m) => ({ to: m.to, ok: false, error: 'No mailer configured (set RESEND_API_KEY or SMTP_*)' }));
+  const r = resolveMailer(cfg, fromNameOverride);
+  switch (r.provider) {
+    case 'resend': return sendViaResend(messages, r);
+    case 'sendgrid': return sendViaSendgrid(messages, r);
+    case 'mailgun': return sendViaMailgun(messages, r);
+    case 'smtp': return sendViaSmtp(messages, r);
+    default:
+      return messages.map((m) => ({ to: m.to, ok: false, error: 'Asnjë ofrues email i konfiguruar (Settings → Integrime)' }));
   }
-  const from = resolveFrom(fromName, mode === 'resend');
-  return mode === 'resend' ? sendViaResend(messages, from) : sendViaSmtp(messages, from);
 }
 
 // Fill {{name}} / {{company}} / {{email}} merge tokens (case-insensitive, trims

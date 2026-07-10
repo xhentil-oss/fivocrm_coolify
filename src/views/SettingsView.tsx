@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare, Copy, Phone, Cloud, UserCircle, QrCode, Wifi, WifiOff, ScrollText, Sparkles } from 'lucide-react';
+import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare, Copy, Phone, Cloud, UserCircle, QrCode, Wifi, WifiOff, ScrollText, Sparkles, Mail } from 'lucide-react';
 import { WhatsAppAccount, TeamMember, UserProfile } from '../types';
 import { MetaChannel } from '../hooks/useTeamSettings';
 import { swiftKeyDown, ibanChange } from '../lib/utils';
@@ -117,6 +117,19 @@ const SettingsView: React.FC = () => {
   const [inquiryReminderSaved, setInquiryReminderSaved] = useState(false);
   const [aiSaved, setAiSaved] = useState(false);
 
+  // ── Email marketing provider ──
+  const [emailProvider, setEmailProvider] = useState<'resend' | 'sendgrid' | 'mailgun' | 'smtp'>('resend');
+  const [emailApiKey, setEmailApiKey] = useState('');
+  const [emailFromEmail, setEmailFromEmail] = useState('');
+  const [emailFromName, setEmailFromName] = useState('');
+  const [emailMailgunDomain, setEmailMailgunDomain] = useState('');
+  const [emailMailgunRegion, setEmailMailgunRegion] = useState<'us' | 'eu'>('us');
+  const [emailSmtpHost, setEmailSmtpHost] = useState('');
+  const [emailSmtpPort, setEmailSmtpPort] = useState('465');
+  const [emailSmtpUser, setEmailSmtpUser] = useState('');
+  const [emailSmtpPass, setEmailSmtpPass] = useState('');
+  const [emailSaved, setEmailSaved] = useState(false);
+
   // ── Company info (used in contract templates) ──
   const [companyName, setCompanyName] = useState('');
   const [companyAddress, setCompanyAddress] = useState('');
@@ -175,6 +188,16 @@ const SettingsView: React.FC = () => {
     if (firestoreSettings.aiProvider) setAiProvider(firestoreSettings.aiProvider);
     if (firestoreSettings.aiApiKey) setAiApiKey(firestoreSettings.aiApiKey);
     if (firestoreSettings.aiModel) setAiModel(firestoreSettings.aiModel);
+    if (firestoreSettings.emailProvider) setEmailProvider(firestoreSettings.emailProvider);
+    if (firestoreSettings.emailApiKey) setEmailApiKey(firestoreSettings.emailApiKey);
+    if (firestoreSettings.emailFromEmail) setEmailFromEmail(firestoreSettings.emailFromEmail);
+    if (firestoreSettings.emailFromName) setEmailFromName(firestoreSettings.emailFromName);
+    if (firestoreSettings.emailMailgunDomain) setEmailMailgunDomain(firestoreSettings.emailMailgunDomain);
+    if (firestoreSettings.emailMailgunRegion) setEmailMailgunRegion(firestoreSettings.emailMailgunRegion);
+    if (firestoreSettings.emailSmtpHost) setEmailSmtpHost(firestoreSettings.emailSmtpHost);
+    if (firestoreSettings.emailSmtpPort) setEmailSmtpPort(String(firestoreSettings.emailSmtpPort));
+    if (firestoreSettings.emailSmtpUser) setEmailSmtpUser(firestoreSettings.emailSmtpUser);
+    if (firestoreSettings.emailSmtpPass) setEmailSmtpPass(firestoreSettings.emailSmtpPass);
     if (firestoreSettings.inquiryMaterialsReminderEnabled !== undefined) setInquiryReminderOn(firestoreSettings.inquiryMaterialsReminderEnabled);
     if (firestoreSettings.inquiryMaterialsReminderDays !== undefined) setInquiryReminderDays(String(firestoreSettings.inquiryMaterialsReminderDays));
     // Meta Cloud API
@@ -444,6 +467,24 @@ const SettingsView: React.FC = () => {
     });
     setAiSaved(true);
     setTimeout(() => setAiSaved(false), 3000);
+  };
+
+  const handleSaveEmailSettings = () => {
+    if (!teamId) return;
+    saveTeamSettings(teamId, {
+      emailProvider,
+      emailApiKey: emailApiKey.trim(),
+      emailFromEmail: emailFromEmail.trim(),
+      emailFromName: emailFromName.trim(),
+      emailMailgunDomain: emailMailgunDomain.trim(),
+      emailMailgunRegion,
+      emailSmtpHost: emailSmtpHost.trim(),
+      emailSmtpPort: Number(emailSmtpPort) || 465,
+      emailSmtpUser: emailSmtpUser.trim(),
+      emailSmtpPass: emailSmtpPass.trim(),
+    });
+    setEmailSaved(true);
+    setTimeout(() => setEmailSaved(false), 3000);
   };
 
   const handleSaveInquiryReminder = () => {
@@ -988,6 +1029,140 @@ const SettingsView: React.FC = () => {
             <div className="flex justify-end">
               <Button onClick={handleSaveAiSettings} disabled={!aiApiKey.trim()} className="gap-2">
                 {aiSaved ? <><Check className="w-4 h-4" /> Ruajtur</> : 'Ruaj Konfigurimin'}
+              </Button>
+            </div>
+          </Card>
+
+          {/* Email Marketing provider */}
+          <Card className="p-6 space-y-6">
+            <div className="flex items-start justify-between">
+              <div className="flex items-center gap-4">
+                <div className="p-3 bg-primary/10 rounded-lg">
+                  <Mail className="w-6 h-6 text-primary" />
+                </div>
+                <div>
+                  <h3 className="text-h4 text-foreground">Email Marketing</h3>
+                  <p className="text-body-sm text-muted-foreground">
+                    Zgjidhni ofruesin për dërgimin e fushatave email (moduli Marketing)
+                  </p>
+                </div>
+              </div>
+              <a
+                href={
+                  emailProvider === 'resend' ? 'https://resend.com/api-keys'
+                    : emailProvider === 'sendgrid' ? 'https://app.sendgrid.com/settings/api_keys'
+                    : emailProvider === 'mailgun' ? 'https://app.mailgun.com/settings/api_security/api_keys'
+                    : 'https://fivocrm.vercel.app'
+                }
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-primary hover:underline text-sm flex items-center gap-1 shrink-0"
+              >
+                Merr çelësin <ExternalLink className="w-3 h-3" />
+              </a>
+            </div>
+
+            <Separator />
+
+            {/* Provider selection */}
+            <div className="space-y-3">
+              <label className="text-body-sm text-foreground font-medium">Ofruesi</label>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {([
+                  { value: 'resend', label: 'Resend', note: 'Rekomandohet' },
+                  { value: 'sendgrid', label: 'SendGrid', note: 'API' },
+                  { value: 'mailgun', label: 'Mailgun', note: 'API' },
+                  { value: 'smtp', label: 'SMTP', note: 'Klasik' },
+                ] as const).map((p) => (
+                  <label key={p.value} className={`flex flex-col gap-0.5 p-3 border rounded-lg cursor-pointer transition-all ${emailProvider === p.value ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground'}`}>
+                    <div className="flex items-center gap-2">
+                      <input type="radio" name="emailProvider" value={p.value} checked={emailProvider === p.value}
+                        onChange={() => setEmailProvider(p.value)} className="w-4 h-4 text-primary" />
+                      <span className="font-medium text-foreground">{p.label}</span>
+                    </div>
+                    <span className="text-xs text-muted-foreground pl-6">{p.note}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="space-y-4">
+              {emailProvider !== 'smtp' ? (
+                <div className="space-y-2">
+                  <label className="text-body-sm text-foreground font-medium flex items-center gap-2">
+                    <Key className="w-4 h-4" /> Çelësi API
+                  </label>
+                  <input type="password" value={emailApiKey} onChange={(e) => setEmailApiKey(e.target.value)}
+                    placeholder={emailProvider === 'resend' ? 're_...' : emailProvider === 'sendgrid' ? 'SG....' : 'key-...'}
+                    autoComplete="off"
+                    className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono text-sm" />
+                  <p className="text-xs text-muted-foreground">Ruhet i sigurt dhe përdoret vetëm nga serveri gjatë dërgimit.</p>
+                </div>
+              ) : (
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-body-sm text-foreground font-medium">SMTP Host</label>
+                    <input type="text" value={emailSmtpHost} onChange={(e) => setEmailSmtpHost(e.target.value)} placeholder="mail.shembull.com"
+                      className="w-full h-11 px-4 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-body-sm text-foreground font-medium">Porta</label>
+                    <input type="number" value={emailSmtpPort} onChange={(e) => setEmailSmtpPort(e.target.value)} placeholder="465"
+                      className="w-full h-11 px-4 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-body-sm text-foreground font-medium">Përdoruesi (email)</label>
+                    <input type="text" value={emailSmtpUser} onChange={(e) => setEmailSmtpUser(e.target.value)} placeholder="marketing@shembull.com" autoComplete="off"
+                      className="w-full h-11 px-4 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-body-sm text-foreground font-medium">Fjalëkalimi</label>
+                    <input type="password" value={emailSmtpPass} onChange={(e) => setEmailSmtpPass(e.target.value)} autoComplete="off"
+                      className="w-full h-11 px-4 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
+                  </div>
+                </div>
+              )}
+
+              {emailProvider === 'mailgun' && (
+                <div className="grid sm:grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <label className="text-body-sm text-foreground font-medium">Domain-i (Mailgun)</label>
+                    <input type="text" value={emailMailgunDomain} onChange={(e) => setEmailMailgunDomain(e.target.value)} placeholder="mg.shembull.com"
+                      className="w-full h-11 px-4 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-body-sm text-foreground font-medium">Rajoni</label>
+                    <select value={emailMailgunRegion} onChange={(e) => setEmailMailgunRegion(e.target.value as 'us' | 'eu')}
+                      className="w-full h-11 px-4 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary">
+                      <option value="us">US</option>
+                      <option value="eu">EU</option>
+                    </select>
+                  </div>
+                </div>
+              )}
+
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div className="space-y-2">
+                  <label className="text-body-sm text-foreground font-medium">Email-i i dërguesit</label>
+                  <input type="email" value={emailFromEmail} onChange={(e) => setEmailFromEmail(e.target.value)} placeholder="marketing@shembull.com"
+                    className="w-full h-11 px-4 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
+                  <p className="text-xs text-muted-foreground">Duhet domain i verifikuar te ofruesi (SPF/DKIM).</p>
+                </div>
+                <div className="space-y-2">
+                  <label className="text-body-sm text-foreground font-medium">Emri i dërguesit</label>
+                  <input type="text" value={emailFromName} onChange={(e) => setEmailFromName(e.target.value)} placeholder="Ekipi FivoCRM"
+                    className="w-full h-11 px-4 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <Button
+                onClick={handleSaveEmailSettings}
+                disabled={emailProvider !== 'smtp' ? !emailApiKey.trim() : !(emailSmtpHost.trim() && emailSmtpUser.trim() && emailSmtpPass.trim())}
+                className="gap-2"
+              >
+                {emailSaved ? <><Check className="w-4 h-4" /> Ruajtur</> : 'Ruaj Konfigurimin'}
               </Button>
             </div>
           </Card>

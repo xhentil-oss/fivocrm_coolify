@@ -539,6 +539,16 @@ async function runRecurringInvoices() {
     const nextDate: Date = invoice.nextRecurringDate?.toDate ? invoice.nextRecurringDate.toDate() : new Date(invoice.nextRecurringDate);
     if (isNaN(nextDate.getTime()) || nextDate > now) { skipped++; continue; }
 
+    // "Repeat until": if this occurrence falls after the end date, the series is
+    // complete — stop generating and clear the recurrence. Past invoices stay.
+    if (invoice.recurringEndDate) {
+      const endDate: Date = invoice.recurringEndDate?.toDate ? invoice.recurringEndDate.toDate() : new Date(invoice.recurringEndDate);
+      if (!isNaN(endDate.getTime()) && nextDate > endDate) {
+        ops.push(doc.ref.update({ isRecurring: false, nextRecurringDate: null, updatedAt: admin.firestore.Timestamp.now() }));
+        skipped++; continue;
+      }
+    }
+
     // Idempotency: skip if a child was already created after the last trigger date.
     // NOTE: equality-only filters (no orderBy) so this needs no composite index —
     // adding orderBy('createdAt') here previously required a missing index and made
@@ -1680,6 +1690,22 @@ async function runEmailCampaigns() {
         continue;
       }
 
+      // Per-team email provider config (Settings → Integrime); falls back to env.
+      const tsDoc = await db.collection('teamSettings').doc(c.teamId).get();
+      const ts = (tsDoc.data() as any) || {};
+      const mailerConfig = {
+        emailProvider: ts.emailProvider,
+        emailApiKey: ts.emailApiKey,
+        emailFromEmail: ts.emailFromEmail,
+        emailFromName: ts.emailFromName,
+        emailMailgunDomain: ts.emailMailgunDomain,
+        emailMailgunRegion: ts.emailMailgunRegion,
+        emailSmtpHost: ts.emailSmtpHost,
+        emailSmtpPort: ts.emailSmtpPort,
+        emailSmtpUser: ts.emailSmtpUser,
+        emailSmtpPass: ts.emailSmtpPass,
+      };
+
       // Resolve segment → recipients from leads and/or customers (filtered in
       // memory, matching the WhatsApp broadcast approach), deduped by email.
       const seg = c.segment || {};
@@ -1734,7 +1760,7 @@ async function runEmailCampaigns() {
         subject: renderMergeTokens(subject, { name: t.name || '', company: t.company || '', email: t.email }),
         html: renderMergeTokens(bodyHtml, { name: t.name || '', company: t.company || '', email: t.email }),
       }));
-      const results = messages.length ? await sendBulkEmail(messages, c.fromName) : [];
+      const results = messages.length ? await sendBulkEmail(messages, mailerConfig, c.fromName) : [];
       const succeeded = results.filter((r) => r.ok).map((r) => normalizeEmail(r.to));
       const failed = results.filter((r) => !r.ok).length;
       sent += succeeded.length;
