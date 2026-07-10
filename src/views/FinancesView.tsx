@@ -1,0 +1,376 @@
+import React, { useMemo } from 'react';
+import { usePermissions } from '../contexts/PermissionsContext';
+import { useCollection } from '../hooks/useFirestore';
+import { Card } from '../components/ui/card';
+import { formatALL, toAll } from '../lib/utils';
+import {
+  TrendingUp, TrendingDown, AlertTriangle, Wallet, Clock,
+  ArrowDownRight, ArrowUpRight, Users, CheckCircle2,
+} from 'lucide-react';
+import {
+  ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
+} from 'recharts';
+import type { Invoice, Expense, Customer, Project, TeamMember } from '../types';
+import {
+  getInvoiceCollectedBetween,
+  getInvoiceOutstandingAll,
+  calculateExpensesBetween,
+  calculateAccountsReceivable,
+  parseDate,
+  MONTH_LABELS_SQ,
+} from '../lib/finance/financialAnalytics';
+
+// ── Single-page, plain-language finance overview for the owner ──
+// Answers one question: "Am I making money this month, where, and why?"
+// Reuses financialAnalytics + per-client P&L logic (mirrors Customer360View).
+
+const MONTH_NAMES_FULL = [
+  'Janar', 'Shkurt', 'Mars', 'Prill', 'Maj', 'Qershor',
+  'Korrik', 'Gusht', 'Shtator', 'Tetor', 'Nëntor', 'Dhjetor',
+];
+
+function monthWindow(base: Date, offset: number) {
+  const d = new Date(base.getFullYear(), base.getMonth() + offset, 1);
+  const start = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+  const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+  return { start, end, monthIndex: d.getMonth(), year: d.getFullYear() };
+}
+
+/** One financial snapshot for a month: money in − money out. */
+function monthProfit(
+  invoices: Invoice[],
+  expenses: Expense[],
+  monthlySalary: number,
+  start: Date,
+  end: Date,
+) {
+  const collected = invoices.reduce((s, inv) => s + getInvoiceCollectedBetween(inv, start, end), 0);
+  const otherExpenses = calculateExpensesBetween(expenses, start, end);
+  const profit = collected - otherExpenses - monthlySalary;
+  return { collected, otherExpenses, salary: monthlySalary, profit };
+}
+
+const FinancesView: React.FC = () => {
+  const permissions = usePermissions();
+  const allowed = permissions.isOwner || permissions.isAdmin || permissions.isSuperAdmin;
+
+  const { data: invoices, loading: lInv } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
+  const { data: expenses, loading: lExp } = useCollection<Expense>('expenses', { skipTeamFilter: true });
+  const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
+  const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
+  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
+
+  const now = useMemo(() => new Date(), []);
+
+  const totalMonthlySalary = useMemo(() => {
+    if (!teamMembers) return 0;
+    return teamMembers
+      .filter(m => m.status === 'Active')
+      .reduce((sum, m) => sum + (m.monthlySalary || 0), 0);
+  }, [teamMembers]);
+
+  // ── This month vs last month ──
+  const { thisMonth, lastMonth } = useMemo(() => {
+    const inv = invoices || [];
+    const exp = expenses || [];
+    const cur = monthWindow(now, 0);
+    const prev = monthWindow(now, -1);
+    return {
+      thisMonth: monthProfit(inv, exp, totalMonthlySalary, cur.start, cur.end),
+      lastMonth: monthProfit(inv, exp, totalMonthlySalary, prev.start, prev.end),
+    };
+  }, [invoices, expenses, totalMonthlySalary, now]);
+
+  const profitDelta = thisMonth.profit - lastMonth.profit;
+
+  // ── 6-month profit trend ──
+  const trend = useMemo(() => {
+    const inv = invoices || [];
+    const exp = expenses || [];
+    const out: { label: string; profit: number }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const w = monthWindow(now, -i);
+      const p = monthProfit(inv, exp, totalMonthlySalary, w.start, w.end);
+      out.push({ label: MONTH_LABELS_SQ[w.monthIndex], profit: Math.round(p.profit) });
+    }
+    return out;
+  }, [invoices, expenses, totalMonthlySalary, now]);
+
+  // ── Receivables + overdue ──
+  const receivables = useMemo(() => {
+    const inv = invoices || [];
+    const outstanding = calculateAccountsReceivable(inv);
+    let overdueAmount = 0;
+    let overdueCount = 0;
+    for (const i of inv) {
+      const out = getInvoiceOutstandingAll(i);
+      if (out <= 0) continue;
+      const due = parseDate(i.dueDate);
+      if (due && due < now) {
+        overdueAmount += out;
+        overdueCount += 1;
+      }
+    }
+    return { outstanding, overdueAmount, overdueCount };
+  }, [invoices, now]);
+
+  // ── Per-client P&L (revenue billed − project cost) ──
+  const clientPnl = useMemo(() => {
+    const inv = invoices || [];
+    const projs = projects || [];
+    const rows = (customers || []).map(c => {
+      const revenue = inv
+        .filter(i => i.customerId === c.id && i.status !== 'Draft' && i.status !== 'Cancelled')
+        .reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
+      const cost = projs
+        .filter(p => p.customerId === c.id)
+        .reduce((s, p) => s + (Number((p as any).spent) || 0), 0);
+      const margin = revenue - cost;
+      const marginPct = revenue > 0 ? Math.round((margin / revenue) * 100) : 0;
+      return { id: c.id, name: c.name || 'Pa emër', revenue, cost, margin, marginPct };
+    }).filter(r => r.revenue > 0 || r.cost > 0);
+
+    const winners = [...rows].sort((a, b) => b.margin - a.margin).slice(0, 3);
+    const losers = rows.filter(r => r.margin < 0).sort((a, b) => a.margin - b.margin).slice(0, 3);
+    return { winners, losers };
+  }, [invoices, projects, customers]);
+
+  // ── Plain-language alarms ──
+  const alarms = useMemo(() => {
+    const items: { text: string; tone: 'red' | 'amber' }[] = [];
+    if (receivables.overdueCount > 0) {
+      items.push({
+        tone: 'red',
+        text: `${receivables.overdueCount} ${receivables.overdueCount === 1 ? 'faturë e vonuar' : 'fatura të vonuara'} = ${formatALL(receivables.overdueAmount)} pa mbledhur.`,
+      });
+    }
+    if (thisMonth.profit < 0) {
+      items.push({ tone: 'red', text: `Këtë muaj po humb para: ${formatALL(Math.abs(thisMonth.profit))}.` });
+    }
+    const marginPct = thisMonth.collected > 0 ? (thisMonth.profit / thisMonth.collected) * 100 : 0;
+    if (thisMonth.profit >= 0 && thisMonth.collected > 0 && marginPct < 20) {
+      items.push({ tone: 'amber', text: `Marzhi këtë muaj është vetëm ${Math.round(marginPct)}% — nën 20%.` });
+    }
+    for (const l of clientPnl.losers) {
+      items.push({ tone: 'amber', text: `Klienti "${l.name}" po humb para: ${formatALL(l.margin)} marzh.` });
+    }
+    return items;
+  }, [receivables, thisMonth, clientPnl]);
+
+  if (!allowed) {
+    return (
+      <div className="p-8 text-center text-muted-foreground">
+        Kjo faqe është vetëm për pronarin.
+      </div>
+    );
+  }
+
+  const loading = lInv || lExp;
+  if (loading) {
+    return <div className="p-8 text-center text-muted-foreground">Duke ngarkuar financat…</div>;
+  }
+
+  const profitPositive = thisMonth.profit >= 0;
+  const monthLabel = `${MONTH_NAMES_FULL[now.getMonth()]} ${now.getFullYear()}`;
+
+  return (
+    <div className="max-w-5xl mx-auto p-4 sm:p-6 space-y-5">
+      {/* Header */}
+      <div>
+        <h1 className="text-2xl font-bold text-foreground">Financat</h1>
+        <p className="text-sm text-muted-foreground">
+          Pamja e shpejtë: a po fiton para këtë muaj, ku, dhe pse.
+        </p>
+      </div>
+
+      {/* 1 — The one number */}
+      <Card className={`p-6 border-2 ${profitPositive ? 'border-emerald-500/40' : 'border-red-500/40'}`}>
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div>
+            <p className="text-sm text-muted-foreground">Fitimi neto — {monthLabel}</p>
+            <p className={`text-4xl sm:text-5xl font-extrabold tabular-nums mt-1 ${profitPositive ? 'text-emerald-600' : 'text-red-600'}`}>
+              {formatALL(thisMonth.profit)}
+            </p>
+            <p className="text-sm text-muted-foreground mt-2 max-w-md">
+              {profitPositive
+                ? 'Kaq para të kanë mbetur këtë muaj pasi zbrite rrogat dhe shpenzimet nga paraja që hyri.'
+                : 'Këtë muaj shpenzimet dhe rrogat kaluan paranë që hyri — je në humbje.'}
+            </p>
+          </div>
+          <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium ${profitDelta >= 0 ? 'bg-emerald-500/10 text-emerald-600' : 'bg-red-500/10 text-red-600'}`}>
+            {profitDelta >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
+            {profitDelta >= 0 ? '+' : ''}{formatALL(profitDelta)} vs muaji i kaluar
+          </div>
+        </div>
+      </Card>
+
+      {/* 2 — Where the number comes from */}
+      <Card className="p-5">
+        <h2 className="text-sm font-semibold mb-4">Nga del ky numër</h2>
+        <div className="space-y-2.5">
+          <BreakdownRow
+            icon={<ArrowUpRight className="w-4 h-4 text-emerald-600" />}
+            label="Para që hyri (arkëtuar)"
+            hint="Fatura që klientët i paguan realisht këtë muaj"
+            amount={thisMonth.collected}
+            positive
+          />
+          <BreakdownRow
+            icon={<ArrowDownRight className="w-4 h-4 text-red-600" />}
+            label="− Rrogat"
+            hint="Rrogat mujore të ekipit aktiv"
+            amount={-thisMonth.salary}
+          />
+          <BreakdownRow
+            icon={<ArrowDownRight className="w-4 h-4 text-red-600" />}
+            label="− Shpenzime të tjera"
+            hint="Qira, softuer, marketing, etj."
+            amount={-thisMonth.otherExpenses}
+          />
+          <div className="border-t pt-2.5">
+            <BreakdownRow
+              icon={profitPositive ? <TrendingUp className="w-4 h-4 text-emerald-600" /> : <TrendingDown className="w-4 h-4 text-red-600" />}
+              label="= Fitimi neto"
+              hint="Çfarë të mbeti"
+              amount={thisMonth.profit}
+              bold
+              positive={profitPositive}
+            />
+          </div>
+        </div>
+      </Card>
+
+      {/* 3 — Cash / receivables */}
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <Card className="p-5">
+          <div className="flex items-center gap-2 mb-2">
+            <Wallet className="w-4 h-4 text-sky-600" />
+            <h2 className="text-sm font-semibold">Të pambledhura</h2>
+          </div>
+          <p className="text-2xl font-bold tabular-nums">{formatALL(receivables.outstanding)}</p>
+          <p className="text-xs text-muted-foreground mt-1">
+            Para që klientët të kanë borxh (fatura të papaguara ende).
+          </p>
+        </Card>
+        <Card className={`p-5 ${receivables.overdueCount > 0 ? 'border-red-500/40' : ''}`}>
+          <div className="flex items-center gap-2 mb-2">
+            <Clock className={`w-4 h-4 ${receivables.overdueCount > 0 ? 'text-red-600' : 'text-muted-foreground'}`} />
+            <h2 className="text-sm font-semibold">Të vonuara</h2>
+          </div>
+          <p className={`text-2xl font-bold tabular-nums ${receivables.overdueCount > 0 ? 'text-red-600' : ''}`}>
+            {formatALL(receivables.overdueAmount)}
+          </p>
+          <p className="text-xs text-muted-foreground mt-1">
+            {receivables.overdueCount > 0
+              ? `${receivables.overdueCount} fatura kaluan afatin — ndiqi për pagesë.`
+              : 'Asnjë faturë e vonuar. 👍'}
+          </p>
+        </Card>
+      </div>
+
+      {/* 4 — Where you win / lose */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+        <Card className="p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+            <h2 className="text-sm font-semibold">Ku fiton më shumë</h2>
+          </div>
+          <ClientList rows={clientPnl.winners} emptyText="Ende pa të dhëna klientësh." />
+        </Card>
+        <Card className="p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle className="w-4 h-4 text-red-600" />
+            <h2 className="text-sm font-semibold">Ku humb para</h2>
+          </div>
+          <ClientList rows={clientPnl.losers} emptyText="Asnjë klient në humbje. 👍" />
+        </Card>
+      </div>
+
+      {/* 5 — Trend */}
+      <Card className="p-5">
+        <h2 className="text-sm font-semibold mb-3">Trendi i fitimit (6 muaj)</h2>
+        <ResponsiveContainer width="100%" height={220}>
+          <LineChart data={trend} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+            <CartesianGrid strokeDasharray="3 3" className="stroke-muted" vertical={false} />
+            <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+            <YAxis tick={{ fontSize: 11 }} width={48} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+            <Tooltip formatter={(v: number) => formatALL(v)} />
+            <Line type="monotone" dataKey="profit" stroke="#0EA5E9" strokeWidth={2.5} dot={{ r: 3 }} />
+          </LineChart>
+        </ResponsiveContainer>
+        <p className="text-xs text-muted-foreground mt-2">
+          Vija tregon fitimin neto muaj pas muaji. Nëse bie vazhdimisht, diçka po të ha marzhin.
+        </p>
+      </Card>
+
+      {/* 6 — Alarms */}
+      {alarms.length > 0 && (
+        <Card className="p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <AlertTriangle className="w-4 h-4 text-amber-500" />
+            <h2 className="text-sm font-semibold">Çfarë kërkon vëmendje</h2>
+          </div>
+          <ul className="space-y-2">
+            {alarms.map((a, i) => (
+              <li key={i} className="flex items-start gap-2 text-sm">
+                <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${a.tone === 'red' ? 'bg-red-500' : 'bg-amber-500'}`} />
+                <span className="text-foreground">{a.text}</span>
+              </li>
+            ))}
+          </ul>
+        </Card>
+      )}
+    </div>
+  );
+};
+
+// ── Sub-components ──
+
+const BreakdownRow: React.FC<{
+  icon: React.ReactNode;
+  label: string;
+  hint: string;
+  amount: number;
+  positive?: boolean;
+  bold?: boolean;
+}> = ({ icon, label, hint, amount, positive, bold }) => (
+  <div className="flex items-center gap-3">
+    <div className="shrink-0">{icon}</div>
+    <div className="min-w-0 flex-1">
+      <p className={`text-sm ${bold ? 'font-bold' : 'font-medium'} text-foreground`}>{label}</p>
+      <p className="text-xs text-muted-foreground truncate">{hint}</p>
+    </div>
+    <p className={`tabular-nums shrink-0 ${bold ? 'text-base font-bold' : 'text-sm font-semibold'} ${
+      positive === undefined
+        ? amount < 0 ? 'text-red-600' : 'text-foreground'
+        : positive ? 'text-emerald-600' : 'text-red-600'
+    }`}>
+      {formatALL(amount)}
+    </p>
+  </div>
+);
+
+const ClientList: React.FC<{
+  rows: { id: string; name: string; revenue: number; margin: number; marginPct: number }[];
+  emptyText: string;
+}> = ({ rows, emptyText }) => {
+  if (!rows.length) {
+    return <p className="text-sm text-muted-foreground">{emptyText}</p>;
+  }
+  return (
+    <ul className="space-y-2.5">
+      {rows.map(r => (
+        <li key={r.id} className="flex items-center gap-2">
+          <Users className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+          <span className="text-sm text-foreground truncate flex-1">{r.name}</span>
+          <span className={`text-sm font-semibold tabular-nums shrink-0 ${r.margin < 0 ? 'text-red-600' : 'text-emerald-600'}`}>
+            {formatALL(r.margin)}
+            {r.revenue > 0 && <span className="text-xs text-muted-foreground ml-1">({r.marginPct}%)</span>}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+};
+
+export default FinancesView;

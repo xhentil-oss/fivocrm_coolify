@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { FolderKanban, Users, CheckSquare, BarChart3, Settings, Hash, MessageSquare, User as UserIcon } from 'lucide-react';
+import { FolderKanban, Users, CheckSquare, BarChart3, Settings, Hash, MessageSquare, User as UserIcon, Wallet } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   Dialog,
@@ -36,6 +36,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChange }) =
     { icon: Users, label: 'Shko te Klientët / Lead-et', path: '/app/crm' },
     { icon: CheckSquare, label: 'Shko te Detyrat', path: '/app/tasks' },
     { icon: MessageSquare, label: 'Shko te Chati', path: '/app/chat' },
+    { icon: Wallet, label: 'Shko te Financat', path: '/app/finances' },
     { icon: BarChart3, label: 'Shko te Raportet', path: '/app/reports' },
     { icon: Settings, label: 'Shko te Cilësimet', path: '/app/settings' },
   ];
