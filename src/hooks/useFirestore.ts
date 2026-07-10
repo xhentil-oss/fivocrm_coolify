@@ -156,6 +156,7 @@ const teamScopedCollections = new Set([
   'workspaceFolders', 'workspaceDriveFiles', 'projects', 'dailyReports',
   'roleTemplates', 'standups', 'quotes', 'contracts',
   'chatSnippets', 'whatsappAccounts', 'whatsappThreads', 'waTemplates', 'waBroadcasts',
+  'emailCampaigns', 'emailTemplates',
   // whatsappMessages reads pass skipTeamFilter (they scope by teamId+phone
   // explicitly), so being in this set only enforces teamId on create.
   'whatsappMessages',
@@ -184,6 +185,7 @@ const businessIsolatedAlways = new Set<string>([
   'services', 'expenses', 'goals', 'quotes', 'contracts', 'tasks', 'taskComments',
   'taskCollaborators', 'milestones', 'projectComments', 'clientRequests', 'serviceInquiries',
   'timeEntries', 'standups', 'dailyReports', 'customIndustries', 'activities',
+  'emailCampaigns', 'emailTemplates',
   'teamMembers', 'teamInvites',
 ]);
 

@@ -25,6 +25,7 @@ export type UserPermissions = {
   canAccessCustomers: boolean;
   canAccessServices: boolean;
   canAccessExpenses: boolean;
+  canAccessMarketing?: boolean;
   canAccessProfile: boolean;
   canAccessTimeTracking: boolean;
   canEdit: boolean;
@@ -58,6 +59,7 @@ const fullAccessPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canAccessCustomers: true,
   canAccessServices: true,
   canAccessExpenses: true,
+  canAccessMarketing: true,
   canAccessProfile: true,
   canAccessTimeTracking: true,
   canEdit: true,
@@ -82,6 +84,7 @@ const restrictedPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canAccessCustomers: false,
   canAccessServices: false,
   canAccessExpenses: false,
+  canAccessMarketing: false,
   canAccessProfile: true,
   canAccessTimeTracking: false,
   canEdit: false,
@@ -331,6 +334,7 @@ export function usePermissions(): UserPermissions {
         canAccessCustomers: true,
         canAccessServices: true,
         canAccessExpenses: membership.canAccessExpenses === true,
+        canAccessMarketing: true,
         canAccessProfile: true,
         canAccessTimeTracking: membership.canAccessTasks === true,
         canEdit: true,
@@ -400,6 +404,7 @@ export function usePermissions(): UserPermissions {
         canAccessCustomers: true,
         canAccessServices: true,
         canAccessExpenses: false,
+        canAccessMarketing: true,
         canAccessProfile: true,
         canAccessTimeTracking: true,
         canEdit: true,

@@ -580,6 +580,22 @@ service cloud.firestore {
       allow update, delete: if isTeamMember(resource.data.teamId);
     }
 
+    match /emailTemplates/{docId} {
+      // Team-scoped reusable email marketing templates.
+      allow read: if isTeamMember(resource.data.teamId);
+      allow create: if isTeamMember(request.resource.data.teamId);
+      allow update, delete: if isTeamMember(resource.data.teamId);
+    }
+
+    match /emailCampaigns/{docId} {
+      // Team-scoped email marketing campaigns.  Created/edited from the UI; the
+      // cron processor advances status/sentCount via the Admin SDK (bypasses
+      // these rules).  Clients may read and manage their team's campaigns.
+      allow read: if isTeamMember(resource.data.teamId);
+      allow create: if isTeamMember(request.resource.data.teamId);
+      allow update, delete: if isTeamMember(resource.data.teamId);
+    }
+
     match /lidMappings/{docId} {
       allow read: if isAuth();
       allow create, update: if isAuth();
