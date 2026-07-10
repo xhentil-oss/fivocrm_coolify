@@ -1,6 +1,6 @@
-import React, { useMemo, useEffect, useRef, useCallback } from 'react';
-import { NavLink } from 'react-router-dom';
-import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Receipt, MessageSquare, MessageCircle, Target, UserCircle, DollarSign, Shield, FileText, Briefcase, LayoutDashboard, Timer, Award, PieChart, Calculator, Globe, ScrollText, Handshake, Building2, Wallet } from 'lucide-react';
+import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
+import { NavLink, useLocation } from 'react-router-dom';
+import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Receipt, MessageSquare, MessageCircle, Target, UserCircle, DollarSign, Shield, FileText, Briefcase, LayoutDashboard, Timer, Award, PieChart, Calculator, Globe, ScrollText, Handshake, Building2, Wallet, ChevronDown, PiggyBank } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -21,7 +21,19 @@ type NavItem = {
   permissionKey: string;
 };
 
-const allNavItems: NavItem[] = [
+// A collapsible parent that groups related leaf items under one header.
+type NavGroup = {
+  group: string;            // stable key
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  children: NavItem[];
+};
+
+type NavEntry = NavItem | NavGroup;
+
+const isGroup = (e: NavEntry): e is NavGroup => 'children' in e;
+
+const allNavItems: NavEntry[] = [
   { path: '/app/tenants', label: 'Relax CRM', icon: Building2, permissionKey: 'isSuperAdmin' },
   { path: '/app/dashboard', label: 'Dashboard', icon: LayoutDashboard, permissionKey: 'canAccessProfile' },
   { path: '/app/projects', label: 'Projektet', icon: FolderKanban, permissionKey: 'canAccessProjects' },
@@ -33,14 +45,22 @@ const allNavItems: NavItem[] = [
   { path: '/app/teams', label: 'Ekipet', icon: UsersRound, permissionKey: 'canAccessTeams' },
   { path: '/app/services', label: 'Shërbimet', icon: Receipt, permissionKey: 'canAccessServices' },
   { path: '/app/service-inquiries', label: 'Kërkesat', icon: FileText, permissionKey: 'canAccessCRM' },
-  { path: '/app/invoices', label: 'Faturat', icon: Receipt, permissionKey: 'canAccessInvoices' },
   { path: '/app/contracts', label: 'Kontratat', icon: ScrollText, permissionKey: 'canAccessInvoices' },
-  { path: '/app/expenses', label: 'Shpenzimet', icon: DollarSign, permissionKey: 'canAccessExpenses' },
   { path: '/app/time-tracking', label: 'Orari', icon: Timer, permissionKey: 'canAccessTimeTracking' },
   { path: '/app/workspace', label: 'Workspace', icon: Briefcase, permissionKey: 'canAccessProjects' },
   { path: '/app/chat', label: 'Chat', icon: MessageSquare, permissionKey: 'canAccessChat' },
   { path: '/app/whatsapp', label: 'WhatsApp', icon: MessageCircle, permissionKey: 'canAccessWhatsapp' },
-  { path: '/app/finances', label: 'Financat', icon: Wallet, permissionKey: 'isAdmin' },
+  // Financat — grouped: overview + invoices + expenses under one collapsible header.
+  {
+    group: 'finances',
+    label: 'Financat',
+    icon: Wallet,
+    children: [
+      { path: '/app/finances', label: 'Përmbledhje', icon: PiggyBank, permissionKey: 'isAdmin' },
+      { path: '/app/invoices', label: 'Faturat', icon: Receipt, permissionKey: 'canAccessInvoices' },
+      { path: '/app/expenses', label: 'Shpenzimet', icon: DollarSign, permissionKey: 'canAccessExpenses' },
+    ],
+  },
   { path: '/app/reports', label: 'Raportet', icon: BarChart3, permissionKey: 'canAccessReports' },
   { path: '/app/workload', label: 'Ngarkesa', icon: PieChart, permissionKey: 'canAccessReports' },
   { path: '/app/price-calculator', label: 'Kalkulatori', icon: Calculator, permissionKey: 'canAccessServices' },
@@ -160,14 +180,76 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
     [business],
   );
 
-  const navItems = permissions.isLoading
-    ? allNavItems.filter(item => item.permissionKey === 'canAccessProfile')
-    : allNavItems.filter(item => {
-        const permKey = item.permissionKey as keyof typeof permissions;
-        if (permissions[permKey] !== true) return false;
-        // super-admin bypasses module toggles
-        return permissions.isSuperAdmin || !disabledModules.has(item.path);
-      });
+  const canSeeLeaf = useCallback((item: NavItem) => {
+    const permKey = item.permissionKey as keyof typeof permissions;
+    if (permissions[permKey] !== true) return false;
+    // super-admin bypasses module toggles
+    return permissions.isSuperAdmin || !disabledModules.has(item.path);
+  }, [permissions, disabledModules]);
+
+  // Resolve permissions/module toggles per entry. Groups keep only their
+  // visible children and drop out entirely when none remain.
+  const navItems: NavEntry[] = useMemo(() => {
+    if (permissions.isLoading) {
+      return allNavItems.filter((e): e is NavItem => !isGroup(e) && e.permissionKey === 'canAccessProfile');
+    }
+    return allNavItems.flatMap(entry => {
+      if (isGroup(entry)) {
+        const children = entry.children.filter(canSeeLeaf);
+        return children.length ? [{ ...entry, children }] : [];
+      }
+      return canSeeLeaf(entry) ? [entry] : [];
+    });
+  }, [permissions.isLoading, canSeeLeaf]);
+
+  // Expand a group by default when one of its children is the active route;
+  // manual toggles override that.
+  const location = useLocation();
+  const [manualOpen, setManualOpen] = useState<Record<string, boolean>>({});
+  const groupChildActive = (g: NavGroup) => g.children.some(c => location.pathname.startsWith(c.path));
+  const isGroupOpen = (g: NavGroup) => manualOpen[g.group] ?? groupChildActive(g);
+  const toggleGroup = (key: string, open: boolean) =>
+    setManualOpen(prev => ({ ...prev, [key]: !open }));
+
+  // Count of accessible leaf modules (groups contribute their children).
+  const accessibleCount = navItems.reduce((n, e) => n + (isGroup(e) ? e.children.length : 1), 0);
+
+  // Shared leaf renderer (used at top level and inside expanded groups).
+  const renderLeaf = (item: NavItem, indented = false) => (
+    <NavLink
+      key={item.path}
+      to={item.path}
+      onClick={onCloseMobile}
+      title={collapsed ? item.label : undefined}
+      aria-label={item.label}
+      className={({ isActive }) =>
+        cn(
+          'group flex items-center gap-3 px-3 py-3 min-h-[44px] rounded-xl transition-all duration-200 text-secondary-foreground',
+          'hover:bg-accent hover:text-accent-foreground hover:translate-x-1 active:bg-accent',
+          isActive && 'bg-gradient-primary text-primary-foreground font-semibold shadow-primary hover:text-primary-foreground',
+          collapsed && 'justify-center hover:translate-x-0',
+          indented && !collapsed && 'py-2 min-h-[40px]'
+        )
+      }
+    >
+      <div className="relative">
+        <item.icon className="h-5 w-5 flex-shrink-0 transition-transform group-hover:scale-110" />
+        {item.path === '/app/chat' && unreadChatCount > 0 && collapsed && (
+          <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-error rounded-full animate-pulse" />
+        )}
+      </div>
+      {!collapsed && (
+        <span className="flex-1 flex items-center justify-between transition-colors">
+          {item.label}
+          {item.path === '/app/chat' && unreadChatCount > 0 && (
+            <Badge className="bg-error text-white text-xs px-1.5 py-0 min-w-[20px] h-5 flex items-center justify-center animate-pulse">
+              {unreadChatCount > 99 ? '99+' : unreadChatCount}
+            </Badge>
+          )}
+        </span>
+      )}
+    </NavLink>
+  );
 
   return (
     <>
@@ -216,47 +298,50 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
               Duke ngarkuar...
             </div>
           ) : (
-            navItems.map((item) => (
-              <NavLink
-                key={item.path}
-                to={item.path}
-                onClick={onCloseMobile}
-                title={collapsed ? item.label : undefined}
-                aria-label={item.label}
-                className={({ isActive }) =>
-                  cn(
-                    'group flex items-center gap-3 px-3 py-3 min-h-[44px] rounded-xl transition-all duration-200 text-secondary-foreground',
-                    'hover:bg-accent hover:text-accent-foreground hover:translate-x-1 active:bg-accent',
-                    isActive && 'bg-gradient-primary text-primary-foreground font-semibold shadow-primary hover:text-primary-foreground',
-                    collapsed && 'justify-center hover:translate-x-0'
-                  )
-                }
-              >
-                <div className="relative">
-                  <item.icon className="h-5 w-5 flex-shrink-0 transition-transform group-hover:scale-110" />
-                  {item.path === '/app/chat' && unreadChatCount > 0 && collapsed && (
-                    <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-error rounded-full animate-pulse" />
+            navItems.map((entry) => {
+              // Leaf — render as before.
+              if (!isGroup(entry)) return renderLeaf(entry);
+
+              // Collapsed sidebar (icon-only): flatten children to icon links so
+              // everything stays reachable without a text header.
+              if (collapsed) {
+                return <React.Fragment key={entry.group}>{entry.children.map(c => renderLeaf(c))}</React.Fragment>;
+              }
+
+              // Expanded: collapsible header + indented children.
+              const open = isGroupOpen(entry);
+              const childActive = groupChildActive(entry);
+              return (
+                <div key={entry.group}>
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(entry.group, open)}
+                    aria-expanded={open}
+                    className={cn(
+                      'group w-full flex items-center gap-3 px-3 py-3 min-h-[44px] rounded-xl transition-all duration-200 text-secondary-foreground',
+                      'hover:bg-accent hover:text-accent-foreground active:bg-accent',
+                      childActive && !open && 'text-primary font-semibold'
+                    )}
+                  >
+                    <entry.icon className="h-5 w-5 flex-shrink-0 transition-transform group-hover:scale-110" />
+                    <span className="flex-1 text-left">{entry.label}</span>
+                    <ChevronDown className={cn('h-4 w-4 shrink-0 transition-transform', open && 'rotate-180')} />
+                  </button>
+                  {open && (
+                    <div className="mt-1 ml-4 pl-2 border-l border-border space-y-1">
+                      {entry.children.map(c => renderLeaf(c, true))}
+                    </div>
                   )}
                 </div>
-                {!collapsed && (
-                  <span className="flex-1 flex items-center justify-between transition-colors">
-                    {item.label}
-                    {item.path === '/app/chat' && unreadChatCount > 0 && (
-                      <Badge className="bg-error text-white text-xs px-1.5 py-0 min-w-[20px] h-5 flex items-center justify-center animate-pulse">
-                        {unreadChatCount > 99 ? '99+' : unreadChatCount}
-                      </Badge>
-                    )}
-                  </span>
-                )}
-              </NavLink>
-            ))
+              );
+            })
           )}
         </nav>
 
         {/* Permission count indicator */}
         {!collapsed && !permissions.isLoading && permissions.role && (
           <div className="px-4 py-3 border-t text-xs text-muted-foreground">
-            {navItems.length} module të aksesueshme
+            {accessibleCount} module të aksesueshme
           </div>
         )}
       </aside>
