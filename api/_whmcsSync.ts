@@ -42,6 +42,31 @@ async function resolveTeamId(): Promise<string | null> {
   return cachedTeamId;
 }
 
+// ── Business resolution (the tenant isolation key) ────────────────────────────
+// `customers`/`invoices`/`subscriptions` are business-isolated in the client
+// (businessIsolatedAlways): a doc WITHOUT a businessId is filtered out by the
+// active-tenant query — it flashes in the list then vanishes. So every mirrored
+// doc must carry the same businessId the staff user's active team resolves to.
+let cachedBusinessId: string | null | undefined;
+async function resolveBusinessId(teamId: string | null): Promise<string | null> {
+  if (cachedBusinessId !== undefined) return cachedBusinessId;
+  const envBiz = process.env.WHMCS_BUSINESS_ID;
+  if (envBiz) { cachedBusinessId = envBiz; return cachedBusinessId; }
+  let bid: string | null = null;
+  if (teamId) {
+    const teamDoc = await db.collection('teams').doc(teamId).get();
+    bid = teamDoc.exists ? ((teamDoc.data() as any)?.businessId ?? null) : null;
+    // Fallback: a member of this team may carry the businessId even if the team
+    // doc doesn't (mirrors the recurring-task self-heal in api/cron/run.ts).
+    if (!bid) {
+      const tm = await db.collection('teamMembers').where('teamId', '==', teamId).limit(1).get();
+      if (!tm.empty) bid = (tm.docs[0].data() as any)?.businessId ?? null;
+    }
+  }
+  cachedBusinessId = bid;
+  return cachedBusinessId;
+}
+
 // ── Customer resolution (auto-match by email, create minimal if missing) ──────
 const customerCache = new Map<string, string>(); // email → customerId
 
@@ -59,6 +84,7 @@ async function resolveCustomer(client: MappedClient | null, teamId: string | nul
 
   // Create a minimal customer purely so invoices/subscriptions can link to it.
   const now = Timestamp.now();
+  const businessId = await resolveBusinessId(teamId);
   const ref = await db.collection('customers').add({
     name: client.name || email,
     email,
@@ -66,6 +92,7 @@ async function resolveCustomer(client: MappedClient | null, teamId: string | nul
     company: client.company || '',
     source: 'whmcs',
     ...(teamId ? { teamId } : {}),
+    ...(businessId ? { businessId } : {}),
     createdAt: now,
     updatedAt: now,
     createdByUserId: null,
@@ -96,6 +123,7 @@ async function upsertCustomer(c: MappedClientFull, teamId: string | null): Promi
     if (!s.empty) ref = s.docs[0].ref;
   }
 
+  const businessId = await resolveBusinessId(teamId);
   const payload: Record<string, any> = {
     whmcsClientId: c.whmcsClientId,
     source: 'whmcs',
@@ -105,6 +133,7 @@ async function upsertCustomer(c: MappedClientFull, teamId: string | null): Promi
     company: c.company,
     address: c.address,
     ...(teamId ? { teamId } : {}),
+    ...(businessId ? { businessId } : {}),
     updatedAt: now,
   };
 
@@ -119,6 +148,7 @@ async function upsertCustomer(c: MappedClientFull, teamId: string | null): Promi
 // ── Invoice upsert ────────────────────────────────────────────────────────────
 async function upsertInvoice(inv: MappedInvoice, customerId: string | null, teamId: string | null): Promise<'created' | 'updated'> {
   const now = Timestamp.now();
+  const businessId = await resolveBusinessId(teamId);
   const snap = await db.collection('invoices').where('whmcsInvoiceId', '==', inv.whmcsInvoiceId).limit(1).get();
 
   // Fields WHMCS owns; we never touch FivoCRM-side reminder flags on update.
@@ -141,6 +171,7 @@ async function upsertInvoice(inv: MappedInvoice, customerId: string | null, team
     ...(inv.lineItems && inv.lineItems.length ? { lineItems: inv.lineItems, productSummary: inv.productSummary } : {}),
     ...(customerId ? { customerId } : {}),
     ...(teamId ? { teamId } : {}),
+    ...(businessId ? { businessId } : {}),
     updatedAt: now,
   };
 
@@ -170,6 +201,7 @@ async function upsertInvoice(inv: MappedInvoice, customerId: string | null, team
 // ── Subscription upsert ─────────────────────────────────────────────────────
 async function upsertSubscription(sub: MappedSubscription, customerId: string | null, teamId: string | null): Promise<'created' | 'updated'> {
   const now = Timestamp.now();
+  const businessId = await resolveBusinessId(teamId);
   const snap = await db.collection('subscriptions').where('whmcsServiceId', '==', sub.whmcsServiceId).limit(1).get();
 
   const payload: Record<string, any> = {
@@ -185,6 +217,7 @@ async function upsertSubscription(sub: MappedSubscription, customerId: string | 
     nextDueDate: toTs(sub.nextDueDate),
     ...(customerId ? { customerId } : {}),
     ...(teamId ? { teamId } : {}),
+    ...(businessId ? { businessId } : {}),
     updatedAt: now,
   };
 
