@@ -285,6 +285,13 @@ export async function fetchClient(clientId: string | number): Promise<MappedClie
   return mapWhmcsClient(data.client || data);
 }
 
+/** Full client details (id, address, status) for the real-time client webhook. */
+export async function fetchClientFull(clientId: string | number): Promise<MappedClientFull> {
+  const data = await whmcsCall('GetClientsDetails', { clientid: clientId, stats: 'false' });
+  // Ensure the id survives even if GetClientsDetails omits it from the client block.
+  return mapWhmcsClientFull({ id: clientId, ...(data.client || data) });
+}
+
 export async function fetchClientProduct(serviceId: string | number): Promise<MappedSubscription | null> {
   const data = await whmcsCall('GetClientsProducts', { serviceid: serviceId });
   const product = data?.products?.product?.[0];

@@ -86,6 +86,30 @@ foreach ($invoiceHooks as $hookName) {
     });
 }
 
+// ── Ngjarjet e klientëve ─────────────────────────────────────────────────────
+// Kjo është ajo që bën një KLIENT TË RI të shfaqet menjëherë në FivoCRM, pa pritur
+// cron-in ditor apo faturën e parë. ClientAdd = klient i ri (admin ose regjistrim),
+// ClientEdit = ndryshim të dhënash.
+$clientHooks = array(
+    'ClientAdd',
+    'ClientEdit',
+    'AcceptRegistration',
+);
+foreach ($clientHooks as $hookName) {
+    add_hook($hookName, 1, function ($vars) use ($hookName) {
+        $clientId = null;
+        foreach (array('userid', 'client_id', 'clientid', 'id') as $key) {
+            if (isset($vars[$key]) && $vars[$key]) { $clientId = $vars[$key]; break; }
+        }
+        if (!$clientId) {
+            return;
+        }
+        fivocrm_send_event($hookName, array(
+            'clientId' => $clientId,
+        ));
+    });
+}
+
 // ── Ngjarjet e shërbimeve / produkteve ───────────────────────────────────────
 $serviceHooks = array(
     'AfterModuleCreate',

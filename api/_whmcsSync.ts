@@ -4,6 +4,7 @@ import {
   whmcsConfigured,
   fetchInvoice,
   fetchClient,
+  fetchClientFull,
   fetchClientProduct,
   mapWhmcsInvoice,
   mapWhmcsProduct,
@@ -205,6 +206,15 @@ export async function syncInvoiceById(invoiceId: string | number): Promise<void>
   }
   const customerId = await resolveCustomer(client, teamId);
   await upsertInvoice(inv, customerId, teamId);
+}
+
+// Real-time client upsert (WHMCS ClientAdd/ClientEdit → FivoCRM customer). This
+// is what makes a brand-new WHMCS client appear immediately, without waiting for
+// the daily cron or the client's first invoice.
+export async function syncClientById(clientId: string | number): Promise<void> {
+  const teamId = await resolveTeamId();
+  const client = await fetchClientFull(clientId);
+  await upsertCustomer(client, teamId);
 }
 
 export async function syncSubscriptionById(serviceId: string | number): Promise<void> {

@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { verifyWebhookSignature } from './_whmcs.js';
-import { syncInvoiceById, syncSubscriptionById } from './_whmcsSync.js';
+import { syncInvoiceById, syncSubscriptionById, syncClientById } from './_whmcsSync.js';
 
 /**
  * Real-time receiver for WHMCS hook events (see scripts/whmcs/whmcs-hook-fivocrm.php).
@@ -36,6 +36,11 @@ const SERVICE_EVENTS = new Set([
   'ServiceSuspend', 'ServiceTerminate',
 ]);
 
+const CLIENT_EVENTS = new Set([
+  'ClientAdd', 'ClientEdit', 'AcceptRegistration', 'ClientDetailsEdit',
+  'ClientChangePassword', 'UserEdit',
+]);
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -63,7 +68,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const event = String(payload.event || '');
   // Acknowledge immediately; do the WHMCS round-trip then respond.
   try {
-    if (INVOICE_EVENTS.has(event) && payload.invoiceId) {
+    if (CLIENT_EVENTS.has(event) && payload.clientId) {
+      await syncClientById(payload.clientId);
+    } else if (INVOICE_EVENTS.has(event) && payload.invoiceId) {
       await syncInvoiceById(payload.invoiceId);
     } else if (SERVICE_EVENTS.has(event) && payload.serviceId) {
       await syncSubscriptionById(payload.serviceId);
