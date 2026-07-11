@@ -205,6 +205,13 @@ const ProjectsView: React.FC = () => {
     const budget = budgetRaw !== undefined && !isNaN(budgetRaw) ? budgetRaw : undefined;
     const resolvedCustomerId = custId && custId !== '__none__' ? custId : undefined;
     const resolvedTeamId = teamId && teamId !== '__none__' ? teamId : undefined;
+    const resolvedResponsible = responsibleUserId && responsibleUserId !== '__none__' ? responsibleUserId : undefined;
+
+    // Mandatory owner: a project needs a responsible lead for accountability.
+    if (!resolvedResponsible) {
+      toast({ title: 'Cakto një përgjegjës', description: 'Projekti duhet të ketë një person përgjegjës.', variant: 'destructive' });
+      return;
+    }
 
     const newProject = await projectMutation.create({
       name,
@@ -214,7 +221,7 @@ const ProjectsView: React.FC = () => {
       budget,
       spent: 0,
       customerId: resolvedCustomerId,
-      responsibleUserId: responsibleUserId && responsibleUserId !== '__none__' ? responsibleUserId : undefined,
+      responsibleUserId: resolvedResponsible,
       isRecurring: isRecurring || undefined,
       recurringFrequency: isRecurring && recurringFrequency ? recurringFrequency as any : undefined,
       memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
@@ -404,6 +411,13 @@ const ProjectsView: React.FC = () => {
     const budgetRaw = budgetStr ? parseFloat(budgetStr) : undefined;
     const budget = budgetRaw !== undefined && !isNaN(budgetRaw) ? budgetRaw : undefined;
 
+    const resolvedResponsible = responsibleUserId && responsibleUserId !== '__none__' ? responsibleUserId : undefined;
+    // Mandatory owner: keep the responsible lead set on edit too.
+    if (!resolvedResponsible) {
+      toast({ title: 'Cakto një përgjegjës', description: 'Projekti duhet të ketë një person përgjegjës.', variant: 'destructive' });
+      return;
+    }
+
     const oldStatus = projectToEdit.status;
 
     await projectMutation.update(projectToEdit.id, {
@@ -413,7 +427,7 @@ const ProjectsView: React.FC = () => {
       teamId: teamId && teamId !== '__none__' ? teamId : undefined,
       budget,
       customerId: custId && custId !== '__none__' ? custId : undefined,
-      responsibleUserId: responsibleUserId && responsibleUserId !== '__none__' ? responsibleUserId : undefined,
+      responsibleUserId: resolvedResponsible,
       isRecurring: isRecurring || undefined,
       recurringFrequency: isRecurring && recurringFrequency ? recurringFrequency as any : undefined,
       memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,

@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useCollection } from '../hooks/useFirestore';
+import { useCollection, useGlobalTeamId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { Card } from '../components/ui/card';
@@ -22,17 +22,27 @@ function hashColor(name: string): string {
 const WorkloadView: React.FC = () => {
   const { user } = useAuth();
   const permissions = usePermissions();
+  // Owners / super-admins have a null permissions.teamId even though a team is
+  // active — mirror SettingsView and fall back to the global active team so the
+  // view isn't emptied out for them.
+  const globalTeamId = useGlobalTeamId();
+  const activeTeamId = permissions.teamId || globalTeamId;
   const [expandedMember, setExpandedMember] = useState<string | null>(null);
   const [filterProject, setFilterProject] = useState<string>('__all__');
 
   const { data: rawTasks, loading: tasksLoading } = useCollection<Task>('tasks', {
-    skip: !permissions.teamId,
+    skip: !activeTeamId,
     orderBy: { field: 'createdAt', direction: 'desc' },
   });
 
+  // `teamMembers` is in businessIsolatedAlways, so skipTeamFilter alone is ignored
+  // and legacy member docs missing `businessId` get dropped → "0 anëtarë". Pass
+  // skipBusinessFilter too so this becomes a plain unscoped read (rules allow read
+  // for any authed user), then scope to the active team client-side below.
   const { data: teamMembers, loading: membersLoading } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
     skipTeamFilter: true,
+    skipBusinessFilter: true,
   });
 
   const { data: userProfiles } = useCollection<UserProfile>('userProfiles');
@@ -47,11 +57,11 @@ const WorkloadView: React.FC = () => {
     return filtered.filter((t) => (t as any).projectId === filterProject);
   }, [rawTasks, filterProject]);
 
-  // Filter team members to this team
+  // Filter team members to the active team (with global fallback for owners).
   const members = useMemo(() => {
-    if (!teamMembers || !permissions.teamId) return [];
-    return teamMembers.filter((m) => m.teamId === permissions.teamId);
-  }, [teamMembers, permissions.teamId]);
+    if (!teamMembers || !activeTeamId) return [];
+    return teamMembers.filter((m) => m.teamId === activeTeamId);
+  }, [teamMembers, activeTeamId]);
 
   // Resolve display name for a userId
   const getDisplayName = (userId: string): string => {

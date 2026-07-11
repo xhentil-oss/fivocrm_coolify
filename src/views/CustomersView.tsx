@@ -269,6 +269,14 @@ const CustomersView: React.FC = () => {
     data.assignedToUserId = assignedTo && assignedTo !== 'unassigned' ? assignedTo : null;
     data.disableOverdueReminders = formData.get('disableOverdueReminders') === 'true';
 
+    // Mandatory owner: a customer manually created here must have an account owner.
+    // (Automated creation — portal login, lead conversion, WHMCS sync — bypasses
+    // this form and may still create ownerless records that are routed later.)
+    if (!data.assignedToUserId) {
+      toast({ title: 'Cakto një përgjegjës', description: 'Klienti duhet të ketë një person përgjegjës.', variant: 'destructive' });
+      return;
+    }
+
     // Duplicate check against the WHOLE tenant (rawCustomers) — not the role-filtered
     // `customers`, or a Member/Viewer would bypass a teammate's existing record.
     const normEmail = data.email?.toLowerCase().trim();
@@ -390,6 +398,12 @@ const CustomersView: React.FC = () => {
     const assignedTo = formData.get('assignedToUserId') as string;
     data.assignedToUserId = assignedTo && assignedTo !== 'unassigned' ? assignedTo : null;
     data.disableOverdueReminders = formData.get('disableOverdueReminders') === 'true';
+
+    // Mandatory owner: keep the account owner set on edit too.
+    if (!data.assignedToUserId) {
+      toast({ title: 'Cakto një përgjegjës', description: 'Klienti duhet të ketë një person përgjegjës.', variant: 'destructive' });
+      return;
+    }
 
     const normEmail = (data.email as string | undefined)?.toLowerCase().trim();
     const normPhone = (data.phone as string | undefined)?.replace(/\D/g, '');

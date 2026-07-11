@@ -101,6 +101,37 @@ export interface WhatsAppTemplate {
 }
 
 // ── Marketing module ─────────────────────────────────────────────────────────
+// One email in a drip sequence. `delayDays` is the offset from enrollment
+// (step 0 → day 0 = immediate). Body comes from a template or inline HTML.
+export interface EmailStep {
+  delayDays: number;
+  subject?: string;       // falls back to campaign.subject / template subject
+  templateId?: string;    // render from a saved EmailTemplate
+  htmlBody?: string;      // inline HTML when no template
+}
+
+// A recipient enrolled in a (multi-step) campaign — the per-person progress
+// tracker for drip sequences. Created by purchase automations; advanced by the
+// campaign-steps cron.
+export interface CampaignEnrollment {
+  id: string;
+  teamId: string;
+  businessId?: string;
+  campaignId: string;
+  email: string;
+  name?: string;
+  company?: string;
+  currentStep: number;              // next step index to send
+  status: 'active' | 'completed' | 'stopped';
+  enrolledAt?: Date;
+  lastSentAt?: Date | null;
+  nextSendAt?: Date | null;         // when currentStep is due
+  sentSteps?: number[];             // idempotency: step indexes already sent
+  sourceInvoiceId?: string;         // purchase enrollments
+  createdAt?: Date;
+  updatedAt?: Date;
+}
+
 // An email marketing campaign. Deliberately mirrors WhatsAppBroadcast so the
 // segment builder, idempotency model and cron sender share the same shape.
 export interface EmailCampaign {
@@ -125,11 +156,17 @@ export interface EmailCampaign {
   // are evergreen and use active/paused instead.
   trigger?: 'manual' | 'purchase';
   triggerServiceIds?: string[];       // purchase trigger: which services fire it (empty = any purchase)
+  // Drip sequence (purchase automations). When present, buyers are enrolled and
+  // each step is sent after its delayDays. Absent = single email (subject/body).
+  steps?: EmailStep[];
   scheduledAt?: Date | null;
   status: 'draft' | 'queued' | 'sending' | 'completed' | 'failed' | 'active' | 'paused';
   totalTargets?: number;
   sentCount?: number;
   failedCount?: number;
+  deliveredCount?: number;            // ESP webhook: delivered events
+  openCount?: number;                 // ESP webhook: unique/total opens
+  clickCount?: number;                // ESP webhook: link clicks
   sentEmails?: string[];              // idempotency: recipients already emailed
   error?: string | null;
   createdAt?: Date;

@@ -140,6 +140,8 @@ const DealsView: React.FC = () => {
 
   const save = async () => {
     if (!form.title?.trim()) { toast({ title: 'Mungon titulli', variant: 'destructive' }); return; }
+    // Mandatory owner: a deal without a responsible rep stalls the pipeline.
+    if (!form.ownerId) { toast({ title: 'Cakto një përgjegjës', description: 'Marrëveshja duhet të ketë një owner.', variant: 'destructive' }); return; }
     setSaving(true);
     try {
       const customer = customers?.find(c => c.id === form.customerId);

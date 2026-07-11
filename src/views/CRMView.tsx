@@ -225,6 +225,13 @@ const CRMView: React.FC = () => {
     const assignedToUserId = formData.get('assignedToUserId') as string;
     const resolvedAssigned = assignedToUserId && assignedToUserId !== 'unassigned' ? assignedToUserId : undefined;
 
+    // Mandatory owner: every lead must have a responsible person so it never
+    // lands in the "Pa asignuar" pile that kills conversion.
+    if (!resolvedAssigned) {
+      toast({ title: 'Cakto një përgjegjës', description: 'Çdo lead duhet të ketë një person përgjegjës.', variant: 'destructive' });
+      setSaving(false); return;
+    }
+
     const createdLead = await leadMutation.create({
       name,
       email: email || undefined,
@@ -313,6 +320,12 @@ const CRMView: React.FC = () => {
       const estimatedValue = formData.get('estimatedValue') as string;
       const assignedToUserId = formData.get('assignedToUserId') as string;
       const resolvedAssigned = assignedToUserId && assignedToUserId !== 'unassigned' ? assignedToUserId : undefined;
+
+      // Mandatory owner: keep the responsible person set on edit too.
+      if (!resolvedAssigned) {
+        toast({ title: 'Cakto një përgjegjës', description: 'Çdo lead duhet të ketë një person përgjegjës.', variant: 'destructive' });
+        setSaving(false); return;
+      }
 
       await leadMutation.update(editLead.id, {
         name,

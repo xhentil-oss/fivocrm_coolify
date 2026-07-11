@@ -24,6 +24,7 @@ import {
   LogOut, Crown, Settings2,
 } from 'lucide-react';
 import { useVideoCall } from '../hooks/useVideoCall';
+import ConversationOwnerBar from '../components/chat/ConversationOwnerBar';
 // Lazy-loaded so the ~260KB Daily.co video SDK only loads when a call starts.
 const VideoCallModal = React.lazy(() => import('../components/VideoCallModal'));
 import { useToast } from '../hooks/use-toast';
@@ -3121,6 +3122,11 @@ const ChatView: React.FC = () => {
             )}
           </div>
         </header>
+
+        {/* Owner + watchers routing bar for client conversations (Request 1) */}
+        {chatMode === 'channel' && isClientChannel && (
+          <ConversationOwnerBar channelId={activeChannel} />
+        )}
 
         {/* Search bar */}
         {showSearch && chatMode !== 'ai' && (

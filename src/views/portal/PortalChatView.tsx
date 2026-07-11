@@ -15,6 +15,7 @@ import { useToast } from '../../hooks/use-toast';
 import { useVideoCall } from '../../hooks/useVideoCall';
 import VideoCallModal from '../../components/VideoCallModal';
 import type { ChatMessage, Project } from '../../types';
+import { ensureConversation } from '../../lib/conversationRouting';
 
 const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
@@ -214,6 +215,22 @@ const PortalChatView: React.FC = () => {
 
       // Bump last-activity so the staff sidebar sorts this conversation by recency.
       updateDoc(doc(db, 'customers', customerId), { lastClientMessageAt: Timestamp.now() }).catch(() => { /* non-blocking */ });
+
+      // Upsert the persistent conversation doc with owner + watchers so the thread
+      // is owned and supervised from the first message (Request 1).
+      const convProj = selectedProjectId ? customerProjects?.find(p => p.id === selectedProjectId) : null;
+      ensureConversation({
+        channelId,
+        channel: 'portal',
+        businessId: clientBusinessId,
+        teamId: (convProj as any)?.teamId || resolvedTeamId,
+        customerId,
+        ownerId: responsibleUserId,
+        salesAgentId: (customer as any)?.salesAgentId || null,
+        subject: customer?.name || undefined,
+        teamMembers: allTeamMembers || [],
+        actorUserId: user.uid,
+      }).catch(() => { /* non-blocking */ });
 
       // Route the message to the responsible person (in-app + email).
       const channelLabel = selectedProjectId

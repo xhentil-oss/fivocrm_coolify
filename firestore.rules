@@ -229,6 +229,35 @@ service cloud.firestore {
       allow update, delete: if isAuth();
     }
 
+    // Persistent client conversation threads (Request 1: owner + watchers routing).
+    // The doc id IS the channelId. Access = you're a watcher, OR you can reach the
+    // underlying client channel (portal client / business member), OR super-admin.
+    // watchers always includes the manager + all admins (even when unassigned), so
+    // the single `watchers array-contains uid` staff query is provably authorized.
+    match /conversations/{convId} {
+      allow read: if isAuth() && (
+        request.auth.uid in resource.data.watchers
+        || canAccessClientChannel(convId)
+        || isBusinessMember(resource.data.businessId)
+        || isSuperAdmin()
+      );
+      // Portal client opens their own thread; staff create within their business.
+      allow create: if isAuth() && (
+        canAccessClientChannel(convId)
+        || isBusinessMember(request.resource.data.businessId)
+        || request.resource.data.businessId == null
+      );
+      // Owner/manager/admin (business member) or the portal client (bumps
+      // lastMessageAt on their own thread) may update; super-admin manages any.
+      allow update: if isAuth() && (
+        request.auth.uid in resource.data.watchers
+        || canAccessClientChannel(convId)
+        || isBusinessMember(resource.data.businessId)
+        || isSuperAdmin()
+      );
+      allow delete: if isAuth() && (isBusinessMember(resource.data.businessId) || isSuperAdmin());
+    }
+
     match /messages/{docId} {
       // Was `if isAuth()` — every DM and channel message readable cross-tenant.
       // Now: business members read their tenant's messages; a user always reads
@@ -591,6 +620,14 @@ service cloud.firestore {
       // Team-scoped email marketing campaigns.  Created/edited from the UI; the
       // cron processor advances status/sentCount via the Admin SDK (bypasses
       // these rules).  Clients may read and manage their team's campaigns.
+      allow read: if isTeamMember(resource.data.teamId);
+      allow create: if isTeamMember(request.resource.data.teamId);
+      allow update, delete: if isTeamMember(resource.data.teamId);
+    }
+
+    match /campaignEnrollments/{docId} {
+      // Per-recipient drip-sequence progress. Created + advanced by the cron
+      // (Admin SDK); clients read their team's for reporting.
       allow read: if isTeamMember(resource.data.teamId);
       allow create: if isTeamMember(request.resource.data.teamId);
       allow update, delete: if isTeamMember(resource.data.teamId);

@@ -28,6 +28,79 @@ function normalizePhone(raw: string): string {
   return digits;
 }
 
+/**
+ * Owner + watchers routing for a WhatsApp conversation (Request 1, server mirror
+ * of src/lib/conversationRouting.ts). Given the team's members + a resolved owner
+ * (from the matched lead), compute the manager, watcher list, and unassigned flag.
+ */
+function buildWaRouting(
+  members: Array<{ userId: string; teamId?: string; role?: string; status?: string }>,
+  ownerId: string | null,
+  teamId: string,
+) {
+  const active = members.filter((m) => (m.status ?? 'Active') === 'Active');
+  const managerId = active.find((m) => m.teamId === teamId && m.role === 'Manager')?.userId || null;
+  const teamMemberIds = active.filter((m) => m.teamId === teamId).map((m) => m.userId);
+  const adminIds = active.filter((m) => m.role === 'Admin').map((m) => m.userId);
+  const fallbackManagers = !ownerId && !managerId ? active.filter((m) => m.role === 'Manager').map((m) => m.userId) : [];
+  const watchers = Array.from(
+    new Set([ownerId, ...teamMemberIds, managerId, ...adminIds, ...fallbackManagers].filter(Boolean) as string[]),
+  );
+  return { managerId, watchers, unassigned: !ownerId };
+}
+
+/** Idempotent upsert of the `wa-<teamId>-<phone>` conversation doc. */
+async function upsertWaConversation(args: {
+  teamId: string;
+  businessId: string;
+  phone: string;
+  ownerId: string | null;
+  leadId: string | null;
+  subject: string | null;
+  members: Array<{ userId: string; teamId?: string; role?: string; status?: string }>;
+  ts: Date;
+}): Promise<void> {
+  const convId = `wa-${args.teamId}-${args.phone}`;
+  const ref = adminDb.collection('conversations').doc(convId);
+  const now = new Date();
+  const routing = buildWaRouting(args.members, args.ownerId, args.teamId);
+  try {
+    const snap = await ref.get();
+    if (!snap.exists) {
+      await ref.set({
+        channel: 'whatsapp',
+        businessId: args.businessId,
+        teamId: args.teamId,
+        phone: args.phone,
+        leadId: args.leadId,
+        subject: args.subject,
+        ownerId: args.ownerId,
+        managerId: routing.managerId,
+        salesAgentId: null,
+        watchers: routing.watchers,
+        unassigned: routing.unassigned,
+        status: 'open',
+        slaFirstResponseDueAt: Timestamp.fromDate(new Date(args.ts.getTime() + 2 * 3600_000)),
+        slaBreachNotified: false,
+        lastMessageAt: Timestamp.fromDate(args.ts),
+        createdAt: Timestamp.fromDate(now),
+        updatedAt: Timestamp.fromDate(now),
+        createdByUserId: null,
+      }, { merge: true });
+      return;
+    }
+    const existing = snap.data() as any;
+    const patch: any = { lastMessageAt: Timestamp.fromDate(args.ts), updatedAt: Timestamp.fromDate(now) };
+    if (existing.unassigned && args.ownerId) {
+      patch.ownerId = args.ownerId;
+      patch.managerId = routing.managerId;
+      patch.watchers = Array.from(new Set([...(existing.watchers || []), ...routing.watchers]));
+      patch.unassigned = false;
+    }
+    await ref.set(patch, { merge: true });
+  } catch { /* never block message ingest */ }
+}
+
 // Is `now` outside the configured business hours (Europe/Tirane)?
 // start/end are "HH:MM" strings; an empty config means always-open (no reply).
 function isOutsideBusinessHours(startStr?: string, endStr?: string): boolean {
@@ -190,6 +263,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const teamSettings = (await adminDb.collection('teamSettings').doc(teamId).get()).data() as any || {};
         const autoReplyChannel = (teamSettings.metaChannels || []).find((c: any) => c.phoneNumberId === metaPhoneNumberId);
 
+        // Load team members + business once for conversation owner/watchers routing.
+        let convBusinessId = teamId;
+        let convMembers: Array<{ userId: string; teamId?: string; role?: string; status?: string }> = [];
+        try {
+          const teamDoc = await adminDb.collection('teams').doc(teamId).get();
+          convBusinessId = (teamDoc.data() as any)?.businessId || teamId;
+          const membersSnap = await adminDb.collection('teamMembers').where('teamId', '==', teamId).get();
+          convMembers = membersSnap.docs.map((d) => {
+            const x = d.data() as any;
+            return { userId: x.userId, teamId: x.teamId, role: x.role, status: x.status };
+          });
+        } catch { /* routing degrades to unassigned if this fails */ }
+
         // ── Process incoming messages ─────────────────────────────────────
         for (const msg of value.messages || []) {
           const from = normalizePhone(msg.from); // sender phone
@@ -245,6 +331,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           // Try to find matching lead
           let autoLeadId: string | null = null;
           let autoLeadName: string | null = null;
+          let autoLeadOwnerId: string | null = null;
           try {
             const leadsSnap = await adminDb.collection('leads')
               .where('teamId', '==', teamId)
@@ -254,6 +341,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             if (!leadsSnap.empty) {
               autoLeadId = leadsSnap.docs[0].id;
               autoLeadName = leadsSnap.docs[0].data().name || null;
+              autoLeadOwnerId = (leadsSnap.docs[0].data() as any).assignedToUserId || null;
             }
             if (!autoLeadId) {
               const snap2 = await adminDb.collection('leads')
@@ -264,6 +352,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               if (!snap2.empty) {
                 autoLeadId = snap2.docs[0].id;
                 autoLeadName = snap2.docs[0].data().name || null;
+                autoLeadOwnerId = (snap2.docs[0].data() as any).assignedToUserId || null;
               }
             }
           } catch { /* non-critical */ }
@@ -309,6 +398,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           } catch (e) {
             console.warn('[meta-webhook] conv tracker update failed:', e);
           }
+
+          // ── Owner + watchers conversation (Request 1) ───────────────────
+          // Unify the WhatsApp thread with the same owner/watchers model as the
+          // portal, so it appears in the responsible person's chat with manager +
+          // admin supervision. Owner is inherited from the matched lead when known.
+          await upsertWaConversation({
+            teamId,
+            businessId: convBusinessId,
+            phone: from,
+            ownerId: autoLeadOwnerId,
+            leadId: autoLeadId,
+            subject: autoLeadName || contactName,
+            members: convMembers,
+            ts,
+          });
 
           // ── Auto-reply outside business hours ───────────────────────────
           // Sends a one-off welcome text when a customer writes outside hours.
