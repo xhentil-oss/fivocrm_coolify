@@ -1564,6 +1564,7 @@ async function runWhatsappBroadcasts() {
           if (seg.statuses?.length && !seg.statuses.includes(l.status)) continue;
           if (!matchesTags(l)) continue;
           if (seg.assignedToUserId && l.assignedToUserId !== seg.assignedToUserId) continue;
+          if (seg.source && String(l.source || '') !== seg.source) continue;
           const phone = normalizeWaPhone(rawPhone);
           if (phone.length >= 7 && !byPhone.has(phone)) byPhone.set(phone, { ...l, id: d.id, phone });
         }
@@ -1577,6 +1578,7 @@ async function runWhatsappBroadcasts() {
           if (!c.phone) continue;
           if (!matchesTags(c)) continue;
           if (seg.assignedToUserId && c.assignedToUserId !== seg.assignedToUserId) continue;
+          if (seg.source && String(c.source || '') !== seg.source) continue;
           const phone = normalizeWaPhone(c.phone);
           if (phone.length >= 7 && !byPhone.has(phone)) byPhone.set(phone, { ...c, id: d.id, phone });
         }
@@ -1734,6 +1736,7 @@ async function runEmailCampaigns() {
           if (seg.statuses?.length && !seg.statuses.includes(l.status)) continue;
           if (!matchesTags(l)) continue;
           if (seg.assignedToUserId && l.assignedToUserId !== seg.assignedToUserId) continue;
+          if (seg.source && String(l.source || '') !== seg.source) continue;
           if (!byEmail.has(email)) byEmail.set(email, { id: d.id, name: l.name, company: l.company, email });
         }
       }
@@ -1745,6 +1748,7 @@ async function runEmailCampaigns() {
           if (!isValidCampaignEmail(email)) continue;
           if (!matchesTags(cu)) continue;
           if (seg.assignedToUserId && cu.assignedToUserId !== seg.assignedToUserId) continue;
+          if (seg.source && String(cu.source || '') !== seg.source) continue;
           if (!byEmail.has(email)) byEmail.set(email, { id: d.id, name: cu.name, company: cu.company, email });
         }
       }

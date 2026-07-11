@@ -78,6 +78,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagMatch, setTagMatch] = useState<'any' | 'all'>('any');
   const [assignedTo, setAssignedTo] = useState('');
+  const [source, setSource] = useState('');
   const [scheduledAt, setScheduledAt] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -88,6 +89,18 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
     (customers || []).forEach((c) => entityTags(c).forEach((t) => s.add(t)));
     return Array.from(s).sort((a, b) => a.localeCompare(b));
   }, [leads, customers]);
+
+  // Distinct contact origins (Customer/Lead `source`) — powers the "Burimi"
+  // filter, e.g. broadcast only to WHMCS-synced clients.
+  const allSources = useMemo(() => {
+    const s = new Set<string>();
+    (leads || []).forEach((l) => { const v = (l as any).source; if (v) s.add(String(v)); });
+    (customers || []).forEach((c) => { const v = (c as any).source; if (v) s.add(String(v)); });
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [leads, customers]);
+  const sourceLabel = (s: string) => (
+    { whmcs: 'WHMCS', manual: 'Manual', stripe: 'Stripe', landing: 'Landing Page' } as Record<string, string>
+  )[s] || (s.charAt(0).toUpperCase() + s.slice(1));
 
   const tagsMatchEntity = (entityTagList: string[]) => {
     if (selectedTags.length === 0) return true;
@@ -110,6 +123,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
         if (statuses.length && !statuses.includes(l.status)) continue;
         if (!tagsMatchEntity(entityTags(l))) continue;
         if (assignedTo && l.assignedToUserId !== assignedTo) continue;
+        if (source && String((l as any).source || '') !== source) continue;
         matched++;
         const phone = l.phone || (l as any).phoneNumber;
         if (hasPhone(phone)) phones.add(norm(phone));
@@ -121,20 +135,21 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
       for (const c of customers || []) {
         if (!tagsMatchEntity(entityTags(c))) continue;
         if (assignedTo && c.assignedToUserId !== assignedTo) continue;
+        if (source && String((c as any).source || '') !== source) continue;
         matched++;
         if (hasPhone(c.phone)) phones.add(norm(c.phone));
       }
     }
     return { matched, withPhone: phones.size };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, customers, audience, statuses, selectedTags, tagMatch, assignedTo]);
+  }, [leads, customers, audience, statuses, selectedTags, tagMatch, assignedTo, source]);
   const targetCount = segmentStats.withPhone;
 
   const toggleAudience = (a: 'leads' | 'customers') =>
     setAudience((prev) => (prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]));
 
   const resetForm = () => {
-    setName(''); setTemplateId(''); setStatuses([]); setSelectedTags([]); setAssignedTo(''); setScheduledAt('');
+    setName(''); setTemplateId(''); setStatuses([]); setSelectedTags([]); setAssignedTo(''); setSource(''); setScheduledAt('');
   };
 
   const buildPayload = (status: WhatsAppBroadcast['status']) => ({
@@ -148,6 +163,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
       ...(statuses.length ? { statuses } : {}),
       ...(selectedTags.length ? { tags: selectedTags, tagMatch } : {}),
       ...(assignedTo ? { assignedToUserId: assignedTo } : {}),
+      ...(source ? { source } : {}),
     },
     scheduledAt: scheduledAt ? Timestamp.fromDate(new Date(scheduledAt)) : null,
     status,
@@ -306,6 +322,17 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
                   Klientët
                 </button>
               </div>
+
+              {allSources.length > 0 && (
+                <div>
+                  <label className="text-[11px] text-muted-foreground block mb-1">Burimi (nga vjen kontakti)</label>
+                  <select value={source} onChange={(e) => setSource(e.target.value)}
+                    className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-[#25D366]/40">
+                    <option value="">Të gjitha burimet</option>
+                    {allSources.map((s) => <option key={s} value={s}>{sourceLabel(s)}</option>)}
+                  </select>
+                </div>
+              )}
 
               {audience.includes('leads') && (
                 <>

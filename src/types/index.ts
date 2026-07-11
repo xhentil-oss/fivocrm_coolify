@@ -56,6 +56,7 @@ export interface WhatsAppBroadcast {
     tagMatch?: 'any' | 'all';         // match ANY (default) or ALL selected tags
     tag?: string;                     // @deprecated single-tag (back-compat)
     assignedToUserId?: string;        // assignedToUserId (leads + customers)
+    source?: string;                  // filter by origin (e.g. 'whmcs') — leads + customers
   };
   scheduledAt?: Date | null;
   status: 'draft' | 'queued' | 'sending' | 'completed' | 'failed';
@@ -150,6 +151,7 @@ export interface EmailCampaign {
     tags?: string[];                  // tags on leads/customers
     tagMatch?: 'any' | 'all';         // match ANY (default) or ALL selected tags
     assignedToUserId?: string;        // assignedToUserId (leads + customers)
+    source?: string;                  // filter by origin (e.g. 'whmcs') — leads + customers
   };
   // 'purchase' campaigns auto-fire when a customer buys a matching service.
   // Manual campaigns use draft→queued→sending→completed; purchase automations

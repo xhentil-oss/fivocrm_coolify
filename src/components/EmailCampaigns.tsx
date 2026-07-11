@@ -42,6 +42,11 @@ const STATUS_LABEL: Record<string, string> = {
   draft: 'draft', queued: 'në radhë', sending: 'duke dërguar', completed: 'përfunduar',
   failed: 'dështoi', active: 'aktive', paused: 'pauzuar',
 };
+// Friendly labels for known contact origins (Customer/Lead `source`).
+const SOURCE_LABEL: Record<string, string> = {
+  whmcs: 'WHMCS', manual: 'Manual', stripe: 'Stripe', landing: 'Landing Page',
+};
+const sourceLabel = (s: string) => SOURCE_LABEL[s] || (s.charAt(0).toUpperCase() + s.slice(1));
 
 const EmailCampaigns: React.FC = () => {
   const { user } = useAuth();
@@ -70,6 +75,7 @@ const EmailCampaigns: React.FC = () => {
   const [statuses, setStatuses] = useState<string[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagMatch, setTagMatch] = useState<'any' | 'all'>('any');
+  const [source, setSource] = useState('');
   const [assignedTo, setAssignedTo] = useState('');
   const [scheduledAt, setScheduledAt] = useState('');
   const [triggerServiceIds, setTriggerServiceIds] = useState<string[]>([]);
@@ -86,6 +92,15 @@ const EmailCampaigns: React.FC = () => {
     const s = new Set<string>();
     (leads || []).forEach((l) => entityTags(l).forEach((t) => s.add(t)));
     (customers || []).forEach((c) => entityTags(c).forEach((t) => s.add(t)));
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [leads, customers]);
+
+  // Distinct contact origins present in the data — powers the "Burimi" filter
+  // (e.g. target only WHMCS-synced clients for a WHMCS-specific campaign).
+  const allSources = useMemo(() => {
+    const s = new Set<string>();
+    (leads || []).forEach((l) => { const v = (l as any).source; if (v) s.add(String(v)); });
+    (customers || []).forEach((c) => { const v = (c as any).source; if (v) s.add(String(v)); });
     return Array.from(s).sort((a, b) => a.localeCompare(b));
   }, [leads, customers]);
 
@@ -111,6 +126,7 @@ const EmailCampaigns: React.FC = () => {
         if (statuses.length && !statuses.includes(l.status)) continue;
         if (!tagsMatch(entityTags(l))) continue;
         if (assignedTo && l.assignedToUserId !== assignedTo) continue;
+        if (source && String((l as any).source || '') !== source) continue;
         matched++;
         if (isValidEmail(l.email)) emails.add(String(l.email).trim().toLowerCase());
       }
@@ -119,18 +135,19 @@ const EmailCampaigns: React.FC = () => {
       for (const c of customers || []) {
         if (!tagsMatch(entityTags(c))) continue;
         if (assignedTo && c.assignedToUserId !== assignedTo) continue;
+        if (source && String((c as any).source || '') !== source) continue;
         matched++;
         if (isValidEmail(c.email)) emails.add(String(c.email).trim().toLowerCase());
       }
     }
     return { matched, withEmail: emails.size };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, customers, audience, statuses, selectedTags, tagMatch, assignedTo]);
+  }, [leads, customers, audience, statuses, selectedTags, tagMatch, assignedTo, source]);
   const targetCount = stats.withEmail;
 
   const resetForm = () => {
     setName(''); setSubject(''); setTemplateId(''); setHtmlBody(''); setStatuses([]); setSelectedTags([]);
-    setAssignedTo(''); setScheduledAt(''); setTriggerServiceIds([]); setSteps([emptyStep(0)]);
+    setAssignedTo(''); setSource(''); setScheduledAt(''); setTriggerServiceIds([]); setSteps([emptyStep(0)]);
   };
 
   const buildManualPayload = (status: EmailCampaign['status']) => ({
@@ -144,6 +161,7 @@ const EmailCampaigns: React.FC = () => {
       ...(statuses.length ? { statuses } : {}),
       ...(selectedTags.length ? { tags: selectedTags, tagMatch } : {}),
       ...(assignedTo ? { assignedToUserId: assignedTo } : {}),
+      ...(source ? { source } : {}),
     },
     scheduledAt: scheduledAt ? Timestamp.fromDate(new Date(scheduledAt)) : null,
     status,
@@ -330,6 +348,17 @@ const EmailCampaigns: React.FC = () => {
                 <button onClick={() => toggleAudience('customers')}
                   className={`flex-1 text-xs px-3 py-1.5 rounded-md border ${audience.includes('customers') ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}>Klientët</button>
               </div>
+
+              {allSources.length > 0 && (
+                <div>
+                  <label className="text-[11px] text-muted-foreground block mb-1">Burimi (nga vjen kontakti)</label>
+                  <select value={source} onChange={(e) => setSource(e.target.value)}
+                    className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/40">
+                    <option value="">Të gjitha burimet</option>
+                    {allSources.map((s) => <option key={s} value={s}>{sourceLabel(s)}</option>)}
+                  </select>
+                </div>
+              )}
 
               {audience.includes('leads') && (
                 <>
