@@ -186,6 +186,7 @@ const businessIsolatedAlways = new Set<string>([
   'taskCollaborators', 'milestones', 'projectComments', 'clientRequests', 'serviceInquiries',
   'timeEntries', 'standups', 'dailyReports', 'customIndustries', 'activities',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments',
+  'domains',
   'teamMembers', 'teamInvites',
 ]);
 

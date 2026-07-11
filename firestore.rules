@@ -150,6 +150,16 @@ service cloud.firestore {
         || isPortalClientFor(resource.data.customerId);
     }
 
+    match /domains/{docId} {
+      // WHMCS-synced domain registrations. Staff read their business's domains
+      // (queries are businessId-scoped); portal client reads their own. Written
+      // only by the Admin SDK sync (bypasses rules), so client writes stay admin-gated.
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
+      allow create, update, delete: if canManageBusinessDoc();
+    }
+
     match /customers/{docId} {
       // Staff read their business's customers; the portal client reads only their
       // own customer doc (doc id == their customerId); super-admin bypasses.

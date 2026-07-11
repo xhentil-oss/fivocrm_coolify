@@ -8,10 +8,12 @@ import {
   fetchClientProduct,
   mapWhmcsInvoice,
   mapWhmcsProduct,
+  mapWhmcsDomain,
   mapWhmcsClient,
   mapWhmcsClientFull,
   type MappedInvoice,
   type MappedSubscription,
+  type MappedDomain,
   type MappedClient,
   type MappedClientFull,
 } from './_whmcs.js';
@@ -248,6 +250,36 @@ async function upsertSubscription(sub: MappedSubscription, customerId: string | 
   return 'updated';
 }
 
+// ── Domain upsert ────────────────────────────────────────────────────────────
+async function upsertDomain(dom: MappedDomain, customerId: string | null, teamId: string | null): Promise<'created' | 'updated'> {
+  const now = Timestamp.now();
+  const businessId = await resolveBusinessId(teamId);
+  const snap = await db.collection('domains').where('whmcsDomainId', '==', dom.whmcsDomainId).limit(1).get();
+
+  const payload: Record<string, any> = {
+    whmcsDomainId: dom.whmcsDomainId,
+    whmcsClientId: dom.whmcsClientId,
+    source: 'whmcs',
+    domainName: dom.domainName,
+    status: dom.status,
+    recurringAmount: dom.recurringAmount,
+    currency: dom.currency,
+    registrationDate: toTs(dom.registrationDate),
+    expiryDate: toTs(dom.expiryDate),
+    ...(customerId ? { customerId } : {}),
+    ...(teamId ? { teamId } : {}),
+    ...(businessId ? { businessId } : {}),
+    updatedAt: now,
+  };
+
+  if (snap.empty) {
+    await db.collection('domains').add({ ...payload, createdAt: now });
+    return 'created';
+  }
+  await snap.docs[0].ref.update(payload);
+  return 'updated';
+}
+
 // ── By-id entrypoints (used by the real-time webhook) ─────────────────────────
 export async function syncInvoiceById(invoiceId: string | number): Promise<void> {
   const teamId = await resolveTeamId();
@@ -407,6 +439,7 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
     clients: { created: 0, updated: 0 },
     invoices: { created: 0, updated: 0 },
     subs: { created: 0, updated: 0 },
+    domains: { created: 0, updated: 0 },
   };
 
   // Resume from where the last invocation stopped (if it ran out of budget).
@@ -431,7 +464,7 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
   // has advanced. Previously clients were gated behind this cursor and got
   // starved whenever the cursor was stuck on 'invoices' for a large account.
   const cursor = (status?.syncCursor || null) as { phase?: string; start?: number } | null;
-  const resumable = cursor?.phase === 'invoices' || cursor?.phase === 'subscriptions';
+  const resumable = cursor?.phase === 'invoices' || cursor?.phase === 'subscriptions' || cursor?.phase === 'domains';
   let phase: string = resumable ? cursor!.phase! : 'invoices';
   let start: number = resumable ? (cursor?.start || 0) : 0;
 
@@ -453,6 +486,7 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
       clientsCreated: counters.clients.created, clientsUpdated: counters.clients.updated,
       invoicesCreated: counters.invoices.created, invoicesUpdated: counters.invoices.updated,
       subsCreated: counters.subs.created, subsUpdated: counters.subs.updated,
+      domainsCreated: counters.domains.created, domainsUpdated: counters.domains.updated,
       errorCount: errors.length, lastErrors: errors.slice(0, 10),
     }, teamId);
     return {
@@ -460,6 +494,7 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
       clientsCreated: counters.clients.created, clientsUpdated: counters.clients.updated,
       invoicesCreated: counters.invoices.created, invoicesUpdated: counters.invoices.updated,
       subsCreated: counters.subs.created, subsUpdated: counters.subs.updated,
+      domainsCreated: counters.domains.created, domainsUpdated: counters.domains.updated,
       errors: errors.length,
       ...(errors.length ? { errorDetail: errors.slice(0, 2).join(' | ').slice(0, 400) } : {}),
     };
@@ -499,7 +534,19 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
       const customerId = await resolveCustomerId(sub.whmcsClientId);
       return upsertSubscription(sub, customerId, teamId);
     }, start, overBudget, errors, counters.subs);
+    await writeWhmcsStatus({ subsCreated: counters.subs.created, subsUpdated: counters.subs.updated, errorCount: errors.length, lastErrors: errors.slice(0, 10) }, teamId);
     if (!res.done) return pause('subscriptions', res.nextStart);
+    phase = 'domains'; start = 0;
+  }
+
+  // ── Phase: domain registrations ──────────────────────────────────────────────
+  if (phase === 'domains') {
+    const res = await runPhase('GetClientsDomains', d => d?.domains?.domain, async (raw) => {
+      const dom = mapWhmcsDomain(raw);
+      const customerId = await resolveCustomerId(dom.whmcsClientId);
+      return upsertDomain(dom, customerId, teamId);
+    }, start, overBudget, errors, counters.domains);
+    if (!res.done) return pause('domains', res.nextStart);
   }
 
   // ── Done: clear the cursor and persist the final status ─────────────────────
@@ -510,6 +557,7 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
     clientsCreated: counters.clients.created, clientsUpdated: counters.clients.updated,
     invoicesCreated: counters.invoices.created, invoicesUpdated: counters.invoices.updated,
     subsCreated: counters.subs.created, subsUpdated: counters.subs.updated,
+    domainsCreated: counters.domains.created, domainsUpdated: counters.domains.updated,
     errorCount: errors.length,
     lastErrors: errors.slice(0, 10),
   }, teamId);
@@ -518,6 +566,7 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
     clientsCreated: counters.clients.created, clientsUpdated: counters.clients.updated,
     invoicesCreated: counters.invoices.created, invoicesUpdated: counters.invoices.updated,
     subsCreated: counters.subs.created, subsUpdated: counters.subs.updated,
+    domainsCreated: counters.domains.created, domainsUpdated: counters.domains.updated,
     errors: errors.length,
     ...(errors.length ? { errorDetail: errors.slice(0, 2).join(' | ').slice(0, 400) } : {}),
   };

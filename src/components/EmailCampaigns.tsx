@@ -60,6 +60,8 @@ const EmailCampaigns: React.FC = () => {
   const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
   const { data: leads } = useCollection<Lead>('leads', { skipTeamFilter: true });
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
+  // WHMCS-synced domain registrations (business-scoped) → target "has a domain".
+  const { data: domains } = useCollection<any>('domains');
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
   });
@@ -76,6 +78,7 @@ const EmailCampaigns: React.FC = () => {
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
   const [tagMatch, setTagMatch] = useState<'any' | 'all'>('any');
   const [source, setSource] = useState('');
+  const [hasDomain, setHasDomain] = useState(false);
   const [assignedTo, setAssignedTo] = useState('');
   const [scheduledAt, setScheduledAt] = useState('');
   const [triggerServiceIds, setTriggerServiceIds] = useState<string[]>([]);
@@ -104,6 +107,13 @@ const EmailCampaigns: React.FC = () => {
     return Array.from(s).sort((a, b) => a.localeCompare(b));
   }, [leads, customers]);
 
+  // customerIds that own at least one registered domain (for the "has domain" filter).
+  const customerIdsWithDomain = useMemo(() => {
+    const s = new Set<string>();
+    (domains || []).forEach((d) => { if (d?.customerId) s.add(String(d.customerId)); });
+    return s;
+  }, [domains]);
+
   const tagsMatch = (list: string[]) => {
     if (selectedTags.length === 0) return true;
     return tagMatch === 'all' ? selectedTags.every((t) => list.includes(t)) : selectedTags.some((t) => list.includes(t));
@@ -123,6 +133,7 @@ const EmailCampaigns: React.FC = () => {
     const emails = new Set<string>();
     if (audience.includes('leads')) {
       for (const l of leads || []) {
+        if (hasDomain) continue; // leads never own a domain
         if (statuses.length && !statuses.includes(l.status)) continue;
         if (!tagsMatch(entityTags(l))) continue;
         if (assignedTo && l.assignedToUserId !== assignedTo) continue;
@@ -136,18 +147,19 @@ const EmailCampaigns: React.FC = () => {
         if (!tagsMatch(entityTags(c))) continue;
         if (assignedTo && c.assignedToUserId !== assignedTo) continue;
         if (source && String((c as any).source || '') !== source) continue;
+        if (hasDomain && !customerIdsWithDomain.has(String(c.id))) continue;
         matched++;
         if (isValidEmail(c.email)) emails.add(String(c.email).trim().toLowerCase());
       }
     }
     return { matched, withEmail: emails.size };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, customers, audience, statuses, selectedTags, tagMatch, assignedTo, source]);
+  }, [leads, customers, audience, statuses, selectedTags, tagMatch, assignedTo, source, hasDomain, customerIdsWithDomain]);
   const targetCount = stats.withEmail;
 
   const resetForm = () => {
     setName(''); setSubject(''); setTemplateId(''); setHtmlBody(''); setStatuses([]); setSelectedTags([]);
-    setAssignedTo(''); setSource(''); setScheduledAt(''); setTriggerServiceIds([]); setSteps([emptyStep(0)]);
+    setAssignedTo(''); setSource(''); setHasDomain(false); setScheduledAt(''); setTriggerServiceIds([]); setSteps([emptyStep(0)]);
   };
 
   const buildManualPayload = (status: EmailCampaign['status']) => ({
@@ -162,6 +174,7 @@ const EmailCampaigns: React.FC = () => {
       ...(selectedTags.length ? { tags: selectedTags, tagMatch } : {}),
       ...(assignedTo ? { assignedToUserId: assignedTo } : {}),
       ...(source ? { source } : {}),
+      ...(hasDomain ? { hasDomain: true } : {}),
     },
     scheduledAt: scheduledAt ? Timestamp.fromDate(new Date(scheduledAt)) : null,
     status,
@@ -358,6 +371,14 @@ const EmailCampaigns: React.FC = () => {
                     {allSources.map((s) => <option key={s} value={s}>{sourceLabel(s)}</option>)}
                   </select>
                 </div>
+              )}
+
+              {audience.includes('customers') && customerIdsWithDomain.size > 0 && (
+                <label className="flex items-center gap-2 text-xs cursor-pointer pt-1">
+                  <input type="checkbox" checked={hasDomain} onChange={(e) => setHasDomain(e.target.checked)}
+                    className="rounded border-border" />
+                  <span>Vetëm klientë me domain të regjistruar <span className="text-muted-foreground">({customerIdsWithDomain.size})</span></span>
+                </label>
               )}
 
               {audience.includes('leads') && (

@@ -1536,6 +1536,10 @@ async function runWhatsappBroadcasts() {
       const seg = b.segment || {};
       const audience: string[] = seg.audience?.length ? seg.audience : ['leads'];
       const byPhone = new Map<string, { id: string; name?: string; phone: string; [k: string]: any }>();
+      // "Has a registered domain" filter → set of customerIds owning a domain.
+      const domainCustomerIds: Set<string> | null = seg.hasDomain
+        ? new Set((await db.collection('domains').get()).docs.map(d => d.data().customerId).filter(Boolean).map(String))
+        : null;
 
       // Tag filtering (normalize array/comma-string; support ANY/ALL + legacy single tag).
       const wantTags: string[] = seg.tags?.length ? seg.tags : (seg.tag ? [seg.tag] : []);
@@ -1565,6 +1569,7 @@ async function runWhatsappBroadcasts() {
           if (!matchesTags(l)) continue;
           if (seg.assignedToUserId && l.assignedToUserId !== seg.assignedToUserId) continue;
           if (seg.source && String(l.source || '') !== seg.source) continue;
+          if (domainCustomerIds) continue; // leads never own a domain
           const phone = normalizeWaPhone(rawPhone);
           if (phone.length >= 7 && !byPhone.has(phone)) byPhone.set(phone, { ...l, id: d.id, phone });
         }
@@ -1579,6 +1584,7 @@ async function runWhatsappBroadcasts() {
           if (!matchesTags(c)) continue;
           if (seg.assignedToUserId && c.assignedToUserId !== seg.assignedToUserId) continue;
           if (seg.source && String(c.source || '') !== seg.source) continue;
+          if (domainCustomerIds && !domainCustomerIds.has(String(d.id))) continue;
           const phone = normalizeWaPhone(c.phone);
           if (phone.length >= 7 && !byPhone.has(phone)) byPhone.set(phone, { ...c, id: d.id, phone });
         }
@@ -1712,6 +1718,10 @@ async function runEmailCampaigns() {
       // memory, matching the WhatsApp broadcast approach), deduped by email.
       const seg = c.segment || {};
       const audience: string[] = seg.audience?.length ? seg.audience : ['leads'];
+      // "Has a registered domain" filter → set of customerIds owning a domain.
+      const domainCustomerIds: Set<string> | null = seg.hasDomain
+        ? new Set((await db.collection('domains').get()).docs.map(d => d.data().customerId).filter(Boolean).map(String))
+        : null;
       const wantTags: string[] = seg.tags?.length ? seg.tags : (seg.tag ? [seg.tag] : []);
       const tagMatchAll = seg.tagMatch === 'all';
       const entityTags = (e: any): string[] => {
@@ -1737,6 +1747,7 @@ async function runEmailCampaigns() {
           if (!matchesTags(l)) continue;
           if (seg.assignedToUserId && l.assignedToUserId !== seg.assignedToUserId) continue;
           if (seg.source && String(l.source || '') !== seg.source) continue;
+          if (domainCustomerIds) continue; // leads never own a domain
           if (!byEmail.has(email)) byEmail.set(email, { id: d.id, name: l.name, company: l.company, email });
         }
       }
@@ -1749,6 +1760,7 @@ async function runEmailCampaigns() {
           if (!matchesTags(cu)) continue;
           if (seg.assignedToUserId && cu.assignedToUserId !== seg.assignedToUserId) continue;
           if (seg.source && String(cu.source || '') !== seg.source) continue;
+          if (domainCustomerIds && !domainCustomerIds.has(String(d.id))) continue;
           if (!byEmail.has(email)) byEmail.set(email, { id: d.id, name: cu.name, company: cu.company, email });
         }
       }

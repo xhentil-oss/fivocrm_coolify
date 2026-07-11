@@ -55,6 +55,8 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
   // so we mirror that here to show the full lists users see.
   const { data: leads } = useCollection<Lead>('leads', { skipTeamFilter: true });
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
+  // WHMCS-synced domain registrations (business-scoped) → target "has a domain".
+  const { data: domains } = useCollection<any>('domains');
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
   });
@@ -79,6 +81,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
   const [tagMatch, setTagMatch] = useState<'any' | 'all'>('any');
   const [assignedTo, setAssignedTo] = useState('');
   const [source, setSource] = useState('');
+  const [hasDomain, setHasDomain] = useState(false);
   const [scheduledAt, setScheduledAt] = useState('');
   const [busy, setBusy] = useState(false);
 
@@ -102,6 +105,13 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
     { whmcs: 'WHMCS', manual: 'Manual', stripe: 'Stripe', landing: 'Landing Page' } as Record<string, string>
   )[s] || (s.charAt(0).toUpperCase() + s.slice(1));
 
+  // customerIds that own at least one registered domain (for the "has domain" filter).
+  const customerIdsWithDomain = useMemo(() => {
+    const s = new Set<string>();
+    (domains || []).forEach((d) => { if (d?.customerId) s.add(String(d.customerId)); });
+    return s;
+  }, [domains]);
+
   const tagsMatchEntity = (entityTagList: string[]) => {
     if (selectedTags.length === 0) return true;
     return tagMatch === 'all'
@@ -122,6 +132,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
       for (const l of leads || []) {
         if (statuses.length && !statuses.includes(l.status)) continue;
         if (!tagsMatchEntity(entityTags(l))) continue;
+        if (hasDomain) continue; // leads never own a domain
         if (assignedTo && l.assignedToUserId !== assignedTo) continue;
         if (source && String((l as any).source || '') !== source) continue;
         matched++;
@@ -136,20 +147,21 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
         if (!tagsMatchEntity(entityTags(c))) continue;
         if (assignedTo && c.assignedToUserId !== assignedTo) continue;
         if (source && String((c as any).source || '') !== source) continue;
+        if (hasDomain && !customerIdsWithDomain.has(String(c.id))) continue;
         matched++;
         if (hasPhone(c.phone)) phones.add(norm(c.phone));
       }
     }
     return { matched, withPhone: phones.size };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads, customers, audience, statuses, selectedTags, tagMatch, assignedTo, source]);
+  }, [leads, customers, audience, statuses, selectedTags, tagMatch, assignedTo, source, hasDomain, customerIdsWithDomain]);
   const targetCount = segmentStats.withPhone;
 
   const toggleAudience = (a: 'leads' | 'customers') =>
     setAudience((prev) => (prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]));
 
   const resetForm = () => {
-    setName(''); setTemplateId(''); setStatuses([]); setSelectedTags([]); setAssignedTo(''); setSource(''); setScheduledAt('');
+    setName(''); setTemplateId(''); setStatuses([]); setSelectedTags([]); setAssignedTo(''); setSource(''); setHasDomain(false); setScheduledAt('');
   };
 
   const buildPayload = (status: WhatsAppBroadcast['status']) => ({
@@ -164,6 +176,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
       ...(selectedTags.length ? { tags: selectedTags, tagMatch } : {}),
       ...(assignedTo ? { assignedToUserId: assignedTo } : {}),
       ...(source ? { source } : {}),
+      ...(hasDomain ? { hasDomain: true } : {}),
     },
     scheduledAt: scheduledAt ? Timestamp.fromDate(new Date(scheduledAt)) : null,
     status,
@@ -332,6 +345,14 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
                     {allSources.map((s) => <option key={s} value={s}>{sourceLabel(s)}</option>)}
                   </select>
                 </div>
+              )}
+
+              {audience.includes('customers') && customerIdsWithDomain.size > 0 && (
+                <label className="flex items-center gap-2 text-xs cursor-pointer pt-1">
+                  <input type="checkbox" checked={hasDomain} onChange={(e) => setHasDomain(e.target.checked)}
+                    className="rounded border-border accent-[#25D366]" />
+                  <span>Vetëm klientë me domain të regjistruar <span className="text-muted-foreground">({customerIdsWithDomain.size})</span></span>
+                </label>
               )}
 
               {audience.includes('leads') && (

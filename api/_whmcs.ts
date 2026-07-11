@@ -154,6 +154,17 @@ export interface MappedSubscription {
   nextDueDate: Date | null;
 }
 
+export interface MappedDomain {
+  whmcsDomainId: string;
+  whmcsClientId: string;
+  domainName: string;
+  status: string;              // Active / Pending / Expired / Cancelled / ...
+  registrationDate: Date | null;
+  expiryDate: Date | null;
+  recurringAmount: number;
+  currency: 'ALL' | 'EUR';
+}
+
 export interface MappedClient {
   email: string;
   name: string;
@@ -243,6 +254,20 @@ export function mapWhmcsProduct(p: any): MappedSubscription {
     currency: normalizeCurrency(p.currencycode),
     billingCycle: String(p.billingcycle || ''),
     nextDueDate: parseWhmcsDate(p.nextduedate),
+  };
+}
+
+/** Map a raw WHMCS domain (from GetClientsDomains) to FivoCRM shape. */
+export function mapWhmcsDomain(d: any): MappedDomain {
+  return {
+    whmcsDomainId: String(d.id ?? d.domainid ?? ''),
+    whmcsClientId: String(d.userid ?? d.clientid ?? d.client_id ?? ''),
+    domainName: String(d.domainname || d.domain || '').trim().toLowerCase(),
+    status: String(d.status || ''),
+    registrationDate: parseWhmcsDate(d.registrationdate || d.regdate),
+    expiryDate: parseWhmcsDate(d.expirydate || d.nextduedate),
+    recurringAmount: Number(d.recurringamount ?? 0),
+    currency: normalizeCurrency(d.currencycode),
   };
 }
 
