@@ -4,6 +4,7 @@ import invoiceHandler from './_send-invoice-email.js';
 import leadReminderHandler from './_send-lead-reminder-email.js';
 import welcomeHandler from './_send-welcome-email.js';
 import notificationHandler from './_send-notification-email.js';
+import marketingWebhookHandler from './_marketing-webhook.js';
 
 /**
  * Consolidated email dispatcher.
@@ -27,9 +28,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.url.includes('send-lead-reminder-email')) type = 'lead-reminder';
     else if (req.url.includes('send-welcome-email')) type = 'welcome';
     else if (req.url.includes('send-notification-email')) type = 'notification';
+    else if (req.url.includes('marketing-webhook')) type = 'marketing-webhook';
   }
 
   switch (type) {
+    case 'marketing-webhook':
+      // Inbound ESP event (open/click) — no Firebase auth (called by the ESP).
+      return marketingWebhookHandler(req, res);
     case 'invite':
       return inviteHandler(req, res);
     case 'invoice':

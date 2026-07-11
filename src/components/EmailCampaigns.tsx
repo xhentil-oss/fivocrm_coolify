@@ -3,7 +3,7 @@ import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useToast } from '../hooks/use-toast';
-import { Send, Loader2, Clock, Mail, Zap, Users, Play, Pause, ShoppingCart } from 'lucide-react';
+import { Send, Loader2, Clock, Mail, Zap, Users, Play, Pause, ShoppingCart, Plus, Trash2, Eye, MousePointerClick } from 'lucide-react';
 import { Button } from './ui/button';
 import { Timestamp } from 'firebase/firestore';
 import type { EmailCampaign, EmailTemplate, Lead, Customer, TeamMember, Service } from '../types';
@@ -17,6 +17,9 @@ function entityTags(e: { tags?: unknown }): string[] {
 }
 const isValidEmail = (e?: string) => !!e && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(e).trim());
 const serviceName = (s: Service) => s.name || s.title || 'Shërbim';
+
+type StepDraft = { delayDays: number; subject: string; templateId: string; htmlBody: string };
+const emptyStep = (delayDays = 0): StepDraft => ({ delayDays, subject: '', templateId: '', htmlBody: '' });
 
 const LEAD_STATUSES = [
   { value: 'New', label: 'Të reja' },
@@ -70,11 +73,14 @@ const EmailCampaigns: React.FC = () => {
   const [assignedTo, setAssignedTo] = useState('');
   const [scheduledAt, setScheduledAt] = useState('');
   const [triggerServiceIds, setTriggerServiceIds] = useState<string[]>([]);
+  const [steps, setSteps] = useState<StepDraft[]>([emptyStep(0)]);
   const [busy, setBusy] = useState(false);
 
   const selectedTpl = templates?.find((t) => t.id === templateId);
   const effectiveHtml = templateId ? (selectedTpl?.html || '') : htmlBody;
   const isPurchase = campaignType === 'purchase';
+  const tplHtml = (id: string) => templates?.find((t) => t.id === id)?.html || '';
+  const stepHtml = (s: StepDraft) => (s.templateId ? tplHtml(s.templateId) : s.htmlBody);
 
   const allTags = useMemo(() => {
     const s = new Set<string>();
@@ -90,6 +96,11 @@ const EmailCampaigns: React.FC = () => {
   const toggleTag = (t: string) => setSelectedTags((p) => (p.includes(t) ? p.filter((x) => x !== t) : [...p, t]));
   const toggleAudience = (a: 'leads' | 'customers') => setAudience((p) => (p.includes(a) ? p.filter((x) => x !== a) : [...p, a]));
   const toggleService = (id: string) => setTriggerServiceIds((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
+
+  const updateStep = (i: number, patch: Partial<StepDraft>) =>
+    setSteps((prev) => prev.map((s, idx) => (idx === i ? { ...s, ...patch } : s)));
+  const addStep = () => setSteps((prev) => [...prev, emptyStep((prev[prev.length - 1]?.delayDays || 0) + 3)]);
+  const removeStep = (i: number) => setSteps((prev) => (prev.length > 1 ? prev.filter((_, idx) => idx !== i) : prev));
 
   // Counts across selected audiences, deduped by email (manual campaigns only).
   const stats = useMemo(() => {
@@ -119,51 +130,78 @@ const EmailCampaigns: React.FC = () => {
 
   const resetForm = () => {
     setName(''); setSubject(''); setTemplateId(''); setHtmlBody(''); setStatuses([]); setSelectedTags([]);
-    setAssignedTo(''); setScheduledAt(''); setTriggerServiceIds([]);
+    setAssignedTo(''); setScheduledAt(''); setTriggerServiceIds([]); setSteps([emptyStep(0)]);
   };
 
-  const buildPayload = (status: EmailCampaign['status']) => ({
+  const buildManualPayload = (status: EmailCampaign['status']) => ({
     name: name.trim(),
     subject: subject.trim() || selectedTpl?.subject || '',
     fromName: fromName.trim() || undefined,
     ...(templateId ? { templateId } : { htmlBody }),
-    trigger: campaignType,
-    ...(isPurchase
-      ? { triggerServiceIds, segment: {} }
-      : {
-          segment: {
-            audience,
-            ...(statuses.length ? { statuses } : {}),
-            ...(selectedTags.length ? { tags: selectedTags, tagMatch } : {}),
-            ...(assignedTo ? { assignedToUserId: assignedTo } : {}),
-          },
-          scheduledAt: scheduledAt ? Timestamp.fromDate(new Date(scheduledAt)) : null,
-          totalTargets: targetCount,
-        }),
+    trigger: 'manual' as const,
+    segment: {
+      audience,
+      ...(statuses.length ? { statuses } : {}),
+      ...(selectedTags.length ? { tags: selectedTags, tagMatch } : {}),
+      ...(assignedTo ? { assignedToUserId: assignedTo } : {}),
+    },
+    scheduledAt: scheduledAt ? Timestamp.fromDate(new Date(scheduledAt)) : null,
     status,
+    totalTargets: targetCount,
     sentCount: 0,
     createdByUserId: user?.uid || null,
   });
 
-  const validateContent = () => {
+  const buildPurchasePayload = (status: EmailCampaign['status']) => {
+    const cleanSteps = steps.map((s) => ({
+      delayDays: Math.max(0, Number(s.delayDays) || 0),
+      ...(s.subject.trim() ? { subject: s.subject.trim() } : {}),
+      ...(s.templateId ? { templateId: s.templateId } : s.htmlBody.trim() ? { htmlBody: s.htmlBody } : {}),
+    }));
+    const first = steps[0];
+    return {
+      name: name.trim(),
+      subject: (first?.subject.trim() || templates?.find((t) => t.id === first?.templateId)?.subject || name.trim()),
+      fromName: fromName.trim() || undefined,
+      ...(first?.templateId ? { templateId: first.templateId } : first?.htmlBody.trim() ? { htmlBody: first.htmlBody } : {}),
+      trigger: 'purchase' as const,
+      triggerServiceIds,
+      steps: cleanSteps,
+      segment: {},
+      status,
+      sentCount: 0,
+      createdByUserId: user?.uid || null,
+    };
+  };
+
+  const validateManual = () => {
     const subj = subject.trim() || selectedTpl?.subject || '';
     if (!name.trim()) { toast({ title: 'Mungon emri i fushatës', variant: 'destructive' }); return false; }
     if (!subj) { toast({ title: 'Mungon subjekti', variant: 'destructive' }); return false; }
     if (!effectiveHtml.trim()) { toast({ title: 'Mungon përmbajtja', description: 'Zgjidh një shabllon ose shkruaj HTML.', variant: 'destructive' }); return false; }
+    if (audience.length === 0) { toast({ title: 'Zgjidh audiencën', variant: 'destructive' }); return false; }
+    if (targetCount === 0) { toast({ title: 'Asnjë target', description: 'Asnjë kontakt me email në këtë segment.', variant: 'destructive' }); return false; }
     return true;
   };
 
-  const validateManual = () => {
-    if (!validateContent()) return false;
-    if (audience.length === 0) { toast({ title: 'Zgjidh audiencën', variant: 'destructive' }); return false; }
-    if (targetCount === 0) { toast({ title: 'Asnjë target', description: 'Asnjë kontakt me email në këtë segment.', variant: 'destructive' }); return false; }
+  const validatePurchaseContent = () => {
+    if (!name.trim()) { toast({ title: 'Mungon emri i fushatës', variant: 'destructive' }); return false; }
+    for (let i = 0; i < steps.length; i++) {
+      const s = steps[i];
+      const subj = s.subject.trim() || templates?.find((t) => t.id === s.templateId)?.subject || '';
+      const html = stepHtml(s);
+      if (!subj || !html.trim()) {
+        toast({ title: `Hapi ${i + 1} i paplotë`, description: 'Çdo hap kërkon subjekt dhe përmbajtje (shabllon ose HTML).', variant: 'destructive' });
+        return false;
+      }
+    }
     return true;
   };
 
   const saveDraft = async () => {
     if (!name.trim()) { toast({ title: 'Mungon emri', variant: 'destructive' }); return; }
     setBusy(true);
-    try { await mutation.create(buildPayload('draft') as any); toast({ title: 'Drafti u ruajt' }); resetForm(); }
+    try { await mutation.create(buildManualPayload('draft') as any); toast({ title: 'Drafti u ruajt' }); resetForm(); }
     catch { toast({ title: 'Gabim', variant: 'destructive' }); }
     finally { setBusy(false); }
   };
@@ -172,7 +210,7 @@ const EmailCampaigns: React.FC = () => {
     if (!validateManual()) return;
     setBusy(true);
     try {
-      const created = await mutation.create(buildPayload('queued') as any);
+      const created = await mutation.create(buildManualPayload('queued') as any);
       if (sendNow) {
         const token = await user!.getIdToken();
         const resp = await fetch('/api/cron/run?job=email-campaigns&manual=1', {
@@ -189,12 +227,11 @@ const EmailCampaigns: React.FC = () => {
     } finally { setBusy(false); }
   };
 
-  // Purchase automation: save as active (running) or paused.
   const saveAutomation = async (active: boolean) => {
-    if (!validateContent()) return;
+    if (!validatePurchaseContent()) return;
     setBusy(true);
     try {
-      await mutation.create(buildPayload(active ? 'active' : 'paused') as any);
+      await mutation.create(buildPurchasePayload(active ? 'active' : 'paused') as any);
       toast({ title: active ? 'Automatizimi u aktivizua' : 'Automatizimi u ruajt (pauzuar)', description: active ? 'Do dërgohet automatikisht kur një klient blen shërbimin.' : undefined });
       resetForm();
     } catch { toast({ title: 'Gabim', variant: 'destructive' }); }
@@ -209,7 +246,7 @@ const EmailCampaigns: React.FC = () => {
 
   const memberName = (m: TeamMember) => m.displayName || m.email || 'Pa emër';
   const tplName = (id?: string) => templates?.find((t) => t.id === id)?.name || (id ? id : 'HTML i lirë');
-  const svcName = (id: string) => services?.find((s) => s.id === id) ? serviceName(services.find((s) => s.id === id)!) : id;
+  const svcName = (id: string) => (services?.find((s) => s.id === id) ? serviceName(services.find((s) => s.id === id)!) : id);
 
   return (
     <div className="space-y-4">
@@ -231,14 +268,14 @@ const EmailCampaigns: React.FC = () => {
         {isPurchase && (
           <div className="flex gap-2 px-3 py-2 rounded-md bg-primary/5 border border-primary/20 text-[11px] text-muted-foreground">
             <ShoppingCart className="w-4 h-4 shrink-0 mt-0.5 text-primary" />
-            <span>Kjo fushatë dërgohet <strong>automatikisht një herë</strong> te klienti kur paguan një faturë me shërbimin e zgjedhur. Aktivizohet vetëm për blerjet e ardhshme.</span>
+            <span>Sekuencë <strong>drip</strong>: kur klienti paguan një faturë me shërbimin e zgjedhur, futet në sekuencë dhe merr çdo hap sipas ditëve të caktuara. Aktivizohet vetëm për blerjet e ardhshme.</span>
           </div>
         )}
 
         <div className="grid sm:grid-cols-2 gap-3">
           <div>
             <label className="text-xs font-medium block mb-1">Emri i fushatës *</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={isPurchase ? 'p.sh. Mirëseardhje pas blerjes' : 'p.sh. Oferta e Marsit'}
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder={isPurchase ? 'p.sh. Onboarding pas blerjes' : 'p.sh. Oferta e Marsit'}
               className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
           </div>
           <div>
@@ -246,138 +283,183 @@ const EmailCampaigns: React.FC = () => {
             <input value={fromName} onChange={(e) => setFromName(e.target.value)} placeholder="p.sh. Ekipi FivoCRM"
               className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
           </div>
-          <div>
-            <label className="text-xs font-medium block mb-1">Shablloni</label>
-            <select value={templateId} onChange={(e) => setTemplateId(e.target.value)}
-              className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/40">
-              <option value="">— HTML i lirë —</option>
-              {templates?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
-          </div>
-          {!isPurchase && (
+        </div>
+
+        {/* ── Manual: single email + segment ───────────────────────────── */}
+        {!isPurchase && (
+          <>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div>
+                <label className="text-xs font-medium block mb-1">Shablloni</label>
+                <select value={templateId} onChange={(e) => setTemplateId(e.target.value)}
+                  className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/40">
+                  <option value="">— HTML i lirë —</option>
+                  {templates?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium block mb-1">Planifiko (opsionale)</label>
+                <input type="datetime-local" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)}
+                  className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+              </div>
+            </div>
             <div>
-              <label className="text-xs font-medium block mb-1">Planifiko (opsionale)</label>
-              <input type="datetime-local" value={scheduledAt} onChange={(e) => setScheduledAt(e.target.value)}
+              <label className="text-xs font-medium block mb-1">Subjekti {templateId ? '(lër bosh për ta marrë nga shablloni)' : '*'}</label>
+              <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder={selectedTpl?.subject || 'Subjekti i email-it, {{name}}'}
                 className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
             </div>
-          )}
-        </div>
-
-        <div>
-          <label className="text-xs font-medium block mb-1">Subjekti {templateId ? '(lër bosh për ta marrë nga shablloni)' : '*'}</label>
-          <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder={selectedTpl?.subject || 'Subjekti i email-it, {{name}}'}
-            className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
-        </div>
-
-        {!templateId && (
-          <div>
-            <label className="text-xs font-medium block mb-1">Përmbajtja (HTML) *</label>
-            <textarea value={htmlBody} onChange={(e) => setHtmlBody(e.target.value)} rows={8} placeholder="<h2>Përshëndetje {{name}}…</h2>"
-              className="w-full px-3 py-2 bg-muted rounded-md text-xs font-mono focus:outline-none focus:ring-2 focus:ring-primary/40" />
-          </div>
-        )}
-        {effectiveHtml.trim() && (
-          <div>
-            <p className="text-[11px] text-muted-foreground mb-1">Pamja paraprake:</p>
-            <div className="border border-border rounded-md p-3 bg-white max-h-48 overflow-auto" dangerouslySetInnerHTML={{ __html: effectiveHtml }} />
-          </div>
-        )}
-
-        {/* Purchase: service trigger picker */}
-        {isPurchase && (
-          <div className="space-y-2 pt-1">
-            <label className="text-xs font-medium block">Nis kur blihet shërbimi</label>
-            {(services || []).length === 0 ? (
-              <p className="text-[11px] text-muted-foreground">Asnjë shërbim në katalog ende.</p>
-            ) : (
-              <>
-                <div className="flex flex-wrap gap-1.5 max-h-32 overflow-y-auto">
-                  {(services || []).map((s) => {
-                    const on = triggerServiceIds.includes(s.id);
-                    return (
-                      <button key={s.id} onClick={() => toggleService(s.id)}
-                        className={`text-xs px-2 py-1 rounded-full border ${on ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}>
-                        {serviceName(s)}
-                      </button>
-                    );
-                  })}
-                </div>
-                <p className="text-[11px] text-muted-foreground">
-                  {triggerServiceIds.length === 0 ? 'Asnjë i zgjedhur = dërgohet për çdo blerje (çdo faturë e paguar).' : `${triggerServiceIds.length} shërbim(e) të zgjedhura.`}
-                </p>
-              </>
+            {!templateId && (
+              <div>
+                <label className="text-xs font-medium block mb-1">Përmbajtja (HTML) *</label>
+                <textarea value={htmlBody} onChange={(e) => setHtmlBody(e.target.value)} rows={8} placeholder="<h2>Përshëndetje {{name}}…</h2>"
+                  className="w-full px-3 py-2 bg-muted rounded-md text-xs font-mono focus:outline-none focus:ring-2 focus:ring-primary/40" />
+              </div>
             )}
-          </div>
-        )}
-
-        {/* Manual: segment builder */}
-        {!isPurchase && (
-          <div className="space-y-2 pt-1">
-            <label className="text-xs font-medium block">Audienca</label>
-            <div className="flex gap-2">
-              <button onClick={() => toggleAudience('leads')}
-                className={`flex-1 text-xs px-3 py-1.5 rounded-md border ${audience.includes('leads') ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}>Lead-et</button>
-              <button onClick={() => toggleAudience('customers')}
-                className={`flex-1 text-xs px-3 py-1.5 rounded-md border ${audience.includes('customers') ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}>Klientët</button>
-            </div>
-
-            {audience.includes('leads') && (
-              <>
-                <label className="text-[11px] text-muted-foreground block pt-1">Statusi i lead-eve (lër bosh = të gjitha)</label>
-                <div className="flex flex-wrap gap-1.5">
-                  {LEAD_STATUSES.map((s) => {
-                    const on = statuses.includes(s.value);
-                    return (
-                      <button key={s.value} onClick={() => setStatuses((p) => on ? p.filter((x) => x !== s.value) : [...p, s.value])}
-                        className={`text-xs px-2 py-1 rounded-full border ${on ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}>{s.label}</button>
-                    );
-                  })}
-                </div>
-              </>
+            {effectiveHtml.trim() && (
+              <div>
+                <p className="text-[11px] text-muted-foreground mb-1">Pamja paraprake:</p>
+                <div className="border border-border rounded-md p-3 bg-white max-h-48 overflow-auto" dangerouslySetInnerHTML={{ __html: effectiveHtml }} />
+              </div>
             )}
 
-            <div>
-              <div className="flex items-center justify-between mb-1">
-                <label className="text-[11px] text-muted-foreground">Etiketat (tags)</label>
-                {selectedTags.length > 1 && (
-                  <div className="flex items-center gap-1 text-[10px]">
-                    <button onClick={() => setTagMatch('any')} className={`px-1.5 py-0.5 rounded ${tagMatch === 'any' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>Çdo</button>
-                    <button onClick={() => setTagMatch('all')} className={`px-1.5 py-0.5 rounded ${tagMatch === 'all' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>Të gjitha</button>
+            <div className="space-y-2 pt-1">
+              <label className="text-xs font-medium block">Audienca</label>
+              <div className="flex gap-2">
+                <button onClick={() => toggleAudience('leads')}
+                  className={`flex-1 text-xs px-3 py-1.5 rounded-md border ${audience.includes('leads') ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}>Lead-et</button>
+                <button onClick={() => toggleAudience('customers')}
+                  className={`flex-1 text-xs px-3 py-1.5 rounded-md border ${audience.includes('customers') ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}>Klientët</button>
+              </div>
+
+              {audience.includes('leads') && (
+                <>
+                  <label className="text-[11px] text-muted-foreground block pt-1">Statusi i lead-eve (lër bosh = të gjitha)</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    {LEAD_STATUSES.map((s) => {
+                      const on = statuses.includes(s.value);
+                      return (
+                        <button key={s.value} onClick={() => setStatuses((p) => on ? p.filter((x) => x !== s.value) : [...p, s.value])}
+                          className={`text-xs px-2 py-1 rounded-full border ${on ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}>{s.label}</button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-[11px] text-muted-foreground">Etiketat (tags)</label>
+                  {selectedTags.length > 1 && (
+                    <div className="flex items-center gap-1 text-[10px]">
+                      <button onClick={() => setTagMatch('any')} className={`px-1.5 py-0.5 rounded ${tagMatch === 'any' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>Çdo</button>
+                      <button onClick={() => setTagMatch('all')} className={`px-1.5 py-0.5 rounded ${tagMatch === 'all' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>Të gjitha</button>
+                    </div>
+                  )}
+                </div>
+                {allTags.length === 0 ? (
+                  <p className="text-[11px] text-muted-foreground">Asnjë etiketë te lead-et/klientët ende.</p>
+                ) : (
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                    {allTags.map((t) => {
+                      const on = selectedTags.includes(t);
+                      return (
+                        <button key={t} onClick={() => toggleTag(t)}
+                          className={`text-xs px-2 py-1 rounded-full border ${on ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}>{t}</button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
-              {allTags.length === 0 ? (
-                <p className="text-[11px] text-muted-foreground">Asnjë etiketë te lead-et/klientët ende.</p>
+
+              <div>
+                <label className="text-[11px] text-muted-foreground block mb-1">Caktuar te</label>
+                <select value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}
+                  className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/40">
+                  <option value="">Kushdo</option>
+                  {teamMembers?.filter((m) => m.userId).map((m) => <option key={m.id} value={m.userId}>{memberName(m)}</option>)}
+                </select>
+              </div>
+
+              <p className="text-xs text-muted-foreground">
+                Target: <span className="font-semibold text-foreground">{stats.withEmail}</span> me email
+                {' '}nga <span className="font-semibold text-foreground">{stats.matched}</span> gjithsej në segment.
+                {stats.matched > stats.withEmail && (
+                  <span className="block text-[11px] text-amber-600 mt-0.5">{stats.matched - stats.withEmail} kontakte s’kanë email dhe nuk dërgohen dot.</span>
+                )}
+              </p>
+            </div>
+          </>
+        )}
+
+        {/* ── Purchase: service trigger + drip steps ───────────────────── */}
+        {isPurchase && (
+          <>
+            <div className="space-y-2">
+              <label className="text-xs font-medium block">Nis kur blihet shërbimi</label>
+              {(services || []).length === 0 ? (
+                <p className="text-[11px] text-muted-foreground">Asnjë shërbim në katalog ende.</p>
               ) : (
-                <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
-                  {allTags.map((t) => {
-                    const on = selectedTags.includes(t);
-                    return (
-                      <button key={t} onClick={() => toggleTag(t)}
-                        className={`text-xs px-2 py-1 rounded-full border ${on ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}>{t}</button>
-                    );
-                  })}
+                <>
+                  <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto">
+                    {(services || []).map((s) => {
+                      const on = triggerServiceIds.includes(s.id);
+                      return (
+                        <button key={s.id} onClick={() => toggleService(s.id)}
+                          className={`text-xs px-2 py-1 rounded-full border ${on ? 'bg-primary text-primary-foreground border-primary' : 'border-border text-muted-foreground hover:bg-muted'}`}>
+                          {serviceName(s)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    {triggerServiceIds.length === 0 ? 'Asnjë i zgjedhur = çdo blerje (çdo faturë e paguar).' : `${triggerServiceIds.length} shërbim(e) të zgjedhura.`}
+                  </p>
+                </>
+              )}
+            </div>
+
+            <div className="space-y-2">
+              <label className="text-xs font-medium block">Sekuenca e email-eve</label>
+              {steps.map((s, i) => (
+                <div key={i} className="border border-border rounded-lg p-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] font-semibold text-foreground">Hapi {i + 1}</span>
+                    <div className="flex items-center gap-2">
+                      <label className="text-[11px] text-muted-foreground flex items-center gap-1">
+                        {i === 0 ? 'Menjëherë' : 'Pas'}
+                        {i > 0 && (
+                          <input type="number" min={0} value={s.delayDays}
+                            onChange={(e) => updateStep(i, { delayDays: Number(e.target.value) })}
+                            className="w-14 px-1.5 py-0.5 bg-muted rounded text-xs text-center focus:outline-none" />
+                        )}
+                        {i > 0 && 'ditë'}
+                      </label>
+                      {steps.length > 1 && (
+                        <button onClick={() => removeStep(i)} className="p-1 rounded hover:bg-destructive/10 text-destructive"><Trash2 className="w-3.5 h-3.5" /></button>
+                      )}
+                    </div>
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-2">
+                    <input value={s.subject} onChange={(e) => updateStep(i, { subject: e.target.value })} placeholder="Subjekti *"
+                      className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+                    <select value={s.templateId} onChange={(e) => updateStep(i, { templateId: e.target.value })}
+                      className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/40">
+                      <option value="">— HTML i lirë —</option>
+                      {templates?.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  </div>
+                  {!s.templateId && (
+                    <textarea value={s.htmlBody} onChange={(e) => updateStep(i, { htmlBody: e.target.value })} rows={5} placeholder="<h2>Përshëndetje {{name}}…</h2>"
+                      className="w-full px-3 py-2 bg-muted rounded-md text-xs font-mono focus:outline-none focus:ring-2 focus:ring-primary/40" />
+                  )}
+                  {stepHtml(s).trim() && (
+                    <div className="border border-border rounded-md p-2 bg-white max-h-32 overflow-auto" dangerouslySetInnerHTML={{ __html: stepHtml(s) }} />
+                  )}
                 </div>
-              )}
+              ))}
+              <Button variant="outline" size="sm" onClick={addStep} className="w-full"><Plus className="w-3.5 h-3.5 mr-1" /> Shto hap</Button>
             </div>
-
-            <div>
-              <label className="text-[11px] text-muted-foreground block mb-1">Caktuar te</label>
-              <select value={assignedTo} onChange={(e) => setAssignedTo(e.target.value)}
-                className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/40">
-                <option value="">Kushdo</option>
-                {teamMembers?.filter((m) => m.userId).map((m) => <option key={m.id} value={m.userId}>{memberName(m)}</option>)}
-              </select>
-            </div>
-
-            <p className="text-xs text-muted-foreground">
-              Target: <span className="font-semibold text-foreground">{stats.withEmail}</span> me email
-              {' '}nga <span className="font-semibold text-foreground">{stats.matched}</span> gjithsej në segment.
-              {stats.matched > stats.withEmail && (
-                <span className="block text-[11px] text-amber-600 mt-0.5">{stats.matched - stats.withEmail} kontakte s’kanë email dhe nuk dërgohen dot.</span>
-              )}
-            </p>
-          </div>
+          </>
         )}
 
         {/* Actions */}
@@ -419,8 +501,14 @@ const EmailCampaigns: React.FC = () => {
                 </p>
                 <p className="text-[11px] text-muted-foreground truncate">
                   {purchase
-                    ? <>Automatike · {c.triggerServiceIds?.length ? c.triggerServiceIds.map(svcName).join(', ') : 'çdo blerje'} · {c.sentCount || 0} dërguar</>
+                    ? <>Automatike · {c.triggerServiceIds?.length ? c.triggerServiceIds.map(svcName).join(', ') : 'çdo blerje'}{c.steps?.length ? ` · ${c.steps.length} hap` : ''} · {c.sentCount || 0} dërguar</>
                     : <>{tplName(c.templateId)} · {c.sentCount || 0}/{c.totalTargets ?? '?'} dërguar{c.failedCount ? ` · ${c.failedCount} dështuan` : ''}</>}
+                  {(c.openCount || c.clickCount) ? (
+                    <span className="inline-flex items-center gap-2 ml-1">
+                      <span className="inline-flex items-center gap-0.5"><Eye className="w-3 h-3" />{c.openCount || 0}</span>
+                      <span className="inline-flex items-center gap-0.5"><MousePointerClick className="w-3 h-3" />{c.clickCount || 0}</span>
+                    </span>
+                  ) : null}
                 </p>
               </div>
               <div className="flex items-center gap-2 shrink-0">

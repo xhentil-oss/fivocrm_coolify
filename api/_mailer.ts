@@ -108,8 +108,9 @@ function fromHeader(r: ResolvedMailer): string {
 }
 
 // ── Resend (native batch) ────────────────────────────────────────────────────
-async function sendViaResend(messages: MailMessage[], r: ResolvedMailer): Promise<SendResult[]> {
+async function sendViaResend(messages: MailMessage[], r: ResolvedMailer, campaignId?: string): Promise<SendResult[]> {
   const from = fromHeader(r);
+  const tags = campaignId ? [{ name: 'campaignId', value: campaignId }] : undefined;
   const results: SendResult[] = [];
   for (let i = 0; i < messages.length; i += RESEND_BATCH_MAX) {
     const chunk = messages.slice(i, i + RESEND_BATCH_MAX);
@@ -117,7 +118,7 @@ async function sendViaResend(messages: MailMessage[], r: ResolvedMailer): Promis
       const resp = await fetch('https://api.resend.com/emails/batch', {
         method: 'POST',
         headers: { Authorization: `Bearer ${r.apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(chunk.map((m) => ({ from, to: [m.to], subject: m.subject, html: m.html }))),
+        body: JSON.stringify(chunk.map((m) => ({ from, to: [m.to], subject: m.subject, html: m.html, ...(tags ? { tags } : {}) }))),
         signal: AbortSignal.timeout(20_000),
       });
       const ok = resp.ok;
@@ -131,7 +132,7 @@ async function sendViaResend(messages: MailMessage[], r: ResolvedMailer): Promis
 }
 
 // ── SendGrid (one request per message; merge tokens differ per recipient) ─────
-async function sendViaSendgrid(messages: MailMessage[], r: ResolvedMailer): Promise<SendResult[]> {
+async function sendViaSendgrid(messages: MailMessage[], r: ResolvedMailer, campaignId?: string): Promise<SendResult[]> {
   const results: SendResult[] = [];
   for (const m of messages) {
     try {
@@ -143,6 +144,7 @@ async function sendViaSendgrid(messages: MailMessage[], r: ResolvedMailer): Prom
           from: { email: r.fromEmail, name: r.fromName },
           subject: m.subject,
           content: [{ type: 'text/html', value: m.html }],
+          ...(campaignId ? { custom_args: { campaignId } } : {}),
         }),
         signal: AbortSignal.timeout(20_000),
       });
@@ -158,7 +160,7 @@ async function sendViaSendgrid(messages: MailMessage[], r: ResolvedMailer): Prom
 }
 
 // ── Mailgun (form-encoded, HTTP basic auth "api:KEY") ─────────────────────────
-async function sendViaMailgun(messages: MailMessage[], r: ResolvedMailer): Promise<SendResult[]> {
+async function sendViaMailgun(messages: MailMessage[], r: ResolvedMailer, campaignId?: string): Promise<SendResult[]> {
   const results: SendResult[] = [];
   if (!r.mailgunDomain) {
     return messages.map((m) => ({ to: m.to, ok: false, error: 'Mailgun domain mungon' }));
@@ -169,6 +171,7 @@ async function sendViaMailgun(messages: MailMessage[], r: ResolvedMailer): Promi
   for (const m of messages) {
     try {
       const form = new URLSearchParams({ from, to: m.to, subject: m.subject, html: m.html });
+      if (campaignId) form.set('v:campaignId', campaignId);
       const resp = await fetch(`${base}/v3/${r.mailgunDomain}/messages`, {
         method: 'POST',
         headers: { Authorization: `Basic ${auth}`, 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -226,14 +229,15 @@ export async function sendBulkEmail(
   messages: MailMessage[],
   cfg: MailerConfig = {},
   fromNameOverride?: string,
+  campaignId?: string,
 ): Promise<SendResult[]> {
   if (messages.length === 0) return [];
   const r = resolveMailer(cfg, fromNameOverride);
   switch (r.provider) {
-    case 'resend': return sendViaResend(messages, r);
-    case 'sendgrid': return sendViaSendgrid(messages, r);
-    case 'mailgun': return sendViaMailgun(messages, r);
-    case 'smtp': return sendViaSmtp(messages, r);
+    case 'resend': return sendViaResend(messages, r, campaignId);
+    case 'sendgrid': return sendViaSendgrid(messages, r, campaignId);
+    case 'mailgun': return sendViaMailgun(messages, r, campaignId);
+    case 'smtp': return sendViaSmtp(messages, r); // SMTP has no event webhooks
     default:
       return messages.map((m) => ({ to: m.to, ok: false, error: 'Asnjë ofrues email i konfiguruar (Settings → Integrime)' }));
   }

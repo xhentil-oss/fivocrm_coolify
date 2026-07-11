@@ -1760,7 +1760,7 @@ async function runEmailCampaigns() {
         subject: renderMergeTokens(subject, { name: t.name || '', company: t.company || '', email: t.email }),
         html: renderMergeTokens(bodyHtml, { name: t.name || '', company: t.company || '', email: t.email }),
       }));
-      const results = messages.length ? await sendBulkEmail(messages, mailerConfig, c.fromName) : [];
+      const results = messages.length ? await sendBulkEmail(messages, mailerConfig, c.fromName, cDoc.id) : [];
       const succeeded = results.filter((r) => r.ok).map((r) => normalizeEmail(r.to));
       const failed = results.filter((r) => !r.ok).length;
       sent += succeeded.length;
@@ -1787,13 +1787,44 @@ async function runEmailCampaigns() {
   return { processed, sent };
 }
 
+// Per-team email provider config (Settings → Integrime) → MailerConfig, cached.
+function makeTeamSettingsCache() {
+  const cache = new Map<string, any>();
+  const get = async (teamId: string) => {
+    if (!teamId) return {};
+    if (!cache.has(teamId)) cache.set(teamId, (await db.collection('teamSettings').doc(teamId).get()).data() || {});
+    return cache.get(teamId);
+  };
+  const cfgFor = async (teamId: string) => {
+    const ts = await get(teamId);
+    return {
+      emailProvider: ts.emailProvider, emailApiKey: ts.emailApiKey, emailFromEmail: ts.emailFromEmail,
+      emailFromName: ts.emailFromName, emailMailgunDomain: ts.emailMailgunDomain, emailMailgunRegion: ts.emailMailgunRegion,
+      emailSmtpHost: ts.emailSmtpHost, emailSmtpPort: ts.emailSmtpPort, emailSmtpUser: ts.emailSmtpUser, emailSmtpPass: ts.emailSmtpPass,
+    };
+  };
+  return { cfgFor };
+}
+
+// Normalize a campaign to a list of drip steps. A campaign with no explicit
+// `steps` is a single day-0 email built from its subject/template/htmlBody.
+function campaignSteps(c: any): { delayDays: number; subject?: string; templateId?: string; htmlBody?: string }[] {
+  if (Array.isArray(c.steps) && c.steps.length) {
+    return c.steps.map((s: any, i: number) => ({
+      delayDays: Number(s.delayDays) || (i === 0 ? 0 : 0),
+      subject: s.subject, templateId: s.templateId, htmlBody: s.htmlBody,
+    }));
+  }
+  return [{ delayDays: 0, subject: c.subject, templateId: c.templateId, htmlBody: c.htmlBody }];
+}
+
 // ── JOB: purchase-campaigns ──────────────────────────────────────────────────
-// Evergreen automations: when a customer PAYS an invoice, fire any 'purchase'
-// email campaigns whose service filter matches (empty filter = any purchase).
-// Covers all payment paths (Stripe/WHMCS/manual) by scanning Paid invoices.
-// Idempotent: each fired campaign is recorded on the invoice's
-// `marketingCampaignsSent`, and only invoices paid AFTER the campaign was
-// created are eligible (so activating an automation never blasts old buyers).
+// Evergreen automations: when a customer PAYS an invoice, ENROLL them into any
+// matching 'purchase' campaign (service filter empty = any purchase). Covers all
+// payment paths (Stripe/WHMCS/manual) by scanning Paid invoices. Idempotent: the
+// enrollment is recorded on the invoice's `marketingCampaignsSent`; only invoices
+// paid AFTER the campaign was created are eligible (so activating an automation
+// never blasts old buyers). The actual emails are delivered by runCampaignSteps.
 async function runPurchaseCampaigns() {
   const now = new Date();
   const LOOKBACK_MS = 60 * 24 * 3600 * 1000; // safety cap: ignore purchases older than 60d
@@ -1802,92 +1833,162 @@ async function runPurchaseCampaigns() {
   // Single-field query (no composite index); filter status in memory.
   const campSnap = await db.collection('emailCampaigns').where('trigger', '==', 'purchase').get();
   const campaigns = campSnap.docs
-    .map((d) => ({ id: d.id, ref: d.ref, ...(d.data() as any) }))
-    .filter((c) => c.status === 'active');
-  if (campaigns.length === 0) return { campaigns: 0, sent: 0 };
-
-  // Resolve each campaign's subject + HTML body once (template or inline).
-  for (const c of campaigns) {
-    c._subject = c.subject || '';
-    c._html = c.htmlBody || '';
-    if (c.templateId) {
-      const t = await db.collection('emailTemplates').doc(c.templateId).get();
-      if (t.exists) {
-        const tpl = t.data() as any;
-        c._html = tpl.html || c._html;
-        if (!c._subject) c._subject = tpl.subject || '';
-      }
-    }
-    c._createdAt = c.createdAt?.toDate ? c.createdAt.toDate() : new Date(0);
-    c._wants = new Set<string>((c.triggerServiceIds || []).filter(Boolean));
-  }
-  const usable = campaigns.filter((c) => c._subject && c._html);
-  if (usable.length === 0) return { campaigns: campaigns.length, sent: 0 };
+    .map((d) => ({ id: d.id, ...(d.data() as any) }))
+    .filter((c) => c.status === 'active')
+    .map((c) => ({
+      ...c,
+      _createdAt: c.createdAt?.toDate ? c.createdAt.toDate() : new Date(0),
+      _wants: new Set<string>((c.triggerServiceIds || []).filter(Boolean)),
+    }));
+  if (campaigns.length === 0) return { campaigns: 0, enrolled: 0 };
 
   const invSnap = await db.collection('invoices').where('status', '==', 'Paid').limit(MAX_INVOICES).get();
 
-  const tsCache = new Map<string, any>();
-  const getTs = async (teamId: string) => {
-    if (!teamId) return {};
-    if (!tsCache.has(teamId)) tsCache.set(teamId, (await db.collection('teamSettings').doc(teamId).get()).data() || {});
-    return tsCache.get(teamId);
-  };
-  const mailerCfgFrom = (ts: any) => ({
-    emailProvider: ts.emailProvider, emailApiKey: ts.emailApiKey, emailFromEmail: ts.emailFromEmail,
-    emailFromName: ts.emailFromName, emailMailgunDomain: ts.emailMailgunDomain, emailMailgunRegion: ts.emailMailgunRegion,
-    emailSmtpHost: ts.emailSmtpHost, emailSmtpPort: ts.emailSmtpPort, emailSmtpUser: ts.emailSmtpUser, emailSmtpPass: ts.emailSmtpPass,
-  });
-
-  let sent = 0;
+  let enrolled = 0;
   for (const invDoc of invSnap.docs) {
     const inv = invDoc.data() as any;
     const paidAt = inv.paidAt?.toDate ? inv.paidAt.toDate() : (inv.updatedAt?.toDate ? inv.updatedAt.toDate() : null);
     if (!paidAt || now.getTime() - paidAt.getTime() > LOOKBACK_MS) continue;
 
     const already = new Set<string>(inv.marketingCampaignsSent || []);
-    // Campaigns for this invoice's team, not yet fired for it, created before the purchase.
-    const candidates = usable.filter((c) => c.teamId === inv.teamId && !already.has(c.id) && paidAt >= c._createdAt);
-    if (candidates.length === 0) continue;
-    if (!inv.customerId) continue;
+    const candidates = campaigns.filter((c) => c.teamId === inv.teamId && !already.has(c.id) && paidAt >= c._createdAt);
+    if (candidates.length === 0 || !inv.customerId) continue;
 
     const custDoc = await db.collection('customers').doc(inv.customerId).get();
     const email = normalizeEmail(custDoc.data()?.email);
     if (!isValidCampaignEmail(email)) continue;
-    const custName = custDoc.data()?.name || '';
-    const custCompany = custDoc.data()?.company || '';
 
-    // Which services were on this invoice (only needed if any candidate filters by service).
+    // Which services were on this invoice (only if a candidate filters by service).
     let serviceIds: Set<string> | null = null;
-    const needServices = candidates.some((c) => c._wants.size > 0);
-    if (needServices) {
+    if (candidates.some((c) => c._wants.size > 0)) {
       const itemsSnap = await db.collection('invoiceItems').where('invoiceId', '==', invDoc.id).get();
       serviceIds = new Set<string>(itemsSnap.docs.map((d) => (d.data() as any).serviceId).filter(Boolean));
     }
 
-    const ts = await getTs(inv.teamId);
-    const cfg = mailerCfgFrom(ts);
-
     for (const c of candidates) {
       if (c._wants.size > 0 && !(serviceIds && [...c._wants].some((id) => serviceIds!.has(id)))) continue;
-      const vars = { name: custName, company: custCompany, email };
-      const results = await sendBulkEmail(
-        [{ to: email, subject: renderMergeTokens(c._subject, vars), html: renderMergeTokens(c._html, vars) }],
-        cfg, c.fromName,
-      );
-      if (results[0]?.ok) {
-        sent++;
-        await invDoc.ref.update({ marketingCampaignsSent: admin.firestore.FieldValue.arrayUnion(c.id) }).catch(() => {});
-        await c.ref.update({
-          sentCount: (c.sentCount || 0) + 1,
-          sentEmails: admin.firestore.FieldValue.arrayUnion(email),
-          updatedAt: now,
-        }).catch(() => {});
-        c.sentCount = (c.sentCount || 0) + 1; // keep local count fresh within this run
-      }
+      // Enroll the buyer; step 0 is due immediately (runCampaignSteps sends it).
+      await db.collection('campaignEnrollments').add({
+        teamId: inv.teamId,
+        ...(inv.businessId ? { businessId: inv.businessId } : {}),
+        campaignId: c.id,
+        email,
+        name: custDoc.data()?.name || '',
+        company: custDoc.data()?.company || '',
+        currentStep: 0,
+        status: 'active',
+        enrolledAt: admin.firestore.Timestamp.fromDate(now),
+        nextSendAt: admin.firestore.Timestamp.fromDate(now),
+        lastSentAt: null,
+        sentSteps: [],
+        sourceInvoiceId: invDoc.id,
+        createdAt: admin.firestore.Timestamp.fromDate(now),
+        updatedAt: admin.firestore.Timestamp.fromDate(now),
+      });
+      await invDoc.ref.update({ marketingCampaignsSent: admin.firestore.FieldValue.arrayUnion(c.id) }).catch(() => {});
+      enrolled++;
     }
   }
 
-  return { campaigns: usable.length, sent };
+  return { campaigns: campaigns.length, enrolled };
+}
+
+// ── JOB: campaign-steps ──────────────────────────────────────────────────────
+// Delivers due drip-sequence steps for active enrollments. For each enrollment
+// whose nextSendAt has passed: send the current step, advance to the next (with
+// its delayDays from enrollment), or complete. Idempotent via `sentSteps`.
+async function runCampaignSteps() {
+  const now = new Date();
+  const MAX = 200; // recipients processed per run
+  const snap = await db.collection('campaignEnrollments').where('status', '==', 'active').limit(MAX).get();
+  if (snap.empty) return { processed: 0, sent: 0 };
+
+  const { cfgFor } = makeTeamSettingsCache();
+  const campCache = new Map<string, any>();
+  const getCampaign = async (id: string) => {
+    if (!campCache.has(id)) campCache.set(id, (await db.collection('emailCampaigns').doc(id).get()).data() || null);
+    return campCache.get(id);
+  };
+  const tplCache = new Map<string, any>();
+  const getTpl = async (id: string) => {
+    if (!tplCache.has(id)) tplCache.set(id, (await db.collection('emailTemplates').doc(id).get()).data() || null);
+    return tplCache.get(id);
+  };
+
+  let processed = 0, sent = 0;
+  for (const eDoc of snap.docs) {
+    const e = eDoc.data() as any;
+    const due = e.nextSendAt?.toDate ? e.nextSendAt.toDate() : now;
+    if (due > now) continue;
+
+    try {
+      const camp = await getCampaign(e.campaignId);
+      if (!camp || (camp.status !== 'active' && camp.status !== 'paused')) {
+        await eDoc.ref.update({ status: 'stopped', updatedAt: now }); continue;
+      }
+      if (camp.status === 'paused') continue; // hold; resume when reactivated
+
+      const steps = campaignSteps(camp);
+      const idx: number = e.currentStep || 0;
+      if (idx >= steps.length) { await eDoc.ref.update({ status: 'completed', updatedAt: now }); continue; }
+      const step = steps[idx];
+      const alreadySent = new Set<number>(e.sentSteps || []);
+
+      // Resolve this step's subject + HTML (step → template → campaign fallback).
+      let subject = step.subject || camp.subject || '';
+      let html = step.htmlBody || '';
+      if (step.templateId) {
+        const tpl = await getTpl(step.templateId);
+        if (tpl) { html = tpl.html || html; if (!subject) subject = tpl.subject || ''; }
+      } else if (!html && camp.templateId) {
+        const tpl = await getTpl(camp.templateId);
+        if (tpl) { html = tpl.html || html; if (!subject) subject = tpl.subject || ''; }
+      }
+      if (!html) html = camp.htmlBody || '';
+
+      let stepOk = alreadySent.has(idx); // if already sent, just advance
+      if (!stepOk && subject && html) {
+        const cfg = await cfgFor(e.teamId);
+        const vars = { name: e.name || '', company: e.company || '', email: e.email };
+        const results = await sendBulkEmail(
+          [{ to: e.email, subject: renderMergeTokens(subject, vars), html: renderMergeTokens(html, vars) }],
+          cfg, camp.fromName, e.campaignId,
+        );
+        stepOk = !!results[0]?.ok;
+        if (stepOk) {
+          sent++;
+          await db.collection('emailCampaigns').doc(e.campaignId).update({
+            sentCount: admin.firestore.FieldValue.increment(1),
+            sentEmails: admin.firestore.FieldValue.arrayUnion(e.email),
+            updatedAt: now,
+          }).catch(() => {});
+        }
+      }
+
+      if (stepOk) {
+        const nextIdx = idx + 1;
+        const enrolledAt = e.enrolledAt?.toDate ? e.enrolledAt.toDate() : now;
+        if (nextIdx >= steps.length) {
+          await eDoc.ref.update({
+            status: 'completed', currentStep: nextIdx, lastSentAt: now,
+            sentSteps: admin.firestore.FieldValue.arrayUnion(idx), updatedAt: now,
+          });
+        } else {
+          const nextDue = new Date(enrolledAt.getTime() + (Number(steps[nextIdx].delayDays) || 0) * 86_400_000);
+          await eDoc.ref.update({
+            currentStep: nextIdx, lastSentAt: now,
+            nextSendAt: admin.firestore.Timestamp.fromDate(nextDue),
+            sentSteps: admin.firestore.FieldValue.arrayUnion(idx), updatedAt: now,
+          });
+        }
+        processed++;
+      }
+    } catch (err: any) {
+      console.error(`[CRON:campaign-steps] enrollment ${eDoc.id} dështoi:`, err);
+    }
+  }
+
+  return { processed, sent };
 }
 
 // ── JOB: backfill-businessid (two-level tenancy, Phase 2) ────────────────────
@@ -2458,6 +2559,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'purchase-campaigns':
         result = await runPurchaseCampaigns();
         break;
+      case 'campaign-steps':
+        result = await runCampaignSteps();
+        break;
       case 'lead-sla-stale-alerts':
         result = await runLeadSlaAndStaleAlerts();
         break;
@@ -2490,7 +2594,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, whmcs, inquiryReminders, projectRollup, leadCadence] = await Promise.allSettled([
+        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, campaignSteps, whmcs, inquiryReminders, projectRollup, leadCadence] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
           runOverdueReminders(),
@@ -2508,6 +2612,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           runWhatsappBroadcasts(),
           runEmailCampaigns(),
           runPurchaseCampaigns(),
+          runCampaignSteps(),
           runWhmcsSync(),
           runInquiryMaterialsReminders(),
           runProjectSpendRollup(),
@@ -2533,6 +2638,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           whatsappBroadcasts: settled(waBroadcasts),
           emailCampaigns: settled(emailCampaigns),
           purchaseCampaigns: settled(purchaseCampaigns),
+          campaignSteps: settled(campaignSteps),
           whmcsSync: settled(whmcs),
           inquiryMaterialsReminders: settled(inquiryReminders),
           projectSpendRollup: settled(projectRollup),
@@ -2541,7 +2647,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts, email-campaigns, purchase-campaigns, whmcs-sync, whmcs-clients` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients` });
     }
 
     return res.status(200).json({ success: true, job, ...result, timestamp: new Date().toISOString() });
