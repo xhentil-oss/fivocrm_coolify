@@ -1,8 +1,9 @@
 import React, { useState, lazy, Suspense } from 'react';
 import { Link } from 'react-router-dom';
-import { Megaphone, Mail, MessageCircle, LayoutTemplate, Send, Info, CheckCircle2, Settings } from 'lucide-react';
+import { Megaphone, Mail, MessageCircle, LayoutTemplate, Send, Info, CheckCircle2, Settings, BarChart3 } from 'lucide-react';
 import EmailCampaigns from '../components/EmailCampaigns';
 import EmailTemplateManager from '../components/EmailTemplateManager';
+import MarketingAnalytics from '../components/MarketingAnalytics';
 import { Button } from '../components/ui/button';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 
@@ -15,16 +16,17 @@ const PROVIDER_LABEL: Record<string, string> = {
 // The WhatsApp broadcast composer already exists as a modal; reuse it as-is.
 const WhatsappBroadcasts = lazy(() => import('../components/WhatsappBroadcasts'));
 
-type Tab = 'email' | 'whatsapp' | 'templates';
+type Tab = 'analytics' | 'email' | 'whatsapp' | 'templates';
 
 const TABS: { key: Tab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { key: 'analytics', label: 'Analitika', icon: BarChart3 },
   { key: 'email', label: 'Fushata Email', icon: Mail },
   { key: 'whatsapp', label: 'Fushata WhatsApp', icon: MessageCircle },
   { key: 'templates', label: 'Shabllone', icon: LayoutTemplate },
 ];
 
 const MarketingView: React.FC = () => {
-  const [tab, setTab] = useState<Tab>('email');
+  const [tab, setTab] = useState<Tab>('analytics');
   const [waOpen, setWaOpen] = useState(false);
   const settings = useTeamSettingsData();
 
@@ -47,7 +49,7 @@ const MarketingView: React.FC = () => {
       </div>
 
       {/* Config note — reflects the provider configured in Settings → Integrime */}
-      {tab !== 'whatsapp' && (
+      {(tab === 'email' || tab === 'templates') && (
         configuredProvider ? (
           <div className="flex gap-2 text-[12px] px-3 py-2 rounded-md bg-emerald-500/10 border border-emerald-500/30 text-emerald-700 dark:text-emerald-400">
             <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
@@ -81,6 +83,7 @@ const MarketingView: React.FC = () => {
         ))}
       </div>
 
+      {tab === 'analytics' && <MarketingAnalytics />}
       {tab === 'email' && <EmailCampaigns />}
       {tab === 'templates' && <EmailTemplateManager />}
       {tab === 'whatsapp' && (
