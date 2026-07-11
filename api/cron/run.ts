@@ -1787,6 +1787,109 @@ async function runEmailCampaigns() {
   return { processed, sent };
 }
 
+// ── JOB: purchase-campaigns ──────────────────────────────────────────────────
+// Evergreen automations: when a customer PAYS an invoice, fire any 'purchase'
+// email campaigns whose service filter matches (empty filter = any purchase).
+// Covers all payment paths (Stripe/WHMCS/manual) by scanning Paid invoices.
+// Idempotent: each fired campaign is recorded on the invoice's
+// `marketingCampaignsSent`, and only invoices paid AFTER the campaign was
+// created are eligible (so activating an automation never blasts old buyers).
+async function runPurchaseCampaigns() {
+  const now = new Date();
+  const LOOKBACK_MS = 60 * 24 * 3600 * 1000; // safety cap: ignore purchases older than 60d
+  const MAX_INVOICES = 300;                   // bound Firestore reads per run
+
+  // Single-field query (no composite index); filter status in memory.
+  const campSnap = await db.collection('emailCampaigns').where('trigger', '==', 'purchase').get();
+  const campaigns = campSnap.docs
+    .map((d) => ({ id: d.id, ref: d.ref, ...(d.data() as any) }))
+    .filter((c) => c.status === 'active');
+  if (campaigns.length === 0) return { campaigns: 0, sent: 0 };
+
+  // Resolve each campaign's subject + HTML body once (template or inline).
+  for (const c of campaigns) {
+    c._subject = c.subject || '';
+    c._html = c.htmlBody || '';
+    if (c.templateId) {
+      const t = await db.collection('emailTemplates').doc(c.templateId).get();
+      if (t.exists) {
+        const tpl = t.data() as any;
+        c._html = tpl.html || c._html;
+        if (!c._subject) c._subject = tpl.subject || '';
+      }
+    }
+    c._createdAt = c.createdAt?.toDate ? c.createdAt.toDate() : new Date(0);
+    c._wants = new Set<string>((c.triggerServiceIds || []).filter(Boolean));
+  }
+  const usable = campaigns.filter((c) => c._subject && c._html);
+  if (usable.length === 0) return { campaigns: campaigns.length, sent: 0 };
+
+  const invSnap = await db.collection('invoices').where('status', '==', 'Paid').limit(MAX_INVOICES).get();
+
+  const tsCache = new Map<string, any>();
+  const getTs = async (teamId: string) => {
+    if (!teamId) return {};
+    if (!tsCache.has(teamId)) tsCache.set(teamId, (await db.collection('teamSettings').doc(teamId).get()).data() || {});
+    return tsCache.get(teamId);
+  };
+  const mailerCfgFrom = (ts: any) => ({
+    emailProvider: ts.emailProvider, emailApiKey: ts.emailApiKey, emailFromEmail: ts.emailFromEmail,
+    emailFromName: ts.emailFromName, emailMailgunDomain: ts.emailMailgunDomain, emailMailgunRegion: ts.emailMailgunRegion,
+    emailSmtpHost: ts.emailSmtpHost, emailSmtpPort: ts.emailSmtpPort, emailSmtpUser: ts.emailSmtpUser, emailSmtpPass: ts.emailSmtpPass,
+  });
+
+  let sent = 0;
+  for (const invDoc of invSnap.docs) {
+    const inv = invDoc.data() as any;
+    const paidAt = inv.paidAt?.toDate ? inv.paidAt.toDate() : (inv.updatedAt?.toDate ? inv.updatedAt.toDate() : null);
+    if (!paidAt || now.getTime() - paidAt.getTime() > LOOKBACK_MS) continue;
+
+    const already = new Set<string>(inv.marketingCampaignsSent || []);
+    // Campaigns for this invoice's team, not yet fired for it, created before the purchase.
+    const candidates = usable.filter((c) => c.teamId === inv.teamId && !already.has(c.id) && paidAt >= c._createdAt);
+    if (candidates.length === 0) continue;
+    if (!inv.customerId) continue;
+
+    const custDoc = await db.collection('customers').doc(inv.customerId).get();
+    const email = normalizeEmail(custDoc.data()?.email);
+    if (!isValidCampaignEmail(email)) continue;
+    const custName = custDoc.data()?.name || '';
+    const custCompany = custDoc.data()?.company || '';
+
+    // Which services were on this invoice (only needed if any candidate filters by service).
+    let serviceIds: Set<string> | null = null;
+    const needServices = candidates.some((c) => c._wants.size > 0);
+    if (needServices) {
+      const itemsSnap = await db.collection('invoiceItems').where('invoiceId', '==', invDoc.id).get();
+      serviceIds = new Set<string>(itemsSnap.docs.map((d) => (d.data() as any).serviceId).filter(Boolean));
+    }
+
+    const ts = await getTs(inv.teamId);
+    const cfg = mailerCfgFrom(ts);
+
+    for (const c of candidates) {
+      if (c._wants.size > 0 && !(serviceIds && [...c._wants].some((id) => serviceIds!.has(id)))) continue;
+      const vars = { name: custName, company: custCompany, email };
+      const results = await sendBulkEmail(
+        [{ to: email, subject: renderMergeTokens(c._subject, vars), html: renderMergeTokens(c._html, vars) }],
+        cfg, c.fromName,
+      );
+      if (results[0]?.ok) {
+        sent++;
+        await invDoc.ref.update({ marketingCampaignsSent: admin.firestore.FieldValue.arrayUnion(c.id) }).catch(() => {});
+        await c.ref.update({
+          sentCount: (c.sentCount || 0) + 1,
+          sentEmails: admin.firestore.FieldValue.arrayUnion(email),
+          updatedAt: now,
+        }).catch(() => {});
+        c.sentCount = (c.sentCount || 0) + 1; // keep local count fresh within this run
+      }
+    }
+  }
+
+  return { campaigns: usable.length, sent };
+}
+
 // ── JOB: backfill-businessid (two-level tenancy, Phase 2) ────────────────────
 // Stamps businessId onto every team-scoped doc via Admin SDK (bypasses rules, so
 // it covers activities/messages/comments the client can't touch). Idempotent.
@@ -2352,6 +2455,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'email-campaigns':
         result = await runEmailCampaigns();
         break;
+      case 'purchase-campaigns':
+        result = await runPurchaseCampaigns();
+        break;
       case 'lead-sla-stale-alerts':
         result = await runLeadSlaAndStaleAlerts();
         break;
@@ -2384,7 +2490,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, whmcs, inquiryReminders, projectRollup, leadCadence] = await Promise.allSettled([
+        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, whmcs, inquiryReminders, projectRollup, leadCadence] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
           runOverdueReminders(),
@@ -2401,6 +2507,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           runNotificationDigest(),
           runWhatsappBroadcasts(),
           runEmailCampaigns(),
+          runPurchaseCampaigns(),
           runWhmcsSync(),
           runInquiryMaterialsReminders(),
           runProjectSpendRollup(),
@@ -2425,6 +2532,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           digest: settled(digest),
           whatsappBroadcasts: settled(waBroadcasts),
           emailCampaigns: settled(emailCampaigns),
+          purchaseCampaigns: settled(purchaseCampaigns),
           whmcsSync: settled(whmcs),
           inquiryMaterialsReminders: settled(inquiryReminders),
           projectSpendRollup: settled(projectRollup),
@@ -2433,7 +2541,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts, email-campaigns, whmcs-sync, whmcs-clients` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts, email-campaigns, purchase-campaigns, whmcs-sync, whmcs-clients` });
     }
 
     return res.status(200).json({ success: true, job, ...result, timestamp: new Date().toISOString() });

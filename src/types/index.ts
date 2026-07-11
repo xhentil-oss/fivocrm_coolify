@@ -120,12 +120,13 @@ export interface EmailCampaign {
     tagMatch?: 'any' | 'all';         // match ANY (default) or ALL selected tags
     assignedToUserId?: string;        // assignedToUserId (leads + customers)
   };
-  // 'purchase' campaigns auto-fire when a customer buys a matching service
-  // (Faza 2 — the field is reserved now so the cron/webhook can key on it).
+  // 'purchase' campaigns auto-fire when a customer buys a matching service.
+  // Manual campaigns use draft→queued→sending→completed; purchase automations
+  // are evergreen and use active/paused instead.
   trigger?: 'manual' | 'purchase';
-  triggerServiceIds?: string[];       // purchase trigger: which services fire it
+  triggerServiceIds?: string[];       // purchase trigger: which services fire it (empty = any purchase)
   scheduledAt?: Date | null;
-  status: 'draft' | 'queued' | 'sending' | 'completed' | 'failed';
+  status: 'draft' | 'queued' | 'sending' | 'completed' | 'failed' | 'active' | 'paused';
   totalTargets?: number;
   sentCount?: number;
   failedCount?: number;
@@ -858,6 +859,47 @@ export interface Channel {
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
+}
+
+/**
+ * A persistent client conversation thread (portal / WhatsApp / email), unified
+ * under one doc so owner + watchers routing survives across channels. The doc id
+ * IS the channelId of the underlying messages (`client-<customerId>[-project-…]`
+ * for the portal, `wa-<teamId>-<phone>` for WhatsApp) so upserts are id-addressable.
+ */
+export interface Conversation {
+  id: string;
+  businessId?: string;
+  teamId?: string;
+  channel: 'portal' | 'whatsapp' | 'email';
+  customerId?: string;
+  leadId?: string;
+  phone?: string;
+  subject?: string;
+  /** The responsible person for replying. Empty → unassigned. */
+  ownerId?: string | null;
+  /** Manager of the owner's team (supervision + can reassign). */
+  managerId?: string | null;
+  /** Sales agent linked to the customer, for continuity. */
+  salesAgentId?: string | null;
+  /**
+   * Everyone who can see the conversation: owner + owner's team + manager +
+   * sales agent + all admins (deduped). Also populated with manager+admins when
+   * unassigned, so the single `watchers array-contains uid` query surfaces
+   * ownerless threads to the people who must triage them.
+   */
+  watchers: string[];
+  /** True while no ownerId is set — drives the "Pa përgjegjës" queue. */
+  unassigned?: boolean;
+  status?: 'open' | 'pending' | 'closed';
+  lastMessageAt?: Date;
+  /** First-response SLA target (Request 3 escalation cron consumes this). */
+  slaFirstResponseDueAt?: Date;
+  firstResponseAt?: Date;
+  slaBreachNotified?: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId?: string | null;
 }
 
 export interface TimeEntry {
