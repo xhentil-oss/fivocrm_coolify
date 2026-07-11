@@ -50,19 +50,38 @@ async function resolveTeamId(): Promise<string | null> {
 let cachedBusinessId: string | null | undefined;
 async function resolveBusinessId(teamId: string | null): Promise<string | null> {
   if (cachedBusinessId !== undefined) return cachedBusinessId;
+  // 1) Explicit env wins (set WHMCS_BUSINESS_ID for a deterministic target).
   const envBiz = process.env.WHMCS_BUSINESS_ID;
   if (envBiz) { cachedBusinessId = envBiz; return cachedBusinessId; }
+
   let bid: string | null = null;
-  if (teamId) {
+
+  // 2) Prefer the business where existing WHMCS customers ALREADY live. This is
+  //    critical: the sync's teamId may map to a different tenant than the one the
+  //    staff user actually works in, and deriving from the team would relocate all
+  //    mirrored customers into an empty business — hiding them. Reuse the dominant
+  //    businessId already present on synced customers so we never move them.
+  const existing = await db.collection('customers').where('source', '==', 'whmcs').limit(80).get();
+  const counts = new Map<string, number>();
+  existing.docs.forEach((d) => {
+    const b = (d.data() as any)?.businessId;
+    if (b) counts.set(b, (counts.get(b) || 0) + 1);
+  });
+  if (counts.size) {
+    bid = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
+  }
+
+  // 3) Fresh install (no WHMCS customers yet): fall back to the sync team's
+  //    businessId (team doc, then a team member — mirrors the recurring self-heal).
+  if (!bid && teamId) {
     const teamDoc = await db.collection('teams').doc(teamId).get();
     bid = teamDoc.exists ? ((teamDoc.data() as any)?.businessId ?? null) : null;
-    // Fallback: a member of this team may carry the businessId even if the team
-    // doc doesn't (mirrors the recurring-task self-heal in api/cron/run.ts).
     if (!bid) {
       const tm = await db.collection('teamMembers').where('teamId', '==', teamId).limit(1).get();
       if (!tm.empty) bid = (tm.docs[0].data() as any)?.businessId ?? null;
     }
   }
+
   cachedBusinessId = bid;
   return cachedBusinessId;
 }
