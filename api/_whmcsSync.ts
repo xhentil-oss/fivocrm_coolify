@@ -363,9 +363,15 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
     }
   }
 
+  // The resume cursor now tracks ONLY the invoices/subscriptions backfill. The
+  // clients phase runs in full on EVERY invocation (below), so new WHMCS clients
+  // always appear regardless of how far the (potentially huge) invoice backfill
+  // has advanced. Previously clients were gated behind this cursor and got
+  // starved whenever the cursor was stuck on 'invoices' for a large account.
   const cursor = (status?.syncCursor || null) as { phase?: string; start?: number } | null;
-  let phase: string = cursor?.phase || 'clients';
-  let start: number = cursor?.start || 0;
+  const resumable = cursor?.phase === 'invoices' || cursor?.phase === 'subscriptions';
+  let phase: string = resumable ? cursor!.phase! : 'invoices';
+  let start: number = resumable ? (cursor?.start || 0) : 0;
 
   // Mark the run as started immediately (moves "Fundit" the moment it begins)
   // and clear any stale errors from previous runs so the UI doesn't show old
@@ -397,17 +403,20 @@ export async function runWhmcsSync(): Promise<Record<string, unknown>> {
     };
   };
 
-  // ── Phase: clients → customers ───────────────────────────────────────────
-  if (phase === 'clients') {
-    const res = await runPhase('GetClients', d => d?.clients?.client, async (raw) => {
-      const r = await upsertCustomer(mapWhmcsClientFull(raw), teamId);
-      if (raw?.id != null) clientCache.set(String(raw.id), mapWhmcsClient(raw));
-      return r;
-    }, start, overBudget, errors, counters.clients);
+  // ── Phase: clients → customers (ALWAYS runs, every invocation) ────────────
+  // syncAllClients has no time budget, but it's cheap now (one GetClients page
+  // per 100 clients, no per-client round-trip), so it completes up-front and
+  // seeds clientCache for the invoice/subscription phases below.
+  {
+    const res = await syncAllClients(teamId, errors, clientCache);
+    counters.clients.created = res.clientsCreated;
+    counters.clients.updated = res.clientsUpdated;
     await writeWhmcsStatus({ clientsCreated: counters.clients.created, clientsUpdated: counters.clients.updated, errorCount: errors.length, lastErrors: errors.slice(0, 10) }, teamId);
-    if (!res.done) return pause('clients', res.nextStart);
-    phase = 'invoices'; start = 0;
   }
+
+  // If the clients pass alone exhausted the budget, pause before the backfill so
+  // we resume invoices/subscriptions next run — clients are already current.
+  if (overBudget()) return pause(phase, start);
 
   // ── Phase: invoices ────────────────────────────────────────────────────────
   if (phase === 'invoices') {
