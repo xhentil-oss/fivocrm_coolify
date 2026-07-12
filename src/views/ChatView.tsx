@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
-import { useLocation, Link as RouterLink } from 'react-router-dom';
+import { useLocation, useNavigate, Link as RouterLink } from 'react-router-dom';
 import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -12,6 +12,7 @@ import { Label } from '../components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Separator } from '../components/ui/separator';
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
 import {
   Send, MessageSquare, Users, Hash, Paperclip, X, FileIcon,
   FolderOpen, ArrowLeft, Search, Pencil, Trash2, Reply,
@@ -21,7 +22,7 @@ import {
   ImageIcon, Circle, Pin, PinOff, Mic, Square, Filter, AtSign,
   Bookmark, BookmarkCheck, ListChecks,
   Zap, BellRing, AlarmClock, Wand2, Clock, CalendarClock, Rows3, Languages, Video,
-  LogOut, Crown, Settings2,
+  LogOut, Crown, Settings2, MoreVertical,
 } from 'lucide-react';
 import { useVideoCall } from '../hooks/useVideoCall';
 import ConversationOwnerBar from '../components/chat/ConversationOwnerBar';
@@ -77,6 +78,7 @@ const ChatView: React.FC = () => {
   const { user } = useAuth();
   const { toast } = useToast();
   const location = useLocation();
+  const navigate = useNavigate();
 
   // State
   const [messageText, setMessageText] = useState('');
@@ -84,12 +86,13 @@ const ChatView: React.FC = () => {
   const [activeChannel, setActiveChannel] = useState<string>(() => {
     const s = (location.state as any);
     // No fixed channels anymore — default to no selection (empty state) unless a
-    // specific channel/group was passed via navigation state.
-    return s?.channel && typeof s.channel === 'string' ? s.channel : '';
+    // specific channel/group was passed via navigation state or ?channel= (push deep-link).
+    if (s?.channel && typeof s.channel === 'string') return s.channel;
+    return new URLSearchParams(location.search).get('channel') || '';
   });
   const [activeDirectUserId, setActiveDirectUserId] = useState<string | null>(() => {
     const s = (location.state as any);
-    return s?.directUserId || null;
+    return s?.directUserId || new URLSearchParams(location.search).get('directUserId') || null;
   });
   const [attachmentUrl, setAttachmentUrl] = useState('');
   const [showAttachmentInput, setShowAttachmentInput] = useState(false);
@@ -1461,22 +1464,30 @@ const ChatView: React.FC = () => {
     prevMessageCountRef.current = currentCount;
   }, [filteredMessages?.length]);
 
-  // If navigated here from a notification with channel/directUserId state, open that conversation
+  // Open a conversation when arrived from a notification — either via React Router
+  // navigation state (in-app bell click) or via ?channel=/?directUserId= query
+  // params (push deep-link, which sets the URL hash rather than router state).
   useEffect(() => {
     const s = location.state as any;
-    if (!s) return;
-    if (s.channel && typeof s.channel === 'string') {
+    const params = new URLSearchParams(location.search);
+    const channel = (s?.channel && typeof s.channel === 'string') ? s.channel : params.get('channel');
+    const directUserId = (s?.directUserId && typeof s.directUserId === 'string') ? s.directUserId : params.get('directUserId');
+    if (channel) {
       setChatMode('channel');
-      setActiveChannel(s.channel);
+      setActiveChannel(channel);
       setShowSidebar(false);
-    } else if (s.directUserId && typeof s.directUserId === 'string') {
+    } else if (directUserId) {
       setChatMode('direct');
-      setActiveDirectUserId(s.directUserId);
+      setActiveDirectUserId(directUserId);
       setShowSidebar(false);
+    } else {
+      return;
     }
-    // Clear state so back-navigation doesn't re-trigger
-    window.history.replaceState(null, '', window.location.pathname + window.location.search);
-  }, [location.state]);
+    // Clear state + query params so a reload / back-navigation doesn't re-trigger.
+    // navigate() is router-aware (works for both HashRouter on native and
+    // BrowserRouter on web) — raw history.replaceState would drop the hash route.
+    navigate(location.pathname, { replace: true });
+  }, [location.state, location.search]);
 
   // Scroll to bottom whenever the active conversation changes
   useEffect(() => {
@@ -2601,7 +2612,7 @@ const ChatView: React.FC = () => {
   return (
     <div className={`flex min-h-0 -mx-3 -mt-3 -mb-20 sm:-mx-6 sm:-mt-6 lg:-m-8 ${chatHeightClass} bg-background overflow-hidden`}>
       {/* SIDEBAR */}
-      <aside className={`w-full lg:w-72 border-r bg-muted/5 flex flex-col flex-shrink-0 min-h-0 overflow-hidden transition-all ${showSidebar ? 'flex' : 'hidden lg:flex'}`}>
+      <aside className={`w-full lg:w-72 border-r border-[#E4E9F1] dark:border-border bg-[#F7F9FC] dark:bg-muted/5 flex flex-col flex-shrink-0 min-h-0 overflow-hidden transition-all ${showSidebar ? 'flex' : 'hidden lg:flex'}`}>
         {/* Sidebar header */}
         <div className="px-4 py-3 border-b flex items-center justify-between">
           <h2 className="font-semibold text-sm">Mesazhe</h2>
@@ -2994,24 +3005,30 @@ const ChatView: React.FC = () => {
             </div>
           ) : chatMode === 'channel' ? (
             <div className="flex items-center gap-3 flex-1 min-w-0">
-              {activeChannel.startsWith('client-') ? (
-                <>
-                  <div className="h-9 w-9 rounded-xl bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center flex-shrink-0">
-                    <Users className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
-                  </div>
-                  <div className="min-w-0">
-                    <p className="font-semibold text-sm truncate">
-                      {(() => {
-                        const match = activeChannel.match(/^client-(.+?)-project-(.+)$/);
-                        if (match) { const c = customers?.find(cu => cu.id === match[1]); const p = projects?.find(pr => pr.id === match[2]); return `${c?.name || 'Klient'} — ${p?.name || 'Projekt'}`; }
-                        const custId = activeChannel.replace('client-', '');
-                        return customers?.find(c => c.id === custId)?.name || 'Klient';
-                      })()}
-                    </p>
-                    <p className="text-[11px] text-muted-foreground">Kanal klienti</p>
-                  </div>
-                </>
-              ) : (() => {
+              {activeChannel.startsWith('client-') ? (() => {
+                const clientName = (() => {
+                  const match = activeChannel.match(/^client-(.+?)-project-(.+)$/);
+                  if (match) { const c = customers?.find(cu => cu.id === match[1]); const p = projects?.find(pr => pr.id === match[2]); return `${c?.name || 'Klient'} — ${p?.name || 'Projekt'}`; }
+                  const custId = activeChannel.replace('client-', '');
+                  return customers?.find(c => c.id === custId)?.name || 'Klient';
+                })();
+                return (
+                  <>
+                    <div className="h-11 w-11 rounded-full bg-[#E6F6EF] dark:bg-emerald-900/30 flex items-center justify-center flex-shrink-0">
+                      <span className="text-sm font-bold text-[#1B9E63] dark:text-emerald-300">{clientName.slice(0, 2).toUpperCase()}</span>
+                    </div>
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <p className="font-semibold text-[15px] text-[#0C1B33] dark:text-foreground truncate">{clientName}</p>
+                        <span className="flex-shrink-0 text-[9.5px] font-bold uppercase tracking-[0.06em] px-1.5 py-0.5 rounded bg-[#E6F6EF] text-[#1B9E63] dark:bg-emerald-900/30 dark:text-emerald-300">Klient</span>
+                      </div>
+                      <p className="text-[11.5px] text-emerald-600 dark:text-emerald-400 flex items-center gap-1.5">
+                        <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" /> Aktiv tani
+                      </p>
+                    </div>
+                  </>
+                );
+              })() : (() => {
                 const meta = getChannelMeta(activeChannel);
                 // Fixed channels removed — a non-client channel is either a group
                 // or nothing selected (empty state).
@@ -3086,39 +3103,43 @@ const ChatView: React.FC = () => {
               </Button>
             )}
             {chatMode !== 'ai' && (
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleExtractActions} disabled={actionExtractLoading} title="Nxirr detyrat nga biseda (AI)">
-                {actionExtractLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
-              </Button>
-            )}
-            {chatMode !== 'ai' && (
-              <Button
-                variant="ghost"
-                size="icon"
-                className="h-8 w-8 relative"
-                onClick={() => {
-                  const cur = user ? getUserStatus(user.uid) : null;
-                  setStatusEmojiInput(cur?.emoji || '💬');
-                  setStatusTextInput(cur?.text || '');
-                  setStatusHoursInput(2);
-                  setStatusDialogOpen(true);
-                }}
-                title="Statusi im"
-              >
-                {(() => {
-                  const s = user ? getUserStatus(user.uid) : null;
-                  return s ? <span className="text-base leading-none">{s.emoji}</span> : <Circle className="h-4 w-4" />;
-                })()}
-              </Button>
-            )}
-            {chatMode !== 'ai' && (
-              <Button variant="ghost" size="icon" className={`h-8 w-8 ${compactMode ? 'text-primary' : ''}`} onClick={() => setCompactMode(c => !c)} title={compactMode ? 'Pamje normale' : 'Pamje kompakte'}>
-                <Rows3 className="h-4 w-4" />
-              </Button>
-            )}
-            {chatMode !== 'ai' && (
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setShowSearch(!showSearch); setSearchQuery(''); }}>
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setShowSearch(!showSearch); setSearchQuery(''); }} title="Kërko në bisedë">
                 <Search className="h-4 w-4" />
               </Button>
+            )}
+            {chatMode !== 'ai' && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="ghost" size="icon" className="h-8 w-8" title="Më shumë">
+                    <MoreVertical className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-52">
+                  <DropdownMenuItem onClick={handleExtractActions} disabled={actionExtractLoading}>
+                    {actionExtractLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ListChecks className="h-4 w-4" />}
+                    <span>Nxirr detyrat (AI)</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={() => {
+                      const cur = user ? getUserStatus(user.uid) : null;
+                      setStatusEmojiInput(cur?.emoji || '💬');
+                      setStatusTextInput(cur?.text || '');
+                      setStatusHoursInput(2);
+                      setStatusDialogOpen(true);
+                    }}
+                  >
+                    {(() => {
+                      const s = user ? getUserStatus(user.uid) : null;
+                      return s ? <span className="text-base leading-none">{s.emoji}</span> : <Circle className="h-4 w-4" />;
+                    })()}
+                    <span>Statusi im</span>
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={() => setCompactMode(c => !c)}>
+                    <Rows3 className={`h-4 w-4 ${compactMode ? 'text-primary' : ''}`} />
+                    <span>{compactMode ? 'Pamje normale' : 'Pamje kompakte'}</span>
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
             )}
           </div>
         </header>
@@ -3941,10 +3962,39 @@ const ChatView: React.FC = () => {
                     </div>
                   )}
                   <div className="flex items-center gap-0.5 flex-shrink-0 pb-1">
-                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
-                      onClick={() => setShowAttachmentInput(!showAttachmentInput)} disabled={isSending}>
-                      <Paperclip className="h-3.5 w-3.5" />
-                    </Button>
+                    {/* Overflow "+" — secondary actions (snippets, AI polish/replies, schedule) */}
+                    <DropdownMenu>
+                      <DropdownMenuTrigger asChild>
+                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground" disabled={isSending} title="Më shumë">
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" side="top" className="w-56">
+                        <DropdownMenuItem onClick={() => { setShowAttachmentInput(!showAttachmentInput); }}>
+                          <Link2 className="h-4 w-4" /> <span>Ngjit URL skedari</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem onClick={() => { setSnippetSearch(''); setSnippetPickerOpen(true); }}>
+                          <Zap className="h-4 w-4" /> <span>Përgjigje të ruajtura</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem disabled={polishLoading || !messageText.trim()} onClick={handlePolishMessage}>
+                          {polishLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Wand2 className="h-4 w-4" />} <span>Përmirëso tekstin (AI)</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem disabled={smartRepliesLoading} onClick={handleSuggestReplies}>
+                          {smartRepliesLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />} <span>Sugjero përgjigje (AI)</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          disabled={(!messageText.trim() && !attachmentUrl.trim()) || chatMode === 'ai'}
+                          onClick={() => {
+                            const d = new Date(Date.now() + 60 * 60 * 1000);
+                            setScheduleDate(d.toISOString().slice(0, 10));
+                            setScheduleTime(d.toTimeString().slice(0, 5));
+                            setScheduleOpen(true);
+                          }}
+                        >
+                          <CalendarClock className="h-4 w-4" /> <span>Programo mesazhin</span>
+                        </DropdownMenuItem>
+                      </DropdownMenuContent>
+                    </DropdownMenu>
                     <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={
@@ -3976,23 +4026,9 @@ const ChatView: React.FC = () => {
                       }}
                     />
                     <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
-                      disabled={isSending} onClick={() => setShowEmojiPicker(showEmojiPicker ? null : 'input')}>
+                      disabled={isSending} onClick={() => setShowEmojiPicker(showEmojiPicker ? null : 'input')}
+                      title="Emoji">
                       <SmilePlus className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button type="button" variant="ghost" size="icon" className="hidden sm:inline-flex h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
-                      disabled={isSending} onClick={() => { setSnippetSearch(''); setSnippetPickerOpen(true); }}
-                      title="Përgjigje të ruajtura">
-                      <Zap className="h-3.5 w-3.5" />
-                    </Button>
-                    <Button type="button" variant="ghost" size="icon" className="hidden sm:inline-flex h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
-                      disabled={isSending || polishLoading || !messageText.trim()} onClick={handlePolishMessage}
-                      title="Përmirëso tekstin me AI">
-                      {polishLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Wand2 className="h-3.5 w-3.5" />}
-                    </Button>
-                    <Button type="button" variant="ghost" size="icon" className="hidden sm:inline-flex h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
-                      disabled={isSending || smartRepliesLoading} onClick={handleSuggestReplies}
-                      title="Sugjero përgjigje me AI">
-                      {smartRepliesLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Sparkles className="h-3.5 w-3.5" />}
                     </Button>
                   </div>
 
@@ -4046,26 +4082,9 @@ const ChatView: React.FC = () => {
                   />
 
                   <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="h-9 w-9 rounded-full flex-shrink-0 mb-0.5 text-muted-foreground hover:text-foreground"
-                    disabled={isSending || (!messageText.trim() && !attachmentUrl.trim()) || chatMode === 'ai'}
-                    onClick={() => {
-                      const d = new Date(Date.now() + 60 * 60 * 1000);
-                      setScheduleDate(d.toISOString().slice(0, 10));
-                      setScheduleTime(d.toTimeString().slice(0, 5));
-                      setScheduleOpen(true);
-                    }}
-                    title="Programo mesazhin"
-                  >
-                    <CalendarClock className="h-4 w-4" />
-                  </Button>
-
-                  <Button
                     type="submit"
                     size="icon"
-                    className={`h-9 w-9 rounded-xl flex-shrink-0 mb-0.5 transition-all ${
+                    className={`h-11 w-11 rounded-[13px] flex-shrink-0 transition-all ${
                       messageText.trim() || attachmentUrl.trim() ? 'bg-accent-gradient text-white shadow-[0_8px_18px_-8px_#0EA5E9] hover:opacity-95' : 'bg-muted text-muted-foreground/40'
                     }`}
                     disabled={isSending || (!messageText.trim() && !attachmentUrl.trim()) || (chatMode === 'direct' && !activeDirectUserId)}

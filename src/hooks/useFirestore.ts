@@ -597,16 +597,25 @@ export function useMutation<T = DocumentData>(collectionName: string) {
       const docRef = await addDoc(collection(db, collectionName), docData);
       if (staticCollections.has(collectionName)) invalidateCollectionCache(collectionName);
 
-      // Email delivery for in-app notifications — single choke point covering
-      // every notification creation site. Fire-and-forget; the server endpoint
-      // resolves the recipient's email and honors their preferences (emailEnabled,
-      // category mute, Do-Not-Disturb) and skips self-notifications. Cron-created
+      // Push + email delivery for in-app notifications — single choke point
+      // covering every notification creation site. Fire-and-forget; the server
+      // endpoint sends an FCM push (arrives even when the app is closed) AND an
+      // email, honoring per-channel prefs (pushEnabled/emailEnabled) + category
+      // mute + Do-Not-Disturb, and skips self-notifications. Cron-created
       // notifications use the admin SDK directly and bypass this path (no dupes).
       if (collectionName === 'notifications' && (docData as any).userId && (docData as any).title) {
         (async () => {
           try {
             const token = await auth.currentUser?.getIdToken();
             if (!token) return;
+            // Deep-link target: prefer an explicit actionUrl; otherwise derive one
+            // from linkTo. A linkTo that isn't a path is a chat channel id, so open
+            // the chat with it (mirrors NotificationsCenter click behavior). This is
+            // read as a query param by ChatView so push taps land on the channel.
+            const rawLink = (docData as any).actionUrl ?? (docData as any).linkTo;
+            const resolvedUrl = rawLink
+              ? (String(rawLink).startsWith('/') ? String(rawLink) : `/app/chat?channel=${encodeURIComponent(String(rawLink))}`)
+              : undefined;
             await fetch('/api/send-notification-email', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
@@ -615,7 +624,7 @@ export function useMutation<T = DocumentData>(collectionName: string) {
                 type: (docData as any).type,
                 title: (docData as any).title,
                 message: (docData as any).message,
-                actionUrl: (docData as any).actionUrl,
+                actionUrl: resolvedUrl,
                 actionLabel: (docData as any).actionLabel,
               }),
             });

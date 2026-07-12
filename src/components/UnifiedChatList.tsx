@@ -1,5 +1,5 @@
 import React, { useMemo, useState } from 'react';
-import { Search, X, Sparkles, Users, AlertTriangle, Plus } from 'lucide-react';
+import { Search, X, Sparkles, Users, Plus } from 'lucide-react';
 
 // Unified WhatsApp-style conversation list (chat redesign handoff).
 // A single recency-sorted list of clients + staff (DMs) + groups + FivoAI, with a
@@ -53,7 +53,7 @@ function pastelFor(key: string): string {
 const TAGS: Record<ConvType, { label: string; cls: string } | null> = {
   ai: { label: 'AI', cls: 'bg-accent-soft text-primary dark:bg-primary/10 dark:text-primary' },
   group: { label: 'Grup', cls: 'bg-accent-soft text-primary dark:bg-primary/10 dark:text-primary' },
-  client: { label: 'Klient', cls: 'bg-teal-100 text-teal-700 dark:bg-teal-900/30 dark:text-teal-300' },
+  client: { label: 'Klient', cls: 'bg-[#E6F6EF] text-[#1B9E63] dark:bg-emerald-900/30 dark:text-emerald-300' },
   staff: null,
 };
 
@@ -66,8 +66,10 @@ const ConversationRow: React.FC<{ c: UnifiedConv }> = ({ c }) => {
   return (
     <button
       onClick={c.onSelect}
-      className={`group/row w-full flex items-stretch gap-3 pl-2 pr-2 rounded-xl text-left transition-colors ${
-        c.isActive ? 'bg-primary/10 border border-primary/30 dark:border-primary/40' : 'hover:bg-accent/50'
+      className={`group/row w-full flex items-stretch gap-3 pl-2 pr-2 rounded-[14px] text-left border transition-colors ${
+        c.isActive
+          ? 'bg-white dark:bg-card border-[#DCE6F5] dark:border-primary/40 shadow-[0_6px_16px_-10px_rgba(12,27,51,0.25)]'
+          : 'border-transparent hover:bg-white/60 dark:hover:bg-accent/50'
       }`}
     >
       {/* Avatar */}
@@ -96,13 +98,13 @@ const ConversationRow: React.FC<{ c: UnifiedConv }> = ({ c }) => {
           <div className="flex items-center gap-1.5">
             <span className="truncate text-[15px] font-semibold text-foreground">{c.name}</span>
             {tag && (
-              <span className={`flex-shrink-0 text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${tag.cls}`}>{tag.label}</span>
+              <span className={`flex-shrink-0 text-[9.5px] font-bold uppercase tracking-[0.06em] px-1.5 py-0.5 rounded ${tag.cls}`}>{tag.label}</span>
             )}
             {c.statusEmoji && <span className="flex-shrink-0 text-xs opacity-75">{c.statusEmoji}</span>}
           </div>
           {c.unassigned ? (
-            <p className="mt-0.5 flex items-center gap-1 text-[13px] font-bold text-amber-600 dark:text-amber-400 truncate">
-              <AlertTriangle className="h-3 w-3 flex-shrink-0" /> Pa përgjegjës
+            <p className="mt-0.5 flex items-center gap-1.5 text-[12.5px] font-medium text-[#B0863E] dark:text-amber-300/80 truncate">
+              <span className="h-1.5 w-1.5 rounded-full bg-[#E0982E] flex-shrink-0" /> Pa përgjegjës
             </p>
           ) : (
             <p className={`mt-0.5 text-[13px] truncate ${showUnread ? 'text-foreground/80 font-medium' : 'text-muted-foreground'}`}>
@@ -113,7 +115,7 @@ const ConversationRow: React.FC<{ c: UnifiedConv }> = ({ c }) => {
         {/* Meta */}
         <div className="flex flex-col items-end gap-1.5 flex-shrink-0">
           {c.time > 0 && (
-            <span className={`text-[11px] ${showUnread ? 'font-bold text-primary' : 'text-muted-foreground/60'}`}>
+            <span className={`text-[11.5px] font-medium ${showUnread ? 'font-bold text-primary' : 'text-muted-foreground/60'}`}>
               {formatShort(c.time)}
             </span>
           )}
@@ -176,7 +178,7 @@ const UnifiedChatList: React.FC<Props> = ({ conversations, canCreateGroups, onCr
   const rest = filter === 'all' && !search.trim() ? visible.filter(c => !c.pinned) : visible;
 
   return (
-    <div className="flex flex-col flex-1 min-h-0">
+    <div className="flex flex-col flex-1 min-h-0 bg-[#F7F9FC] dark:bg-transparent">
       {/* Single search */}
       <div className="px-3 pt-2 pb-1">
         <div className="relative">
@@ -199,7 +201,7 @@ const UnifiedChatList: React.FC<Props> = ({ conversations, canCreateGroups, onCr
       </div>
 
       {/* Filter chips */}
-      <div className="flex gap-2 px-3 py-2 overflow-x-auto no-scrollbar border-b border-border/50">
+      <div className="flex gap-2 px-4 pt-1 pb-3.5 overflow-x-auto no-scrollbar">
         {FILTERS.map(f => {
           const active = filter === f.key;
           const showCount = f.key === 'unassigned' && unassignedCount > 0;
@@ -207,14 +209,16 @@ const UnifiedChatList: React.FC<Props> = ({ conversations, canCreateGroups, onCr
             <button
               key={f.key}
               onClick={() => setFilter(f.key)}
-              className={`h-8 px-3 inline-flex items-center gap-1.5 rounded-full text-[13px] font-bold whitespace-nowrap transition-colors ${
-                active ? 'bg-primary text-primary-foreground' : 'bg-background text-muted-foreground border border-border'
+              className={`shrink-0 py-2 px-[15px] inline-flex items-center gap-1.5 rounded-full text-[13px] font-semibold whitespace-nowrap transition-colors ${
+                active
+                  ? 'bg-gradient-secondary text-white border border-transparent shadow-[0_8px_16px_-10px_#12468C]'
+                  : 'bg-white dark:bg-card text-[#5B6B85] dark:text-muted-foreground border border-[#E4E9F1] dark:border-border'
               }`}
             >
-              {f.key === 'unassigned' && <span className="h-1.5 w-1.5 rounded-full bg-amber-500" />}
+              {f.key === 'unassigned' && <span className="h-1.5 w-1.5 rounded-full bg-[#E0982E]" />}
               {f.label}
               {showCount && (
-                <span className={`text-[11px] px-1.5 rounded-full ${active ? 'bg-white/40 text-primary-foreground' : 'bg-muted text-muted-foreground'}`}>
+                <span className={`text-[11px] font-bold px-[7px] py-px rounded-full ${active ? 'bg-white/25 text-white' : 'bg-[#EEF2F7] dark:bg-muted text-muted-foreground'}`}>
                   {unassignedCount}
                 </span>
               )}
