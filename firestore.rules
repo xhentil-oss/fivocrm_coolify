@@ -69,6 +69,29 @@ service cloud.firestore {
       return isBusinessMember(resource.data.businessId) || isSuperAdmin();
     }
 
+    // CREATE guard (enterprise "you can't write outside your tenant"): the NEW
+    // doc's businessId MUST be the writer's own business. Enforced at the rules
+    // layer so a buggy/hostile client can never stamp another tenant's id — the
+    // isolation no longer depends on the app code being correct.
+    function canCreateBusinessDoc() {
+      return isBusinessMember(request.resource.data.businessId) || isSuperAdmin();
+    }
+
+    // Portal self-service create: an authenticated user creating a record tied to
+    // their OWN uid. Portal clients aren't business members yet (their businessId
+    // is the tenant default, resolved at signup), so this narrow path lets them
+    // create ONLY their own onboarding records (customer/lead/access/request/
+    // inquiry) — never staff data, and only "as themselves".
+    function isSelfCreate() {
+      return isAuth() && request.resource.data.createdByUserId == request.auth.uid;
+    }
+
+    // UPDATE guard: the tenant key is immutable — an edit may never move a doc to
+    // another business (blocks tenant-hopping via update). Super-admins may.
+    function keepsBusinessId() {
+      return isSuperAdmin() || request.resource.data.businessId == resource.data.businessId;
+    }
+
     // Portal client reading their own customer's data. useClientPortal mirrors the
     // portal user's customerId onto users/{uid}.customerId (uid-keyed), so rules can
     // resolve uid → customerId deterministically without re-keying clientPortalAccess.
@@ -131,7 +154,7 @@ service cloud.firestore {
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
-      allow create: if isAuth();
+      allow create: if canCreateBusinessDoc() || isSelfCreate();
       allow update, delete: if canManageBusinessDoc()
         || isPortalClientFor(resource.data.customerId);
     }
@@ -145,7 +168,7 @@ service cloud.firestore {
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
-      allow create: if canCreateForTeam();
+      allow create: if canCreateBusinessDoc();
       allow update, delete: if canManageBusinessDoc()
         || isPortalClientFor(resource.data.customerId);
     }
@@ -171,7 +194,7 @@ service cloud.firestore {
         || (isAuth() && request.auth.token.email != null
             && resource.data.email == request.auth.token.email.lower())
         || isSuperAdmin();
-      allow create: if isAuth();
+      allow create: if canCreateBusinessDoc() || isSelfCreate();
       allow update, delete: if canManageBusinessDoc()
         || isPortalClientDoc(docId);
     }
@@ -186,15 +209,19 @@ service cloud.firestore {
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
-      allow create: if isAuth();
+      allow create: if canCreateBusinessDoc() || isSelfCreate();
       allow update, delete: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
     }
 
     match /services/{docId} {
-      // Authenticated read only — services contain team-specific pricing/data.
+      // NOTE: read stays `isAuth()` — the client portal (PortalServicesView,
+      // PortalDashboard, PortalInvoicesView) reads services with skipTeamFilter and
+      // portal clients aren't business members, so tightening read would break them.
+      // TODO (follow-up): scope the portal's services query by the client's business
+      // and gate read by a portal-of-business clause. Create/update ARE hardened.
       allow read: if isAuth();
-      allow create: if canCreateForTeam();
-      allow update, delete: if isAuth() && ownsTeamDoc();
+      allow create: if canCreateBusinessDoc();
+      allow update, delete: if canManageBusinessDoc();
     }
 
     // ── Phase 4.3a: staff-only collections (never read by the client portal,
@@ -204,19 +231,19 @@ service cloud.firestore {
     // filtered queries the client issues — no breakage.
     match /expenses/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateForTeam();
+      allow create: if canCreateBusinessDoc();
       allow update, delete: if canManageBusinessDoc();
     }
 
     match /goals/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateForTeam();
+      allow create: if canCreateBusinessDoc();
       allow update, delete: if canManageBusinessDoc();
     }
 
     match /timeEntries/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateForTeam();
+      allow create: if canCreateBusinessDoc();
       allow update, delete: if canManageBusinessDoc();
     }
 
@@ -228,7 +255,7 @@ service cloud.firestore {
         || (isAuth() && resource.data.memberUserIds is list
             && request.auth.uid in resource.data.memberUserIds)
         || isSuperAdmin();
-      allow create: if canCreateForTeam();
+      allow create: if canCreateBusinessDoc();
       allow update, delete: if canManageBusinessDoc()
         || isPortalClientFor(resource.data.customerId);
     }
@@ -297,13 +324,13 @@ service cloud.firestore {
 
     match /activities/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateForTeam();
+      allow create: if canCreateBusinessDoc();
       allow update, delete: if false;
     }
 
     match /dailyReports/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateForTeam();
+      allow create: if canCreateBusinessDoc();
       allow update, delete: if canManageBusinessDoc();
     }
 
@@ -312,7 +339,7 @@ service cloud.firestore {
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
-      allow create: if canCreateForTeam();
+      allow create: if canCreateBusinessDoc();
       allow update, delete: if canManageBusinessDoc()
         || isPortalClientFor(resource.data.customerId);
     }
@@ -333,7 +360,7 @@ service cloud.firestore {
 
     match /taskCollaborators/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateForTeam();
+      allow create: if canCreateBusinessDoc();
       allow update, delete: if canManageBusinessDoc();
     }
 
@@ -341,15 +368,16 @@ service cloud.firestore {
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
-      // Portal users may not have teamId resolved yet
-      allow create: if isAuth();
+      // Portal users may not have teamId resolved yet — allow their own self-create;
+      // staff must carry their own businessId.
+      allow create: if canCreateBusinessDoc() || isSelfCreate();
       allow update, delete: if canManageBusinessDoc()
         || isPortalClientFor(resource.data.customerId);
     }
 
     match /customIndustries/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if isAuth();
+      allow create: if canCreateBusinessDoc();
       allow update, delete: if canManageBusinessDoc();
     }
 
@@ -371,8 +399,8 @@ service cloud.firestore {
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
-      // Portal clients can create comments
-      allow create: if isAuth();
+      // Portal clients create their own comments; staff carry their businessId.
+      allow create: if canCreateBusinessDoc() || isSelfCreate();
       allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
     }
 
@@ -381,15 +409,15 @@ service cloud.firestore {
       allow read: if isBusinessMember(resource.data.businessId)
         || (isAuth() && resource.data.clientUserId == request.auth.uid)
         || isSuperAdmin();
-      // Portal clients can submit inquiries
-      allow create: if isAuth();
+      // Portal clients submit their own inquiries; staff carry their businessId.
+      allow create: if canCreateBusinessDoc() || isSelfCreate();
       allow update, delete: if canManageBusinessDoc()
         || (isAuth() && resource.data.clientUserId == request.auth.uid);
     }
 
     match /standups/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateForTeam();
+      allow create: if canCreateBusinessDoc();
       allow update, delete: if canManageBusinessDoc();
     }
 
@@ -401,7 +429,7 @@ service cloud.firestore {
       allow read: if isBusinessMember(resource.data.businessId)
         || quoteAccessibleByPortal()
         || isSuperAdmin();
-      allow create: if canCreateForTeam();
+      allow create: if canCreateBusinessDoc();
       allow update: if isBusinessMember(resource.data.businessId)
         || quoteAccessibleByPortal()
         || isSuperAdmin();
@@ -412,7 +440,7 @@ service cloud.firestore {
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
-      allow create: if canCreateForTeam();
+      allow create: if canCreateBusinessDoc();
       // Portal client may respond to / sign their own contract.
       allow update, delete: if canManageBusinessDoc()
         || isPortalClientFor(resource.data.customerId);
@@ -480,7 +508,9 @@ service cloud.firestore {
 
     match /clientPortalAccess/{docId} {
       allow read: if isAuth();
-      allow create: if isAuth();
+      // Self-create only: portal client (createdByUserId == own uid) or staff
+      // creating a client's access (also stamps their own uid as creator).
+      allow create: if isSelfCreate() || isSuperAdmin();
       // Portal clients may only update their own safe fields.
       // Immutable fields (accessLevel, role, teamId, customerId, userId, email) can NEVER
       // be changed by the portal user — only the server-side Admin SDK may do so.
@@ -543,7 +573,7 @@ service cloud.firestore {
 
     match /milestones/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateForTeam();
+      allow create: if canCreateBusinessDoc();
       allow update, delete: if canManageBusinessDoc();
     }
 
