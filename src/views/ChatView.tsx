@@ -2596,10 +2596,10 @@ const ChatView: React.FC = () => {
   //  R E N D E R
   // =====================================
 
+  // Fills the full-bleed route wrapper (App.tsx gives /app/chat a padding-free
+  // flex-1 min-h-0 container). h-full + the parent's single dvh height context
+  // means no svh/-mb hacks are needed and the bottom nav stays on-screen.
   return (
-    {/* Fills the full-bleed route wrapper (App.tsx gives /app/chat a padding-free
-        flex-1 min-h-0 container). h-full + the parent's single dvh height context
-        means no svh/-mb hacks are needed and the bottom nav stays on-screen. */}
     <div className="flex min-w-0 h-full bg-background overflow-hidden">
       {/* SIDEBAR — full-width master list on mobile, fixed rail on lg+. On mobile
           it collapses (hidden) once a conversation opens so <main> fills the screen. */}
