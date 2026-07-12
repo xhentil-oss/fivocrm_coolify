@@ -15,6 +15,14 @@ import type { ClientPortalAccess, Customer } from '../types';
  * Uses direct Firestore writes (not useMutation) to avoid hook closure issues.
  */
 
+// Default tenant for the apex / *.vercel.app host, where there is no portal
+// subdomain to resolve (usePortalTenant returns null there). Without this, a
+// brand-new client's records fell back to "the first team member in a
+// cross-tenant, unordered query" — i.e. an ARBITRARY tenant — so clients landed
+// in the wrong business. Set both to the MAIN tenant's ids in the environment.
+const DEFAULT_TEAM_ID = (import.meta.env.VITE_DEFAULT_TEAM_ID as string | undefined) || undefined;
+const DEFAULT_BUSINESS_ID = (import.meta.env.VITE_DEFAULT_BUSINESS_ID as string | undefined) || undefined;
+
 // ── Module-level singleton guards ───────────────────────────────────────────
 // Multiple portal views call useClientPortal() simultaneously (PortalLayout,
 // PortalDashboard, PortalChatView, etc.). Each instance has its own React ref,
@@ -117,7 +125,9 @@ export function useClientPortal() {
   // Prefer the subdomain tenant's team; else fall back to any available team member
   // (apex/agency behavior) so portal-created docs satisfy rules requiring teamId.
   const resolveTeamId = useCallback(() => {
-    return tenantTeamId || allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
+    // Priority: subdomain tenant → configured default (main tenant) → first
+    // cross-tenant member (last-resort; arbitrary — the bug we're fixing).
+    return tenantTeamId || DEFAULT_TEAM_ID || allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
   }, [tenantTeamId, allTeamMembers]);
 
   // Resolve the businessId to stamp on client-created docs. On a tenant subdomain
@@ -128,6 +138,7 @@ export function useClientPortal() {
   // became invisible in the business-scoped admin views.
   const resolveBusinessId = useCallback(() => {
     if (tenantBusinessId) return tenantBusinessId;
+    if (DEFAULT_BUSINESS_ID) return DEFAULT_BUSINESS_ID;
     const teamId = resolveTeamId();
     const sameTeam = allTeamMembers?.find((m: any) => m.teamId === teamId && m.businessId);
     return sameTeam?.businessId || allTeamMembers?.find((m: any) => m.businessId)?.businessId || null;
