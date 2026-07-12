@@ -42,3 +42,6 @@ scripts/sa.json
 *serviceAccount*.json
 *service-account*.json
 *-firebase-adminsdk-*.json
+
+# Tenant-cleanup rollback backups (keep local, never commit)
+migration-backup-*.json

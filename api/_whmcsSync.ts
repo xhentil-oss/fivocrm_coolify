@@ -34,11 +34,32 @@ function toTs(d: Date | null) {
 let cachedTeamId: string | null | undefined;
 async function resolveTeamId(): Promise<string | null> {
   if (cachedTeamId !== undefined) return cachedTeamId;
+  // 1) Explicit env wins — the deterministic, recommended control.
   const envTeam = process.env.WHMCS_TEAM_ID;
-  if (envTeam) {
-    cachedTeamId = envTeam;
-    return cachedTeamId;
+  if (envTeam) { cachedTeamId = envTeam; return cachedTeamId; }
+
+  // 2) Derive a team that BELONGS to the WHMCS business, so mirrored data can
+  //    never land on ANOTHER tenant's team. The old code used the first team in
+  //    the whole collection (`teams limit 1`), which was a different tenant's
+  //    team → 398 Agjencia records ended up on KB Group's team. Never again:
+  //    every candidate team is verified to share the resolved businessId.
+  const businessId = await resolveBusinessId(null);
+  if (businessId) {
+    // Prefer the dominant team already used by this business's WHMCS customers…
+    const existing = await db.collection('customers')
+      .where('source', '==', 'whmcs').where('businessId', '==', businessId).limit(80).get();
+    const counts = new Map<string, number>();
+    existing.docs.forEach((d) => { const t = (d.data() as any)?.teamId; if (t) counts.set(t, (counts.get(t) || 0) + 1); });
+    for (const [t] of [...counts.entries()].sort((a, b) => b[1] - a[1])) {
+      const td = await db.collection('teams').doc(t).get();
+      if (td.exists && (td.data() as any)?.businessId === businessId) { cachedTeamId = t; return cachedTeamId; }
+    }
+    // …else any team owned by this business.
+    const owned = await db.collection('teams').where('businessId', '==', businessId).limit(1).get();
+    if (!owned.empty) { cachedTeamId = owned.docs[0].id; return cachedTeamId; }
   }
+
+  // 3) Fresh install (no WHMCS customers, no business): first team as last resort.
   const teamsSnap = await db.collection('teams').limit(1).get();
   cachedTeamId = teamsSnap.empty ? null : teamsSnap.docs[0].id;
   return cachedTeamId;
