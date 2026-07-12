@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useLocation, useNavigate, Link as RouterLink } from 'react-router-dom';
 import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
@@ -165,6 +166,30 @@ const ChatView: React.FC = () => {
   // UX state
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
+
+  // Mobile long-press action menu (WhatsApp/Telegram style): holds the id of the
+  // message whose bottom-sheet is open. Desktop keeps its hover toolbar untouched.
+  const [longPressMenuId, setLongPressMenuId] = useState<string | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Guards the synthetic click that fires after a long-press touchend, so opening
+  // the menu doesn't also trigger a tap action on the bubble.
+  const longPressFiredRef = useRef(false);
+
+  // Start the press timer; after ~450ms open the action sheet + a subtle haptic.
+  const startLongPress = useCallback((id: string) => {
+    longPressFiredRef.current = false;
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = setTimeout(() => {
+      longPressFiredRef.current = true;
+      try { navigator.vibrate?.(12); } catch { /* haptics optional */ }
+      setLongPressMenuId(id);
+    }, 450);
+  }, []);
+  // Cancel a pending press (finger lifted early, moved/scrolled, or cancelled).
+  const cancelLongPress = useCallback(() => {
+    if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; }
+  }, []);
+  useEffect(() => () => { if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current); }, []);
   const bottomSentinelRef = useRef<HTMLDivElement>(null);
   const sessionUnreadIdsRef = useRef<Set<string>>(new Set());
   const seededConvKeyRef = useRef<string>('');
@@ -3437,8 +3462,17 @@ const ChatView: React.FC = () => {
                                 </div>
                               )}
 
-                              {/* Bubble */}
-                              <div className={`relative ${(hasImage || hasAudio) && isPlaceholderContent ? 'p-1.5' : 'px-4 py-2.5'} ${
+                              {/* Bubble — long-press (mobile) opens the action sheet; on
+                                  mobile text isn't selectable and the native callout is
+                                  suppressed so the press feels like a native app. Desktop
+                                  keeps text selection + the hover toolbar unchanged. */}
+                              <div
+                                onTouchStart={() => { if (!isDeleted && !isEditing) startLongPress(message.id); }}
+                                onTouchEnd={cancelLongPress}
+                                onTouchMove={cancelLongPress}
+                                onTouchCancel={cancelLongPress}
+                                onContextMenu={(e) => { if (!isDeleted && !isEditing) e.preventDefault(); }}
+                                className={`relative select-none sm:select-text [-webkit-touch-callout:none] ${(hasImage || hasAudio) && isPlaceholderContent ? 'p-1.5' : 'px-4 py-2.5'} ${
                                 isOwn
                                   ? 'bg-accent-gradient text-white rounded-2xl rounded-br-md shadow-[0_6px_16px_-8px_rgba(14,165,233,0.6)]'
                                   : 'bg-card text-foreground border border-border rounded-2xl rounded-tl-md shadow-sm'
@@ -3660,57 +3694,80 @@ const ChatView: React.FC = () => {
                                 </div>
                               )}
 
-                              {/* Mobile-visible quick actions row */}
-                              {!isDeleted && !isEditing && (
-                                <div className={`flex sm:hidden items-center gap-1 mt-1 ${isOwn ? 'justify-end' : 'justify-start'}`}>
-                                  <button
-                                    className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-foreground active:text-foreground"
-                                    onClick={() => setReplyingTo(message)}
+                              {/* Mobile long-press action sheet — replaces the old
+                                  always-visible quick-actions row. Opened by long-pressing
+                                  the bubble (see startLongPress on the bubble above) and
+                                  rendered in a portal on document.body so it can't be
+                                  clipped by the chat's overflow/scroll containers. Only
+                                  one is ever open (keyed by longPressMenuId). sm:hidden →
+                                  mobile only; desktop keeps its hover toolbar. */}
+                              {longPressMenuId === message.id && !isDeleted && !isEditing && createPortal(
+                                <div className="sm:hidden" role="dialog" aria-modal="true">
+                                  {/* Backdrop — tap anywhere to dismiss */}
+                                  <div
+                                    className="fixed inset-0 z-[60] bg-black/50 animate-in fade-in duration-150"
+                                    onClick={() => setLongPressMenuId(null)}
+                                  />
+                                  {/* Slide-up sheet */}
+                                  <div
+                                    className="fixed inset-x-0 bottom-0 z-[61] bg-popover border-t rounded-t-2xl shadow-2xl animate-in slide-in-from-bottom duration-200"
+                                    style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
                                   >
-                                    <Reply className="h-3.5 w-3.5" />
-                                  </button>
-                                  <button
-                                    className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-foreground active:text-foreground"
-                                    onClick={() => {
-                                      navigator.clipboard.writeText(message.content).catch(() => {});
-                                      setCopiedMsgId(message.id);
-                                      setTimeout(() => setCopiedMsgId(null), 1500);
-                                    }}
-                                  >
-                                    {copiedMsgId === message.id
-                                      ? <CheckCheck className="h-3.5 w-3.5 text-emerald-500" />
-                                      : <Copy className="h-3.5 w-3.5" />}
-                                  </button>
-                                  <button
-                                    className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-foreground active:text-foreground"
-                                    onClick={() => setShowEmojiPicker(showEmojiPicker === message.id ? null : message.id)}
-                                  >
-                                    <SmilePlus className="h-3.5 w-3.5" />
-                                  </button>
-                                  {showEmojiPicker === message.id && (
-                                    <div className={`absolute bottom-full ${isOwn ? 'right-0' : 'left-0'} mb-1 flex flex-wrap gap-1 bg-popover border rounded-xl shadow-lg px-2 py-2 z-50 max-w-[200px]`}>
+                                    {/* Grab handle */}
+                                    <div className="flex justify-center pt-2 pb-1">
+                                      <div className="h-1 w-9 rounded-full bg-muted-foreground/25" />
+                                    </div>
+                                    {/* Quick emoji reactions */}
+                                    <div className="flex justify-around px-3 py-2 border-b border-border/60">
                                       {EMOJI_REACTIONS.map(emoji => (
-                                        <button key={emoji} onClick={() => handleReaction(message.id, emoji)} className="text-xl sm:text-lg p-2 sm:p-0.5">{emoji}</button>
+                                        <button
+                                          key={emoji}
+                                          className="text-2xl p-1.5 rounded-full active:scale-125 transition-transform"
+                                          onClick={() => { handleReaction(message.id, emoji); setLongPressMenuId(null); }}
+                                        >
+                                          {emoji}
+                                        </button>
                                       ))}
                                     </div>
-                                  )}
-                                  {isOwn && (
-                                    <>
+                                    {/* Actions (≥48px rows for comfortable touch) */}
+                                    <div className="py-1.5">
                                       <button
-                                        className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-foreground active:text-foreground"
-                                        onClick={() => { setEditingMessageId(message.id); setEditText(message.content); }}
+                                        className="flex items-center gap-3 w-full px-5 py-3 text-[15px] text-foreground active:bg-accent/60 transition-colors"
+                                        onClick={() => { setReplyingTo(message); setLongPressMenuId(null); }}
                                       >
-                                        <Pencil className="h-3.5 w-3.5" />
+                                        <Reply className="h-5 w-5 text-muted-foreground" /> Përgjigju
                                       </button>
                                       <button
-                                        className="p-1.5 rounded-lg text-muted-foreground/50 hover:text-destructive active:text-destructive"
-                                        onClick={() => handleDeleteMessage(message.id)}
+                                        className="flex items-center gap-3 w-full px-5 py-3 text-[15px] text-foreground active:bg-accent/60 transition-colors"
+                                        onClick={() => {
+                                          navigator.clipboard.writeText(message.content).catch(() => {});
+                                          setCopiedMsgId(message.id);
+                                          setTimeout(() => setCopiedMsgId(null), 1500);
+                                          setLongPressMenuId(null);
+                                        }}
                                       >
-                                        <Trash2 className="h-3.5 w-3.5" />
+                                        <Copy className="h-5 w-5 text-muted-foreground" /> Kopjo
                                       </button>
-                                    </>
-                                  )}
-                                </div>
+                                      {isOwn && (
+                                        <>
+                                          <button
+                                            className="flex items-center gap-3 w-full px-5 py-3 text-[15px] text-foreground active:bg-accent/60 transition-colors"
+                                            onClick={() => { setEditingMessageId(message.id); setEditText(message.content); setLongPressMenuId(null); }}
+                                          >
+                                            <Pencil className="h-5 w-5 text-muted-foreground" /> Modifiko
+                                          </button>
+                                          <button
+                                            className="flex items-center gap-3 w-full px-5 py-3 text-[15px] text-destructive active:bg-destructive/10 transition-colors"
+                                            onClick={() => { handleDeleteMessage(message.id); setLongPressMenuId(null); }}
+                                          >
+                                            <Trash2 className="h-5 w-5" /> Fshij
+                                          </button>
+                                        </>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>,
+                                document.body
                               )}
 
                               {/* Reactions */}
