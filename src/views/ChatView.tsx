@@ -284,19 +284,6 @@ const ChatView: React.FC = () => {
   const channelMutation = useMutation<Channel>('channels');
   // Only Admin/Manager/Owner may create groups.
   const canCreateGroups = !!(permissions.isAdmin || permissions.isManager || permissions.isOwner);
-  // The owner's role-preview banner adds 36px to the top offset (App.tsx mt-[108px]
-  // vs mt-[72px]). The chat fills the viewport with a fixed height calc, so without
-  // accounting for the banner the chat extends 36px over the mobile bottom nav
-  // (white bg covering the menu). Add the banner height when it's showing.
-  const previewBanner = !!(permissions.isOwner && (permissions as any).previewRole);
-  // Mobile uses svh (small-viewport): with the browser URL bar visible the real
-  // viewport is smaller than dvh, and a dvh-sized panel pushed the fixed bottom
-  // nav below the fold (you had to scroll to reveal the menu). svh + reserving the
-  // bottom-nav height (72px header + 80px nav) keeps the nav on-screen. Desktop
-  // (lg, no bottom nav) keeps dvh.
-  const chatHeightClass = previewBanner
-    ? 'h-[calc(100svh-188px)] lg:h-[calc(100dvh-108px)]'
-    : 'h-[calc(100svh-152px)] lg:h-[calc(100dvh-72px)]';
   // Groups the current user belongs to — only members see a group.
   const myGroups = useMemo(
     () => (allGroups || [])
@@ -2610,9 +2597,13 @@ const ChatView: React.FC = () => {
   // =====================================
 
   return (
-    <div className={`flex min-h-0 -mx-3 -mt-3 -mb-20 sm:-mx-6 sm:-mt-6 lg:-m-8 ${chatHeightClass} bg-background overflow-hidden`}>
-      {/* SIDEBAR */}
-      <aside className={`w-full lg:w-72 border-r border-[#E4E9F1] dark:border-border bg-[#F7F9FC] dark:bg-muted/5 flex flex-col flex-shrink-0 min-h-0 overflow-hidden transition-all ${showSidebar ? 'flex' : 'hidden lg:flex'}`}>
+    {/* Fills the full-bleed route wrapper (App.tsx gives /app/chat a padding-free
+        flex-1 min-h-0 container). h-full + the parent's single dvh height context
+        means no svh/-mb hacks are needed and the bottom nav stays on-screen. */}
+    <div className="flex min-w-0 h-full bg-background overflow-hidden">
+      {/* SIDEBAR — full-width master list on mobile, fixed rail on lg+. On mobile
+          it collapses (hidden) once a conversation opens so <main> fills the screen. */}
+      <aside className={`w-full lg:w-72 min-w-0 border-r border-[#E4E9F1] dark:border-border bg-[#F7F9FC] dark:bg-muted/5 flex flex-col flex-shrink-0 min-h-0 overflow-hidden transition-all ${showSidebar ? 'flex' : 'hidden lg:flex'}`}>
         {/* Sidebar header */}
         <div className="px-4 py-3 border-b flex items-center justify-between">
           <h2 className="font-semibold text-sm">Mesazhe</h2>

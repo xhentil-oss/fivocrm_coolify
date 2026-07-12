@@ -953,13 +953,13 @@ const TasksView: React.FC = () => {
   }
 
   return (
-    <div className="h-[calc(100dvh-120px)] flex flex-col lg:flex-row">
+    <div className="h-[calc(100dvh-120px)] w-full min-w-0 flex flex-col lg:flex-row">
       {/* Left Side - Task List */}
       <div className={`${
         selectedTask
           ? `hidden lg:flex lg:flex-col lg:border-r ${panelExpanded ? 'lg:w-1/3 lg:min-w-[400px]' : 'lg:w-1/2'}`
           : 'flex flex-col w-full'
-      } transition-all duration-300`}>
+      } min-w-0 transition-all duration-300`}>
         {/* ── Header ── */}
         <div className="shrink-0 border-b bg-background">
           {/* Title + primary action */}
@@ -1117,7 +1117,7 @@ const TasksView: React.FC = () => {
         )}
 
         {/* Task List Content */}
-        <div className="flex-1 overflow-y-auto">
+        <div className="flex-1 min-w-0 overflow-y-auto">
           {viewMode === 'list' && groupBy === 'none' && (
             <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
               <SortableContext items={visibleTasks.map(t => t.id)} strategy={verticalListSortingStrategy}>

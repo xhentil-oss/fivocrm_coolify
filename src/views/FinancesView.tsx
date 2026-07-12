@@ -251,9 +251,9 @@ const FinancesView: React.FC = () => {
       {/* 1 — The one number */}
       <Card className={`p-6 border-2 ${profitPositive ? 'border-emerald-500/40' : 'border-red-500/40'}`}>
         <div className="flex items-start justify-between gap-4 flex-wrap">
-          <div>
+          <div className="min-w-0">
             <p className="text-sm text-muted-foreground">Fitimi neto — {monthLabel}</p>
-            <p className={`text-4xl sm:text-5xl font-extrabold tabular-nums mt-1 ${profitPositive ? 'text-emerald-600' : 'text-red-600'}`}>
+            <p className={`text-4xl sm:text-5xl font-extrabold tabular-nums break-words mt-1 ${profitPositive ? 'text-emerald-600' : 'text-red-600'}`}>
               {formatALL(thisMonth.profit)}
             </p>
             <p className="text-sm text-muted-foreground mt-2 max-w-md">

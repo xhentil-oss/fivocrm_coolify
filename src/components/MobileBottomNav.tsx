@@ -128,9 +128,14 @@ const MobileBottomNav: React.FC = () => {
       {/* ── Bottom navigation bar ── */}
       {/* Height grows by the bottom safe-area inset; padding pushes the tabs above the
           gesture bar / home indicator so they stay tappable on edge-to-edge devices. */}
+      {/* In-flow flex child at the bottom of the app's h-[100dvh] column (NOT
+          position:fixed). This keeps it pinned to the bottom of the VISIBLE
+          viewport regardless of the Android WebView's layout/visual viewport
+          mismatch that previously pushed a fixed nav off-screen on the chat page.
+          Height + padding reserve the bottom safe-area (home indicator). */}
       <nav
         style={{ height: 'calc(4rem + env(safe-area-inset-bottom))', paddingBottom: 'env(safe-area-inset-bottom)' }}
-        className="fixed bottom-0 left-0 right-0 z-40 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 border-t flex items-stretch lg:hidden"
+        className="shrink-0 w-full z-40 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 border-t flex items-stretch lg:hidden"
       >
         {primaryItems.map(item => {
           const Icon = item.icon;

@@ -1,5 +1,5 @@
 import React, { useState, Suspense, useEffect } from 'react';
-import { BrowserRouter, HashRouter, Routes, Route, Navigate, Link } from 'react-router-dom';
+import { BrowserRouter, HashRouter, Routes, Route, Navigate, Link, useLocation } from 'react-router-dom';
 import { Capacitor } from '@capacitor/core';
 import { getDoc, setDoc, doc } from 'firebase/firestore';
 import { db } from './lib/firebase';
@@ -155,6 +155,12 @@ function AppContent() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { user } = useAuth();
   const { isOwner, previewRole, isLoading: permissionsLoading } = usePermissions();
+  const location = useLocation();
+  // Full-bleed routes fill the content column exactly (no padding, no internal
+  // page scroll) and manage their own scrolling — e.g. the chat, which needs a
+  // single flex height context so the bottom nav can't fall off a mismatched
+  // (svh vs layout) viewport.
+  const isFullBleedRoute = location.pathname.startsWith('/app/chat');
   const [showOnboarding, setShowOnboarding] = useState(() => {
     return !localStorage.getItem('fivocrm_onboarding_done');
   });
@@ -264,35 +270,48 @@ function AppContent() {
               />
             </Suspense>
           )}
-          <div className="min-h-screen bg-background text-foreground">
-            <TopNavBar 
+          <div
+            // Single fixed-height flex column: the fixed TopNavBar overlays the
+            // reserved top padding, the content row is flex-1, and MobileBottomNav
+            // is the last flex child — so header, content, and nav share ONE height
+            // basis (dvh) and the nav can never anchor to a taller layout viewport
+            // than the content uses (the svh/layout mismatch that hid it on mobile).
+            className="h-[100dvh] flex flex-col overflow-hidden bg-background text-foreground"
+            style={{
+              paddingTop: `calc(${isOwner && previewRole ? '108px' : '72px'} + env(safe-area-inset-top))`,
+            }}
+          >
+            <TopNavBar
               onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
               onOpenCommandPalette={() => setCommandPaletteOpen(true)}
               onToggleMobileMenu={() => setMobileMenuOpen(!mobileMenuOpen)}
               mobileMenuOpen={mobileMenuOpen}
             />
-            
-            <div className="flex">
-              <Sidebar 
-                collapsed={sidebarCollapsed} 
+
+            <div className="flex flex-1 min-h-0 min-w-0">
+              <Sidebar
+                collapsed={sidebarCollapsed}
                 mobileOpen={mobileMenuOpen}
                 onCloseMobile={() => setMobileMenuOpen(false)}
               />
-              
+
               <main
-                className={`flex-1 transition-all duration-normal ease-in-out ${
+                // min-w-0: a flex item defaults to min-width:auto, which lets wide
+                // content (full-bleed views, wide chat bubbles, nowrap buttons) push
+                // <main> past the viewport and cause horizontal overflow. min-w-0
+                // lets it shrink to the available width so inner overflow-x scrolls.
+                // flex flex-col min-h-0: main owns the content column height; the
+                // route wrapper below is the scroll region (or full-bleed for chat).
+                className={`flex-1 min-w-0 flex flex-col min-h-0 transition-all duration-normal ease-in-out ${
                   sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'
                 }`}
-                style={{
-                  // Clear the fixed header (72px, +36px when the preview banner shows)
-                  // plus the top safe-area inset so content never hides under the notch.
-                  marginTop: `calc(${isOwner && previewRole ? '108px' : '72px'} + env(safe-area-inset-top))`,
-                }}
               >
                 <div
-                  className="p-3 sm:p-6 lg:p-8"
-                  // Clear the fixed mobile bottom nav (~5rem) + the bottom safe-area inset.
-                  style={{ paddingBottom: 'calc(5rem + env(safe-area-inset-bottom))' }}
+                  className={`flex-1 min-h-0 ${
+                    isFullBleedRoute
+                      ? 'overflow-hidden'
+                      : 'overflow-y-auto p-3 sm:p-6 lg:p-8'
+                  }`}
                 >
                   <PendingInvitesBanner />
                   <ErrorBoundary>

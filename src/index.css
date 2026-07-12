@@ -101,6 +101,11 @@
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
     font-weight: 300;
+    /* Safety net against horizontal overflow: no view should ever produce a
+       document wider than the viewport. Individual scrollable regions (tables,
+       code blocks, message lists) use their own overflow-x:auto containers. */
+    overflow-x: hidden;
+    max-width: 100%;
   }
   
   h1, h2, h3, h4, h5, h6 {

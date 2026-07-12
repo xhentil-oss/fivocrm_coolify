@@ -1522,7 +1522,7 @@ const ReportsView: React.FC = () => {
             ndarë sipas peshës së të ardhurave). Shuma barazohet me fitimin neto të kompanisë në bazë arkë.
           </p>
         </div>
-        <div className="overflow-x-auto">
+        <div className="w-full min-w-0 overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-xs text-muted-foreground border-b">
@@ -1722,7 +1722,7 @@ const ReportsView: React.FC = () => {
             buxhetin e projektit; rroga ndahet sipas numrit të projekteve të anëtarit.
           </p>
         </div>
-        <div className="overflow-x-auto">
+        <div className="w-full min-w-0 overflow-x-auto">
           <table className="w-full text-sm">
             <thead>
               <tr className="text-xs text-muted-foreground border-b">

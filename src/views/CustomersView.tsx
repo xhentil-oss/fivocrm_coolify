@@ -556,11 +556,11 @@ const CustomersView: React.FC = () => {
   const newRequestsCount = requests?.filter(r => r.status === 'New').length || 0;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 w-full min-w-0">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight">Klientet</h1>
+          <h1 className="text-2xl sm:text-3xl font-bold tracking-tight">Klientet</h1>
           <p className="text-muted-foreground mt-1">
             Menaxhoni klientet, portalin dhe kerkesat e tyre
           </p>
@@ -641,7 +641,7 @@ const CustomersView: React.FC = () => {
 
       {/* Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <div className="overflow-x-auto">
+        <div className="w-full min-w-0 overflow-x-auto">
           <TabsList className="min-w-max">
             <TabsTrigger value="customers" className="gap-1 sm:gap-2 text-xs sm:text-sm">
               <Building2 className="h-4 w-4" />
@@ -880,7 +880,7 @@ const CustomersView: React.FC = () => {
 
           {/* Customer Table - Desktop */}
           <Card className="overflow-hidden hidden sm:block">
-            <div className="overflow-x-auto">
+            <div className="w-full min-w-0 overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-muted">
                   <tr>

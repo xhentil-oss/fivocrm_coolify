@@ -162,7 +162,7 @@ export const PipelineBoard: React.FC<PipelineBoardProps> = ({ leads, onStatusCha
 
   return (
     <DndContext sensors={sensors} onDragStart={handleStart} onDragEnd={handleEnd}>
-      <div className="overflow-x-auto -mx-4 px-4 pb-4">
+      <div className="w-full min-w-0 overflow-x-auto -mx-4 px-4 pb-4">
         <div className="flex gap-3 min-w-max">
           {STAGES.map(s => (
             <StageColumn

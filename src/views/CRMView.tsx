@@ -1009,7 +1009,7 @@ const CRMView: React.FC = () => {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 w-full min-w-0">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-h2 text-foreground">Leads</h1>
@@ -1620,7 +1620,7 @@ const CRMView: React.FC = () => {
 
           {/* Desktop table */}
           <Card className="overflow-hidden hidden sm:block">
-            <div className="overflow-x-auto">
+            <div className="w-full min-w-0 overflow-x-auto">
               <table className="w-full">
                 <thead className="bg-muted">
                   <tr>

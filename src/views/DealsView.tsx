@@ -182,7 +182,7 @@ const DealsView: React.FC = () => {
   const activeDeal = activeId ? (deals || []).find(d => d.id === activeId) : null;
 
   return (
-    <div className="space-y-4">
+    <div className="w-full min-w-0 space-y-4">
       <div className="flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-xl font-semibold text-foreground">Marrëveshjet</h1>
