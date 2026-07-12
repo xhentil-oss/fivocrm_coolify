@@ -3956,11 +3956,39 @@ const ChatView: React.FC = () => {
                     {/* Overflow "+" — secondary actions (snippets, AI polish/replies, schedule) */}
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground" disabled={isSending} title="Më shumë">
-                          <Plus className="h-4 w-4" />
+                        <Button type="button" variant="ghost" size="icon" className="h-10 w-10 lg:h-7 lg:w-7 rounded-lg text-muted-foreground/60 hover:text-foreground" disabled={isSending} title="Më shumë">
+                          <Plus className="h-5 w-5 lg:h-4 lg:w-4" />
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="start" side="top" className="w-56">
+                        {/* Mobile-only: the inline image/voice/emoji buttons are hidden
+                            below lg to give the textarea room, so surface them here. */}
+                        <DropdownMenuItem
+                          className="lg:hidden"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={
+                            isSending || attachmentUploading ||
+                            (chatMode === 'channel' && !activeChannel) ||
+                            (chatMode === 'direct' && !activeDirectUserId) ||
+                            (chatMode !== 'channel' && chatMode !== 'direct')
+                          }
+                        >
+                          {attachmentUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <ImageIcon className="h-4 w-4" />} <span>Dërgo imazh ose PDF</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          className="lg:hidden"
+                          onClick={() => { if (isRecording) stopRecording(true); else startRecording(); }}
+                          disabled={isSending || attachmentUploading}
+                        >
+                          <Mic className="h-4 w-4" /> <span>Regjistro notë zanore</span>
+                        </DropdownMenuItem>
+                        <DropdownMenuItem
+                          className="lg:hidden"
+                          onClick={() => setShowEmojiPicker(showEmojiPicker ? null : 'input')}
+                          disabled={isSending}
+                        >
+                          <SmilePlus className="h-4 w-4" /> <span>Emoji</span>
+                        </DropdownMenuItem>
                         <DropdownMenuItem onClick={() => { setShowAttachmentInput(!showAttachmentInput); }}>
                           <Link2 className="h-4 w-4" /> <span>Ngjit URL skedari</span>
                         </DropdownMenuItem>
@@ -3986,7 +4014,9 @@ const ChatView: React.FC = () => {
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
-                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
+                    {/* Inline image/voice/emoji — desktop only; on mobile they live in
+                        the "+" menu (above) and voice is the right-side mic (below). */}
+                    <Button type="button" variant="ghost" size="icon" className="hidden lg:inline-flex h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
                       onClick={() => fileInputRef.current?.click()}
                       disabled={
                         isSending ||
@@ -3999,7 +4029,7 @@ const ChatView: React.FC = () => {
                       {attachmentUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
                     </Button>
                     <Button type="button" variant="ghost" size="icon"
-                      className={`h-7 w-7 rounded-lg transition-colors ${isRecording ? 'text-rose-500 animate-pulse' : 'text-muted-foreground/60 hover:text-foreground'}`}
+                      className={`hidden lg:inline-flex h-7 w-7 rounded-lg transition-colors ${isRecording ? 'text-rose-500 animate-pulse' : 'text-muted-foreground/60 hover:text-foreground'}`}
                       onClick={() => { if (isRecording) stopRecording(true); else startRecording(); }}
                       disabled={isSending || attachmentUploading}
                       title={isRecording ? 'Ndalo dhe dërgo' : 'Regjistro një notë zanore'}>
@@ -4016,7 +4046,7 @@ const ChatView: React.FC = () => {
                         if (f) await handleAttachmentUpload(f);
                       }}
                     />
-                    <Button type="button" variant="ghost" size="icon" className="h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
+                    <Button type="button" variant="ghost" size="icon" className="hidden lg:inline-flex h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
                       disabled={isSending} onClick={() => setShowEmojiPicker(showEmojiPicker ? null : 'input')}
                       title="Emoji">
                       <SmilePlus className="h-3.5 w-3.5" />
@@ -4072,10 +4102,25 @@ const ChatView: React.FC = () => {
                     className="flex-1 min-w-0 bg-transparent border-0 outline-none text-base sm:text-sm resize-none py-1.5 placeholder:text-muted-foreground/40 max-h-[120px]"
                   />
 
+                  {/* MOBILE right control — WhatsApp pattern: mic when the field is
+                      empty, Send once there's text. Desktop (lg+) always shows Send
+                      (its voice mic lives inline on the left). */}
+                  <Button
+                    type="button"
+                    size="icon"
+                    onClick={() => { if (isRecording) stopRecording(true); else startRecording(); }}
+                    disabled={isSending || attachmentUploading}
+                    title={isRecording ? 'Ndalo dhe dërgo' : 'Regjistro një notë zanore'}
+                    className={`lg:hidden ${messageText.trim() || attachmentUrl.trim() ? 'hidden' : 'flex'} h-11 w-11 rounded-[13px] flex-shrink-0 transition-all ${
+                      isRecording ? 'bg-rose-500 text-white animate-pulse' : 'bg-muted text-muted-foreground/70 hover:text-foreground'
+                    }`}
+                  >
+                    {isRecording ? <Square className="h-4 w-4 fill-current" /> : <Mic className="h-5 w-5" />}
+                  </Button>
                   <Button
                     type="submit"
                     size="icon"
-                    className={`h-11 w-11 rounded-[13px] flex-shrink-0 transition-all ${
+                    className={`${messageText.trim() || attachmentUrl.trim() ? 'flex' : 'hidden'} lg:flex h-11 w-11 rounded-[13px] flex-shrink-0 transition-all ${
                       messageText.trim() || attachmentUrl.trim() ? 'bg-accent-gradient text-white shadow-[0_8px_18px_-8px_#0EA5E9] hover:opacity-95' : 'bg-muted text-muted-foreground/40'
                     }`}
                     disabled={isSending || (!messageText.trim() && !attachmentUrl.trim()) || (chatMode === 'direct' && !activeDirectUserId)}
