@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { addDoc, collection, doc, updateDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useClientPortal } from '../../hooks/useClientPortal';
@@ -29,6 +30,15 @@ const PortalChatView: React.FC = () => {
   const [selectedProjectId, setSelectedProjectId] = useState<string | null>(null);
   const [replyingTo, setReplyingTo] = useState<any>(null);
   const [showEmojiPicker, setShowEmojiPicker] = useState<string | null>(null);
+  // Mobile long-press action sheet (WhatsApp-style) — replaces the always-visible
+  // action buttons that cluttered every bubble on mobile.
+  const [longPressMenuId, setLongPressMenuId] = useState<string | null>(null);
+  const longPressTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startLongPress = (id: string) => {
+    if (longPressTimerRef.current) clearTimeout(longPressTimerRef.current);
+    longPressTimerRef.current = setTimeout(() => { try { navigator.vibrate?.(12); } catch { /* optional */ } setLongPressMenuId(id); }, 450);
+  };
+  const cancelLongPress = () => { if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; } };
   const scrollRef = useRef<HTMLDivElement>(null);
   const markedAsReadRef = useRef<Set<string>>(new Set());
 
@@ -562,7 +572,12 @@ const PortalChatView: React.FC = () => {
                           )}
 
                           <div
-                            className={`rounded-2xl px-3 sm:px-3.5 py-2 relative ${
+                            onTouchStart={() => startLongPress(msg.id)}
+                            onTouchEnd={cancelLongPress}
+                            onTouchMove={cancelLongPress}
+                            onTouchCancel={cancelLongPress}
+                            onContextMenu={(e) => e.preventDefault()}
+                            className={`rounded-2xl px-3 sm:px-3.5 py-2 relative select-none sm:select-text [-webkit-touch-callout:none] ${
                               own
                                 ? 'bg-primary text-primary-foreground rounded-br-sm'
                                 : 'bg-muted/80 border border-border/50 rounded-bl-sm'
@@ -589,8 +604,10 @@ const PortalChatView: React.FC = () => {
                               )
                             )}
 
-                            {/* Message actions on hover */}
-                            <div className={`absolute -top-3 ${own ? 'left-1' : 'right-1'} opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity flex items-center gap-0.5 bg-background border rounded-lg shadow-sm px-1 py-0.5 z-10`}>
+                            {/* Message actions — desktop hover only. On mobile the
+                                long-press action sheet (below) handles react/reply so
+                                bubbles stay clean. */}
+                            <div className={`absolute -top-3 ${own ? 'left-1' : 'right-1'} hidden sm:flex sm:opacity-0 sm:group-hover:opacity-100 transition-opacity items-center gap-0.5 bg-background border rounded-lg shadow-sm px-1 py-0.5 z-10`}>
                               <div className="relative">
                                 <button
                                   className="p-2 sm:p-1 hover:bg-accent rounded text-muted-foreground hover:text-foreground"
@@ -731,6 +748,38 @@ const PortalChatView: React.FC = () => {
         </form>
       </div>
       {roomUrl && <VideoCallModal roomUrl={roomUrl} userName={customer?.name || 'Klient'} onClose={closeVideo} />}
+
+      {/* Mobile long-press action sheet — react / reply. Portaled to body so it
+          isn't clipped; backdrop tap dismisses. Desktop uses the hover toolbar. */}
+      {longPressMenuId && createPortal(
+        <div className="sm:hidden" role="dialog" aria-modal="true">
+          <div className="fixed inset-0 z-[60] bg-black/50 animate-in fade-in duration-150" onClick={() => setLongPressMenuId(null)} />
+          <div
+            className="fixed inset-x-0 bottom-0 z-[61] bg-popover border-t rounded-t-2xl shadow-2xl animate-in slide-in-from-bottom duration-200"
+            style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+          >
+            <div className="flex justify-center pt-2 pb-1"><div className="h-1 w-9 rounded-full bg-muted-foreground/25" /></div>
+            <div className="flex justify-around px-3 py-2 border-b border-border/60">
+              {EMOJI_REACTIONS.map(emoji => (
+                <button
+                  key={emoji}
+                  className="text-2xl p-1.5 rounded-full active:scale-125 transition-transform"
+                  onClick={() => { handleReaction(longPressMenuId, emoji); setLongPressMenuId(null); }}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </div>
+            <button
+              className="flex items-center gap-3 w-full px-5 py-3.5 text-[15px] text-foreground active:bg-accent/60 transition-colors"
+              onClick={() => { const m = messages.find((x: any) => x.id === longPressMenuId); if (m) setReplyingTo(m); setLongPressMenuId(null); }}
+            >
+              <Reply className="h-5 w-5 text-muted-foreground" /> Përgjigju
+            </button>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
 };

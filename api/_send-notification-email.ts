@@ -117,7 +117,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
             url: actionUrl ? String(actionUrl) : '/',
             ...(type ? { type: String(type) } : {}),
           },
-          android: { priority: 'high' },
+          android: { priority: 'high', notification: { icon: 'ic_stat_notify', color: '#0EA5E9' } },
           webpush: { notification: { icon: '/icon-192.png' }, fcmOptions: { link: actionUrl ? String(actionUrl) : '/' } },
         });
         result.push = 'sent';

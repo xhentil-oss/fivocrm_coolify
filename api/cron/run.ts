@@ -94,7 +94,7 @@ async function sendPush(userId: string, title: string, body: string, data?: Reco
       token,
       notification: { title, body },
       data: data || {},
-      android: { priority: 'high' },
+      android: { priority: 'high', notification: { icon: 'ic_stat_notify', color: '#0EA5E9' } },
       webpush: { notification: { icon: '/icon-192.png' }, fcmOptions: { link: data?.url || '/' } },
     });
   } catch (err) {
