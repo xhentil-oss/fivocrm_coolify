@@ -167,6 +167,14 @@ const ChatView: React.FC = () => {
   const [showJumpToBottom, setShowJumpToBottom] = useState(false);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
 
+  // Only render the most-recent N bubbles in the DOM (older reachable via the
+  // "load older" button). Typing re-renders ChatView, and re-executing the full
+  // bubble map for 100+ complex messages per keystroke is what made the keyboard
+  // lag on mid/low devices (e.g. S21). Capping the rendered window keeps the
+  // per-keystroke cost bounded regardless of thread length.
+  const RENDER_STEP = 40;
+  const [renderCap, setRenderCap] = useState(RENDER_STEP);
+
   // Mobile long-press action menu (WhatsApp/Telegram style): holds the id of the
   // message whose bottom-sheet is open. Desktop keeps its hover toolbar untouched.
   const [longPressMenuId, setLongPressMenuId] = useState<string | null>(null);
@@ -1507,6 +1515,8 @@ const ChatView: React.FC = () => {
     // as a fresh scroll-to-bottom, not a spurious "new message" from the prior one.
     prevMessageCountRef.current = 0;
     atBottomRef.current = true;
+    // Fresh conversation → show the most-recent window again.
+    setRenderCap(RENDER_STEP);
     requestAnimationFrame(() => {
       const vp = getScroller(scrollRef.current);
       if (vp) vp.scrollTop = vp.scrollHeight;
@@ -2469,8 +2479,9 @@ const ChatView: React.FC = () => {
     const v = e.target.value;
     setMessageText(v);
     if (chatMode !== 'ai' && v) handleTyping();
-    e.target.style.height = 'auto';
-    e.target.style.height = Math.min(e.target.scrollHeight, 120) + 'px';
+    // Auto-grow in rAF so we don't force a synchronous reflow on every keystroke.
+    const ta = e.target;
+    requestAnimationFrame(() => { ta.style.height = 'auto'; ta.style.height = Math.min(ta.scrollHeight, 120) + 'px'; });
     // Detect "@xxx" prefix immediately before caret
     if (chatMode === 'channel' || chatMode === 'direct') {
       const caret = e.target.selectionStart ?? v.length;
@@ -3365,11 +3376,16 @@ const ChatView: React.FC = () => {
                     )}
                   </div>
                 )}
-                {/* Load more — shown when we're at the Firestore limit */}
-                {chatMode === 'channel' && filteredMessages.length >= channelLimit && !searchQuery && (
+                {/* Load older — reveals more of the render window, and fetches more
+                    from Firestore once the window reaches the query limit. */}
+                {(chatMode === 'channel' || chatMode === 'direct') && !searchQuery &&
+                  (renderCap < filteredMessages.length || (chatMode === 'channel' && filteredMessages.length >= channelLimit)) && (
                   <div className="flex justify-center py-3">
                     <button
-                      onClick={() => setChannelLimit(l => l + 100)}
+                      onClick={() => {
+                        setRenderCap(c => c + RENDER_STEP);
+                        if (chatMode === 'channel' && filteredMessages.length >= channelLimit) setChannelLimit(l => l + 100);
+                      }}
                       className="text-xs text-primary underline hover:opacity-80"
                     >
                       Ngarko mesazhe më të vjetra
@@ -3379,12 +3395,16 @@ const ChatView: React.FC = () => {
                 {filteredMessages.length > 0 ? (
                   (() => {
                     let lastDateKey = '';
-                    return filteredMessages.map((message, idx) => {
+                    // Render only the most-recent window (older via "load older").
+                    const visibleMessages = filteredMessages.length > renderCap
+                      ? filteredMessages.slice(filteredMessages.length - renderCap)
+                      : filteredMessages;
+                    return visibleMessages.map((message, idx) => {
                       const isOwn = message.senderId === user?.uid;
                       const dateKey = getDateKey(message.createdAt);
                       const showDateSep = dateKey !== lastDateKey;
                       lastDateKey = dateKey;
-                      const prevMsg = idx > 0 ? filteredMessages[idx - 1] : null;
+                      const prevMsg = idx > 0 ? visibleMessages[idx - 1] : null;
                       // Slack-style: group messages within 5-minute window from same sender
                       const sameSender = !!(prevMsg &&
                         prevMsg.senderId === message.senderId &&
@@ -3397,7 +3417,7 @@ const ChatView: React.FC = () => {
                       const isPinned = !!(message as any).isPinned;
                       // New messages divider: show before the first message that was unread when we opened
                       const isFirstUnread = sessionUnreadIdsRef.current.has(message.id) &&
-                        (idx === 0 || !sessionUnreadIdsRef.current.has(filteredMessages[idx - 1].id));
+                        (idx === 0 || !sessionUnreadIdsRef.current.has(visibleMessages[idx - 1].id));
                       // Read receipt: last own message in DM that has been read
                       const showReadReceipt = isOwn &&
                         chatMode === 'direct' &&
