@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { createPortal } from 'react-dom';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useCollection, useMutation } from '../hooks/useFirestore';
@@ -17,6 +18,7 @@ import {
   ExternalLink, Tag, CheckCircle2, Eye, AlertCircle,
   Instagram, Facebook, Linkedin, ArrowRight, Trash2,
   Image as ImageIcon, Briefcase,
+  Quote, Download, X, ChevronLeft, ChevronRight, FileArchive, Film,
 } from 'lucide-react';
 import type { ServiceInquiry, Lead, Project } from '../types';
 import { safeHref } from '../lib/utils';
@@ -34,6 +36,8 @@ const ServiceInquiriesView: React.FC = () => {
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [deletedIds, setDeletedIds] = useState<Set<string>>(new Set());
+  // In-app image lightbox for uploaded materials (click to zoom, prev/next).
+  const [lightbox, setLightbox] = useState<{ files: { url: string; name: string }[]; index: number } | null>(null);
 
   const { toast } = useToast();
 
@@ -502,6 +506,44 @@ const ServiceInquiriesView: React.FC = () => {
                   );
                 })()}
 
+                {/* ── Fjalët e klientit — the message the client wrote, elevated to the
+                       top and made large + readable so staff reads intent first. ── */}
+                {(() => {
+                  const goal = selectedInquiry.mainGoal?.trim();
+                  const narrative: { label: string; value?: string }[] = [
+                    { label: 'Nevoja e projektit', value: selectedInquiry.projectNeedDescription?.trim() },
+                    { label: 'Sfida kryesore', value: selectedInquiry.currentMainChallenge?.trim() },
+                    { label: 'Çfarë ka provuar', value: selectedInquiry.whatHaveYouTried?.trim() },
+                  ].filter(n => n.value);
+                  if (!goal && narrative.length === 0) return null;
+                  return (
+                    <div className="rounded-xl border border-primary/20 bg-primary/[0.04] dark:bg-primary/10 p-4 sm:p-5">
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className="h-8 w-8 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+                          <Quote className="h-4 w-4 text-primary" />
+                        </div>
+                        <div>
+                          <p className="text-sm font-semibold text-foreground leading-tight">Çfarë kërkon klienti</p>
+                          <p className="text-[11px] text-muted-foreground">Me fjalët e tyre</p>
+                        </div>
+                      </div>
+                      {goal && (
+                        <p className="text-[16px] sm:text-[17px] font-medium leading-snug text-foreground mb-3">
+                          {goal}
+                        </p>
+                      )}
+                      <div className="space-y-3">
+                        {narrative.map(n => (
+                          <div key={n.label}>
+                            <p className="text-[11px] font-semibold uppercase tracking-wide text-primary/70 mb-0.5">{n.label}</p>
+                            <p className="text-[15px] leading-relaxed text-foreground/90 whitespace-pre-wrap">{n.value}</p>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()}
+
                 {/* Section 1: Basic Info */}
                 <div className="space-y-3">
                   <h4 className="text-sm font-semibold flex items-center gap-2 text-primary">
@@ -591,22 +633,9 @@ const ServiceInquiriesView: React.FC = () => {
                         ))}
                       </div>
                     </div>
-                    <InfoRow icon={Target} label="Objektivi kryesor" value={selectedInquiry.mainGoal} />
-                    <div>
-                      <span className="text-xs text-muted-foreground">Përshkrimi i nevojës</span>
-                      <p className="text-sm mt-1 whitespace-pre-wrap">{selectedInquiry.projectNeedDescription}</p>
-                    </div>
-                    <div>
-                      <span className="text-xs text-muted-foreground">Sfida kryesore</span>
-                      <p className="text-sm mt-1 whitespace-pre-wrap">{selectedInquiry.currentMainChallenge}</p>
-                    </div>
+                    {/* The client's narrative (goal / need / challenge / tried) is shown
+                        prominently in the "Çfarë kërkon klienti" card above. */}
                     <InfoRow icon={User} label="Ka punuar me agjenci" value={selectedInquiry.hasWorkedWithAgency || '—'} />
-                    {selectedInquiry.whatHaveYouTried && (
-                      <div>
-                        <span className="text-xs text-muted-foreground">Çfarë ka provuar</span>
-                        <p className="text-sm mt-1 whitespace-pre-wrap">{selectedInquiry.whatHaveYouTried}</p>
-                      </div>
-                    )}
                   </div>
                 </div>
 
@@ -636,20 +665,21 @@ const ServiceInquiriesView: React.FC = () => {
                   </h4>
                   <div className="bg-muted/30 rounded-lg p-4 space-y-3">
                     <InfoRow icon={FolderOpen} label="Ka materiale" value={selectedInquiry.hasExistingMaterials} />
-                    {selectedInquiry.googleDriveLink && (
-                      <div className="flex items-center gap-2">
-                        <ExternalLink className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-                        <a href={safeHref(selectedInquiry.googleDriveLink)} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline truncate">
-                          {selectedInquiry.googleDriveLink}
-                        </a>
-                      </div>
-                    )}
-                    {selectedInquiry.secondGoogleDriveLink && (
-                      <div className="flex items-center gap-2">
-                        <ExternalLink className="w-3.5 h-3.5 text-muted-foreground flex-shrink-0" />
-                        <a href={safeHref(selectedInquiry.secondGoogleDriveLink)} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline truncate">
-                          {selectedInquiry.secondGoogleDriveLink}
-                        </a>
+                    {(selectedInquiry.googleDriveLink || selectedInquiry.secondGoogleDriveLink) && (
+                      <div className="flex flex-wrap gap-2">
+                        {[selectedInquiry.googleDriveLink, selectedInquiry.secondGoogleDriveLink].filter(Boolean).map((link, i) => (
+                          <a
+                            key={i}
+                            href={safeHref(link!)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-2 rounded-lg border bg-background px-3 py-2 text-sm hover:border-primary/40 hover:bg-primary/5 transition-colors"
+                          >
+                            <FolderOpen className="h-4 w-4 text-primary flex-shrink-0" />
+                            <span className="font-medium">Hap Google Drive{i === 1 ? ' (2)' : ''}</span>
+                            <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                          </a>
+                        ))}
                       </div>
                     )}
                     {selectedInquiry.folderIncludes && selectedInquiry.folderIncludes.length > 0 && (
@@ -665,30 +695,55 @@ const ServiceInquiriesView: React.FC = () => {
                     {selectedInquiry.hasBrandGuidelines && (
                       <InfoRow icon={Palette} label="Brand Guidelines" value={selectedInquiry.hasBrandGuidelines} />
                     )}
-                    {Array.isArray(selectedInquiry.materialFiles) && selectedInquiry.materialFiles.length > 0 && (
-                      <div>
-                        <span className="text-xs text-muted-foreground">Foto & materiale të ngarkuara</span>
-                        <div className="grid grid-cols-3 sm:grid-cols-4 gap-2 mt-1.5">
-                          {selectedInquiry.materialFiles.map((f, i) => {
-                            const isImg = /\.(png|jpe?g|gif|webp|svg|bmp)/i.test(f.name) || /\.(png|jpe?g|gif|webp|svg|bmp)/i.test(f.url);
-                            return (
-                              <a key={i} href={safeHref(f.url)} target="_blank" rel="noopener noreferrer" className="group rounded-lg border bg-background overflow-hidden" title={f.name}>
-                                {isImg ? (
-                                  <img src={f.url} alt={f.name} className="h-20 w-full object-cover" />
-                                ) : (
-                                  <div className="h-20 w-full flex flex-col items-center justify-center gap-1 text-muted-foreground">
-                                    <FileText className="h-5 w-5" />
+                    {Array.isArray(selectedInquiry.materialFiles) && selectedInquiry.materialFiles.length > 0 && (() => {
+                      const files = selectedInquiry.materialFiles!;
+                      const images = files.filter(isImageFile);
+                      return (
+                        <div>
+                          <span className="text-xs text-muted-foreground">Foto &amp; materiale të ngarkuara · {files.length}</span>
+                          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 mt-2">
+                            {files.map((f, i) => {
+                              if (isImageFile(f)) {
+                                const imgIndex = Math.max(0, images.findIndex(x => x.url === f.url));
+                                return (
+                                  <button
+                                    key={i}
+                                    type="button"
+                                    onClick={() => setLightbox({ files: images, index: imgIndex })}
+                                    className="group relative rounded-xl border bg-background overflow-hidden aspect-square"
+                                    title={f.name}
+                                  >
+                                    <img src={f.url} alt={f.name} loading="lazy" className="h-full w-full object-cover transition-transform group-hover:scale-105" />
+                                    <div className="absolute inset-0 group-hover:bg-black/30 transition-colors flex items-center justify-center">
+                                      <Eye className="h-6 w-6 text-white opacity-0 group-hover:opacity-100 transition-opacity" />
+                                    </div>
+                                    <span className="absolute bottom-0 inset-x-0 bg-gradient-to-t from-black/70 to-transparent px-2 py-1 text-[10px] text-white truncate text-left">{f.name}</span>
+                                  </button>
+                                );
+                              }
+                              const kind = fileKind(f.name || f.url);
+                              const Icon = kind.icon;
+                              return (
+                                <div key={i} className="rounded-xl border bg-background p-3 flex flex-col aspect-square" title={f.name}>
+                                  <div className={`flex-1 flex items-center justify-center ${kind.tint}`}>
+                                    <Icon className="h-9 w-9" />
                                   </div>
-                                )}
-                                <div className="flex items-center gap-1 px-1.5 py-1 text-[10px] text-muted-foreground group-hover:text-primary">
-                                  <ExternalLink className="h-3 w-3 flex-shrink-0" /><span className="truncate">{f.name}</span>
+                                  <p className="text-[11px] text-foreground/80 truncate mb-1.5">{f.name}</p>
+                                  <div className="flex gap-1.5">
+                                    <a href={safeHref(f.url)} target="_blank" rel="noopener noreferrer" className="flex-1 inline-flex items-center justify-center gap-1 text-[11px] rounded-md bg-muted hover:bg-accent py-1">
+                                      <ExternalLink className="h-3 w-3" />Hap
+                                    </a>
+                                    <a href={safeHref(f.url)} download={f.name} className="inline-flex items-center justify-center rounded-md bg-muted hover:bg-accent px-2 py-1" title="Shkarko">
+                                      <Download className="h-3 w-3" />
+                                    </a>
+                                  </div>
                                 </div>
-                              </a>
-                            );
-                          })}
+                              );
+                            })}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      );
+                    })()}
                   </div>
                 </div>
 
@@ -735,8 +790,55 @@ const ServiceInquiriesView: React.FC = () => {
           )}
         </DialogContent>
       </Dialog>
+
+      {/* In-app image lightbox — zoom uploaded photos without leaving the app */}
+      {lightbox && createPortal(
+        <div className="fixed inset-0 z-[80] bg-black/90 flex items-center justify-center" onClick={() => setLightbox(null)}>
+          <button className="absolute top-4 right-4 text-white/80 hover:text-white p-2" onClick={() => setLightbox(null)} aria-label="Mbyll">
+            <X className="h-6 w-6" />
+          </button>
+          {lightbox.files.length > 1 && (
+            <>
+              <button className="absolute left-2 sm:left-6 text-white/80 hover:text-white p-2" aria-label="Para"
+                onClick={e => { e.stopPropagation(); setLightbox(l => l && ({ ...l, index: (l.index - 1 + l.files.length) % l.files.length })); }}>
+                <ChevronLeft className="h-8 w-8" />
+              </button>
+              <button className="absolute right-2 sm:right-6 text-white/80 hover:text-white p-2" aria-label="Pas"
+                onClick={e => { e.stopPropagation(); setLightbox(l => l && ({ ...l, index: (l.index + 1) % l.files.length })); }}>
+                <ChevronRight className="h-8 w-8" />
+              </button>
+            </>
+          )}
+          <div className="max-w-[92vw] max-h-[88vh] flex flex-col items-center gap-3" onClick={e => e.stopPropagation()}>
+            <img src={lightbox.files[lightbox.index].url} alt={lightbox.files[lightbox.index].name} className="max-w-full max-h-[80vh] object-contain rounded-lg" />
+            <div className="flex items-center gap-3 text-white/90 text-sm">
+              <span className="truncate max-w-[55vw]">{lightbox.files[lightbox.index].name}</span>
+              <span className="text-white/50">{lightbox.index + 1}/{lightbox.files.length}</span>
+              <a href={safeHref(lightbox.files[lightbox.index].url)} download={lightbox.files[lightbox.index].name}
+                className="inline-flex items-center gap-1 hover:text-white" onClick={e => e.stopPropagation()}>
+                <Download className="h-4 w-4" />Shkarko
+              </a>
+            </div>
+          </div>
+        </div>,
+        document.body
+      )}
     </div>
   );
+};
+
+// True when a material file is an image (checked on both name and url).
+const isImageFile = (f: { url: string; name: string }) =>
+  /\.(png|jpe?g|gif|webp|svg|bmp)(\?|$)/i.test(f.name || '') || /\.(png|jpe?g|gif|webp|svg|bmp)(\?|$)/i.test(f.url || '');
+
+// Pick an icon + tint for a non-image material file by extension.
+const fileKind = (nameOrUrl: string): { icon: React.ElementType; tint: string } => {
+  const s = (nameOrUrl || '').toLowerCase();
+  if (/\.pdf(\?|$)/.test(s)) return { icon: FileText, tint: 'text-red-500' };
+  if (/\.(docx?|odt|rtf|txt)(\?|$)/.test(s)) return { icon: FileText, tint: 'text-blue-500' };
+  if (/\.(zip|rar|7z|tar|gz)(\?|$)/.test(s)) return { icon: FileArchive, tint: 'text-amber-500' };
+  if (/\.(mp4|mov|avi|mkv|webm)(\?|$)/.test(s)) return { icon: Film, tint: 'text-purple-500' };
+  return { icon: FileText, tint: 'text-muted-foreground' };
 };
 
 // Helper component for info rows
