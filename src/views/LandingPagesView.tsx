@@ -184,7 +184,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
   {
     id: 'bakery',
     title: 'Social Bakery',
-    description: 'Menaxhim i rrjeteve sociale për furra buke, pastiçeri dhe ëmbëltore — 1 paketë e plotë me 2 ditë xhirimi/muaj, reklama lokale dhe përmbajtje që hap oreksin. 60.000 Lekë/muaj.',
+    description: 'Menaxhim i rrjeteve sociale për furra buke, pastiçeri dhe ëmbëltore — 1 paketë e plotë me 15 postime/muaj (12 Reels), 1 ditë xhirimi/muaj, reklama lokale dhe përmbajtje që hap oreksin. 60.000 Lekë/muaj.',
     path: '/bakery',
     category: 'Social Media',
     icon: Croissant,

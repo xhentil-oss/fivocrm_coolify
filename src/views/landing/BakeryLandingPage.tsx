@@ -39,9 +39,9 @@ const PACKAGE = {
       title: 'Përmbajtja & Prodhimi',
       items: [
         'Menaxhim i Instagram, Facebook dhe TikTok',
-        '16 postime në muaj që hapin oreksin',
-        '12 Reels në muaj me produktet tuaja të freskëta',
-        '2 ditë xhirimi në muaj brenda furrës suaj',
+        '15 postime në muaj që hapin oreksin',
+        '12 prej tyre Reels me produktet tuaja të freskëta',
+        '1 ditë xhirimi në muaj brenda furrës suaj',
         'Regji dhe editim profesional i videove',
         'Stories ditore që tregojnë përditshmërinë e furrës',
       ],
