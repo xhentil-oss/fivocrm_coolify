@@ -6,10 +6,10 @@ import { getStatusColor } from '../../lib/statusColors';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
-import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2, Sparkles, Calculator, MessageSquare } from 'lucide-react';
+import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2, Sparkles, Calculator, MessageSquare, ArrowRight } from 'lucide-react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useToast } from '../../hooks/use-toast';
-import type { Invoice, InvoiceItem, Service, ClientRequest, Project, Task, Quote, Lead } from '../../types';
+import type { Invoice, InvoiceItem, Service, ClientRequest, Project, Task, Quote, Lead, ServiceInquiry } from '../../types';
 
 const QUOTES = [
   'Suksesi nuk është çelësi i lumturisë. Lumturia është çelësi i suksesit.',
@@ -205,6 +205,24 @@ const PortalDashboard: React.FC = () => {
       return { ...p, done, total, pct: total > 0 ? Math.round((done / total) * 100) : 0 };
     });
   }, [rawProjects, allTasks]);
+
+  // ── Client's submitted inquiries (anketa). A submitted inquiry counts as an
+  // active project — the team is preparing the proposal — so it shows as a card
+  // on the dashboard even before a real project doc exists. Draft = not yet
+  // submitted; Converted = a real project now exists (shown via customerProjects).
+  const { data: myInquiries } = useCollection<ServiceInquiry>('serviceInquiries', {
+    skip: !user,
+    where: user?.uid ? [{ field: 'clientUserId', operator: '==', value: user.uid }] : undefined,
+    skipTeamFilter: true,
+  });
+  const activeInquiries = React.useMemo(
+    () => (myInquiries || []).filter(i => i.status === 'New' || i.status === 'Reviewed'),
+    [myInquiries]
+  );
+  const activeProjects = React.useMemo(
+    () => customerProjects.filter(p => p.status !== 'Completed'),
+    [customerProjects]
+  );
 
   // Payment history
   const paidInvoices = React.useMemo(() => {
@@ -406,14 +424,16 @@ const PortalDashboard: React.FC = () => {
         </Card>
       </div>
 
-      {/* Project Progress */}
-      {customerProjects.length > 0 && (
+      {/* Active Projects — real active projects + submitted inquiries.
+          A submitted anketë counts as an active project, so an inquiry-only
+          client still sees a project card here. */}
+      {(activeProjects.length > 0 || activeInquiries.length > 0) && (
         <Card>
           <CardHeader className="pb-3">
             <div className="flex items-center justify-between">
               <CardTitle className="text-lg flex items-center gap-2">
                 <FolderKanban className="w-5 h-5 text-primary" />
-                Projektet Tuaja
+                Projektet Aktive
               </CardTitle>
               <Link to="/portal/projects" className="text-sm text-primary hover:underline">
                 Shiko të gjitha
@@ -422,7 +442,30 @@ const PortalDashboard: React.FC = () => {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {customerProjects.map(p => (
+              {/* Submitted inquiries shown as active projects (team preparing the proposal) */}
+              {activeInquiries.map(inq => {
+                const title = (inq as any).serviceTitle || inq.servicesInterestedIn?.[0] || 'Kërkesë shërbimi';
+                return (
+                  <Link key={`inq-${inq.id}`} to={`/portal/projects/inquiry/${inq.id}`} className="block hover:bg-muted/50 rounded-lg p-2 -m-2 transition-colors">
+                    <div className="flex items-center gap-3">
+                      <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-primary/10">
+                        <ClipboardList className="h-5 w-5 text-primary" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium truncate">{title}</span>
+                          <Badge variant="secondary" className="bg-blue-100 text-blue-800">Në shqyrtim</Badge>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">Ekipi po përgatit propozimin tuaj.</p>
+                      </div>
+                      <ArrowRight className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                    </div>
+                  </Link>
+                );
+              })}
+
+              {/* Real active projects with progress */}
+              {activeProjects.map(p => (
                 <Link key={p.id} to={`/portal/projects/${p.id}`} className="block hover:bg-muted/50 rounded-lg p-2 -m-2 transition-colors">
                   <div className="space-y-2">
                     <div className="flex items-center justify-between text-sm">
