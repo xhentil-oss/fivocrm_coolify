@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Shield, Sun, Camera, Car } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Shield, Sun, Camera, Car, Croissant, Store } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -179,6 +179,28 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Car,
     color: 'text-blue-600',
     gradient: 'from-blue-600 to-cyan-500',
+    status: 'active',
+  },
+  {
+    id: 'bakery',
+    title: 'Social Bakery',
+    description: 'Menaxhim i rrjeteve sociale për furra buke, pastiçeri dhe ëmbëltore — 1 paketë e plotë me 2 ditë xhirimi/muaj, reklama lokale dhe përmbajtje që hap oreksin. 60.000 Lekë/muaj.',
+    path: '/bakery',
+    category: 'Social Media',
+    icon: Croissant,
+    color: 'text-orange-600',
+    gradient: 'from-amber-500 to-orange-600',
+    status: 'active',
+  },
+  {
+    id: 'shop-produkte',
+    title: 'Shop me Produkte',
+    description: 'Paketë premium për dyqane me produkte — 4 xhirime/muaj me modele, regji profesionale, person i dedikuar (jo skedulim), reklama në Ads Manager dhe email marketing. 190.000 Lekë/muaj.',
+    path: '/shop-produkte',
+    category: 'Social Media',
+    icon: Store,
+    color: 'text-emerald-600',
+    gradient: 'from-emerald-500 to-teal-600',
     status: 'active',
   },
 ];

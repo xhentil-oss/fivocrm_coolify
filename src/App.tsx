@@ -95,6 +95,8 @@ const WebsiteMaintenanceLandingPage = lazyRetry(() => import('./views/landing/We
 const PergolaLandingPage = lazyRetry(() => import('./views/landing/PergolaLandingPage'));
 const FotoVideoLandingPage = lazyRetry(() => import('./views/landing/FotoVideoLandingPage'));
 const TransferLandingPage = lazyRetry(() => import('./views/landing/TransferLandingPage'));
+const BakeryLandingPage = lazyRetry(() => import('./views/landing/BakeryLandingPage'));
+const ShopProduktLandingPage = lazyRetry(() => import('./views/landing/ShopProduktLandingPage'));
 const PriceCalculatorView = lazyRetry(() => import('./views/PriceCalculatorView'));
 const LandingPagesView = lazyRetry(() => import('./views/LandingPagesView'));
 const PrivacyPolicyView = lazyRetry(() => import('./views/PrivacyPolicyView'));
@@ -233,6 +235,8 @@ function AppContent() {
       <Route path="/pergola" element={<Suspense fallback={<LazyFallback />}><PergolaLandingPage /></Suspense>} />
       <Route path="/foto-video" element={<Suspense fallback={<LazyFallback />}><FotoVideoLandingPage /></Suspense>} />
       <Route path="/transfer" element={<Suspense fallback={<LazyFallback />}><TransferLandingPage /></Suspense>} />
+      <Route path="/bakery" element={<Suspense fallback={<LazyFallback />}><BakeryLandingPage /></Suspense>} />
+      <Route path="/shop-produkte" element={<Suspense fallback={<LazyFallback />}><ShopProduktLandingPage /></Suspense>} />
       <Route path="/privacy" element={<Suspense fallback={<LazyFallback />}><PrivacyPolicyView /></Suspense>} />
       <Route path="/privatesia" element={<Suspense fallback={<LazyFallback />}><PrivacyPolicyView /></Suspense>} />
       <Route path="/delete-account" element={<Suspense fallback={<LazyFallback />}><DeleteAccountView /></Suspense>} />
