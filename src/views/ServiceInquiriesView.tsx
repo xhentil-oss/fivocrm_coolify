@@ -18,17 +18,20 @@ import {
   ExternalLink, Tag, CheckCircle2, Eye, AlertCircle,
   Instagram, Facebook, Linkedin, ArrowRight, Trash2,
   Image as ImageIcon, Briefcase,
-  Quote, Download, X, ChevronLeft, ChevronRight, FileArchive, Film,
+  Quote, Download, X, ChevronLeft, ChevronRight, FileArchive, Film, Pencil,
 } from 'lucide-react';
 import type { ServiceInquiry, Lead, Project } from '../types';
 import { safeHref } from '../lib/utils';
 import { buildProjectDescription, appendBrief, getInquiryCompleteness, getInquirySections } from '../lib/inquiryBrief';
 import { FolderKanban } from 'lucide-react';
+import ServiceQuestionnaireForm from '../components/ServiceQuestionnaireForm';
 
 const ServiceInquiriesView: React.FC = () => {
   const permissions = usePermissions();
   const canDelete = permissions.role === 'Admin' || permissions.role === 'Manager';
+  const canEdit = permissions.role === 'Admin' || permissions.role === 'Manager';
   const [selectedInquiry, setSelectedInquiry] = useState<ServiceInquiry | null>(null);
+  const [editing, setEditing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [convertingId, setConvertingId] = useState<string | null>(null);
@@ -93,6 +96,17 @@ const ServiceInquiriesView: React.FC = () => {
     } finally {
       setDeleting(false);
     }
+  };
+
+  // Admin/Manager edit of a client-submitted survey — reuses the same
+  // questionnaire form the client fills, then writes the changes back.
+  const handleEditSubmit = async (formData: any) => {
+    if (!selectedInquiry) return;
+    const id = selectedInquiry.id;
+    await inquiryMutation.update(id, { ...formData });
+    setSelectedInquiry(prev => (prev ? ({ ...prev, ...formData } as ServiceInquiry) : null));
+    setEditing(false);
+    toast({ title: 'Anketa u përditësua', description: 'Ndryshimet u ruajtën me sukses.' });
   };
 
   const handleStatusChange = async (id: string, status: string) => {
@@ -423,16 +437,34 @@ const ServiceInquiriesView: React.FC = () => {
       </Dialog>
 
       {/* Detail Dialog */}
-      <Dialog open={!!selectedInquiry} onOpenChange={open => { if (!open) setSelectedInquiry(null); }}>
+      <Dialog open={!!selectedInquiry} onOpenChange={open => { if (!open) { setSelectedInquiry(null); setEditing(false); } }}>
         <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
           <DialogHeader className="flex-shrink-0">
             <DialogTitle className="flex items-center gap-2">
-              <FileText className="w-5 h-5" />
-              Detajet e Kërkesës
+              {editing ? <Pencil className="w-5 h-5" /> : <FileText className="w-5 h-5" />}
+              {editing ? 'Edito Anketën' : 'Detajet e Kërkesës'}
             </DialogTitle>
           </DialogHeader>
 
-          {selectedInquiry && (
+          {selectedInquiry && editing && (
+            <div className="flex-1 overflow-y-auto pr-2">
+              <button
+                type="button"
+                onClick={() => setEditing(false)}
+                className="inline-flex items-center gap-1.5 text-sm font-medium text-muted-foreground hover:text-foreground mb-4"
+              >
+                <ChevronLeft className="h-4 w-4" /> Anulo editimin
+              </button>
+              <ServiceQuestionnaireForm
+                key={selectedInquiry.id}
+                onSubmit={handleEditSubmit}
+                initialDraft={{ ...(selectedInquiry as any), id: selectedInquiry.id }}
+                isEditing
+              />
+            </div>
+          )}
+
+          {selectedInquiry && !editing && (
             <div className="flex-1 overflow-y-auto pr-2">
               <div className="space-y-6 pb-4">
                 {/* Status + Actions bar */}
@@ -469,6 +501,16 @@ const ServiceInquiriesView: React.FC = () => {
                       >
                         <FolderKanban className="w-3.5 h-3.5 mr-1" />
                         {convertingProjectId === selectedInquiry.id ? 'Duke krijuar...' : 'Konverto në Projekt'}
+                      </Button>
+                    )}
+                    {canEdit && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setEditing(true)}
+                      >
+                        <Pencil className="w-3.5 h-3.5 mr-1" />
+                        Edito
                       </Button>
                     )}
                     {canDelete && (
