@@ -8,7 +8,6 @@ import {
   LayoutDashboard,
   FileText,
   ShoppingBag,
-  MessageSquare,
   ClipboardList,
   FolderKanban,
   Calculator,
@@ -21,6 +20,7 @@ import {
   EyeOff,
   Sparkles,
   MessageCircle,
+  ArrowRight,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Loader2 } from 'lucide-react';
@@ -31,7 +31,6 @@ const navItems = [
   { to: '/portal/contracts', icon: ScrollText, label: 'Kontratat' },
   { to: '/portal/services', icon: ShoppingBag, label: 'Shërbimet' },
   { to: '/portal/projects', icon: FolderKanban, label: 'Projektet' },
-  { to: '/portal/chat', icon: MessageSquare, label: 'Chat Support' },
   { to: '/portal/preventiva', icon: Calculator, label: 'Preventiva' },
 ];
 
@@ -212,15 +211,24 @@ const PortalLayout: React.FC = () => {
           })}
         </nav>
 
-        {/* Quick-help card → opens the support chat */}
-        <div className="mt-auto m-4 rounded-2xl border border-primary/15 bg-gradient-to-b from-primary/5 to-primary/10 p-4">
-          <div className="flex items-center gap-1.5 text-[12.5px] font-semibold text-primary mb-1.5">
-            <Sparkles className="h-3.5 w-3.5" /> Ndihmë e shpejtë
+        {/* Quick-help card → the single, prominent entry to support chat */}
+        <div className="mt-auto m-4 rounded-2xl border-2 border-primary/25 bg-gradient-to-b from-primary/[0.08] to-primary/[0.16] p-5 shadow-lg shadow-primary/10">
+          <div className="flex items-center gap-2 text-sm font-bold text-primary mb-2">
+            <Sparkles className="h-4 w-4" /> Ndihmë e shpejtë
+            {unreadStaffMsgs > 0 && (
+              <span className="ml-auto min-w-[20px] h-5 px-1.5 bg-red-500 text-white rounded-full flex items-center justify-center text-[11px] font-bold">
+                {unreadStaffMsgs > 9 ? '9+' : unreadStaffMsgs}
+              </span>
+            )}
           </div>
-          <p className="text-[12.5px] leading-relaxed text-muted-foreground mb-2.5">Keni pyetje për një shërbim? Ekipi ynë përgjigjet brenda 24 orëve.</p>
+          <p className="text-[13px] leading-relaxed text-muted-foreground mb-3.5">
+            Keni pyetje për një shërbim? Ekipi ynë përgjigjet brenda 24 orëve.
+          </p>
           <NavLink to="/portal/chat" onClick={() => setMobileOpen(false)}
-            className="flex items-center justify-center gap-1.5 rounded-lg bg-card border border-primary/20 py-2 text-[12.5px] font-semibold text-primary hover:bg-primary/5 transition-colors">
-            <MessageCircle className="h-3.5 w-3.5" /> Kontakto ekipin
+            className="flex items-center justify-center gap-2 rounded-xl bg-brand-gradient text-white py-2.5 text-sm font-semibold shadow-md shadow-primary/25 hover:opacity-95 transition-opacity">
+            <MessageCircle className="h-4 w-4" />
+            {unreadStaffMsgs > 0 ? 'Vazhdo bisedën' : 'Kontakto ekipin'}
+            <ArrowRight className="h-4 w-4" />
           </NavLink>
         </div>
       </aside>

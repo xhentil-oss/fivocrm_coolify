@@ -4,10 +4,9 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useCollection, useDocument } from '../../hooks/useFirestore';
 import { getStatusColor } from '../../lib/statusColors';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
-import { Button } from '../../components/ui/button';
 import { Badge } from '../../components/ui/badge';
-import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2, Sparkles, Calculator, MessageSquare, ArrowRight } from 'lucide-react';
-import { Link, useNavigate } from 'react-router-dom';
+import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2, Sparkles, Calculator, ArrowRight } from 'lucide-react';
+import { Link } from 'react-router-dom';
 import { useToast } from '../../hooks/use-toast';
 import type { Invoice, InvoiceItem, Service, ClientRequest, Project, Task, Quote, Lead, ServiceInquiry } from '../../types';
 
@@ -27,7 +26,6 @@ const QUOTES = [
 const PortalDashboard: React.FC = () => {
   const { customerId } = useClientPortal();
   const { user } = useAuth();
-  const navigate = useNavigate();
   const { toast } = useToast();
 
   // Greeting based on time of day
@@ -45,15 +43,6 @@ const PortalDashboard: React.FC = () => {
   }, []);
 
   const displayName = user?.displayName || user?.email?.split('@')[0] || 'klient';
-
-  // Team availability — Mon–Fri, 09:00–18:00 (local). Drives the online indicator
-  // on the Chat Support card; outside these hours we promise a 24h reply instead.
-  const isTeamOnline = React.useMemo(() => {
-    const now = new Date();
-    const day = now.getDay(); // 0 Sun … 6 Sat
-    const hour = now.getHours();
-    return day >= 1 && day <= 5 && hour >= 9 && hour < 18;
-  }, []);
 
   // ── Unread staff messages via notifications ──
   const { data: portalUserNotifs } = useCollection<any>('notifications', {
@@ -77,8 +66,8 @@ const PortalDashboard: React.FC = () => {
     }
     if (unreadStaffMsgs > prevStaffMsgCountRef.current) {
       toast({
-        title: '🐦 Mesazh i ri nga ekipi!',
-        description: 'Klikoni zogun për të parë mesazhin.',
+        title: 'Mesazh i ri nga ekipi!',
+        description: 'Hapni "Ndihmë e shpejtë" në menu për ta parë.',
       });
     }
     prevStaffMsgCountRef.current = unreadStaffMsgs;
@@ -258,7 +247,7 @@ const PortalDashboard: React.FC = () => {
       </div>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-4">
         <Link to="/portal/invoices">
           <Card className="hover:shadow-md transition-shadow cursor-pointer">
             <CardContent className="pt-6">
@@ -309,22 +298,6 @@ const PortalDashboard: React.FC = () => {
           </Card>
         </Link>
 
-        <Link to="/portal/chat">
-          <Card className="hover:shadow-md transition-shadow cursor-pointer">
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <div className="p-2 bg-orange-100 rounded-lg">
-                  <MessageSquare className="h-5 w-5 text-orange-600" />
-                </div>
-                <div>
-                  <p className="text-sm text-muted-foreground">Chat Support</p>
-                  <p className="text-base font-semibold">Na shkruani</p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </Link>
-
         <Link to="/portal/preventiva">
           <Card className="hover:shadow-md transition-shadow cursor-pointer">
             <CardContent className="pt-6">
@@ -343,7 +316,7 @@ const PortalDashboard: React.FC = () => {
       </div>
 
       {/* Recent Activity */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6">
         {/* Recent Invoices */}
         <Card>
           <CardHeader className="pb-3">
@@ -385,41 +358,6 @@ const PortalDashboard: React.FC = () => {
                 ))}
               </div>
             )}
-          </CardContent>
-        </Card>
-
-        {/* Chat Support */}
-        <Card>
-          <CardHeader className="pb-3">
-            <div className="flex items-center justify-between gap-2">
-              <CardTitle className="text-lg flex items-center gap-2">
-                <MessageSquare className="w-5 h-5 text-primary" />
-                Chat Support
-              </CardTitle>
-              {unreadStaffMsgs > 0 && (
-                <span className="inline-flex items-center rounded-full bg-red-500 text-white text-xs font-semibold px-2.5 py-1 whitespace-nowrap">
-                  {unreadStaffMsgs} mesazhe të reja
-                </span>
-              )}
-            </div>
-            {/* Live availability indicator */}
-            <div className="flex items-center gap-2 mt-1.5">
-              <span className={`h-2.5 w-2.5 rounded-full flex-shrink-0 ${isTeamOnline ? 'bg-success animate-pulse' : 'bg-amber-400'}`} />
-              <span className="text-sm text-muted-foreground">
-                {isTeamOnline ? 'Ekipi është online' : 'Përgjigje brenda 24 orëve'}
-              </span>
-            </div>
-          </CardHeader>
-          <CardContent>
-            <p className="text-sm text-muted-foreground mb-4">
-              Keni një pyetje ose kërkesë? Na shkruani direkt — ekipi përgjegjës ju përgjigjet sa më shpejt.
-            </p>
-            <Button asChild className="w-full bg-brand-gradient text-white">
-              <Link to="/portal/chat">
-                <MessageSquare className="w-4 h-4 mr-2" />
-                {unreadStaffMsgs > 0 ? 'Vazhdo bisedën' : 'Nis një bisedë'}
-              </Link>
-            </Button>
           </CardContent>
         </Card>
       </div>
@@ -547,30 +485,6 @@ const PortalDashboard: React.FC = () => {
         </Card>
       )}
 
-      {/* ── Floating Bird Widget: unread staff messages ── */}
-      {unreadStaffMsgs > 0 && (
-        <button
-          onClick={() => navigate('/portal/chat')}
-          className="fixed bottom-6 right-6 z-50 flex items-center gap-3 bg-white dark:bg-gray-900 rounded-2xl shadow-xl px-4 py-3 border border-primary/20 dark:border-primary/30 hover:shadow-lg hover:scale-105 transition-all duration-200 animate-bird-enter"
-          title="Mesazh i ri nga ekipi — klikoni për chat"
-        >
-          {/* Bird + pulse ring */}
-          <div className="relative flex-shrink-0 w-9 h-9 flex items-center justify-center">
-            <div className="absolute inset-0 rounded-full bg-primary/20 animate-pulse-ring" />
-            <span className="text-2xl block animate-bird-fly select-none">🐦</span>
-            <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] bg-red-500 rounded-full flex items-center justify-center text-white text-[9px] font-bold px-0.5 shadow">
-              {unreadStaffMsgs > 9 ? '9+' : unreadStaffMsgs}
-            </span>
-          </div>
-          {/* Label */}
-          <div className="text-left">
-            <div className="text-xs font-semibold text-foreground whitespace-nowrap leading-tight">Mesazh nga ekipi</div>
-            <div className="text-[10px] text-primary font-medium mt-0.5">
-              {unreadStaffMsgs} të palexuar · Hap chat →
-            </div>
-          </div>
-        </button>
-      )}
     </div>
   );
 };
