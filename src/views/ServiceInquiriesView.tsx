@@ -28,8 +28,10 @@ import ServiceQuestionnaireForm from '../components/ServiceQuestionnaireForm';
 
 const ServiceInquiriesView: React.FC = () => {
   const permissions = usePermissions();
-  const canDelete = permissions.role === 'Admin' || permissions.role === 'Manager';
-  const canEdit = permissions.role === 'Admin' || permissions.role === 'Manager';
+  // Use the resolved role flags, not the raw role string — SuperAdmin/Owner both
+  // have isAdmin=true but a role of 'SuperAdmin'/custom, so a string compare hid these actions.
+  const canDelete = permissions.isAdmin || permissions.isManager;
+  const canEdit = permissions.isAdmin || permissions.isManager;
   const [selectedInquiry, setSelectedInquiry] = useState<ServiceInquiry | null>(null);
   const [editing, setEditing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
