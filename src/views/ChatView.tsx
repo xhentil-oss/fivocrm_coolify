@@ -625,6 +625,14 @@ const ChatView: React.FC = () => {
     return `User ${userId.slice(0, 6)}`;
   }, [displayNameCache]);
 
+  // Sender avatar for push notifications — only https URLs (the FCM image field
+  // rejects anything else). Returns undefined for users without an uploaded photo,
+  // which safely falls back to a plain notification.
+  const getUserAvatar = useCallback((userId: string): string | undefined => {
+    const url = (profileMap.get(userId) as any)?.avatarUrl;
+    return typeof url === 'string' && /^https:\/\//i.test(url) ? url : undefined;
+  }, [profileMap]);
+
   // #45 Custom status — returns active (non-expired) status for a user, or null.
   const getUserStatus = useCallback((uid: string): { emoji: string; text: string } | null => {
     const p = profileMap.get(uid);
@@ -2013,6 +2021,7 @@ const ChatView: React.FC = () => {
               message: (finalText || '📎 Attachment').slice(0, 100),
               isRead: false,
               linkTo: targetChannel,
+              imageUrl: getUserAvatar(user.uid),
             } as any).catch(() => { /* non-blocking */ });
           });
         }
@@ -2055,6 +2064,19 @@ const ChatView: React.FC = () => {
         }
       } else if (targetDirectUserId) {
         await messageMutation.create({ ...baseMessage, receiverId: targetDirectUserId } as Omit<ChatMessage, 'id'>);
+        // Notify the recipient (push + email, arrives even when the app is closed).
+        // DMs previously created no notification, so recipients missed messages while
+        // away. Title = sender's name, imageUrl = their avatar (WhatsApp/Airbnb style).
+        // actionUrl deep-links back to this DM thread on tap.
+        notificationMutation.create({
+          userId: targetDirectUserId,
+          type: 'direct_message',
+          title: getUserDisplayName(user.uid),
+          message: (finalText || '📎 Attachment').slice(0, 100),
+          isRead: false,
+          actionUrl: `/app/chat?directUserId=${user.uid}`,
+          imageUrl: getUserAvatar(user.uid),
+        } as any).catch(() => { /* non-blocking */ });
       }
 
       setMessageText('');

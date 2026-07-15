@@ -626,6 +626,8 @@ export function useMutation<T = DocumentData>(collectionName: string) {
                 message: (docData as any).message,
                 actionUrl: resolvedUrl,
                 actionLabel: (docData as any).actionLabel,
+                // Sender avatar → shown in the push (WhatsApp/Airbnb style). Optional.
+                imageUrl: (docData as any).imageUrl ?? (docData as any).avatarUrl,
               }),
             });
           } catch { /* non-critical: in-app notification already saved */ }

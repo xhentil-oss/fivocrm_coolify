@@ -82,8 +82,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (!checkRateLimit(caller.uid)) return res.status(429).json({ error: 'Rate limited' });
 
-  const { userId, type, title, message, actionUrl, actionLabel } = req.body || {};
+  const { userId, type, title, message, actionUrl, actionLabel, imageUrl } = req.body || {};
   if (!userId || !title) return res.status(400).json({ error: 'Missing userId or title' });
+
+  // Sender avatar (or any image) shown in the push — only accept https URLs so a
+  // bad value can't break the FCM send. Falls back to a plain notification.
+  const safeImageUrl = typeof imageUrl === 'string' && /^https:\/\//i.test(imageUrl) ? imageUrl : undefined;
 
   // Don't notify someone about their own action.
   if (userId === caller.uid) return res.status(200).json({ skipped: 'self' });
@@ -112,13 +116,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (token) {
         await adminMessaging.send({
           token,
-          notification: { title, body: message || '' },
+          // notification.imageUrl maps to android big-picture / apns / webpush image,
+          // so a sender avatar shows next to the message like WhatsApp/Airbnb.
+          notification: { title, body: message || '', ...(safeImageUrl ? { imageUrl: safeImageUrl } : {}) },
           data: {
             url: actionUrl ? String(actionUrl) : '/',
             ...(type ? { type: String(type) } : {}),
           },
-          android: { priority: 'high', notification: { icon: 'ic_stat_notify', color: '#0EA5E9' } },
-          webpush: { notification: { icon: '/icon-192.png' }, fcmOptions: { link: actionUrl ? String(actionUrl) : '/' } },
+          android: {
+            priority: 'high',
+            notification: {
+              icon: 'ic_stat_notify',
+              color: '#0EA5E9',
+              ...(safeImageUrl ? { imageUrl: safeImageUrl } : {}),
+            },
+          },
+          webpush: {
+            notification: { icon: '/icon-192.png', ...(safeImageUrl ? { image: safeImageUrl } : {}) },
+            fcmOptions: { link: actionUrl ? String(actionUrl) : '/' },
+          },
         });
         result.push = 'sent';
       } else {
