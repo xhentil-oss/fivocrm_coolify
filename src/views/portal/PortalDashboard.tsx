@@ -46,6 +46,15 @@ const PortalDashboard: React.FC = () => {
 
   const displayName = user?.displayName || user?.email?.split('@')[0] || 'klient';
 
+  // Team availability — Mon–Fri, 09:00–18:00 (local). Drives the online indicator
+  // on the Chat Support card; outside these hours we promise a 24h reply instead.
+  const isTeamOnline = React.useMemo(() => {
+    const now = new Date();
+    const day = now.getDay(); // 0 Sun … 6 Sat
+    const hour = now.getHours();
+    return day >= 1 && day <= 5 && hour >= 9 && hour < 18;
+  }, []);
+
   // ── Unread staff messages via notifications ──
   const { data: portalUserNotifs } = useCollection<any>('notifications', {
     skip: !user,
@@ -290,7 +299,7 @@ const PortalDashboard: React.FC = () => {
                   <MessageSquare className="h-5 w-5 text-orange-600" />
                 </div>
                 <div>
-                  <p className="text-sm text-muted-foreground">Mbështetje</p>
+                  <p className="text-sm text-muted-foreground">Chat Support</p>
                   <p className="text-base font-semibold">Na shkruani</p>
                 </div>
               </div>
@@ -361,23 +370,38 @@ const PortalDashboard: React.FC = () => {
           </CardContent>
         </Card>
 
-        {/* Support via chat */}
+        {/* Chat Support */}
         <Card>
           <CardHeader className="pb-3">
-            <CardTitle className="text-lg flex items-center gap-2">
-              <MessageSquare className="w-5 h-5 text-primary" />
-              Mbështetje
-            </CardTitle>
+            <div className="flex items-center justify-between gap-2">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <MessageSquare className="w-5 h-5 text-primary" />
+                Chat Support
+              </CardTitle>
+              {unreadStaffMsgs > 0 && (
+                <span className="inline-flex items-center rounded-full bg-red-500 text-white text-xs font-semibold px-2.5 py-1 whitespace-nowrap">
+                  {unreadStaffMsgs} mesazhe të reja
+                </span>
+              )}
+            </div>
+            {/* Live availability indicator */}
+            <div className="flex items-center gap-2 mt-1.5">
+              <span className={`h-2.5 w-2.5 rounded-full flex-shrink-0 ${isTeamOnline ? 'bg-success animate-pulse' : 'bg-amber-400'}`} />
+              <span className="text-sm text-muted-foreground">
+                {isTeamOnline ? 'Ekipi është online' : 'Përgjigje brenda 24 orëve'}
+              </span>
+            </div>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground mb-4">
               Keni një pyetje ose kërkesë? Na shkruani direkt — ekipi përgjegjës ju përgjigjet sa më shpejt.
             </p>
-            <Link to="/portal/chat">
-              <Button className="w-full">
-                <MessageSquare className="w-4 h-4 mr-2" /> Hap bisedën
-              </Button>
-            </Link>
+            <Button asChild className="w-full bg-brand-gradient text-white">
+              <Link to="/portal/chat">
+                <MessageSquare className="w-4 h-4 mr-2" />
+                {unreadStaffMsgs > 0 ? 'Vazhdo bisedën' : 'Nis një bisedë'}
+              </Link>
+            </Button>
           </CardContent>
         </Card>
       </div>
