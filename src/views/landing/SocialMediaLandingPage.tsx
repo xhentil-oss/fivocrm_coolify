@@ -58,8 +58,10 @@ const PKG_STYLES = [
   { id: 'growth', color: 'from-violet-500 to-purple-600', border: 'border-violet-200 hover:border-violet-400', headerBg: 'bg-gradient-to-br from-violet-50 to-purple-50', popular: true },
   { id: 'pro', color: 'from-indigo-500 to-blue-600', border: 'border-indigo-300 hover:border-indigo-500', headerBg: 'bg-gradient-to-br from-indigo-50 to-blue-50', popular: false },
   { id: 'agency', color: 'from-amber-500 to-orange-500', border: 'border-amber-200 hover:border-amber-500', headerBg: 'bg-gradient-to-br from-amber-50 to-orange-50', popular: false },
+  { id: 'bakery', color: 'from-orange-400 to-rose-500', border: 'border-orange-200 hover:border-orange-400', headerBg: 'bg-gradient-to-br from-orange-50 to-rose-50', popular: false },
+  { id: 'asatrade', color: 'from-emerald-500 to-teal-600', border: 'border-emerald-300 hover:border-emerald-500', headerBg: 'bg-gradient-to-br from-emerald-50 to-teal-50', popular: false },
 ];
-const COMPARE_COLORS = ['text-pink-600', 'text-violet-600', 'text-indigo-600', 'text-amber-600'];
+const COMPARE_COLORS = ['text-pink-600', 'text-violet-600', 'text-indigo-600', 'text-amber-600', 'text-orange-600', 'text-emerald-600'];
 const PAIN_ICONS = [Users, Clock, BarChart3, Search];
 const PAIN_STYLE = [
   { color: 'text-rose-500', bg: 'bg-rose-50' },
@@ -106,7 +108,7 @@ const SQ: Copy = {
       { title: 'Reklamat hangrën buxhetin', body: 'Keni investuar në Meta Ads por rezultatet ishin zhgënjyese. Reklamat pa strategji të saktë janë para të hedhura.' },
       { title: 'Konkurrenti është kudo', body: 'Kompetitorët tuaj janë aktiv, postojnë çdo ditë dhe marrin klientët tuaj potencialë. Çdo ditë pa prezencë është mundësi e humbur.' },
     ] },
-  packages: { kicker: 'Çmimet', title: '4 paketa — 1 zgjidhje e duhur për ju', sub: 'Nga 500€/muaj deri në 2,800€/muaj. Pa kontratë — ndryshoni kur dëshironi.', idealFor: 'Ideal për', notIncluded: 'Nuk përfshihet', note: '* Buxheti i reklamave paguhet direkt te platformat (Meta/Google/TikTok) — nuk përfshihet në çmim.', compareChoose: 'Zgjidh',
+  packages: { kicker: 'Çmimet', title: '6 paketa — 1 zgjidhje e duhur për ju', sub: 'Nga një prezencë profesionale te prodhimi i plotë video. Zgjidhni paketën që i përshtatet biznesit tuaj — pa kontratë afatgjatë, ndryshoni kur të doni.', idealFor: 'Ideal për', notIncluded: 'Nuk përfshihet', note: '* Buxheti i reklamave paguhet direkt te platformat (Meta/Google/TikTok) — nuk përfshihet në çmim.', compareChoose: 'Zgjidh',
     pkgs: [
       { title: 'Starter', subtitle: 'Prezencë profesionale dhe aktivitet i rregullt', price: '500€', priceNote: '/ muaj + ad spend', badge: '', cta: 'Fillo me Starter', targetAudience: ['Biznese të reja online', 'Brand-e personale & influencerë fillestarë', 'Dyqane & shërbime lokale'],
         features: [{ category: 'Platformat & Kontent', items: ['Menaxhim 2 platformash (Facebook + Instagram)', '12 postime / muaj', '8 reels / muaj', 'Design grafik profesional', 'Copywriting & hashtag strategy', 'Kalendar mujor kontent', 'Publikim sipas orarit optimal'] }, { category: 'Reklama', items: ['Setup i fushatave Meta Ads', '1 fushatë aktive', 'Targetim bazë i audiencës'] }, { category: 'Raportim', items: ['Raport mujor bazë', 'KPIs: reach, engagement, followers'] }],
@@ -120,6 +122,12 @@ const SQ: Copy = {
       { title: 'Agency', subtitle: 'Zgjidhja e plotë — ekip i dedikuar për brand-in tuaj', price: '2,800€', priceNote: '/ muaj + ad spend', badge: 'Full Service', cta: 'Zgjidh Agency', targetAudience: ['Kompani të mëdha & korporata', 'Brand-e me prania multi-platformë', 'Biznese që duan ekip të dedikuar'],
         features: [{ category: 'Platformat & Kontent', items: ['Menaxhim 5 platformash (FB + IG + TikTok + LinkedIn + YouTube)', '32+ postime / muaj', '28+ reels / muaj', '3+ ditë xhirimi / muaj', 'Mini-dokumentarë & brand films', 'Podcast / Audio content', 'Design system i plotë brand', 'Copywriting multiplatformë', 'Kampanja sezonale & promovuese'] }, { category: 'Reklama Full-Funnel', items: ['Meta Ads + Google Ads + TikTok Ads', 'YouTube Ads', 'Fushata pa limit', 'Full funnel strategy (Awareness → Conversion)', 'Email marketing automation', 'CRM integration & follow-up', 'Buxhet i optimizuar cross-platform'] }, { category: 'Ekip & Strategji', items: ['Account manager i dedikuar', 'Menaxher kontent i dedikuar', 'Community management i plotë 7/7', 'Inbox + DM management', 'Influencer marketing & koordinim', 'Brand reputation management', 'Raport javor + mujor + kuartal', 'Strategji vjetore growth'] }],
         notIncluded: ['Buxheti i reklamave'] },
+      { title: 'Social Bakery', subtitle: 'Paketë e krijuar posaçërisht për furra buke, pastiçeri dhe ëmbëltore', price: '60.000 L', priceNote: '/ muaj + buxheti i reklamave', badge: '', cta: 'Zgjidh Social Bakery', targetAudience: ['Furra buke & pastiçeri', 'Ëmbëltore, cake shop & akullore', 'Kafe me produkte të freskëta'],
+        features: [{ category: 'Përmbajtja & Prodhimi', items: ['Menaxhim i Instagram, Facebook & TikTok', '16 postime në muaj që zgjojnë oreksin', '12 reels në muaj me produktet tuaja të freskëta', '2 ditë xhirimi në muaj brenda lokalit tuaj', 'Regji dhe editim profesional i videove', 'Stories ditore që tregojnë përditshmërinë e furrës'] }, { category: 'Reklama', items: ['Menaxhim i reklamave në Meta Ads Manager', 'Targetim lokal — klientët brenda zonës suaj', 'Fushata për porosi online dhe vizita në dyqan'] }, { category: 'Rritje & Raportim', items: ['Strategji për video që bëhen virale', 'Rritje organike e shikueshmërisë', 'Raport mujor i qartë me rezultate reale'] }],
+        notIncluded: ['Buxheti i reklamave', 'Email marketing', 'YouTube & LinkedIn'] },
+      { title: 'Asa Trade', subtitle: 'Zgjidhje premium për dyqanet me produkte që duan të shesin çdo ditë online', price: '190.000 L', priceNote: '/ muaj + buxheti i reklamave', badge: 'Premium', cta: 'Zgjidh Asa Trade', targetAudience: ['Dyqane me produkte, fizike dhe online', 'Brand-e retail që duan shitje nga rrjetet', 'Biznese që kërkojnë prodhim video profesional'],
+        features: [{ category: 'Prodhim & Regji', items: ['4 ditë xhirimi profesional në muaj', '2–3 modele femra për prezantimin e produkteve', 'Regji profesionale për çdo video', 'Editim dhe montazh kinematografik'] }, { category: 'Menaxhim & Përmbajtje', items: ['Menaxhim i disa kanaleve: Instagram, TikTok dhe Facebook', 'Një person i dedikuar që menaxhon rrjetet çdo ditë — jo thjesht postime të programuara', 'Kalendar strategjik i përmbajtjes', 'Postime dhe reels çdo javë'] }, { category: 'Rritje & Reklama', items: ['Menaxhim i reklamave në Ads Manager (Meta)', 'Rritje organike e shikueshmërisë', 'Strategji për video që bëhen virale', 'Email marketing për klientët ekzistues'] }],
+        notIncluded: ['Buxheti i reklamave (paguhet direkt te platformat)'] },
     ] },
   process: { kicker: 'Si Punojmë', title: 'Procesi ynë i provuar', sub: '5 hapa drejt prezencës dixhitale që sjell rezultate.',
     steps: [
@@ -304,7 +312,9 @@ const SocialMediaLandingPage: React.FC = () => {
   const bt = BILLING_T[lang] || BILLING_T.sq;
   const toggleAddon = (i: number) => setSelectedAddons(prev => prev.includes(i) ? prev.filter(x => x !== i) : [...prev, i]);
   // Monthly value: selected package (annual = −15%) + selected add-ons.
-  const pkgMonthly = priceNum(t.packages.pkgs.find(x => x.title === selectedPkg)?.price || '');
+  const selectedPkgObj = t.packages.pkgs.find(x => x.title === selectedPkg);
+  // Only €-priced packages feed the €-based add-on estimator; Lek packages are excluded to avoid mixed-currency totals.
+  const pkgMonthly = selectedPkgObj?.price.includes('€') ? priceNum(selectedPkgObj.price) : 0;
   const effPkgMonthly = billing === 'annual' ? Math.round(pkgMonthly * (1 - ANNUAL_DISCOUNT)) : pkgMonthly;
   const addonsMonthly = selectedAddons.reduce((s, i) => s + (ADDON_PRICES[i] || 0), 0);
   const estMonthly = effPkgMonthly + addonsMonthly;
@@ -444,7 +454,7 @@ const SocialMediaLandingPage: React.FC = () => {
               </div>
             </div>
           </FadeIn>
-          <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-6 items-start">
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-6 items-start">
             {t.packages.pkgs.map((pkg, i) => { const style = PKG_STYLES[i]; return (
               <FadeIn key={style.id} delay={i * 100}>
                 <div className={`relative bg-white rounded-2xl border-2 ${style.border} transition-all duration-300 shadow-sm hover:shadow-xl flex flex-col overflow-hidden`}>
@@ -455,9 +465,10 @@ const SocialMediaLandingPage: React.FC = () => {
                     <h3 className="text-xl font-extrabold text-gray-900">{pkg.title}</h3>
                     <p className="text-xs text-gray-500 mt-1 mb-3 leading-snug">{pkg.subtitle}</p>
                     {(() => {
+                      const isEuro = pkg.price.includes('€');
                       const m = priceNum(pkg.price);
                       const annual = Math.round(m * (1 - ANNUAL_DISCOUNT));
-                      return billing === 'annual' ? (
+                      return billing === 'annual' && isEuro ? (
                         <>
                           <div className="flex items-end gap-2">
                             <span className="text-3xl font-extrabold text-gray-900">{annual.toLocaleString()}€</span>
