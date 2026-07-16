@@ -15,24 +15,7 @@ import { Badge } from '../../components/ui/badge';
 import { Zap, Percent, GripVertical } from 'lucide-react';
 import type { Lead } from '../../types';
 import { leadTemperature, leadSla, TEMP_META } from '../../lib/leadIntel';
-
-const STAGE_PROBABILITY: Record<string, number> = {
-  New: 10,
-  Contacted: 20,
-  Qualified: 40,
-  'Follow-up': 30,
-  Converted: 100,
-};
-
-type StageKey = 'New' | 'Contacted' | 'Qualified' | 'Follow-up' | 'Converted';
-
-const STAGES: { key: StageKey; label: string; accent: string }[] = [
-  { key: 'New', label: 'Të reja', accent: 'border-l-blue-400' },
-  { key: 'Contacted', label: 'Kontaktuara', accent: 'border-l-navy-700' },
-  { key: 'Qualified', label: 'Kualifikuara', accent: 'border-l-green-500' },
-  { key: 'Follow-up', label: 'Në ndjekje', accent: 'border-l-yellow-500' },
-  { key: 'Converted', label: 'Konvertuara', accent: 'border-l-emerald-600' },
-];
+import { PIPELINE_STAGES, leadStageProbability, type LeadStatus } from '../../lib/leadStages';
 
 interface PipelineBoardProps {
   leads: Lead[];
@@ -45,7 +28,7 @@ function LeadCard({ lead, calculateLeadScore, onCardClick }: { lead: Lead; calcu
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: lead.id });
   const score = (lead as any).score ?? calculateLeadScore(lead);
   const scoreColor = score >= 70 ? 'text-green-600' : score >= 40 ? 'text-yellow-600' : 'text-red-500';
-  const prob = lead.probability ?? STAGE_PROBABILITY[lead.status] ?? 0;
+  const prob = leadStageProbability(lead);
   return (
     <div
       ref={setNodeRef}
@@ -95,7 +78,7 @@ function LeadCard({ lead, calculateLeadScore, onCardClick }: { lead: Lead; calcu
   );
 }
 
-function StageColumn({ stage, accent, label, leads, calculateLeadScore, onCardClick }: { stage: StageKey; accent: string; label: string; leads: Lead[]; calculateLeadScore: (l: Lead) => number; onCardClick: (l: Lead) => void }) {
+function StageColumn({ stage, accent, label, leads, calculateLeadScore, onCardClick }: { stage: LeadStatus; accent: string; label: string; leads: Lead[]; calculateLeadScore: (l: Lead) => number; onCardClick: (l: Lead) => void }) {
   const { isOver, setNodeRef } = useDroppable({ id: stage });
   const total = leads.reduce((s, l) => s + (l.estimatedValue || 0), 0);
   return (
@@ -136,12 +119,12 @@ export const PipelineBoard: React.FC<PipelineBoardProps> = ({ leads, onStatusCha
   const [activeId, setActiveId] = useState<string | null>(null);
 
   const grouped = useMemo(() => {
-    const map: Record<StageKey, Lead[]> = {
-      New: [], Contacted: [], Qualified: [], 'Follow-up': [], Converted: [],
-    };
+    const map = {} as Record<LeadStatus, Lead[]>;
+    for (const s of PIPELINE_STAGES) map[s.key] = [];
     for (const lead of leads) {
       if (lead.status === 'Lost') continue;
-      const key = (STAGES.find(s => s.key === lead.status)?.key) || 'New';
+      // Won behaves as closed-won → shown in the Converted column.
+      const key = (map[lead.status as LeadStatus] ? lead.status : lead.status === 'Won' ? 'Converted' : 'New') as LeadStatus;
       map[key].push(lead);
     }
     return map;
@@ -155,7 +138,7 @@ export const PipelineBoard: React.FC<PipelineBoardProps> = ({ leads, onStatusCha
     if (!e.over) return;
     const lead = leads.find(l => l.id === e.active.id);
     if (!lead) return;
-    const target = String(e.over.id) as StageKey;
+    const target = String(e.over.id) as LeadStatus;
     if (lead.status === target) return;
     await onStatusChange(lead, target);
   };
@@ -164,7 +147,7 @@ export const PipelineBoard: React.FC<PipelineBoardProps> = ({ leads, onStatusCha
     <DndContext sensors={sensors} onDragStart={handleStart} onDragEnd={handleEnd}>
       <div className="w-full min-w-0 overflow-x-auto -mx-4 px-4 pb-4">
         <div className="flex gap-3 min-w-max">
-          {STAGES.map(s => (
+          {PIPELINE_STAGES.map(s => (
             <StageColumn
               key={s.key}
               stage={s.key}

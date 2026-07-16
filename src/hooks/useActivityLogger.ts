@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { collection, addDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
-import { getGlobalTeamId } from './useFirestore';
+import { getGlobalTeamId, getGlobalBusinessId } from './useFirestore';
 import type { Activity } from '../types';
 
 /**
@@ -35,6 +35,8 @@ export function useActivityLogger() {
           customerId: opts?.customerId || null,
           userId: user.uid,
           teamId: getGlobalTeamId() || null,
+          // Business-scoped reads filter on businessId; without it this doc is orphaned.
+          businessId: getGlobalBusinessId() || getGlobalTeamId() || null,
           createdAt: Timestamp.now(),
         });
       } catch {

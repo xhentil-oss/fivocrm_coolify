@@ -75,6 +75,8 @@ const PortalInquiryView: React.FC = () => {
       notes: `Shërbime: ${formData.servicesInterestedIn.join(', ')}\nObjektivi: ${formData.mainGoal}\nBuxheti: ${formData.budgetRange}\nAfati: ${formData.timeline}\n\nPërshkrimi: ${formData.projectNeedDescription}\nSfida: ${formData.currentMainChallenge}`,
       serviceInquiryId: id,
       ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+      // Business-scoped CRM reads filter on businessId; without it the lead is invisible in /app/crm.
+      ...(tenantBusinessId ? { businessId: tenantBusinessId } : resolvedTeamId ? { businessId: resolvedTeamId } : {}),
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
       createdByUserId: user?.uid || null,
@@ -100,6 +102,7 @@ const PortalInquiryView: React.FC = () => {
       dueDate: tomorrow,
       assignedToUserId: salesAdminMembers?.[0]?.userId || '',
       ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
+      ...(tenantBusinessId ? { businessId: tenantBusinessId } : resolvedTeamId ? { businessId: resolvedTeamId } : {}),
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
       createdByUserId: user?.uid || null,

@@ -38,6 +38,7 @@ import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilter
 import { useUserNames } from '../hooks/useUserNames';
 import { safeHref, phoneKeyDown, normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import { leadTemperature, leadSla, TEMP_META } from '../lib/leadIntel';
+import { LEAD_STAGES, SELECTABLE_STATUSES, leadStageLabel } from '../lib/leadStages';
 import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember, Quote, Deal } from '../types';
 
 const CRMView: React.FC = () => {
@@ -141,16 +142,11 @@ const CRMView: React.FC = () => {
   const { data: allQuotes } = useCollection<Quote>('quotes');
   const { getName } = useUserNames(teamMembers || []);
 
-  const STAGE_PROBABILITY: Record<string, number> = {
-    'New': 10,
-    'Contacted': 20,
-    'Qualified': 40,
-    'Follow-up': 30,
-    'Proposal': 70,
-    'Won': 100,
-    'Converted': 100,
-    'Lost': 0,
-  };
+  // Derived from the single source of truth (src/lib/leadStages.ts) so board,
+  // table, dropdown and analytics never drift apart again.
+  const STAGE_PROBABILITY: Record<string, number> = Object.fromEntries(
+    LEAD_STAGES.map(s => [s.key, s.prob])
+  );
 
   const LOST_REASONS = [
     'Çmimi i lartë',
@@ -165,17 +161,7 @@ const CRMView: React.FC = () => {
 
 
 
-  const getStatusLabel = (status: string) => {
-    switch (status) {
-      case 'New': return 'I Ri';
-      case 'Contacted': return 'Kontaktuar';
-      case 'Qualified': return 'Kualifikuar';
-      case 'Follow-up': return 'Në Ndjekje';
-      case 'Converted': return 'Konvertuar';
-      case 'Lost': return 'Humbur';
-      default: return status;
-    }
-  };
+  const getStatusLabel = leadStageLabel;
 
   const handleCreateLead = async (formData: FormData) => {
     if (saving) return;
@@ -1519,7 +1505,7 @@ const CRMView: React.FC = () => {
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="end">
-                      {(['New', 'Contacted', 'Qualified', 'Follow-up', 'Lost'] as const).map(s => (
+                      {(['New', 'Contacted', 'Qualified', 'Proposal', 'Follow-up', 'Lost'] as const).map(s => (
                         <DropdownMenuItem
                           key={s}
                           onClick={async () => {
@@ -1814,12 +1800,9 @@ const CRMView: React.FC = () => {
                             </SelectValue>
                           </SelectTrigger>
                           <SelectContent>
-                            <SelectItem value="New">I Ri</SelectItem>
-                            <SelectItem value="Contacted">Kontaktuar</SelectItem>
-                            <SelectItem value="Qualified">Kualifikuar</SelectItem>
-                            <SelectItem value="Follow-up">Në Ndjekje</SelectItem>
-                            <SelectItem value="Converted">Konvertuar</SelectItem>
-                            <SelectItem value="Lost">Humbur</SelectItem>
+                            {SELECTABLE_STATUSES.map(s => (
+                              <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>
+                            ))}
                           </SelectContent>
                         </Select>
                       </td>

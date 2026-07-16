@@ -95,17 +95,25 @@ const RegisterView: React.FC = () => {
       // Resolve teamId from existing team members so new documents are visible
       // to admins (team-scoped views filter by teamId).
       let teamId: string | null = null;
+      let businessId: string | null = null;
       try {
         const tmSnap = await getDocs(
           query(collection(db, 'teamMembers'), where('status', '==', 'Active'))
         );
-        teamId = tmSnap.docs.find(d => d.data().teamId)?.data().teamId || null;
+        const memberDoc = tmSnap.docs.find(d => d.data().teamId);
+        teamId = memberDoc?.data().teamId || null;
+        businessId = memberDoc?.data().businessId || null;
       } catch { /* non-critical */ }
-      const teamIdField = teamId ? { teamId } : {};
+      // Stamp BOTH teamId and businessId — business-scoped reads filter on businessId,
+      // so a lead/customer created with teamId only would be invisible in the CRM.
+      const scopeFields = {
+        ...(teamId ? { teamId } : {}),
+        ...((businessId || teamId) ? { businessId: businessId || teamId } : {}),
+      };
 
       // 2. Create a Lead in Firestore
       await addDoc(collection(db, 'leads'), {
-        ...teamIdField,
+        ...scopeFields,
         name: fullName,
         firstName: firstName.trim(),
         lastName: lastName.trim(),
@@ -125,7 +133,7 @@ const RegisterView: React.FC = () => {
       let customerId: string | null = null;
       try {
         const customerDoc = await addDoc(collection(db, 'customers'), {
-          ...teamIdField,
+          ...scopeFields,
           name: fullName,
           email: email.trim(),
           phone: phone.trim() || null,

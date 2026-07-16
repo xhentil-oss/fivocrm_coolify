@@ -3,20 +3,11 @@ import { Card } from '../../components/ui/card';
 import { TrendingUp, Users, DollarSign, Target, Clock, Zap, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { getTimestampMs } from '../../lib/utils';
 import { leadSla } from '../../lib/leadIntel';
+import { PIPELINE_STAGES, OPEN_STATUSES, leadStageProbability } from '../../lib/leadStages';
 import type { Lead } from '../../types';
 
-const STAGE_PROBABILITY: Record<string, number> = {
-  New: 10, Contacted: 20, Qualified: 40, 'Follow-up': 30, Proposal: 70, Won: 100, Converted: 100, Lost: 0,
-};
-const FUNNEL: { key: string; label: string; color: string }[] = [
-  { key: 'New', label: 'Të reja', color: 'bg-blue-500' },
-  { key: 'Contacted', label: 'Kontaktuara', color: 'bg-navy-700' },
-  { key: 'Qualified', label: 'Kualifikuara', color: 'bg-green-500' },
-  { key: 'Follow-up', label: 'Në ndjekje', color: 'bg-amber-500' },
-  { key: 'Proposal', label: 'Propozim', color: 'bg-orange-500' },
-  { key: 'Converted', label: 'Konvertuara', color: 'bg-emerald-600' },
-];
-const OPEN_STATUSES = ['New', 'Contacted', 'Qualified', 'Follow-up', 'Proposal'];
+// Funnel reuses the canonical board stages (New → … → Converted).
+const FUNNEL = PIPELINE_STAGES.map(s => ({ key: s.key, label: s.label, color: s.color }));
 const fmt = (n: number) => Math.round(n).toLocaleString('sq-AL');
 
 const Kpi: React.FC<{ icon: React.ReactNode; label: string; value: string; sub?: string; tone?: string }> = ({ icon, label, value, sub, tone }) => (
@@ -51,7 +42,7 @@ const LeadAnalytics: React.FC<{
     const lost = all.filter(l => l.status === 'Lost');
 
     const pipelineValue = open.reduce((s, l) => s + (l.estimatedValue || 0), 0);
-    const weighted = open.reduce((s, l) => s + (l.estimatedValue || 0) * ((l.probability ?? STAGE_PROBABILITY[l.status] ?? 0) / 100), 0);
+    const weighted = open.reduce((s, l) => s + (l.estimatedValue || 0) * (leadStageProbability(l) / 100), 0);
     const conversionRate = all.length ? (converted.length / all.length) * 100 : 0;
 
     // Avg time-to-convert (days)
