@@ -76,8 +76,10 @@ const LeadTimeline: React.FC<{ leadId: string; onLogged?: (type: LeadActivityTyp
     orderBy: { field: 'createdAt', direction: 'desc' },
   });
 
+  // Bound the rendered timeline to the 50 most-recent entries. (Business-scoped
+  // reads are not limited server-side by design, so we cap on the client.)
   const sorted = useMemo(
-    () => (activities || []).slice().sort((a, b) => getTimestampMs(b.createdAt) - getTimestampMs(a.createdAt)),
+    () => (activities || []).slice().sort((a, b) => getTimestampMs(b.createdAt) - getTimestampMs(a.createdAt)).slice(0, 50),
     [activities]
   );
 

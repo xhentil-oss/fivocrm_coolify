@@ -79,7 +79,10 @@ const CRMView: React.FC = () => {
   useEffect(() => {
     if (typeof window !== 'undefined') window.localStorage.setItem('crm_view_mode', viewMode);
   }, [viewMode]);
-  // Windowing — render at most N rows; "Shfaq më shumë" reveals more
+  // Windowing — render at most N rows; "Shfaq më shumë" reveals more.
+  // NOTE: this bounds DOM/render work, not Firestore reads. Reads follow the
+  // app-wide businessId-only scoping (useFirestore deliberately avoids composite
+  // indexes), so read-bounding for leads is a separate, index-gated change.
   const PAGE_SIZE = 100;
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
   const { toast } = useToast();
@@ -399,6 +402,25 @@ const CRMView: React.FC = () => {
     if (lead.lastFollowUpDate) score += 10;
     return Math.min(100, score);
   };
+
+  // P1.1 — compute score/temperature/SLA ONCE per lead per snapshot, instead of
+  // recomputing inside the sort comparator (O(n log n)) and per row/card on every
+  // render. Keyed by lead id (optimistic status clones keep the same id).
+  const leadIntelMap = React.useMemo(() => {
+    const map = new Map<string, { score: number; temperature: ReturnType<typeof leadTemperature>; sla: ReturnType<typeof leadSla> }>();
+    for (const l of leads || []) {
+      map.set(l.id, {
+        score: (l as any).score ?? calculateLeadScore(l),
+        temperature: leadTemperature(l),
+        sla: leadSla(l),
+      });
+    }
+    return map;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leads]);
+  const getScore = (l: Lead) => leadIntelMap.get(l.id)?.score ?? (l as any).score ?? calculateLeadScore(l);
+  const getTemp = (l: Lead) => leadIntelMap.get(l.id)?.temperature ?? leadTemperature(l);
+  const getSla = (l: Lead) => leadIntelMap.get(l.id)?.sla ?? leadSla(l);
 
   const handleAssignLead = async (lead: Lead, assignedToUserId: string) => {
     const resolved = assignedToUserId && assignedToUserId !== 'unassigned' ? assignedToUserId : undefined;
@@ -781,7 +803,7 @@ const CRMView: React.FC = () => {
       );
     }
     if (scoreFilter !== 'all') result = result.filter(l => {
-      const s = (l as any).score ?? calculateLeadScore(l);
+      const s = getScore(l);
       if (scoreFilter === 'high') return s >= 70;
       if (scoreFilter === 'medium') return s >= 40 && s < 70;
       if (scoreFilter === 'low') return s < 40;
@@ -804,9 +826,7 @@ const CRMView: React.FC = () => {
         case 'name': return a.name.localeCompare(b.name, 'sq') * dir;
         case 'value': return ((a.estimatedValue || 0) - (b.estimatedValue || 0)) * dir;
         case 'score': {
-          const sa = (a as any).score ?? calculateLeadScore(a);
-          const sb = (b as any).score ?? calculateLeadScore(b);
-          return (sa - sb) * dir;
+          return (getScore(a) - getScore(b)) * dir;
         }
         case 'prob': return ((a.probability ?? STAGE_PROBABILITY[a.status] ?? 0) - (b.probability ?? STAGE_PROBABILITY[b.status] ?? 0)) * dir;
         case 'follow': return (getFollowMs(a) - getFollowMs(b)) * dir;
@@ -867,23 +887,29 @@ const CRMView: React.FC = () => {
       return sum + (l.estimatedValue || 0) * prob;
     }, 0);
 
-    // Build cumulative forecast per day for the last 60 days, using createdAt as "lead became part of pipeline"
+    // Build cumulative forecast per day for the last 60 days, using createdAt as
+    // "lead became part of pipeline". Single pass: bucket each active lead's
+    // weighted value at the day it first enters the 60-day window, then prefix-sum.
+    // points[k] = cutoff (today - (59-k) days); O(n + 60) instead of O(60·n).
+    const DAY = 86400000;
     const today = new Date();
     today.setHours(23, 59, 59, 999);
-    const points: number[] = [];
-    for (let i = 59; i >= 0; i--) {
-      const cutoff = new Date(today);
-      cutoff.setDate(cutoff.getDate() - i);
-      let sum = 0;
-      for (const l of leads || []) {
-        if (l.status === 'Lost' || l.status === 'Converted') continue;
-        const createdAt = l.createdAt ? new Date(l.createdAt) : null;
-        if (!createdAt || createdAt > cutoff) continue;
-        const prob = (l.probability ?? STAGE_PROBABILITY[l.status] ?? 0) / 100;
-        sum += (l.estimatedValue || 0) * prob;
-      }
-      points.push(sum);
+    const todayMs = today.getTime();
+    const add = new Array(60).fill(0);
+    for (const l of active) {
+      const createdMs = getTimestampMs(l.createdAt);
+      const diff = todayMs - createdMs;
+      if (!createdMs || diff < 0) continue; // no/invalid date or created after today
+      const prob = (l.probability ?? STAGE_PROBABILITY[l.status] ?? 0) / 100;
+      const w = (l.estimatedValue || 0) * prob;
+      let k0 = 59 - Math.floor(diff / DAY);
+      if (k0 < 0) k0 = 0;      // older than the window → counts from day 0
+      if (k0 > 59) continue;   // outside the window
+      add[k0] += w;
     }
+    const points: number[] = [];
+    let running = 0;
+    for (let k = 0; k < 60; k++) { running += add[k]; points.push(running); }
     const last30 = points.slice(30);
     const prev30 = points.slice(0, 30);
     const avgPrev = prev30.reduce((a, b) => a + b, 0) / Math.max(prev30.length, 1);
@@ -1286,6 +1312,7 @@ const CRMView: React.FC = () => {
           onStatusChange={handleStatusChange}
           onCardClick={setSelectedLead}
           calculateLeadScore={calculateLeadScore}
+          intel={leadIntelMap}
         />
       ) : (
       <Tabs value={activeTab} onValueChange={setActiveTab}>
@@ -1334,7 +1361,7 @@ const CRMView: React.FC = () => {
           {/* Mobile card layout */}
           <div className="sm:hidden space-y-3">
             {filteredLeads.slice(0, visibleLimit).map((lead) => {
-              const s = (lead as any).score ?? calculateLeadScore(lead);
+              const s = getScore(lead);
               const scoreColor = s >= 70 ? 'text-green-600' : s >= 40 ? 'text-yellow-600' : 'text-red-500';
               const leadPhone = normalizeAlbanianPhone(lead.phoneNumber || lead.phone || '');
               const waUnread = leadPhone ? (waUnreadByPhone.get(leadPhone) || 0) : 0;
@@ -1361,9 +1388,9 @@ const CRMView: React.FC = () => {
                   {/* Tier 1 — name + status + score + menu */}
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex-1 min-w-0 flex items-center gap-2">
-                      <span className="shrink-0">{TEMP_META[leadTemperature(lead)].emoji}</span>
+                      <span className="shrink-0">{TEMP_META[getTemp(lead)].emoji}</span>
                       <p className="font-medium text-foreground truncate">{lead.name}</p>
-                      {leadSla(lead).breached && <span className="text-[10px] px-1 py-0.5 rounded-full font-medium bg-red-500 text-white shrink-0">SLA</span>}
+                      {getSla(lead).breached && <span className="text-[10px] px-1 py-0.5 rounded-full font-medium bg-red-500 text-white shrink-0">SLA</span>}
                       <Badge className={`${getStatusColor(lead.status)} text-[10px] py-0 px-1.5 shrink-0`}>
                         {getStatusLabel(lead.status)}
                       </Badge>
@@ -1731,13 +1758,13 @@ const CRMView: React.FC = () => {
                       <td className="px-6 py-4">
                         <div className="space-y-1">
                           <div className="flex items-center gap-1.5 flex-wrap">
-                            {(() => { const t = leadTemperature(lead); return (
+                            {(() => { const t = getTemp(lead); return (
                               <span title={`Temperatura: ${TEMP_META[t].label}`} className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${TEMP_META[t].className}`}>
                                 {TEMP_META[t].emoji}
                               </span>
                             ); })()}
                             <p className="text-body font-normal text-foreground">{lead.name}</p>
-                            {(() => { const s = leadSla(lead); return (<>
+                            {(() => { const s = getSla(lead); return (<>
                               {s.breached && <span title="Pa përgjigje brenda 24h" className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-red-500 text-white">⏰ SLA</span>}
                               {!s.breached && s.stale && <span title="Pa aktivitet prej 14+ ditësh" className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-slate-200 text-slate-600 dark:bg-slate-800 dark:text-slate-300">💤 Ngrirë</span>}
                             </>); })()}
@@ -1844,7 +1871,7 @@ const CRMView: React.FC = () => {
                       </td>
                       <td className="px-6 py-4">
                         {(() => {
-                          const s = (lead as any).score ?? calculateLeadScore(lead);
+                          const s = getScore(lead);
                           const color = s >= 70 ? 'text-green-600' : s >= 40 ? 'text-yellow-600' : 'text-red-500';
                           return (
                             <div className="flex items-center gap-1">
@@ -1988,7 +2015,7 @@ const CRMView: React.FC = () => {
         activityContent={selectedLead ? <LeadTimeline leadId={selectedLead.id} onLogged={(type) => bumpLeadActivity(selectedLead.id, type)} /> : undefined}
         actions={selectedLead ? (
           <div className="space-y-3">
-            {(() => { const t = leadTemperature(selectedLead); const s = leadSla(selectedLead); return (
+            {(() => { const t = getTemp(selectedLead); const s = getSla(selectedLead); return (
               <div className="flex items-center gap-2 flex-wrap">
                 <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${TEMP_META[t].className}`}>{TEMP_META[t].emoji} {TEMP_META[t].label}</span>
                 {s.breached && <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-red-500 text-white">⏰ SLA e shkelur</span>}

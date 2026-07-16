@@ -17,16 +17,24 @@ import type { Lead } from '../../types';
 import { leadTemperature, leadSla, TEMP_META } from '../../lib/leadIntel';
 import { PIPELINE_STAGES, leadStageProbability, type LeadStatus } from '../../lib/leadStages';
 
+export type LeadIntel = { score: number; temperature: ReturnType<typeof leadTemperature>; sla: ReturnType<typeof leadSla> };
+type IntelMap = Map<string, LeadIntel>;
+
 interface PipelineBoardProps {
   leads: Lead[];
   onStatusChange: (lead: Lead, newStatus: string) => void | Promise<void>;
   onCardClick: (lead: Lead) => void;
   calculateLeadScore: (l: Lead) => number;
+  // Precomputed intel (P1.1) — avoids recomputing temperature/SLA/score per card.
+  intel?: IntelMap;
 }
 
-function LeadCard({ lead, calculateLeadScore, onCardClick }: { lead: Lead; calculateLeadScore: (l: Lead) => number; onCardClick: (l: Lead) => void }) {
+function LeadCard({ lead, calculateLeadScore, onCardClick, intel }: { lead: Lead; calculateLeadScore: (l: Lead) => number; onCardClick: (l: Lead) => void; intel?: IntelMap }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: lead.id });
-  const score = (lead as any).score ?? calculateLeadScore(lead);
+  const cached = intel?.get(lead.id);
+  const score = cached?.score ?? (lead as any).score ?? calculateLeadScore(lead);
+  const temp = cached?.temperature ?? leadTemperature(lead);
+  const sla = cached?.sla ?? leadSla(lead);
   const scoreColor = score >= 70 ? 'text-green-600' : score >= 40 ? 'text-yellow-600' : 'text-red-500';
   const prob = leadStageProbability(lead);
   return (
@@ -50,9 +58,9 @@ function LeadCard({ lead, calculateLeadScore, onCardClick }: { lead: Lead; calcu
           className="flex-1 min-w-0 text-left"
         >
           <p className="font-medium text-foreground text-sm truncate">
-            <span className="mr-1">{TEMP_META[leadTemperature(lead)].emoji}</span>
+            <span className="mr-1">{TEMP_META[temp].emoji}</span>
             {lead.name}
-            {leadSla(lead).breached && <span className="ml-1 text-[9px] px-1 py-0.5 rounded-full font-medium bg-red-500 text-white align-middle">SLA</span>}
+            {sla.breached && <span className="ml-1 text-[9px] px-1 py-0.5 rounded-full font-medium bg-red-500 text-white align-middle">SLA</span>}
           </p>
           {lead.company && (
             <p className="text-xs text-muted-foreground truncate">{lead.company}</p>
@@ -78,7 +86,7 @@ function LeadCard({ lead, calculateLeadScore, onCardClick }: { lead: Lead; calcu
   );
 }
 
-function StageColumn({ stage, accent, label, leads, calculateLeadScore, onCardClick }: { stage: LeadStatus; accent: string; label: string; leads: Lead[]; calculateLeadScore: (l: Lead) => number; onCardClick: (l: Lead) => void }) {
+function StageColumn({ stage, accent, label, leads, calculateLeadScore, onCardClick, intel }: { stage: LeadStatus; accent: string; label: string; leads: Lead[]; calculateLeadScore: (l: Lead) => number; onCardClick: (l: Lead) => void; intel?: IntelMap }) {
   const { isOver, setNodeRef } = useDroppable({ id: stage });
   const total = leads.reduce((s, l) => s + (l.estimatedValue || 0), 0);
   return (
@@ -106,6 +114,7 @@ function StageColumn({ stage, accent, label, leads, calculateLeadScore, onCardCl
               lead={lead}
               calculateLeadScore={calculateLeadScore}
               onCardClick={onCardClick}
+              intel={intel}
             />
           ))
         )}
@@ -114,7 +123,7 @@ function StageColumn({ stage, accent, label, leads, calculateLeadScore, onCardCl
   );
 }
 
-export const PipelineBoard: React.FC<PipelineBoardProps> = ({ leads, onStatusChange, onCardClick, calculateLeadScore }) => {
+export const PipelineBoard: React.FC<PipelineBoardProps> = ({ leads, onStatusChange, onCardClick, calculateLeadScore, intel }) => {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const [activeId, setActiveId] = useState<string | null>(null);
 
@@ -156,6 +165,7 @@ export const PipelineBoard: React.FC<PipelineBoardProps> = ({ leads, onStatusCha
               leads={grouped[s.key]}
               calculateLeadScore={calculateLeadScore}
               onCardClick={onCardClick}
+              intel={intel}
             />
           ))}
         </div>

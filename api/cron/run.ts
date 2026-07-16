@@ -1015,7 +1015,11 @@ async function runLeadFollowUpReminders() {
   // 23-hour debounce: don't re-notify if we already notified today
   const twentyThreeHoursAgo = new Date(now.getTime() - 23 * 60 * 60 * 1000);
 
-  const leadsSnap = await db.collection('leads').get();
+  // Only open + converted leads can have a live follow-up (Won/Lost are skipped
+  // below anyway) — scope the read instead of scanning every lead in the platform.
+  const leadsSnap = await db.collection('leads')
+    .where('status', 'in', ['New', 'Contacted', 'Qualified', 'Proposal', 'Follow-up', 'Converted'])
+    .get();
   if (leadsSnap.empty) return { notified: 0 };
 
   let notified = 0;
@@ -1136,7 +1140,10 @@ async function runLeadSlaAndStaleAlerts() {
   const now = Date.now();
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
 
-  const leadsSnap = await db.collection('leads').get();
+  // SLA/stale alerts don't apply to Lost/Converted (skipped below) — scope the read.
+  const leadsSnap = await db.collection('leads')
+    .where('status', 'in', ['New', 'Contacted', 'Qualified', 'Proposal', 'Follow-up', 'Won'])
+    .get();
   const adminsByTeam: Record<string, string[]> = {};
   const getTeamAdmins = async (teamId?: string): Promise<string[]> => {
     if (!teamId) return [];
@@ -1201,7 +1208,10 @@ async function runLeadWhatsappAutoReminders() {
   const now = Date.now();
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
 
-  const leadsSnap = await db.collection('leads').get();
+  // Auto-reminders target only open leads (Won/Lost/Converted skipped below) — scope the read.
+  const leadsSnap = await db.collection('leads')
+    .where('status', 'in', ['New', 'Contacted', 'Qualified', 'Proposal', 'Follow-up'])
+    .get();
   if (leadsSnap.empty) return { sent: 0 };
 
   const tsCache = new Map<string, any>();
