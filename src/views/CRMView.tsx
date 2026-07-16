@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { useCollection, useMutation, useGlobalTeamId, useWhatsappEnabled } from '../hooks/useFirestore';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import { useCollection, useDocument, useMutation, useGlobalTeamId, useWhatsappEnabled } from '../hooks/useFirestore';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import type { WhatsAppMessage } from '../types';
 import { useAuth } from '../contexts/AuthContext';
@@ -39,10 +39,13 @@ import { useUserNames } from '../hooks/useUserNames';
 import { safeHref, phoneKeyDown, normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import { leadTemperature, leadSla, TEMP_META } from '../lib/leadIntel';
 import { LEAD_STAGES, SELECTABLE_STATUSES, leadStageLabel } from '../lib/leadStages';
+import { useSavedSegments, type LeadSegment } from '../hooks/useSavedSegments';
 import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember, Quote, Deal } from '../types';
 
 const CRMView: React.FC = () => {
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const routeLeadId = searchParams.get('lead');
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null);
   const [whatsappLead, setWhatsappLead] = useState<Lead | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
@@ -104,6 +107,9 @@ const CRMView: React.FC = () => {
   });
   // Role-based filtering: Member/Viewer see only leads they created
   const leads = useFilteredByOwner(rawLeads);
+  // P2.3 — deep link: /app/crm/:leadId opens the drawer. Fallback fetch for a lead
+  // not in the loaded list (e.g. opened via a shared link before the list loads).
+  const { data: routeLead } = useDocument<Lead>('leads', routeLeadId || '');
   const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
@@ -421,6 +427,25 @@ const CRMView: React.FC = () => {
   const getScore = (l: Lead) => leadIntelMap.get(l.id)?.score ?? (l as any).score ?? calculateLeadScore(l);
   const getTemp = (l: Lead) => leadIntelMap.get(l.id)?.temperature ?? leadTemperature(l);
   const getSla = (l: Lead) => leadIntelMap.get(l.id)?.sla ?? leadSla(l);
+
+  // P2.3 — open/close the lead drawer with the URL in sync (deep-linkable via
+  // ?lead=<id>; a query param keeps us on the same route so filters/scroll persist).
+  const openLead = React.useCallback((lead: Lead) => {
+    setSelectedLead(lead);
+    setSearchParams(prev => { const p = new URLSearchParams(prev); p.set('lead', lead.id); return p; });
+  }, [setSearchParams]);
+  const closeLead = React.useCallback(() => {
+    setSelectedLead(null);
+    setSearchParams(prev => { const p = new URLSearchParams(prev); p.delete('lead'); return p; }, { replace: true });
+  }, [setSearchParams]);
+  // Hydrate the drawer from a direct link / refresh once the lead is available.
+  React.useEffect(() => {
+    if (!routeLeadId || selectedLead?.id === routeLeadId) return;
+    const found = (leads || []).find(l => l.id === routeLeadId)
+      || (routeLead && (routeLead as any).id === routeLeadId ? routeLead : null);
+    if (found) setSelectedLead(found);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [routeLeadId, leads, routeLead]);
 
   const handleAssignLead = async (lead: Lead, assignedToUserId: string) => {
     const resolved = assignedToUserId && assignedToUserId !== 'unassigned' ? assignedToUserId : undefined;
@@ -867,6 +892,26 @@ const CRMView: React.FC = () => {
     setTagFilter('all');
   };
 
+  // P2.2 — saved segments (named filter sets).
+  const { segments, saveSegment, deleteSegment } = useSavedSegments();
+  const applySegment = (seg: LeadSegment) => {
+    const f = seg.filters;
+    setSearchQuery(f.searchQuery || '');
+    setScoreFilter(f.scoreFilter || 'all');
+    setAssignedFilter(f.assignedFilter || 'all');
+    setSourceFilter(f.sourceFilter || 'all');
+    setTagFilter(f.tagFilter || 'all');
+    setSortBy((f.sortBy as any) || 'createdAt');
+    setSortDir((f.sortDir as any) || 'desc');
+    setActiveTab(f.activeTab || 'all');
+  };
+  const handleSaveSegment = () => {
+    const name = window.prompt('Emri i segmentit:');
+    if (!name) return;
+    saveSegment(name, { searchQuery, scoreFilter, assignedFilter, sourceFilter, tagFilter, sortBy, sortDir, activeTab });
+    toast({ title: 'Segmenti u ruajt', description: name });
+  };
+
   const needsFollowUp = React.useMemo(() => {
     if (!leads) return [];
     const thirtyDaysAgo = new Date();
@@ -972,7 +1017,7 @@ const CRMView: React.FC = () => {
       if (e.key === 'Enter') {
         if (highlightedIndex >= 0 && filteredLeads[highlightedIndex]) {
           e.preventDefault();
-          setSelectedLead(filteredLeads[highlightedIndex]);
+          openLead(filteredLeads[highlightedIndex]);
         }
         return;
       }
@@ -1218,6 +1263,32 @@ const CRMView: React.FC = () => {
         </div>
       )}
 
+      {/* Saved segments (P2.2) */}
+      <div className="flex flex-wrap items-center gap-1.5 -mt-1">
+        <span className="text-xs text-muted-foreground">Segmentet:</span>
+        {segments.length === 0 && (
+          <span className="text-xs text-muted-foreground/70 italic">asnjë ende</span>
+        )}
+        {segments.map(seg => (
+          <Badge key={seg.name} variant="outline" className="gap-1 pl-2 pr-1 font-normal">
+            <button onClick={() => applySegment(seg)} className="hover:underline" aria-label={`Apliko segmentin ${seg.name}`}>
+              {seg.name}
+            </button>
+            <button onClick={() => deleteSegment(seg.name)} className="hover:bg-muted rounded-sm p-0.5" aria-label={`Fshi segmentin ${seg.name}`}>
+              <X className="w-3 h-3" />
+            </button>
+          </Badge>
+        ))}
+        {hasActiveFilters && (
+          <button
+            onClick={handleSaveSegment}
+            className="text-xs text-primary hover:underline underline-offset-2 ml-1 flex items-center gap-0.5"
+          >
+            <Plus className="w-3 h-3" /> Ruaj filtrin
+          </button>
+        )}
+      </div>
+
       <div className="grid gap-2 sm:gap-3 stagger-children" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))' }}>
         <Card className="p-3 sm:p-4 card-hover">
           <div className="flex items-center gap-1.5 text-muted-foreground">
@@ -1310,7 +1381,7 @@ const CRMView: React.FC = () => {
               : (leads || []).map(l => optimisticStatus[l.id] ? { ...l, status: optimisticStatus[l.id] } : l))
           }
           onStatusChange={handleStatusChange}
-          onCardClick={setSelectedLead}
+          onCardClick={openLead}
           calculateLeadScore={calculateLeadScore}
           intel={leadIntelMap}
         />
@@ -1384,7 +1455,7 @@ const CRMView: React.FC = () => {
                 );
               }
               return (
-                <Card key={lead.id} className="p-3 active:bg-muted/40 transition-colors" onClick={() => setSelectedLead(lead)}>
+                <Card key={lead.id} className="p-3 active:bg-muted/40 transition-colors" onClick={() => openLead(lead)}>
                   {/* Tier 1 — name + status + score + menu */}
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex-1 min-w-0 flex items-center gap-2">
@@ -1739,7 +1810,7 @@ const CRMView: React.FC = () => {
                     <tr
                       key={lead.id}
                       className={`group hover:bg-muted/50 cursor-pointer transition-colors duration-fast ${idx === highlightedIndex ? 'bg-muted/60 ring-1 ring-inset ring-primary/40' : ''} ${selectedIds.has(lead.id) ? 'bg-primary/5' : ''}`}
-                      onClick={() => setSelectedLead(lead)}
+                      onClick={() => openLead(lead)}
                     >
                       <td className="px-4 py-4 w-10" onClick={(e) => e.stopPropagation()}>
                         <Checkbox
@@ -2005,7 +2076,7 @@ const CRMView: React.FC = () => {
 
       <DetailDrawer
         open={!!selectedLead}
-        onClose={() => setSelectedLead(null)}
+        onClose={closeLead}
         title={selectedLead?.name || ''}
         data={selectedLead}
         onSaveNotes={selectedLead ? async (notes) => {

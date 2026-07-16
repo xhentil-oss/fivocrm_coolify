@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Card } from '../../components/ui/card';
 import { TrendingUp, Users, DollarSign, Target, Clock, Zap, AlertTriangle, CheckCircle2 } from 'lucide-react';
 import { getTimestampMs } from '../../lib/utils';
@@ -35,8 +35,11 @@ const LeadAnalytics: React.FC<{
   teamMembers: { userId: string; name?: string; displayName?: string; email?: string }[];
   getName: (id?: string, fallback?: string) => string;
 }> = ({ leads, getName }) => {
+  // P2.4 — date range over lead.createdAt. Default "all" preserves prior behavior.
+  const [rangeDays, setRangeDays] = useState<number | 'all'>('all');
   const m = useMemo(() => {
-    const all = leads || [];
+    const cutoff = rangeDays === 'all' ? 0 : Date.now() - rangeDays * 86_400_000;
+    const all = (leads || []).filter(l => rangeDays === 'all' || getTimestampMs(l.createdAt) >= cutoff);
     const open = all.filter(l => OPEN_STATUSES.includes(l.status));
     const converted = all.filter(l => l.status === 'Converted');
     const lost = all.filter(l => l.status === 'Lost');
@@ -102,15 +105,37 @@ const LeadAnalytics: React.FC<{
     const lostReasons = Array.from(lostMap.entries()).map(([reason, count]) => ({ reason, count })).sort((a, b) => b.count - a.count);
 
     return { all, open, converted, lost, pipelineValue, weighted, conversionRate, avgConvDays, avgRespH, slaBreaches, staleCount, funnel, bySource, leaderboard, lostReasons };
-  }, [leads, getName]);
+  }, [leads, getName, rangeDays]);
 
   const funnelMax = Math.max(1, ...m.funnel.map(f => f.count));
   const srcMax = Math.max(1, ...m.bySource.map(s => s.count));
   const lbMax = Math.max(1, ...m.leaderboard.map(r => r.count));
   const lostMax = Math.max(1, ...m.lostReasons.map(r => r.count));
 
+  const RANGES: { key: number | 'all'; label: string }[] = [
+    { key: 7, label: '7 ditë' },
+    { key: 30, label: '30 ditë' },
+    { key: 90, label: '90 ditë' },
+    { key: 'all', label: 'Të gjitha' },
+  ];
+
   return (
     <div className="space-y-6 mt-4">
+      {/* Date range */}
+      <div className="flex items-center justify-end gap-1.5">
+        <span className="text-xs text-muted-foreground mr-1">Periudha (sipas datës së krijimit):</span>
+        <div className="inline-flex items-center bg-muted rounded-full p-0.5">
+          {RANGES.map(r => (
+            <button
+              key={String(r.key)}
+              onClick={() => setRangeDays(r.key)}
+              className={`px-3 py-1 rounded-full text-xs font-medium transition-colors ${rangeDays === r.key ? 'bg-background shadow text-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+            >
+              {r.label}
+            </button>
+          ))}
+        </div>
+      </div>
       {/* KPI cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
         <Kpi icon={<Users className="w-4 h-4" />} label="Leads aktive" value={fmt(m.open.length)} sub={`${m.all.length} gjithsej`} />
