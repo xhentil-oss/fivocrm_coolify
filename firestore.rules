@@ -634,43 +634,46 @@ service cloud.firestore {
     }
 
     match /waTemplates/{docId} {
-      // Team-scoped saved WhatsApp templates (Meta HSM mappings).
-      allow read: if isTeamMember(resource.data.teamId);
-      allow create: if isTeamMember(request.resource.data.teamId);
-      allow update, delete: if isTeamMember(resource.data.teamId);
+      // Business-scoped saved WhatsApp templates (Meta HSM mappings). Queries
+      // filter by businessId; teamId fallback covers legacy docs.
+      allow read: if isBusinessMember(resource.data.businessId) || isTeamMember(resource.data.teamId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc() || isTeamMember(request.resource.data.teamId);
+      allow update, delete: if canManageBusinessDoc() || isTeamMember(resource.data.teamId);
     }
 
     match /waBroadcasts/{docId} {
-      // Team-scoped broadcast campaigns.  Created/edited from the UI; the
-      // cron processor advances status/sentCount via the Admin SDK (bypasses
-      // these rules).  Clients may read and manage their team's broadcasts.
-      allow read: if isTeamMember(resource.data.teamId);
-      allow create: if isTeamMember(request.resource.data.teamId);
-      allow update, delete: if isTeamMember(resource.data.teamId);
+      // Business-scoped broadcast campaigns (queries filter by businessId).
+      // Created/edited from the UI; the cron processor advances status/sentCount
+      // via the Admin SDK (bypasses these rules). teamId fallback covers legacy docs.
+      allow read: if isBusinessMember(resource.data.businessId) || isTeamMember(resource.data.teamId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc() || isTeamMember(request.resource.data.teamId);
+      allow update, delete: if canManageBusinessDoc() || isTeamMember(resource.data.teamId);
     }
 
     match /emailTemplates/{docId} {
-      // Team-scoped reusable email marketing templates.
-      allow read: if isTeamMember(resource.data.teamId);
-      allow create: if isTeamMember(request.resource.data.teamId);
-      allow update, delete: if isTeamMember(resource.data.teamId);
+      // Business-scoped reusable email marketing templates (queries filter by
+      // businessId). teamId fallback covers legacy docs created pre-businessId.
+      allow read: if isBusinessMember(resource.data.businessId) || isTeamMember(resource.data.teamId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc() || isTeamMember(request.resource.data.teamId);
+      allow update, delete: if canManageBusinessDoc() || isTeamMember(resource.data.teamId);
     }
 
     match /emailCampaigns/{docId} {
-      // Team-scoped email marketing campaigns.  Created/edited from the UI; the
-      // cron processor advances status/sentCount via the Admin SDK (bypasses
-      // these rules).  Clients may read and manage their team's campaigns.
-      allow read: if isTeamMember(resource.data.teamId);
-      allow create: if isTeamMember(request.resource.data.teamId);
-      allow update, delete: if isTeamMember(resource.data.teamId);
+      // Business-scoped email marketing campaigns (queries filter by businessId).
+      // Created/edited from the UI; the cron processor advances status/sentCount
+      // via the Admin SDK (bypasses these rules). teamId fallback covers legacy docs.
+      allow read: if isBusinessMember(resource.data.businessId) || isTeamMember(resource.data.teamId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc() || isTeamMember(request.resource.data.teamId);
+      allow update, delete: if canManageBusinessDoc() || isTeamMember(resource.data.teamId);
     }
 
     match /campaignEnrollments/{docId} {
       // Per-recipient drip-sequence progress. Created + advanced by the cron
-      // (Admin SDK); clients read their team's for reporting.
-      allow read: if isTeamMember(resource.data.teamId);
-      allow create: if isTeamMember(request.resource.data.teamId);
-      allow update, delete: if isTeamMember(resource.data.teamId);
+      // (Admin SDK); clients read their business's for reporting. teamId fallback
+      // covers legacy docs created pre-businessId.
+      allow read: if isBusinessMember(resource.data.businessId) || isTeamMember(resource.data.teamId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc() || isTeamMember(request.resource.data.teamId);
+      allow update, delete: if canManageBusinessDoc() || isTeamMember(resource.data.teamId);
     }
 
     match /lidMappings/{docId} {
