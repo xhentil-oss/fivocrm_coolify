@@ -69,7 +69,7 @@ export interface TeamSettings {
   aiModel?: string;         // optional model override (e.g. gemini-2.5-flash, gpt-4o-mini)
   // Email marketing provider — configured per-team from Settings → Integrime.
   // Read server-side by api/_mailer.ts (via teamSettings) when sending campaigns.
-  emailProvider?: 'resend' | 'sendgrid' | 'mailgun' | 'smtp';
+  emailProvider?: 'resend' | 'sendgrid' | 'mailgun' | 'brevo' | 'smtp';
   emailApiKey?: string;         // Resend / SendGrid / Mailgun API key
   emailFromEmail?: string;      // verified sender address (e.g. marketing@domain.com)
   emailFromName?: string;       // default display name

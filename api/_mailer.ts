@@ -3,7 +3,7 @@
 // per-team from teamSettings (configured in Settings → Integrime); when a team
 // hasn't configured one, we fall back to platform-wide env vars.
 //
-// Providers: Resend, SendGrid, Mailgun, or custom/plain SMTP.
+// Providers: Resend, SendGrid, Mailgun, Brevo, or custom/plain SMTP.
 //
 // Per-team config (teamSettings): emailProvider, emailApiKey, emailFromEmail,
 //   emailFromName, emailMailgunDomain, emailMailgunRegion, emailSmtp*.
@@ -11,7 +11,7 @@
 //   | SMTP_HOST/PORT/USER/PASS, plus MARKETING_FROM_EMAIL / MARKETING_FROM_NAME.
 import nodemailer from 'nodemailer';
 
-export type MailProvider = 'resend' | 'sendgrid' | 'mailgun' | 'smtp';
+export type MailProvider = 'resend' | 'sendgrid' | 'mailgun' | 'brevo' | 'smtp';
 
 export interface MailMessage {
   to: string;
@@ -65,6 +65,8 @@ function resolveMailer(cfg: MailerConfig = {}, fromNameOverride?: string): Resol
     provider = 'sendgrid';
   } else if (process.env.MAILGUN_API_KEY && process.env.MAILGUN_DOMAIN) {
     provider = 'mailgun';
+  } else if (process.env.BREVO_API_KEY) {
+    provider = 'brevo';
   } else if ((cfg.emailSmtpUser && cfg.emailSmtpPass) || (process.env.SMTP_USER && process.env.SMTP_PASS)) {
     provider = 'smtp';
   } else {
@@ -75,7 +77,8 @@ function resolveMailer(cfg: MailerConfig = {}, fromNameOverride?: string): Resol
     cfg.emailApiKey ||
     (provider === 'resend' ? process.env.RESEND_API_KEY : undefined) ||
     (provider === 'sendgrid' ? process.env.SENDGRID_API_KEY : undefined) ||
-    (provider === 'mailgun' ? process.env.MAILGUN_API_KEY : undefined);
+    (provider === 'mailgun' ? process.env.MAILGUN_API_KEY : undefined) ||
+    (provider === 'brevo' ? process.env.BREVO_API_KEY : undefined);
 
   const fromEmail =
     cfg.emailFromEmail ||
@@ -188,6 +191,34 @@ async function sendViaMailgun(messages: MailMessage[], r: ResolvedMailer, campai
   return results;
 }
 
+// ── Brevo (transactional "SMTP" HTTP API; api-key header) ─────────────────────
+async function sendViaBrevo(messages: MailMessage[], r: ResolvedMailer, campaignId?: string): Promise<SendResult[]> {
+  const results: SendResult[] = [];
+  for (const m of messages) {
+    try {
+      const resp = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: { 'api-key': r.apiKey || '', 'Content-Type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({
+          sender: { email: r.fromEmail, name: r.fromName },
+          to: [{ email: m.to }],
+          subject: m.subject,
+          htmlContent: m.html,
+          ...(campaignId ? { tags: [campaignId] } : {}),
+        }),
+        signal: AbortSignal.timeout(20_000),
+      });
+      // Brevo returns 201 Created with a messageId on success.
+      const ok = resp.status === 201 || resp.ok;
+      const detail = ok ? '' : await resp.text().catch(() => `HTTP ${resp.status}`);
+      results.push({ to: m.to, ok, ...(ok ? {} : { error: detail.slice(0, 200) }) });
+    } catch (err: any) {
+      results.push({ to: m.to, ok: false, error: err?.message || 'Brevo error' });
+    }
+  }
+  return results;
+}
+
 // ── SMTP (nodemailer) ─────────────────────────────────────────────────────────
 async function sendViaSmtp(messages: MailMessage[], r: ResolvedMailer): Promise<SendResult[]> {
   if (!r.smtp.user || !r.smtp.pass) {
@@ -237,6 +268,7 @@ export async function sendBulkEmail(
     case 'resend': return sendViaResend(messages, r, campaignId);
     case 'sendgrid': return sendViaSendgrid(messages, r, campaignId);
     case 'mailgun': return sendViaMailgun(messages, r, campaignId);
+    case 'brevo': return sendViaBrevo(messages, r, campaignId);
     case 'smtp': return sendViaSmtp(messages, r); // SMTP has no event webhooks
     default:
       return messages.map((m) => ({ to: m.to, ok: false, error: 'Asnjë ofrues email i konfiguruar (Settings → Integrime)' }));

@@ -118,7 +118,7 @@ const SettingsView: React.FC = () => {
   const [aiSaved, setAiSaved] = useState(false);
 
   // ── Email marketing provider ──
-  const [emailProvider, setEmailProvider] = useState<'resend' | 'sendgrid' | 'mailgun' | 'smtp'>('resend');
+  const [emailProvider, setEmailProvider] = useState<'resend' | 'sendgrid' | 'mailgun' | 'brevo' | 'smtp'>('resend');
   const [emailApiKey, setEmailApiKey] = useState('');
   const [emailFromEmail, setEmailFromEmail] = useState('');
   const [emailFromName, setEmailFromName] = useState('');
@@ -1052,6 +1052,7 @@ const SettingsView: React.FC = () => {
                   emailProvider === 'resend' ? 'https://resend.com/api-keys'
                     : emailProvider === 'sendgrid' ? 'https://app.sendgrid.com/settings/api_keys'
                     : emailProvider === 'mailgun' ? 'https://app.mailgun.com/settings/api_security/api_keys'
+                    : emailProvider === 'brevo' ? 'https://app.brevo.com/settings/keys/api'
                     : 'https://fivocrm.vercel.app'
                 }
                 target="_blank"
@@ -1072,6 +1073,7 @@ const SettingsView: React.FC = () => {
                   { value: 'resend', label: 'Resend', note: 'Rekomandohet' },
                   { value: 'sendgrid', label: 'SendGrid', note: 'API' },
                   { value: 'mailgun', label: 'Mailgun', note: 'API' },
+                  { value: 'brevo', label: 'Brevo', note: 'API (SMTP)' },
                   { value: 'smtp', label: 'SMTP', note: 'Klasik' },
                 ] as const).map((p) => (
                   <label key={p.value} className={`flex flex-col gap-0.5 p-3 border rounded-lg cursor-pointer transition-all ${emailProvider === p.value ? 'border-primary bg-primary/5' : 'border-border hover:border-muted-foreground'}`}>
@@ -1093,7 +1095,7 @@ const SettingsView: React.FC = () => {
                     <Key className="w-4 h-4" /> Çelësi API
                   </label>
                   <input type="password" value={emailApiKey} onChange={(e) => setEmailApiKey(e.target.value)}
-                    placeholder={emailProvider === 'resend' ? 're_...' : emailProvider === 'sendgrid' ? 'SG....' : 'key-...'}
+                    placeholder={emailProvider === 'resend' ? 're_...' : emailProvider === 'sendgrid' ? 'SG....' : emailProvider === 'brevo' ? 'xkeysib-...' : 'key-...'}
                     autoComplete="off"
                     className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono text-sm" />
                   <p className="text-xs text-muted-foreground">Ruhet i sigurt dhe përdoret vetëm nga serveri gjatë dërgimit.</p>
