@@ -37,8 +37,10 @@ import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
 import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
 import { safeHref, phoneKeyDown, normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
-import { leadTemperature, leadSla, TEMP_META } from '../lib/leadIntel';
+import { TEMP_META } from '../lib/leadIntel';
 import { LEAD_STAGES, SELECTABLE_STATUSES, leadStageLabel } from '../lib/leadStages';
+import { calculateLeadScore } from '../lib/leadScore';
+import { useLeadIntel } from '../hooks/useLeadIntel';
 import { useSavedSegments, type LeadSegment } from '../hooks/useSavedSegments';
 import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember, Quote, Deal } from '../types';
 
@@ -393,40 +395,8 @@ const CRMView: React.FC = () => {
     bumpLeadActivity(leadId, type);
   };
 
-  // Lead Scoring: 0-100 based on data completeness & value
-  const calculateLeadScore = (lead: Partial<Lead> & Record<string, any>): number => {
-    let score = 0;
-    if (lead.name) score += 10;
-    if (lead.email) score += 15;
-    if (lead.phoneNumber || lead.phone) score += 10;
-    if (lead.company) score += 15;
-    if (lead.website) score += 5;
-    if (lead.source) score += 5;
-    if (lead.estimatedValue && lead.estimatedValue > 0) {
-      score += Math.min(30, Math.round(lead.estimatedValue / 1000) * 5);
-    }
-    if (lead.lastFollowUpDate) score += 10;
-    return Math.min(100, score);
-  };
-
-  // P1.1 — compute score/temperature/SLA ONCE per lead per snapshot, instead of
-  // recomputing inside the sort comparator (O(n log n)) and per row/card on every
-  // render. Keyed by lead id (optimistic status clones keep the same id).
-  const leadIntelMap = React.useMemo(() => {
-    const map = new Map<string, { score: number; temperature: ReturnType<typeof leadTemperature>; sla: ReturnType<typeof leadSla> }>();
-    for (const l of leads || []) {
-      map.set(l.id, {
-        score: (l as any).score ?? calculateLeadScore(l),
-        temperature: leadTemperature(l),
-        sla: leadSla(l),
-      });
-    }
-    return map;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leads]);
-  const getScore = (l: Lead) => leadIntelMap.get(l.id)?.score ?? (l as any).score ?? calculateLeadScore(l);
-  const getTemp = (l: Lead) => leadIntelMap.get(l.id)?.temperature ?? leadTemperature(l);
-  const getSla = (l: Lead) => leadIntelMap.get(l.id)?.sla ?? leadSla(l);
+  // Lead scoring + per-lead intel (score/temperature/SLA), extracted to a hook (P3).
+  const { leadIntelMap, getScore, getTemp, getSla } = useLeadIntel(leads);
 
   // P2.3 — open/close the lead drawer with the URL in sync (deep-linkable via
   // ?lead=<id>; a query param keeps us on the same route so filters/scroll persist).
