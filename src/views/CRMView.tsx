@@ -11,6 +11,7 @@ import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
 import { Checkbox } from '../components/ui/checkbox';
 import { PipelineBoard } from './crm/PipelineBoard';
+import { LeadFiltersBar } from './crm/LeadFiltersBar';
 import LeadAnalytics from './crm/LeadAnalytics';
 import ExportButton from '../components/ExportButton';
 import LeadImportDialog from '../components/LeadImportDialog';
@@ -1122,71 +1123,14 @@ const CRMView: React.FC = () => {
       </div>
 
       {/* Search & Filter bar */}
-      <div className="flex flex-col sm:flex-row gap-2">
-        <div className="relative flex-1">
-          <Search className="w-4 h-4 absolute left-3 top-2.5 text-muted-foreground" />
-          <Input
-            ref={searchInputRef}
-            value={searchQuery}
-            onChange={e => setSearchQuery(e.target.value)}
-            placeholder="Kërko sipas emrit, email, telefonit, kompanisë... (shtypni / për fokus)"
-            className="pl-9 h-9"
-          />
-          {searchQuery && (
-            <button className="absolute right-3 top-2.5" onClick={() => setSearchQuery('')}>
-              <X className="w-4 h-4 text-muted-foreground hover:text-foreground" />
-            </button>
-          )}
-        </div>
-
-        <Select value={scoreFilter} onValueChange={setScoreFilter}>
-          <SelectTrigger className="w-full sm:w-[145px] h-9">
-            <SelectValue placeholder="Pikët" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Të gjitha pikët</SelectItem>
-            <SelectItem value="high">I lartë (70+)</SelectItem>
-            <SelectItem value="medium">Mesatar (40–69)</SelectItem>
-            <SelectItem value="low">I ulët (&lt;40)</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={assignedFilter} onValueChange={setAssignedFilter}>
-          <SelectTrigger className="w-full sm:w-[140px] h-9">
-            <SelectValue placeholder="Asignuara" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Të gjitha</SelectItem>
-            <SelectItem value="mine">Të miat</SelectItem>
-            <SelectItem value="unassigned">Pa asignuar</SelectItem>
-          </SelectContent>
-        </Select>
-        <Select value={sourceFilter} onValueChange={setSourceFilter}>
-          <SelectTrigger className="w-full sm:w-[140px] h-9">
-            <SelectValue placeholder="Burimi" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Të gjitha burimet</SelectItem>
-            <SelectItem value="Website">Website</SelectItem>
-            <SelectItem value="Referral">Referim</SelectItem>
-            <SelectItem value="Cold Call">Cold Call</SelectItem>
-            <SelectItem value="Social Media">Social Media</SelectItem>
-            <SelectItem value="Email">Email</SelectItem>
-            <SelectItem value="Event">Event</SelectItem>
-            <SelectItem value="Other">Tjetër</SelectItem>
-          </SelectContent>
-        </Select>
-        {allTags.length > 0 && (
-          <Select value={tagFilter} onValueChange={setTagFilter}>
-            <SelectTrigger className="w-full sm:w-[140px] h-9">
-              <SelectValue placeholder="Tag" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">Të gjitha tags</SelectItem>
-              {allTags.map(t => <SelectItem key={t} value={t}>{t}</SelectItem>)}
-            </SelectContent>
-          </Select>
-        )}
-      </div>
+      <LeadFiltersBar
+        searchQuery={searchQuery} setSearchQuery={setSearchQuery} searchInputRef={searchInputRef}
+        scoreFilter={scoreFilter} setScoreFilter={setScoreFilter}
+        assignedFilter={assignedFilter} setAssignedFilter={setAssignedFilter}
+        sourceFilter={sourceFilter} setSourceFilter={setSourceFilter}
+        tagFilter={tagFilter} setTagFilter={setTagFilter}
+        allTags={allTags}
+      />
 
       {/* Active filter chips */}
       {hasActiveFilters && (
