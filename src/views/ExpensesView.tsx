@@ -260,7 +260,7 @@ const ExpensesView: React.FC = () => {
     return Array.from(ys).sort((a, b) => b - a);
   }, [expenses, currentYr]);
   const pendingApprovalCount = expenses?.filter(e => (e as any).approvalStatus === 'Submitted').length || 0;
-  const isAdminOrManager = permissions.role === 'Admin' || permissions.role === 'Manager';
+  const isAdminOrManager = permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin;
 
   const getCategoryLabel = (category: string) => {
     switch (category) {
