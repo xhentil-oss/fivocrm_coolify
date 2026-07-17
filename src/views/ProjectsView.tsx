@@ -200,6 +200,14 @@ const ProjectsView: React.FC = () => {
     if (selectedServiceIdsStr) {
       try { selectedServiceIds = JSON.parse(selectedServiceIdsStr); } catch { selectedServiceIds = undefined; }
     }
+    const profitSplitStr = formData.get('profitSplit') as string;
+    let profitSplit: Array<{ userId: string; percent: number }> | undefined;
+    if (profitSplitStr) {
+      try {
+        const parsed = JSON.parse(profitSplitStr);
+        profitSplit = Array.isArray(parsed) && parsed.length > 0 ? parsed : undefined;
+      } catch { profitSplit = undefined; }
+    }
 
     const budgetRaw = budgetStr ? parseFloat(budgetStr) : undefined;
     const budget = budgetRaw !== undefined && !isNaN(budgetRaw) ? budgetRaw : undefined;
@@ -226,6 +234,7 @@ const ProjectsView: React.FC = () => {
       recurringFrequency: isRecurring && recurringFrequency ? recurringFrequency as any : undefined,
       memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
       serviceIds: selectedServiceIds && selectedServiceIds.length > 0 ? selectedServiceIds : undefined,
+      profitSplit: profitSplit && profitSplit.length > 0 ? profitSplit : undefined,
     });
 
     // Only auto-create an invoice when there is something to bill: an explicit
@@ -407,6 +416,14 @@ const ProjectsView: React.FC = () => {
     if (selectedServiceIdsStr) {
       try { selectedServiceIds = JSON.parse(selectedServiceIdsStr); } catch { selectedServiceIds = undefined; }
     }
+    const profitSplitStr = formData.get('profitSplit') as string;
+    let profitSplit: Array<{ userId: string; percent: number }> | undefined;
+    if (profitSplitStr) {
+      try {
+        const parsed = JSON.parse(profitSplitStr);
+        profitSplit = Array.isArray(parsed) && parsed.length > 0 ? parsed : undefined;
+      } catch { profitSplit = undefined; }
+    }
 
     const budgetRaw = budgetStr ? parseFloat(budgetStr) : undefined;
     const budget = budgetRaw !== undefined && !isNaN(budgetRaw) ? budgetRaw : undefined;
@@ -432,6 +449,9 @@ const ProjectsView: React.FC = () => {
       recurringFrequency: isRecurring && recurringFrequency ? recurringFrequency as any : undefined,
       memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
       serviceIds: selectedServiceIds && selectedServiceIds.length > 0 ? selectedServiceIds : undefined,
+      // Write [] (not undefined) so clearing a manual split resets to the default
+      // "100% to responsible" instead of leaving the old split in place.
+      profitSplit: profitSplit && profitSplit.length > 0 ? profitSplit : [],
     } as any);
 
     logActivity('project_updated', `Projekt i përditësuar: ${name}`, { entityType: 'project', entityId: projectToEdit.id });
@@ -906,7 +926,28 @@ const ProjectForm: React.FC<{
   const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
   const [budgetInput, setBudgetInput] = useState(initialData?.budget ? String(initialData.budget) : '');
   const [serviceCategory, setServiceCategory] = useState<string>('__all__');
+  // Manual revenue split among participants. Off → 100% to responsible (default).
+  const [customSplit, setCustomSplit] = useState<boolean>(!!(initialData as any)?.profitSplit?.length);
+  const [splitPct, setSplitPct] = useState<Record<string, number>>(() => {
+    const init: Record<string, number> = {};
+    ((initialData as any)?.profitSplit || []).forEach((e: any) => {
+      if (e?.userId) init[e.userId] = Number(e.percent) || 0;
+    });
+    return init;
+  });
   const { getName } = useUserNames(teamMembers || []);
+
+  // Participants eligible for a split: responsible + selected members (deduped).
+  const splitParticipants = React.useMemo(() => {
+    const ids: string[] = [];
+    if (responsibleUserId && responsibleUserId !== '__none__') ids.push(responsibleUserId);
+    memberUserIds.forEach(id => { if (!ids.includes(id)) ids.push(id); });
+    return ids;
+  }, [responsibleUserId, memberUserIds]);
+
+  const pctFor = (id: string) =>
+    splitPct[id] !== undefined ? splitPct[id] : (id === responsibleUserId ? 100 : 0);
+  const splitTotal = splitParticipants.reduce((s, id) => s + pctFor(id), 0);
 
   const serviceCategories = React.useMemo(() => {
     if (!services) return [];
@@ -943,6 +984,16 @@ const ProjectForm: React.FC<{
     if (isRecurring) formData.set('recurringFrequency', recurringFrequency);
     formData.set('memberUserIds', JSON.stringify(memberUserIds));
     formData.set('selectedServiceIds', JSON.stringify(selectedServiceIds));
+    // Only persist a manual split when the toggle is on; otherwise leave it empty
+    // so the default "100% to responsible" applies.
+    if (customSplit && splitParticipants.length > 0) {
+      const arr = splitParticipants
+        .map(id => ({ userId: id, percent: pctFor(id) }))
+        .filter(e => e.percent > 0);
+      formData.set('profitSplit', JSON.stringify(arr));
+    } else {
+      formData.set('profitSplit', JSON.stringify([]));
+    }
     // Override budget with computed service total if services are selected
     if (serviceBudget !== null) {
       formData.set('budget', String(serviceBudget));
@@ -1158,6 +1209,55 @@ const ProjectForm: React.FC<{
           </div>
           {memberUserIds.length > 0 && (
             <p className="text-xs text-primary mt-1">{memberUserIds.length} person{memberUserIds.length !== 1 ? 'a' : ''} të zgjedhur</p>
+          )}
+        </div>
+      )}
+
+      {/* Manual revenue split */}
+      {splitParticipants.length > 0 && (
+        <div className="border rounded-lg p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Ndaj xhiron mes ekipit</p>
+              <p className="text-xs text-muted-foreground">
+                Pa këtë, 100% e vlerës i kalon përgjegjësit. Aktivizoje për ta ndarë manualisht.
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={customSplit}
+              onClick={() => setCustomSplit(!customSplit)}
+              className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${customSplit ? 'bg-primary' : 'bg-muted-foreground/30'}`}
+            >
+              <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${customSplit ? 'translate-x-4' : 'translate-x-1'}`} />
+            </button>
+          </div>
+          {customSplit && (
+            <div className="space-y-2">
+              {splitParticipants.map(id => (
+                <div key={id} className="flex items-center gap-2">
+                  <span className="text-sm flex-1 truncate">
+                    {getName(id)}
+                    {id === responsibleUserId && <span className="text-[11px] text-muted-foreground ml-1">(përgjegjës)</span>}
+                  </span>
+                  <Input
+                    type="number"
+                    min="0"
+                    max="100"
+                    step="1"
+                    value={pctFor(id)}
+                    onChange={e => setSplitPct(prev => ({ ...prev, [id]: Math.max(0, Math.min(100, Number(e.target.value) || 0)) }))}
+                    className="w-20 h-8 text-right"
+                  />
+                  <span className="text-sm text-muted-foreground w-4">%</span>
+                </div>
+              ))}
+              <div className={`flex items-center justify-between text-xs pt-1 border-t ${splitTotal === 100 ? 'text-muted-foreground' : 'text-amber-600 dark:text-amber-400'}`}>
+                <span>Totali</span>
+                <span className="font-medium">{splitTotal}%{splitTotal !== 100 ? ' — duhet të jetë 100%' : ''}</span>
+              </div>
+            </div>
           )}
         </div>
       )}

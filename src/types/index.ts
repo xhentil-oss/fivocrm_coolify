@@ -205,6 +205,9 @@ export interface Project {
   responsibleUserId?: string;
   memberUserIds?: string[];
   guestUserIds?: string[];  // Users with read-only + comment access to this project
+  // Manual revenue split among staff. When empty/unset, 100% of the project value
+  // (budget) is credited to responsibleUserId. When set, percents should sum to 100.
+  profitSplit?: Array<{ userId: string; percent: number }>;
   sourceQuestionnaireId?: string; // ServiceInquiry that this project was created from
   // Recurring project support
   isRecurring?: boolean;

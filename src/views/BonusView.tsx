@@ -197,7 +197,6 @@ const BonusView: React.FC = () => {
     const totalPeriodBudget = periodProjects.reduce((s, p) => s + (p.budget || 0), 0);
 
     return teamMembers
-      .filter(m => effectiveSalary(m.userId, m.monthlySalary) > 0)
       .map(member => {
         const salary = effectiveSalary(member.userId, member.monthlySalary);
         const salarySource = salaryFromExpenses.has(member.userId) ? 'expenses' : 'profile';
@@ -261,16 +260,25 @@ const BonusView: React.FC = () => {
         });
 
         const netContribution = projectDetails.reduce((sum, p) => sum + p.net, 0);
-        const bonus = calculateBonus(salary, netContribution);
+        // Bonus needs a salary to size the tiers; without it we still SHOW the
+        // member (so nobody disappears) but the bonus stays 0 with a hint.
+        const bonus = salary > 0
+          ? calculateBonus(salary, netContribution)
+          : calculateBonus(0, 0);
 
         return {
           member,
           salarySource,
+          hasSalary: salary > 0,
           ...bonus,
+          netContribution,
           projects: projectDetails,
-        } as BonusResult & { member: TeamMember; salarySource: 'expenses' | 'profile' };
+        } as BonusResult & { member: TeamMember; salarySource: 'expenses' | 'profile'; hasSalary: boolean };
       })
-      .sort((a, b) => b.totalBonus - a.totalBonus);
+      // Keep members who are paid OR who actually worked on projects this period;
+      // drop only the ones with neither (they'd be empty rows).
+      .filter(r => r.hasSalary || r.projects.length > 0)
+      .sort((a, b) => b.totalBonus - a.totalBonus || b.netContribution - a.netContribution);
   }, [teamMembers, periodProjects, expenses, selectedMonth, selectedYear]);
 
   // Workers only see their own row
@@ -535,6 +543,9 @@ const BonusView: React.FC = () => {
                         {result.member.role} · Rroga: {result.threshold ? Math.round(result.threshold / 3).toLocaleString() : '—'} L/muaj
                         {(result as any).salarySource === 'expenses' && (
                           <span className="ml-1 text-blue-500" title="Rroga e marrë nga shpenzimet e muajit">· nga shpenzimet</span>
+                        )}
+                        {!(result as any).hasSalary && (
+                          <span className="ml-1 text-amber-600 dark:text-amber-400" title="Vendos pagën te profili i punonjësit që të llogaritet bonusi">· vendos pagën për bonus</span>
                         )}
                       </p>
                     </div>

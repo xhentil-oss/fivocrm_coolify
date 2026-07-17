@@ -55,6 +55,7 @@ const ChatView = lazyRetry(() => import('./views/ChatView'));
 const WhatsappInboxView = lazyRetry(() => import('./views/WhatsappInboxView'));
 const MarketingView = lazyRetry(() => import('./views/MarketingView'));
 const ReportsView = lazyRetry(() => import('./views/ReportsView'));
+const StaffRevenueView = lazyRetry(() => import('./views/StaffRevenueView'));
 const FinancesView = lazyRetry(() => import('./views/FinancesView'));
 const BonusView = lazyRetry(() => import('./views/BonusView'));
 const UserProfileView = lazyRetry(() => import('./views/UserProfileView'));
@@ -336,6 +337,7 @@ function AppContent() {
                       <Route path="/app/whatsapp" element={<PermissionGate permissionKey="canAccessWhatsapp"><WhatsappInboxView /></PermissionGate>} />
                       <Route path="/app/marketing" element={<PermissionGate permissionKey="canAccessMarketing"><MarketingView /></PermissionGate>} />
                       <Route path="/app/reports" element={<PermissionGate permissionKey="canAccessReports"><ReportsView /></PermissionGate>} />
+                      <Route path="/app/staff-revenue" element={<PermissionGate permissionKey="canAccessReports"><StaffRevenueView /></PermissionGate>} />
                       <Route path="/app/finances" element={<PermissionGate permissionKey="isAdmin"><FinancesView /></PermissionGate>} />
                       <Route path="/app/bonus" element={<PermissionGate permissionKey="canAccessProfile"><BonusView /></PermissionGate>} />
                       <Route path="/app/profile" element={<UserProfileView />} />

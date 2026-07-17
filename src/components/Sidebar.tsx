@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Receipt, MessageSquare, MessageCircle, Target, UserCircle, DollarSign, Shield, FileText, Briefcase, LayoutDashboard, Timer, Award, PieChart, Calculator, Globe, ScrollText, Handshake, Building2, Wallet, ChevronDown, PiggyBank, Megaphone } from 'lucide-react';
+import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Receipt, MessageSquare, MessageCircle, Target, UserCircle, DollarSign, Shield, FileText, Briefcase, LayoutDashboard, Timer, Award, PieChart, Calculator, Globe, ScrollText, Handshake, Building2, Wallet, ChevronDown, PiggyBank, Megaphone, TrendingUp } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -63,6 +63,7 @@ const allNavItems: NavEntry[] = [
     ],
   },
   { path: '/app/reports', label: 'Raportet', icon: BarChart3, permissionKey: 'canAccessReports' },
+  { path: '/app/staff-revenue', label: 'Xhiro sipas Stafit', icon: TrendingUp, permissionKey: 'canAccessReports' },
   { path: '/app/workload', label: 'Ngarkesa', icon: PieChart, permissionKey: 'canAccessReports' },
   { path: '/app/price-calculator', label: 'Kalkulatori', icon: Calculator, permissionKey: 'canAccessServices' },
   { path: '/app/landing-pages', label: 'Landing Pages', icon: Globe, permissionKey: 'canAccessServices' },
