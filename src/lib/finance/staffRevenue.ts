@@ -18,10 +18,12 @@ import { parseDate } from './financialAnalytics';
 export interface StaffRevenueOptions {
   /** 'completed' counts only Completed (or recurring-completed) projects; 'all' counts every project with a value. */
   mode: 'all' | 'completed';
+  /** Explicit date window; takes precedence over year/allTime. Use for rolling ranges (last 1/3/6/12 months). */
+  range?: { start: Date; end: Date };
   /** Restrict to a calendar year. Omit (or allTime) for no date restriction. */
   year?: number;
   allTime?: boolean;
-  /** Months of salary to charge in the period (e.g. monthsElapsedInYear). Defaults to 12. */
+  /** Months of salary to charge in the period (e.g. monthsElapsedInYear, or the window length). Defaults to 12. */
   months?: number;
 }
 
@@ -99,8 +101,12 @@ export function computeStaffRevenue(
   const months = opts.months ?? 12;
   const activeMembers = teamMembers.filter(m => m.status === 'Active');
 
-  // Period filter.
+  // Period filter — explicit range wins, then calendar year, then all-time.
   const inYear = (d: Date | null): boolean => {
+    if (opts.range) {
+      if (!d) return false;
+      return d >= opts.range.start && d <= opts.range.end;
+    }
     if (opts.allTime || opts.year == null) return true;
     if (!d) return false;
     return d.getFullYear() === opts.year;

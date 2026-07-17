@@ -7,10 +7,15 @@ import { useCollection } from '../hooks/useFirestore';
 import { usePermissions } from '../contexts/PermissionsContext';
 import type { Project, TeamMember, Expense } from '../types';
 import { computeStaffRevenue } from '../lib/finance/staffRevenue';
-import { monthsElapsedInYear } from '../lib/finance/financialAnalytics';
 
-const CURRENT_YEAR = new Date().getFullYear();
-const YEARS = [CURRENT_YEAR, CURRENT_YEAR - 1, CURRENT_YEAR - 2];
+type PeriodKey = '1m' | '3m' | '6m' | '12m' | 'all';
+const PERIODS: { key: PeriodKey; label: string; months: number }[] = [
+  { key: '1m', label: 'Muaji', months: 1 },
+  { key: '3m', label: '3 Muaj', months: 3 },
+  { key: '6m', label: '6 Muaj', months: 6 },
+  { key: '12m', label: '12 Muaj', months: 12 },
+  { key: 'all', label: 'Gjithë kohën', months: 12 },
+];
 
 const StaffRevenueView: React.FC = () => {
   const permissions = usePermissions();
@@ -18,20 +23,23 @@ const StaffRevenueView: React.FC = () => {
   const { data: teamMembers, loading: ml } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
   const { data: expenses, loading: el } = useCollection<Expense>('expenses', { skipTeamFilter: true });
 
-  const [period, setPeriod] = useState<'year' | 'all'>('year');
-  const [year, setYear] = useState<number>(CURRENT_YEAR);
+  const [period, setPeriod] = useState<PeriodKey>('1m');
   const [mode, setMode] = useState<'all' | 'completed'>('all');
   const [expanded, setExpanded] = useState<string | null>(null);
 
-  const result = useMemo(() => computeStaffRevenue(
-    projects, teamMembers, expenses,
-    {
-      mode,
-      year: period === 'all' ? undefined : year,
-      allTime: period === 'all',
-      months: period === 'all' ? 12 : monthsElapsedInYear(year),
-    },
-  ), [projects, teamMembers, expenses, mode, period, year]);
+  const result = useMemo(() => {
+    const cfg = PERIODS.find(p => p.key === period)!;
+    if (period === 'all') {
+      return computeStaffRevenue(projects, teamMembers, expenses, { mode, allTime: true, months: 12 });
+    }
+    const end = new Date();
+    const start = new Date();
+    start.setMonth(start.getMonth() - cfg.months);
+    start.setHours(0, 0, 0, 0);
+    return computeStaffRevenue(projects, teamMembers, expenses, {
+      mode, range: { start, end }, months: cfg.months,
+    });
+  }, [projects, teamMembers, expenses, mode, period]);
 
   const loading = pl || ml || el;
   const canSeeCost = permissions.isAdmin || permissions.isManager || permissions.isOwner;
@@ -58,18 +66,14 @@ const StaffRevenueView: React.FC = () => {
       {/* Controls */}
       <div className="flex items-center gap-2 flex-wrap">
         <div className="inline-flex rounded-md border border-border overflow-hidden text-sm">
-          <button onClick={() => setPeriod('year')} className={`px-3 py-1.5 ${period === 'year' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Sipas vitit</button>
-          <button onClick={() => setPeriod('all')} className={`px-3 py-1.5 ${period === 'all' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Gjithë kohën</button>
+          {PERIODS.map(p => (
+            <button
+              key={p.key}
+              onClick={() => setPeriod(p.key)}
+              className={`px-3 py-1.5 ${period === p.key ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}
+            >{p.label}</button>
+          ))}
         </div>
-        {period === 'year' && (
-          <select
-            value={year}
-            onChange={e => setYear(Number(e.target.value))}
-            className="h-9 rounded-md border border-border bg-background px-3 text-sm"
-          >
-            {YEARS.map(y => <option key={y} value={y}>{y}</option>)}
-          </select>
-        )}
         <div className="inline-flex rounded-md border border-border overflow-hidden text-sm">
           <button onClick={() => setMode('all')} className={`px-3 py-1.5 ${mode === 'all' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Të gjitha</button>
           <button onClick={() => setMode('completed')} className={`px-3 py-1.5 ${mode === 'completed' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground'}`}>Vetëm të mbyllura</button>
