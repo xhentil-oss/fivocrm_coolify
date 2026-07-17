@@ -82,7 +82,13 @@ export function usePushNotifications(userId?: string) {
         const { default: app } = await import('../lib/firebase');
         const messaging = getMessaging(app);
         const vapidKey = import.meta.env.VITE_FIREBASE_VAPID_KEY as string | undefined;
-        if (!vapidKey) return; // VAPID key not configured
+        if (!vapidKey) {
+          // Without a VAPID key no web FCM token can be minted, so NO web push is
+          // ever delivered (staff AND portal clients). This fails silently, so log
+          // it loudly — set VITE_FIREBASE_VAPID_KEY in the Vercel env to enable it.
+          console.warn('[Push] VITE_FIREBASE_VAPID_KEY is not set — web push notifications are disabled.');
+          return;
+        }
 
         // Register service worker for background messages
         const swReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js');

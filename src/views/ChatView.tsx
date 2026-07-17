@@ -2038,7 +2038,10 @@ const ChatView: React.FC = () => {
               const title = projectName
                 ? `Mesazh i ri nga stafi - ${projectName}`
                 : `Mesazh i ri nga stafi - ${customer?.name || 'Biseda'}`;
-              try { await notificationMutation.create({ userId: (pa as any).userId || custId, type: 'staff_message', title, message: (effectiveText || '📎 Attachment').slice(0, 100), isRead: false, linkTo: targetChannel } as any); } catch { /* skip */ }
+              // actionUrl points at the PORTAL chat — the recipient is a client and
+              // has no access to /app/chat, so the choke point must not derive an
+              // /app/chat deep-link from linkTo. linkTo is kept for in-app routing.
+              try { await notificationMutation.create({ userId: (pa as any).userId || custId, type: 'staff_message', title, message: (effectiveText || '📎 Attachment').slice(0, 100), isRead: false, linkTo: targetChannel, actionUrl: '/portal/chat' } as any); } catch { /* skip */ }
               // Send email notification (rate-limited server-side)
               if ((pa as any).email) {
                 try {
@@ -2692,24 +2695,28 @@ const ChatView: React.FC = () => {
               isActive: chatMode === 'channel' && activeChannel === g.id,
               onSelect: () => handleSelectChannel(g.id),
             }));
-            // Clients (dedup by customerId)
-            (portalAccess || []).filter((a, i, arr) => arr.findIndex(x => x.customerId === a.customerId) === i).forEach(a => {
-              const c = customers?.find(cu => cu.id === a.customerId);
-              // Skip clients whose customer isn't in THIS business (customers is
-              // business-scoped): a cross-tenant/orphan client channel can't be read
-              // under RLS, so listing it would only produce a permission-denied that
-              // kills the live listener when opened.
-              if (!c) return;
-              const cid = `client-${a.customerId}`;
+            // Clients — list EVERY customer of this business, not just those with a
+            // clientPortalAccess record. Previously the list was driven by
+            // `portalAccess`, so a client only appeared after logging into the portal
+            // at least once; CRM-only clients (e.g. added but never logged in) were
+            // invisible and un-messageable. `customers` is business-scoped, so the
+            // `client-{id}` channel is always readable under RLS. Portal access is
+            // merged in only for the email fallback on the display name.
+            const portalByCustomer = new Map<string, ClientPortalAccess>();
+            (portalAccess || []).forEach(a => { if (a.customerId && !portalByCustomer.has(a.customerId)) portalByCustomer.set(a.customerId, a); });
+            (customers || []).forEach(c => {
+              if (!c.id) return;
+              const access = portalByCustomer.get(c.id);
+              const cid = `client-${c.id}`;
               const repId = (c as any)?.assignedToUserId;
               const denorm = (c as any)?.lastClientMessageAt ? getTimestampMs((c as any).lastClientMessageAt) : 0;
               convs.push({
-                key: 'c-' + a.customerId, type: 'client', name: c?.name || a.email || 'Klient',
+                key: 'c-' + c.id, type: 'client', name: c.name || access?.email || 'Klient',
                 preview: repId ? `👤 ${repId === user?.uid ? 'Ti' : getUserDisplayName(repId)}` : '',
                 unassigned: !repId,
-                time: Math.max(denorm, clientRecencyMap.get(a.customerId) || 0),
+                time: Math.max(denorm, clientRecencyMap.get(c.id) || 0),
                 unread: clientUnreadMap.get(cid) || 0,
-                initials: (c?.name || a.email || 'K').slice(0, 2).toUpperCase(),
+                initials: (c.name || access?.email || 'K').slice(0, 2).toUpperCase(),
                 isActive: chatMode === 'channel' && activeChannel === cid,
                 onSelect: () => handleSelectChannel(cid),
               });
