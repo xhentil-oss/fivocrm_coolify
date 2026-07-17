@@ -66,7 +66,7 @@ const ExpensesView: React.FC = () => {
 
     const memberId = formData.get('memberId') as string;
 
-    const isAdminOrManager = permissions.role === 'Admin' || permissions.role === 'Manager';
+    const isAdminOrManager = permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin;
     await expenseMutation.create({
       title,
       description: description || undefined,
