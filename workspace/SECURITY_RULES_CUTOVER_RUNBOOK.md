@@ -23,20 +23,42 @@ membership deterministically. The fix requires (a) all memberships keyed `{teamI
 - `src/lib/createTenant.ts` already writes the owner membership as `{teamId}_{uid}`.
 - API relay/authz hardening (send-invoice / checkout / lead-reminder / notification).
 
-## Step 1 — Backfill existing memberships to `{teamId}_{uid}`
-Add a one-shot job (mirror the existing `backfill-businessid` in `api/cron/run.ts`):
-for every `teamMembers` doc whose id !== `{teamId}_{uid}`, copy it to the deterministic id
-(Admin SDK), then delete the old doc. Verify counts before/after. Keep a dry-run mode.
-Until this completes, users with legacy-keyed memberships would fail the hardened `users`
-rule — so this MUST finish first.
+## Step 1 — Backfill existing memberships to `{teamId}_{uid}`  ✅ SHIPPED
+The `backfill-member-keys` cron job (`api/cron/run.ts`, `runBackfillMemberKeys`) re-keys every
+`teamMembers` doc to the deterministic id, dedupes duplicates, and is idempotent. It's gated
+to a **super-admin claim** (`callerIsSuperAdmin`). Run dry first, then for real:
+
+```
+# dry run (counts only, no writes)
+curl -H "Authorization: Bearer <super-admin ID token>" \
+     "https://<host>/api/cron/run?manual=1&job=backfill-member-keys&dryRun=1"
+# real run
+curl -H "Authorization: Bearer <super-admin ID token>" \
+     "https://<host>/api/cron/run?manual=1&job=backfill-member-keys"
+```
+Verify `alreadyKeyed + reKeyed + dedupedDuplicates == total` and `errors: []` before Step 3.
+Until this completes, users with legacy random-keyed memberships would fail the hardened
+`users` rule — so this MUST finish first.
 
 ## Step 2 — Deploy the app (Vercel) — already contains the endpoint + wiring
 Push this branch. Vercel deploys app + `api/*` atomically. Verify `/api/accept-invite`
 works in production (accept a test invite) BEFORE touching rules.
 
-## Step 3 — Apply + emulator-test the hardened rules, THEN deploy
-Add these helpers and swap the four rules below. Test with
-`@firebase/rules-unit-testing` against `firebase emulators:start --only firestore`.
+## Step 3 — Apply + emulator-test the hardened rules, THEN deploy  ✅ TOOLING SHIPPED
+Generate the hardened rules (patches the live file — no drift) and run the 7 rules tests:
+
+```
+npm i -D @firebase/rules-unit-testing firebase-tools
+node scripts/build-hardened-rules.cjs          # -> firestore.rules.hardened
+diff firestore.rules firestore.rules.hardened  # review
+firebase emulators:exec --only firestore "node --test scripts/firestore-rules.test.mjs"
+```
+All 7 tests (`scripts/firestore-rules.test.mjs`) must pass. Then:
+```
+cp firestore.rules.hardened firestore.rules
+firebase deploy --only firestore:rules         # AFTER Steps 1 & 2
+```
+The exact rule changes the generator applies (for review):
 
 ```
 // helpers
