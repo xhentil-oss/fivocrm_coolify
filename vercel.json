@@ -8,6 +8,7 @@
     { "source": "/api/send-lead-reminder-email", "destination": "/api/email?type=lead-reminder" },
     { "source": "/api/send-welcome-email",       "destination": "/api/email?type=welcome" },
     { "source": "/api/send-notification-email",  "destination": "/api/email?type=notification" },
+    { "source": "/api/accept-invite",            "destination": "/api/email?type=accept-invite" },
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/((?!api).*)", "destination": "/" }
   ],
