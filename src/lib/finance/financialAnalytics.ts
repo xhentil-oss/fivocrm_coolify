@@ -112,9 +112,12 @@ export function monthsElapsedInYear(year: number, now = new Date()): number {
   return now.getMonth() + 1;
 }
 
-/** Total expenses (in ALL) with a date within [start, end]. */
+/** Total expenses (in ALL) with a date within [start, end].
+ *  Excludes `category === 'Salary'` — salary is accounted for separately via the
+ *  monthlySalary term, so counting it here too would double-subtract it. */
 export function calculateExpensesBetween(expenses: Expense[] | undefined, start: Date, end?: Date): number {
   return (expenses ?? []).reduce((s, exp) => {
+    if (exp.category === 'Salary') return s;
     const d = getExpenseDate(exp);
     if (!d) return s;
     if (d < start) return s;
@@ -195,6 +198,7 @@ export function buildExpensesByMonth(expenses: Expense[] | undefined, year: numb
   return monthLabels.map((label, i) => {
     const monthExpenseTotal = (expenses ?? [])
       .filter(exp => {
+        if (exp.category === 'Salary') return false; // salary added separately below
         const d = getExpenseDate(exp);
         if (!d) return false;
         return d.getMonth() === i && d.getFullYear() === year;
@@ -278,7 +282,8 @@ export function calculateProjectedRevenue(invoices?: Invoice[]): number {
 }
 
 export function calculateTotalExpenses(expenses: Expense[] | undefined, totalMonthlySalary: number): number {
-  return (expenses?.reduce((sum, exp) => sum + toAll(exp.amount ?? 0, exp.currency), 0) || 0) + totalMonthlySalary;
+  // Skip Salary-category expenses; salary is counted once via totalMonthlySalary.
+  return (expenses?.reduce((sum, exp) => exp.category === 'Salary' ? sum : sum + toAll(exp.amount ?? 0, exp.currency), 0) || 0) + totalMonthlySalary;
 }
 
 export function calculateRevenueBetween(invoices: Invoice[] | undefined, start: Date, end?: Date): number {

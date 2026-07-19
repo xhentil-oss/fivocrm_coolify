@@ -236,7 +236,7 @@ const ExpensesView: React.FC = () => {
     }
   };
 
-  const totalExpenses = expenses?.reduce((sum, exp) => sum + exp.amount, 0) || 0;
+  const totalExpenses = expenses?.reduce((sum, exp) => sum + toAll(exp.amount ?? 0, (exp as any).currency), 0) || 0;
   const activeExpenses = expenses?.filter(e => e.status === 'Active').length || 0;
   const recurringExpenses = expenses?.filter(e => e.isRecurring).length || 0;
 

@@ -92,6 +92,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Don't notify someone about their own action.
   if (userId === caller.uid) return res.status(200).json({ skipped: 'self' });
 
+  // Authorize: a caller may only notify a user in their OWN business — otherwise any
+  // authenticated user could push/email arbitrary UIDs across tenants (spam/phishing).
+  // Resolved from users/{uid}.businessId, which both staff and portal clients carry.
+  // Best-effort: if either side's business can't be resolved (legacy record) we fall
+  // through rather than drop a legitimate notification; super-admins bypass.
+  if (caller.superAdmin !== true) {
+    try {
+      const [callerSnap, targetSnap] = await Promise.all([
+        adminDb.collection('users').doc(caller.uid).get(),
+        adminDb.collection('users').doc(String(userId)).get(),
+      ]);
+      const callerBiz = callerSnap.exists ? (callerSnap.data() as any)?.businessId : undefined;
+      const targetBiz = targetSnap.exists ? (targetSnap.data() as any)?.businessId : undefined;
+      if (callerBiz && targetBiz && callerBiz !== targetBiz) {
+        return res.status(403).json({ error: 'Forbidden' });
+      }
+    } catch { /* best-effort: don't block a legitimate notification on a lookup error */ }
+  }
+
   // Load preferences once — they gate both channels (push + email).
   let prefs: any = {};
   try {

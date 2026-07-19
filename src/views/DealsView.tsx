@@ -31,7 +31,10 @@ function DealCard({ deal, getName, onClick }: { deal: Deal; getName: (id?: strin
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({ id: deal.id });
   const cur = curSymbol(deal.currency);
   const close = deal.expectedCloseDate ? new Date(getTimestampMs(deal.expectedCloseDate)) : null;
-  const overdue = close && OPEN_STAGES.includes(deal.stage) && close.getTime() < Date.now();
+  // Overdue only once the close date has fully passed — compare against end-of-day
+  // so a deal closing *today* isn't flagged (avoids UTC-midnight vs local-time skew).
+  const closeEod = close ? new Date(close.getFullYear(), close.getMonth(), close.getDate(), 23, 59, 59, 999) : null;
+  const overdue = closeEod && OPEN_STAGES.includes(deal.stage) && closeEod.getTime() < Date.now();
   return (
     <div ref={setNodeRef} className={`bg-card border border-border rounded-md p-3 shadow-sm hover:shadow-md transition-shadow ${isDragging ? 'opacity-30' : ''}`}>
       <div className="flex items-start gap-1.5">

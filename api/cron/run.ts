@@ -47,6 +47,20 @@ async function authorizeManual(req: VercelRequest): Promise<string | null> {
   }
 }
 
+// Verify the caller holds the server-trustworthy super-admin custom claim.
+// Used to gate destructive cross-tenant jobs (e.g. the member-key re-key migration)
+// so a mere team Admin can't trigger them.
+async function callerIsSuperAdmin(req: VercelRequest): Promise<boolean> {
+  const authHeader = req.headers.authorization as string;
+  if (!authHeader?.startsWith('Bearer ')) return false;
+  try {
+    const decoded = await adminAuth.verifyIdToken(authHeader.slice(7));
+    return decoded.superAdmin === true;
+  } catch {
+    return false;
+  }
+}
+
 // ── settleAll: Promise.allSettled with error logging ─────────────────────────
 async function settleAll(ops: Promise<any>[], jobName: string): Promise<void> {
   const results = await Promise.allSettled(ops);
@@ -2106,6 +2120,54 @@ async function runBackfillPortalCustomerId() {
   return { updated, total: snap.size };
 }
 
+// ── JOB: backfill-member-keys (tenant-isolation cutover, Step 1) ─────────────
+// Re-keys every teamMembers doc to the DETERMINISTIC id `{teamId}_{uid}` so the
+// hardened Firestore rules can validate a user's tenant key via exists()/get().
+// Historically JoinInviteView used addDoc() (random ids) while createTenant used
+// {teamId}_{uid}; this normalizes the legacy random-keyed docs. Idempotent:
+// correctly-keyed docs are skipped, so re-runs are cheap. MUST complete before the
+// hardened users/teamMembers rules are deployed (see SECURITY_RULES_CUTOVER_RUNBOOK).
+async function runBackfillMemberKeys(opts?: { dryRun?: boolean }) {
+  const snap = await db.collection('teamMembers').get();
+  let alreadyKeyed = 0, reKeyed = 0, dedupedDuplicates = 0, skippedIncomplete = 0;
+  const errors: string[] = [];
+
+  for (const d of snap.docs) {
+    const data = d.data() as any;
+    const teamId = data.teamId as string | undefined;
+    const uid = data.userId as string | undefined;
+    if (!teamId || !uid) { skippedIncomplete++; continue; }
+
+    const targetId = `${teamId}_${uid}`;
+    if (d.id === targetId) { alreadyKeyed++; continue; }
+
+    if (opts?.dryRun) { reKeyed++; continue; }
+
+    try {
+      const targetRef = db.collection('teamMembers').doc(targetId);
+      const targetSnap = await targetRef.get();
+      const batch = db.batch();
+      if (targetSnap.exists) {
+        // A deterministic doc already exists for this (team,user) — it wins; drop the
+        // legacy duplicate so usePermissions no longer sees two memberships.
+        batch.delete(d.ref);
+        dedupedDuplicates++;
+      } else {
+        batch.set(targetRef, { ...data, updatedAt: admin.firestore.Timestamp.now() });
+        batch.delete(d.ref);
+        reKeyed++;
+      }
+      await batch.commit();
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      console.error(`[backfill-member-keys] ${d.id} failed:`, msg);
+      errors.push(`${d.id}: ${msg.slice(0, 200)}`);
+    }
+  }
+
+  return { total: snap.size, alreadyKeyed, reKeyed, dedupedDuplicates, skippedIncomplete, errors, dryRun: !!opts?.dryRun };
+}
+
 // ── JOB: backfill-customerid (Phase 4.3b Wave 3) ─────────────────────────────
 // Stamps customerId onto parent-linked child records so portal clients can read
 // their own data under server-side RLS (isPortalClientFor). Staff isolation uses
@@ -2555,6 +2617,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'backfill-portal-customerid':
         result = await runBackfillPortalCustomerId();
         break;
+      case 'backfill-member-keys': {
+        // Destructive re-key migration — restrict to a super-admin claim (not any
+        // team Admin), even though it's a manual trigger. The scheduled cron path
+        // (CRON_SECRET) is trusted and also allowed.
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runBackfillMemberKeys({ dryRun: req.query.dryRun === '1' });
+        break;
+      }
       case 'backfill-customerid':
         result = await runBackfillCustomerId({ reset: req.query.reset === '1' });
         break;

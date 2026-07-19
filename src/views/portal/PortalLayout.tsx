@@ -79,8 +79,7 @@ const PortalLayout: React.FC = () => {
   }
 
   if (!user) {
-    navigate('/login?redirect=/portal');
-    return null;
+    return <Navigate to="/login?redirect=/portal" replace />;
   }
 
   if (!isClient) {

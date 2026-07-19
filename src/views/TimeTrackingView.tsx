@@ -14,6 +14,7 @@ import { Switch } from '../components/ui/switch';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import type { TimeEntry, Task, Project } from '../types';
 import { useToast } from '../hooks/use-toast';
+import { totalTrackedMinutes, entryDurationMinutes } from '../lib/timeTracking';
 
 const TimeTrackingView: React.FC = () => {
   const { user } = useAuth();
@@ -152,10 +153,21 @@ const TimeTrackingView: React.FC = () => {
   const startTimer = async (taskId?: string, projectId?: string, description?: string) => {
     if (!user) return;
 
+    // Enforce a single running timer per user: close any entry left open from a
+    // previous session/task first. Overlapping running timers were the root cause
+    // of corrupt totals (a stop computed its duration against the wrong start).
+    const myRunning = (timeEntries || []).filter(e => e.userId === user.uid && !e.endTime);
+    for (const e of myRunning) {
+      const endTimeVal = new Date();
+      const start = new Date((e.startTime as any)?.toDate ? (e.startTime as any).toDate() : e.startTime);
+      const duration = Math.max(0, Math.floor((endTimeVal.getTime() - start.getTime()) / 60000));
+      await timeEntryMutation.update(e.id, { endTime: endTimeVal, duration });
+    }
+
     const newEntry = await timeEntryMutation.create({
       userId: user.uid,
-      taskId,
-      projectId,
+      taskId: taskId && taskId !== 'none' ? taskId : undefined,
+      projectId: projectId && projectId !== 'none' ? projectId : undefined,
       description,
       startTime: new Date(),
       isBillable: false,
@@ -195,12 +207,16 @@ const TimeTrackingView: React.FC = () => {
 
     const start = new Date(startTime);
     const end = new Date(endTime);
-    const duration = Math.floor((end.getTime() - start.getTime()) / 60000);
+    if (!(end.getTime() > start.getTime())) {
+      toast({ title: 'Koha e mbarimit duhet të jetë pas kohës së fillimit.', variant: 'destructive' });
+      return;
+    }
+    const duration = Math.max(0, Math.floor((end.getTime() - start.getTime()) / 60000));
 
     await timeEntryMutation.create({
       userId: user.uid,
-      taskId: taskId || undefined,
-      projectId: projectId || undefined,
+      taskId: taskId && taskId !== 'none' ? taskId : undefined,
+      projectId: projectId && projectId !== 'none' ? projectId : undefined,
       description: description || undefined,
       startTime: start,
       endTime: end,
@@ -228,11 +244,15 @@ const TimeTrackingView: React.FC = () => {
 
     const start = new Date(startTime);
     const end = new Date(endTime);
-    const duration = Math.floor((end.getTime() - start.getTime()) / 60000);
+    if (!(end.getTime() > start.getTime())) {
+      toast({ title: 'Koha e mbarimit duhet të jetë pas kohës së fillimit.', variant: 'destructive' });
+      return;
+    }
+    const duration = Math.max(0, Math.floor((end.getTime() - start.getTime()) / 60000));
 
     await timeEntryMutation.update(selectedEntry.id, {
-      taskId: taskId || undefined,
-      projectId: projectId || undefined,
+      taskId: taskId && taskId !== 'none' ? taskId : undefined,
+      projectId: projectId && projectId !== 'none' ? projectId : undefined,
       description: description || undefined,
       startTime: start,
       endTime: end,
@@ -265,10 +285,11 @@ const TimeTrackingView: React.FC = () => {
     return hrs > 0 ? `${hrs}h ${mins}m` : `${mins}m`;
   };
 
-  const totalMinutes = timeEntries?.reduce((sum, entry) => sum + (entry.duration || 0), 0) || 0;
-  const billableMinutes = timeEntries?.filter(e => e.isBillable).reduce((sum, entry) => sum + (entry.duration || 0), 0) || 0;
+  // Derive minutes from start/end (source of truth) — never the stale `duration` field.
+  const totalMinutes = totalTrackedMinutes(timeEntries);
+  const billableMinutes = totalTrackedMinutes(timeEntries?.filter(e => e.isBillable));
   const totalRevenue = timeEntries?.filter(e => e.isBillable && e.hourlyRate).reduce((sum, entry) => {
-    const hours = (entry.duration || 0) / 60;
+    const hours = entryDurationMinutes(entry) / 60;
     return sum + (hours * (entry.hourlyRate || 0));
   }, 0) || 0;
 

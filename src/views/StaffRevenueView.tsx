@@ -30,7 +30,9 @@ const StaffRevenueView: React.FC = () => {
   const result = useMemo(() => {
     const cfg = PERIODS.find(p => p.key === period)!;
     if (period === 'all') {
-      return computeStaffRevenue(projects, teamMembers, expenses, { mode, allTime: true, months: 12 });
+      // Omit `months` so salary is charged over the real span of matched projects
+      // (derived inside computeStaffRevenue) instead of a hardcoded 12 months.
+      return computeStaffRevenue(projects, teamMembers, expenses, { mode, allTime: true });
     }
     const end = new Date();
     const start = new Date();

@@ -45,6 +45,12 @@ export interface RoutingResult {
 
 const isActive = (m: RoutingMember) => (m.status ?? 'Active') === 'Active';
 
+// Admin-level roles that must always watch a business's conversations. The
+// business Owner and SuperAdmin carry non-'Admin' role strings, so filtering on
+// role === 'Admin' alone would silently drop them from the watcher list.
+const ADMIN_ROLES = new Set(['Admin', 'Owner', 'SuperAdmin']);
+const isAdminRole = (m: RoutingMember) => !!m.role && ADMIN_ROLES.has(m.role);
+
 /** SLA target for first response to a client message (business-hours-ish; the
  *  escalation cron refines this). Kept here so ingest and cron agree. */
 export const FIRST_RESPONSE_SLA_HOURS = 2;
@@ -58,8 +64,12 @@ export function buildRouting(input: RoutingInput): RoutingResult {
   const ownerMember = ownerId ? members.find((m) => m.userId === ownerId) : undefined;
   const teamId = ownerMember?.teamId || input.teamId || null;
 
+  // Same-tenant guard. A falsy input.businessId must NOT fall back to "match all
+  // businesses" — that would pull every tenant's admins/managers onto the thread
+  // (cross-tenant watchers). When we can't resolve the conversation's business we
+  // stay conservative and match no one on this axis.
   const sameBusiness = (m: RoutingMember) =>
-    !input.businessId || !m.businessId || m.businessId === input.businessId;
+    !!input.businessId && (!m.businessId || m.businessId === input.businessId);
 
   // Manager of that team.
   const managerId =
@@ -72,9 +82,9 @@ export function buildRouting(input: RoutingInput): RoutingResult {
     ? members.filter((m) => m.teamId === teamId && sameBusiness(m)).map((m) => m.userId)
     : [];
 
-  // All admins in the business (always watchers).
+  // All admins/owners in the business (always watchers).
   const adminIds = members
-    .filter((m) => m.role === 'Admin' && sameBusiness(m))
+    .filter((m) => isAdminRole(m) && sameBusiness(m))
     .map((m) => m.userId);
 
   const salesAgentId = input.salesAgentId || null;
@@ -84,7 +94,9 @@ export function buildRouting(input: RoutingInput): RoutingResult {
   // rather than vanishing.
   const fallbackManagers =
     !ownerId && !managerId
-      ? members.filter((m) => m.role === 'Manager' && sameBusiness(m)).map((m) => m.userId)
+      ? members
+          .filter((m) => (m.role === 'Manager' || isAdminRole(m)) && sameBusiness(m))
+          .map((m) => m.userId)
       : [];
 
   const watchers = Array.from(

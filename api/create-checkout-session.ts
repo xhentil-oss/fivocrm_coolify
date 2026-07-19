@@ -80,22 +80,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     const invoiceData = invoiceDoc.data()!;
     const invoiceTeamId = invoiceData.teamId as string | undefined;
+    const invoiceBusinessId = invoiceData.businessId as string | undefined;
 
-    // Authorize: staff member of the invoice's team OR portal client for this invoice's customer
-    if (invoiceTeamId) {
-      const [memberSnap, portalSnap] = await Promise.all([
-        db.collection('teamMembers')
-          .where('teamId', '==', invoiceTeamId)
-          .where('userId', '==', uid)
-          .limit(1)
-          .get(),
-        db.collection('clientPortalAccess')
-          .where('userId', '==', uid)
-          .where('customerId', '==', invoiceData.customerId || '')
-          .limit(1)
-          .get(),
+    // Authorize: staff member of the invoice's team/business OR the portal client for
+    // this invoice's customer. Fail closed — an invoice scoped to neither a team nor a
+    // business (and not owned by the calling portal client) is rejected, never skipped.
+    // Recurring/legacy invoices set teamId=null but still carry businessId.
+    {
+      const [teamSnap, bizSnap, portalSnap] = await Promise.all([
+        invoiceTeamId
+          ? db.collection('teamMembers').where('teamId', '==', invoiceTeamId).where('userId', '==', uid).limit(1).get()
+          : Promise.resolve({ empty: true } as any),
+        invoiceBusinessId
+          ? db.collection('teamMembers').where('businessId', '==', invoiceBusinessId).where('userId', '==', uid).limit(1).get()
+          : Promise.resolve({ empty: true } as any),
+        invoiceData.customerId
+          ? db.collection('clientPortalAccess').where('userId', '==', uid).where('customerId', '==', invoiceData.customerId).limit(1).get()
+          : Promise.resolve({ empty: true } as any),
       ]);
-      if (memberSnap.empty && portalSnap.empty) {
+      if (teamSnap.empty && bizSnap.empty && portalSnap.empty) {
         return res.status(403).json({ error: 'Forbidden' });
       }
     }

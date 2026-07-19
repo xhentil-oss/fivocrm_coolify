@@ -640,11 +640,26 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
     return { isOneTime, budgetOptions, adBudgetOptions, showAdBudget, billingLabel: isOneTime ? 'njëherësh' : 'në muaj' };
   }, [form.servicesInterestedIn, form.currency, form.smm_organicOrAds]);
 
+  // Clear budget / ad-spend selections once they no longer match the current
+  // currency + billing model (e.g. user switched EUR→ALL or monthly→one-time),
+  // so a stale value from the old option set is never submitted.
+  React.useEffect(() => {
+    if (form.budgetRange && !budgetContext.budgetOptions.includes(form.budgetRange)) {
+      set('budgetRange', '');
+    }
+    if (form.adBudget && !budgetContext.adBudgetOptions.includes(form.adBudget)) {
+      set('adBudget', '');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [budgetContext.budgetOptions, budgetContext.adBudgetOptions]);
+
   // Determine if step 3 (service-specific) should show
   const hasServiceSpecific = form.servicesInterestedIn.some(s =>
     SERVICES_WITH_QUESTIONS.includes(s)
   );
-  const totalSteps = hasServiceSpecific ? 4 : 3;
+  // 5 steps total (incl. "Rishiko & Dërgo"); step 3 is skipped when there are
+  // no service-specific questions, leaving 4 visible steps.
+  const totalSteps = hasServiceSpecific ? 5 : 4;
 
   // Map display step to actual step when step 3 is skipped
   const actualStep = (displayStep: number) => {

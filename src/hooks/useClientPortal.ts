@@ -125,10 +125,11 @@ export function useClientPortal() {
   // Prefer the subdomain tenant's team; else fall back to any available team member
   // (apex/agency behavior) so portal-created docs satisfy rules requiring teamId.
   const resolveTeamId = useCallback(() => {
-    // Priority: subdomain tenant → configured default (main tenant) → first
-    // cross-tenant member (last-resort; arbitrary — the bug we're fixing).
-    return tenantTeamId || DEFAULT_TEAM_ID || allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
-  }, [tenantTeamId, allTeamMembers]);
+    // Priority: subdomain tenant → configured default (main tenant). We deliberately
+    // do NOT fall back to "the first cross-tenant member" — that landed brand-new
+    // clients in an ARBITRARY tenant. Unresolved → null (fail closed).
+    return tenantTeamId || DEFAULT_TEAM_ID || null;
+  }, [tenantTeamId]);
 
   // Resolve the businessId to stamp on client-created docs. On a tenant subdomain
   // this is the tenant's businessId. On the apex/agency host there is no tenant
@@ -139,9 +140,12 @@ export function useClientPortal() {
   const resolveBusinessId = useCallback(() => {
     if (tenantBusinessId) return tenantBusinessId;
     if (DEFAULT_BUSINESS_ID) return DEFAULT_BUSINESS_ID;
+    // Only derive from a team we ACTUALLY resolved (subdomain tenant or configured
+    // default). Never fall back to an arbitrary cross-tenant member's businessId —
+    // that dropped clients into a random business. Unresolved → null (fail closed).
     const teamId = resolveTeamId();
-    const sameTeam = allTeamMembers?.find((m: any) => m.teamId === teamId && m.businessId);
-    return sameTeam?.businessId || allTeamMembers?.find((m: any) => m.businessId)?.businessId || null;
+    if (!teamId) return null;
+    return allTeamMembers?.find((m: any) => m.teamId === teamId && m.businessId)?.businessId || null;
   }, [tenantBusinessId, resolveTeamId, allTeamMembers]);
 
   const createDoc = useCallback(async (collName: string, data: Record<string, any>) => {
@@ -289,12 +293,13 @@ export function useClientPortal() {
 
         // Notify admin team members — ONLY of this client's tenant. allTeamMembers
         // is read cross-tenant (skipTeamFilter), so without the businessId filter a
-        // new client would notify every tenant's admins, including the platform
-        // super-admin. On the apex/agency host (no tenantBusinessId) we keep the
-        // existing behavior.
-        const admins = (allTeamMembers || []).filter(
-          (m: any) => m.role === 'Admin' && (!tenantBusinessId || m.businessId === tenantBusinessId)
-        );
+        // new client would notify EVERY tenant's admins, including the platform
+        // super-admin. Require a resolved businessId; if the tenant can't be
+        // determined we skip notifying entirely rather than spamming all tenants.
+        const notifyBusinessId = resolveBusinessId();
+        const admins = notifyBusinessId
+          ? (allTeamMembers || []).filter((m: any) => m.role === 'Admin' && m.businessId === notifyBusinessId)
+          : [];
         for (const admin of admins) {
           createDoc('notifications', {
             userId: admin.userId,
@@ -319,7 +324,7 @@ export function useClientPortal() {
       });
       })(); // end async IIFE
     }
-  }, [user, authLoading, anyByUserId, anyByEmail, byUserIdLoading, byEmailLoading, matchingCustomers, customersLoading, teamMembersLoading, autoCreating, createDoc, allTeamMembers, tenantBusinessId]);
+  }, [user, authLoading, anyByUserId, anyByEmail, byUserIdLoading, byEmailLoading, matchingCustomers, customersLoading, teamMembersLoading, autoCreating, createDoc, allTeamMembers, tenantBusinessId, resolveBusinessId]);
 
   const access = (activeByUserId.find(a => a.customerId) || activeByUserId[0])
     || (activeByEmail.find(a => a.customerId) || activeByEmail[0])

@@ -41,6 +41,10 @@ const PortalChatView: React.FC = () => {
   const cancelLongPress = () => { if (longPressTimerRef.current) { clearTimeout(longPressTimerRef.current); longPressTimerRef.current = null; } };
   const scrollRef = useRef<HTMLDivElement>(null);
   const markedAsReadRef = useRef<Set<string>>(new Set());
+  // scrollRef points at the inner content div; the actual scrollable element is
+  // the Radix ScrollArea viewport that wraps it. Resolve it via closest().
+  const getScroller = (): HTMLElement | null =>
+    scrollRef.current?.closest<HTMLElement>('[data-radix-scroll-area-viewport]') ?? null;
 
   // Fetch projects assigned to this customer
   const { data: customerProjects } = useCollection<Project>('projects', {
@@ -98,6 +102,10 @@ const PortalChatView: React.FC = () => {
   const ALLOWED_ATTACHMENT_TYPES = [...ALLOWED_IMG_TYPES, ...ALLOWED_DOC_TYPES];
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
   const isImageUrl = (url: string) => /\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$/i.test(url) || /image%2F/i.test(url);
+  // Only render https:// attachment links as clickable anchors — reject any
+  // `javascript:`/other URI written straight to Firestore (XSS on click).
+  const safeAttachmentHref = (url?: string | null): string | undefined =>
+    (url && /^https:\/\//i.test(url.trim())) ? url : undefined;
 
   // Resolve teamId so client messages include it — required for the admin's
   // team-scoped useCollection('messages') to see them. Prefer the tenant's own team
@@ -165,9 +173,10 @@ const PortalChatView: React.FC = () => {
   const prevCountRef = useRef(0);
   useEffect(() => {
     const count = messages?.length || 0;
-    if (count > prevCountRef.current && scrollRef.current) {
+    if (count > prevCountRef.current) {
       requestAnimationFrame(() => {
-        if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+        const vp = getScroller();
+        if (vp) vp.scrollTop = vp.scrollHeight;
       });
     }
     prevCountRef.current = count;
@@ -175,7 +184,8 @@ const PortalChatView: React.FC = () => {
 
   useEffect(() => {
     requestAnimationFrame(() => {
-      if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      const vp = getScroller();
+      if (vp) vp.scrollTop = vp.scrollHeight;
     });
   }, [channelId]);
 
@@ -185,13 +195,21 @@ const PortalChatView: React.FC = () => {
   // Mark staff messages as readAt when client opens chat
   useEffect(() => {
     if (!user || !messages.length) return;
-    const unread = messages.filter(
-      (m: any) => m.senderType === 'staff' && !m.readAt && !markedAsReadRef.current.has(m.id)
-    );
-    unread.forEach((m: any) => {
-      markedAsReadRef.current.add(m.id);
-      messageMutation.update(m.id, { readAt: new Date() } as any).catch(() => {});
-    });
+    // Only mark staff messages as read while the tab is actually visible —
+    // otherwise a background/unfocused portal tab would fire read-receipts on
+    // mount without the client having seen anything.
+    const markVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      messages
+        .filter((m: any) => m.senderType === 'staff' && !m.readAt && !markedAsReadRef.current.has(m.id))
+        .forEach((m: any) => {
+          markedAsReadRef.current.add(m.id);
+          messageMutation.update(m.id, { readAt: new Date() } as any).catch(() => {});
+        });
+    };
+    markVisible();
+    document.addEventListener('visibilitychange', markVisible);
+    return () => document.removeEventListener('visibilitychange', markVisible);
   }, [messages, user]);
 
   const handleSendMessage = async (e?: React.FormEvent | null, override?: { attachmentUrl?: string }) => {
@@ -586,12 +604,12 @@ const PortalChatView: React.FC = () => {
                             <p className="text-[13px] sm:text-[13.5px] leading-relaxed whitespace-pre-wrap break-words">{msg.content}</p>
                             {msg.attachmentUrl && (
                               isImageUrl(msg.attachmentUrl) ? (
-                                <a href={msg.attachmentUrl} target="_blank" rel="noopener noreferrer" className="block mt-1.5">
+                                <a href={safeAttachmentHref(msg.attachmentUrl)} target="_blank" rel="noopener noreferrer" className="block mt-1.5">
                                   <img src={msg.attachmentUrl} alt="Foto" loading="lazy" className="rounded-lg max-w-[220px] max-h-[280px] object-cover border border-border/40" />
                                 </a>
                               ) : (
                                 <a
-                                  href={msg.attachmentUrl}
+                                  href={safeAttachmentHref(msg.attachmentUrl)}
                                   target="_blank"
                                   rel="noopener noreferrer"
                                   className={`inline-flex items-center gap-1.5 text-xs mt-1.5 px-2 py-1 rounded-md ${

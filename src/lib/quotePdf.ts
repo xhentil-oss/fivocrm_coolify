@@ -90,6 +90,7 @@ export function downloadQuotePdf(q: Quote): void {
   // Discounts
   const disc = (q.result?.bundleDiscountAmount || 0) + (q.result?.manualDiscountAmount || 0);
   if (disc > 0) {
+    if (y > 760) { doc.addPage(); y = 48; }
     y += 6;
     doc.setTextColor('#16a34a');
     doc.text(`Zbritje${q.result?.bundleDiscountLabel ? ` (${q.result.bundleDiscountLabel})` : ''}`, margin + 6, y);
@@ -98,6 +99,7 @@ export function downloadQuotePdf(q: Quote): void {
   }
 
   // Totals band
+  if (y > 760) { doc.addPage(); y = 48; }
   y += 10;
   doc.setDrawColor('#e5e7eb');
   doc.line(margin, y, pageW - margin, y);
@@ -110,6 +112,7 @@ export function downloadQuotePdf(q: Quote): void {
   doc.text('Totali mujor:', margin + 6, y);
   doc.text(money(q.result?.totalMonthly ?? 0, cur), pageW - margin - 180, y);
   y += 20;
+  if (y > 760) { doc.addPage(); y = 48; }
   doc.setFontSize(13);
   doc.setTextColor(CYAN);
   doc.text('GRAND TOTAL:', margin + 6, y);
@@ -118,6 +121,7 @@ export function downloadQuotePdf(q: Quote): void {
   // Notes / validity
   if (q.notes || q.validUntil) {
     y += 30;
+    if (y > 760) { doc.addPage(); y = 48; }
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(9);
     doc.setTextColor('#6b7280');

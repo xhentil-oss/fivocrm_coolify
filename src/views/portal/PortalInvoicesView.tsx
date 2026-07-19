@@ -11,6 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../componen
 import { Separator } from '../../components/ui/separator';
 import { FileText, Search, Eye, DollarSign, Calendar, CreditCard, Check, ExternalLink, Building2, Download } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
+import { toAll } from '../../lib/utils';
 import type { Invoice, InvoiceItem, Service, Customer } from '../../types';
 import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../../lib/native';
 
@@ -160,8 +161,10 @@ const PortalInvoicesView: React.FC = () => {
     return service?.title || service?.name || 'Shërbim';
   };
 
-  const totalPaid = invoices?.filter(i => i.status === 'Paid').reduce((s, i) => s + (i.total ?? i.amount ?? 0), 0) || 0;
-  const totalPending = invoices?.filter(i => i.status === 'Pending' || i.status === 'Overdue').reduce((s, i) => s + (i.total ?? i.amount ?? 0), 0) || 0;
+  // Normalize each invoice to ALL before summing — invoices can be EUR or ALL, and
+  // the summary cards render a fixed "ALL" label, so a raw mixed-currency sum lied.
+  const totalPaid = invoices?.filter(i => i.status === 'Paid').reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0) || 0;
+  const totalPending = invoices?.filter(i => i.status === 'Pending' || i.status === 'Overdue').reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0) || 0;
 
   if (loading) {
     return (
