@@ -193,9 +193,6 @@ const BonusView: React.FC = () => {
       return sum + toAll(e.amount || 0, e.currency);
     }, 0);
 
-    // Allocate office expenses proportionally to each project's budget weight
-    const totalPeriodBudget = periodProjects.reduce((s, p) => s + (p.budget || 0), 0);
-
     return teamMembers
       .map(member => {
         const salary = effectiveSalary(member.userId, member.monthlySalary);
@@ -221,11 +218,11 @@ const BonusView: React.FC = () => {
             .filter(e => (e as any).projectId === p.id)
             .reduce((sum, e) => sum + toAll(e.amount || 0, e.currency), 0);
 
-          // ── office expenses allocated by this project's budget share ────
-          const budgetFraction = totalPeriodBudget > 0
-            ? (p.budget || 0) / totalPeriodBudget
-            : periodProjects.length > 0 ? 1 / periodProjects.length : 0;
-          const perProjectOffice = totalOfficeExpenses * budgetFraction;
+          // ── office expenses split EQUALLY across the period's projects ──
+          // (matches the documented model + in-app explainer: "ndahen barabar").
+          const perProjectOffice = periodProjects.length > 0
+            ? totalOfficeExpenses / periodProjects.length
+            : 0;
 
           // ── salary cost of each assigned member (prorated by project budget) ─
           // Uses salary from Expenses if linked, else falls back to monthlySalary.
@@ -469,13 +466,13 @@ const BonusView: React.FC = () => {
             <div className="flex-1 max-w-xs">
               <div className="flex justify-between text-xs text-muted-foreground mb-1">
                 <span>Progresi drejt pragut</span>
-                <span>{Math.min(100, Math.round((myResult.netContribution / myResult.threshold) * 100))}%</span>
+                <span>{myResult.threshold > 0 ? Math.min(100, Math.round((myResult.netContribution / myResult.threshold) * 100)) : 0}%</span>
               </div>
               <div className="h-3 bg-muted rounded-full overflow-hidden">
                 <div
                   className="h-full rounded-full transition-all"
                   style={{
-                    width: getProgressWidth(myResult.netContribution, myResult.threshold * (5/3)),
+                    width: getProgressWidth(myResult.netContribution, myResult.threshold),
                     background: myResult.totalBonus > 0
                       ? 'linear-gradient(90deg, #f59e0b, #d97706)'
                       : 'hsl(var(--primary) / 0.6)',
@@ -521,7 +518,7 @@ const BonusView: React.FC = () => {
           {memberResults.map(result => {
             const isExpanded = expandedMember === result.member.id;
             const hasBonus = result.totalBonus > 0;
-            const progressMax = (result.threshold / 3) * 5; // threshold = salary×3, so salary = threshold/3
+            const progressMax = result.threshold; // label & bar both measure progress toward the threshold
 
             return (
               <Card
@@ -571,7 +568,7 @@ const BonusView: React.FC = () => {
                 <div className="px-4 pb-3">
                   <div className="flex items-center justify-between text-[10px] text-muted-foreground mb-1">
                     <span>Progresi drejt pragut (3× rrogë)</span>
-                    <span>{Math.min(100, Math.round((result.netContribution / result.threshold) * 100))}% · Pragu: {result.threshold.toLocaleString()} L</span>
+                    <span>{result.threshold > 0 ? Math.min(100, Math.round((result.netContribution / result.threshold) * 100)) : 0}% · Pragu: {result.threshold.toLocaleString()} L</span>
                   </div>
                   <div className="h-2 bg-muted rounded-full overflow-hidden">
                     <div

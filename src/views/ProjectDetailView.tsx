@@ -185,10 +185,12 @@ const ProjectDetailView: React.FC = () => {
     }
   }, [allTasks, selectedTask]);
 
-  // Progress uses ALL top-level tasks (unfiltered), not the search/status-filtered view
+  // Progress uses ALL top-level tasks from the RAW (unfiltered) project tasks —
+  // the role-filtered `allTasks` would make a Member who only sees their own Done
+  // task read as 100% complete. Mirrors the auto-complete check below.
   const allTopLevelTasks = React.useMemo(() =>
-    (allTasks || []).filter(t => !t.parentTaskId),
-    [allTasks]
+    (rawProjectTasks || []).filter(t => !t.parentTaskId),
+    [rawProjectTasks]
   );
   const completedTasks = allTopLevelTasks.filter(t => t.status === 'Done').length;
   const totalTasks = allTopLevelTasks.length;
@@ -204,7 +206,10 @@ const ProjectDetailView: React.FC = () => {
     const endDateStr = formData.get('endDate') as string;
     const startDate = startDateStr ? new Date(startDateStr) : new Date();
     const endDate = endDateStr ? new Date(endDateStr) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
-    if (startDate > endDate) return;
+    if (startDate > endDate) {
+      toast({ title: 'Datat e pavlefshme', description: 'Data e fillimit nuk mund të jetë pas datës së mbarimit.', variant: 'destructive' });
+      return;
+    }
     const assignedToUserId = formData.get('assignedToUserId') as string || user?.uid || '';
     const section = (formData.get('section') as string || '').trim();
     const priority = formData.get('priority') as string || 'medium';
@@ -233,6 +238,9 @@ const ProjectDetailView: React.FC = () => {
       // Stamp the project's team so creation works even when there's no global
       // active team (e.g. a super-admin viewing across teams).
       ...(project?.teamId ? { teamId: project.teamId } : {}),
+      // Carry the business/tenant scope too — without businessId the task falls
+      // outside the business-scoped task query and vanishes from list & calendar.
+      ...(project?.businessId ? { businessId: project.businessId } : {}),
     };
 
     if (isRecurring) {

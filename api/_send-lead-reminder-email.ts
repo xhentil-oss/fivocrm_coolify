@@ -73,13 +73,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   if (!lead.email || !isValidEmail(lead.email)) return res.status(422).json({ error: 'Lead has no valid email' });
 
-  // Verify caller is on the same team
-  if (lead.teamId) {
-    const memberSnap = await db.collection('teamMembers')
-      .where('teamId', '==', lead.teamId)
-      .where('userId', '==', decoded.uid)
-      .limit(1).get();
-    if (memberSnap.empty) return res.status(403).json({ error: 'Forbidden' });
+  // Verify the caller is staff of the lead's team (or, for legacy null-teamId leads,
+  // its business). Fail closed: a lead scoped to neither cannot be authorized and is
+  // rejected — this closes the "auth-skip when teamId is missing" bypass.
+  if (!lead.teamId && !lead.businessId) {
+    return res.status(403).json({ error: 'Lead is not scoped to a team or business' });
+  }
+  {
+    const [teamSnap, bizSnap] = await Promise.all([
+      lead.teamId
+        ? db.collection('teamMembers').where('teamId', '==', lead.teamId).where('userId', '==', decoded.uid).limit(1).get()
+        : Promise.resolve({ empty: true } as any),
+      lead.businessId
+        ? db.collection('teamMembers').where('businessId', '==', lead.businessId).where('userId', '==', decoded.uid).limit(1).get()
+        : Promise.resolve({ empty: true } as any),
+    ]);
+    if (teamSnap.empty && bizSnap.empty) return res.status(403).json({ error: 'Forbidden' });
   }
 
   // Resolve sender display name

@@ -189,7 +189,8 @@ const CRMView: React.FC = () => {
     const normEmail = email?.toLowerCase().trim();
     const normPhone = phoneNumber?.replace(/\D/g, '');
     if (normEmail) {
-      const dupLead = leads?.find(l => l.email?.toLowerCase().trim() === normEmail);
+      // Dedup against the UNFILTERED source so restricted roles can't create dupes.
+      const dupLead = rawLeads?.find(l => l.email?.toLowerCase().trim() === normEmail);
       const dupCustomer = customers?.find(c => c.email?.toLowerCase().trim() === normEmail);
       if (dupLead) {
         toast({ title: 'Email ekziston tek Leads!', description: `Lead "${dupLead.name}" ka të njëjtin email.`, variant: 'destructive' });
@@ -201,7 +202,7 @@ const CRMView: React.FC = () => {
       }
     }
     if (normPhone && normPhone.length >= 7) {
-      const dupLead = leads?.find(l => l.phoneNumber?.replace(/\D/g, '') === normPhone);
+      const dupLead = rawLeads?.find(l => l.phoneNumber?.replace(/\D/g, '') === normPhone);
       const dupCustomer = customers?.find(c => c.phone?.replace(/\D/g, '') === normPhone);
       if (dupLead) {
         toast({ title: 'Numri ekziston tek Leads!', description: `Lead "${dupLead.name}" ka të njëjtin numër telefoni.`, variant: 'destructive' });
@@ -285,7 +286,8 @@ const CRMView: React.FC = () => {
       const normEmail = email?.toLowerCase().trim();
       const normPhone = phoneNumber?.replace(/\D/g, '');
       if (normEmail) {
-        const dupLead = leads?.find(l => l.id !== editLead.id && l.email?.toLowerCase().trim() === normEmail);
+        // Dedup against the UNFILTERED source so restricted roles can't create dupes.
+        const dupLead = rawLeads?.find(l => l.id !== editLead.id && l.email?.toLowerCase().trim() === normEmail);
         const dupCustomer = customers?.find(c => c.email?.toLowerCase().trim() === normEmail);
         if (dupLead) {
           toast({ title: 'Email ekziston tek Leads!', description: `Lead "${dupLead.name}" ka të njëjtin email.`, variant: 'destructive' });
@@ -297,7 +299,7 @@ const CRMView: React.FC = () => {
         }
       }
       if (normPhone && normPhone.length >= 7) {
-        const dupLead = leads?.find(l => l.id !== editLead.id && l.phoneNumber?.replace(/\D/g, '') === normPhone);
+        const dupLead = rawLeads?.find(l => l.id !== editLead.id && l.phoneNumber?.replace(/\D/g, '') === normPhone);
         const dupCustomer = customers?.find(c => c.phone?.replace(/\D/g, '') === normPhone);
         if (dupLead) {
           toast({ title: 'Numri ekziston tek Leads!', description: `Lead "${dupLead.name}" ka të njëjtin numër telefoni.`, variant: 'destructive' });
@@ -339,9 +341,9 @@ const CRMView: React.FC = () => {
         businessCategory,
         notes: notes || undefined,
         tags: (() => { const t = parseTags(formData.get('tags') as string); return t.length ? t : undefined; })(),
-        estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined,
+        estimatedValue: estimatedValue && !isNaN(parseFloat(estimatedValue)) ? parseFloat(estimatedValue) : undefined,
         probability: STAGE_PROBABILITY[status] ?? editLead.probability,
-        score: calculateLeadScore({ name, email, phoneNumber, company, estimatedValue: estimatedValue ? parseFloat(estimatedValue) : undefined }),
+        score: calculateLeadScore({ name, email, phoneNumber, company, estimatedValue: estimatedValue && !isNaN(parseFloat(estimatedValue)) ? parseFloat(estimatedValue) : undefined }),
         assignedToUserId: resolvedAssigned,
       });
 
@@ -718,7 +720,7 @@ const CRMView: React.FC = () => {
         customerName: lead.name,
         leadId: lead.id,
         amount: lead.estimatedValue || 0,
-        currency: 'EUR',
+        currency: 'ALL', // lead.estimatedValue is entered in Lek ("Vlera e Parashikuar (L)")
         stage: 'Qualification',
         ownerId: lead.assignedToUserId || undefined,
         lastActivityAt: new Date(),
@@ -2565,12 +2567,9 @@ const LeadForm: React.FC<{
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="New">I Ri</SelectItem>
-              <SelectItem value="Contacted">Kontaktuar</SelectItem>
-              <SelectItem value="Qualified">Kualifikuar</SelectItem>
-              <SelectItem value="Follow-up">Në Ndjekje</SelectItem>
-              <SelectItem value="Converted">Konvertuar</SelectItem>
-              <SelectItem value="Lost">Humbur</SelectItem>
+              {SELECTABLE_STATUSES.map(s => (
+                <SelectItem key={s.key} value={s.key}>{s.label}</SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </div>

@@ -1,5 +1,6 @@
 import type { Lead } from '../types';
 import { getTimestampMs } from './utils';
+import { calculateLeadScore } from './leadScore';
 
 // SLA / staleness thresholds (kept in sync with the cron in api/cron/run.ts).
 export const SLA_FIRST_RESPONSE_HOURS = 24;
@@ -20,16 +21,20 @@ export function leadLastActivityMs(lead: Lead): number {
  * Live engagement temperature derived from recency, stage, value and quality
  * score. Lost/Converted are always cold. Recomputed in the UI (not stored).
  */
-export function leadTemperature(lead: Lead): Temperature {
+export function leadTemperature(lead: Lead, score?: number): Temperature {
   if (lead.status === 'Lost' || lead.status === 'Converted') return 'cold';
   const lastMs = leadLastActivityMs(lead);
   const days = lastMs ? (Date.now() - lastMs) / 86_400_000 : Infinity;
+  // Prefer the resolved score passed by the caller (useLeadIntel) so temperature
+  // matches the score shown in the UI. When absent, resolve it the SAME way the UI
+  // does (stored score ?? computed) instead of silently treating it as 0.
+  const resolvedScore = score ?? lead.score ?? calculateLeadScore(lead);
   let pts = 0;
   if (days <= 2) pts += 3; else if (days <= 7) pts += 2; else if (days <= 14) pts += 1;
   if (lead.status === 'Proposal' || lead.status === 'Qualified') pts += 2;
   else if (lead.status === 'Contacted' || lead.status === 'Follow-up') pts += 1;
   if ((lead.estimatedValue || 0) >= 5000) pts += 1;
-  if ((lead.score || 0) >= 70) pts += 1;
+  if (resolvedScore >= 70) pts += 1;
   return pts >= 4 ? 'hot' : pts >= 2 ? 'warm' : 'cold';
 }
 

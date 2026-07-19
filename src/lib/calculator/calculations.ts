@@ -235,14 +235,27 @@ export function calculate(sel: CalculatorSelections, settings: CalculatorSetting
     { key: 'addOns', label: 'Add-ons', items: calcAddOns(sel.addOns, pricing.addOns) },
   ];
 
+  // Pricing is stored in each market's native currency (Albania = ALL,
+  // International = EUR). Convert every amount into the currency the user
+  // selected so displayed AND persisted figures match the chosen currency.
+  const nativeCurrency: Currency = sel.market === 'albania' ? 'ALL' : 'EUR';
+  const conv = (n: number) => convertCurrency(n, nativeCurrency, sel.currency, settings.exchangeRates);
+
   const categories: CategoryTotal[] = categoryCalcs
     .filter(c => c.items.length > 0)
-    .map(c => ({
-      category: c.label,
-      oneTime: c.items.filter(i => i.type === 'one-time').reduce((s, i) => s + i.amount, 0),
-      monthly: c.items.filter(i => i.type === 'monthly').reduce((s, i) => s + i.amount, 0),
-      items: c.items,
-    }));
+    .map(c => {
+      const items = c.items.map(i => ({
+        ...i,
+        amount: conv(i.amount),
+        unitPrice: i.unitPrice != null ? conv(i.unitPrice) : i.unitPrice,
+      }));
+      return {
+        category: c.label,
+        oneTime: items.filter(i => i.type === 'one-time').reduce((s, i) => s + i.amount, 0),
+        monthly: items.filter(i => i.type === 'monthly').reduce((s, i) => s + i.amount, 0),
+        items,
+      };
+    });
 
   const subtotalOneTime = categories.reduce((s, c) => s + c.oneTime, 0);
   const subtotalMonthly = categories.reduce((s, c) => s + c.monthly, 0);
@@ -271,19 +284,25 @@ export function calculate(sel: CalculatorSelections, settings: CalculatorSetting
     }
   }
 
-  // Manual discounts
-  let manualDiscountAmount = 0;
+  // Manual discounts.
+  //  - Percentage discounts scale both buckets proportionally (via the ratio).
+  //  - A fixed discount is a ONE-TIME amount: it must come off the one-time
+  //    bucket exactly once, never folded into the ratio (which would make it
+  //    recur every month against the monthly total too).
+  let manualPercentAmount = 0;
   if (sel.discountPercent > 0) {
-    manualDiscountAmount += (subtotalOneTime + subtotalMonthly) * (sel.discountPercent / 100);
+    manualPercentAmount = (subtotalOneTime + subtotalMonthly) * (sel.discountPercent / 100);
   }
-  manualDiscountAmount += sel.discountFixed;
+  const manualDiscountAmount = manualPercentAmount + sel.discountFixed;
 
-  const totalDiscount = bundleDiscountAmount + manualDiscountAmount;
+  // Only percentage-based discounts feed the proportional ratio.
+  const percentDiscount = bundleDiscountAmount + manualPercentAmount;
   const totalBeforeDiscount = subtotalOneTime + subtotalMonthly;
-  const discountRatio = totalBeforeDiscount > 0 ? (totalBeforeDiscount - totalDiscount) / totalBeforeDiscount : 1;
+  const discountRatio = totalBeforeDiscount > 0 ? (totalBeforeDiscount - percentDiscount) / totalBeforeDiscount : 1;
 
-  const totalOneTime = Math.max(0, subtotalOneTime * discountRatio);
   const totalMonthly = Math.max(0, subtotalMonthly * discountRatio);
+  // Fixed one-time discount applied once, to the one-time bucket only.
+  const totalOneTime = Math.max(0, subtotalOneTime * discountRatio - sel.discountFixed);
   const grandTotal = totalOneTime + totalMonthly;
 
   // Internal costs (optional)

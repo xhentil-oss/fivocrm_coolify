@@ -98,7 +98,7 @@ export function computeStaffRevenue(
   };
   if (!projects || !teamMembers) return empty;
 
-  const months = opts.months ?? 12;
+  let months = opts.months ?? 12;
   const activeMembers = teamMembers.filter(m => m.status === 'Active');
 
   // Period filter — explicit range wins, then calendar year, then all-time.
@@ -115,6 +115,22 @@ export function computeStaffRevenue(
     if (opts.mode === 'completed' && !isCompleted(p)) return false;
     return inYear(projectDate(p));
   });
+
+  // All-time: charge salary for the ACTUAL span the matched projects cover
+  // rather than a hardcoded 12 months. Otherwise multi-year project value is
+  // compared against only one year of salary cost, inflating profit.
+  if (opts.allTime && opts.months == null) {
+    const times = periodProjects
+      .map(projectDate)
+      .filter((d): d is Date => !!d)
+      .map(d => d.getTime());
+    if (times.length > 0) {
+      const min = new Date(Math.min(...times));
+      const max = new Date(Math.max(...times));
+      const span = (max.getFullYear() - min.getFullYear()) * 12 + (max.getMonth() - min.getMonth()) + 1;
+      months = Math.max(1, span);
+    }
+  }
 
   // Resolve an allocation id (uid or email) to an active member.
   const memberFor = (id: string): TeamMember | undefined => {

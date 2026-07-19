@@ -7,6 +7,38 @@ function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && !email.includes('\n') && !email.includes('\r');
 }
 
+function escapeHtml(str: string): string {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#x27;');
+}
+
+// Fail-closed staff authorization: the caller must be a member of the doc's team
+// OR (for recurring/legacy docs with a null teamId) its business. A doc carrying
+// NEITHER key cannot be authorized and is denied — never skipped. This closes the
+// "auth-skip when teamId is missing" bypass (recurring-invoice children set teamId
+// to null but still carry businessId).
+async function callerIsStaff(
+  uid: string,
+  teamId: string | undefined | null,
+  businessId: string | undefined | null,
+): Promise<boolean> {
+  if (teamId) {
+    const s = await db.collection('teamMembers')
+      .where('teamId', '==', teamId).where('userId', '==', uid).limit(1).get();
+    if (!s.empty) return true;
+  }
+  if (businessId) {
+    const s = await db.collection('teamMembers')
+      .where('businessId', '==', businessId).where('userId', '==', uid).limit(1).get();
+    if (!s.empty) return true;
+  }
+  return false;
+}
+
 // In-memory rate limit for client chat notifications: 1 email per (email+channelId) per 10 min
 const notifyRateLimit = new Map<string, number>();
 const NOTIFY_RATE_MS = 10 * 60 * 1000;
@@ -43,13 +75,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // ── Client chat notification ──────────────────────────────────────────────
   if (requestType === 'notify-client') {
-    const { recipientEmail, recipientName, channelId, senderName, messagePreview } = req.body;
-    if (!recipientEmail || typeof recipientEmail !== 'string' || !channelId) {
-      return res.status(400).json({ error: 'Missing recipientEmail or channelId' });
+    const { channelId, senderName, messagePreview } = req.body;
+    // channelId is `client-<customerId>` (optionally `-project-<pid>`). The
+    // recipient and authorization are BOTH derived from it — the client-supplied
+    // recipientEmail is ignored, so this can no longer be used as an open relay to
+    // an arbitrary address.
+    if (!channelId || typeof channelId !== 'string' || !channelId.startsWith('client-')) {
+      return res.status(400).json({ error: 'Invalid channelId' });
     }
-    if (!isValidEmail(recipientEmail)) {
-      return res.status(400).json({ error: 'Invalid email' });
+    const customerId = channelId.split('-')[1];
+    if (!customerId) {
+      return res.status(400).json({ error: 'Invalid channelId' });
     }
+
+    // Resolve the customer this channel belongs to.
+    const customerDoc = await db.collection('customers').doc(customerId).get();
+    if (!customerDoc.exists) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+    const customer = customerDoc.data()!;
+
+    // Authorize: the caller must be a staff member of the customer's team/business.
+    // (Only staff notify a client of a new message; a portal client never calls this.)
+    const authorized = await callerIsStaff(decodedToken.uid, customer.teamId, customer.businessId);
+    if (!authorized) {
+      return res.status(403).json({ error: 'Forbidden' });
+    }
+
+    // Recipient is the customer's own address — never an attacker-chosen one.
+    let recipientEmail: string | undefined = typeof customer.email === 'string' ? customer.email : undefined;
+    if (!recipientEmail || !isValidEmail(recipientEmail)) {
+      // Fall back to the portal-access record's login email.
+      const paSnap = await db.collection('clientPortalAccess')
+        .where('customerId', '==', customerId).limit(1).get();
+      const paEmail = paSnap.empty ? undefined : (paSnap.docs[0].data() as any).email;
+      recipientEmail = typeof paEmail === 'string' ? paEmail : undefined;
+    }
+    if (!recipientEmail || !isValidEmail(recipientEmail)) {
+      return res.status(422).json({ error: 'Customer has no valid email' });
+    }
+
     // Rate limit — silently skip
     const key = `${recipientEmail}:${channelId}`;
     const lastSent = notifyRateLimit.get(key) || 0;
@@ -69,14 +134,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       auth: { user: smtpUser, pass: process.env.SMTP_PASS },
     });
     const appUrl = process.env.VITE_APP_URL || 'https://app.fivoo.net';
-    const name = recipientName || recipientEmail.split('@')[0];
-    const from = senderName || 'Ekipi';
-    const preview = messagePreview ? String(messagePreview).slice(0, 200) : 'Keni një mesazh të ri.';
+    // All interpolated values are HTML-escaped to prevent injection into the email body.
+    const name = escapeHtml(customer.name || recipientEmail.split('@')[0]);
+    const from = escapeHtml(senderName ? String(senderName).slice(0, 80) : 'Ekipi');
+    const preview = escapeHtml(messagePreview ? String(messagePreview).slice(0, 200) : 'Keni një mesazh të ri.');
     try {
       await transporter.sendMail({
         from: `"FivoCRM" <${smtpUser}>`,
         to: recipientEmail,
-        subject: `Mesazh i ri nga ${from}`,
+        subject: `Mesazh i ri nga ${from}`.replace(/[\n\r]/g, '').slice(0, 180),
         html: `<div style="font-family:Arial,sans-serif;max-width:520px;margin:0 auto;padding:24px;background:#f9fafb;border-radius:8px;"><h2 style="color:#2563eb;margin-top:0;">Mesazh i ri</h2><p style="color:#374151;">Përshëndetje, <strong>${name}</strong>!</p><p style="color:#374151;"><strong>${from}</strong> ju ka dërguar një mesazh:</p><blockquote style="border-left:3px solid #2563eb;padding:10px 14px;background:#eff6ff;border-radius:4px;margin:16px 0;color:#1e40af;font-style:italic;">${preview}</blockquote><a href="${appUrl}/portal/chat" style="display:inline-block;background:#2563eb;color:#fff;padding:11px 24px;border-radius:6px;text-decoration:none;font-weight:bold;margin-top:8px;">Hap portalin</a><p style="color:#9ca3af;font-size:11px;margin-top:28px;border-top:1px solid #e5e7eb;padding-top:12px;">FivoCRM &mdash; Platforma juaj e biznesit</p></div>`,
       });
       return res.status(200).json({ ok: true });
@@ -102,16 +168,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
   const invoice = invoiceDoc.data()!;
 
-  // Verify the caller belongs to the same team as the invoice
-  if (invoice.teamId) {
-    const memberSnap = await db.collection('teamMembers')
-      .where('teamId', '==', invoice.teamId)
-      .where('userId', '==', decodedToken.uid)
-      .limit(1)
-      .get();
-    if (memberSnap.empty) {
-      return res.status(403).json({ error: 'Forbidden' });
-    }
+  // Verify the caller is staff of the invoice's team (or, for recurring/legacy
+  // null-teamId invoices, its business). Fail closed: an invoice with neither key
+  // cannot be authorized and is rejected rather than silently skipping the check.
+  if (!invoice.teamId && !invoice.businessId) {
+    return res.status(403).json({ error: 'Invoice is not scoped to a team or business' });
+  }
+  if (!(await callerIsStaff(decodedToken.uid, invoice.teamId, invoice.businessId))) {
+    return res.status(403).json({ error: 'Forbidden' });
   }
 
   // Fetch customer

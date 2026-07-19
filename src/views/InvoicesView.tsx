@@ -33,7 +33,7 @@ import {
 } from '../components/ui/dropdown-menu';
 import type { Invoice, Customer, Service, InvoiceItem, Project, ClientPortalAccess } from '../types';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
-import { toAll, getEurToAllRate, getTimestampMs } from '../lib/utils';
+import { toAll, getRateToAll, getTimestampMs } from '../lib/utils';
 import { toast } from '../hooks/use-toast';
 import { getStatusColor, getInvoiceStatusLabel } from '../lib/statusColors';
 import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../lib/native';
@@ -281,7 +281,13 @@ const InvoicesView: React.FC = () => {
 
     try {
       toast({ title: 'Duke hapur Stripe Checkout...' });
-      
+
+      // Stripe does not support ALL (Albanian Lek) — convert an ALL invoice to EUR
+      // for checkout. Other currencies (EUR/USD/GBP) are passed through as-is.
+      const invCur = ((invoice as any).currency || 'EUR').toUpperCase();
+      const stripeCurrency = invCur === 'ALL' ? 'eur' : invCur.toLowerCase();
+      const stripeAmount = invCur === 'ALL' ? amount / getRateToAll('EUR') : amount;
+
       const authToken = await user?.getIdToken();
       const response = await fetch('/api/create-checkout-session', {
         method: 'POST',
@@ -292,8 +298,8 @@ const InvoicesView: React.FC = () => {
         body: JSON.stringify({
           invoiceId: invoice.id,
           invoiceNumber: invoice.invoiceNumber || invoice.id.slice(0, 8),
-          amount,
-          currency: ((invoice as any).currency || 'EUR').toLowerCase(),
+          amount: stripeAmount,
+          currency: stripeCurrency,
           customerEmail: customer?.email || undefined,
           customerName: customer?.name || undefined,
           successUrl: appReturnUrl(`/app/invoices?payment=success&invoice=${invoice.id}`),
@@ -884,7 +890,7 @@ const InvoicesView: React.FC = () => {
                         <CreditCard className="w-4 h-4 mr-2" /> Paguaj me Stripe
                       </DropdownMenuItem>
                     )}
-                    {permissions.canEdit && invoice.status !== 'Paid' && (
+                    {permissions.canEdit && invoice.status !== 'Paid' && invoice.status !== 'Draft' && (
                       <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setPartialPaymentInvoice(invoice); setPartialAmount(''); setPartialNote(''); setPartialMethod('Cash'); }}>
                         <DollarSign className="w-4 h-4 mr-2" /> Pagesë Pjesore
                       </DropdownMenuItem>
@@ -987,10 +993,9 @@ const InvoicesView: React.FC = () => {
                           </Button>
                         </div>
                       ) : (
-                        <div 
-                          className={`flex items-center gap-2 px-2 py-1 rounded ${permissions.canEdit ? 'cursor-pointer hover:bg-muted/50' : ''}`}
-                          onClick={() => startEditing(invoice.id, 'total', invoice.total ?? invoice.amount ?? 0)}
-                        >
+                        // Inline-editing `total` writes only `total` and desyncs it from
+                        // subtotal/discount/tax — edit the amount via the full invoice form instead.
+                        <div className="flex items-center gap-2 px-2 py-1">
                           <div>
                             <div>{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}</div>
                             {invoice.status === 'Partial' && invoice.paidAmount != null && (
@@ -999,7 +1004,6 @@ const InvoicesView: React.FC = () => {
                               </div>
                             )}
                           </div>
-                          <Edit2 className="w-3 h-3 opacity-0 group-hover:opacity-100" />
                         </div>
                       )}
                     </td>
@@ -1102,7 +1106,7 @@ const InvoicesView: React.FC = () => {
                             Paguaj
                           </Button>
                         )}
-                        {permissions.canEdit && invoice.status !== 'Paid' && (
+                        {permissions.canEdit && invoice.status !== 'Paid' && invoice.status !== 'Draft' && (
                           <Button
                             variant="outline"
                             size="sm"
@@ -1556,11 +1560,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
   // Convert a service price to the invoice currency, respecting the service's own currency.
   const toInvoiceCurrency = (servicePrice: number, serviceCurrency?: string) => {
     const svcCur = (serviceCurrency || 'ALL').toUpperCase();
-    const rate = getEurToAllRate();
     if (svcCur === currency) return servicePrice;           // same currency → no conversion
-    if (svcCur === 'EUR' && currency === 'ALL') return servicePrice * rate;   // EUR → ALL
-    if (svcCur === 'ALL' && currency === 'EUR') return servicePrice / rate;   // ALL → EUR
-    return servicePrice;
+    // Convert source → ALL, then ALL → target. Handles any currency (EUR/USD/GBP),
+    // not just EUR↔ALL, so USD/GBP service prices no longer bill at face value.
+    const inAll = servicePrice * getRateToAll(svcCur);
+    return inAll / getRateToAll(currency);
   };
 
   const calculateSubtotal = () => {
@@ -2415,6 +2419,11 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
               }
               try {
                 toast({ title: 'Duke hapur Stripe Checkout...' });
+                // Stripe does not support ALL (Albanian Lek) — convert an ALL invoice
+                // to EUR for checkout. Other currencies are passed through as-is.
+                const invCur = ((invoice as any).currency || 'EUR').toUpperCase();
+                const stripeCurrency = invCur === 'ALL' ? 'eur' : invCur.toLowerCase();
+                const stripeAmount = invCur === 'ALL' ? amount / getRateToAll('EUR') : amount;
                 const authToken = await user?.getIdToken();
                 const response = await fetch('/api/create-checkout-session', {
                   method: 'POST',
@@ -2425,8 +2434,8 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
                   body: JSON.stringify({
                     invoiceId: invoice.id,
                     invoiceNumber: invoice.invoiceNumber || invoice.id.slice(0, 8),
-                    amount,
-                    currency: (invoice as any).currency === 'EUR' ? 'eur' : 'all',
+                    amount: stripeAmount,
+                    currency: stripeCurrency,
                     customerEmail: customer?.email || undefined,
                     customerName: customer?.name || undefined,
                     successUrl: appReturnUrl(`/app/invoices?payment=success&invoice=${invoice.id}`),

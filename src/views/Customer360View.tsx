@@ -1129,10 +1129,10 @@ const Customer360View: React.FC = () => {
           <div className="space-y-4">
             <div>
               <Label>Zgjedh Shërbim nga lista</Label>
-              <Select value={selectedServiceId || ''} onValueChange={(v) => setSelectedServiceId(v || null)}>
+              <Select value={selectedServiceId || '__none__'} onValueChange={(v) => setSelectedServiceId(v === '__none__' ? null : v)}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">(Asnjë)</SelectItem>
+                  <SelectItem value="__none__">(Asnjë)</SelectItem>
                   {services?.map(s => (
                     <SelectItem key={s.id} value={s.id}>{s.title || s.name || s.id}</SelectItem>
                   ))}

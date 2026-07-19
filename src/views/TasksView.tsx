@@ -694,7 +694,9 @@ const TasksView: React.FC = () => {
             const outcome = await completeTask(task, {
               createTask: (data) => taskMutation.create(data as any),
               updateTask: (id, data) => taskMutation.update(id, data),
-              allTasks: tasks,
+              // Blocker guard must see the full workspace (all statuses + subtasks),
+              // not the status/assignee/search-filtered display list `tasks`.
+              allTasks,
             });
             if (outcome.kind === 'blocked') {
               toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
@@ -857,7 +859,8 @@ const TasksView: React.FC = () => {
               const outcome = await completeTask(task, {
                 createTask: (data) => taskMutation.create(data as any),
                 updateTask: (id, data) => taskMutation.update(id, data),
-                allTasks: tasks,
+                // Blocker guard must see the full workspace, not the filtered list.
+                allTasks,
               });
               if (outcome.kind === 'blocked') {
                 toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });

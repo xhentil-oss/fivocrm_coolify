@@ -8,6 +8,7 @@ import { Badge } from '../../components/ui/badge';
 import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2, Sparkles, Calculator, ArrowRight } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useToast } from '../../hooks/use-toast';
+import { toAll } from '../../lib/utils';
 import type { Invoice, InvoiceItem, Service, ClientRequest, Project, Task, Quote, Lead, ServiceInquiry } from '../../types';
 
 const QUOTES = [
@@ -114,9 +115,11 @@ const PortalDashboard: React.FC = () => {
   // Calculate stats
   const totalInvoices = invoices?.length || 0;
   const pendingInvoices = invoices?.filter(i => i.status === 'Pending' || i.status === 'Overdue').length || 0;
+  // Normalize each invoice to ALL before summing (invoices may be EUR or ALL) so the
+  // fixed "ALL" label on the total is truthful.
   const totalOwed = invoices
     ?.filter(i => i.status === 'Pending' || i.status === 'Overdue')
-    .reduce((sum, i) => sum + (i.total ?? i.amount ?? 0), 0) || 0;
+    .reduce((sum, i) => sum + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0) || 0;
 
   // Get unique services purchased via invoice items
   const myServiceIds = new Set(
@@ -222,7 +225,7 @@ const PortalDashboard: React.FC = () => {
     }) || [];
   }, [invoices]);
 
-  const totalPaid = paidInvoices.reduce((s, i) => s + (i.total ?? i.amount ?? 0), 0);
+  const totalPaid = paidInvoices.reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
 
   const recentInvoices = invoices?.slice(0, 5) || [];
   const recentRequests = requests?.slice(0, 5) || [];
@@ -453,7 +456,7 @@ const PortalDashboard: React.FC = () => {
                       {inv.paymentMethod ? ` • ${inv.paymentMethod}` : ''}
                     </p>
                   </div>
-                  <span className="font-semibold text-green-600">{(inv.total || inv.amount || 0).toLocaleString()} ALL</span>
+                  <span className="font-semibold text-green-600">{toAll(inv.total || inv.amount || 0, (inv as any).currency).toLocaleString()} ALL</span>
                 </div>
               ))}
             </div>

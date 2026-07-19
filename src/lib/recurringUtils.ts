@@ -24,7 +24,9 @@ export function addFrequency(
     d.setDate(d.getDate() + 7 * step);
     if (dayOfWeek != null) {
       const diff = dayOfWeek - d.getDay();
-      if (diff !== 0) d.setDate(d.getDate() + diff);
+      // Only ever snap forward — a negative diff would pull the date backwards,
+      // producing an interval shorter than 7 days. `(diff + 7) % 7` keeps it future.
+      if (diff !== 0) d.setDate(d.getDate() + ((diff + 7) % 7));
     }
   } else if (frequency === 'monthly') {
     d.setMonth(d.getMonth() + step);
@@ -87,6 +89,9 @@ export function buildNextRecurringTask(task: Task): Omit<Task, 'id' | 'createdAt
     customerId: (task as any).customerId ?? undefined,
     projectId: task.projectId ?? undefined,
     assignedToUserId: task.assignedToUserId ?? undefined,
+    // Carry board organisation forward so the next cycle keeps its labels & column.
+    labels: (task as any).labels ?? undefined,
+    section: (task as any).section ?? undefined,
     startDate: newStart,
     endDate: newEnd,
     parentTaskId: task.parentTaskId ?? undefined,

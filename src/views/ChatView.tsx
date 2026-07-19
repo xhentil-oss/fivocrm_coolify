@@ -1387,7 +1387,7 @@ const ChatView: React.FC = () => {
   const activeTypingUsers = useMemo(() => {
     if (!typingIndicators || !user) return [];
     const now = Date.now();
-    const channelOrDm = chatMode === 'channel' ? activeChannel : `dm-${activeDirectUserId}`;
+    const channelOrDm = chatMode === 'channel' ? activeChannel : `dm-${[user.uid, activeDirectUserId].sort().join('-')}`;
     return typingIndicators.filter((t: any) =>
       t.channelId === channelOrDm && t.userId !== user.uid && t.timestamp &&
       (now - getTimestampMs(t.timestamp)) < 5000
@@ -1397,7 +1397,7 @@ const ChatView: React.FC = () => {
 
   const handleTyping = useCallback(() => {
     if (!user) return;
-    const channelOrDm = chatMode === 'channel' ? activeChannel : `dm-${activeDirectUserId}`;
+    const channelOrDm = chatMode === 'channel' ? activeChannel : `dm-${[user.uid, activeDirectUserId].sort().join('-')}`;
     if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
     // Debounce: only write to Firestore at most once per second
     const now = Date.now();
@@ -1635,6 +1635,12 @@ const ChatView: React.FC = () => {
 
   const isImageUrl = useCallback((url: string) =>
     /\.(jpg|jpeg|png|gif|webp|svg|bmp)(\?.*)?$/i.test(url), []);
+
+  // Only allow https:// attachment links to be rendered as clickable anchors.
+  // A message written directly to Firestore could carry a `javascript:` (or
+  // other) URI that would execute on click — reject anything non-https here.
+  const safeAttachmentHref = useCallback((url?: string | null): string | undefined =>
+    (url && /^https:\/\//i.test(url.trim())) ? url : undefined, []);
 
   // Audio attachment detection — used for voice-notes rendering
   const isAudioUrl = useCallback((url: string) =>
@@ -2088,7 +2094,7 @@ const ChatView: React.FC = () => {
       setReplyingTo(null);
       // Reset textarea height
       if (chatTextareaRef.current) chatTextareaRef.current.style.height = 'auto';
-      const channelOrDm = chatMode === 'channel' ? activeChannel : `dm-${activeDirectUserId}`;
+      const channelOrDm = chatMode === 'channel' ? activeChannel : `dm-${[user.uid, activeDirectUserId].sort().join('-')}`;
       const ex = typingIndicators?.find((t: any) => t.userId === user.uid && t.channelId === channelOrDm);
       if (ex) typingMutation.remove(ex.id).catch(() => {});
     } catch (err) {
@@ -3568,7 +3574,7 @@ const ChatView: React.FC = () => {
 
                                 {/* Inline image preview */}
                                 {message.attachmentUrl && hasImage && (
-                                  <a href={message.attachmentUrl} target="_blank" rel="noopener noreferrer" className={`block ${isPlaceholderContent ? '' : 'mt-2'}`}>
+                                  <a href={safeAttachmentHref(message.attachmentUrl)} target="_blank" rel="noopener noreferrer" className={`block ${isPlaceholderContent ? '' : 'mt-2'}`}>
                                     <img
                                       src={message.attachmentUrl}
                                       alt="attachment"
@@ -3584,7 +3590,7 @@ const ChatView: React.FC = () => {
                                 )}
                                 {/* Non-image / non-audio attachment */}
                                 {message.attachmentUrl && !hasImage && !hasAudio && (
-                                  <a href={message.attachmentUrl} target="_blank" rel="noopener noreferrer"
+                                  <a href={safeAttachmentHref(message.attachmentUrl)} target="_blank" rel="noopener noreferrer"
                                     className={`inline-flex items-center gap-1.5 text-xs mt-2 px-2.5 py-1 rounded-lg transition-colors ${
                                       isOwn ? 'bg-primary-foreground/15 hover:bg-primary-foreground/25' : 'bg-background hover:bg-accent text-primary'
                                     }`}>

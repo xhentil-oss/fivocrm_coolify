@@ -121,6 +121,34 @@ const JoinInviteView: React.FC = () => {
 
     setAccepting(true);
     try {
+      // Preferred path: server-side acceptance (Admin SDK) — validates token + email
+      // and creates the membership with a deterministic id, so the `teamMembers` create
+      // rule can be locked to the team owner only (no client self-insert into a victim
+      // tenant). Falls back to the legacy client flow if the endpoint is unavailable,
+      // so this is safe to ship before the hardened rules are deployed.
+      try {
+        const idToken = await user.getIdToken();
+        const resp = await fetch('/api/accept-invite', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+          body: JSON.stringify({ token }),
+        });
+        if (resp.ok) {
+          setSuccess(true);
+          setAccepting(false);
+          return;
+        }
+        // 4xx from the endpoint = a real, authoritative rejection (expired / wrong
+        // email / already accepted). Surface it and stop — do NOT fall back.
+        if (resp.status >= 400 && resp.status < 500) {
+          const data = await resp.json().catch(() => ({} as any));
+          setError(data?.error || 'Ftesa nuk mund të pranohet.');
+          setAccepting(false);
+          return;
+        }
+        // 5xx / network → fall through to the legacy client path below.
+      } catch { /* endpoint unreachable — fall through to legacy client path */ }
+
       // Resolve the team's businessId (the tenant isolation key) so we can stamp it
       // on the member AND on users/{uid} immediately — server-side RLS (isBusinessMember)
       // reads users/{uid}.businessId, so without this a new member can't read chat/CRM

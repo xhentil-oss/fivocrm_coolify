@@ -37,7 +37,7 @@ const PortalInquiryView: React.FC = () => {
   const { inquiryId } = useParams<{ inquiryId: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { customerId } = useClientPortal();
+  const { customerId, businessId } = useClientPortal();
   const { tenantBusinessId } = usePortalTenant();
   const { toast } = useToast();
 
@@ -76,7 +76,8 @@ const PortalInquiryView: React.FC = () => {
       serviceInquiryId: id,
       ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
       // Business-scoped CRM reads filter on businessId; without it the lead is invisible in /app/crm.
-      ...(tenantBusinessId ? { businessId: tenantBusinessId } : resolvedTeamId ? { businessId: resolvedTeamId } : {}),
+      // Use the REAL businessId from useClientPortal (never the teamId — that failed isBusinessMember).
+      ...(businessId ? { businessId } : {}),
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
       createdByUserId: user?.uid || null,
@@ -102,7 +103,7 @@ const PortalInquiryView: React.FC = () => {
       dueDate: tomorrow,
       assignedToUserId: salesAdminMembers?.[0]?.userId || '',
       ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
-      ...(tenantBusinessId ? { businessId: tenantBusinessId } : resolvedTeamId ? { businessId: resolvedTeamId } : {}),
+      ...(businessId ? { businessId } : {}),
       createdAt: Timestamp.now(),
       updatedAt: Timestamp.now(),
       createdByUserId: user?.uid || null,

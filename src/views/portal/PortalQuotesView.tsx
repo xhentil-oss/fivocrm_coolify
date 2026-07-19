@@ -34,7 +34,7 @@ const PortalQuotesView: React.FC = () => {
 
   // Leads linked to this customer — server-side scoped to customerId (server RLS
   // only authorizes leads stamped with the client's own customerId).
-  const { data: leads } = useCollection<Lead>('leads', {
+  const { data: leads, loading: leadsLoading } = useCollection<Lead>('leads', {
     skip: !customerId,
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
@@ -53,12 +53,14 @@ const PortalQuotesView: React.FC = () => {
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });
-  const { data: quotesByLead } = useCollection<Quote>('quotes', {
+  const { data: quotesByLead, loading: loadingByLead } = useCollection<Quote>('quotes', {
     skip: leadIdList.length === 0,
     where: [{ field: 'leadId', operator: 'in', value: leadIdList }],
     skipTeamFilter: true,
   });
-  const loading = loadingByCustomer;
+  // Wait for the lead-based path too, otherwise the empty state flashes before the
+  // leads (and their quotes) have loaded.
+  const loading = loadingByCustomer || leadsLoading || loadingByLead;
 
   const myQuotes = React.useMemo(() => {
     const merged = [...(quotesByCustomer || []), ...(quotesByLead || [])];
@@ -229,11 +231,9 @@ const PortalQuotesView: React.FC = () => {
                                       <CheckCircle2 className="w-3.5 h-3.5 text-green-500 mt-0.5 shrink-0" />
                                       <span className="text-foreground">{item.name || item.label || item.title || JSON.stringify(item)}</span>
                                     </div>
-                                    {(item.oneTime || item.monthly) && (
+                                    {item.amount > 0 && (
                                       <span className="text-muted-foreground tabular-nums shrink-0 text-xs">
-                                        {item.oneTime > 0 && `${(item.oneTime).toLocaleString()} ${cur}`}
-                                        {item.oneTime > 0 && item.monthly > 0 && ' + '}
-                                        {item.monthly > 0 && `${(item.monthly).toLocaleString()} ${cur}/muaj`}
+                                        {item.amount.toLocaleString()} {cur}{item.type === 'monthly' ? '/muaj' : ''}
                                       </span>
                                     )}
                                   </li>
@@ -282,7 +282,7 @@ const PortalQuotesView: React.FC = () => {
                   <div className="px-6 py-4 border-t bg-muted/10 flex flex-col sm:flex-row gap-3">
                     <Button
                       className="flex-1 bg-green-600 hover:bg-green-700 text-white gap-2"
-                      disabled={!!respondingId}
+                      disabled={respondingId === q.id + 'Accepted' || respondingId === q.id + 'Rejected'}
                       onClick={() => handleRespond('Accepted')}
                     >
                       <CheckCircle2 className="w-4 h-4" />
@@ -291,7 +291,7 @@ const PortalQuotesView: React.FC = () => {
                     <Button
                       className="flex-1 gap-2"
                       variant="outline"
-                      disabled={!!respondingId}
+                      disabled={respondingId === q.id + 'Accepted' || respondingId === q.id + 'Rejected'}
                       onClick={() => handleRespond('Rejected')}
                     >
                       <XCircle className="w-4 h-4 text-red-500" />

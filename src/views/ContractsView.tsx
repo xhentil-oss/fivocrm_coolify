@@ -187,7 +187,10 @@ const ContractsView: React.FC = () => {
     const parties = buildParties(formCustomerId);
     setFormTitle(`Kontratë — ${label} — ${parties.clientName}`);
     const pkgBlock = `<hr><h2>PAKETA E ZGJEDHUR: ${label}</h2><ul>${pkgLines}</ul><p><strong>Total One-time:</strong> ${(q.result?.totalOneTime ?? 0).toLocaleString()} ${cur}</p><p><strong>Total Mujor:</strong> ${(q.result?.totalMonthly ?? 0).toLocaleString()} ${cur}/muaj</p>${q.result?.grandTotal ? `<p><strong>Grand Total:</strong> ${q.result.grandTotal.toLocaleString()} ${cur}</p>` : ''}`;
-    const base = CONTRACT_TEMPLATES[0].getHTML(parties);
+    // Append the package block to whatever is already in the editor (the user's
+    // chosen template + edits). Only fall back to the default template when the
+    // editor is still empty — never wipe existing content.
+    const base = formBody?.trim() ? formBody : CONTRACT_TEMPLATES[0].getHTML(parties);
     const html = base + pkgBlock;
     setFormBody(html);
     setTimeout(() => editorRef.current?.setContent(html), 0);

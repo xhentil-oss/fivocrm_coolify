@@ -257,7 +257,7 @@ const PortalServicesView: React.FC = () => {
                       <div className="flex items-end justify-between mb-4 gap-2">
                         <div>
                           <div className="flex items-baseline gap-1">
-                            <span className="text-2xl font-bold font-mono tracking-tight">{service.price.toLocaleString()}</span>
+                            <span className="text-2xl font-bold font-mono tracking-tight">{(service.price ?? 0).toLocaleString()}</span>
                             <span className="text-sm font-semibold text-muted-foreground">{service.currency || 'ALL'}</span>
                           </div>
                           {period && <div className="text-xs text-muted-foreground mt-0.5">{period}</div>}
