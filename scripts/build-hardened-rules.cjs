@@ -37,27 +37,43 @@ function replaceOnce(haystack, needle, replacement, label) {
 const HELPERS_ANCHOR = '    // ── Team-Scoped Collections ──';
 const HELPERS = `    // ── Tenant-key validation (hardened cutover) ──
     // The tenant boundary must NOT trust a client-written users/{uid}.businessId.
-    // These validate that the tenant keys a user writes to their own doc correspond to
-    // a REAL membership (deterministically keyed {teamId}_{uid}) or, for portal clients,
-    // to a customer whose email matches their verified token email.
+    // A user may set the tenant keys on their OWN users doc ONLY when they are backed by
+    // a real membership (staff) or a customer they own (portal); businessId is validated
+    // as a side-effect of whichever key is present, and can never be set on its own.
     function membershipRef(teamId, uid) {
       return /databases/$(database)/documents/teamMembers/$(teamId + '_' + uid);
     }
-    function usersTeamKeyOk(userId) {
-      // Changing team/business requires BOTH keys present and matching a real membership.
-      return (!('teamId' in request.resource.data) && !('businessId' in request.resource.data))
-        || (request.resource.data.teamId is string
-            && exists(membershipRef(request.resource.data.teamId, userId))
-            && get(membershipRef(request.resource.data.teamId, userId)).data.businessId
-                 == request.resource.data.businessId);
+    function usersCustomerRef(cid) {
+      return /databases/$(database)/documents/customers/$(cid);
     }
-    function usersCustomerKeyOk(userId) {
+    // Each tenant key present on the write is validated INDEPENDENTLY, so neither a
+    // staff user nor a portal client can inject a key that isn't theirs (e.g. staff
+    // planting a customerId to read a victim's portal data).
+    function usersTenantOk(userId) {
+      return usersTeamFieldOk(userId) && usersCustomerFieldOk(userId) && usersBusinessFieldOk(userId);
+    }
+    function usersTeamFieldOk(userId) {
+      return !('teamId' in request.resource.data)
+        || (request.resource.data.teamId is string
+            && exists(membershipRef(request.resource.data.teamId, userId)));
+    }
+    function usersCustomerFieldOk(userId) {
       return !('customerId' in request.resource.data)
         || (request.resource.data.customerId is string
-            && exists(/databases/$(database)/documents/customers/$(request.resource.data.customerId))
             && request.auth.token.email != null
-            && get(/databases/$(database)/documents/customers/$(request.resource.data.customerId)).data.email
+            && exists(usersCustomerRef(request.resource.data.customerId))
+            && get(usersCustomerRef(request.resource.data.customerId)).data.email
                  == request.auth.token.email.lower());
+    }
+    function usersBusinessFieldOk(userId) {
+      // businessId must match the business of a present, already-validated teamId or customerId.
+      return !('businessId' in request.resource.data)
+        || (('teamId' in request.resource.data)
+            && get(membershipRef(request.resource.data.teamId, userId)).data.businessId
+                 == request.resource.data.businessId)
+        || (('customerId' in request.resource.data)
+            && get(usersCustomerRef(request.resource.data.customerId)).data.businessId
+                 == request.resource.data.businessId);
     }
 
 ${HELPERS_ANCHOR}`;
@@ -87,7 +103,7 @@ const USERS_REPLACEMENT = `    match /users/{userId} {
       // own customer. Super-admins (claim) bypass. This is what stops an attacker from
       // self-attesting into a victim tenant via users/{uid}.businessId.
       allow create, update: if request.auth.uid == userId
-        && (isSuperAdmin() || (usersTeamKeyOk(userId) && usersCustomerKeyOk(userId)));
+        && (usersTenantOk(userId) || isSuperAdmin());
     }`;
 rules = replaceOnce(rules, USERS_ANCHOR, USERS_REPLACEMENT, 'users rule');
 
