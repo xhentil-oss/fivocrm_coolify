@@ -32,7 +32,7 @@ let testEnv;
 before(async () => {
   testEnv = await initializeTestEnvironment({
     projectId: PROJECT_ID,
-    firestore: { rules: readFileSync('firestore.rules.hardened', 'utf8') },
+    firestore: { rules: readFileSync('firestore.rules', 'utf8') },
   });
 
   // Seed with rules disabled.
@@ -48,6 +48,14 @@ before(async () => {
     });
     // A victim team so we can test forging a membership into it.
     await setDoc(doc(db, 'teams', VICTIM_TEAM), { businessId: VICTIM_BIZ, createdByUserId: 'victimOwner' });
+
+    // users/{uid} tenant markers (chat rules resolve membership/portal via these).
+    await setDoc(doc(db, 'users', 'alice'), { teamId: MY_TEAM, businessId: MY_BIZ });
+    await setDoc(doc(db, 'users', 'carol'), { customerId: 'cust1' });
+    // An existing channel message in bizMine (sent by someone else) for update tests.
+    await setDoc(doc(db, 'messages', 'msg1'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, channelId: 'general-mine', senderId: 'zoe', content: 'hi',
+    });
   });
 });
 
@@ -116,4 +124,50 @@ test('7. only team owner creates memberships client-side', async () => {
   await assertFails(setDoc(doc(stranger, 'teamMembers', `${OWNED}_stranger`), {
     userId: 'stranger', teamId: OWNED, businessId: 'bizOwned', role: 'Admin', status: 'Active',
   }));
+});
+
+// ── Chat message rules (hardening pass) ──
+
+// 8. Staff posts into their own team's channel → ALLOWED; a stranger can't stamp that team.
+test('8a. staff posts in own team channel', async () => {
+  const alice = testEnv.authenticatedContext('alice', { email: 'alice@mine.com' }).firestore();
+  await assertSucceeds(setDoc(doc(alice, 'messages', 'm-a1'), {
+    teamId: MY_TEAM, businessId: MY_BIZ, channelId: 'general-mine', senderId: 'alice', content: 'hi',
+  }));
+});
+test('8b. stranger cannot post stamped with a team they are not in', async () => {
+  const mallory = testEnv.authenticatedContext('mallory', { email: 'm@evil.com' }).firestore();
+  await assertFails(setDoc(doc(mallory, 'messages', 'm-m1'), {
+    teamId: VICTIM_TEAM, businessId: VICTIM_BIZ, channelId: 'general-victim', senderId: 'mallory', content: 'x',
+  }));
+});
+
+// 9. Portal client posts into their OWN client channel → ALLOWED; into another's → DENIED.
+test('9a. portal client posts in own client channel', async () => {
+  const carol = testEnv.authenticatedContext('carol', { email: 'carol@client.com' }).firestore();
+  await assertSucceeds(setDoc(doc(carol, 'messages', 'm-c1'), {
+    senderType: 'client', channelId: 'client-cust1', senderId: 'carol', content: 'hello',
+  }));
+});
+test('9b. portal client cannot post in another customer channel', async () => {
+  const carol = testEnv.authenticatedContext('carol', { email: 'carol@client.com' }).firestore();
+  await assertFails(setDoc(doc(carol, 'messages', 'm-c2'), {
+    senderType: 'client', channelId: 'client-someoneElse', senderId: 'carol', content: 'sneaky',
+  }));
+});
+
+// 10. Reactions/read (field-whitelist update): a business member may; an outsider may not.
+test('10a. business member can react to a message in their tenant', async () => {
+  const alice = testEnv.authenticatedContext('alice', { email: 'alice@mine.com' }).firestore();
+  await assertSucceeds(setDoc(doc(alice, 'messages', 'msg1'), { reactions: { '👍': ['alice'] } }, { merge: true }));
+});
+test('10b. outsider cannot react to a message in another tenant', async () => {
+  const mallory = testEnv.authenticatedContext('mallory', { email: 'm@evil.com' }).firestore();
+  await assertFails(setDoc(doc(mallory, 'messages', 'msg1'), { reactions: { '💀': ['mallory'] } }, { merge: true }));
+});
+
+// 11. The dead directMessages collection is fully locked.
+test('11. directMessages is denied for everyone', async () => {
+  const alice = testEnv.authenticatedContext('alice', { email: 'alice@mine.com' }).firestore();
+  await assertFails(setDoc(doc(alice, 'directMessages', 'dm1'), { teamId: MY_TEAM, x: 1 }));
 });

@@ -348,17 +348,36 @@ service cloud.firestore {
         || resource.data.receiverId == request.auth.uid
         || canAccessClientChannel(resource.data.channelId)
         || isSuperAdmin();
-      // Staff create with teamId; portal clients create with senderType == 'client' (no teamId required)
+      // HARDENED create: a portal client may only post into their OWN client channel;
+      // staff may post into a channel of a team/business they belong to (or a client
+      // channel they can reach). Was `teamId is string || senderType=='client'`, which
+      // let a client post into any customer's thread and let anyone stamp a teamId.
       allow create: if isAuth() && (
-        request.resource.data.teamId is string ||
-        request.resource.data.senderType == 'client'
+        (request.resource.data.senderType == 'client'
+          && canAccessClientChannel(request.resource.data.channelId))
+        || (request.resource.data.teamId is string && (
+              isTeamMember(request.resource.data.teamId)
+              || isBusinessMember(request.resource.data.businessId)
+              || canAccessClientChannel(request.resource.data.channelId)
+              || isSuperAdmin()
+           ))
       );
-      // Sender can update/delete own messages; any authenticated user can mark as read,
-      // toggle reactions, or pin messages (collaborative actions).
+      // Sender edits/deletes their own messages. Collaborative actions (read/reactions/
+      // pin) are allowed ONLY to someone who can already access the message — the same
+      // tenant/participant/channel test as `read`. Was unconditional, letting any signed-in
+      // user mutate any message cross-tenant by doc id.
       allow update: if isAuth() && (
         resource.data.senderId == request.auth.uid ||
-        request.resource.data.diff(resource.data).affectedKeys()
-          .hasOnly(['isRead', 'readAt', 'readBy', 'updatedAt', 'reactions', 'isPinned', 'pinnedAt', 'pinnedBy'])
+        (
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['isRead', 'readAt', 'readBy', 'updatedAt', 'reactions', 'isPinned', 'pinnedAt', 'pinnedBy'])
+          && (
+            isBusinessMember(resource.data.businessId)
+            || resource.data.receiverId == request.auth.uid
+            || canAccessClientChannel(resource.data.channelId)
+            || isSuperAdmin()
+          )
+        )
       );
       allow delete: if isAuth() && resource.data.senderId == request.auth.uid;
     }
@@ -609,10 +628,10 @@ service cloud.firestore {
       allow update, delete: if isAuth() && resource.data.senderId == request.auth.uid;
     }
 
+    // directMessages: unused collection (DMs live in `messages`). Locked to deny —
+    // it was an open, dead attack surface (read/update/delete: if isAuth()).
     match /directMessages/{docId} {
-      allow read: if isAuth();
-      allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      allow read, write: if false;
     }
 
     match /milestones/{docId} {
