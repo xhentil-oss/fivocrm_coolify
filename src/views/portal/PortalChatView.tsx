@@ -46,6 +46,19 @@ const PortalChatView: React.FC = () => {
   const getScroller = (): HTMLElement | null =>
     scrollRef.current?.closest<HTMLElement>('[data-radix-scroll-area-viewport]') ?? null;
 
+  // Tap a reply-quote → scroll to + briefly highlight the original message.
+  const jumpToMessage = (id?: string | null) => {
+    if (!id) return;
+    const el = document.getElementById(`msg-${id}`);
+    if (!el) {
+      toast({ description: 'Mesazhi origjinal nuk është ngarkuar. Shfaq mesazhet më të vjetra.' });
+      return;
+    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('ring-2', 'ring-primary');
+    setTimeout(() => el.classList.remove('ring-2', 'ring-primary'), 1600);
+  };
+
   // Fetch projects assigned to this customer
   const { data: customerProjects } = useCollection<Project>('projects', {
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
@@ -559,7 +572,8 @@ const PortalChatView: React.FC = () => {
                         </div>
                       )}
                       <div
-                        className={`flex group ${own ? 'justify-end' : 'justify-start'} ${sameSenderAsPrev ? 'mt-0.5' : 'mt-3'}`}
+                        id={`msg-${msg.id}`}
+                        className={`flex group ${own ? 'justify-end' : 'justify-start'} ${sameSenderAsPrev ? 'mt-0.5' : 'mt-3'} rounded-2xl transition-shadow`}
                       >
                         {/* Team Avatar */}
                         {!own && (
@@ -585,12 +599,17 @@ const PortalChatView: React.FC = () => {
                             </span>
                           )}
 
-                          {/* Reply preview */}
+                          {/* Reply preview — tap to jump to the original message */}
                           {msg.replyToContent && (
-                            <div className="text-[11px] mb-1 p-1.5 rounded border-l-2 bg-muted/40 border-primary/40 max-w-full">
+                            <button
+                              type="button"
+                              onClick={() => jumpToMessage((msg as any).replyToId)}
+                              title="Shko te mesazhi origjinal"
+                              className="text-[11px] mb-1 p-1.5 rounded border-l-2 bg-muted/40 border-primary/40 max-w-full block w-full text-left hover:bg-muted transition-colors cursor-pointer"
+                            >
                               <span className="font-medium">{msg.replyToSender}</span>
                               <p className="truncate opacity-80">{msg.replyToContent}</p>
-                            </div>
+                            </button>
                           )}
 
                           <div

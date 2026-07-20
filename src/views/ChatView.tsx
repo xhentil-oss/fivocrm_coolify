@@ -1648,6 +1648,21 @@ const ChatView: React.FC = () => {
     return /^(javascript|data|vbscript|file):/i.test(u) ? undefined : u;
   }, []);
 
+  // Scroll to + briefly highlight a message by id. Used by the reply-quote preview
+  // (tap a quoted message → jump to the original) and reusable elsewhere. The original
+  // lives in the same channel; if it isn't currently loaded in the DOM, tell the user.
+  const jumpToMessage = useCallback((id?: string | null) => {
+    if (!id) return;
+    const el = document.getElementById(`msg-${id}`);
+    if (!el) {
+      toast({ description: 'Mesazhi origjinal nuk është ngarkuar. Shfaq mesazhet më të vjetra dhe provo sërish.' });
+      return;
+    }
+    el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    el.classList.add('ring-2', 'ring-primary');
+    setTimeout(() => el.classList.remove('ring-2', 'ring-primary'), 1600);
+  }, [toast]);
+
   // Audio attachment detection — used for voice-notes rendering
   const isAudioUrl = useCallback((url: string) =>
     /\.(webm|ogg|mp3|m4a|wav)(\?.*)?$/i.test(url) || /audio%2F/i.test(url), []);
@@ -3513,14 +3528,19 @@ const ChatView: React.FC = () => {
                                 </div>
                               )}
 
-                              {/* Reply preview */}
+                              {/* Reply preview — tap to jump to the original message */}
                               {(message as any).replyToContent && (
-                                <div className={`text-[11px] px-3 py-1.5 mb-1 rounded-xl max-w-full border-l-2 ${
-                                  isOwn ? 'bg-white/15 border-white/50' : 'bg-muted/50 border-primary/30'
-                                }`}>
+                                <button
+                                  type="button"
+                                  onClick={() => jumpToMessage((message as any).replyToId)}
+                                  title="Shko te mesazhi origjinal"
+                                  className={`text-[11px] px-3 py-1.5 mb-1 rounded-xl max-w-full border-l-2 block w-full text-left transition-colors cursor-pointer ${
+                                    isOwn ? 'bg-white/15 border-white/50 hover:bg-white/25' : 'bg-muted/50 border-primary/30 hover:bg-muted'
+                                  }`}
+                                >
                                   <span className={`font-semibold text-[10px] ${isOwn ? 'text-white' : 'text-primary'}`}>{(message as any).replyToSender}</span>
                                   <p className="truncate opacity-70 mt-0.5">{(message as any).replyToContent}</p>
-                                </div>
+                                </button>
                               )}
 
                               {/* Bubble — long-press (mobile) opens the action sheet; on
