@@ -65,6 +65,18 @@ const CHANNELS: { id: string; name: string; icon: typeof Hash; description: stri
 
 const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '💯', '✅', '🙏', '😎', '🤔'];
 
+// Composer emoji grid — the quick reactions plus a modest extended set so the
+// "Emoji" button in the message composer can insert emojis into the text.
+const COMPOSER_EMOJIS = [
+  ...EMOJI_REACTIONS,
+  '😀', '😅', '😊', '😍', '😘', '😜', '🤗', '🙄', '😴', '😇',
+  '👏', '🙌', '🤝', '👌', '✌️', '🤞', '💪', '🫶', '👀', '🧠',
+  '🚀', '⭐', '🌟', '⚡', '💡', '📈', '💰', '🎯', '📌', '☕',
+];
+
+// Simple Albanian pluralization helper: singular when n === 1, else plural.
+const plural = (n: number, one: string, many: string) => (n === 1 ? one : many);
+
 const ACTIVE_MEMBERS_QUERY = {
   where: [{ field: 'status', operator: '==', value: 'Active' }],
   // Cross-team DM: list all active members across every team so people can
@@ -216,6 +228,7 @@ const ChatView: React.FC = () => {
   const markedNotifReadRef = useRef<Set<string>>(new Set());
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const chatTextareaRef = useRef<HTMLTextAreaElement>(null);
+  const composerEmojiRef = useRef<HTMLDivElement>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const prevSeenMsgIdsRef = useRef<Set<string>>(new Set());
   const isInitialMsgLoadRef = useRef(true);
@@ -1451,11 +1464,23 @@ const ChatView: React.FC = () => {
     if (seededConvKeyRef.current === convKey) return; // already seeded this conversation
     if (filteredMessages.length === 0) return;         // wait for the first load
     seededConvKeyRef.current = convKey;
-    sessionUnreadIdsRef.current = new Set(
-      filteredMessages
-        .filter(m => m.senderId !== user.uid && !m.isRead && !(m as any).deletedAt)
-        .map(m => m.id)
-    );
+    const unreadIds = filteredMessages
+      .filter(m => m.senderId !== user.uid && !m.isRead && !(m as any).deletedAt)
+      .map(m => m.id);
+    sessionUnreadIdsRef.current = new Set(unreadIds);
+    // Jump to the first unread message on open (mirrors the pin/reply jump: scroll
+    // + brief highlight). Runs after the conversation-switch scroll-to-bottom so it
+    // wins, but only when there ARE unreads — otherwise we leave the bottom view be.
+    if (unreadIds.length > 0) {
+      const firstId = unreadIds[0];
+      setTimeout(() => {
+        const el = document.getElementById(`msg-${firstId}`);
+        if (!el) return;
+        el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        el.classList.add('ring-2', 'ring-primary');
+        setTimeout(() => el.classList.remove('ring-2', 'ring-primary'), 1600);
+      }, 350);
+    }
   }, [chatMode, activeChannel, activeDirectUserId, filteredMessages, user]);
 
   // IntersectionObserver — show jump-to-bottom when sentinel is out of view
@@ -1819,10 +1844,11 @@ const ChatView: React.FC = () => {
     if (!d) return 'Joaktiv';
     const diff = Date.now() - d.getTime();
     const min = Math.floor(diff / 60000);
-    if (min < 60) return `Parë ${min} min më parë`;
+    if (min < 60) return `Parë ${min} ${plural(min, 'minutë', 'minuta')} më parë`;
     const h = Math.floor(min / 60);
-    if (h < 24) return `Parë ${h}h më parë`;
-    return `Parë ${Math.floor(h / 24)} ditë më parë`;
+    if (h < 24) return `Parë ${h} ${plural(h, 'orë', 'orë')} më parë`;
+    const days = Math.floor(h / 24);
+    return `Parë ${days} ${plural(days, 'ditë', 'ditë')} më parë`;
   }, [isOnline, profileMap]);
 
   // Background DM notifications — fires when a DM arrives in any conversation
@@ -2598,6 +2624,48 @@ const ChatView: React.FC = () => {
     });
   }, [messageText, mentionAnchorIdx, mentionQuery, mentionKind]);
 
+  // Insert an emoji from the composer picker at the caret (falls back to append
+  // when the textarea ref isn't available). Closes the picker after inserting.
+  const insertEmoji = useCallback((emoji: string) => {
+    const ta = chatTextareaRef.current;
+    if (ta) {
+      const start = ta.selectionStart ?? messageText.length;
+      const end = ta.selectionEnd ?? messageText.length;
+      const newText = messageText.slice(0, start) + emoji + messageText.slice(end);
+      setMessageText(newText);
+      requestAnimationFrame(() => {
+        ta.focus();
+        const caret = start + emoji.length;
+        try { ta.setSelectionRange(caret, caret); } catch { /* noop */ }
+      });
+    } else {
+      setMessageText(prev => prev + emoji);
+    }
+    setShowEmojiPicker(null);
+  }, [messageText]);
+
+  // Close the composer emoji picker on Escape or an outside click.
+  useEffect(() => {
+    if (showEmojiPicker !== 'input') return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setShowEmojiPicker(null); };
+    const onDown = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      // Ignore clicks on the trigger itself — it manages its own toggle.
+      if (t?.closest?.('[data-emoji-trigger]')) return;
+      if (composerEmojiRef.current && !composerEmojiRef.current.contains(t)) {
+        setShowEmojiPicker(null);
+      }
+    };
+    document.addEventListener('keydown', onKey);
+    // Delay the outside-click listener a tick so the opening click doesn't close it.
+    const t = setTimeout(() => document.addEventListener('mousedown', onDown), 0);
+    return () => {
+      clearTimeout(t);
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('mousedown', onDown);
+    };
+  }, [showEmojiPicker]);
+
   // Slash commands registry
   const SLASH_COMMANDS = useMemo(() => ([
     { cmd: 'task', label: '/task', desc: 'Krijo një detyrë nga ky tekst' },
@@ -2699,9 +2767,18 @@ const ChatView: React.FC = () => {
             {totalUnread > 0 && (
               <Badge variant="destructive" className="h-5 min-w-5 text-[10px] px-1.5">{totalUnread}</Badge>
             )}
-            <Button variant="ghost" size="icon" className="h-7 w-7">
-              <Plus className="h-3.5 w-3.5" />
-            </Button>
+            {canCreateGroups && (
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-7 w-7"
+                aria-label="Krijo grup të ri"
+                title="Grup i ri"
+                onClick={() => { setNewGroupName(''); setNewGroupDesc(''); setNewGroupMembers([]); setShowCreateGroup(true); }}
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </Button>
+            )}
           </div>
         </div>
 
@@ -2715,7 +2792,7 @@ const ChatView: React.FC = () => {
             // Groups
             (myGroups || []).forEach(g => convs.push({
               key: 'g-' + g.id, type: 'group', name: g.name || 'Grup',
-              preview: `${(g.members || []).length} anëtarë`,
+              preview: `${(g.members || []).length} ${plural((g.members || []).length, 'anëtar', 'anëtarë')}`,
               time: (g as any).lastMessageAt ? getTimestampMs((g as any).lastMessageAt) : 0,
               unread: channelUnreadMap.get(g.id) || 0,
               initials: (g.name || 'G').slice(0, 2).toUpperCase(),
@@ -3140,7 +3217,7 @@ const ChatView: React.FC = () => {
                     <div className="min-w-0">
                       <p className="font-semibold text-sm truncate">{meta.name}</p>
                       <p className="text-[11px] text-muted-foreground truncate">
-                        {(meta.group?.members || []).length} anëtarë · prek për të menaxhuar
+                        {(meta.group?.members || []).length} {plural((meta.group?.members || []).length, 'anëtar', 'anëtarë')} · prek për të menaxhuar
                       </p>
                     </div>
                   </button>
@@ -3155,7 +3232,7 @@ const ChatView: React.FC = () => {
                     <div className={`h-9 w-9 rounded-xl ${getAvatarColor(activeDirectUserId)} flex items-center justify-center`}>
                       <span className="text-xs font-bold text-white">{getUserDisplayName(activeDirectUserId).slice(0, 2).toUpperCase()}</span>
                     </div>
-                    <div className="absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full bg-emerald-500 border-2 border-background" />
+                    <div className={`absolute -bottom-0.5 -right-0.5 h-2.5 w-2.5 rounded-full border-2 border-background ${isOnline(activeDirectUserId) ? 'bg-emerald-500' : 'bg-muted-foreground/40'}`} />
                   </div>
                   <div>
                     <p className="font-semibold text-sm">{getUserDisplayName(activeDirectUserId)}</p>
@@ -3171,29 +3248,29 @@ const ChatView: React.FC = () => {
 
           <div className="flex items-center gap-1">
             {chatMode === 'ai' && aiMessages.length > 0 && (
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={resetAiChat} title="Bisedë e re">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={resetAiChat} aria-label="Bisedë e re" title="Bisedë e re">
                 <RefreshCw className="h-4 w-4" />
               </Button>
             )}
             {(chatMode === 'channel' ? !!activeChannel : chatMode === 'direct' ? !!activeDirectUserId : false) && (
-              <Button variant="ghost" size="icon" className="h-8 w-8 text-emerald-600 hover:text-emerald-700" onClick={startVideoCall} disabled={videoStarting} title="Thirrje video">
+              <Button variant="ghost" size="icon" className="h-8 w-8 text-emerald-600 hover:text-emerald-700" onClick={startVideoCall} disabled={videoStarting} aria-label="Thirrje video" title="Thirrje video">
                 {videoStarting ? <Loader2 className="h-4 w-4 animate-spin" /> : <Video className="h-4 w-4" />}
               </Button>
             )}
             {chatMode !== 'ai' && (
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleSummarizeChat} disabled={summaryLoading} title="Përmblidh bisedën me AI">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={handleSummarizeChat} disabled={summaryLoading} aria-label="Përmblidh bisedën me AI" title="Përmblidh bisedën me AI">
                 {summaryLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
               </Button>
             )}
             {chatMode !== 'ai' && (
-              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setShowSearch(!showSearch); setSearchQuery(''); }} title="Kërko në bisedë">
+              <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => { setShowSearch(!showSearch); setSearchQuery(''); }} aria-label="Kërko në bisedë" title="Kërko në bisedë">
                 <Search className="h-4 w-4" />
               </Button>
             )}
             {chatMode !== 'ai' && (
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <Button variant="ghost" size="icon" className="h-8 w-8" title="Më shumë">
+                  <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="Më shumë veprime" title="Më shumë">
                     <MoreVertical className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>
@@ -3627,7 +3704,10 @@ const ChatView: React.FC = () => {
                                 {/* Time inside bubble — WhatsApp style */}
                                 {!isEditing && (
                                   <div className={`flex items-center gap-1 mt-1.5 ${isOwn ? 'justify-end' : 'justify-start'}`}>
-                                    <span className={`text-[10px] flex items-center gap-1 ${isOwn ? 'text-white/80' : 'text-muted-foreground/60'}`}>
+                                    <span
+                                      className={`text-[10px] flex items-center gap-1 ${isOwn ? 'text-white/80' : 'text-muted-foreground/60'}`}
+                                      title={new Date(message.createdAt).toLocaleString('sq-AL', { dateStyle: 'full', timeStyle: 'short' })}
+                                    >
                                       {new Date(message.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                                       {(message as any).editedAt && (
                                         <button
@@ -3670,6 +3750,7 @@ const ChatView: React.FC = () => {
                                   <div className={`absolute -top-9 ${isOwn ? 'right-1' : 'left-1'} hidden sm:flex opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-all items-center flex-nowrap whitespace-nowrap bg-background border rounded-xl shadow-lg px-1 py-0.5 z-20 gap-0.5`}>
                                     <div className="relative">
                                       <button className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors"
+                                        aria-label="Reago me emoji" title="Reago"
                                         onClick={() => setShowEmojiPicker(showEmojiPicker === message.id ? null : message.id)}>
                                         <SmilePlus className="h-3.5 w-3.5" />
                                       </button>
@@ -3681,12 +3762,14 @@ const ChatView: React.FC = () => {
                                         </div>
                                       )}
                                     </div>
-                                    <button className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors" onClick={() => setReplyingTo(message)}>
+                                    <button className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors" aria-label="Përgjigju" title="Përgjigju" onClick={() => setReplyingTo(message)}>
                                       <Reply className="h-3.5 w-3.5" />
                                     </button>
                                     <button
                                       className={`p-1 hover:bg-accent rounded-lg transition-colors ${bookmarkedMessageIds.has(message.id) ? 'text-amber-500' : 'text-muted-foreground hover:text-foreground'}`}
                                       onClick={() => handleToggleBookmark(message)}
+                                      aria-label={bookmarkedMessageIds.has(message.id) ? 'Hiq nga të ruajturat' : 'Ruaj për më vonë'}
+                                      aria-pressed={bookmarkedMessageIds.has(message.id)}
                                       title={bookmarkedMessageIds.has(message.id) ? 'Hiq nga të ruajturat' : 'Ruaj për më vonë'}
                                     >
                                       {bookmarkedMessageIds.has(message.id) ? <BookmarkCheck className="h-3.5 w-3.5" /> : <Bookmark className="h-3.5 w-3.5" />}
@@ -3694,6 +3777,7 @@ const ChatView: React.FC = () => {
                                     <button
                                       className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors"
                                       onClick={() => openTaskFromMessage(message)}
+                                      aria-label="Krijo detyrë nga ky mesazh"
                                       title="Krijo detyrë nga ky mesazh"
                                     >
                                       <ListChecks className="h-3.5 w-3.5" />
@@ -3702,6 +3786,7 @@ const ChatView: React.FC = () => {
                                       <button
                                         className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors"
                                         onClick={() => setReminderPickerFor(reminderPickerFor === message.id ? null : message.id)}
+                                        aria-label="Kujtomë për këtë mesazh"
                                         title="Kujtomë për këtë mesazh"
                                       >
                                         <BellRing className="h-3.5 w-3.5" />
@@ -3729,12 +3814,16 @@ const ChatView: React.FC = () => {
                                     <button
                                       className={`p-1 hover:bg-accent rounded-lg transition-colors ${isPinned ? 'text-amber-500' : 'text-muted-foreground hover:text-foreground'}`}
                                       onClick={() => handleTogglePin(message)}
+                                      aria-label={isPinned ? 'Hiq fiksimin' : 'Fikso mesazhin'}
+                                      aria-pressed={isPinned}
                                       title={isPinned ? 'Hiq fiksimin' : 'Fikso mesazhin'}
                                     >
                                       {isPinned ? <PinOff className="h-3.5 w-3.5" /> : <Pin className="h-3.5 w-3.5" />}
                                     </button>
                                     <button
                                       className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors"
+                                      aria-label="Kopjo mesazhin"
+                                      title="Kopjo"
                                       onClick={() => {
                                         navigator.clipboard.writeText(message.content).catch(() => {});
                                         setCopiedMsgId(message.id);
@@ -3749,16 +3838,17 @@ const ChatView: React.FC = () => {
                                       className={`p-1 hover:bg-accent rounded-lg transition-colors ${translations[message.id] ? 'text-primary' : 'text-muted-foreground hover:text-foreground'}`}
                                       onClick={() => handleTranslateMessage(message.id, message.content)}
                                       disabled={translatingId === message.id}
+                                      aria-label={translations[message.id] ? 'Fshih përkthimin' : 'Përkthe me AI'}
                                       title={translations[message.id] ? 'Fshih përkthimin' : 'Përkthe me AI'}
                                     >
                                       {translatingId === message.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Languages className="h-3.5 w-3.5" />}
                                     </button>
                                     {isOwn && (
                                       <>
-                                        <button className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors" onClick={() => { setEditingMessageId(message.id); setEditText(message.content); }}>
+                                        <button className="p-1 hover:bg-accent rounded-lg text-muted-foreground hover:text-foreground transition-colors" aria-label="Modifiko mesazhin" title="Modifiko" onClick={() => { setEditingMessageId(message.id); setEditText(message.content); }}>
                                           <Pencil className="h-3.5 w-3.5" />
                                         </button>
-                                        <button className="p-1 hover:bg-destructive/10 rounded-lg text-muted-foreground hover:text-destructive transition-colors" onClick={() => handleDeleteMessage(message.id)}>
+                                        <button className="p-1 hover:bg-destructive/10 rounded-lg text-muted-foreground hover:text-destructive transition-colors" aria-label="Fshij mesazhin" title="Fshij" onClick={() => handleDeleteMessage(message.id)}>
                                           <Trash2 className="h-3.5 w-3.5" />
                                         </button>
                                       </>
@@ -3786,12 +3876,12 @@ const ChatView: React.FC = () => {
                                 <div className="sm:hidden" role="dialog" aria-modal="true">
                                   {/* Backdrop — tap anywhere to dismiss */}
                                   <div
-                                    className="fixed inset-0 z-[60] bg-black/50 animate-in fade-in duration-150"
+                                    className="fixed inset-0 z-[60] bg-black/50 animate-in fade-in duration-150 motion-reduce:animate-none"
                                     onClick={() => setLongPressMenuId(null)}
                                   />
                                   {/* Slide-up sheet */}
                                   <div
-                                    className="fixed inset-x-0 bottom-0 z-[61] bg-popover border-t rounded-t-2xl shadow-2xl animate-in slide-in-from-bottom duration-200"
+                                    className="fixed inset-x-0 bottom-0 z-[61] bg-popover border-t rounded-t-2xl shadow-2xl animate-in slide-in-from-bottom duration-200 motion-reduce:animate-none"
                                     style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
                                   >
                                     {/* Grab handle */}
@@ -3863,6 +3953,8 @@ const ChatView: React.FC = () => {
                                           onClick={() => handleReaction(message.id, emoji)}
                                           onMouseEnter={() => setReactionPopover({ msgId: message.id, emoji })}
                                           onMouseLeave={() => setReactionPopover(p => p?.msgId === message.id && p?.emoji === emoji ? null : p)}
+                                          aria-label={`${emoji}, ${users.length} — ${names}`}
+                                          aria-pressed={users.includes(user?.uid || '')}
                                           title={names}
                                           className={`inline-flex items-center gap-0.5 px-2 py-0.5 rounded-full text-[11px] border transition-colors ${
                                             users.includes(user?.uid || '') ? 'bg-primary/10 border-primary/30 font-semibold' : 'bg-background border-border hover:border-primary/30'
@@ -3916,6 +4008,8 @@ const ChatView: React.FC = () => {
                   if (vp) vp.scrollTop = vp.scrollHeight;
                   setShowJumpToBottom(false);
                 }}
+                aria-label="Shko te mesazhi i fundit"
+                title="Shko poshtë"
                 className="absolute bottom-4 right-5 z-20 h-9 w-9 rounded-full bg-background border shadow-lg flex items-center justify-center hover:bg-accent transition-colors"
               >
                 {currentConvUnread > 0 && (
@@ -3932,9 +4026,9 @@ const ChatView: React.FC = () => {
             {activeTypingUsers.length > 0 && (
               <div className="px-3 sm:px-5 py-1.5 text-xs text-muted-foreground flex items-center gap-2 border-t bg-muted/10">
                 <span className="flex gap-0.5">
-                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:-0.3s]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce [animation-delay:-0.15s]" />
-                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/40 animate-bounce" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/70 animate-bounce motion-reduce:animate-none [animation-delay:-0.3s]" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/70 animate-bounce motion-reduce:animate-none [animation-delay:-0.15s]" />
+                  <span className="w-1.5 h-1.5 rounded-full bg-muted-foreground/70 animate-bounce motion-reduce:animate-none" />
                 </span>
                 {activeTypingUsers.map((t: any) => getUserDisplayName(t.userId)).join(', ')} po shkruan...
               </div>
@@ -3984,7 +4078,7 @@ const ChatView: React.FC = () => {
                 {/* Voice recording overlay */}
                 {isRecording && (
                   <div className="flex items-center gap-3 px-3 py-2 mb-2 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200/60 dark:border-rose-900/40">
-                    <span className="h-2.5 w-2.5 rounded-full bg-rose-500 animate-pulse" />
+                    <span className="h-2.5 w-2.5 rounded-full bg-rose-500 animate-pulse motion-reduce:animate-none" />
                     <span className="text-sm font-semibold text-rose-700 dark:text-rose-300">Po regjistron…</span>
                     <span className="text-xs text-rose-600/80 dark:text-rose-300/80 font-mono">
                       {(() => {
@@ -4090,11 +4184,35 @@ const ChatView: React.FC = () => {
                       </div>
                     </div>
                   )}
+                  {/* Composer emoji picker — opened by the "Emoji" button (desktop
+                      inline + mobile "+" menu). Inserts at the caret. */}
+                  {showEmojiPicker === 'input' && (
+                    <div
+                      ref={composerEmojiRef}
+                      role="dialog"
+                      aria-label="Zgjidh një emoji"
+                      className="absolute bottom-full left-2 mb-1 z-30 w-[260px] bg-popover border rounded-xl shadow-lg p-2"
+                    >
+                      <div className="grid grid-cols-8 gap-0.5 max-h-[180px] overflow-y-auto">
+                        {COMPOSER_EMOJIS.map((emoji, i) => (
+                          <button
+                            key={`${emoji}-${i}`}
+                            type="button"
+                            aria-label={`Fut emoji ${emoji}`}
+                            onClick={() => insertEmoji(emoji)}
+                            className="text-xl leading-none p-1 rounded-lg hover:bg-accent transition-colors"
+                          >
+                            {emoji}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div className="flex items-center gap-0.5 flex-shrink-0 pb-1">
                     {/* Overflow "+" — secondary actions (snippets, AI polish/replies, schedule) */}
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
-                        <Button type="button" variant="ghost" size="icon" className="h-10 w-10 lg:h-7 lg:w-7 rounded-lg text-muted-foreground/60 hover:text-foreground" disabled={isSending} title="Më shumë">
+                        <Button type="button" variant="ghost" size="icon" className="h-10 w-10 lg:h-7 lg:w-7 rounded-lg text-muted-foreground/60 hover:text-foreground" disabled={isSending} aria-label="Më shumë opsione" title="Më shumë">
                           <Plus className="h-5 w-5 lg:h-4 lg:w-4" />
                         </Button>
                       </DropdownMenuTrigger>
@@ -4163,13 +4281,15 @@ const ChatView: React.FC = () => {
                         (chatMode === 'direct' && !activeDirectUserId) ||
                         (chatMode !== 'channel' && chatMode !== 'direct')
                       }
+                      aria-label={attachmentUploading ? 'Po ngarkohet' : 'Dërgo imazh ose PDF'}
                       title={attachmentUploading ? 'Po ngarkohet…' : 'Dërgo imazh ose PDF'}>
                       {attachmentUploading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ImageIcon className="h-3.5 w-3.5" />}
                     </Button>
                     <Button type="button" variant="ghost" size="icon"
-                      className={`hidden lg:inline-flex h-7 w-7 rounded-lg transition-colors ${isRecording ? 'text-rose-500 animate-pulse' : 'text-muted-foreground/60 hover:text-foreground'}`}
+                      className={`hidden lg:inline-flex h-7 w-7 rounded-lg transition-colors ${isRecording ? 'text-rose-500 animate-pulse motion-reduce:animate-none' : 'text-muted-foreground/60 hover:text-foreground'}`}
                       onClick={() => { if (isRecording) stopRecording(true); else startRecording(); }}
                       disabled={isSending || attachmentUploading}
+                      aria-label={isRecording ? 'Ndalo dhe dërgo notën zanore' : 'Regjistro një notë zanore'}
                       title={isRecording ? 'Ndalo dhe dërgo' : 'Regjistro një notë zanore'}>
                       {isRecording ? <Square className="h-3.5 w-3.5 fill-current" /> : <Mic className="h-3.5 w-3.5" />}
                     </Button>
@@ -4186,7 +4306,7 @@ const ChatView: React.FC = () => {
                     />
                     <Button type="button" variant="ghost" size="icon" className="hidden lg:inline-flex h-7 w-7 rounded-lg text-muted-foreground/60 hover:text-foreground"
                       disabled={isSending} onClick={() => setShowEmojiPicker(showEmojiPicker ? null : 'input')}
-                      title="Emoji">
+                      data-emoji-trigger aria-label="Fut emoji" aria-expanded={showEmojiPicker === 'input'} title="Emoji">
                       <SmilePlus className="h-3.5 w-3.5" />
                     </Button>
                   </div>
@@ -4248,9 +4368,10 @@ const ChatView: React.FC = () => {
                     size="icon"
                     onClick={() => { if (isRecording) stopRecording(true); else startRecording(); }}
                     disabled={isSending || attachmentUploading}
+                    aria-label={isRecording ? 'Ndalo dhe dërgo notën zanore' : 'Regjistro një notë zanore'}
                     title={isRecording ? 'Ndalo dhe dërgo' : 'Regjistro një notë zanore'}
                     className={`lg:hidden ${messageText.trim() || attachmentUrl.trim() ? 'hidden' : 'flex'} h-11 w-11 rounded-[13px] flex-shrink-0 transition-all ${
-                      isRecording ? 'bg-rose-500 text-white animate-pulse' : 'bg-muted text-muted-foreground/70 hover:text-foreground'
+                      isRecording ? 'bg-rose-500 text-white animate-pulse motion-reduce:animate-none' : 'bg-muted text-muted-foreground/70 hover:text-foreground'
                     }`}
                   >
                     {isRecording ? <Square className="h-4 w-4 fill-current" /> : <Mic className="h-5 w-5" />}
@@ -4262,6 +4383,8 @@ const ChatView: React.FC = () => {
                       messageText.trim() || attachmentUrl.trim() ? 'bg-accent-gradient text-white shadow-[0_8px_18px_-8px_#0EA5E9] hover:opacity-95' : 'bg-muted text-muted-foreground/40'
                     }`}
                     disabled={isSending || (!messageText.trim() && !attachmentUrl.trim()) || (chatMode === 'direct' && !activeDirectUserId)}
+                    aria-label="Dërgo mesazhin"
+                    title="Dërgo"
                   >
                     <Send className="h-4 w-4" />
                   </Button>
@@ -4269,7 +4392,20 @@ const ChatView: React.FC = () => {
               </form>
               <div className="hidden sm:flex items-center justify-between mt-1.5 px-1">
                 <p className="text-[10px] text-muted-foreground/60">Enter për të dërguar · Shift+Enter për rresht të ri</p>
-                <button className="text-[10px] text-muted-foreground/30 hover:text-primary transition-colors flex items-center gap-1">
+                <button
+                  type="button"
+                  aria-label="Krijo detyrë nga ky tekst"
+                  title="Krijo detyrë nga ky tekst"
+                  onClick={() => {
+                    setTaskFromMsgSource(null);
+                    setTaskFromMsgTitle(messageText.trim().slice(0, 120));
+                    setTaskFromMsgAssignee(user?.uid || '');
+                    setTaskFromMsgDueDate('');
+                    setTaskFromMsgPriority('medium');
+                    setTaskFromMsgOpen(true);
+                  }}
+                  className="text-[10px] text-muted-foreground/30 hover:text-primary transition-colors flex items-center gap-1"
+                >
                   <Link2 className="h-2.5 w-2.5" /> Lidh me task
                 </button>
               </div>
