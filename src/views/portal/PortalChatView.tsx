@@ -102,10 +102,14 @@ const PortalChatView: React.FC = () => {
   const ALLOWED_ATTACHMENT_TYPES = [...ALLOWED_IMG_TYPES, ...ALLOWED_DOC_TYPES];
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
   const isImageUrl = (url: string) => /\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$/i.test(url) || /image%2F/i.test(url);
-  // Only render https:// attachment links as clickable anchors — reject any
-  // `javascript:`/other URI written straight to Firestore (XSS on click).
-  const safeAttachmentHref = (url?: string | null): string | undefined =>
-    (url && /^https:\/\//i.test(url.trim())) ? url : undefined;
+  // Render attachment links as clickable anchors, but block dangerous schemes
+  // (javascript:/data:/vbscript:/file:) written straight to Firestore (XSS on click).
+  // Allow normal file URLs (https/http/blob/relative) so legacy http:// VPS links download.
+  const safeAttachmentHref = (url?: string | null): string | undefined => {
+    if (!url) return undefined;
+    const u = url.trim();
+    return /^(javascript|data|vbscript|file):/i.test(u) ? undefined : u;
+  };
 
   // Resolve teamId so client messages include it — required for the admin's
   // team-scoped useCollection('messages') to see them. Prefer the tenant's own team
