@@ -1,13 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
-import { addDoc, collection, doc, updateDoc, Timestamp } from 'firebase/firestore';
+import { addDoc, collection, doc, updateDoc, writeBatch, Timestamp } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { usePortalTenant } from '../../hooks/usePortalTenant';
 import { useCollection, useMutation, useDocument } from '../../hooks/useFirestore';
 import { useFileUpload } from '../../hooks/useFileUpload';
 import { useAuth } from '../../contexts/AuthContext';
-import { Input } from '../../components/ui/input';
 import { Button } from '../../components/ui/button';
 import { ScrollArea } from '../../components/ui/scroll-area';
 import { Badge } from '../../components/ui/badge';
@@ -19,6 +18,39 @@ import type { ChatMessage, Project } from '../../types';
 import { ensureConversation } from '../../lib/conversationRouting';
 
 const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+
+// Lightweight, self-contained inline formatter so staff-authored markdown renders
+// for the client instead of showing raw symbols. Supports **bold**, *italic*,
+// `code`, @mentions and auto-linked http(s) URLs. Builds React nodes only (never
+// dangerouslySetInnerHTML) so all text is auto-escaped and safe from XSS.
+const formatMessageContent = (text?: string | null): React.ReactNode => {
+  if (!text) return text ?? '';
+  const tokenRe = /(`[^`]+`)|(\*\*[^*]+\*\*)|(\*[^*]+\*)|(@[\w.-]+)|(https?:\/\/[^\s<]+)/g;
+  const nodes: React.ReactNode[] = [];
+  let lastIndex = 0;
+  let key = 0;
+  let match: RegExpExecArray | null;
+  while ((match = tokenRe.exec(text)) !== null) {
+    if (match.index > lastIndex) nodes.push(text.slice(lastIndex, match.index));
+    const [full, code, bold, italic, mention, url] = match;
+    if (code) {
+      nodes.push(<code key={key++} className="px-1 py-0.5 rounded bg-black/10 dark:bg-white/15 text-[0.85em] font-mono">{code.slice(1, -1)}</code>);
+    } else if (bold) {
+      nodes.push(<strong key={key++} className="font-semibold">{bold.slice(2, -2)}</strong>);
+    } else if (italic) {
+      nodes.push(<em key={key++}>{italic.slice(1, -1)}</em>);
+    } else if (mention) {
+      nodes.push(<span key={key++} className="font-medium text-primary">{mention}</span>);
+    } else if (url) {
+      nodes.push(<a key={key++} href={url} target="_blank" rel="noopener noreferrer" className="underline break-all">{url}</a>);
+    } else {
+      nodes.push(full);
+    }
+    lastIndex = match.index + full.length;
+  }
+  if (lastIndex < text.length) nodes.push(text.slice(lastIndex));
+  return nodes;
+};
 
 const PortalChatView: React.FC = () => {
   const { user } = useAuth();
@@ -110,6 +142,13 @@ const PortalChatView: React.FC = () => {
   const notificationMutation = useMutation<any>('notifications');
   const { upload: uploadAttachment, uploading } = useFileUpload();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const composerRef = useRef<HTMLTextAreaElement | null>(null);
+  // Grow the composer with its content up to ~5 lines, then scroll.
+  const MAX_COMPOSER_PX = 120;
+  const autoGrowComposer = (el: HTMLTextAreaElement) => {
+    el.style.height = 'auto';
+    el.style.height = `${Math.min(el.scrollHeight, MAX_COMPOSER_PX)}px`;
+  };
   const ALLOWED_IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
   const ALLOWED_DOC_TYPES = ['application/pdf'];
   const ALLOWED_ATTACHMENT_TYPES = [...ALLOWED_IMG_TYPES, ...ALLOWED_DOC_TYPES];
@@ -209,6 +248,11 @@ const PortalChatView: React.FC = () => {
   // Clear read tracking when switching channels
   useEffect(() => { markedAsReadRef.current.clear(); }, [channelId]);
 
+  // Collapse the auto-grown composer back to a single line once it's emptied.
+  useEffect(() => {
+    if (composerRef.current && !messageText) composerRef.current.style.height = 'auto';
+  }, [messageText]);
+
   // Mark staff messages as readAt when client opens chat
   useEffect(() => {
     if (!user || !messages.length) return;
@@ -217,12 +261,16 @@ const PortalChatView: React.FC = () => {
     // mount without the client having seen anything.
     const markVisible = () => {
       if (document.visibilityState !== 'visible') return;
-      messages
-        .filter((m: any) => m.senderType === 'staff' && !m.readAt && !markedAsReadRef.current.has(m.id))
-        .forEach((m: any) => {
-          markedAsReadRef.current.add(m.id);
-          messageMutation.update(m.id, { readAt: new Date() } as any).catch(() => {});
-        });
+      const unread = messages.filter((m: any) => m.senderType === 'staff' && !m.readAt && !markedAsReadRef.current.has(m.id));
+      if (unread.length === 0) return;
+      // Collapse N individual updates into a single Firestore batched write.
+      const batch = writeBatch(db);
+      const now = new Date();
+      unread.forEach((m: any) => {
+        markedAsReadRef.current.add(m.id);
+        batch.update(doc(db, 'messages', m.id), { readAt: now } as any);
+      });
+      batch.commit().catch(() => {});
     };
     markVisible();
     document.addEventListener('visibilitychange', markVisible);
@@ -452,7 +500,7 @@ const PortalChatView: React.FC = () => {
     return (
       <div className="flex items-center justify-center h-[60vh]">
         <div className="text-center space-y-3">
-          <div className="w-12 h-12 border-4 border-primary/30 border-t-primary rounded-full animate-spin mx-auto" />
+          <div className="w-12 h-12 border-4 border-primary/30 border-t-primary rounded-full animate-spin motion-reduce:animate-none mx-auto" />
           <p className="text-muted-foreground text-sm">Duke ngarkuar bisedën...</p>
         </div>
       </div>
@@ -467,7 +515,6 @@ const PortalChatView: React.FC = () => {
           <div className="w-10 h-10 sm:w-11 sm:h-11 rounded-full bg-gradient-to-br from-primary to-primary/70 flex items-center justify-center text-primary-foreground font-bold text-sm">
             <MessageSquare className="h-5 w-5" />
           </div>
-          <div className="absolute -bottom-0.5 -right-0.5 w-3.5 h-3.5 bg-emerald-500 rounded-full border-2 border-background" />
         </div>
         <div className="flex-1 min-w-0">
           <h1 className="font-semibold text-foreground text-base sm:text-lg">
@@ -475,7 +522,7 @@ const PortalChatView: React.FC = () => {
               ? customerProjects?.find(p => p.id === selectedProjectId)?.name || 'Projekt'
               : 'Ekipi Ynë'}
           </h1>
-          <p className="text-xs text-emerald-600 font-medium">Aktiv tani</p>
+          <p className="text-xs text-muted-foreground">Zakonisht përgjigjemi brenda pak orësh</p>
         </div>
         {messages && messages.length > 0 && (
           <Badge variant="outline" className="text-xs hidden sm:flex">
@@ -624,7 +671,7 @@ const PortalChatView: React.FC = () => {
                                 : 'bg-muted/80 border border-border/50 rounded-bl-sm'
                             }`}
                           >
-                            <p className="text-[13px] sm:text-[13.5px] leading-relaxed whitespace-pre-wrap break-words">{msg.content}</p>
+                            <p className="text-[13px] sm:text-[13.5px] leading-relaxed whitespace-pre-wrap break-words">{formatMessageContent(msg.content)}</p>
                             {msg.attachmentUrl && (
                               isImageUrl(msg.attachmentUrl) ? (
                                 <a href={safeAttachmentHref(msg.attachmentUrl)} target="_blank" rel="noopener noreferrer" className="block mt-1.5">
@@ -651,6 +698,7 @@ const PortalChatView: React.FC = () => {
                             <div className={`absolute -top-3 ${own ? 'left-1' : 'right-1'} hidden sm:flex sm:opacity-0 sm:group-hover:opacity-100 transition-opacity items-center gap-0.5 bg-background border rounded-lg shadow-sm px-1 py-0.5 z-10`}>
                               <div className="relative">
                                 <button
+                                  aria-label="Shto reagim"
                                   className="p-2 sm:p-1 hover:bg-accent rounded text-muted-foreground hover:text-foreground"
                                   onClick={() => setShowEmojiPicker(showEmojiPicker === msg.id ? null : msg.id)}
                                 >
@@ -671,6 +719,7 @@ const PortalChatView: React.FC = () => {
                                 )}
                               </div>
                               <button
+                                aria-label="Përgjigju mesazhit"
                                 className="p-1 hover:bg-accent rounded text-muted-foreground hover:text-foreground"
                                 onClick={() => setReplyingTo(msg)}
                               >
@@ -730,7 +779,7 @@ const PortalChatView: React.FC = () => {
             <span className="text-xs font-medium text-primary">{getDisplayName(replyingTo.senderId)}</span>
             <p className="text-xs text-muted-foreground truncate">{replyingTo.content}</p>
           </div>
-          <Button variant="ghost" size="icon" className="h-6 w-6 flex-shrink-0" onClick={() => setReplyingTo(null)}>
+          <Button variant="ghost" size="icon" aria-label="Anulo përgjigjen" className="h-6 w-6 flex-shrink-0" onClick={() => setReplyingTo(null)}>
             <X className="h-3 w-3" />
           </Button>
         </div>
@@ -754,8 +803,9 @@ const PortalChatView: React.FC = () => {
             className="h-9 w-9 sm:h-10 sm:w-10 rounded-full flex-shrink-0 text-muted-foreground hover:text-foreground"
             onClick={() => fileInputRef.current?.click()}
             title="Dërgo foto"
+            aria-label="Bashkëngjit skedar"
           >
-            {uploading ? <RefreshCw className="h-4 w-4 sm:h-5 sm:w-5 animate-spin" /> : <Paperclip className="h-4 w-4 sm:h-5 sm:w-5" />}
+            {uploading ? <RefreshCw className="h-4 w-4 sm:h-5 sm:w-5 animate-spin motion-reduce:animate-none" /> : <Paperclip className="h-4 w-4 sm:h-5 sm:w-5" />}
           </Button>
           {videoEnabled && (
             <Button
@@ -766,22 +816,33 @@ const PortalChatView: React.FC = () => {
               className="h-9 w-9 sm:h-10 sm:w-10 rounded-full flex-shrink-0 text-muted-foreground hover:text-foreground"
               onClick={handleVideoCall}
               title="Thirrje video"
+              aria-label="Nis thirrje video"
             >
-              {videoStarting ? <RefreshCw className="h-4 w-4 sm:h-5 sm:w-5 animate-spin" /> : <Video className="h-4 w-4 sm:h-5 sm:w-5" />}
+              {videoStarting ? <RefreshCw className="h-4 w-4 sm:h-5 sm:w-5 animate-spin motion-reduce:animate-none" /> : <Video className="h-4 w-4 sm:h-5 sm:w-5" />}
             </Button>
           )}
           <div className="flex-1 min-w-0">
-            <Input
+            <textarea
+              ref={composerRef}
               placeholder="Shkruani mesazhin..."
               value={messageText}
-              onChange={(e) => setMessageText(e.target.value)}
-              className="rounded-full pr-4 h-9 sm:h-10 bg-muted/50 border-muted-foreground/20 focus:bg-background transition-colors"
+              rows={1}
+              aria-label="Shkruani mesazhin"
+              onChange={(e) => { setMessageText(e.target.value); autoGrowComposer(e.target); }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSendMessage();
+                }
+              }}
+              className="w-full resize-none rounded-2xl px-4 py-2 text-base leading-relaxed bg-muted/50 border border-muted-foreground/20 focus:bg-background focus:outline-none focus:ring-1 focus:ring-primary/40 transition-colors max-h-[120px] overflow-y-auto"
             />
           </div>
-          <Button 
-            type="submit" 
-            size="icon" 
-            disabled={!messageText.trim() && !attachmentUrl.trim()} 
+          <Button
+            type="submit"
+            size="icon"
+            aria-label="Dërgo mesazhin"
+            disabled={!messageText.trim() && !attachmentUrl.trim()}
             className="h-9 w-9 sm:h-10 sm:w-10 rounded-full flex-shrink-0 shadow-sm"
           >
             <Send className="h-4 w-4" />
@@ -794,9 +855,9 @@ const PortalChatView: React.FC = () => {
           isn't clipped; backdrop tap dismisses. Desktop uses the hover toolbar. */}
       {longPressMenuId && createPortal(
         <div className="sm:hidden" role="dialog" aria-modal="true">
-          <div className="fixed inset-0 z-[60] bg-black/50 animate-in fade-in duration-150" onClick={() => setLongPressMenuId(null)} />
+          <div className="fixed inset-0 z-[60] bg-black/50 animate-in fade-in duration-150 motion-reduce:animate-none" onClick={() => setLongPressMenuId(null)} />
           <div
-            className="fixed inset-x-0 bottom-0 z-[61] bg-popover border-t rounded-t-2xl shadow-2xl animate-in slide-in-from-bottom duration-200"
+            className="fixed inset-x-0 bottom-0 z-[61] bg-popover border-t rounded-t-2xl shadow-2xl animate-in slide-in-from-bottom duration-200 motion-reduce:animate-none"
             style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
           >
             <div className="flex justify-center pt-2 pb-1"><div className="h-1 w-9 rounded-full bg-muted-foreground/25" /></div>
