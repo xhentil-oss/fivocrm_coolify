@@ -481,6 +481,32 @@ service cloud.firestore {
       allow update, delete: if canManageBusinessDoc();
     }
 
+    // dailyFocus — the personal "Most Important Task" (Eat That Frog). Read within
+    // the business; a person manages only their own frog (managers/admins too).
+    match /dailyFocus/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update, delete: if (isAuth() && resource.data.userId == request.auth.uid)
+        || canManageBusinessDoc();
+    }
+
+    // productivitySettings — per-team Momentum targets. Any business member reads;
+    // only managers/admins write (canManageBusinessDoc).
+    match /productivitySettings/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update, delete: if canManageBusinessDoc();
+    }
+
+    // weeklyReviews — personal 4DX/GTD weekly review. Read within the business;
+    // a person manages only their own review.
+    match /weeklyReviews/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update, delete: if (isAuth() && resource.data.userId == request.auth.uid)
+        || canManageBusinessDoc();
+    }
+
     match /quotes/{docId} {
       // Staff read via businessId; the portal client reads quotes for their own
       // customer (or a lead linked to it). Was `if isAuth()` — leaked every

@@ -19,6 +19,7 @@ import type {
   Activity, Goal, DailyReport
 } from '../types';
 import { useFilteredTasks, useFilteredProjects, useFilteredByOwner } from '../hooks/useRoleFilteredData';
+import MomentumWidget from '../components/MomentumWidget';
 
 
 // ── Greeting based on time of day ──
@@ -820,6 +821,9 @@ const StaffDashboard: React.FC = () => {
 
         {/* ── RIGHT SIDEBAR ── */}
         <div className="space-y-4">
+
+          {/* Momentum snapshot — score, level, streak, frog */}
+          <MomentumWidget tasks={tasks} timeEntries={allTimeEntries || []} dailyReports={dailyReports || []} />
 
           {/* Daily Productivity */}
           <Card className="overflow-hidden">

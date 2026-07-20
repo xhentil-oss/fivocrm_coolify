@@ -565,14 +565,46 @@ export interface Goal {
   linkedProjects?: string[];
   linkedLeads?: string[];
   linkedTasks?: string[];
-  /** Metric tracking */
+  /** Metric tracking (legacy single-metric; superseded by keyResults) */
   targetValue?: number;
   currentValue?: number;
   metricUnit?: string; // e.g. "€", "leads", "projekte"
+  /**
+   * OKR Key Results (Measure What Matters). When present, the goal's progress is
+   * DERIVED from the average of its KR progress rather than the manual `progress`
+   * field. 'auto' KRs pull their currentValue live from CRM data.
+   */
+  keyResults?: KeyResult[];
   teamId?: string;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
+}
+
+export type KeyResultType = 'metric' | 'milestone' | 'auto';
+
+/** Data sources an 'auto' Key Result can derive its current value from. */
+export type KeyResultAutoSource =
+  | 'tasksCompleted'
+  | 'projectsCompleted'
+  | 'leadsWon'
+  | 'revenue'
+  | 'invoicesPaid';
+
+export interface KeyResult {
+  id: string;
+  title: string;
+  type: KeyResultType;
+  /** Baseline value at the start of the cycle (progress measured from here). */
+  startValue: number;
+  /** Current value — hand-entered for 'metric', last computed for 'auto', unused for 'milestone'. */
+  currentValue: number;
+  targetValue: number;
+  unit?: string; // €, leads, %, projekte…
+  /** milestone type: is it done? */
+  done?: boolean;
+  /** auto type: which CRM metric to derive currentValue from. */
+  autoSource?: KeyResultAutoSource;
 }
 
 export interface Milestone {
@@ -1154,4 +1186,67 @@ export interface DailyReport {
   mood?: 'great' | 'good' | 'neutral' | 'struggling';
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * "Bretkosa e Ditës" (Eat That Frog / The One Thing) — the single Most Important
+ * Task a person commits to each day, decided in the morning and reviewed at night.
+ * One doc per user per day (id convention: `${userId}_${date}`), so a re-commit
+ * overwrites rather than duplicates.
+ */
+export interface DailyFocus {
+  id: string;
+  userId: string;
+  teamId?: string;
+  businessId?: string;
+  date: string;          // YYYY-MM-DD
+  title: string;         // the "frog" — what you'll eat first
+  taskId?: string;       // optional link to a real Task
+  done: boolean;         // eaten?
+  completedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId?: string | null;
+}
+
+/**
+ * Per-team productivity targets — feed the Momentum score so each team is judged
+ * against its own reality (a sales team's "throughput" ≠ a dev team's). One doc
+ * per team (id convention: the teamId). Missing fields fall back to DEFAULT_TARGETS.
+ */
+export interface ProductivitySettings {
+  id: string;
+  teamId?: string;
+  businessId?: string;
+  targets: {
+    focusHours?: number;
+    deepWorkSessions?: number;
+    reportDays?: number;
+    throughput?: number;
+    estimateCoverage?: number;   // 0–1
+    minSessionMinutes?: number;
+  };
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId?: string | null;
+}
+
+/**
+ * Weekly Review (4DX cadence of accountability + GTD Weekly Review). One doc per
+ * user per ISO week (id convention: `${userId}_${weekKey}`). Captures reflection
+ * and the commitment (WIG / One Thing) for the coming week.
+ */
+export interface WeeklyReview {
+  id: string;
+  userId: string;
+  teamId?: string;
+  businessId?: string;
+  weekKey: string;        // ISO week, e.g. "2026-W30"
+  wins: string;           // what went well
+  improve: string;        // what to improve
+  nextWig: string;        // the One Thing / WIG for next week
+  scoreSnapshot?: number; // productivity score at review time
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId?: string | null;
 }

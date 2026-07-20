@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Receipt, MessageSquare, MessageCircle, Target, UserCircle, DollarSign, Shield, FileText, Briefcase, LayoutDashboard, Timer, Award, PieChart, Calculator, Globe, ScrollText, Handshake, Building2, Wallet, ChevronDown, PiggyBank, Megaphone, TrendingUp } from 'lucide-react';
+import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Receipt, MessageSquare, MessageCircle, Target, UserCircle, DollarSign, Shield, FileText, Briefcase, LayoutDashboard, Timer, Award, PieChart, Calculator, Globe, ScrollText, Handshake, Building2, Wallet, ChevronDown, PiggyBank, Megaphone, TrendingUp, Rocket } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -41,6 +41,7 @@ const allNavItems: NavEntry[] = [
   { path: '/app/deals', label: 'Marrëveshjet', icon: Handshake, permissionKey: 'canAccessCRM' },
   { path: '/app/customers', label: 'Klientët', icon: Users, permissionKey: 'canAccessCustomers' },
   { path: '/app/tasks', label: 'Detyrat', icon: CheckSquare, permissionKey: 'canAccessTasks' },
+  { path: '/app/momentum', label: 'Momentum', icon: Rocket, permissionKey: 'canAccessProfile' },
   { path: '/app/goals', label: 'Objektivat', icon: Target, permissionKey: 'canAccessGoals' },
   { path: '/app/teams', label: 'Ekipet', icon: UsersRound, permissionKey: 'canAccessTeams' },
   { path: '/app/services', label: 'Shërbimet', icon: Receipt, permissionKey: 'canAccessServices' },

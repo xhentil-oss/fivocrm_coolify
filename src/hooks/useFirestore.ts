@@ -154,7 +154,7 @@ const teamScopedCollections = new Set([
   'taskCollaborators', 'customIndustries', 'typingIndicators',
   'directMessages', 'milestones', 'serviceInquiries', 'projectComments',
   'workspaceFolders', 'workspaceDriveFiles', 'projects', 'dailyReports',
-  'roleTemplates', 'standups', 'quotes', 'contracts',
+  'roleTemplates', 'standups', 'quotes', 'contracts', 'dailyFocus', 'productivitySettings', 'weeklyReviews',
   'chatSnippets', 'whatsappAccounts', 'whatsappThreads', 'waTemplates', 'waBroadcasts',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments',
   // whatsappMessages reads pass skipTeamFilter (they scope by teamId+phone
@@ -184,7 +184,7 @@ const businessIsolatedAlways = new Set<string>([
   'leads', 'projects', 'invoices', 'invoiceItems', 'customers', 'deals', 'leadActivities',
   'services', 'expenses', 'goals', 'quotes', 'contracts', 'tasks', 'taskComments',
   'taskCollaborators', 'milestones', 'projectComments', 'clientRequests', 'serviceInquiries',
-  'timeEntries', 'standups', 'dailyReports', 'customIndustries', 'activities',
+  'timeEntries', 'standups', 'dailyReports', 'dailyFocus', 'productivitySettings', 'weeklyReviews', 'customIndustries', 'activities',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments',
   'domains',
   'teamMembers', 'teamInvites',

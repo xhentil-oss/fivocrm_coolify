@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -8,6 +8,7 @@ import {
   Target, Plus, CheckCircle2, Calendar, Users, User as UserIcon,
   AlertCircle, Link2, Trash2, ChevronDown, ChevronRight,
   FolderKanban, Briefcase, ListTodo, BarChart3, Pencil,
+  Zap, Flag, Hash, Minus, Sparkles,
 } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -21,7 +22,14 @@ import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { Calendar as CalendarComponent } from '../components/ui/calendar';
 import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
-import type { Goal, Team, TeamMember, Milestone, Project, Lead, Task } from '../types';
+import type {
+  Goal, Team, TeamMember, Milestone, Project, Lead, Task, Invoice,
+  KeyResult, KeyResultType, KeyResultAutoSource,
+} from '../types';
+import {
+  goalDerivedProgress, goalHealth, hasKeyResults, keyResultProgress, keyResultCurrent,
+  goalScore, AUTO_SOURCE_LABELS, AUTO_SOURCE_UNIT, type OkrContext,
+} from '../lib/productivity/okr';
 
 // ─── Main View ───────────────────────────────────────────────────────────────
 const GoalsView: React.FC = () => {
@@ -42,12 +50,25 @@ const GoalsView: React.FC = () => {
   const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers');
   const teamMembers = useUniqueTeamMembers(rawTeamMembers);
   const { data: milestones } = useCollection<Milestone>('milestones');
-  // CRM collections — lazy-loaded only when a dialog is open
-  const needsCRM = isCreateDialogOpen || !!editingGoal || !!selectedGoal;
-  const { data: projects } = useCollection<Project>('projects', { skip: !needsCRM });
-  const { data: leads } = useCollection<Lead>('leads', { skip: !needsCRM });
-  const { data: tasks } = useCollection<Task>('tasks', { skip: !needsCRM });
+  // CRM collections — loaded always so OKR auto Key Results derive live progress
+  // (their currentValue is pulled from tasks/projects/leads/invoices).
+  const { data: projects } = useCollection<Project>('projects');
+  const { data: leads } = useCollection<Lead>('leads');
+  const { data: tasks } = useCollection<Task>('tasks');
+  const { data: invoices } = useCollection<Invoice>('invoices');
   const { getName } = useUserNames(teamMembers);
+
+  // Live context for OKR auto Key Results.
+  const okrCtx: OkrContext = useMemo(
+    () => ({ tasks: tasks || [], projects: projects || [], leads: leads || [], invoices: invoices || [] }),
+    [tasks, projects, leads, invoices],
+  );
+  // Derived (OKR) progress + health — replaces the manual field when KRs exist.
+  const progressOf = useMemo(() => (g: Goal) => goalDerivedProgress(g, okrCtx), [okrCtx]);
+  const statusOf = useMemo(
+    () => (g: Goal): Goal['status'] => (hasKeyResults(g) ? goalHealth(g, goalDerivedProgress(g, okrCtx)) : g.status),
+    [okrCtx],
+  );
 
   // Mutations
   const goalMutation = useMutation<Goal>('goals');
@@ -58,26 +79,27 @@ const GoalsView: React.FC = () => {
   const goals = useMemo(() => {
     if (!allGoals) return [];
     let filtered = allGoals;
-    if (filterStatus !== 'all') filtered = filtered.filter(g => g.status === filterStatus);
+    if (filterStatus !== 'all') filtered = filtered.filter(g => statusOf(g) === filterStatus);
     if (activeTab === 'team') filtered = filtered.filter(g => (g.scope || 'team') === 'team');
     if (activeTab === 'individual') filtered = filtered.filter(g => g.scope === 'individual');
     if (activeTab === 'my') filtered = filtered.filter(g => g.ownerId === user?.uid);
     return filtered;
-  }, [allGoals, filterStatus, activeTab, user]);
+  }, [allGoals, filterStatus, activeTab, user, statusOf]);
 
   // Stats
   const stats = useMemo(() => {
     const all = allGoals || [];
+    const st = all.map(g => statusOf(g));
     return {
       total: all.length,
       teamGoals: all.filter(g => (g.scope || 'team') === 'team').length,
       individualGoals: all.filter(g => g.scope === 'individual').length,
-      onTrack: all.filter(g => g.status === 'On Track').length,
-      atRisk: all.filter(g => g.status === 'At Risk' || g.status === 'Off Track').length,
-      achieved: all.filter(g => g.status === 'Achieved').length,
-      avgProgress: all.length ? Math.round(all.reduce((s, g) => s + (g.progress || 0), 0) / all.length) : 0,
+      onTrack: st.filter(s => s === 'On Track').length,
+      atRisk: st.filter(s => s === 'At Risk' || s === 'Off Track').length,
+      achieved: st.filter(s => s === 'Achieved').length,
+      avgProgress: all.length ? Math.round(all.reduce((s, g) => s + progressOf(g), 0) / all.length) : 0,
     };
-  }, [allGoals]);
+  }, [allGoals, statusOf, progressOf]);
 
   const getChildGoals = (parentId: string) =>
     (allGoals || []).filter(g => g.parentGoalId === parentId);
@@ -251,6 +273,7 @@ const GoalsView: React.FC = () => {
                 linkedCount={linkedCount}
                 getStatusIcon={getStatusIcon}
                 getName={getName}
+                okrCtx={okrCtx}
                 onClick={() => setSelectedGoal(goal)}
               />
             );
@@ -269,6 +292,7 @@ const GoalsView: React.FC = () => {
           projects={projects || []}
           leads={leads || []}
           tasks={tasks || []}
+          okrCtx={okrCtx}
           getName={getName}
           getStatusIcon={getStatusIcon}
           onUpdate={goalMutation.update}
@@ -313,49 +337,78 @@ const GoalCard: React.FC<{
   linkedCount: number;
   getStatusIcon: (s: string) => React.ReactNode;
   getName: (id: string | null | undefined, fb?: string) => string;
+  okrCtx: OkrContext;
   onClick: () => void;
-}> = ({ goal, childGoals, milestones, completedMilestones, linkedCount, getStatusIcon, getName, onClick }) => {
+}> = ({ goal, childGoals, milestones, completedMilestones, linkedCount, getStatusIcon, getName, okrCtx, onClick }) => {
   const [expanded, setExpanded] = useState(false);
   const isTeam = (goal.scope || 'team') === 'team';
+  const okr = hasKeyResults(goal);
+  const progress = goalDerivedProgress(goal, okrCtx);
+  const status = okr ? goalHealth(goal, progress) : goal.status;
+  const krs = goal.keyResults || [];
   const progressColor =
-    (goal.progress || 0) >= 75 ? 'bg-green-500' :
-    (goal.progress || 0) >= 40 ? 'bg-amber-500' : 'bg-red-500';
+    progress >= 75 ? 'bg-green-500' :
+    progress >= 40 ? 'bg-amber-500' : 'bg-red-500';
 
   return (
     <Card className="p-5 space-y-3 cursor-pointer transition-all hover:shadow-lg">
       <div className="flex items-start justify-between" onClick={onClick}>
         <div className="flex items-start gap-3 flex-1">
-          {getStatusIcon(goal.status)}
+          {getStatusIcon(status)}
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap mb-1">
               <h3 className="font-semibold text-foreground truncate">{goal.title}</h3>
               <Badge variant="outline" className="text-xs">
                 {isTeam ? <><Users className="w-3 h-3 mr-1" />Ekipor</> : <><UserIcon className="w-3 h-3 mr-1" />Individual</>}
               </Badge>
+              {okr && (
+                <Badge variant="secondary" className="text-[10px] gap-0.5">
+                  <Sparkles className="w-3 h-3" /> OKR · {krs.length} KR
+                </Badge>
+              )}
             </div>
             {goal.description && (
               <p className="text-sm text-muted-foreground line-clamp-2">{goal.description}</p>
             )}
           </div>
         </div>
-        <Badge className={getStatusColor(goal.status)}>{goal.status}</Badge>
+        <Badge className={getStatusColor(status)}>{status}</Badge>
       </div>
 
       {/* Progress Bar */}
       <div className="space-y-1" onClick={onClick}>
         <div className="flex items-center justify-between text-sm">
-          <span className="text-muted-foreground">Progresi</span>
-          <span className="font-medium">{goal.progress || 0}%</span>
+          <span className="text-muted-foreground">{okr ? 'Progresi (auto nga KR)' : 'Progresi'}</span>
+          <span className="font-medium">{progress}%</span>
         </div>
         <div className="w-full bg-muted rounded-full h-2">
-          <div className={`${progressColor} h-2 rounded-full transition-all`} style={{ width: `${goal.progress || 0}%` }} />
+          <div className={`${progressColor} h-2 rounded-full transition-all`} style={{ width: `${progress}%` }} />
         </div>
-        {goal.targetValue != null && (
+        {!okr && goal.targetValue != null && (
           <p className="text-xs text-muted-foreground">
             {goal.currentValue || 0} / {goal.targetValue} {goal.metricUnit || ''}
           </p>
         )}
       </div>
+
+      {/* Key Results mini-list */}
+      {okr && (
+        <div className="space-y-1.5" onClick={onClick}>
+          {krs.slice(0, 3).map((kr) => {
+            const p = keyResultProgress(kr, goal, okrCtx);
+            return (
+              <div key={kr.id} className="flex items-center gap-2 text-xs">
+                {kr.type === 'auto' ? <Zap className="w-3 h-3 text-indigo-500 shrink-0" />
+                  : kr.type === 'milestone' ? <Flag className="w-3 h-3 text-amber-500 shrink-0" />
+                  : <Hash className="w-3 h-3 text-blue-500 shrink-0" />}
+                <span className="flex-1 truncate text-muted-foreground">{kr.title}</span>
+                <span className="font-medium tabular-nums">{p}%</span>
+              </div>
+            );
+          })}
+          {krs.length > 3 && <p className="text-[11px] text-muted-foreground pl-5">+{krs.length - 3} të tjera…</p>}
+        </div>
+      )}
 
       {/* Footer Row */}
       <div className="flex items-center justify-between pt-2 border-t text-xs text-muted-foreground" onClick={onClick}>
@@ -396,21 +449,129 @@ const GoalCard: React.FC<{
           </button>
           {expanded && (
             <div className="mt-2 space-y-2 pl-4 border-l-2 border-muted">
-              {childGoals.map(child => (
+              {childGoals.map(child => {
+                const cp = goalDerivedProgress(child, okrCtx);
+                const cs = hasKeyResults(child) ? goalHealth(child, cp) : child.status;
+                return (
                 <div key={child.id} className="flex items-center gap-2 text-sm p-2 rounded bg-muted/50">
-                  {getStatusIcon(child.status)}
+                  {getStatusIcon(cs)}
                   <span className="flex-1 truncate">{child.title}</span>
-                  <span className="text-xs font-medium">{child.progress || 0}%</span>
+                  <span className="text-xs font-medium">{cp}%</span>
                   {child.ownerId && (
                     <span className="text-xs text-muted-foreground">{getName(child.ownerId)}</span>
                   )}
                 </div>
-              ))}
+                );
+              })}
             </div>
           )}
         </div>
       )}
     </Card>
+  );
+};
+
+// ─── Key Results Editor (OKR) ────────────────────────────────────────────────
+const makeKR = (): KeyResult => ({
+  id: (typeof crypto !== 'undefined' && crypto.randomUUID) ? crypto.randomUUID() : Math.random().toString(36).slice(2),
+  title: '', type: 'metric', startValue: 0, currentValue: 0, targetValue: 100, unit: '',
+});
+
+const KR_TYPES: { value: KeyResultType; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
+  { value: 'metric', label: 'Metrikë', icon: Hash },
+  { value: 'auto', label: 'Auto (CRM)', icon: Zap },
+  { value: 'milestone', label: 'Etapë', icon: Flag },
+];
+
+const KeyResultsEditor: React.FC<{ value: KeyResult[]; onChange: (v: KeyResult[]) => void }> = ({ value, onChange }) => {
+  const patch = (id: string, p: Partial<KeyResult>) => onChange(value.map(k => (k.id === id ? { ...k, ...p } : k)));
+  const num = (v: string) => (v === '' ? 0 : parseFloat(v) || 0);
+
+  return (
+    <div className="space-y-3">
+      {value.map((kr, i) => {
+        const TypeIcon = KR_TYPES.find(t => t.value === kr.type)?.icon || Hash;
+        return (
+          <div key={kr.id} className="p-3 rounded-lg border bg-muted/30 space-y-2.5">
+            <div className="flex items-center gap-2">
+              <span className="w-6 h-6 rounded-md bg-primary/10 text-primary flex items-center justify-center text-xs font-bold shrink-0">
+                {i + 1}
+              </span>
+              <Input
+                value={kr.title}
+                onChange={(e) => patch(kr.id, { title: e.target.value })}
+                placeholder={`Key Result ${i + 1} — çfarë mat?`}
+                className="h-8 flex-1"
+              />
+              <button type="button" onClick={() => onChange(value.filter(k => k.id !== kr.id))} className="text-muted-foreground hover:text-destructive shrink-0">
+                <Trash2 className="w-4 h-4" />
+              </button>
+            </div>
+
+            {/* Type toggle */}
+            <div className="flex gap-1">
+              {KR_TYPES.map(t => {
+                const Icon = t.icon;
+                const active = kr.type === t.value;
+                return (
+                  <button
+                    key={t.value}
+                    type="button"
+                    onClick={() => patch(kr.id, {
+                      type: t.value,
+                      ...(t.value === 'auto' && !kr.autoSource ? { autoSource: 'tasksCompleted' as KeyResultAutoSource, unit: AUTO_SOURCE_UNIT.tasksCompleted } : {}),
+                    })}
+                    className={`flex-1 flex items-center justify-center gap-1 py-1.5 rounded-md text-xs border transition ${active ? 'bg-primary text-primary-foreground border-primary' : 'bg-background text-muted-foreground hover:text-foreground'}`}
+                  >
+                    <Icon className="w-3 h-3" /> {t.label}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Type-specific fields */}
+            {kr.type === 'metric' && (
+              <div className="grid grid-cols-4 gap-2">
+                <div><Label className="text-[10px]">Fillimi</Label><Input type="number" value={kr.startValue} onChange={e => patch(kr.id, { startValue: num(e.target.value) })} className="h-8" /></div>
+                <div><Label className="text-[10px]">Aktuale</Label><Input type="number" value={kr.currentValue} onChange={e => patch(kr.id, { currentValue: num(e.target.value) })} className="h-8" /></div>
+                <div><Label className="text-[10px]">Target</Label><Input type="number" value={kr.targetValue} onChange={e => patch(kr.id, { targetValue: num(e.target.value) })} className="h-8" /></div>
+                <div><Label className="text-[10px]">Njësia</Label><Input value={kr.unit || ''} onChange={e => patch(kr.id, { unit: e.target.value })} placeholder="€" className="h-8" /></div>
+              </div>
+            )}
+            {kr.type === 'auto' && (
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <Label className="text-[10px]">Burimi (auto nga CRM)</Label>
+                  <Select
+                    value={kr.autoSource || 'tasksCompleted'}
+                    onValueChange={(v) => patch(kr.id, { autoSource: v as KeyResultAutoSource, unit: AUTO_SOURCE_UNIT[v as KeyResultAutoSource] })}
+                  >
+                    <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {(Object.keys(AUTO_SOURCE_LABELS) as KeyResultAutoSource[]).map(s => (
+                        <SelectItem key={s} value={s}>{AUTO_SOURCE_LABELS[s]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div><Label className="text-[10px]">Target</Label><Input type="number" value={kr.targetValue} onChange={e => patch(kr.id, { targetValue: num(e.target.value) })} className="h-8" /></div>
+                <p className="col-span-2 text-[10px] text-muted-foreground flex items-center gap-1">
+                  <Zap className="w-3 h-3 text-indigo-500" /> Vlera aktuale llogaritet automatikisht nga të dhënat e CRM-së brenda periudhës së objektivit.
+                </p>
+              </div>
+            )}
+            {kr.type === 'milestone' && (
+              <p className="text-[11px] text-muted-foreground flex items-center gap-1">
+                <Flag className="w-3 h-3 text-amber-500" /> Etapë binare — 0% deri sa të shënohet e përfunduar, pastaj 100%.
+              </p>
+            )}
+          </div>
+        );
+      })}
+      <Button type="button" variant="outline" size="sm" className="w-full gap-1" onClick={() => onChange([...value, makeKR()])}>
+        <Plus className="w-4 h-4" /> Shto Key Result
+      </Button>
+    </div>
   );
 };
 
@@ -441,6 +602,8 @@ const GoalForm: React.FC<{
   const [parentGoalId, setParentGoalId] = useState(initialData?.parentGoalId || '');
   const [status, setStatus] = useState(initialData?.status || 'On Track');
   const [teamId, setTeamId] = useState(initialData?.teamId || '');
+  const [keyResults, setKeyResults] = useState<KeyResult[]>(initialData?.keyResults || []);
+  const hasKRs = keyResults.filter(k => k.title.trim()).length > 0;
 
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -462,6 +625,21 @@ const GoalForm: React.FC<{
     };
     // Only set teamId when explicitly chosen; otherwise let useMutation auto-inject it
     if (teamId) data.teamId = teamId;
+
+    // OKR Key Results — sanitized so no `undefined` reaches Firestore arrays.
+    const cleanKRs: KeyResult[] = keyResults
+      .filter(k => k.title.trim())
+      .map(k => {
+        const base: KeyResult = {
+          id: k.id, title: k.title.trim(), type: k.type,
+          startValue: k.startValue || 0, currentValue: k.currentValue || 0,
+          targetValue: k.targetValue || 0, unit: k.unit || '',
+        };
+        if (k.type === 'auto') base.autoSource = k.autoSource || 'tasksCompleted';
+        if (k.type === 'milestone') base.done = !!k.done;
+        return base;
+      });
+    data.keyResults = cleanKRs.length ? cleanKRs : undefined;
 
     const tv = fd.get('targetValue') as string;
     if (tv) {
@@ -547,8 +725,26 @@ const GoalForm: React.FC<{
         </div>
         <div>
           <Label htmlFor="progress">Progresi (%)</Label>
-          <Input id="progress" name="progress" type="number" min="0" max="100" defaultValue={initialData?.progress || 0} />
+          {hasKRs ? (
+            <div className="h-10 flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Sparkles className="w-3.5 h-3.5 text-primary" /> Auto nga Key Results
+              <input type="hidden" name="progress" value={initialData?.progress || 0} />
+            </div>
+          ) : (
+            <Input id="progress" name="progress" type="number" min="0" max="100" defaultValue={initialData?.progress || 0} />
+          )}
         </div>
+      </div>
+
+      {/* Key Results (OKR) */}
+      <div className="pt-2 border-t">
+        <Label className="mb-2 flex items-center gap-1.5 text-sm font-semibold">
+          <Sparkles className="w-4 h-4 text-primary" /> Key Results (OKR)
+        </Label>
+        <p className="text-[11px] text-muted-foreground mb-3">
+          Rezultate të matshme që përcaktojnë suksesin. Progresi i objektivit llogaritet automatikisht si mesatarja e tyre. Përdor <b>Auto</b> për t'i lidhur me të dhënat e CRM-së.
+        </p>
+        <KeyResultsEditor value={keyResults} onChange={setKeyResults} />
       </div>
 
       {/* Owner (for individual) */}
@@ -593,9 +789,10 @@ const GoalForm: React.FC<{
         </div>
       )}
 
-      {/* Metric Tracking */}
+      {/* Metric Tracking — legacy single-metric, only when no Key Results are set */}
+      {!hasKRs && (
       <div>
-        <Label className="mb-2 block text-muted-foreground text-xs uppercase tracking-wider">Metrika (opsionale)</Label>
+        <Label className="mb-2 block text-muted-foreground text-xs uppercase tracking-wider">Metrika e thjeshtë (opsionale)</Label>
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
           <div>
             <Label htmlFor="targetValue" className="text-xs">Vlera Target</Label>
@@ -611,6 +808,7 @@ const GoalForm: React.FC<{
           </div>
         </div>
       </div>
+      )}
 
       {/* Linked CRM Elements */}
       <div className="space-y-3 pt-2 border-t">
@@ -706,19 +904,33 @@ const GoalDetailDialog: React.FC<{
   projects: Project[];
   leads: Lead[];
   tasks: Task[];
+  okrCtx: OkrContext;
   getName: (id: string | null | undefined, fb?: string) => string;
   getStatusIcon: (s: string) => React.ReactNode;
   onUpdate: (id: string, data: any) => Promise<any>;
   onDelete: (id: string) => Promise<any>;
   onEdit: () => void;
   milestoneMutation: ReturnType<typeof useMutation<Milestone>>;
-}> = ({ goal, open, onOpenChange, milestones, childGoals, projects, leads, tasks, getName, getStatusIcon, onUpdate, onDelete, onEdit, milestoneMutation }) => {
+}> = ({ goal, open, onOpenChange, milestones, childGoals, projects, leads, tasks, okrCtx, getName, getStatusIcon, onUpdate, onDelete, onEdit, milestoneMutation }) => {
   const [newMilestone, setNewMilestone] = useState('');
   const [newMilestoneDueDate, setNewMilestoneDueDate] = useState<Date | undefined>();
   const isTeam = (goal.scope || 'team') === 'team';
+
+  // Local, editable copy of Key Results for instant inline feedback.
+  const [krs, setKrs] = useState<KeyResult[]>(goal.keyResults || []);
+  useEffect(() => { setKrs(goal.keyResults || []); }, [goal.id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const liveGoal: Goal = useMemo(() => ({ ...goal, keyResults: krs }), [goal, krs]);
+  const okr = hasKeyResults(liveGoal);
+  const progress = goalDerivedProgress(liveGoal, okrCtx);
+  const derivedStatus = okr ? goalHealth(liveGoal, progress) : goal.status;
+  const score = goalScore(progress);
   const progressColor =
-    (goal.progress || 0) >= 75 ? 'bg-green-500' :
-    (goal.progress || 0) >= 40 ? 'bg-amber-500' : 'bg-red-500';
+    progress >= 75 ? 'bg-green-500' :
+    progress >= 40 ? 'bg-amber-500' : 'bg-red-500';
+
+  const persistKRs = (next: KeyResult[]) => { setKrs(next); onUpdate(goal.id, { keyResults: next }); };
+  const patchKR = (id: string, p: Partial<KeyResult>) => persistKRs(krs.map(k => (k.id === id ? { ...k, ...p } : k)));
 
   const handleAddMilestone = async () => {
     if (!newMilestone.trim()) return;
@@ -758,24 +970,95 @@ const GoalDetailDialog: React.FC<{
           {/* Progress */}
           <div>
             <div className="flex items-center justify-between text-sm mb-2">
-              <span className="font-medium">Progresi</span>
-              <span className="font-bold text-lg">{goal.progress || 0}%</span>
+              <span className="font-medium flex items-center gap-1.5">
+                Progresi {okr && <Badge variant="secondary" className="text-[10px] gap-0.5"><Sparkles className="w-3 h-3" />OKR · score {score.toFixed(1)}</Badge>}
+              </span>
+              <span className="font-bold text-lg">{progress}%</span>
             </div>
             <div className="w-full bg-muted rounded-full h-3">
-              <div className={`${progressColor} h-3 rounded-full transition-all`} style={{ width: `${goal.progress || 0}%` }} />
+              <div className={`${progressColor} h-3 rounded-full transition-all`} style={{ width: `${progress}%` }} />
             </div>
-            {goal.targetValue != null && (
+            {!okr && goal.targetValue != null && (
               <p className="text-sm text-muted-foreground mt-1">
                 {goal.currentValue || 0} / {goal.targetValue} {goal.metricUnit || ''}
               </p>
             )}
+            {okr && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Llogaritur automatikisht si mesatarja e {krs.length} Key Results.
+                {score >= 0.6 && score <= 0.7 && ' 🎯 Zonë ideale për objektiva ambicioze (0.6–0.7).'}
+              </p>
+            )}
           </div>
+
+          {/* Key Results */}
+          {okr && (
+            <div className="border-t pt-4">
+              <h4 className="font-medium mb-3 flex items-center gap-2">
+                <Sparkles className="w-4 h-4 text-primary" /> Key Results ({krs.length})
+              </h4>
+              <div className="space-y-3">
+                {krs.map((kr) => {
+                  const p = keyResultProgress(kr, liveGoal, okrCtx);
+                  const cur = keyResultCurrent(kr, liveGoal, okrCtx);
+                  const barColor = p >= 75 ? 'bg-green-500' : p >= 40 ? 'bg-amber-500' : 'bg-red-500';
+                  return (
+                    <div key={kr.id} className="p-3 rounded-lg border bg-muted/30">
+                      <div className="flex items-center gap-2 mb-2">
+                        {kr.type === 'auto' ? <Zap className="w-3.5 h-3.5 text-indigo-500 shrink-0" />
+                          : kr.type === 'milestone' ? <Flag className="w-3.5 h-3.5 text-amber-500 shrink-0" />
+                          : <Hash className="w-3.5 h-3.5 text-blue-500 shrink-0" />}
+                        <span className="text-sm font-medium flex-1 min-w-0 truncate">{kr.title}</span>
+                        <span className="text-sm font-bold tabular-nums">{p}%</span>
+                      </div>
+                      <div className="w-full bg-muted rounded-full h-2 mb-2">
+                        <div className={`${barColor} h-2 rounded-full transition-all`} style={{ width: `${p}%` }} />
+                      </div>
+                      <div className="flex items-center justify-between gap-2">
+                        {kr.type === 'milestone' ? (
+                          <button
+                            onClick={() => patchKR(kr.id, { done: !kr.done })}
+                            className={`flex items-center gap-1.5 text-xs px-2 py-1 rounded-md ${kr.done ? 'bg-green-100 dark:bg-green-900/30 text-green-700 dark:text-green-400' : 'bg-muted hover:bg-muted/70'}`}
+                          >
+                            <CheckCircle2 className={`w-3.5 h-3.5 ${kr.done ? 'text-green-500' : 'text-muted-foreground'}`} />
+                            {kr.done ? 'E përfunduar' : 'Shëno të përfunduar'}
+                          </button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground tabular-nums">
+                            {Math.round(cur).toLocaleString()} / {Math.round(kr.targetValue).toLocaleString()} {kr.unit}
+                            {kr.type === 'auto' && <span className="ml-1 text-indigo-500">· auto</span>}
+                          </span>
+                        )}
+                        {kr.type === 'metric' && (
+                          <div className="flex items-center gap-1">
+                            <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => patchKR(kr.id, { currentValue: Math.max(0, (kr.currentValue || 0) - 1) })}>
+                              <Minus className="w-3 h-3" />
+                            </Button>
+                            <Input
+                              type="number"
+                              value={kr.currentValue}
+                              onChange={(e) => setKrs(krs.map(k => k.id === kr.id ? { ...k, currentValue: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 } : k))}
+                              onBlur={() => onUpdate(goal.id, { keyResults: krs })}
+                              className="h-7 w-20 text-center text-xs"
+                            />
+                            <Button size="icon" variant="outline" className="h-7 w-7" onClick={() => patchKR(kr.id, { currentValue: (kr.currentValue || 0) + 1 })}>
+                              <Plus className="w-3 h-3" />
+                            </Button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
 
           {/* Meta Grid */}
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-sm">
             <div className="bg-muted/50 p-3 rounded">
-              <p className="text-muted-foreground text-xs mb-1">Statusi</p>
-              <Badge className={getStatusColor(goal.status)}>{goal.status}</Badge>
+              <p className="text-muted-foreground text-xs mb-1">Statusi{okr ? ' (auto)' : ''}</p>
+              <Badge className={getStatusColor(derivedStatus)}>{derivedStatus}</Badge>
             </div>
             <div className="bg-muted/50 p-3 rounded">
               <p className="text-muted-foreground text-xs mb-1">{isTeam ? 'Lloji' : 'Pronari'}</p>
@@ -802,21 +1085,25 @@ const GoalDetailDialog: React.FC<{
                 <ChevronRight className="w-4 h-4" /> Nën-Objektiva ({childGoals.length})
               </h4>
               <div className="space-y-2">
-                {childGoals.map(child => (
+                {childGoals.map(child => {
+                  const cp = goalDerivedProgress(child, okrCtx);
+                  const cs = hasKeyResults(child) ? goalHealth(child, cp) : child.status;
+                  return (
                   <div key={child.id} className="flex items-center gap-3 p-3 bg-muted/50 rounded">
-                    {getStatusIcon(child.status)}
+                    {getStatusIcon(cs)}
                     <div className="flex-1">
                       <p className="font-medium text-sm">{child.title}</p>
                       {child.ownerId && <p className="text-xs text-muted-foreground">{getName(child.ownerId)}</p>}
                     </div>
                     <div className="text-right">
-                      <p className="font-medium text-sm">{child.progress || 0}%</p>
+                      <p className="font-medium text-sm">{cp}%</p>
                       <div className="w-20 bg-muted rounded-full h-1.5 mt-1">
-                        <div className="bg-primary h-1.5 rounded-full" style={{ width: `${child.progress || 0}%` }} />
+                        <div className="bg-primary h-1.5 rounded-full" style={{ width: `${cp}%` }} />
                       </div>
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

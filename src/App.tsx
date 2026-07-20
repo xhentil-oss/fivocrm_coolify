@@ -69,6 +69,7 @@ const TimeTrackingView = lazyRetry(() => import('./views/TimeTrackingView'));
 const WorkspaceView = lazyRetry(() => import('./views/WorkspaceView'));
 const StaffDashboard = lazyRetry(() => import('./views/StaffDashboard'));
 const WorkloadView = lazyRetry(() => import('./views/WorkloadView'));
+const MomentumView = lazyRetry(() => import('./views/MomentumView'));
 const JoinInviteView = lazyRetry(() => import('./views/JoinInviteView'));
 const Customer360View = lazyRetry(() => import('./views/Customer360View'));
 const PortalLayout = lazyRetry(() => import('./views/portal/PortalLayout'));
@@ -349,6 +350,7 @@ function AppContent() {
                       <Route path="/app/time-tracking" element={<PermissionGate permissionKey="canAccessTimeTracking"><TimeTrackingView /></PermissionGate>} />
                       <Route path="/app/workspace" element={<PermissionGate permissionKey="canAccessProjects"><WorkspaceView /></PermissionGate>} />
                       <Route path="/app/workload" element={<PermissionGate permissionKey="canAccessReports"><WorkloadView /></PermissionGate>} />
+                      <Route path="/app/momentum" element={<PermissionGate permissionKey="canAccessProfile"><MomentumView /></PermissionGate>} />
                       <Route path="/app/price-calculator" element={<PermissionGate permissionKey="canAccessServices"><Suspense fallback={<div className="p-8 text-center"><span className="animate-spin">⏳</span></div>}><PriceCalculatorView /></Suspense></PermissionGate>} />
                       <Route path="/app/landing-pages" element={<PermissionGate permissionKey="canAccessServices"><Suspense fallback={<div className="p-8 text-center"><span className="animate-spin">⏳</span></div>}><LandingPagesView /></Suspense></PermissionGate>} />
                       <Route path="/app/contracts" element={<PermissionGate permissionKey="canAccessInvoices"><ContractsView /></PermissionGate>} />
