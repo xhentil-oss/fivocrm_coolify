@@ -141,6 +141,47 @@ service cloud.firestore {
             && isPortalClientFor(get(/databases/$(database)/documents/leads/$(resource.data.leadId)).data.customerId));
     }
 
+    // ── Tenant-key validation (hardened cutover) ──
+    // The tenant boundary must NOT trust a client-written users/{uid}.businessId.
+    // A user may set the tenant keys on their OWN users doc ONLY when they are backed by
+    // a real membership (staff) or a customer they own (portal); businessId is validated
+    // as a side-effect of whichever key is present, and can never be set on its own.
+    function membershipRef(teamId, uid) {
+      return /databases/$(database)/documents/teamMembers/$(teamId + '_' + uid);
+    }
+    function usersCustomerRef(cid) {
+      return /databases/$(database)/documents/customers/$(cid);
+    }
+    // Each tenant key present on the write is validated INDEPENDENTLY, so neither a
+    // staff user nor a portal client can inject a key that isn't theirs (e.g. staff
+    // planting a customerId to read a victim's portal data).
+    function usersTenantOk(userId) {
+      return usersTeamFieldOk(userId) && usersCustomerFieldOk(userId) && usersBusinessFieldOk(userId);
+    }
+    function usersTeamFieldOk(userId) {
+      return !('teamId' in request.resource.data)
+        || (request.resource.data.teamId is string
+            && exists(membershipRef(request.resource.data.teamId, userId)));
+    }
+    function usersCustomerFieldOk(userId) {
+      return !('customerId' in request.resource.data)
+        || (request.resource.data.customerId is string
+            && request.auth.token.email != null
+            && exists(usersCustomerRef(request.resource.data.customerId))
+            && get(usersCustomerRef(request.resource.data.customerId)).data.email
+                 == request.auth.token.email.lower());
+    }
+    function usersBusinessFieldOk(userId) {
+      // businessId must match the business of a present, already-validated teamId or customerId.
+      return !('businessId' in request.resource.data)
+        || (('teamId' in request.resource.data)
+            && get(membershipRef(request.resource.data.teamId, userId)).data.businessId
+                 == request.resource.data.businessId)
+        || (('customerId' in request.resource.data)
+            && get(usersCustomerRef(request.resource.data.customerId)).data.businessId
+                 == request.resource.data.businessId);
+    }
+
     // ── Team-Scoped Collections ──
     // Reads: authenticated only.  The client fetches all docs and filters by
     // teamId client-side (to support legacy docs without teamId and to avoid
@@ -464,7 +505,10 @@ service cloud.firestore {
 
     match /teamMembers/{docId} {
       allow read: if isAuth();
-      allow create: if isAuth();
+      // HARDENED: only the team owner may create memberships client-side. The one
+      // legitimate non-owner path — accepting an invite — goes through the Admin SDK
+      // (api/accept-invite), which validates the token + email and bypasses rules.
+      allow create: if isTeamOwner(request.resource.data.teamId) || isSuperAdmin();
       // Prevent role self-escalation: users can update own record but only safe fields
       allow update: if isAuth() && (
         // Self-update: only displayName/email/updatedAt, role must not change
@@ -700,7 +744,12 @@ service cloud.firestore {
     // Stores onboardingCompleted and other per-user state.
     match /users/{userId} {
       allow read: if isAuth() && request.auth.uid == userId;
-      allow write: if isAuth() && request.auth.uid == userId;
+      // HARDENED: a user may write their own doc, but may only set the tenant keys
+      // (teamId/businessId/customerId) to values backed by a real membership / their
+      // own customer. Super-admins (claim) bypass. This is what stops an attacker from
+      // self-attesting into a victim tenant via users/{uid}.businessId.
+      allow create, update: if request.auth.uid == userId
+        && (usersTenantOk(userId) || isSuperAdmin());
     }
 
     // ── userPreferences: per-user notification preferences, DND settings ──
