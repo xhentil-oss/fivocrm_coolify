@@ -1639,8 +1639,14 @@ const ChatView: React.FC = () => {
   // Only allow https:// attachment links to be rendered as clickable anchors.
   // A message written directly to Firestore could carry a `javascript:` (or
   // other) URI that would execute on click — reject anything non-https here.
-  const safeAttachmentHref = useCallback((url?: string | null): string | undefined =>
-    (url && /^https:\/\//i.test(url.trim())) ? url : undefined, []);
+  const safeAttachmentHref = useCallback((url?: string | null): string | undefined => {
+    if (!url) return undefined;
+    const u = url.trim();
+    // Block only dangerous schemes that could execute on click (javascript:/data:/
+    // vbscript:/file:); allow normal file URLs. Was https-only, which stripped
+    // legitimate legacy http:// VPS attachment links and broke downloads for some users.
+    return /^(javascript|data|vbscript|file):/i.test(u) ? undefined : u;
+  }, []);
 
   // Audio attachment detection — used for voice-notes rendering
   const isAudioUrl = useCallback((url: string) =>
