@@ -5,7 +5,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { useCollection, getGlobalTeamId } from '../hooks/useFirestore';
+import { useCollection, getGlobalTeamId, getGlobalBusinessId } from '../hooks/useFirestore';
 import type { SocialSnapshot, Customer } from '../types';
 import SocialAnalytics from '../components/SocialAnalytics';
 
@@ -44,6 +44,8 @@ const SocialMediaView: React.FC = () => {
   const [banner, setBanner] = useState<{ kind: 'ok' | 'err'; text: string } | null>(null);
 
   const teamId = getGlobalTeamId();
+  const businessId = getGlobalBusinessId();
+  const scopeQs = `teamId=${encodeURIComponent(teamId || '')}&businessId=${encodeURIComponent(businessId || '')}`;
   const customerName = useCallback(
     (id: string) => customers?.find((c) => c.id === id)?.name || 'Klient',
     [customers],
@@ -61,17 +63,17 @@ const SocialMediaView: React.FC = () => {
   }, [user]);
 
   const loadAccounts = useCallback(async () => {
-    if (!teamId || !user) return;
+    if ((!teamId && !businessId) || !user) return;
     setAccountsLoading(true);
     try {
-      const { accounts } = await authFetch(`/api/social?action=list&teamId=${encodeURIComponent(teamId)}`);
+      const { accounts } = await authFetch(`/api/social?action=list&${scopeQs}`);
       setAccounts(accounts || []);
     } catch (e) {
       setBanner({ kind: 'err', text: (e as Error).message });
     } finally {
       setAccountsLoading(false);
     }
-  }, [teamId, user, authFetch]);
+  }, [teamId, businessId, user, authFetch]);
 
   useEffect(() => { void loadAccounts(); }, [loadAccounts]);
 
@@ -94,10 +96,10 @@ const SocialMediaView: React.FC = () => {
   }, [params, setParams, loadAccounts]);
 
   const handleConnect = async () => {
-    if (!teamId || !selectedCustomer) { setBanner({ kind: 'err', text: 'Zgjidhni një klient së pari.' }); return; }
+    if ((!teamId && !businessId) || !selectedCustomer) { setBanner({ kind: 'err', text: 'Zgjidhni një klient së pari.' }); return; }
     setBusy('connect');
     try {
-      const { url } = await authFetch(`/api/social?action=oauth-url&teamId=${encodeURIComponent(teamId)}&customerId=${encodeURIComponent(selectedCustomer)}`);
+      const { url } = await authFetch(`/api/social?action=oauth-url&${scopeQs}&customerId=${encodeURIComponent(selectedCustomer)}`);
       window.location.href = url; // hand off to Facebook Login
     } catch (e) {
       setBanner({ kind: 'err', text: (e as Error).message });
@@ -106,12 +108,12 @@ const SocialMediaView: React.FC = () => {
   };
 
   const handleSync = async (accountId?: string) => {
-    if (!teamId) return;
+    if (!teamId && !businessId) return;
     setBusy(accountId || 'all');
     try {
       const { results } = await authFetch('/api/social?action=sync-now', {
         method: 'POST',
-        body: JSON.stringify({ teamId, accountId }),
+        body: JSON.stringify({ teamId, businessId, accountId }),
       });
       const failed = (results || []).filter((r: any) => r.error);
       setBanner(failed.length
@@ -126,10 +128,9 @@ const SocialMediaView: React.FC = () => {
   };
 
   const handleDisconnect = async (accountId: string) => {
-    if (!teamId) return;
     setBusy(accountId);
     try {
-      await authFetch('/api/social?action=disconnect', { method: 'POST', body: JSON.stringify({ teamId, accountId }) });
+      await authFetch('/api/social?action=disconnect', { method: 'POST', body: JSON.stringify({ accountId }) });
       setAccounts((prev) => prev.filter((a) => a.id !== accountId));
     } catch (e) {
       setBanner({ kind: 'err', text: (e as Error).message });

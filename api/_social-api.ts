@@ -68,10 +68,26 @@ async function requireAuth(req: VercelRequest): Promise<string | null> {
   }
 }
 
-async function isTeamMember(uid: string, teamId: string): Promise<boolean> {
-  const snap = await adminDb.collection('teamMembers')
-    .where('teamId', '==', teamId).where('userId', '==', uid).limit(1).get();
-  return !snap.empty;
+// A caller is authorized for a scope if they hold a teamMembers doc matching the
+// requested teamId OR businessId. businessId is the real tenant boundary (the app
+// moved off teamId scoping), so we accept either — one query, checked in memory.
+async function memberOf(uid: string, teamId?: string | null, businessId?: string | null): Promise<boolean> {
+  if (!teamId && !businessId) return false;
+  const snap = await adminDb.collection('teamMembers').where('userId', '==', uid).limit(50).get();
+  return snap.docs.some((d) => {
+    const m = d.data();
+    return (!!teamId && m.teamId === teamId) || (!!businessId && m.businessId === businessId);
+  });
+}
+
+// All socialAccounts matching a scope (businessId primary, teamId fallback),
+// de-duplicated by doc id.
+async function accountsForScope(teamId?: string | null, businessId?: string | null) {
+  const byId = new Map<string, any>();
+  const col = adminDb.collection('socialAccounts');
+  if (businessId) (await col.where('businessId', '==', businessId).get()).forEach((d) => byId.set(d.id, d));
+  if (teamId) (await col.where('teamId', '==', teamId).get()).forEach((d) => byId.set(d.id, d));
+  return [...byId.values()];
 }
 
 // Strip the access token before returning an account to the browser.
@@ -106,10 +122,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const uid = await requireAuth(req);
       if (!uid) return res.status(401).json({ error: 'Missing or invalid token' });
       const teamId = String(req.query.teamId || '');
+      const businessId = String(req.query.businessId || '');
       const customerId = String(req.query.customerId || '');
-      if (!teamId || !customerId) return res.status(400).json({ error: 'teamId dhe customerId janë të detyrueshëm' });
-      if (!(await isTeamMember(uid, teamId))) return res.status(403).json({ error: 'Nuk jeni anëtar i këtij ekipi' });
-      const state = signState({ uid, teamId, customerId });
+      if (!customerId || (!teamId && !businessId)) return res.status(400).json({ error: 'customerId dhe teamId/businessId janë të detyrueshëm' });
+      if (!(await memberOf(uid, teamId, businessId))) return res.status(403).json({ error: 'Nuk jeni anëtar i këtij ekipi' });
+      const state = signState({ uid, teamId, businessId, customerId });
       return res.status(200).json({ url: buildLoginUrl(APP_ID, redirectUri(req), state) });
     }
 
@@ -128,8 +145,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const custSnap = await adminDb.collection('customers').doc(state.customerId).get();
       if (!custSnap.exists) return back(`error=${encodeURIComponent('Klienti nuk u gjet')}`);
       const cust = custSnap.data()!;
-      const teamId = cust.teamId || state.teamId;
-      const businessId = cust.businessId ?? null;
+      // businessId is the tenant key the staff UI lists by → prefer the customer's,
+      // fall back to the active business the connect was initiated from. teamId is
+      // secondary (kept for reference / legacy team-scoped reads).
+      const businessId = cust.businessId || state.businessId || null;
+      const teamId = state.teamId || cust.teamId || null;
+      const scopeKey = businessId || teamId; // stable doc-id prefix
 
       const shortToken = await exchangeCodeForToken(APP_ID, APP_SECRET, redirectUri(req), code);
       const { token: longToken, expiresIn } = await exchangeForLongLived(APP_ID, APP_SECRET, shortToken);
@@ -143,7 +164,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       for (const p of pages) {
         // Facebook Page
-        const fbId = `${teamId}_facebook_${p.pageId}`;
+        const fbId = `${scopeKey}_facebook_${p.pageId}`;
         await adminDb.collection('socialAccounts').doc(fbId).set({
           teamId, businessId, customerId: state.customerId,
           platform: 'facebook', name: p.name, externalId: p.pageId,
@@ -156,7 +177,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
         // Linked Instagram business account (insights are mediated by the Page token)
         if (p.instagram?.id) {
-          const igId = `${teamId}_instagram_${p.instagram.id}`;
+          const igId = `${scopeKey}_instagram_${p.instagram.id}`;
           await adminDb.collection('socialAccounts').doc(igId).set({
             teamId, businessId, customerId: state.customerId,
             platform: 'instagram', name: p.instagram.username ? `@${p.instagram.username}` : p.name,
@@ -178,10 +199,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const uid = await requireAuth(req);
       if (!uid) return res.status(401).json({ error: 'Missing or invalid token' });
       const teamId = String(req.query.teamId || '');
-      if (!teamId) return res.status(400).json({ error: 'teamId mungon' });
-      if (!(await isTeamMember(uid, teamId))) return res.status(403).json({ error: 'Nuk jeni anëtar i këtij ekipi' });
-      const snap = await adminDb.collection('socialAccounts').where('teamId', '==', teamId).get();
-      const accounts = snap.docs
+      const businessId = String(req.query.businessId || '');
+      if (!teamId && !businessId) return res.status(400).json({ error: 'teamId ose businessId mungon' });
+      if (!(await memberOf(uid, teamId, businessId))) return res.status(403).json({ error: 'Nuk jeni anëtar i këtij ekipi' });
+      const docs = await accountsForScope(teamId, businessId);
+      const accounts = docs
         .map((d) => publicAccount(d.id, d.data()))
         .filter((a) => a.connected);
       return res.status(200).json({ accounts });
@@ -192,12 +214,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
       const uid = await requireAuth(req);
       if (!uid) return res.status(401).json({ error: 'Missing or invalid token' });
-      const { accountId, teamId } = req.body || {};
-      if (!accountId || !teamId) return res.status(400).json({ error: 'accountId dhe teamId janë të detyrueshëm' });
-      if (!(await isTeamMember(uid, teamId))) return res.status(403).json({ error: 'Nuk jeni anëtar i këtij ekipi' });
+      const { accountId } = req.body || {};
+      if (!accountId) return res.status(400).json({ error: 'accountId është i detyrueshëm' });
       const ref = adminDb.collection('socialAccounts').doc(accountId);
       const doc = await ref.get();
-      if (!doc.exists || doc.data()?.teamId !== teamId) return res.status(404).json({ error: 'Llogaria nuk u gjet' });
+      const a = doc.data();
+      // Authorize against the account's OWN scope (team or business it belongs to).
+      if (!doc.exists || !(await memberOf(uid, a?.teamId, a?.businessId))) {
+        return res.status(404).json({ error: 'Llogaria nuk u gjet' });
+      }
       // Soft-disconnect: revoke access but keep historical snapshots readable.
       await ref.update({ connected: false, accessToken: '', updatedAt: Timestamp.now() });
       return res.status(200).json({ success: true });
@@ -208,18 +233,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
       const uid = await requireAuth(req);
       if (!uid) return res.status(401).json({ error: 'Missing or invalid token' });
-      const { teamId, accountId, period } = req.body || {};
-      if (!teamId) return res.status(400).json({ error: 'teamId mungon' });
-      if (!(await isTeamMember(uid, teamId))) return res.status(403).json({ error: 'Nuk jeni anëtar i këtij ekipi' });
+      const { teamId, businessId, accountId, period } = req.body || {};
+      if (!teamId && !businessId) return res.status(400).json({ error: 'teamId ose businessId mungon' });
+      if (!(await memberOf(uid, teamId, businessId))) return res.status(403).json({ error: 'Nuk jeni anëtar i këtij ekipi' });
       const p = typeof period === 'string' && /^\d{4}-\d{2}$/.test(period) ? period : currentPeriod();
 
       if (accountId) {
         const doc = await adminDb.collection('socialAccounts').doc(accountId).get();
-        if (!doc.exists || doc.data()?.teamId !== teamId) return res.status(404).json({ error: 'Llogaria nuk u gjet' });
+        const a = doc.data();
+        if (!doc.exists || !(await memberOf(uid, a?.teamId, a?.businessId))) return res.status(404).json({ error: 'Llogaria nuk u gjet' });
         const result = await syncAccount(doc as any, p);
         return res.status(200).json({ success: true, results: [result] });
       }
-      const results = await syncAllAccounts(p, teamId);
+      const results = await syncAllAccounts(p, { teamId, businessId });
       return res.status(200).json({ success: true, results });
     }
 

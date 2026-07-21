@@ -76,15 +76,28 @@ export async function syncAccount(accountDoc: QueryDocumentSnapshot, period: str
   }
 }
 
-// Sync every connected account (optionally a single team) for a period.
-export async function syncAllAccounts(period: string, teamId?: string): Promise<SyncResult[]> {
-  let q = adminDb.collection('socialAccounts').where('connected', '==', true);
-  if (teamId) q = q.where('teamId', '==', teamId);
-  const snap = await q.get();
+// Sync every connected account for a period. Optionally narrow to a tenant scope
+// (businessId primary, teamId fallback — deduped by doc id). No scope = all
+// connected accounts (used by the monthly cron).
+export async function syncAllAccounts(
+  period: string,
+  scope?: { teamId?: string | null; businessId?: string | null },
+): Promise<SyncResult[]> {
+  const col = adminDb.collection('socialAccounts');
+  const byId = new Map<string, QueryDocumentSnapshot>();
+  // Single-field equality queries only (no composite index needed); `connected`
+  // is filtered in memory below.
+  if (scope?.teamId || scope?.businessId) {
+    if (scope.businessId) (await col.where('businessId', '==', scope.businessId).get()).forEach((d) => byId.set(d.id, d as QueryDocumentSnapshot));
+    if (scope.teamId) (await col.where('teamId', '==', scope.teamId).get()).forEach((d) => byId.set(d.id, d as QueryDocumentSnapshot));
+  } else {
+    (await col.where('connected', '==', true).get()).forEach((d) => byId.set(d.id, d as QueryDocumentSnapshot));
+  }
   const results: SyncResult[] = [];
   // Serial to stay gentle on Graph API rate limits — the set is small (per client).
-  for (const doc of snap.docs) {
-    results.push(await syncAccount(doc as QueryDocumentSnapshot, period));
+  for (const doc of byId.values()) {
+    if (doc.data().connected === false) continue;
+    results.push(await syncAccount(doc, period));
   }
   return results;
 }
