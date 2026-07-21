@@ -64,7 +64,10 @@ export async function syncAccount(accountDoc: QueryDocumentSnapshot, period: str
       { merge: true },
     );
 
-    await accountDoc.ref.update({ lastSyncedAt: now, lastSyncError: null, updatedAt: now });
+    // Surface non-fatal Graph API failures (deprecated metric, missing perm) so
+    // the staff UI explains why a metric came back 0 instead of failing silently.
+    const note = data.errors && data.errors.length ? data.errors.join(' | ').slice(0, 500) : null;
+    await accountDoc.ref.update({ lastSyncedAt: now, lastSyncError: note, updatedAt: now });
     return {
       accountId: accountDoc.id, platform: a.platform, period,
       followers: data.metrics.followers, reach: data.metrics.reach,

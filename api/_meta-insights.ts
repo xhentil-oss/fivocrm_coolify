@@ -75,6 +75,9 @@ export interface SnapshotData {
     city?: Record<string, number>;
     country?: Record<string, number>;
   };
+  // Non-fatal Graph API failures (deprecated metric, missing permission, …) so the
+  // caller can surface WHY a value came back 0 instead of failing silently.
+  errors?: string[];
 }
 
 // ── low-level Graph helpers ──────────────────────────────────────────────────
@@ -89,11 +92,17 @@ async function graphGet(path: string, params: Record<string, string>): Promise<a
 }
 
 // Tolerant variant for optional/volatile metrics: returns null instead of throwing.
-async function tryGraphGet(path: string, params: Record<string, string>): Promise<any | null> {
+// Pushes a readable reason into `errors` (when provided) so the caller can show
+// exactly which call failed and why.
+async function tryGraphGet(
+  path: string, params: Record<string, string>, errors?: string[], label?: string,
+): Promise<any | null> {
   try {
     return await graphGet(path, params);
   } catch (err) {
-    console.warn(`[meta-insights] optional call failed (${path}):`, (err as Error)?.message);
+    const msg = (err as Error)?.message || 'error';
+    console.warn(`[meta-insights] optional call failed (${label || path}):`, msg);
+    if (errors) errors.push(`${label || path}: ${msg}`);
     return null;
   }
 }
@@ -180,8 +189,13 @@ function indexInsights(res: any | null): Record<string, any> {
   return out;
 }
 
-const sumSeries = (metric: any): number =>
-  (metric?.values || []).reduce((a: number, v: any) => a + (Number(v.value) || 0), 0);
+// Sum an insights metric. Recent Graph API returns some metrics as a single
+// `total_value` object instead of a `values[]` time series — handle both.
+const sumSeries = (metric: any): number => {
+  if (!metric) return 0;
+  if (metric.total_value) return Number(metric.total_value.value) || 0;
+  return (metric.values || []).reduce((a: number, v: any) => a + (Number(v.value) || 0), 0);
+};
 
 // Merge several day-series into one sorted [{date,reach,impressions,engagement}] array.
 function buildDailyFromInsights(byMetric: Record<string, any>, map: Record<string, string>) {
@@ -207,26 +221,27 @@ export async function fetchFacebookSnapshot(account: MetaAccountLite, period: st
   const { since, until } = monthRange(period);
   const token = account.accessToken;
   const id = account.externalId;
+  const errors: string[] = [];
 
   const byMetric = indexInsights(
     await tryGraphGet(`${id}/insights`, {
       access_token: token, period: 'day', since, until,
       metric: 'page_impressions,page_impressions_unique,page_post_engagements,page_views_total',
-    }),
+    }, errors, 'fb-insights'),
   );
   const impressions = sumSeries(byMetric['page_impressions']);
   const reach = sumSeries(byMetric['page_impressions_unique']);
   const engagement = sumSeries(byMetric['page_post_engagements']);
   const profileViews = sumSeries(byMetric['page_views_total']);
 
-  const prof = await tryGraphGet(id, { access_token: token, fields: 'followers_count,fan_count' });
+  const prof = await tryGraphGet(id, { access_token: token, fields: 'followers_count,fan_count' }, errors, 'fb-profile');
   const followers = Number(prof?.followers_count ?? prof?.fan_count ?? 0);
 
   const growth = indexInsights(
     await tryGraphGet(`${id}/insights`, {
       access_token: token, period: 'day', since, until,
       metric: 'page_fan_adds_unique,page_fan_removes_unique',
-    }),
+    }, errors, 'fb-fan-growth'),
   );
   const followerGrowth = sumSeries(growth['page_fan_adds_unique']) - sumSeries(growth['page_fan_removes_unique']);
 
@@ -239,7 +254,7 @@ export async function fetchFacebookSnapshot(account: MetaAccountLite, period: st
   const postsRes = await tryGraphGet(`${id}/published_posts`, {
     access_token: token, since, until, limit: '25',
     fields: 'id,message,permalink_url,created_time,full_picture,shares,likes.summary(true),comments.summary(true)',
-  });
+  }, errors, 'fb-posts');
   const posts = (postsRes?.data || []).map((p: any) => {
     const likes = Number(p.likes?.summary?.total_count || 0);
     const comments = Number(p.comments?.summary?.total_count || 0);
@@ -265,6 +280,7 @@ export async function fetchFacebookSnapshot(account: MetaAccountLite, period: st
     },
     daily,
     topPosts,
+    errors,
   };
 }
 
@@ -274,31 +290,44 @@ export async function fetchInstagramSnapshot(account: MetaAccountLite, period: s
   const token = account.accessToken;
   const id = account.externalId;
 
-  const byMetric = indexInsights(
-    await tryGraphGet(`${id}/insights`, {
-      access_token: token, period: 'day', since, until,
-      metric: 'reach,impressions,profile_views',
-    }),
-  );
-  const reach = sumSeries(byMetric['reach']);
-  const impressions = sumSeries(byMetric['impressions']);
-  const profileViews = sumSeries(byMetric['profile_views']);
+  const errors: string[] = [];
 
-  const prof = await tryGraphGet(id, { access_token: token, fields: 'followers_count,media_count' });
+  // Split each metric into its OWN call: recent Graph API deprecates/renames IG
+  // metrics (e.g. `impressions` → `views`) and some now require
+  // `metric_type=total_value`. A single invalid metric in a batched call would
+  // 400 the whole request and zero everything — separate calls isolate that.
+  const reachIns = indexInsights(
+    await tryGraphGet(`${id}/insights`, { access_token: token, period: 'day', since, until, metric: 'reach' }, errors, 'ig-reach'),
+  );
+  const reach = sumSeries(reachIns['reach']);
+
+  // `impressions` was renamed to `views` in newer versions — try the new name first.
+  let impressions = sumSeries(indexInsights(
+    await tryGraphGet(`${id}/insights`, { access_token: token, period: 'day', since, until, metric: 'views' }, errors, 'ig-views'),
+  )['views']);
+  if (!impressions) {
+    impressions = sumSeries(indexInsights(
+      await tryGraphGet(`${id}/insights`, { access_token: token, period: 'day', since, until, metric: 'impressions' }, errors, 'ig-impressions'),
+    )['impressions']);
+  }
+
+  // profile_views now requires metric_type=total_value in recent versions.
+  const profileViews = sumSeries(indexInsights(
+    await tryGraphGet(`${id}/insights`, { access_token: token, period: 'day', since, until, metric: 'profile_views', metric_type: 'total_value' }, errors, 'ig-profile_views'),
+  )['profile_views']);
+
+  const prof = await tryGraphGet(id, { access_token: token, fields: 'followers_count,media_count' }, errors, 'ig-profile');
   const followers = Number(prof?.followers_count || 0);
 
-  const fc = indexInsights(
-    await tryGraphGet(`${id}/insights`, {
-      access_token: token, period: 'day', since, until, metric: 'follower_count',
-    }),
-  );
-  const followerGrowth = sumSeries(fc['follower_count']);
+  const followerGrowth = sumSeries(indexInsights(
+    await tryGraphGet(`${id}/insights`, { access_token: token, period: 'day', since, until, metric: 'follower_count' }, errors, 'ig-follower_count'),
+  )['follower_count']);
 
   // Media published in the month → engagement + top posts + per-day engagement.
   const mediaRes = await tryGraphGet(`${id}/media`, {
     access_token: token, since, until, limit: '50',
     fields: 'id,caption,permalink,media_type,media_product_type,thumbnail_url,media_url,timestamp,like_count,comments_count',
-  });
+  }, errors, 'ig-media');
   const startMs = start.getTime(), endMs = end.getTime();
   const media = (mediaRes?.data || []).filter((m: any) => {
     const t = m.timestamp ? new Date(m.timestamp).getTime() : 0;
@@ -327,7 +356,7 @@ export async function fetchInstagramSnapshot(account: MetaAccountLite, period: s
   });
   const topPosts = posts.sort((a: any, b: any) => b.engagement - a.engagement).slice(0, 10);
 
-  const daily = buildDailyFromInsights(byMetric, { reach: 'reach', impressions: 'impressions' });
+  const daily = buildDailyFromInsights(reachIns, { reach: 'reach' });
   for (const d of daily) d.engagement = engagementByDay.get(d.date) || 0;
   // days that had posts but no insight row
   for (const [day, eng] of engagementByDay) {
@@ -339,7 +368,7 @@ export async function fetchInstagramSnapshot(account: MetaAccountLite, period: s
     await tryGraphGet(`${id}/insights`, {
       access_token: token, period: 'lifetime',
       metric: 'audience_gender_age,audience_city,audience_country',
-    }),
+    }, errors, 'ig-demographics'),
   );
 
   return {
@@ -351,6 +380,7 @@ export async function fetchInstagramSnapshot(account: MetaAccountLite, period: s
     daily,
     topPosts,
     demographics,
+    errors,
   };
 }
 
