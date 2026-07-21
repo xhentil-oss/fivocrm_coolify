@@ -13,6 +13,8 @@ import {
   Sparkles, Square, CheckSquare, TrendingUp, PhoneCall,
 } from 'lucide-react';
 import { toast } from '../hooks/use-toast';
+import DepartmentReportFields, { useMyServiceLine } from './DepartmentReportFields';
+import { normalizeServiceLine } from '../lib/productivity/reportTemplates';
 import type { DailyReport, Project, Task, Lead, StandupEntry, TeamMember, Notification } from '../types';
 
 const POPUP_HOUR = 16;
@@ -37,8 +39,10 @@ const DailyReportPopup: React.FC = () => {
   const [mood, setMood] = useState<'great' | 'good' | 'neutral' | 'struggling'>('good');
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
+  const [customFields, setCustomFields] = useState<Record<string, string | number>>({});
   const [submitting, setSubmitting] = useState(false);
 
+  const serviceLine = useMyServiceLine();
   const today = getTodayString();
 
   // User-scoped dismiss key — prevents cross-user interference on shared devices
@@ -217,6 +221,8 @@ const DailyReportPopup: React.FC = () => {
         projectIds: selectedProjectIds,
         completedTaskIds: allCompletedIds.length > 0 ? allCompletedIds : undefined,
         mood,
+        serviceLine: normalizeServiceLine(serviceLine) || undefined,
+        customFields: Object.keys(customFields).length ? customFields : undefined,
       } as any);
 
       // Notify admin/manager when blocker is reported
@@ -252,6 +258,7 @@ const DailyReportPopup: React.FC = () => {
       setMood('good');
       setSelectedProjectIds([]);
       setSelectedTaskIds([]);
+      setCustomFields({});
     } catch (err) {
       console.error('Failed to submit daily report:', err);
       toast({ title: 'Gabim!', description: 'Nuk u ruajt raporti. Provo përsëri.', variant: 'destructive' });
@@ -438,6 +445,13 @@ const DailyReportPopup: React.FC = () => {
               )}
             </div>
           )}
+
+          {/* ── Department (serviceLine) fields ────────────────────── */}
+          <DepartmentReportFields
+            serviceLine={serviceLine}
+            values={customFields}
+            onChange={(k, v) => setCustomFields((prev) => ({ ...prev, [k]: v }))}
+          />
 
           {/* ── 2. Open items ──────────────────────────────────────── */}
           <div>

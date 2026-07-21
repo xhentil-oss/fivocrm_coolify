@@ -20,6 +20,8 @@ import {
   Sparkles, Eye, Bot, Loader2,
 } from 'lucide-react';
 import { toast } from '../hooks/use-toast';
+import DepartmentReportFields, { useMyServiceLine } from '../components/DepartmentReportFields';
+import { normalizeServiceLine, getReportTemplate, summableFields } from '../lib/productivity/reportTemplates';
 import type { DailyReport, TeamMember, Project } from '../types';
 
 function getTodayString(): string {
@@ -126,6 +128,24 @@ const DailyReportsView: React.FC = () => {
     }
     return map;
   }, [weekReports, week.days]);
+
+  // Weekly "what we achieved" — sum summable department metrics per serviceLine.
+  const weeklyDeptTotals = useMemo(() => {
+    const byLine = new Map<string, { template: ReturnType<typeof getReportTemplate>; totals: Map<string, number>; reports: number }>();
+    for (const r of weekReports) {
+      const key = normalizeServiceLine(r.serviceLine);
+      const tmpl = getReportTemplate(key);
+      if (!key || !tmpl || !r.customFields) continue;
+      let entry = byLine.get(key);
+      if (!entry) { entry = { template: tmpl, totals: new Map(), reports: 0 }; byLine.set(key, entry); }
+      entry.reports++;
+      for (const f of summableFields(tmpl)) {
+        const v = Number(r.customFields[f.key]);
+        if (!isNaN(v) && v) entry.totals.set(f.key, (entry.totals.get(f.key) || 0) + v);
+      }
+    }
+    return Array.from(byLine.values()).filter((e) => e.totals.size > 0);
+  }, [weekReports]);
 
   const handleAiSummary = async () => {
     const todayReports = weekReports.filter(r => r.date === today);
@@ -256,6 +276,33 @@ const DailyReportsView: React.FC = () => {
           </div>
         </Card>
       </div>
+
+      {/* Weekly "what we achieved" — department metric totals */}
+      {weeklyDeptTotals.length > 0 && (
+        <Card className="p-4">
+          <p className="text-sm font-semibold mb-3 flex items-center gap-2">
+            <Sparkles className="w-4 h-4 text-primary" /> Arritjet e javës sipas departamentit
+          </p>
+          <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+            {weeklyDeptTotals.map((e) => (
+              <div key={e.template!.key} className="rounded-lg border bg-muted/20 p-3">
+                <p className="text-sm font-medium mb-2 flex items-center gap-1.5">
+                  <span>{e.template!.emoji}</span> {e.template!.label}
+                  <span className="text-[11px] text-muted-foreground font-normal ml-auto">{e.reports} raporte</span>
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {e.template!.fields.filter((f) => e.totals.has(f.key)).map((f) => (
+                    <span key={f.key} className="text-xs px-2 py-1 rounded-md bg-primary/10 text-foreground">
+                      <span className="font-semibold tabular-nums">{Math.round((e.totals.get(f.key) || 0) * 100) / 100}{f.unit ? ` ${f.unit}` : ''}</span>
+                      <span className="text-muted-foreground"> {f.label}</span>
+                    </span>
+                  ))}
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* AI Summary (manager only) */}
       {isManagerOrAbove && aiSummary && (
@@ -414,6 +461,31 @@ const DailyReportsView: React.FC = () => {
                 </p>
               </div>
 
+              {selectedReport.customFields && Object.keys(selectedReport.customFields).length > 0 && (() => {
+                const tmpl = getReportTemplate(selectedReport.serviceLine);
+                const fields = tmpl?.fields || [];
+                const entries = Object.entries(selectedReport.customFields).filter(([, v]) => v !== '' && v != null);
+                if (entries.length === 0) return null;
+                return (
+                  <div>
+                    <Label className="flex items-center gap-2 mb-1 text-primary">
+                      <FileText className="w-4 h-4" /> Raporti i departamentit{tmpl ? ` — ${tmpl.emoji} ${tmpl.label}` : ''}
+                    </Label>
+                    <div className="grid grid-cols-2 gap-x-4 gap-y-2 bg-primary/5 border border-primary/20 p-3 rounded-lg">
+                      {entries.map(([k, v]) => {
+                        const f = fields.find((x) => x.key === k);
+                        return (
+                          <div key={k} className={f?.type === 'textarea' ? 'col-span-2' : ''}>
+                            <span className="text-muted-foreground text-xs block">{f?.label || k}</span>
+                            <span className="font-medium text-sm whitespace-pre-wrap">{String(v)}{f?.unit ? ` ${f.unit}` : ''}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                );
+              })()}
+
               {selectedReport.openItems?.trim() && (
                 <div>
                   <Label className="flex items-center gap-2 mb-1 text-warning">
@@ -506,8 +578,10 @@ const CreateReportDialog: React.FC<{ onClose: () => void; projects?: Project[] |
   const [hoursWorked, setHoursWorked] = useState('8');
   const [mood, setMood] = useState<'great' | 'good' | 'neutral' | 'struggling'>('good');
   const [selectedProjectIds, setSelectedProjectIds] = useState<string[]>([]);
+  const [customFields, setCustomFields] = useState<Record<string, string | number>>({});
   const [submitting, setSubmitting] = useState(false);
 
+  const serviceLine = useMyServiceLine();
   const today = getTodayString();
 
   const handleSubmit = async () => {
@@ -528,6 +602,8 @@ const CreateReportDialog: React.FC<{ onClose: () => void; projects?: Project[] |
         hoursWorked: parseFloat(hoursWorked) || 8,
         projectIds: selectedProjectIds,
         mood,
+        serviceLine: normalizeServiceLine(serviceLine) || undefined,
+        customFields: Object.keys(customFields).length ? customFields : undefined,
       } as any);
       toast({ title: 'Raporti u ruajt!' });
       onClose();
@@ -560,6 +636,13 @@ const CreateReportDialog: React.FC<{ onClose: () => void; projects?: Project[] |
             <Textarea value={completedToday} onChange={e => setCompletedToday(e.target.value)} rows={3}
               placeholder="p.sh. Përfundova 3 postime për Klientin A..." />
           </div>
+
+          <DepartmentReportFields
+            serviceLine={serviceLine}
+            values={customFields}
+            onChange={(k, v) => setCustomFields((prev) => ({ ...prev, [k]: v }))}
+          />
+
           <div>
             <Label className="flex items-center gap-2 mb-1.5">
               <Clock className="w-4 h-4 text-warning" /> Çfarë mbeti hapur
