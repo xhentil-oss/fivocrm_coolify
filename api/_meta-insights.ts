@@ -216,6 +216,72 @@ function buildDailyFromInsights(byMetric: Record<string, any>, map: Record<strin
 
 const round1 = (n: number) => Math.round(n * 10) / 10;
 
+// Meta caps insights since/until ranges at 30 days. Split a month into
+// non-overlapping ≤28-day windows (a 31-day month → two windows) so calls never
+// trip the "more than 30 days" error.
+function rangeWindows(sinceSec: number, untilSec: number): Array<[string, string]> {
+  const WIN = 28 * 24 * 3600;
+  const out: Array<[string, string]> = [];
+  let s = sinceSec;
+  while (s < untilSec) {
+    const u = Math.min(s + WIN, untilSec);
+    out.push([String(s), String(u)]);
+    s = u;
+  }
+  return out;
+}
+
+// Fetch a day-series IG metric across the whole month → date→value map (merged
+// across windows, deduped by date).
+async function igDaySeries(
+  id: string, token: string, metric: string, sinceSec: number, untilSec: number, errors: string[], label: string,
+): Promise<Map<string, number>> {
+  const days = new Map<string, number>();
+  for (const [s, u] of rangeWindows(sinceSec, untilSec)) {
+    const res = await tryGraphGet(`${id}/insights`, { access_token: token, metric, period: 'day', since: s, until: u }, errors, label);
+    const m = indexInsights(res)[metric];
+    for (const v of m?.values || []) {
+      const d = String(v.end_time || '').slice(0, 10);
+      if (d) days.set(d, Number(v.value) || 0);
+    }
+  }
+  return days;
+}
+
+// Fetch a total_value IG metric across the month, summed over windows.
+async function igTotal(
+  id: string, token: string, metric: string, sinceSec: number, untilSec: number, errors: string[], label: string,
+): Promise<number> {
+  let total = 0;
+  for (const [s, u] of rangeWindows(sinceSec, untilSec)) {
+    const res = await tryGraphGet(`${id}/insights`, { access_token: token, metric, period: 'day', metric_type: 'total_value', since: s, until: u }, errors, label);
+    total += sumSeries(indexInsights(res)[metric]);
+  }
+  return total;
+}
+
+// IG follower demographics (new API: metric=follower_demographics, one call per
+// breakdown). Returns undefined when nothing is available (accounts <100 followers).
+async function fetchIgDemographics(id: string, token: string, errors: string[]): Promise<SnapshotData['demographics'] | undefined> {
+  const out: Record<string, Record<string, number>> = {};
+  const map: Record<string, 'age' | 'gender' | 'city' | 'country'> = { age: 'age', gender: 'gender', city: 'city', country: 'country' };
+  for (const breakdown of Object.keys(map)) {
+    const res = await tryGraphGet(`${id}/insights`, {
+      access_token: token, metric: 'follower_demographics', period: 'lifetime', metric_type: 'total_value', timeframe: 'this_month', breakdown,
+    }, errors, `ig-demo-${breakdown}`);
+    const results = indexInsights(res)['follower_demographics']?.total_value?.breakdowns?.[0]?.results;
+    if (Array.isArray(results)) {
+      const bucket: Record<string, number> = {};
+      for (const r of results) {
+        const k = r.dimension_values?.[0];
+        if (k) bucket[k] = Number(r.value) || 0;
+      }
+      if (Object.keys(bucket).length) out[map[breakdown]] = bucket;
+    }
+  }
+  return (out.age || out.gender || out.city || out.country) ? out : undefined;
+}
+
 // ── Facebook Page snapshot ───────────────────────────────────────────────────
 export async function fetchFacebookSnapshot(account: MetaAccountLite, period: string): Promise<SnapshotData> {
   const { since, until } = monthRange(period);
@@ -223,11 +289,15 @@ export async function fetchFacebookSnapshot(account: MetaAccountLite, period: st
   const id = account.externalId;
   const errors: string[] = [];
 
+  // Page-level insight metrics require the read_insights permission (not requested
+  // — it's an "Invalid Scope" for newer apps). These calls fail expectedly, so we
+  // DON'T surface their errors (pass no errors array) to avoid an alarming ⚠. Once
+  // read_insights is granted via App Review these light up automatically.
   const byMetric = indexInsights(
     await tryGraphGet(`${id}/insights`, {
       access_token: token, period: 'day', since, until,
       metric: 'page_impressions,page_impressions_unique,page_post_engagements,page_views_total',
-    }, errors, 'fb-insights'),
+    }),
   );
   const impressions = sumSeries(byMetric['page_impressions']);
   const reach = sumSeries(byMetric['page_impressions_unique']);
@@ -241,7 +311,7 @@ export async function fetchFacebookSnapshot(account: MetaAccountLite, period: st
     await tryGraphGet(`${id}/insights`, {
       access_token: token, period: 'day', since, until,
       metric: 'page_fan_adds_unique,page_fan_removes_unique',
-    }, errors, 'fb-fan-growth'),
+    }),
   );
   const followerGrowth = sumSeries(growth['page_fan_adds_unique']) - sumSeries(growth['page_fan_removes_unique']);
 
@@ -289,41 +359,27 @@ export async function fetchInstagramSnapshot(account: MetaAccountLite, period: s
   const { start, end, since, until } = monthRange(period);
   const token = account.accessToken;
   const id = account.externalId;
-
   const errors: string[] = [];
+  const s = Number(since), u = Number(until);
 
-  // Split each metric into its OWN call: recent Graph API deprecates/renames IG
-  // metrics (e.g. `impressions` → `views`) and some now require
-  // `metric_type=total_value`. A single invalid metric in a batched call would
-  // 400 the whole request and zero everything — separate calls isolate that.
-  const reachIns = indexInsights(
-    await tryGraphGet(`${id}/insights`, { access_token: token, period: 'day', since, until, metric: 'reach' }, errors, 'ig-reach'),
-  );
-  const reach = sumSeries(reachIns['reach']);
+  // IG Graph API (v22): metrics are split by shape. `reach` + `follower_count`
+  // are day time-series (≤30-day windows); `views`, `profile_views`,
+  // `total_interactions` require metric_type=total_value. `impressions` is gone
+  // (→ `views`). Each metric is its own call so one failure never zeros the rest.
+  const reachByDay = await igDaySeries(id, token, 'reach', s, u, errors, 'ig-reach');
+  const reach = [...reachByDay.values()].reduce((a, b) => a + b, 0);
 
-  // `impressions` was renamed to `views` in newer versions — try the new name first.
-  let impressions = sumSeries(indexInsights(
-    await tryGraphGet(`${id}/insights`, { access_token: token, period: 'day', since, until, metric: 'views' }, errors, 'ig-views'),
-  )['views']);
-  if (!impressions) {
-    impressions = sumSeries(indexInsights(
-      await tryGraphGet(`${id}/insights`, { access_token: token, period: 'day', since, until, metric: 'impressions' }, errors, 'ig-impressions'),
-    )['impressions']);
-  }
-
-  // profile_views now requires metric_type=total_value in recent versions.
-  const profileViews = sumSeries(indexInsights(
-    await tryGraphGet(`${id}/insights`, { access_token: token, period: 'day', since, until, metric: 'profile_views', metric_type: 'total_value' }, errors, 'ig-profile_views'),
-  )['profile_views']);
+  const impressions = await igTotal(id, token, 'views', s, u, errors, 'ig-views');
+  const profileViews = await igTotal(id, token, 'profile_views', s, u, errors, 'ig-profile_views');
+  const totalInteractions = await igTotal(id, token, 'total_interactions', s, u, errors, 'ig-interactions');
 
   const prof = await tryGraphGet(id, { access_token: token, fields: 'followers_count,media_count' }, errors, 'ig-profile');
   const followers = Number(prof?.followers_count || 0);
 
-  const followerGrowth = sumSeries(indexInsights(
-    await tryGraphGet(`${id}/insights`, { access_token: token, period: 'day', since, until, metric: 'follower_count' }, errors, 'ig-follower_count'),
-  )['follower_count']);
+  const followerByDay = await igDaySeries(id, token, 'follower_count', s, u, errors, 'ig-follower_count');
+  const followerGrowth = [...followerByDay.values()].reduce((a, b) => a + b, 0);
 
-  // Media published in the month → engagement + top posts + per-day engagement.
+  // Media published in the month → top posts + per-day engagement breakdown.
   const mediaRes = await tryGraphGet(`${id}/media`, {
     access_token: token, since, until, limit: '50',
     fields: 'id,caption,permalink,media_type,media_product_type,thumbnail_url,media_url,timestamp,like_count,comments_count',
@@ -335,12 +391,12 @@ export async function fetchInstagramSnapshot(account: MetaAccountLite, period: s
   });
 
   const engagementByDay = new Map<string, number>();
-  let engagement = 0;
+  let mediaEngagement = 0;
   const posts = media.map((m: any) => {
     const likes = Number(m.like_count || 0);
     const comments = Number(m.comments_count || 0);
     const eng = likes + comments;
-    engagement += eng;
+    mediaEngagement += eng;
     const day = String(m.timestamp || '').slice(0, 10);
     if (day) engagementByDay.set(day, (engagementByDay.get(day) || 0) + eng);
     return {
@@ -356,20 +412,17 @@ export async function fetchInstagramSnapshot(account: MetaAccountLite, period: s
   });
   const topPosts = posts.sort((a: any, b: any) => b.engagement - a.engagement).slice(0, 10);
 
-  const daily = buildDailyFromInsights(reachIns, { reach: 'reach' });
-  for (const d of daily) d.engagement = engagementByDay.get(d.date) || 0;
-  // days that had posts but no insight row
-  for (const [day, eng] of engagementByDay) {
-    if (!daily.find((d) => d.date === day)) daily.push({ date: day, reach: 0, impressions: 0, engagement: eng });
-  }
-  daily.sort((a, b) => a.date.localeCompare(b.date));
+  // Account-level total_interactions is the authoritative engagement figure (works
+  // even in months with no new posts); fall back to the media sum if unavailable.
+  const engagement = totalInteractions || mediaEngagement;
 
-  const demographics = parseDemographics(
-    await tryGraphGet(`${id}/insights`, {
-      access_token: token, period: 'lifetime',
-      metric: 'audience_gender_age,audience_city,audience_country',
-    }, errors, 'ig-demographics'),
-  );
+  // Daily chart: reach from insights, engagement from post activity.
+  const dayKeys = new Set<string>([...reachByDay.keys(), ...engagementByDay.keys()]);
+  const daily = [...dayKeys].sort().map((d) => ({
+    date: d, reach: reachByDay.get(d) || 0, impressions: 0, engagement: engagementByDay.get(d) || 0,
+  }));
+
+  const demographics = await fetchIgDemographics(id, token, errors);
 
   return {
     metrics: {
@@ -381,34 +434,6 @@ export async function fetchInstagramSnapshot(account: MetaAccountLite, period: s
     topPosts,
     demographics,
     errors,
-  };
-}
-
-// Split IG audience_gender_age ("M.25-34" → gender + age buckets) and the
-// city/country maps. Returns undefined when Meta gave us nothing (accounts with
-// <100 followers get no demographics).
-function parseDemographics(res: any | null): SnapshotData['demographics'] | undefined {
-  const byMetric = indexInsights(res);
-  const ga = byMetric['audience_gender_age']?.values?.[0]?.value;
-  const city = byMetric['audience_city']?.values?.[0]?.value;
-  const country = byMetric['audience_country']?.values?.[0]?.value;
-  if (!ga && !city && !country) return undefined;
-
-  const age: Record<string, number> = {};
-  const gender: Record<string, number> = {};
-  if (ga) {
-    for (const [k, v] of Object.entries(ga)) {
-      const [g, bucket] = k.split('.');
-      const n = Number(v) || 0;
-      if (bucket) age[bucket] = (age[bucket] || 0) + n;
-      if (g) gender[g] = (gender[g] || 0) + n;
-    }
-  }
-  return {
-    age: Object.keys(age).length ? age : undefined,
-    gender: Object.keys(gender).length ? gender : undefined,
-    city: city || undefined,
-    country: country || undefined,
   };
 }
 
