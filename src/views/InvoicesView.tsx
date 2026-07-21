@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { useCollection, useMutation, useGlobalTeamId } from '../hooks/useFirestore';
+import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { getNextInvoiceNumber } from '../lib/firebase';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
@@ -113,6 +113,14 @@ const InvoicesView: React.FC = () => {
   const { data: teamMembers } = useCollection<any>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
   });
+  // Super-admins read teamMembers across ALL tenants (SUPER_ADMIN_BYPASS_COLLECTIONS),
+  // so scope notification recipients to the ACTIVE business — otherwise a super-admin
+  // marking an invoice paid would notify other tenants' admins.
+  const activeBusinessId = useGlobalBusinessId();
+  const scopedMembers = useMemo(
+    () => (teamMembers || []).filter((m: any) => !activeBusinessId || !m.businessId || m.businessId === activeBusinessId),
+    [teamMembers, activeBusinessId]
+  );
 
   // Auto-generated occurrences of a recurring parent invoice.
   const childrenOfInvoice = (parentId: string) =>
@@ -374,7 +382,7 @@ const InvoicesView: React.FC = () => {
     // Notify Admin/finance team when invoice marked Paid
     if (field === 'status' && editValue === 'Paid') {
       const invoice = invoices?.find(i => i.id === invoiceId);
-      const recipients = teamMembers?.filter((m: any) => m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices)) || [];
+      const recipients = scopedMembers.filter((m: any) => m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices));
       await Promise.all(recipients.map((m: any) => notificationMutation.create({
         userId: m.userId,
         type: 'invoice_paid',
@@ -420,7 +428,7 @@ const InvoicesView: React.FC = () => {
       if (isFullyPaid) updateData.paidAt = new Date();
       await invoiceMutation.update(partialPaymentInvoice.id, updateData);
       if (isFullyPaid) {
-        const recipients = teamMembers?.filter((m: any) => m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices)) || [];
+        const recipients = scopedMembers.filter((m: any) => m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices));
         await Promise.all(recipients.map((m: any) => notificationMutation.create({
           userId: m.userId,
           type: 'invoice_paid',
@@ -1475,6 +1483,13 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
   const { data: invoiceTeamMembers } = useCollection<any>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
   });
+  // Scope notification recipients to the ACTIVE business (super-admins read all tenants'
+  // teamMembers), so creating an invoice doesn't notify other tenants' admins.
+  const activeBusinessId = useGlobalBusinessId();
+  const scopedInvoiceMembers = useMemo(
+    () => (invoiceTeamMembers || []).filter((m: any) => !activeBusinessId || !m.businessId || m.businessId === activeBusinessId),
+    [invoiceTeamMembers, activeBusinessId]
+  );
 
   // Auto-generate invoice number for new invoices using a Firebase atomic counter.
   // The counter doc (counters/invoices_{teamId}) is incremented transactionally to avoid duplicates.
@@ -1684,7 +1699,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       });
 
       // Notify Admin/finance members about the new invoice
-      const invoiceRecipients = invoiceTeamMembers?.filter((m: any) => m.userId !== currentUser?.uid && (m.role === 'Admin' || m.canAccessInvoices)) || [];
+      const invoiceRecipients = scopedInvoiceMembers.filter((m: any) => m.userId !== currentUser?.uid && (m.role === 'Admin' || m.canAccessInvoices));
       await Promise.all(invoiceRecipients.map((m: any) => invoiceNotifMutation.create({
         userId: m.userId,
         type: 'invoice_created',

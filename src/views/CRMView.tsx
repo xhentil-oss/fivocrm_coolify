@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { useCollection, useDocument, useMutation, useGlobalTeamId, useWhatsappEnabled } from '../hooks/useFirestore';
+import { useCollection, useDocument, useMutation, useGlobalTeamId, useGlobalBusinessId, useWhatsappEnabled } from '../hooks/useFirestore';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import type { WhatsAppMessage } from '../types';
 import { useAuth } from '../contexts/AuthContext';
@@ -117,6 +117,14 @@ const CRMView: React.FC = () => {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
   const teamMembers = useUniqueTeamMembers(rawTeamMembers);
+  // Super-admins read teamMembers across ALL tenants (SUPER_ADMIN_BYPASS_COLLECTIONS),
+  // so scope assignee pickers / notification recipients to the ACTIVE business —
+  // otherwise other tenants' people leak into dropdowns and notifications.
+  const activeBusinessId = useGlobalBusinessId();
+  const scopedMembers = useMemo(
+    () => (teamMembers || []).filter((m: any) => !activeBusinessId || !m.businessId || m.businessId === activeBusinessId),
+    [teamMembers, activeBusinessId]
+  );
   const leadMutation = useMutation<Lead>('leads');
   const leadActivityMutation = useMutation('leadActivities');
   const dealMutation = useMutation<Deal>('deals');
@@ -440,10 +448,10 @@ const CRMView: React.FC = () => {
   // Round-robin distribute leads among eligible reps (CRM-capable roles).
   const handleAutoDistribute = async (ids: string[]) => {
     if (ids.length === 0) return;
-    const eligible = (teamMembers || []).filter((m: any) =>
+    const eligible = scopedMembers.filter((m: any) =>
       ['Sales', 'SalesAgent', 'Manager', 'Admin'].includes(m.role) || m.canAccessCRM === true
     );
-    const pool = eligible.length ? eligible : (teamMembers || []);
+    const pool = eligible.length ? eligible : scopedMembers;
     if (pool.length === 0) { toast({ title: 'Asnjë anëtar i disponueshëm për caktim', variant: 'destructive' }); return; }
     try {
       await Promise.all(ids.map((id, i) => {
@@ -696,7 +704,7 @@ const CRMView: React.FC = () => {
 
       // Send notification to Admin + Sales (canAccessCRM) team members (best-effort)
       if (user && teamMembers) {
-        const notifyPromises = teamMembers
+        const notifyPromises = scopedMembers
           .filter(m => m.userId !== user.uid && (m.role === 'Admin' || m.canAccessCRM))
           .map(m => notificationMutation.create({
             userId: m.userId,
@@ -1117,7 +1125,7 @@ const CRMView: React.FC = () => {
               <DialogHeader>
                 <DialogTitle>Krijo Lead të Ri</DialogTitle>
               </DialogHeader>
-              <LeadForm onSubmit={(data) => { setDirty(false); handleCreateLead(data); }} disabled={saving} teamMembers={teamMembers || []} getName={getName} onDirtyChange={setDirty} tagSuggestions={tagSuggestions} />
+              <LeadForm onSubmit={(data) => { setDirty(false); handleCreateLead(data); }} disabled={saving} teamMembers={scopedMembers} getName={getName} onDirtyChange={setDirty} tagSuggestions={tagSuggestions} />
             </DialogContent>
           </Dialog>
         )}
@@ -1574,7 +1582,7 @@ const CRMView: React.FC = () => {
                       >
                         Pa asignuar
                       </DropdownMenuItem>
-                      {teamMembers?.map(m => (
+                      {scopedMembers.map(m => (
                         <DropdownMenuItem
                           key={m.userId}
                           onClick={async () => {
@@ -1838,7 +1846,7 @@ const CRMView: React.FC = () => {
                             </SelectTrigger>
                             <SelectContent>
                               <SelectItem value="unassigned">Pa asignuar</SelectItem>
-                              {(teamMembers || []).filter(m => m.status === 'Active').map(m => (
+                              {scopedMembers.filter(m => m.status === 'Active').map(m => (
                                 <SelectItem key={m.userId} value={m.userId}>
                                   {getName(m.userId, m.email || m.userId)}
                                 </SelectItem>
