@@ -8,7 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useGoogleApi, DriveFile } from '../contexts/GoogleApiContext';
-import { Calendar as CalendarIcon, MessageSquare, Users, ChevronRight, ChevronDown, Clock, Play, Pause, Square, Paperclip, Upload, X, AtSign, Eye, Plus, Trash2, Edit2, Send, Hash, Check, Cloud, Maximize2, Minimize2, ImageIcon, Loader2 } from 'lucide-react';
+import { Calendar as CalendarIcon, MessageSquare, Users, ChevronRight, ChevronDown, Clock, Play, Pause, Square, Paperclip, Upload, X, AtSign, Eye, Plus, Trash2, Edit2, Send, Hash, Check, Cloud, Maximize2, Minimize2, ImageIcon, Loader2, FileText, Download } from 'lucide-react';
 import GoogleDrivePicker from './GoogleDrivePicker';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -675,14 +675,29 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     }
   };
 
+  // Materials: images + PDF only, max 15 MB each.
+  const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
+  const isAllowedMaterial = (f: File) => f.type.startsWith('image/') || f.type === 'application/pdf';
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
     if (!files || files.length === 0) return;
 
+    const picked = Array.from(files);
+    const valid = picked.filter(f => isAllowedMaterial(f) && f.size <= MAX_ATTACHMENT_BYTES);
+    if (valid.length < picked.length) {
+      toast({
+        title: 'Skedar i papranuar',
+        description: 'Lejohen vetëm imazhe ose PDF, deri në 15 MB secili.',
+        variant: 'destructive',
+      });
+    }
+    if (valid.length === 0) { e.target.value = ''; return; }
+
     const newAttachments = [...attachments];
 
     try {
-      for (const file of Array.from(files)) {
+      for (const file of valid) {
         // Upload to the file server so the URL survives reloads (a blob: URL is
         // session-scoped and dies on navigation/app restart).
         const result = await uploadCommentImage(file, 'task-attachments');
@@ -1877,7 +1892,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             <div className="flex items-center justify-between mb-3">
               <h4 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
                 <Paperclip className="w-4 h-4" />
-                Skedarët ({attachments.length})
+                Materiale ({attachments.length})
               </h4>
               {!isGuestMode && (
                 <div className="flex gap-1">
@@ -1886,8 +1901,9 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                       <Cloud className="w-4 h-4" />
                     </Button>
                   )}
-                  <Button variant="ghost" size="sm" onClick={() => fileInputRef.current?.click()} title="Ngarko skedar">
-                    <Upload className="w-4 h-4" />
+                  <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => fileInputRef.current?.click()} disabled={commentImageUploading} title="Bashkëngjit material (imazh ose PDF)" aria-label="Bashkëngjit material (imazh ose PDF)">
+                    {commentImageUploading ? <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" /> : <Upload className="w-4 h-4" />}
+                    <span className="hidden sm:inline text-xs">Shto material</span>
                   </Button>
                 </div>
               )}
@@ -1895,6 +1911,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 ref={fileInputRef}
                 type="file"
                 multiple
+                accept="image/*,application/pdf"
                 className="hidden"
                 onChange={handleFileUpload}
               />
@@ -1909,32 +1926,50 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             
             {attachments.length > 0 && (
               <div className="space-y-2">
-                {attachments.map((file: any, index: number) => (
-                  <div key={index} className="flex items-center justify-between p-2 bg-muted/50 rounded text-sm">
-                    <div className="flex items-center gap-2 min-w-0">
-                      {file.source === 'google-drive' ? (
-                        <Cloud className="w-3 h-3 text-blue-500 flex-shrink-0" />
-                      ) : (
-                        <Paperclip className="w-3 h-3 text-muted-foreground flex-shrink-0" />
-                      )}
-                      {file.url ? (
-                        <a href={file.url} target="_blank" rel="noopener noreferrer" className="truncate text-blue-600 hover:underline">{file.name}</a>
-                      ) : (
-                        <span className="truncate">{file.name}</span>
-                      )}
+                {attachments.map((file: any, index: number) => {
+                  const isImage = typeof file.type === 'string'
+                    ? file.type.startsWith('image/')
+                    : /\.(png|jpe?g|gif|webp|bmp)(\?.*)?$/i.test(file.url || '');
+                  const isPdf = file.type === 'application/pdf' || /\.pdf(\?.*)?$/i.test(file.url || '');
+                  const sizeLabel = file.size
+                    ? (file.size >= 1024 * 1024 ? `${(file.size / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(file.size / 1024))} KB`)
+                    : '';
+                  return (
+                    <div key={index} className="flex items-center justify-between gap-2 p-2 bg-muted/50 rounded text-sm">
+                      <div className="flex items-center gap-2 min-w-0">
+                        {isImage && file.url ? (
+                          <a href={file.url} target="_blank" rel="noopener noreferrer" className="flex-shrink-0">
+                            <img src={file.url} alt={file.name} loading="lazy" className="w-10 h-10 rounded object-cover border border-border/40" />
+                          </a>
+                        ) : (
+                          <span className={`w-8 h-8 rounded flex items-center justify-center flex-shrink-0 ${isPdf ? 'bg-red-500/10 text-red-600' : 'bg-muted text-muted-foreground'}`}>
+                            {file.source === 'google-drive' ? <Cloud className="w-4 h-4 text-blue-500" /> : isPdf ? <FileText className="w-4 h-4" /> : <Paperclip className="w-4 h-4" />}
+                          </span>
+                        )}
+                        <div className="min-w-0">
+                          {file.url ? (
+                            <a href={file.url} target="_blank" rel="noopener noreferrer" className="block truncate text-blue-600 hover:underline">{file.name}</a>
+                          ) : (
+                            <span className="block truncate">{file.name}</span>
+                          )}
+                          {sizeLabel && <span className="text-[11px] text-muted-foreground">{sizeLabel}</span>}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-0.5 flex-shrink-0">
+                        {file.url && (
+                          <a href={file.url} download={file.name} target="_blank" rel="noopener noreferrer" title="Shkarko" aria-label={`Shkarko ${file.name}`} className="h-6 w-6 inline-flex items-center justify-center rounded hover:bg-accent text-muted-foreground hover:text-foreground">
+                            <Download className="w-3 h-3" />
+                          </a>
+                        )}
+                        {!isGuestMode && (
+                          <Button variant="ghost" size="sm" className="h-6 w-6 p-0" title="Hiq materialin" aria-label={`Hiq ${file.name}`} onClick={() => handleRemoveAttachment(index)}>
+                            <X className="w-3 h-3" />
+                          </Button>
+                        )}
+                      </div>
                     </div>
-                    {!isGuestMode && (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-6 w-6 p-0"
-                        onClick={() => handleRemoveAttachment(index)}
-                      >
-                        <X className="w-3 h-3" />
-                      </Button>
-                    )}
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
