@@ -178,6 +178,100 @@ export interface EmailCampaign {
   createdByUserId?: string | null;
 }
 
+// ── Social Media analytics (Meta: Facebook Pages + Instagram) ─────────────
+// A connected social account whose analytics FivoCRM pulls on the client's
+// behalf. The access token lives here — this is a STAFF-ONLY collection, never
+// read by the portal. Clients only ever read the derived SocialSnapshot docs.
+export interface SocialAccount {
+  id: string;
+  teamId: string;
+  businessId?: string;
+  customerId: string;            // CRM customer this account belongs to (drives portal scoping of snapshots)
+  platform: 'facebook' | 'instagram';
+  name: string;                  // Page name / IG @handle shown in the UI
+  externalId: string;            // FB Page id, or IG business account id
+  pageId?: string;               // instagram: the linked FB Page id (insights are page-mediated)
+  username?: string;             // IG @handle / page vanity name
+  pictureUrl?: string;           // avatar
+  accessToken: string;           // long-lived Page access token (server-use only, never sent to portal)
+  tokenExpiresAt?: Date | null;  // null = never expires (system-user token)
+  connected: boolean;            // false after a disconnect (row kept for history)
+  lastSyncedAt?: Date | null;
+  lastSyncError?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface SocialMetrics {
+  reach: number;                 // unique accounts reached
+  impressions: number;           // total impressions / views
+  engagement: number;            // reactions + comments + shares/saves
+  followers: number;             // follower / fan count at period end
+  followerGrowth: number;        // net change over the period
+  profileViews?: number;
+  postsCount?: number;           // posts published in the period
+  linkClicks?: number;
+  engagementRate?: number;       // engagement / reach (%), precomputed for the UI
+}
+
+export interface SocialDailyPoint {
+  date: string;                  // 'YYYY-MM-DD'
+  reach?: number;
+  impressions?: number;
+  engagement?: number;
+  followers?: number;
+}
+
+export interface SocialPost {
+  id: string;
+  caption?: string;
+  permalink?: string;
+  thumbnailUrl?: string;
+  mediaType?: string;            // IMAGE | VIDEO | CAROUSEL_ALBUM | REEL
+  timestamp?: Date;
+  likes?: number;
+  comments?: number;
+  shares?: number;
+  saves?: number;
+  reach?: number;
+  engagement?: number;
+}
+
+export interface SocialDemographics {
+  age?: Record<string, number>;     // e.g. { '18-24': 1200, '25-34': 3400, ... }
+  gender?: Record<string, number>;  // e.g. { 'M': 1000, 'F': 900, 'U': 50 }
+  city?: Record<string, number>;
+  country?: Record<string, number>;
+}
+
+// A monthly analytics snapshot for one SocialAccount. Written once per month by
+// the cron sync (one Graph API call per account → one doc), so Firebase cost is
+// negligible. Holds headline metrics + a daily breakdown + top posts. This is
+// the ONLY social collection the client portal reads (scoped by customerId).
+export interface SocialSnapshot {
+  id: string;                    // `${accountId}_${period}` — idempotent upsert key
+  teamId: string;
+  businessId?: string;
+  customerId: string;            // portal scoping
+  accountId: string;
+  platform: 'facebook' | 'instagram';
+  accountName: string;           // denormalized (portal never reads SocialAccount)
+  username?: string;
+  pictureUrl?: string;
+  period: string;                // 'YYYY-MM' — the reported month
+  periodStart: Date;
+  periodEnd: Date;
+  metrics: SocialMetrics;
+  daily: SocialDailyPoint[];     // per-day breakdown within the month
+  topPosts: SocialPost[];        // best posts of the month
+  demographics?: SocialDemographics; // audience split (IG business, ≥100 followers)
+  fetchedAt: Date;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
 // A reusable HTML email template. Body supports {{name}}, {{company}}, {{email}}
 // merge tokens filled per-recipient by the sender.
 export interface EmailTemplate {
@@ -1184,6 +1278,10 @@ export interface DailyReport {
   projectIds?: string[];
   completedTaskIds?: string[];
   mood?: 'great' | 'good' | 'neutral' | 'struggling';
+  /** Department (serviceLine) this report was filled against, e.g. "seo". */
+  serviceLine?: string;
+  /** Department-specific fields (keys defined by the serviceLine template). */
+  customFields?: Record<string, string | number>;
   createdAt: Date;
   updatedAt: Date;
 }

@@ -54,6 +54,7 @@ const InvoicesView = lazyRetry(() => import('./views/InvoicesView'));
 const ChatView = lazyRetry(() => import('./views/ChatView'));
 const WhatsappInboxView = lazyRetry(() => import('./views/WhatsappInboxView'));
 const MarketingView = lazyRetry(() => import('./views/MarketingView'));
+const SocialMediaView = lazyRetry(() => import('./views/SocialMediaView'));
 const ReportsView = lazyRetry(() => import('./views/ReportsView'));
 const StaffRevenueView = lazyRetry(() => import('./views/StaffRevenueView'));
 const FinancesView = lazyRetry(() => import('./views/FinancesView'));
@@ -105,6 +106,7 @@ const PrivacyPolicyView = lazyRetry(() => import('./views/PrivacyPolicyView'));
 const DeleteAccountView = lazyRetry(() => import('./views/DeleteAccountView'));
 const ContractsView = lazyRetry(() => import('./views/ContractsView'));
 const PortalContractsView = lazyRetry(() => import('./views/portal/PortalContractsView'));
+const PortalSocialView = lazyRetry(() => import('./views/portal/PortalSocialView'));
 
 function LazyFallback() {
   return (
@@ -257,6 +259,7 @@ function AppContent() {
         <Route path="projects/:projectId" element={<Suspense fallback={<LazyFallback />}><PortalProjectDetailView /></Suspense>} />
         <Route path="preventiva" element={<Suspense fallback={<LazyFallback />}><PortalQuotesView /></Suspense>} />
         <Route path="contracts" element={<Suspense fallback={<LazyFallback />}><PortalContractsView /></Suspense>} />
+        <Route path="social" element={<Suspense fallback={<LazyFallback />}><PortalSocialView /></Suspense>} />
       </Route>
       
       {/* Protected routes */}
@@ -337,6 +340,7 @@ function AppContent() {
                       <Route path="/app/chat" element={<PermissionGate permissionKey="canAccessChat"><ChatView /></PermissionGate>} />
                       <Route path="/app/whatsapp" element={<PermissionGate permissionKey="canAccessWhatsapp"><WhatsappInboxView /></PermissionGate>} />
                       <Route path="/app/marketing" element={<PermissionGate permissionKey="canAccessMarketing"><MarketingView /></PermissionGate>} />
+                      <Route path="/app/social" element={<PermissionGate permissionKey="canAccessMarketing"><SocialMediaView /></PermissionGate>} />
                       <Route path="/app/reports" element={<PermissionGate permissionKey="canAccessReports"><ReportsView /></PermissionGate>} />
                       <Route path="/app/staff-revenue" element={<PermissionGate permissionKey="canAccessReports"><StaffRevenueView /></PermissionGate>} />
                       <Route path="/app/finances" element={<PermissionGate permissionKey="isAdmin"><FinancesView /></PermissionGate>} />

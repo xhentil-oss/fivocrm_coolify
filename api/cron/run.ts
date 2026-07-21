@@ -4,6 +4,7 @@ import { buildInvoiceEmail } from '../_invoiceEmail.js';
 import admin, { adminDb as db, adminMessaging, adminAuth } from '../_firebaseAdmin.js';
 import { runWhmcsSync, runWhmcsClientSync } from '../_whmcsSync.js';
 import { sendBulkEmail, renderMergeTokens } from '../_mailer.js';
+import { syncAllAccounts, currentPeriod } from '../_social.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 function authorize(req: VercelRequest): boolean {
@@ -2580,6 +2581,20 @@ async function runProjectSpendRollup() {
   return { updated, projects: projectsSnap.size };
 }
 
+// ── Social media analytics — monthly pull ────────────────────────────────────
+// Triggered once a month (VPS scheduler fires it late on the last day of the
+// month). Pulls Facebook/Instagram insights for every connected account and
+// writes ONE socialSnapshots doc per account → negligible Firebase cost.
+// Accepts ?period=YYYY-MM to backfill a specific month (defaults to current).
+async function runSocialMonthlySync(period?: string): Promise<Record<string, unknown>> {
+  const p = period && /^\d{4}-\d{2}$/.test(period) ? period : currentPeriod();
+  const results = await syncAllAccounts(p);
+  const ok = results.filter((r) => !r.error).length;
+  const failed = results.filter((r) => r.error);
+  if (failed.length) console.error(`[CRON:social-monthly-sync] ${failed.length} dështuan:`, failed);
+  return { period: p, accounts: results.length, synced: ok, failed: failed.length };
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const isManual = req.query.manual === '1';
@@ -2689,6 +2704,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'lead-cadence-steps':
         result = await runLeadCadenceSteps();
+        break;
+      case 'social-monthly-sync':
+        result = await runSocialMonthlySync(req.query.period as string | undefined);
         break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit

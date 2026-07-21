@@ -21,6 +21,7 @@ import {
   Sparkles,
   MessageCircle,
   ArrowRight,
+  Share2,
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Loader2 } from 'lucide-react';
@@ -32,6 +33,7 @@ const navItems = [
   { to: '/portal/services', icon: ShoppingBag, label: 'Shërbimet' },
   { to: '/portal/projects', icon: FolderKanban, label: 'Projektet' },
   { to: '/portal/preventiva', icon: Calculator, label: 'Preventiva' },
+  { to: '/portal/social', icon: Share2, label: 'Rrjetet Sociale' },
 ];
 
 const PortalLayout: React.FC = () => {

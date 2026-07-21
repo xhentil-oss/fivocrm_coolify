@@ -889,6 +889,18 @@ function startCronSchedulers(): void {
   scheduleDailyUtc(CRON_DAILY_HOUR, 0, () => { void triggerCronJob('run-all'); });
   // Housekeeping at 03:00 UTC.
   scheduleDailyUtc(3, 0, () => { void triggerCronJob('cleanup-old-notifications'); });
+  // Social-media analytics — pulled ONCE per month (last day, 22:00 UTC) to keep
+  // Firebase writes negligible. The daily tick fires the job only when tomorrow is
+  // a new month (i.e. today is the last day of the month). Insights for the ending
+  // month are still fully available at that time (stories retention is 24h).
+  scheduleDailyUtc(22, 0, () => {
+    const now = new Date();
+    const tomorrow = new Date(now);
+    tomorrow.setUTCDate(now.getUTCDate() + 1);
+    if (tomorrow.getUTCMonth() !== now.getUTCMonth()) {
+      void triggerCronJob('social-monthly-sync');
+    }
+  });
   // Kick the frequent set shortly after boot so a restart doesn't stall a broadcast.
   setTimeout(() => { void triggerCronJob('whatsapp-broadcasts'); }, MIN);
   console.log(`[CRON] ✅ Schedulerët aktiv → ${CRM_BASE_URL} (daily run-all @ ${CRON_DAILY_HOUR}:00 UTC)`);

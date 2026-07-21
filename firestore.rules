@@ -765,6 +765,25 @@ service cloud.firestore {
       allow update, delete: if canManageBusinessDoc() || isTeamMember(resource.data.teamId);
     }
 
+    // ── Social Media analytics (Meta) ──
+    // socialAccounts holds long-lived Page access tokens → NEVER exposed to the
+    // client SDK. Both the staff UI (via api/social) and the cron sync use the
+    // Admin SDK, which bypasses rules. Deny all client access outright.
+    match /socialAccounts/{docId} {
+      allow read, write: if false;
+    }
+
+    // socialSnapshots are the derived, token-free monthly reports. Staff read
+    // their business's snapshots (queries filter by businessId); the portal client
+    // reads only their own customer's (portal query is `where customerId == myId`).
+    // Written exclusively by the Admin SDK sync — no client writes.
+    match /socialSnapshots/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
+      allow create, update, delete: if false;
+    }
+
     match /lidMappings/{docId} {
       allow read: if isAuth();
       allow create, update: if isAuth();
