@@ -6,17 +6,19 @@ import welcomeHandler from './_send-welcome-email.js';
 import notificationHandler from './_send-notification-email.js';
 import marketingWebhookHandler from './_marketing-webhook.js';
 import acceptInviteHandler from './_accept-invite.js';
+import socialHandler from './_social-api.js';
 
 /**
- * Consolidated dispatcher (named "email" for historical reasons — it also routes a
- * couple of non-email actions, e.g. marketing-webhook and accept-invite).
+ * Consolidated dispatcher (named "email" for historical reasons — it also routes
+ * several non-email actions: marketing-webhook, accept-invite, and social).
  *
- * Routes (via vercel.json rewrites that preserve the original client URL):
+ * Routes (via vercel.json rewrites that preserve the original client URL + query):
  *   /api/send-invite              -> ?type=invite
  *   /api/send-invoice-email       -> ?type=invoice
  *   /api/send-lead-reminder-email -> ?type=lead-reminder
  *   /api/send-welcome-email       -> ?type=welcome
  *   /api/accept-invite            -> ?type=accept-invite
+ *   /api/social                   -> ?type=social  (sub-dispatches on ?action=)
  *
  * Created to stay under Vercel Hobby's 12-function limit.
  */
@@ -33,9 +35,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.url.includes('send-notification-email')) type = 'notification';
     else if (req.url.includes('marketing-webhook')) type = 'marketing-webhook';
     else if (req.url.includes('accept-invite')) type = 'accept-invite';
+    else if (req.url.includes('/api/social')) type = 'social';
   }
 
   switch (type) {
+    case 'social':
+      // Social Media module — sub-dispatches on ?action= (oauth/list/sync/...).
+      return socialHandler(req, res);
     case 'accept-invite':
       return acceptInviteHandler(req, res);
     case 'marketing-webhook':
