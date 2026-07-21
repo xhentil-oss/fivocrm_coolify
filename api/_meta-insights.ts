@@ -21,11 +21,17 @@ const GRAPH = 'https://graph.facebook.com/v21.0';
 // Permissions required to read Page + Instagram insights on a client's behalf.
 // These are "advanced" permissions → require Meta App Review + Business
 // Verification before they work for accounts the developer doesn't own.
+//
+// NOTE: `read_insights` is intentionally omitted. Newer Meta apps reject it as an
+// "Invalid Scope" in the login dialog (it blocks the whole flow). Instagram
+// insights use `instagram_manage_insights` and are unaffected. Facebook *Page*
+// insights (page_impressions/…) do need `read_insights` — add it back to this
+// list ONLY after requesting it in App Review → Permissions, where it becomes
+// grantable. Until then, our helper degrades FB page metrics to 0 (tryGraphGet).
 export const META_SCOPES = [
   'public_profile',
   'pages_show_list',
   'pages_read_engagement',
-  'read_insights',
   'instagram_basic',
   'instagram_manage_insights',
   'business_management',
