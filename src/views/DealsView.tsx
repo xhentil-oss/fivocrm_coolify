@@ -3,7 +3,7 @@ import {
   DndContext, DragOverlay, PointerSensor, useSensor, useSensors, useDraggable, useDroppable,
   type DragStartEvent, type DragEndEvent,
 } from '@dnd-kit/core';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useUserNames } from '../hooks/useUserNames';
@@ -73,6 +73,13 @@ const DealsView: React.FC = () => {
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: rawMembers } = useCollection<TeamMember>('teamMembers', { where: [{ field: 'status', operator: '==', value: 'Active' }] });
   const teamMembers = useUniqueTeamMembers(rawMembers);
+  // Super-admins read teamMembers across ALL tenants (SUPER_ADMIN_BYPASS_COLLECTIONS),
+  // so scope the owner/assignee picker to the ACTIVE business.
+  const activeBusinessId = useGlobalBusinessId();
+  const scopedMembers = useMemo(
+    () => (teamMembers || []).filter((m: any) => !activeBusinessId || !m.businessId || m.businessId === activeBusinessId),
+    [teamMembers, activeBusinessId]
+  );
   const { getName } = useUserNames(teamMembers || []);
   const dealMutation = useMutation<Deal>('deals');
   const leadMutation = useMutation<Lead>('leads');
@@ -289,7 +296,7 @@ const DealsView: React.FC = () => {
                   <SelectTrigger><SelectValue placeholder="Zgjidh" /></SelectTrigger>
                   <SelectContent className="max-h-72">
                     <SelectItem value="__none__">— Asnjë —</SelectItem>
-                    {(teamMembers || []).map(m => <SelectItem key={m.userId} value={m.userId}>{getName(m.userId)}</SelectItem>)}
+                    {scopedMembers.map(m => <SelectItem key={m.userId} value={m.userId}>{getName(m.userId)}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>

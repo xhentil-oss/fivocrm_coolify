@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useToast } from '../hooks/use-toast';
 import { useNavigate } from 'react-router-dom';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
 import { getNextInvoiceNumber } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -76,6 +76,14 @@ const ProjectsView: React.FC = () => {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
   const teamMembers = useUniqueTeamMembers(rawTeamMembers);
+  // Super-admins read teamMembers across ALL tenants (SUPER_ADMIN_BYPASS_COLLECTIONS),
+  // so scope the project member/responsible pickers to the ACTIVE business — otherwise
+  // other tenants' people (e.g. another business's admin) leak into the form.
+  const activeBusinessId = useGlobalBusinessId();
+  const formTeamMembers = useMemo(
+    () => (teamMembers || []).filter((m: any) => !activeBusinessId || !m.businessId || m.businessId === activeBusinessId),
+    [teamMembers, activeBusinessId]
+  );
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
   const { data: allInvoices } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
@@ -518,7 +526,7 @@ const ProjectsView: React.FC = () => {
               <DialogHeader>
                 <DialogTitle>Krijo Projekt të Ri</DialogTitle>
               </DialogHeader>
-              <ProjectForm key={isCreateDialogOpen ? 'open' : 'closed'} onSubmit={handleCreateProject} teams={teams || []} customers={customers || []} teamMembers={teamMembers || []} services={services || []} />
+              <ProjectForm key={isCreateDialogOpen ? 'open' : 'closed'} onSubmit={handleCreateProject} teams={teams || []} customers={customers || []} teamMembers={formTeamMembers} services={services || []} />
             </DialogContent>
           </Dialog>
         )}
@@ -897,7 +905,7 @@ const ProjectsView: React.FC = () => {
               onSubmit={handleEditProject}
               teams={teams || []}
               customers={customers || []}
-              teamMembers={teamMembers || []}
+              teamMembers={formTeamMembers}
               services={services || []}
               initialData={projectToEdit}
             />
