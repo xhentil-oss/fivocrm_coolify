@@ -5,6 +5,7 @@ import admin, { adminDb as db, adminMessaging, adminAuth } from '../_firebaseAdm
 import { runWhmcsSync, runWhmcsClientSync } from '../_whmcsSync.js';
 import { sendBulkEmail, renderMergeTokens } from '../_mailer.js';
 import { syncAllAccounts, currentPeriod } from '../_social.js';
+import { sendReportsForPeriod } from '../_socialEmail.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 function authorize(req: VercelRequest): boolean {
@@ -2586,13 +2587,19 @@ async function runProjectSpendRollup() {
 // month). Pulls Facebook/Instagram insights for every connected account and
 // writes ONE socialSnapshots doc per account → negligible Firebase cost.
 // Accepts ?period=YYYY-MM to backfill a specific month (defaults to current).
-async function runSocialMonthlySync(period?: string): Promise<Record<string, unknown>> {
+async function runSocialMonthlySync(period?: string, opts?: { email?: boolean }): Promise<Record<string, unknown>> {
   const p = period && /^\d{4}-\d{2}$/.test(period) ? period : currentPeriod();
   const results = await syncAllAccounts(p);
   const ok = results.filter((r) => !r.error).length;
   const failed = results.filter((r) => r.error);
   if (failed.length) console.error(`[CRON:social-monthly-sync] ${failed.length} dështuan:`, failed);
-  return { period: p, accounts: results.length, synced: ok, failed: failed.length };
+  // After the pull, email each client their monthly report (client only). Skipped
+  // when explicitly disabled (?email=0) so a manual re-sync doesn't re-notify.
+  let email: { sent: number; skipped: number; failed: number } | undefined;
+  if (opts?.email !== false) {
+    email = await sendReportsForPeriod(p);
+  }
+  return { period: p, accounts: results.length, synced: ok, failed: failed.length, email };
 }
 
 // ── Main handler ──────────────────────────────────────────────────────────────
@@ -2706,7 +2713,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         result = await runLeadCadenceSteps();
         break;
       case 'social-monthly-sync':
-        result = await runSocialMonthlySync(req.query.period as string | undefined);
+        result = await runSocialMonthlySync(req.query.period as string | undefined, { email: req.query.email !== '0' });
         break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit

@@ -5,6 +5,7 @@ import {
   buildLoginUrl, exchangeCodeForToken, exchangeForLongLived, listManagedAccounts,
 } from './_meta-insights.js';
 import { syncAccount, syncAllAccounts, currentPeriod } from './_social.js';
+import { sendCustomerReport } from './_socialEmail.js';
 
 /**
  * Social Media module API — connect Facebook/Instagram accounts and pull their
@@ -247,6 +248,27 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const results = await syncAllAccounts(p, { teamId, businessId });
       return res.status(200).json({ success: true, results });
+    }
+
+    // ── POST send-report (manual "Dërgo raportin me email") ────────────────────
+    if (action === 'send-report') {
+      if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+      const uid = await requireAuth(req);
+      if (!uid) return res.status(401).json({ error: 'Missing or invalid token' });
+      const { customerId, period } = req.body || {};
+      if (!customerId) return res.status(400).json({ error: 'customerId mungon' });
+      // Authorize against the customer's OWN tenant (team/business).
+      const cust = (await adminDb.collection('customers').doc(customerId).get()).data();
+      if (!cust || !(await memberOf(uid, cust.teamId, cust.businessId))) {
+        return res.status(403).json({ error: 'Nuk keni akses te ky klient' });
+      }
+      const p = typeof period === 'string' && /^\d{4}-\d{2}$/.test(period) ? period : currentPeriod();
+      const result = await sendCustomerReport(customerId, p);
+      if (result.ok) return res.status(200).json({ success: true });
+      const reason = result.skipped === 'no-email' ? 'Klienti nuk ka email të regjistruar'
+        : result.skipped === 'no-data' ? 'Nuk ka raport për këtë muaj (sinkronizo së pari)'
+        : result.error || 'Dërgimi dështoi';
+      return res.status(200).json({ success: false, error: reason });
     }
 
     return res.status(400).json({ error: `Veprim i panjohur: "${action}"` });

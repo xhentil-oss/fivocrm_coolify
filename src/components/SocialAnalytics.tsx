@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import {
   Facebook, Instagram, Users, Eye, Heart, TrendingUp, Activity,
-  Image as ImageIcon, MapPin,
+  Image as ImageIcon, MapPin, Mail, Loader2,
 } from 'lucide-react';
 import type { SocialSnapshot } from '../types';
 
@@ -46,15 +46,18 @@ interface Props {
   loading?: boolean;
   /** Compact = portal (bigger headings handled by caller). */
   emptyHint?: string;
+  /** Staff-only: when provided, shows a "Dërgo me email" button for the client. */
+  onSendReport?: (customerId: string, period: string) => Promise<void> | void;
 }
 
-const SocialAnalytics: React.FC<Props> = ({ snapshots, loading, emptyHint }) => {
+const SocialAnalytics: React.FC<Props> = ({ snapshots, loading, emptyHint, onSendReport }) => {
+  const [sending, setSending] = useState(false);
   // Group snapshots by account so the user can switch between connected profiles.
   const accounts = useMemo(() => {
-    const map = new Map<string, { accountId: string; name: string; platform: string; pictureUrl?: string | null; periods: string[] }>();
+    const map = new Map<string, { accountId: string; customerId: string; name: string; platform: string; pictureUrl?: string | null; periods: string[] }>();
     for (const s of snapshots) {
       if (!map.has(s.accountId)) {
-        map.set(s.accountId, { accountId: s.accountId, name: s.accountName, platform: s.platform, pictureUrl: s.pictureUrl, periods: [] });
+        map.set(s.accountId, { accountId: s.accountId, customerId: s.customerId, name: s.accountName, platform: s.platform, pictureUrl: s.pictureUrl, periods: [] });
       }
       map.get(s.accountId)!.periods.push(s.period);
     }
@@ -130,16 +133,34 @@ const SocialAnalytics: React.FC<Props> = ({ snapshots, loading, emptyHint }) => 
           ))}
         </div>
         {activeAccount && activeAccount.periods.length > 0 && (
-          <select
-            value={period}
-            onChange={(e) => setPeriod(e.target.value)}
-            className="ml-auto text-sm rounded-lg border border-border bg-card px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/40"
-            aria-label="Zgjidh muajin"
-          >
-            {activeAccount.periods.map((p) => (
-              <option key={p} value={p}>{periodLabel(p)}</option>
-            ))}
-          </select>
+          <div className="ml-auto flex items-center gap-2">
+            {onSendReport && (
+              <button
+                onClick={async () => {
+                  if (!activeAccount || sending) return;
+                  setSending(true);
+                  try { await onSendReport(activeAccount.customerId, period); }
+                  finally { setSending(false); }
+                }}
+                disabled={sending}
+                className="inline-flex items-center gap-1.5 text-sm rounded-lg border border-border bg-card px-3 py-1.5 hover:bg-accent disabled:opacity-50"
+                title="Dërgo raportin e këtij muaji te klienti me email"
+              >
+                {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Mail className="w-4 h-4" />}
+                Dërgo me email
+              </button>
+            )}
+            <select
+              value={period}
+              onChange={(e) => setPeriod(e.target.value)}
+              className="text-sm rounded-lg border border-border bg-card px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-primary/40"
+              aria-label="Zgjidh muajin"
+            >
+              {activeAccount.periods.map((p) => (
+                <option key={p} value={p}>{periodLabel(p)}</option>
+              ))}
+            </select>
+          </div>
         )}
       </div>
 

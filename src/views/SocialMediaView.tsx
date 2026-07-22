@@ -127,6 +127,20 @@ const SocialMediaView: React.FC = () => {
     }
   };
 
+  const handleSendReport = async (customerId: string, period: string) => {
+    try {
+      const r = await authFetch('/api/social?action=send-report', {
+        method: 'POST',
+        body: JSON.stringify({ customerId, period }),
+      });
+      setBanner(r.success
+        ? { kind: 'ok', text: 'Raporti u dërgua me email te klienti.' }
+        : { kind: 'err', text: r.error || 'Dërgimi dështoi.' });
+    } catch (e) {
+      setBanner({ kind: 'err', text: (e as Error).message });
+    }
+  };
+
   const handleDisconnect = async (accountId: string) => {
     setBusy(accountId);
     try {
@@ -183,6 +197,7 @@ const SocialMediaView: React.FC = () => {
           snapshots={snapshots || []}
           loading={loading}
           emptyHint={canManage ? 'Lidhni një llogari te tab-i "Llogaritë" dhe sinkronizoni për të parë raportin.' : undefined}
+          onSendReport={canManage ? handleSendReport : undefined}
         />
       )}
 
