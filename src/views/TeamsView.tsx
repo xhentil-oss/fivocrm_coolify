@@ -3,7 +3,7 @@ import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFir
 import { useAuth } from '../contexts/AuthContext';
 import { getDocs, query, where, collection, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Users, Plus, MoreVertical, Mail, UserPlus, Shield, Trash2, CheckCircle, XCircle, Clock, Edit2, Check, X, Settings, Eye, Globe, Search, Share2, PenTool, Palette, Megaphone, Code2, HeadphonesIcon, Briefcase, DollarSign, TrendingUp, UserCheck } from 'lucide-react';
+import { Users, Plus, MoreVertical, Mail, UserPlus, Shield, Trash2, CheckCircle, XCircle, Clock, Edit2, Check, X, Settings, Eye, Globe, Search, Share2, PenTool, Palette, Megaphone, Code2, HeadphonesIcon, Briefcase, DollarSign, TrendingUp, UserCheck, Copy, Send } from 'lucide-react';
 
 // Returns icon + colour classes based on the team's department / service category
 function getTeamDeptIcon(department?: string) {
@@ -131,6 +131,59 @@ const TeamsView: React.FC = () => {
     setIsCreateDialogOpen(false);
   };
 
+  // Build the join link from a STABLE public base — window.location.origin can be
+  // https://localhost inside the Capacitor app (or a preview URL), which would make
+  // the emailed link useless. Prefer VITE_APP_URL, then a non-localhost origin, then
+  // the known production URL.
+  const buildInviteLink = (token: string) => {
+    const envUrl = (import.meta.env.VITE_APP_URL as string | undefined)?.replace(/\/$/, '');
+    const origin = typeof window !== 'undefined' ? window.location.origin : '';
+    const base = envUrl
+      || (origin && !/localhost|127\.0\.0\.1|capacitor:/i.test(origin) ? origin : 'https://fivocrm.vercel.app');
+    return `${base}/join/${token}`;
+  };
+
+  // Copy an invite link to the clipboard — the reliable fallback so adding someone
+  // never depends solely on email delivery.
+  const copyInviteLink = async (token: string) => {
+    const link = buildInviteLink(token);
+    try {
+      await navigator.clipboard.writeText(link);
+      toast({ title: 'Linku u kopjua', description: 'Ngjite dhe dërgoja personit (WhatsApp / email tjetër).' });
+    } catch {
+      toast({ title: 'Linku i ftesës', description: link });
+    }
+  };
+
+  // Re-send the invite email for an existing pending invite (falls back to copying
+  // the link if the email fails again).
+  const handleResendInvite = async (invite: any) => {
+    if (!user) return;
+    try {
+      const idToken = await user.getIdToken();
+      const response = await fetch('/api/send-invite', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${idToken}` },
+        body: JSON.stringify({
+          to: invite.email,
+          teamName: invite.teamName || 'Ekip',
+          inviteLink: buildInviteLink(invite.token),
+          senderName: user.displayName || 'FivoCRM',
+        }),
+      });
+      if (response.ok) {
+        toast({ title: 'Email-i u ridërgua', description: `Ftesa iu ridërgua ${invite.email}.` });
+      } else {
+        const errBody = await response.json().catch(() => ({}));
+        await copyInviteLink(invite.token);
+        toast({ title: 'Email nuk u dërgua — linku u kopjua', description: `Dërgoja manualisht. (${response.status}: ${errBody.detail ?? errBody.error ?? 'unknown'})`, variant: 'destructive' });
+      }
+    } catch {
+      await copyInviteLink(invite.token);
+      toast({ title: 'Email nuk u dërgua — linku u kopjua', description: 'Dërgoja personit manualisht.', variant: 'destructive' });
+    }
+  };
+
   const handleInviteMember = async (formData: FormData) => {
     if (!selectedTeam || !user) return;
 
@@ -198,7 +251,7 @@ const TeamsView: React.FC = () => {
 
     // Send invitation email via API
     try {
-      const inviteLink = `${window.location.origin}/join/${token}`;
+      const inviteLink = buildInviteLink(token);
       const idToken = await user.getIdToken();
       const response = await fetch('/api/send-invite', {
         method: 'POST',
@@ -210,17 +263,21 @@ const TeamsView: React.FC = () => {
           senderName: user.displayName || 'FivoCRM'
         })
       });
-      
+
       if (response.ok) {
         toast({ title: 'Ftesa u dërgua!', description: `Email-i i ftesës u dërgua te ${email}.` });
       } else {
         const errBody = await response.json().catch(() => ({}));
         console.error('[send-invite] error:', response.status, errBody);
-        toast({ title: 'Ftesa u ruajt', description: `Email nuk u dërgua (${response.status}: ${errBody.detail ?? errBody.error ?? 'unknown'})`, variant: 'destructive' });
+        // Email failed but the invite is saved — copy the link so the admin can share
+        // it manually instead of being stranded.
+        await copyInviteLink(token);
+        toast({ title: 'Ftesa u ruajt — linku u kopjua', description: `Email nuk u dërgua; dërgoja linkun manualisht. (${response.status}: ${errBody.detail ?? errBody.error ?? 'unknown'})`, variant: 'destructive' });
       }
     } catch (error) {
       console.error('Email error:', error);
-      toast({ title: 'Ftesa u ruajt', description: 'Email-i nuk u dërgua. Gabim rrjeti.', variant: 'destructive' });
+      await copyInviteLink(token);
+      toast({ title: 'Ftesa u ruajt — linku u kopjua', description: 'Email-i nuk u dërgua (gabim rrjeti); dërgoja linkun manualisht.', variant: 'destructive' });
     }
     
     setIsInviteDialogOpen(false);
@@ -800,15 +857,25 @@ const TeamsView: React.FC = () => {
                       </p>
                     </div>
                     <div className="flex gap-2">
+                      <Button variant="outline" size="sm" onClick={() => copyInviteLink(invite.token)} title="Kopjo linkun e ftesës">
+                        <Copy className="w-4 h-4 mr-1" />
+                        Kopjo linkun
+                      </Button>
                       {(permissions.isAdmin || permissions.isOwner) && (
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => inviteMutation.update(invite.id, { status: 'Cancelled' })}
-                        >
-                          <XCircle className="w-4 h-4 mr-1" />
-                          Anulo
-                        </Button>
+                        <>
+                          <Button variant="outline" size="sm" onClick={() => handleResendInvite(invite)} title="Ridërgo email-in">
+                            <Send className="w-4 h-4 mr-1" />
+                            Ridërgo
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => inviteMutation.update(invite.id, { status: 'Cancelled' })}
+                          >
+                            <XCircle className="w-4 h-4 mr-1" />
+                            Anulo
+                          </Button>
+                        </>
                       )}
                     </div>
                   </div>
