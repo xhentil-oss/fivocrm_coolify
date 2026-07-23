@@ -142,7 +142,12 @@ export function computeStaffRevenue(
   const expDate = (e: Expense) => parseDate((e as any).date) || parseDate((e as any).createdAt);
   const directExpensesOf = (projectId: string): number =>
     (expenses ?? [])
-      .filter(e => (e as any).projectId === projectId && inYear(expDate(e)))
+      // Match projectPnl: salary is not a project-direct cost, and rejected
+      // expenses never hit the books.
+      .filter(e => (e as any).projectId === projectId
+        && (e as any).category !== 'Salary'
+        && (e as any).approvalStatus !== 'Rejected'
+        && inYear(expDate(e)))
       .reduce((s, e) => s + toAll(e.amount || 0, (e as any).currency), 0);
 
   const memberKey = (m: TeamMember) => m.userId || (m as any).email || m.id;

@@ -40,8 +40,9 @@ function billingTypeOf(p: Project): 'one-time' | 'monthly' {
 
 // Monthly projects that are still generating revenue next month.
 const ACTIVE_FOR_RECURRING = new Set(['Active', 'Planning', 'In Review', 'On Hold']);
-// One-time projects that could still start (not cancelled/archived).
-const ALIVE = new Set(['Active', 'Planning', 'In Review', 'On Hold', 'Completed']);
+// One-time projects that could still start next month (a Completed/Cancelled/
+// Archived project isn't "kicking off").
+const ALIVE = new Set(['Active', 'Planning', 'In Review', 'On Hold']);
 
 export function forecastNextMonth(
   projects: Project[] | undefined | null,

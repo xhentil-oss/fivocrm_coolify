@@ -72,8 +72,13 @@ const PaymentsView: React.FC = () => {
     if (!invoices) return;
     setSyncing(true);
     try {
+      // A content signature so rows created without a sourceKey (legacy / Stripe
+      // webhook / manual) are not duplicated by the derived backfill.
+      const sig = (p: { invoiceId: string; amount: number; method?: string; paidAt?: any }) =>
+        `${p.invoiceId}|${Math.round(p.amount || 0)}|${p.method || ''}|${(parseDate(p.paidAt) || new Date(0)).toISOString().slice(0, 10)}`;
       const existing = new Set((payments || []).map(p => p.sourceKey).filter(Boolean));
-      const missing = missingPayments(invoices, existing);
+      const existingSigs = new Set((payments || []).map(sig));
+      const missing = missingPayments(invoices, existing).filter(m => !existingSigs.has(sig(m)));
       if (missing.length === 0) {
         toast({ title: 'Gjithçka e sinkronizuar', description: 'Nuk ka arkëtime të reja për të shtuar.' });
         return;

@@ -249,15 +249,26 @@ function buildCacheKey(
   return `${collectionName}|${whereKey}|${orderKey}|${limit ?? ''}|${skipTeamFilter}|${teamId ?? ''}`;
 }
 
-// Convert Firestore timestamps to Date
+// Convert Firestore timestamps to Date — recursively, so timestamps nested
+// inside arrays/objects (e.g. invoice.partialPayments[].paidAt,
+// teamMember.salaryHistory[].effectiveFrom) are also turned into real Dates.
+// Previously this was shallow, so nested dates arrived as raw Timestamps and
+// every parseDate() on them returned null (silently breaking dated features).
+function deepConvertTimestamps(value: any, depth: number): any {
+  if (value instanceof Timestamp) return value.toDate();
+  if (value == null || typeof value !== 'object' || value instanceof Date) return value;
+  if (depth > 8) return value; // safety against unexpectedly deep/circular data
+  if (Array.isArray(value)) return value.map(v => deepConvertTimestamps(v, depth + 1));
+  // Only descend into plain objects — skip class instances like DocumentReference/GeoPoint.
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return value;
+  const out: DocumentData = {};
+  for (const k in value) out[k] = deepConvertTimestamps(value[k], depth + 1);
+  return out;
+}
+
 function convertTimestamps(data: DocumentData): DocumentData {
-  const converted: DocumentData = { ...data };
-  for (const key in converted) {
-    if (converted[key] instanceof Timestamp) {
-      converted[key] = converted[key].toDate();
-    }
-  }
-  return converted;
+  return deepConvertTimestamps(data, 0) as DocumentData;
 }
 
 // Hook to fetch a collection with real-time updates

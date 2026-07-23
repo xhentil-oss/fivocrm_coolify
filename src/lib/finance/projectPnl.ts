@@ -25,6 +25,7 @@
 import type { Project, TeamMember, Expense } from '../../types';
 import { toAll } from '../utils';
 import { parseDate, monthsElapsedInYear } from './financialAnalytics';
+import { totalSalaryForMonth } from './salaryHistory';
 
 export interface ProjectPnlOptions {
   /** 'completed' counts only Completed (or recurring-completed) projects; 'all' counts every project. */
@@ -151,9 +152,26 @@ export function computeProjectPnl(
   const periodMonths = months;
 
   // ── Fixed cost pool: salaries + non-project, non-salary expenses in the period.
-  const salaries = (teamMembers ?? [])
-    .filter(m => m.status === 'Active')
-    .reduce((s, m) => s + (m.monthlySalary || 0), 0) * months;
+  // With an explicit `months` override (tests), charge current active salaries ×
+  // months. Otherwise sum the HISTORY-AWARE payroll for each calendar month in
+  // the period, so a mid-period raise is reflected in the pool.
+  let salaries: number;
+  if (opts.months != null) {
+    salaries = (teamMembers ?? [])
+      .filter(m => m.status === 'Active')
+      .reduce((s, m) => s + (m.monthlySalary || 0), 0) * months;
+  } else {
+    salaries = 0;
+    const cur = new Date(periodStart.getFullYear(), periodStart.getMonth(), 1);
+    const last = new Date(periodEnd.getFullYear(), periodEnd.getMonth(), 1);
+    let guard = 0;
+    while (cur.getTime() <= last.getTime() && guard < 600) {
+      const monthEnd = new Date(cur.getFullYear(), cur.getMonth() + 1, 0, 23, 59, 59, 999);
+      salaries += totalSalaryForMonth(teamMembers, monthEnd);
+      cur.setMonth(cur.getMonth() + 1);
+      guard++;
+    }
+  }
 
   const expDate = (e: Expense) => parseDate((e as any).date) || parseDate((e as any).createdAt);
   const expInPeriod = (e: Expense) => (opts.allTime || (opts.year == null && !opts.range)) ? true : inPeriod(expDate(e));
@@ -162,6 +180,7 @@ export function computeProjectPnl(
   const directByProject = new Map<string, number>();
   for (const e of expenses ?? []) {
     if (!expInPeriod(e)) continue;
+    if ((e as any).approvalStatus === 'Rejected') continue; // rejected expenses never hit the books
     const amt = toAll(e.amount || 0, (e as any).currency);
     const pid = (e as any).projectId as string | undefined;
     const isSalary = (e as any).category === CATEGORY_SALARY;

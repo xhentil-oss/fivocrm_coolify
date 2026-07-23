@@ -25,7 +25,18 @@ export type CashflowMonthPoint = {
 
 export function parseDate(value: unknown): Date | null {
   if (!value) return null;
-  const d = value instanceof Date ? value : new Date(value as string);
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  // Firestore Timestamp — client SDK exposes toDate(); serialized/admin form has seconds.
+  const v = value as any;
+  if (typeof v.toDate === 'function') {
+    const d = v.toDate();
+    return d instanceof Date && !Number.isNaN(d.getTime()) ? d : null;
+  }
+  if (typeof v.seconds === 'number') {
+    const d = new Date(v.seconds * 1000);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  const d = new Date(value as string);
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
@@ -112,12 +123,20 @@ export function monthsElapsedInYear(year: number, now = new Date()): number {
   return now.getMonth() + 1;
 }
 
+/** An expense hits the books unless it was explicitly rejected in the approval
+ *  workflow. (Submitted/Approved/undefined all count.) */
+export function expenseIsCountable(exp: Expense): boolean {
+  return (exp as any).approvalStatus !== 'Rejected';
+}
+
 /** Total expenses (in ALL) with a date within [start, end].
  *  Excludes `category === 'Salary'` — salary is accounted for separately via the
- *  monthlySalary term, so counting it here too would double-subtract it. */
+ *  monthlySalary term, so counting it here too would double-subtract it —
+ *  and excludes rejected expenses. */
 export function calculateExpensesBetween(expenses: Expense[] | undefined, start: Date, end?: Date): number {
   return (expenses ?? []).reduce((s, exp) => {
     if (exp.category === 'Salary') return s;
+    if (!expenseIsCountable(exp)) return s;
     const d = getExpenseDate(exp);
     if (!d) return s;
     if (d < start) return s;
@@ -199,6 +218,7 @@ export function buildExpensesByMonth(expenses: Expense[] | undefined, year: numb
     const monthExpenseTotal = (expenses ?? [])
       .filter(exp => {
         if (exp.category === 'Salary') return false; // salary added separately below
+        if (!expenseIsCountable(exp)) return false;
         const d = getExpenseDate(exp);
         if (!d) return false;
         return d.getMonth() === i && d.getFullYear() === year;
@@ -253,6 +273,8 @@ export function buildCashflowByMonth(
 
     const outflow = (expenses ?? [])
       .filter(exp => {
+        if (exp.category === 'Salary') return false; // salary added once via totalMonthlySalary below
+        if (!expenseIsCountable(exp)) return false;
         const d = getExpenseDate(exp);
         if (!d) return false;
         return d.getMonth() === i && d.getFullYear() === year;
@@ -282,8 +304,10 @@ export function calculateProjectedRevenue(invoices?: Invoice[]): number {
 }
 
 export function calculateTotalExpenses(expenses: Expense[] | undefined, totalMonthlySalary: number): number {
-  // Skip Salary-category expenses; salary is counted once via totalMonthlySalary.
-  return (expenses?.reduce((sum, exp) => exp.category === 'Salary' ? sum : sum + toAll(exp.amount ?? 0, exp.currency), 0) || 0) + totalMonthlySalary;
+  // Skip Salary-category (counted once via totalMonthlySalary) and rejected expenses.
+  return (expenses?.reduce((sum, exp) =>
+    (exp.category === 'Salary' || !expenseIsCountable(exp)) ? sum : sum + toAll(exp.amount ?? 0, exp.currency), 0) || 0)
+    + totalMonthlySalary;
 }
 
 export function calculateRevenueBetween(invoices: Invoice[] | undefined, start: Date, end?: Date): number {

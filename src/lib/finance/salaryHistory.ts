@@ -15,6 +15,11 @@ import { parseDate } from './financialAnalytics';
 
 /** Monthly salary in effect for `member` during the month ending at `monthEnd`. */
 export function memberSalaryForMonth(member: TeamMember, monthEnd: Date): number {
+  // Inactive members are off payroll — consistent with projectPnl/staffRevenue,
+  // which only pool Active members. Prevents a departed employee (whose history
+  // never drops to 0) from being charged into current/future months.
+  if (member.status !== 'Active') return 0;
+
   const hist = (member.salaryHistory || [])
     .map(e => ({ monthlySalary: Number(e.monthlySalary) || 0, from: parseDate(e.effectiveFrom) }))
     .filter((e): e is { monthlySalary: number; from: Date } => !!e.from)

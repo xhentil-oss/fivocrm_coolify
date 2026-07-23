@@ -20,6 +20,7 @@ import {
   monthsElapsedInYear,
   getFinancialAvailableYears,
   getInvoiceOutstandingAll,
+  parseDate,
 } from './financialAnalytics';
 
 function mkInvoice(partial?: Partial<Invoice>): Invoice {
@@ -46,6 +47,29 @@ function mkExpense(partial?: Partial<Expense>): Expense {
     ...partial,
   };
 }
+
+describe('parseDate', () => {
+  it('handles Firestore Timestamp-like values', () => {
+    const iso = '2026-06-15T00:00:00.000Z';
+    expect(parseDate({ toDate: () => new Date(iso) })?.toISOString()).toBe(iso);
+    expect(parseDate({ seconds: Math.floor(new Date(iso).getTime() / 1000) })?.getUTCFullYear()).toBe(2026);
+    expect(parseDate(new Date(iso))?.toISOString()).toBe(iso);
+    expect(parseDate(null)).toBeNull();
+    expect(parseDate('not-a-date')).toBeNull();
+  });
+});
+
+describe('rejected-expense exclusion', () => {
+  const start = new Date('2026-06-01'), end = new Date('2026-06-30T23:59:59');
+  it('excludes rejected expenses from calculateExpensesBetween and calculateTotalExpenses', () => {
+    const expenses: Expense[] = [
+      mkExpense({ id: 'ok', amount: 100, category: 'Rent', date: new Date('2026-06-10') }),
+      mkExpense({ id: 'rej', amount: 500, category: 'Rent', date: new Date('2026-06-10'), approvalStatus: 'Rejected' } as any),
+    ];
+    expect(calculateExpensesBetween(expenses, start, end)).toBe(100);
+    expect(calculateTotalExpenses(expenses, 0)).toBe(100);
+  });
+});
 
 describe('financial analytics engine', () => {
   it('builds available years from invoices, partial payments and expenses', () => {

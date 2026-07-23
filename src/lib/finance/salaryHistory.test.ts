@@ -37,6 +37,28 @@ describe('memberSalaryForMonth', () => {
     expect(memberSalaryForMonth(m, end(2026, 5))).toBe(80_000); // June → new (effective 1 Jun)
   });
 
+  it('returns 0 for inactive members even when they have history', () => {
+    const m = mkMember({
+      status: 'Inactive',
+      monthlySalary: 60_000,
+      salaryHistory: [{ monthlySalary: 60_000, effectiveFrom: new Date('2026-01-01') }],
+    });
+    expect(memberSalaryForMonth(m, end(2026, 5))).toBe(0);
+  });
+
+  it('parses Firestore Timestamp-like effectiveFrom (toDate / seconds)', () => {
+    const asTs = (iso: string) => ({ toDate: () => new Date(iso), seconds: Math.floor(new Date(iso).getTime() / 1000) });
+    const m = mkMember({
+      monthlySalary: 80_000,
+      salaryHistory: [
+        { monthlySalary: 50_000, effectiveFrom: asTs('2026-01-01') as any },
+        { monthlySalary: 80_000, effectiveFrom: asTs('2026-06-01') as any },
+      ],
+    });
+    expect(memberSalaryForMonth(m, end(2026, 2))).toBe(50_000);
+    expect(memberSalaryForMonth(m, end(2026, 6))).toBe(80_000);
+  });
+
   it('returns 0 for months before the earliest history entry (not yet hired)', () => {
     const m = mkMember({
       monthlySalary: 60_000,

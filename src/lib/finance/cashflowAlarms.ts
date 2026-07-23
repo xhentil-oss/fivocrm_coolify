@@ -69,14 +69,15 @@ export function computeCashflowHealth(
   const exp = expenses || [];
 
   // ── Monthly recurring inflow: active recurring invoices, normalised to /month.
+  // Exclude Draft (not issued) and Cancelled — only committed recurring revenue.
   const monthlyInflow = inv
-    .filter(i => isActiveRecurringParent(i) && i.status !== 'Cancelled')
+    .filter(i => isActiveRecurringParent(i) && i.status !== 'Cancelled' && i.status !== 'Draft')
     .reduce((s, i) => s + getInvoiceTotalAll(i) * (FREQ_TO_MONTHLY[i.recurringFrequency || 'monthly'] ?? 1), 0);
 
   // ── Monthly fixed outflow: salaries (history-aware) + recurring expenses.
   const salaries = totalSalaryForMonth(teamMembers, monthEnd(now, 1)); // next month
   const recurringExpenses = exp
-    .filter(e => isActiveRecurringParent(e) && (e as any).category !== 'Salary')
+    .filter(e => isActiveRecurringParent(e) && (e as any).category !== 'Salary' && (e as any).approvalStatus !== 'Rejected')
     .reduce((s, e) => s + toAll(e.amount || 0, (e as any).currency) * (FREQ_TO_MONTHLY[(e as any).recurringFrequency || 'monthly'] ?? 1), 0);
   const monthlyOutflow = salaries + recurringExpenses;
 
@@ -127,6 +128,7 @@ export function computeCashflowHealth(
   // ── Expense spike: this month's expenses > 1.5× trailing 3-month average.
   const expensesIn = (offset: number) =>
     exp.reduce((s, e) => {
+      if ((e as any).category === 'Salary' || (e as any).approvalStatus === 'Rejected') return s;
       const d = parseDate((e as any).date) || parseDate((e as any).createdAt);
       if (!d || d < monthStart(now, offset) || d > monthEnd(now, offset)) return s;
       return s + toAll(e.amount || 0, (e as any).currency);
