@@ -156,7 +156,18 @@ function DefaultRedirect() {
 }
 
 function AppContent() {
-  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  // Persisted so a collapsed (icons-only) sidebar stays that way across reloads —
+  // useful e.g. on the chat page where the extra width matters.
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    try { return localStorage.getItem('sidebar_collapsed') === '1'; } catch { return false; }
+  });
+  const toggleSidebar = React.useCallback(() => {
+    setSidebarCollapsed(v => {
+      const next = !v;
+      try { localStorage.setItem('sidebar_collapsed', next ? '1' : '0'); } catch { /* ignore */ }
+      return next;
+    });
+  }, []);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const { user } = useAuth();
@@ -291,7 +302,7 @@ function AppContent() {
             }}
           >
             <TopNavBar
-              onToggleSidebar={() => setSidebarCollapsed(!sidebarCollapsed)}
+              onToggleSidebar={toggleSidebar}
               onOpenCommandPalette={() => setCommandPaletteOpen(true)}
               onToggleMobileMenu={() => setMobileMenuOpen(!mobileMenuOpen)}
               mobileMenuOpen={mobileMenuOpen}
