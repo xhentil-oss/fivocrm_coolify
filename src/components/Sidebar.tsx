@@ -69,6 +69,7 @@ const allNavItems: NavEntry[] = [
     children: [
       { path: '/app/finances', label: 'Përmbledhje', icon: PiggyBank, permissionKey: 'isAdmin' },
       { path: '/app/invoices', label: 'Faturat', icon: Receipt, permissionKey: 'canAccessInvoices' },
+      { path: '/app/payments', label: 'Arkëtimet', icon: Wallet, permissionKey: 'canAccessInvoices' },
       { path: '/app/expenses', label: 'Shpenzimet', icon: DollarSign, permissionKey: 'canAccessExpenses' },
       { path: '/app/bonus', label: 'Bonuset', icon: Award, permissionKey: 'canAccessProfile' },
     ],

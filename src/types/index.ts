@@ -968,6 +968,31 @@ export interface ServiceInquiry {
   createdByUserId: string | null;
 }
 
+/**
+ * A recorded payment (arkëtim) against an invoice. This is the real payment
+ * ledger — invoices still carry partialPayments[] for backward compatibility,
+ * but every payment is mirrored here with a stable `sourceKey` for idempotent
+ * backfill/sync. See lib/finance/payments.ts.
+ */
+export interface Payment {
+  id: string;
+  invoiceId: string;
+  invoiceNumber?: string;
+  customerId?: string;
+  amount: number;                 // in the invoice's native currency
+  currency?: 'ALL' | 'EUR' | 'USD' | 'GBP';
+  method?: string;                // 'Cash' | 'Bank' | 'Stripe' | …
+  paidAt: Date;
+  note?: string;
+  teamId?: string;
+  businessId?: string;
+  source?: 'partial' | 'full' | 'backfill' | 'stripe';
+  /** Idempotency key: `${invoiceId}#p{index}` | `#pfinal` | `#full`. */
+  sourceKey: string;
+  createdAt: Date;
+  createdByUserId?: string | null;
+}
+
 export interface InvoiceItem {
   id: string;
   invoiceId: string;

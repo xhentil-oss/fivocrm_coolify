@@ -32,7 +32,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '../components/ui/dropdown-menu';
-import type { Invoice, Customer, Service, InvoiceItem, Project, ClientPortalAccess } from '../types';
+import type { Invoice, Customer, Service, InvoiceItem, Project, ClientPortalAccess, Payment } from '../types';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import { toAll, getRateToAll, getTimestampMs } from '../lib/utils';
 import { toast } from '../hooks/use-toast';
@@ -111,6 +111,7 @@ const InvoicesView: React.FC = () => {
   const invoiceMutation = useMutation<Invoice>('invoices');
   const invoiceItemMutationTop = useMutation<InvoiceItem>('invoiceItems');
   const notificationMutation = useMutation<any>('notifications');
+  const paymentMutation = useMutation<Payment>('payments');
   const { data: teamMembers } = useCollection<any>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
   });
@@ -428,6 +429,23 @@ const InvoicesView: React.FC = () => {
       };
       if (isFullyPaid) updateData.paidAt = new Date();
       await invoiceMutation.update(partialPaymentInvoice.id, updateData);
+
+      // Mirror into the payment ledger (same sourceKey scheme as the backfill).
+      const paymentIndex = existingPayments.length;
+      await paymentMutation.create({
+        invoiceId: partialPaymentInvoice.id,
+        invoiceNumber: partialPaymentInvoice.invoiceNumber,
+        customerId: partialPaymentInvoice.customerId,
+        amount,
+        currency: invoiceCurrency,
+        method: partialMethod,
+        note: partialNote || undefined,
+        paidAt: newPayment.paidAt,
+        teamId: partialPaymentInvoice.teamId,
+        businessId: (partialPaymentInvoice as any).businessId,
+        source: 'partial',
+        sourceKey: `${partialPaymentInvoice.id}#p${paymentIndex}`,
+      } as any).catch((err) => console.error('[Payments] ledger write failed:', err));
       if (isFullyPaid) {
         const recipients = scopedMembers.filter((m: any) => m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices));
         await Promise.all(recipients.map((m: any) => notificationMutation.create({
