@@ -1,11 +1,11 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState } from 'react';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useCollection } from '../hooks/useFirestore';
 import { Card } from '../components/ui/card';
 import { formatALL, toAll } from '../lib/utils';
 import {
   TrendingUp, TrendingDown, AlertTriangle, Wallet, Clock,
-  ArrowDownRight, ArrowUpRight, Users, CheckCircle2, Repeat, XCircle,
+  ArrowDownRight, ArrowUpRight, Users, CheckCircle2, Repeat, XCircle, Briefcase,
 } from 'lucide-react';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -19,6 +19,7 @@ import {
   parseDate,
   MONTH_LABELS_SQ,
 } from '../lib/finance/financialAnalytics';
+import { computeProjectPnl, type ProjectPnlOptions } from '../lib/finance/projectPnl';
 
 // ── Single-page, plain-language finance overview for the owner ──
 // Answers one question: "Am I making money this month, where, and why?"
@@ -194,6 +195,28 @@ const FinancesView: React.FC = () => {
     return { stuck, misconfigured, paused, healthy, totalParents: parents.length };
   }, [invoices, customers, now]);
 
+  // ── Per-project P&L (revenue − direct cost − allocated fixed overhead) ──
+  // Full-absorption: the fixed pool (salaries + non-project expenses) is spread
+  // across projects by revenue weight. See lib/finance/projectPnl.ts.
+  const [pnlPeriod, setPnlPeriod] = useState<'month' | 'year' | 'all'>('year');
+  const projectPnl = useMemo(() => {
+    let opts: ProjectPnlOptions;
+    if (pnlPeriod === 'month') {
+      const w = monthWindow(now, 0);
+      opts = { range: { start: w.start, end: w.end }, mode: 'all', now };
+    } else if (pnlPeriod === 'year') {
+      opts = { year: now.getFullYear(), mode: 'all', now };
+    } else {
+      opts = { allTime: true, mode: 'all', now };
+    }
+    return computeProjectPnl(projects, teamMembers, expenses, opts);
+  }, [projects, teamMembers, expenses, pnlPeriod, now]);
+
+  const customerNameById = useMemo(
+    () => new Map((customers || []).map(c => [c.id, c.name || 'Pa klient'])),
+    [customers],
+  );
+
   // ── Plain-language alarms ──
   const alarms = useMemo(() => {
     const items: { text: string; tone: 'red' | 'amber' }[] = [];
@@ -351,6 +374,35 @@ const FinancesView: React.FC = () => {
         </Card>
       </div>
 
+      {/* 4b — Profit per project (full-absorption) */}
+      <Card className="p-5">
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
+          <div className="flex items-center gap-2">
+            <Briefcase className="w-4 h-4 text-sky-600" />
+            <h2 className="text-sm font-semibold">Fitimi sipas projekti</h2>
+          </div>
+          <div className="flex items-center gap-1 rounded-lg bg-muted/50 p-0.5">
+            {([['month', 'Muaji'], ['year', 'Viti'], ['all', 'Gjithë']] as const).map(([key, label]) => (
+              <button
+                key={key}
+                onClick={() => setPnlPeriod(key)}
+                className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                  pnlPeriod === key ? 'bg-background shadow-sm font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          Të ardhurat (buxheti) − kostot direkte (shpenzime të projektit) − pjesa e kostove fikse
+          (rroga + qira + të tjera), e ndarë sipas peshës së të ardhurave.
+        </p>
+
+        <ProjectPnlBlock pnl={projectPnl} customerNameById={customerNameById} />
+      </Card>
+
       {/* 5 — Trend */}
       <Card className="p-5">
         <h2 className="text-sm font-semibold mb-3">Trendi i fitimit (6 muaj)</h2>
@@ -498,5 +550,95 @@ const ClientList: React.FC<{
     </ul>
   );
 };
+
+const ProjectPnlBlock: React.FC<{
+  pnl: ReturnType<typeof computeProjectPnl>;
+  customerNameById: Map<string, string>;
+}> = ({ pnl, customerNameById }) => {
+  if (pnl.rows.length === 0) {
+    return <p className="text-sm text-muted-foreground">Ende pa projekte për këtë periudhë.</p>;
+  }
+
+  const { fixedPool, totals, allocationBasis } = pnl;
+
+  return (
+    <div className="space-y-3">
+      {/* Fixed pool summary */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-center">
+        <PoolTile label="Të ardhura" value={totals.revenue} />
+        <PoolTile label="Kosto direkte" value={totals.directCost} tone="red" />
+        <PoolTile label="Kosto fikse" value={fixedPool.total} tone="red" hint={`rroga ${formatALL(fixedPool.salaries)} + fikse ${formatALL(fixedPool.otherFixed)}`} />
+        <PoolTile label="Fitimi total" value={totals.profit} tone={totals.profit >= 0 ? 'green' : 'red'} bold />
+      </div>
+
+      {allocationBasis === 'equal' && (
+        <p className="text-[11px] text-amber-600">
+          ⚠ Asnjë projekt s'ka buxhet — kostot fikse u ndanë në mënyrë të barabartë. Vendos buxhetin te projektet për ndarje reale.
+        </p>
+      )}
+
+      {/* Per-project table */}
+      <div className="overflow-x-auto -mx-1">
+        <table className="w-full text-sm min-w-[560px]">
+          <thead>
+            <tr className="text-xs text-muted-foreground border-b">
+              <th className="text-left font-medium py-2 px-1">Projekti</th>
+              <th className="text-right font-medium py-2 px-1">Të ardhura</th>
+              <th className="text-right font-medium py-2 px-1">Direkte</th>
+              <th className="text-right font-medium py-2 px-1">Fikse</th>
+              <th className="text-right font-medium py-2 px-1">Fitimi</th>
+              <th className="text-right font-medium py-2 px-1">Marzh</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pnl.rows.map(r => (
+              <tr key={r.id} className="border-b border-border/50 last:border-0">
+                <td className="py-2 px-1 max-w-[180px]">
+                  <p className="text-foreground truncate font-medium">{r.name}</p>
+                  {r.customerId && (
+                    <p className="text-[11px] text-muted-foreground truncate">
+                      {customerNameById.get(r.customerId) || 'Pa klient'}
+                    </p>
+                  )}
+                </td>
+                <td className="py-2 px-1 text-right tabular-nums">{formatALL(r.revenue)}</td>
+                <td className="py-2 px-1 text-right tabular-nums text-muted-foreground">{formatALL(r.directCost)}</td>
+                <td className="py-2 px-1 text-right tabular-nums text-muted-foreground">{formatALL(r.overhead)}</td>
+                <td className={`py-2 px-1 text-right tabular-nums font-semibold ${r.profit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                  {formatALL(r.profit)}
+                </td>
+                <td className={`py-2 px-1 text-right tabular-nums ${r.margin == null ? 'text-muted-foreground' : r.margin >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                  {r.margin == null ? '—' : `${Math.round(r.margin * 100)}%`}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        "Fikse" = pjesa e rrogave dhe shpenzimeve të përgjithshme që i takon këtij projekti.
+        Kostot variabile shtoji si Shpenzim i lidhur me projektin te faqja Shpenzimet.
+      </p>
+    </div>
+  );
+};
+
+const PoolTile: React.FC<{
+  label: string;
+  value: number;
+  tone?: 'green' | 'red' | 'default';
+  bold?: boolean;
+  hint?: string;
+}> = ({ label, value, tone = 'default', bold, hint }) => (
+  <div className="rounded-lg border bg-muted/20 p-2.5">
+    <p className="text-[11px] text-muted-foreground">{label}</p>
+    <p className={`tabular-nums ${bold ? 'text-base font-bold' : 'text-sm font-semibold'} ${
+      tone === 'green' ? 'text-emerald-600' : tone === 'red' ? 'text-red-600' : 'text-foreground'
+    }`}>
+      {formatALL(value)}
+    </p>
+    {hint && <p className="text-[10px] text-muted-foreground mt-0.5 leading-tight">{hint}</p>}
+  </div>
+);
 
 export default FinancesView;
