@@ -1,5 +1,5 @@
 import React from 'react';
-import { Search, Plus, User, Menu, X, LogOut, Eye, EyeOff } from 'lucide-react';
+import { Search, Plus, User, Menu, X, LogOut, Eye, EyeOff, PanelLeft } from 'lucide-react';
 import { Button } from './ui/button';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -81,9 +81,10 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
             size="icon"
             onClick={onToggleSidebar}
             className="hidden lg:flex bg-white/10 text-white hover:bg-white/20"
-            aria-label="Hap/Mbyll panelin anësor"
+            aria-label="Zvogëlo/Zgjero panelin anësor"
+            title="Zvogëlo/Zgjero panelin anësor (vetëm ikonat)"
           >
-            <Menu className="w-5 h-5" />
+            <PanelLeft className="w-5 h-5" />
           </Button>
 
           <h1 className="text-h4 text-white font-medium">
