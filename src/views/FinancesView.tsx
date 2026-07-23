@@ -220,10 +220,10 @@ const FinancesView: React.FC = () => {
     [invoices, expenses, teamMembers, now],
   );
 
-  // ── Next-month profit forecast ──
+  // ── Next-month profit forecast (project-pipeline based) ──
   const forecast = useMemo(
-    () => forecastNextMonth(invoices, expenses, teamMembers, now),
-    [invoices, expenses, teamMembers, now],
+    () => forecastNextMonth(projects, expenses, teamMembers, now),
+    [projects, expenses, teamMembers, now],
   );
 
   // ── Plain-language alarms ──
@@ -313,8 +313,12 @@ const FinancesView: React.FC = () => {
               {formatALL(forecast.predictedProfit)}
             </p>
             <p className="text-xs text-muted-foreground mt-1">
-              Parashikim mbi mesataren e {forecast.basisMonths} muajve të fundit (të ardhura {formatALL(forecast.predictedRevenue)}
-              {' '}− rroga {formatALL(forecast.predictedSalary)} − shpenzime {formatALL(forecast.predictedOtherExpenses)}).
+              Të ardhura {formatALL(forecast.predictedRevenue)} (mujore {formatALL(forecast.recurringRevenue)}
+              {forecast.newProjectRevenue > 0 ? ` + projekte të reja ${formatALL(forecast.newProjectRevenue)}` : ''})
+              {' '}− rroga {formatALL(forecast.predictedSalary)} − shpenzime {formatALL(forecast.predictedOtherExpenses)}.
+            </p>
+            <p className="text-[11px] text-muted-foreground mt-0.5">
+              Të ardhurat nga projektet mujore që përsëriten + projektet një-herëshe që fillojnë atë muaj. Shpenzimet: mesatarja e {forecast.basisMonths} muajve.
             </p>
           </div>
           <div className={`rounded-lg px-3 py-2 text-xs font-medium ${forecast.predictedProfit >= thisMonth.profit ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'}`}>
