@@ -300,6 +300,9 @@ export interface Project {
   // maintenance) — the P&L multiplies it by the months active in the period.
   // When unset, inferred from isRecurring (recurring → monthly, else one-time).
   billingType?: 'one-time' | 'monthly';
+  /** Expected/actual start date. Used by the next-month forecast to count a
+   *  one-time project's budget as revenue in the month it kicks off. */
+  startDate?: Date;
   spent?: number;
   responsibleUserId?: string;
   memberUserIds?: string[];

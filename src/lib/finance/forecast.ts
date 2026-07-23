@@ -1,22 +1,26 @@
 // Next-month profit forecast for the owner dashboard.
 //
-// Grounded and transparent: predicts next month from what we can actually see —
-//   revenue      = trailing 3-month average of collected revenue
-//   other costs  = trailing 3-month average of non-salary expenses
-//   salary       = next month's payroll (history-aware, exact — not averaged)
-//   profit       = revenue − salary − other costs
-// It deliberately mirrors FinancesView's own monthProfit definition so the
-// forecast is comparable to the actuals shown right above it.
+// Revenue is projected from the PROJECT PIPELINE (not a trailing average):
+//   recurring  = budget of monthly/recurring projects still active (each is a
+//                monthly fee that will bill again next month)
+//   new        = budget of one-time projects whose startDate falls in the
+//                forecast month (a project kicking off next month)
+// Costs stay grounded:
+//   salary     = next month's payroll (history-aware, exact)
+//   other      = trailing 3-month average of non-salary expenses
+//   profit     = revenue − salary − other
 
-import type { Invoice, Expense, TeamMember } from '../../types';
-import { getInvoiceCollectedBetween, calculateExpensesBetween } from './financialAnalytics';
+import type { Expense, TeamMember, Project } from '../../types';
+import { parseDate, calculateExpensesBetween } from './financialAnalytics';
 import { totalSalaryForMonth } from './salaryHistory';
 
 export interface NextMonthForecast {
   year: number;
-  monthIndex: number;        // 0-11 of the forecast month
-  basisMonths: number;       // trailing months averaged
-  predictedRevenue: number;
+  monthIndex: number;          // 0-11 of the forecast month
+  basisMonths: number;         // trailing months averaged for expenses
+  recurringRevenue: number;    // monthly projects
+  newProjectRevenue: number;   // one-time projects starting next month
+  predictedRevenue: number;    // recurring + new
   predictedSalary: number;
   predictedOtherExpenses: number;
   predictedProfit: number;
@@ -29,30 +33,52 @@ function monthWindow(base: Date, offset: number) {
   return { start, end, monthIndex: d.getMonth(), year: d.getFullYear() };
 }
 
+function billingTypeOf(p: Project): 'one-time' | 'monthly' {
+  if (p.billingType === 'monthly' || p.billingType === 'one-time') return p.billingType;
+  return (p as any).isRecurring ? 'monthly' : 'one-time';
+}
+
+// Monthly projects that are still generating revenue next month.
+const ACTIVE_FOR_RECURRING = new Set(['Active', 'Planning', 'In Review', 'On Hold']);
+// One-time projects that could still start (not cancelled/archived).
+const ALIVE = new Set(['Active', 'Planning', 'In Review', 'On Hold', 'Completed']);
+
 export function forecastNextMonth(
-  invoices: Invoice[] | undefined | null,
+  projects: Project[] | undefined | null,
   expenses: Expense[] | undefined | null,
   teamMembers: TeamMember[] | undefined | null,
   now: Date = new Date(),
 ): NextMonthForecast {
-  const inv = invoices || [];
+  const projs = projects || [];
   const exp = expenses || [];
-
-  // Trailing 3 full months (offsets -1, -2, -3).
-  const OFFSETS = [-1, -2, -3];
-  const collected: number[] = [];
-  const otherExp: number[] = [];
-  for (const off of OFFSETS) {
-    const w = monthWindow(now, off);
-    collected.push(inv.reduce((s, i) => s + getInvoiceCollectedBetween(i, w.start, w.end), 0));
-    otherExp.push(calculateExpensesBetween(exp, w.start, w.end)); // excludes Salary category
-  }
-  const basisMonths = OFFSETS.length;
-  const mean = (xs: number[]) => (xs.length ? xs.reduce((a, b) => a + b, 0) / xs.length : 0);
-
   const next = monthWindow(now, 1);
-  const predictedRevenue = mean(collected);
-  const predictedOtherExpenses = mean(otherExp);
+
+  let recurringRevenue = 0;
+  let newProjectRevenue = 0;
+  for (const p of projs) {
+    const budget = p.budget || 0;
+    if (budget <= 0) continue;
+    if (billingTypeOf(p) === 'monthly') {
+      if (ACTIVE_FOR_RECURRING.has(p.status)) recurringRevenue += budget;
+    } else {
+      // One-time: count only if it starts in the forecast month.
+      const start = parseDate((p as any).startDate);
+      if (start && start >= next.start && start <= next.end && ALIVE.has(p.status)) {
+        newProjectRevenue += budget;
+      }
+    }
+  }
+  const predictedRevenue = recurringRevenue + newProjectRevenue;
+
+  // Trailing 3 full months of non-salary expenses (offsets -1, -2, -3).
+  const OFFSETS = [-1, -2, -3];
+  const otherExp = OFFSETS.map(off => {
+    const w = monthWindow(now, off);
+    return calculateExpensesBetween(exp, w.start, w.end); // excludes Salary category
+  });
+  const basisMonths = OFFSETS.length;
+  const predictedOtherExpenses = otherExp.reduce((a, b) => a + b, 0) / basisMonths;
+
   const predictedSalary = totalSalaryForMonth(teamMembers, next.end);
   const predictedProfit = predictedRevenue - predictedSalary - predictedOtherExpenses;
 
@@ -60,6 +86,8 @@ export function forecastNextMonth(
     year: next.year,
     monthIndex: next.monthIndex,
     basisMonths,
+    recurringRevenue,
+    newProjectRevenue,
     predictedRevenue,
     predictedSalary,
     predictedOtherExpenses,
