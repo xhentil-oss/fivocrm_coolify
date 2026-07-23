@@ -21,6 +21,7 @@ import {
 } from '../lib/finance/financialAnalytics';
 import { computeProjectPnl, type ProjectPnlOptions } from '../lib/finance/projectPnl';
 import { totalSalaryForMonth } from '../lib/finance/salaryHistory';
+import { computeCashflowHealth } from '../lib/finance/cashflowAlarms';
 
 // ── Single-page, plain-language finance overview for the owner ──
 // Answers one question: "Am I making money this month, where, and why?"
@@ -210,6 +211,12 @@ const FinancesView: React.FC = () => {
   const customerNameById = useMemo(
     () => new Map((customers || []).map(c => [c.id, c.name || 'Pa klient'])),
     [customers],
+  );
+
+  // ── Forward-looking cashflow health (recurring inflow vs fixed outflow) ──
+  const cashflow = useMemo(
+    () => computeCashflowHealth(invoices, expenses, teamMembers, now),
+    [invoices, expenses, teamMembers, now],
   );
 
   // ── Plain-language alarms ──
@@ -473,6 +480,54 @@ const FinancesView: React.FC = () => {
               ose prit ciklin tjetër të cron-it. Faturat në pauzë ({recurringHealth.paused}) nuk numërohen si problem.
             </p>
           </div>
+        )}
+      </Card>
+
+      {/* 5b — Cashflow health (recurring inflow vs fixed outflow) */}
+      <Card className={`p-5 ${cashflow.gap < 0 ? 'border-red-500/40' : ''}`}>
+        <div className="flex items-center gap-2 mb-1">
+          <Wallet className={`w-4 h-4 ${cashflow.gap < 0 ? 'text-red-600' : 'text-emerald-600'}`} />
+          <h2 className="text-sm font-semibold">Shëndeti i rrjedhës së parasë (mujore)</h2>
+        </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          A i mbulojnë të ardhurat e rregullta (kontratat mujore) kostot fikse çdo muaj?
+        </p>
+        <div className="grid grid-cols-3 gap-2 text-center mb-3">
+          <PoolTile label="Të ardhura të rregullta" value={cashflow.monthlyInflow} tone="green" />
+          <PoolTile
+            label="Kosto fikse"
+            value={cashflow.monthlyOutflow}
+            tone="red"
+            hint={`rroga ${formatALL(cashflow.salaries)} + periodike ${formatALL(cashflow.recurringExpenses)}`}
+          />
+          <PoolTile label={cashflow.gap >= 0 ? 'Tepricë mujore' : 'Mungesë mujore'} value={cashflow.gap} tone={cashflow.gap >= 0 ? 'green' : 'red'} bold />
+        </div>
+        {cashflow.alarms.length === 0 ? (
+          <p className="text-sm text-emerald-600 flex items-center gap-1.5">
+            <CheckCircle2 className="w-4 h-4" /> Rrjedha e parasë duket e shëndetshme.
+          </p>
+        ) : (
+          <ul className="space-y-2">
+            {cashflow.alarms.map(a => (
+              <li key={a.id} className="flex items-start gap-2 text-sm">
+                <span className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${a.severity === 'red' ? 'bg-red-500' : 'bg-amber-500'}`} />
+                <div className="min-w-0 flex-1">
+                  <p className="text-foreground font-medium">
+                    {a.title}
+                    {a.id === 'concentration' && a.customerId && (
+                      <span className="text-muted-foreground font-normal"> — {customerNameById.get(a.customerId) || 'klient'}</span>
+                    )}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{a.detail}</p>
+                </div>
+                {a.amount != null && (
+                  <span className={`text-sm font-semibold tabular-nums shrink-0 ${a.amount < 0 ? 'text-red-600' : 'text-foreground'}`}>
+                    {formatALL(a.amount)}
+                  </span>
+                )}
+              </li>
+            ))}
+          </ul>
         )}
       </Card>
 
