@@ -383,6 +383,11 @@ export interface TeamMember {
   canAccessExpenses?: boolean;
   canAccessProfile?: boolean;
   monthlySalary?: number;
+  /** Effective-dated salary changes, so historical months use the salary that
+   *  applied then (not today's). Each entry = the monthly salary in effect from
+   *  `effectiveFrom` until the next entry. When empty, `monthlySalary` is used
+   *  for every month (backward-compatible). See lib/finance/salaryHistory.ts. */
+  salaryHistory?: Array<{ monthlySalary: number; effectiveFrom: Date }>;
   /** Internal labor cost per hour (ALL). Used to cost logged time into project
    *  spend & per-client P&L. If unset, derived from monthlySalary / 160. */
   hourlyCostRate?: number;
