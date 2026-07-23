@@ -22,6 +22,7 @@ import {
 import { computeProjectPnl, type ProjectPnlOptions } from '../lib/finance/projectPnl';
 import { totalSalaryForMonth } from '../lib/finance/salaryHistory';
 import { computeCashflowHealth } from '../lib/finance/cashflowAlarms';
+import { forecastNextMonth } from '../lib/finance/forecast';
 
 // ── Single-page, plain-language finance overview for the owner ──
 // Answers one question: "Am I making money this month, where, and why?"
@@ -219,6 +220,12 @@ const FinancesView: React.FC = () => {
     [invoices, expenses, teamMembers, now],
   );
 
+  // ── Next-month profit forecast ──
+  const forecast = useMemo(
+    () => forecastNextMonth(invoices, expenses, teamMembers, now),
+    [invoices, expenses, teamMembers, now],
+  );
+
   // ── Plain-language alarms ──
   const alarms = useMemo(() => {
     const items: { text: string; tone: 'red' | 'amber' }[] = [];
@@ -290,6 +297,28 @@ const FinancesView: React.FC = () => {
           <div className={`flex items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium ${profitDelta >= 0 ? 'bg-emerald-500/10 text-emerald-600' : 'bg-red-500/10 text-red-600'}`}>
             {profitDelta >= 0 ? <TrendingUp className="w-4 h-4" /> : <TrendingDown className="w-4 h-4" />}
             {profitDelta >= 0 ? '+' : ''}{formatALL(profitDelta)} vs muaji i kaluar
+          </div>
+        </div>
+      </Card>
+
+      {/* 1b — Predicted profit next month */}
+      <Card className="p-5">
+        <div className="flex items-start justify-between gap-4 flex-wrap">
+          <div className="min-w-0">
+            <p className="text-sm text-muted-foreground flex items-center gap-1.5">
+              {forecast.predictedProfit >= 0 ? <TrendingUp className="w-4 h-4 text-sky-600" /> : <TrendingDown className="w-4 h-4 text-red-600" />}
+              Fitimi i parashikuar — {MONTH_NAMES_FULL[forecast.monthIndex]} {forecast.year}
+            </p>
+            <p className={`text-2xl sm:text-3xl font-bold tabular-nums break-words mt-1 ${forecast.predictedProfit >= 0 ? 'text-sky-600' : 'text-red-600'}`}>
+              {formatALL(forecast.predictedProfit)}
+            </p>
+            <p className="text-xs text-muted-foreground mt-1">
+              Parashikim mbi mesataren e {forecast.basisMonths} muajve të fundit (të ardhura {formatALL(forecast.predictedRevenue)}
+              {' '}− rroga {formatALL(forecast.predictedSalary)} − shpenzime {formatALL(forecast.predictedOtherExpenses)}).
+            </p>
+          </div>
+          <div className={`rounded-lg px-3 py-2 text-xs font-medium ${forecast.predictedProfit >= thisMonth.profit ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'}`}>
+            {forecast.predictedProfit >= thisMonth.profit ? '↑' : '↓'} vs muaji aktual ({formatALL(forecast.predictedProfit - thisMonth.profit)})
           </div>
         </div>
       </Card>
