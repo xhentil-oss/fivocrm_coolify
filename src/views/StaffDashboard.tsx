@@ -642,15 +642,6 @@ const StaffDashboard: React.FC = () => {
                     {tasks?.find(t => t.id === myActiveTimer.taskId)?.title || 'Detyrë aktive'}
                   </div>
                 </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  className="border-green-300 text-green-700 hover:bg-green-100 dark:border-green-700 dark:text-green-300"
-                  onClick={() => navigate('/app/time-tracking')}
-                >
-                  <Clock className="w-3.5 h-3.5 mr-1" />
-                  Shiko timer
-                </Button>
               </div>
             </Card>
           )}
@@ -1082,24 +1073,6 @@ const StaffDashboard: React.FC = () => {
                     {unreadClientMsgs > 9 ? '9+' : unreadClientMsgs}
                   </span>
                 )}
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="justify-start text-xs h-9"
-                onClick={() => navigate('/app/time-tracking')}
-              >
-                <Timer className="w-3.5 h-3.5 mr-1.5 text-primary" />
-                Kohë
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                className="justify-start text-xs h-9"
-                onClick={() => navigate('/app/reports')}
-              >
-                <TrendingUp className="w-3.5 h-3.5 mr-1.5 text-amber-500" />
-                Raportet
               </Button>
             </div>
           </Card>

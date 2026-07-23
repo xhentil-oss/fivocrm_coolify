@@ -37,7 +37,6 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChange }) =
     { icon: CheckSquare, label: 'Shko te Detyrat', path: '/app/tasks' },
     { icon: MessageSquare, label: 'Shko te Chati', path: '/app/chat' },
     { icon: Wallet, label: 'Shko te Financat', path: '/app/finances' },
-    { icon: BarChart3, label: 'Shko te Raportet', path: '/app/reports' },
     { icon: Settings, label: 'Shko te Cilësimet', path: '/app/settings' },
   ];
 

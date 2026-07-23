@@ -55,8 +55,6 @@ const ChatView = lazyRetry(() => import('./views/ChatView'));
 const WhatsappInboxView = lazyRetry(() => import('./views/WhatsappInboxView'));
 const MarketingView = lazyRetry(() => import('./views/MarketingView'));
 const SocialMediaView = lazyRetry(() => import('./views/SocialMediaView'));
-const ReportsView = lazyRetry(() => import('./views/ReportsView'));
-const StaffRevenueView = lazyRetry(() => import('./views/StaffRevenueView'));
 const FinancesView = lazyRetry(() => import('./views/FinancesView'));
 const BonusView = lazyRetry(() => import('./views/BonusView'));
 const UserProfileView = lazyRetry(() => import('./views/UserProfileView'));
@@ -66,10 +64,8 @@ const CustomersView = lazyRetry(() => import('./views/CustomersView'));
 const ServicesView = lazyRetry(() => import('./views/ServicesView'));
 const ServiceInquiriesView = lazyRetry(() => import('./views/ServiceInquiriesView'));
 const ExpensesView = lazyRetry(() => import('./views/ExpensesView'));
-const TimeTrackingView = lazyRetry(() => import('./views/TimeTrackingView'));
 const WorkspaceView = lazyRetry(() => import('./views/WorkspaceView'));
 const StaffDashboard = lazyRetry(() => import('./views/StaffDashboard'));
-const WorkloadView = lazyRetry(() => import('./views/WorkloadView'));
 const MomentumView = lazyRetry(() => import('./views/MomentumView'));
 const JoinInviteView = lazyRetry(() => import('./views/JoinInviteView'));
 const Customer360View = lazyRetry(() => import('./views/Customer360View'));
@@ -352,8 +348,6 @@ function AppContent() {
                       <Route path="/app/whatsapp" element={<PermissionGate permissionKey="canAccessWhatsapp"><WhatsappInboxView /></PermissionGate>} />
                       <Route path="/app/marketing" element={<PermissionGate permissionKey="canAccessMarketing"><MarketingView /></PermissionGate>} />
                       <Route path="/app/social" element={<PermissionGate permissionKey="canAccessMarketing"><SocialMediaView /></PermissionGate>} />
-                      <Route path="/app/reports" element={<PermissionGate permissionKey="canAccessReports"><ReportsView /></PermissionGate>} />
-                      <Route path="/app/staff-revenue" element={<PermissionGate permissionKey="canAccessReports"><StaffRevenueView /></PermissionGate>} />
                       <Route path="/app/finances" element={<PermissionGate permissionKey="isAdmin"><FinancesView /></PermissionGate>} />
                       <Route path="/app/bonus" element={<PermissionGate permissionKey="canAccessProfile"><BonusView /></PermissionGate>} />
                       <Route path="/app/profile" element={<UserProfileView />} />
@@ -362,9 +356,7 @@ function AppContent() {
                       <Route path="/app/services" element={<PermissionGate permissionKey="canAccessServices"><ServicesView /></PermissionGate>} />
                       <Route path="/app/service-inquiries" element={<PermissionGate permissionKey="canAccessCRM"><ServiceInquiriesView /></PermissionGate>} />
                       <Route path="/app/expenses" element={<PermissionGate permissionKey="canAccessExpenses"><ExpensesView /></PermissionGate>} />
-                      <Route path="/app/time-tracking" element={<PermissionGate permissionKey="canAccessTimeTracking"><TimeTrackingView /></PermissionGate>} />
                       <Route path="/app/workspace" element={<PermissionGate permissionKey="canAccessProjects"><WorkspaceView /></PermissionGate>} />
-                      <Route path="/app/workload" element={<PermissionGate permissionKey="canAccessReports"><WorkloadView /></PermissionGate>} />
                       <Route path="/app/momentum" element={<PermissionGate permissionKey="canAccessProfile"><MomentumView /></PermissionGate>} />
                       <Route path="/app/price-calculator" element={<PermissionGate permissionKey="canAccessServices"><Suspense fallback={<div className="p-8 text-center"><span className="animate-spin">⏳</span></div>}><PriceCalculatorView /></Suspense></PermissionGate>} />
                       <Route path="/app/landing-pages" element={<PermissionGate permissionKey="canAccessServices"><Suspense fallback={<div className="p-8 text-center"><span className="animate-spin">⏳</span></div>}><LandingPagesView /></Suspense></PermissionGate>} />
