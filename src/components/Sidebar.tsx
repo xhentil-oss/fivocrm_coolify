@@ -47,13 +47,12 @@ const allNavItems: NavEntry[] = [
   { path: '/app/services', label: 'Shërbimet', icon: Receipt, permissionKey: 'canAccessServices' },
   { path: '/app/service-inquiries', label: 'Kërkesat', icon: FileText, permissionKey: 'canAccessCRM' },
   { path: '/app/contracts', label: 'Kontratat', icon: ScrollText, permissionKey: 'canAccessInvoices' },
-  { path: '/app/time-tracking', label: 'Orari', icon: Timer, permissionKey: 'canAccessTimeTracking' },
   { path: '/app/workspace', label: 'Workspace', icon: Briefcase, permissionKey: 'canAccessProjects' },
   { path: '/app/chat', label: 'Chat', icon: MessageSquare, permissionKey: 'canAccessChat' },
   { path: '/app/whatsapp', label: 'WhatsApp', icon: MessageCircle, permissionKey: 'canAccessWhatsapp' },
   { path: '/app/marketing', label: 'Marketing', icon: Megaphone, permissionKey: 'canAccessMarketing' },
   { path: '/app/social', label: 'Rrjetet Sociale', icon: Share2, permissionKey: 'canAccessMarketing' },
-  // Financat — grouped: overview + invoices + expenses under one collapsible header.
+  // Financat — grouped: overview + invoices + expenses + bonuses under one collapsible header.
   {
     group: 'finances',
     label: 'Financat',
@@ -62,14 +61,11 @@ const allNavItems: NavEntry[] = [
       { path: '/app/finances', label: 'Përmbledhje', icon: PiggyBank, permissionKey: 'isAdmin' },
       { path: '/app/invoices', label: 'Faturat', icon: Receipt, permissionKey: 'canAccessInvoices' },
       { path: '/app/expenses', label: 'Shpenzimet', icon: DollarSign, permissionKey: 'canAccessExpenses' },
+      { path: '/app/bonus', label: 'Bonuset', icon: Award, permissionKey: 'canAccessProfile' },
     ],
   },
-  { path: '/app/reports', label: 'Raportet', icon: BarChart3, permissionKey: 'canAccessReports' },
-  { path: '/app/staff-revenue', label: 'Xhiro sipas Stafit', icon: TrendingUp, permissionKey: 'canAccessReports' },
-  { path: '/app/workload', label: 'Ngarkesa', icon: PieChart, permissionKey: 'canAccessReports' },
   { path: '/app/price-calculator', label: 'Kalkulatori', icon: Calculator, permissionKey: 'canAccessServices' },
   { path: '/app/landing-pages', label: 'Landing Pages', icon: Globe, permissionKey: 'canAccessServices' },
-  { path: '/app/bonus', label: 'Bonuset', icon: Award, permissionKey: 'canAccessProfile' },
   { path: '/app/profile', label: 'Profili', icon: UserCircle, permissionKey: 'canAccessProfile' },
   { path: '/app/settings', label: 'Cilësimet', icon: Settings, permissionKey: 'canAccessProfile' },
 ];
