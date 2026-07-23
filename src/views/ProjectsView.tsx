@@ -198,6 +198,7 @@ const ProjectsView: React.FC = () => {
     const responsibleUserId = formData.get('responsibleUserId') as string;
     const isRecurring = formData.get('isRecurring') === 'true';
     const recurringFrequency = formData.get('recurringFrequency') as string;
+    const billingType = formData.get('billingType') === 'monthly' ? 'monthly' : 'one-time';
     const memberUserIdsStr = formData.get('memberUserIds') as string;
     let memberUserIds: string[] | undefined;
     if (memberUserIdsStr) {
@@ -235,6 +236,7 @@ const ProjectsView: React.FC = () => {
       status,
       teamId: resolvedTeamId,
       budget,
+      billingType,
       spent: 0,
       customerId: resolvedCustomerId,
       responsibleUserId: resolvedResponsible,
@@ -414,6 +416,7 @@ const ProjectsView: React.FC = () => {
     const responsibleUserId = formData.get('responsibleUserId') as string;
     const isRecurring = formData.get('isRecurring') === 'true';
     const recurringFrequency = formData.get('recurringFrequency') as string;
+    const billingType = formData.get('billingType') === 'monthly' ? 'monthly' : 'one-time';
     const memberUserIdsStr = formData.get('memberUserIds') as string;
     let memberUserIds: string[] | undefined;
     if (memberUserIdsStr) {
@@ -451,6 +454,7 @@ const ProjectsView: React.FC = () => {
       status,
       teamId: teamId && teamId !== '__none__' ? teamId : undefined,
       budget,
+      billingType,
       customerId: custId && custId !== '__none__' ? custId : undefined,
       responsibleUserId: resolvedResponsible,
       isRecurring: isRecurring || undefined,
@@ -933,6 +937,9 @@ const ProjectForm: React.FC<{
   const [memberUserIds, setMemberUserIds] = useState<string[]>(initialData?.memberUserIds || []);
   const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
   const [budgetInput, setBudgetInput] = useState(initialData?.budget ? String(initialData.budget) : '');
+  const [billingType, setBillingType] = useState<'one-time' | 'monthly'>(
+    initialData?.billingType || (initialData?.isRecurring ? 'monthly' : 'one-time'),
+  );
   const [serviceCategory, setServiceCategory] = useState<string>('__all__');
   // Manual revenue split among participants. Off → 100% to responsible (default).
   const [customSplit, setCustomSplit] = useState<boolean>(!!(initialData as any)?.profitSplit?.length);
@@ -990,6 +997,7 @@ const ProjectForm: React.FC<{
     }
     formData.set('isRecurring', isRecurring ? 'true' : 'false');
     if (isRecurring) formData.set('recurringFrequency', recurringFrequency);
+    formData.set('billingType', billingType);
     formData.set('memberUserIds', JSON.stringify(memberUserIds));
     formData.set('selectedServiceIds', JSON.stringify(selectedServiceIds));
     // Only persist a manual split when the toggle is on; otherwise leave it empty
@@ -1161,6 +1169,25 @@ const ProjectForm: React.FC<{
         />
         <p className="text-xs text-muted-foreground mt-1">
           {serviceBudget !== null ? 'Llogaritet automatikisht nga shërbimet e zgjedhura' : 'Shuma që projekti gjeneron si të ardhura'}
+        </p>
+      </div>
+
+      {/* Billing type — how the budget above is read in the P&L */}
+      <div>
+        <Label htmlFor="billingType">Lloji i faturimit</Label>
+        <Select value={billingType} onValueChange={(v) => setBillingType(v as 'one-time' | 'monthly')}>
+          <SelectTrigger id="billingType">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="one-time">Njëherëshe (vlerë totale)</SelectItem>
+            <SelectItem value="monthly">Mujore (tarifë çdo muaj)</SelectItem>
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground mt-1">
+          {billingType === 'monthly'
+            ? 'Buxheti lart është tarifë mujore — fitimi shumëzon me muajt që projekti ka qenë aktiv.'
+            : 'Buxheti lart është vlerë totale njëherëshe (p.sh. ndërtim web, branding).'}
         </p>
       </div>
 

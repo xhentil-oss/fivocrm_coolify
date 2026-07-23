@@ -1,7 +1,12 @@
 // Per-project profit & loss (P&L) with full-absorption overhead allocation.
 //
 // Model (decided with the business owner):
-//  - Each project's REVENUE = its `budget` field ("Të Ardhurat e Projektit").
+//  - Each project's REVENUE derives from its `budget` field:
+//      · one-time projects → budget as-is (a single deal value).
+//      · monthly projects  → budget × months the project was active in the
+//        period, so a recurring fee is compared against the same span of
+//        salary cost (otherwise 1 month of fee vs N months of salary = nonsense).
+//    Billing type comes from `billingType`, falling back to isRecurring.
 //  - DIRECT (variable) COSTS = expenses linked to the project (`projectId`),
 //    entered manually as they happen. Salary-category expenses are excluded here
 //    to avoid double-counting fixed salary (which comes from monthlySalary below).
@@ -40,7 +45,9 @@ export interface ProjectPnlRow {
   name: string;
   customerId?: string;
   responsibleUserId?: string;
-  revenue: number;      // project budget (ALL)
+  billingType: 'one-time' | 'monthly';
+  activeMonths: number; // months the project counted toward the period (monthly only; 1 for one-time)
+  revenue: number;      // recognised revenue for the period (ALL)
   directCost: number;   // project-linked expenses (ALL)
   overhead: number;     // allocated share of the fixed pool (ALL)
   cost: number;         // directCost + overhead
@@ -70,6 +77,17 @@ function isCompleted(p: Project): boolean {
 
 function projectDate(p: Project): Date | null {
   return parseDate((p as any).lastCompletedAt) || parseDate(p.updatedAt) || parseDate(p.createdAt);
+}
+
+/** Inclusive whole-month count between two dates (≥1). */
+function monthsBetween(a: Date, b: Date): number {
+  return Math.max(1, (b.getFullYear() - a.getFullYear()) * 12 + (b.getMonth() - a.getMonth()) + 1);
+}
+
+/** Whether a project's `budget` is a monthly fee or a one-time value. */
+function billingTypeOf(p: Project): 'one-time' | 'monthly' {
+  if (p.billingType === 'monthly' || p.billingType === 'one-time') return p.billingType;
+  return (p as any).isRecurring ? 'monthly' : 'one-time';
 }
 
 const CATEGORY_SALARY = 'Salary';
@@ -103,26 +121,34 @@ export function computeProjectPnl(
     return inPeriod(projectDate(p));
   });
 
-  // ── How many months of salary to charge into the fixed pool.
+  // ── Resolve the period window [periodStart, periodEnd]. Used both for the
+  // salary months charged into the pool AND for prorating monthly project fees,
+  // so revenue and cost always cover the same span.
+  let periodStart: Date;
+  let periodEnd: Date;
+  if (opts.range) {
+    periodStart = opts.range.start;
+    periodEnd = opts.range.end;
+  } else if (opts.year != null && !opts.allTime) {
+    periodStart = new Date(opts.year, 0, 1);
+    periodEnd = opts.year === now.getFullYear()
+      ? now
+      : new Date(opts.year, 11, 31, 23, 59, 59, 999);
+  } else {
+    // All-time: from the earliest matched project up to now.
+    const times = periodProjects.map(projectDate).filter((d): d is Date => !!d).map(d => d.getTime());
+    periodStart = times.length > 0 ? new Date(Math.min(...times)) : now;
+    periodEnd = now;
+  }
+
+  // Months of salary to charge into the fixed pool.
   let months = opts.months;
   if (months == null) {
-    if (opts.range) {
-      const s = opts.range.start, e = opts.range.end;
-      months = Math.max(1, (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth()) + 1);
-    } else if (opts.year != null && !opts.allTime) {
-      months = monthsElapsedInYear(opts.year, now);
-    } else {
-      // All-time: span the matched projects actually cover.
-      const times = periodProjects.map(projectDate).filter((d): d is Date => !!d).map(d => d.getTime());
-      if (times.length > 0) {
-        const min = new Date(Math.min(...times));
-        const max = new Date(Math.max(...times));
-        months = Math.max(1, (max.getFullYear() - min.getFullYear()) * 12 + (max.getMonth() - min.getMonth()) + 1);
-      } else {
-        months = 12;
-      }
-    }
+    months = (opts.year != null && !opts.allTime && !opts.range)
+      ? monthsElapsedInYear(opts.year, now)
+      : monthsBetween(periodStart, periodEnd);
   }
+  const periodMonths = months;
 
   // ── Fixed cost pool: salaries + non-project, non-salary expenses in the period.
   const salaries = (teamMembers ?? [])
@@ -149,15 +175,30 @@ export function computeProjectPnl(
 
   const poolTotal = salaries + otherFixed;
 
+  // ── Recognised revenue per project (one-time = budget; monthly = fee × active months).
+  const revenueOf = (p: Project): { revenue: number; billingType: 'one-time' | 'monthly'; activeMonths: number } => {
+    const bt = billingTypeOf(p);
+    const fee = p.budget || 0;
+    if (bt === 'one-time') return { revenue: fee, billingType: bt, activeMonths: 1 };
+    const projStart = parseDate(p.createdAt) ?? periodStart;
+    const projEnd = parseDate((p as any).lastCompletedAt) ?? periodEnd;
+    const s = projStart > periodStart ? projStart : periodStart;
+    const e = projEnd < periodEnd ? projEnd : periodEnd;
+    const active = e >= s ? Math.min(monthsBetween(s, e), periodMonths) : 1;
+    return { revenue: fee * active, billingType: bt, activeMonths: active };
+  };
+  const revInfo = new Map(periodProjects.map(p => [p.id, revenueOf(p)] as const));
+
   // ── Allocate the pool by revenue weight (equal split when no revenue).
-  const totalRevenue = periodProjects.reduce((s, p) => s + (p.budget || 0), 0);
+  const totalRevenue = periodProjects.reduce((s, p) => s + revInfo.get(p.id)!.revenue, 0);
   const allocationBasis: 'revenue' | 'equal' = totalRevenue > 0 ? 'revenue' : 'equal';
   const equalShare = periodProjects.length > 0 ? 1 / periodProjects.length : 0;
 
   const missingBudget = { count: 0, names: [] as string[] };
 
   const rows: ProjectPnlRow[] = periodProjects.map(p => {
-    const revenue = p.budget || 0;
+    const info = revInfo.get(p.id)!;
+    const revenue = info.revenue;
     const directCost = directByProject.get(p.id) || 0;
     const share = allocationBasis === 'revenue'
       ? (totalRevenue > 0 ? revenue / totalRevenue : 0)
@@ -174,6 +215,8 @@ export function computeProjectPnl(
       name: p.name,
       customerId: p.customerId,
       responsibleUserId: p.responsibleUserId || p.createdByUserId || undefined,
+      billingType: info.billingType,
+      activeMonths: info.activeMonths,
       revenue,
       directCost,
       overhead,
