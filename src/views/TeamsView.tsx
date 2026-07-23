@@ -34,6 +34,8 @@ function getTeamDeptIcon(department?: string) {
 }
 import { usePermissions } from '../contexts/PermissionsContext';
 import { cn } from '../lib/utils';
+import { appendSalaryChange } from '../lib/finance/salaryHistory';
+import { parseDate } from '../lib/finance/financialAnalytics';
 import { toast } from '../hooks/use-toast';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -1173,6 +1175,10 @@ const EditMemberForm: React.FC<{
   const [canAccessSettings, setCanAccessSettings] = useState(member.canAccessSettings ?? false);
   const [status, setStatus] = useState(member.status);
   const [monthlySalary, setMonthlySalary] = useState(member.monthlySalary?.toString() || '');
+  // Salary-history: date a salary change takes effect (used only when the salary
+  // value actually changes) + a flag to wipe the recorded history.
+  const [salaryEffectiveFrom, setSalaryEffectiveFrom] = useState(new Date().toISOString().slice(0, 10));
+  const [clearSalaryHistory, setClearSalaryHistory] = useState(false);
   const [hourlyCostRate, setHourlyCostRate] = useState(member.hourlyCostRate?.toString() || '');
   const [serviceLines, setServiceLines] = useState<string[]>(
     Array.isArray(member.serviceLines) && member.serviceLines.length
@@ -1194,6 +1200,22 @@ const EditMemberForm: React.FC<{
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
+    const newSalary = monthlySalary ? parseFloat(monthlySalary) : undefined;
+
+    // Maintain the effective-dated salary timeline. Record a new entry only when
+    // the amount actually changed; seed the old amount as a baseline first time.
+    let salaryHistory = member.salaryHistory;
+    const salaryChanged = (newSalary || 0) !== (member.monthlySalary || 0);
+    if (clearSalaryHistory) {
+      salaryHistory = [];
+    } else if (salaryChanged && newSalary != null && newSalary > 0) {
+      salaryHistory = appendSalaryChange(
+        member,
+        newSalary,
+        new Date(salaryEffectiveFrom + 'T12:00:00'),
+      );
+    }
+
     onSubmit({
       role,
       canAccessProjects,
@@ -1205,9 +1227,11 @@ const EditMemberForm: React.FC<{
       status,
       displayName: displayName.trim() || undefined,
       email: email.trim() || undefined,
-      monthlySalary: monthlySalary ? parseFloat(monthlySalary) : undefined,
+      monthlySalary: newSalary,
       hourlyCostRate: hourlyCostRate ? parseFloat(hourlyCostRate) : undefined,
       serviceLines: serviceLines.length ? serviceLines : undefined,
+      // Only include when we changed it, so unrelated edits don't clobber history.
+      ...(salaryHistory !== member.salaryHistory ? { salaryHistory } : {}),
     });
   };
 
@@ -1386,6 +1410,54 @@ const EditMemberForm: React.FC<{
           placeholder="p.sh. 800"
           className="w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
         />
+
+        {/* Effective date — used when the salary above changes, so historical
+            months keep the old figure in the financial P&L. */}
+        {(parseFloat(monthlySalary) || 0) !== (member.monthlySalary || 0) && (parseFloat(monthlySalary) || 0) > 0 && (
+          <div className="pt-1">
+            <Label htmlFor="salaryEffectiveFrom" className="text-xs text-amber-800 dark:text-amber-300">Rroga e re efektive nga</Label>
+            <p className="text-[11px] text-muted-foreground">Muajt para kësaj date ruajnë rrogën e vjetër në llogaritjen e fitimit.</p>
+            <input
+              id="salaryEffectiveFrom"
+              type="date"
+              value={salaryEffectiveFrom}
+              onChange={(e) => setSalaryEffectiveFrom(e.target.value)}
+              className="mt-1 w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+          </div>
+        )}
+
+        {/* Recorded salary timeline */}
+        {(member.salaryHistory?.length ?? 0) > 0 && !clearSalaryHistory && (
+          <div className="pt-1">
+            <Label className="text-xs text-amber-800 dark:text-amber-300">Historiku i rrogës</Label>
+            <ul className="mt-1 space-y-0.5">
+              {[...(member.salaryHistory || [])]
+                .map(h => ({ amount: Number(h.monthlySalary) || 0, from: parseDate(h.effectiveFrom) }))
+                .filter(h => !!h.from)
+                .sort((a, b) => (b.from!.getTime() - a.from!.getTime()))
+                .map((h, i) => (
+                  <li key={i} className="flex items-center justify-between text-[11px] text-muted-foreground">
+                    <span>nga {h.from!.toLocaleDateString('sq-AL', { month: '2-digit', year: 'numeric' })}</span>
+                    <span className="tabular-nums font-medium text-foreground">{h.amount.toLocaleString()} L</span>
+                  </li>
+                ))}
+            </ul>
+            <button
+              type="button"
+              onClick={() => setClearSalaryHistory(true)}
+              className="mt-1 text-[11px] text-red-600 hover:underline"
+            >
+              Pastro historikun
+            </button>
+          </div>
+        )}
+        {clearSalaryHistory && (
+          <p className="text-[11px] text-red-600 pt-1">
+            Historiku do të fshihet me ruajtjen. <button type="button" onClick={() => setClearSalaryHistory(false)} className="underline">Anulo</button>
+          </p>
+        )}
+
         <div className="pt-1">
           <Label htmlFor="hourlyCostRate" className="text-xs text-amber-800 dark:text-amber-300">Tarifa e kostos / orë (L)</Label>
           <p className="text-[11px] text-muted-foreground">Kosto e brendshme për orë pune (P&amp;L per-klient + buxheti). Bosh = llogaritet nga rroga / 160.</p>

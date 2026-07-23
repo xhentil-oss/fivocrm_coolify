@@ -20,6 +20,7 @@ import {
   MONTH_LABELS_SQ,
 } from '../lib/finance/financialAnalytics';
 import { computeProjectPnl, type ProjectPnlOptions } from '../lib/finance/projectPnl';
+import { totalSalaryForMonth } from '../lib/finance/salaryHistory';
 
 // ── Single-page, plain-language finance overview for the owner ──
 // Answers one question: "Am I making money this month, where, and why?"
@@ -70,24 +71,18 @@ const FinancesView: React.FC = () => {
 
   const now = useMemo(() => new Date(), []);
 
-  const totalMonthlySalary = useMemo(() => {
-    if (!teamMembers) return 0;
-    return teamMembers
-      .filter(m => m.status === 'Active')
-      .reduce((sum, m) => sum + (m.monthlySalary || 0), 0);
-  }, [teamMembers]);
-
-  // ── This month vs last month ──
+  // ── This month vs last month ── (salary is resolved per month via history,
+  // so past months use the salary that applied then, not today's.)
   const { thisMonth, lastMonth } = useMemo(() => {
     const inv = invoices || [];
     const exp = expenses || [];
     const cur = monthWindow(now, 0);
     const prev = monthWindow(now, -1);
     return {
-      thisMonth: monthProfit(inv, exp, totalMonthlySalary, cur.start, cur.end),
-      lastMonth: monthProfit(inv, exp, totalMonthlySalary, prev.start, prev.end),
+      thisMonth: monthProfit(inv, exp, totalSalaryForMonth(teamMembers, cur.end), cur.start, cur.end),
+      lastMonth: monthProfit(inv, exp, totalSalaryForMonth(teamMembers, prev.end), prev.start, prev.end),
     };
-  }, [invoices, expenses, totalMonthlySalary, now]);
+  }, [invoices, expenses, teamMembers, now]);
 
   const profitDelta = thisMonth.profit - lastMonth.profit;
 
@@ -98,11 +93,11 @@ const FinancesView: React.FC = () => {
     const out: { label: string; profit: number }[] = [];
     for (let i = 5; i >= 0; i--) {
       const w = monthWindow(now, -i);
-      const p = monthProfit(inv, exp, totalMonthlySalary, w.start, w.end);
+      const p = monthProfit(inv, exp, totalSalaryForMonth(teamMembers, w.end), w.start, w.end);
       out.push({ label: MONTH_LABELS_SQ[w.monthIndex], profit: Math.round(p.profit) });
     }
     return out;
-  }, [invoices, expenses, totalMonthlySalary, now]);
+  }, [invoices, expenses, teamMembers, now]);
 
   // ── Receivables + overdue ──
   const receivables = useMemo(() => {
