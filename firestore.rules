@@ -214,6 +214,16 @@ service cloud.firestore {
         || isPortalClientFor(resource.data.customerId);
     }
 
+    match /payments/{docId} {
+      // Payment ledger (arkëtime). Mirrors invoices' business scoping; portal
+      // clients may read their own payments.
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update, delete: if canManageBusinessDoc();
+    }
+
     match /domains/{docId} {
       // WHMCS-synced domain registrations. Staff read their business's domains
       // (queries are businessId-scoped); portal client reads their own. Written
