@@ -595,11 +595,12 @@ const ProjectPnlBlock: React.FC<{
               <tr key={r.id} className="border-b border-border/50 last:border-0">
                 <td className="py-2 px-1 max-w-[180px]">
                   <p className="text-foreground truncate font-medium">{r.name}</p>
-                  {r.customerId && (
-                    <p className="text-[11px] text-muted-foreground truncate">
-                      {customerNameById.get(r.customerId) || 'Pa klient'}
-                    </p>
-                  )}
+                  <p className="text-[11px] text-muted-foreground truncate">
+                    {r.customerId ? (customerNameById.get(r.customerId) || 'Pa klient') : 'Pa klient'}
+                    {r.billingType === 'monthly'
+                      ? ` · mujore ×${r.activeMonths}`
+                      : ' · njëherëshe'}
+                  </p>
                 </td>
                 <td className="py-2 px-1 text-right tabular-nums">{formatALL(r.revenue)}</td>
                 <td className="py-2 px-1 text-right tabular-nums text-muted-foreground">{formatALL(r.directCost)}</td>

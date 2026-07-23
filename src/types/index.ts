@@ -295,6 +295,11 @@ export interface Project {
   teamId?: string;
   customerId?: string;
   budget?: number;
+  // How `budget` is interpreted for profit/P&L. 'one-time' = a single deal value
+  // (web build, branding). 'monthly' = a recurring monthly fee (SEO, social,
+  // maintenance) — the P&L multiplies it by the months active in the period.
+  // When unset, inferred from isRecurring (recurring → monthly, else one-time).
+  billingType?: 'one-time' | 'monthly';
   spent?: number;
   responsibleUserId?: string;
   memberUserIds?: string[];

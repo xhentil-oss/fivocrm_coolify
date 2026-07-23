@@ -121,6 +121,42 @@ describe('computeProjectPnl', () => {
     expect(res.rows[0].id).toBe('new');
   });
 
+  it('prorates a monthly project fee across the period months', () => {
+    const projects = [
+      mkProject({ id: 'seo', name: 'SEO', budget: 30_000, billingType: 'monthly', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-07-01') }),
+    ];
+    const res = computeProjectPnl(projects, [], [], { year: 2026, now: new Date('2026-07-23') });
+    // Jan..Jul = 7 months elapsed → 30k × 7.
+    expect(res.rows[0].billingType).toBe('monthly');
+    expect(res.rows[0].activeMonths).toBe(7);
+    expect(res.rows[0].revenue).toBe(210_000);
+  });
+
+  it('infers monthly billing from isRecurring when billingType is unset', () => {
+    const projects = [
+      mkProject({ id: 'r', name: 'R', budget: 10_000, isRecurring: true, createdAt: new Date('2026-05-01'), updatedAt: new Date('2026-05-01') }),
+    ];
+    const res = computeProjectPnl(projects, [], [], { year: 2026, now: new Date('2026-07-23') });
+    // Active May..Jul = 3 months → 30k.
+    expect(res.rows[0].billingType).toBe('monthly');
+    expect(res.rows[0].activeMonths).toBe(3);
+    expect(res.rows[0].revenue).toBe(30_000);
+  });
+
+  it('makes the aggregate realistic once monthly fees are annualised', () => {
+    // 1 salary of 100k × 7 months = 700k pool. Two monthly projects at 30k+70k
+    // fee → (30k+70k) × 7 = 700k revenue → break-even overall, not -83%.
+    const projects = [
+      mkProject({ id: 'a', name: 'A', budget: 30_000, billingType: 'monthly', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-07-01') }),
+      mkProject({ id: 'b', name: 'B', budget: 70_000, billingType: 'monthly', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-07-01') }),
+    ];
+    const members = [mkMember({ monthlySalary: 100_000 })];
+    const res = computeProjectPnl(projects, members, [], { year: 2026, now: new Date('2026-07-23') });
+    expect(res.totals.revenue).toBe(700_000);
+    expect(res.fixedPool.total).toBe(700_000);
+    expect(res.totals.profit).toBeCloseTo(0, 3);
+  });
+
   it('returns null margin for zero-revenue projects', () => {
     const projects = [mkProject({ id: 'a', name: 'A', budget: 0 })];
     const res = computeProjectPnl(projects, [], [], { months: 1 });
