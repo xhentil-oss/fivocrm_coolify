@@ -88,7 +88,7 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
           </Button>
 
           <h1 className="text-h4 text-white font-medium">
-            WorkHub
+            FivoCRM
           </h1>
         </div>
 
