@@ -259,12 +259,16 @@ export default function CalculatorSettingsPanel({ settings, onSave, onReset }: P
         <Separator />
 
         <CollapsibleSection title="Kursi i këmbimit">
-          <PriceField label="ALL → EUR" value={local.exchangeRates.ALL_to_EUR} onChange={v => { setLocal(prev => ({ ...prev, exchangeRates: { ...prev.exchangeRates, ALL_to_EUR: v } })); setDirty(true); }} />
-          <PriceField label="ALL → USD" value={local.exchangeRates.ALL_to_USD} onChange={v => { setLocal(prev => ({ ...prev, exchangeRates: { ...prev.exchangeRates, ALL_to_USD: v } })); setDirty(true); }} />
-          <PriceField label="EUR → ALL" value={local.exchangeRates.EUR_to_ALL} onChange={v => { setLocal(prev => ({ ...prev, exchangeRates: { ...prev.exchangeRates, EUR_to_ALL: v } })); setDirty(true); }} />
-          <PriceField label="EUR → USD" value={local.exchangeRates.EUR_to_USD} onChange={v => { setLocal(prev => ({ ...prev, exchangeRates: { ...prev.exchangeRates, EUR_to_USD: v } })); setDirty(true); }} />
-          <PriceField label="USD → ALL" value={local.exchangeRates.USD_to_ALL} onChange={v => { setLocal(prev => ({ ...prev, exchangeRates: { ...prev.exchangeRates, USD_to_ALL: v } })); setDirty(true); }} />
-          <PriceField label="USD → EUR" value={local.exchangeRates.USD_to_EUR} onChange={v => { setLocal(prev => ({ ...prev, exchangeRates: { ...prev.exchangeRates, USD_to_EUR: v } })); setDirty(true); }} />
+          {/* Rates are derived from the shared CRM rate (Cilësimet → Kursi i
+              Këmbimit) so quotes always match invoice/CRM totals. Read-only here. */}
+          <p className="text-xs text-muted-foreground py-1">
+            Kurset menaxhohen te <span className="font-medium text-foreground">Cilësimet → Kursi i Këmbimit</span> dhe
+            zbatohen njësoj për oferta, fatura dhe CRM. Vlerat aktuale:
+          </p>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-sm py-1">
+            <div className="flex justify-between"><span className="text-muted-foreground">1 EUR</span><span className="tabular-nums font-medium">{local.exchangeRates.EUR_to_ALL.toLocaleString()} ALL</span></div>
+            <div className="flex justify-between"><span className="text-muted-foreground">1 USD</span><span className="tabular-nums font-medium">{local.exchangeRates.USD_to_ALL.toLocaleString()} ALL</span></div>
+          </div>
         </CollapsibleSection>
 
         <CollapsibleSection title="Bundle Discounts">

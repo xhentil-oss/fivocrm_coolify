@@ -6,6 +6,7 @@ import type {
   MarketPricing, ExchangeRates, BundleDiscount,
   CalculatorSettings, CalculatorSelections,
 } from './types';
+import { getRateToAll } from '../utils';
 
 /* ─── Albania Pricing (in ALL) ─── */
 const ALBANIA_PRICING: MarketPricing = {
@@ -187,15 +188,25 @@ const INTERNATIONAL_PRICING: MarketPricing = {
   },
 };
 
-/* ─── Exchange Rates ─── */
-const DEFAULT_EXCHANGE_RATES: ExchangeRates = {
-  ALL_to_EUR: 0.0093,
-  ALL_to_USD: 0.0101,
-  EUR_to_ALL: 107,
-  EUR_to_USD: 1.08,
-  USD_to_ALL: 99,
-  USD_to_EUR: 0.92,
-};
+/* ─── Exchange Rates ───
+   Single source of truth: the shared CRM rates in lib/utils (getRateToAll,
+   backed by the `eur_all_rate`/`usd_all_rate` settings). The calculator no
+   longer keeps its own editable rates — they are always derived from the base
+   EUR→ALL and USD→ALL so a quote and its CRM/invoice total never disagree. */
+export function buildExchangeRatesFromShared(): ExchangeRates {
+  const eurToAll = getRateToAll('EUR');
+  const usdToAll = getRateToAll('USD');
+  return {
+    EUR_to_ALL: eurToAll,
+    USD_to_ALL: usdToAll,
+    ALL_to_EUR: eurToAll > 0 ? 1 / eurToAll : 0,
+    ALL_to_USD: usdToAll > 0 ? 1 / usdToAll : 0,
+    EUR_to_USD: usdToAll > 0 ? eurToAll / usdToAll : 0,
+    USD_to_EUR: eurToAll > 0 ? usdToAll / eurToAll : 0,
+  };
+}
+
+const DEFAULT_EXCHANGE_RATES: ExchangeRates = buildExchangeRatesFromShared();
 
 /* ─── Bundle Discounts ─── */
 const DEFAULT_BUNDLE_DISCOUNTS: BundleDiscount[] = [
@@ -319,11 +330,17 @@ export const DEFAULT_SELECTIONS: CalculatorSelections = {
 const SETTINGS_KEY = 'fivo_calculator_settings';
 
 export function loadSettings(): CalculatorSettings {
+  let settings: CalculatorSettings;
   try {
     const raw = localStorage.getItem(SETTINGS_KEY);
-    if (raw) return JSON.parse(raw) as CalculatorSettings;
-  } catch { /* ignore */ }
-  return structuredClone(DEFAULT_SETTINGS);
+    settings = raw ? (JSON.parse(raw) as CalculatorSettings) : structuredClone(DEFAULT_SETTINGS);
+  } catch {
+    settings = structuredClone(DEFAULT_SETTINGS);
+  }
+  // Exchange rates are never taken from saved calculator settings — always
+  // derive them from the shared CRM rate so quotes match invoices/CRM totals.
+  settings.exchangeRates = buildExchangeRatesFromShared();
+  return settings;
 }
 
 export function saveSettings(settings: CalculatorSettings): void {
