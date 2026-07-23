@@ -23,6 +23,7 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Textarea } from '../components/ui/textarea';
 import {
   buildRevenueByMonthByBasis,
+  getInvoiceCollectedBetween,
   type AccountingBasis,
 } from '../lib/finance/financialAnalytics';
 import {
@@ -455,6 +456,20 @@ const InvoicesView: React.FC = () => {
     return sum;
   }, 0) || 0;
 
+  // Real month-over-month collected-revenue delta (was a hardcoded "+12%").
+  const revenueMoM = useMemo(() => {
+    const now = new Date();
+    const curStart = new Date(now.getFullYear(), now.getMonth(), 1, 0, 0, 0, 0);
+    const curEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+    const prevStart = new Date(now.getFullYear(), now.getMonth() - 1, 1, 0, 0, 0, 0);
+    const prevEnd = new Date(now.getFullYear(), now.getMonth(), 0, 23, 59, 59, 999);
+    const inv = invoices || [];
+    const cur = inv.reduce((s, i) => s + getInvoiceCollectedBetween(i, curStart, curEnd), 0);
+    const prev = inv.reduce((s, i) => s + getInvoiceCollectedBetween(i, prevStart, prevEnd), 0);
+    const pct = prev > 0 ? ((cur - prev) / prev) * 100 : (cur > 0 ? 100 : 0);
+    return { cur, prev, pct, hasPrev: prev > 0 };
+  }, [invoices]);
+
   // ── Revenue by Month ──
   // Uses centralised helper from financialAnalytics so accrual/cash toggle
   // stays consistent with ReportsView. Default is accrual (IFRS/GAAP).
@@ -663,7 +678,11 @@ const InvoicesView: React.FC = () => {
           <p className="text-sm sm:text-h2 text-foreground font-medium animate-count-up">
             {totalRevenue.toLocaleString()} L
           </p>
-          <p className="text-[10px] sm:text-xs text-success hidden sm:block">+12% nga muaji i kaluar</p>
+          <p className={`text-[10px] sm:text-xs hidden sm:block ${revenueMoM.pct >= 0 ? 'text-success' : 'text-red-600'}`}>
+            {revenueMoM.hasPrev
+              ? `${revenueMoM.pct >= 0 ? '+' : ''}${Math.round(revenueMoM.pct)}% nga muaji i kaluar`
+              : revenueMoM.cur > 0 ? 'Arkëtim i ri këtë muaj' : 'Pa arkëtim këtë muaj'}
+          </p>
         </Card>
 
         <Card className="p-3 sm:p-6 space-y-1 sm:space-y-2 card-hover metric-card-primary border-l-4 border-l-primary">
@@ -974,46 +993,18 @@ const InvoicesView: React.FC = () => {
                       </div>
                     </td>
                     <td className="px-4 py-3 text-body font-medium">
-                      {editingInvoiceId === invoice.id && editingField === 'total' ? (
-                        <div className="flex items-center gap-2">
-                          <input
-                            type="number"
-                            value={editValue}
-                            onChange={(e) => setEditValue(e.target.value)}
-                            className="w-24 px-2 py-1 border rounded"
-                            autoFocus
-                          />
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6"
-                            onClick={() => saveEdit(invoice.id, 'total')}
-                          >
-                            <Check className="w-4 h-4 text-success" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            className="h-6 w-6"
-                            onClick={cancelEditing}
-                          >
-                            <X className="w-4 h-4 text-error" />
-                          </Button>
+                      {/* Total is read-only inline: editing it alone would desync it from
+                          subtotal/discount/tax. Change the amount via the full invoice form. */}
+                      <div className="flex items-center gap-2 px-2 py-1">
+                        <div>
+                          <div>{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}</div>
+                          {invoice.status === 'Partial' && invoice.paidAmount != null && (
+                            <div className="text-[10px] text-cyan-600 font-medium">
+                              {invoice.paidAmount.toLocaleString()} / {(invoice.total ?? invoice.amount ?? 0).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}
+                            </div>
+                          )}
                         </div>
-                      ) : (
-                        // Inline-editing `total` writes only `total` and desyncs it from
-                        // subtotal/discount/tax — edit the amount via the full invoice form instead.
-                        <div className="flex items-center gap-2 px-2 py-1">
-                          <div>
-                            <div>{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}</div>
-                            {invoice.status === 'Partial' && invoice.paidAmount != null && (
-                              <div className="text-[10px] text-cyan-600 font-medium">
-                                {invoice.paidAmount.toLocaleString()} / {(invoice.total ?? invoice.amount ?? 0).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}
-                              </div>
-                            )}
-                          </div>
-                        </div>
-                      )}
+                      </div>
                     </td>
                     <td className="px-4 py-3">
                       {editingInvoiceId === invoice.id && editingField === 'status' ? (
