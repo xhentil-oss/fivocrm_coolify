@@ -236,7 +236,9 @@ const ExpensesView: React.FC = () => {
     }
   };
 
-  const totalExpenses = expenses?.reduce((sum, exp) => sum + toAll(exp.amount ?? 0, (exp as any).currency), 0) || 0;
+  // Rejected expenses are shown in the list but must not hit any total.
+  const countable = (exp: any) => exp.approvalStatus !== 'Rejected';
+  const totalExpenses = expenses?.reduce((sum, exp) => countable(exp) ? sum + toAll(exp.amount ?? 0, (exp as any).currency) : sum, 0) || 0;
   const activeExpenses = expenses?.filter(e => e.status === 'Active').length || 0;
   const recurringExpenses = expenses?.filter(e => e.isRecurring).length || 0;
 
@@ -246,6 +248,7 @@ const ExpensesView: React.FC = () => {
   const monthlyExpenses = useMemo(() => {
     const totals = new Array(12).fill(0) as number[];
     (expenses || []).forEach(exp => {
+      if ((exp as any).approvalStatus === 'Rejected') return;
       const d = getExpenseDate(exp);
       if (!d || d.getFullYear() !== byMonthYear) return;
       totals[d.getMonth()] += toAll(exp.amount ?? 0, (exp as any).currency);

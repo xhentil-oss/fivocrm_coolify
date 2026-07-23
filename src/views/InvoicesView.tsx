@@ -500,11 +500,15 @@ const InvoicesView: React.FC = () => {
   const currentMonth = new Date().getMonth();
   const currentYear = new Date().getFullYear();
   const availableYears = [currentYear, currentYear - 1, currentYear - 2, currentYear - 3];
-  const paidInvoices = invoices?.filter(inv => inv.status === 'Paid' || inv.status === 'Partial').length || 0;
+  // "Të përfunduara" = fully paid only (a Partial invoice isn't completed).
+  const paidInvoices = invoices?.filter(inv => inv.status === 'Paid').length || 0;
   const pendingAmount = invoices?.filter(inv => inv.status === 'Pending').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
   const draftAmount = invoices?.filter(inv => inv.status === 'Draft').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
+  const overdueAmount = invoices?.filter(inv => inv.status === 'Overdue').reduce((sum, inv) => sum + Math.max(0, toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency) - toAll(inv.paidAmount ?? 0, (inv as any).currency)), 0) || 0;
   const partialRemainingAmount = invoices?.filter(inv => inv.status === 'Partial').reduce((sum, inv) => sum + Math.max(0, toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency) - toAll(inv.paidAmount ?? 0, (inv as any).currency)), 0) || 0;
-  const projectedRevenue = pendingAmount + draftAmount + partialRemainingAmount;
+  // Money genuinely owed to us: issued-but-unpaid (Pending), overdue balances,
+  // and the unpaid remainder of partial invoices. Drafts are NOT issued → excluded.
+  const projectedRevenue = pendingAmount + overdueAmount + partialRemainingAmount;
 
   // Recurring invoices whose next-generation date has arrived (and not paused) — an
   // estimate shown in the confirm dialog before the manual "Gjenero Periodike" run.
@@ -688,13 +692,13 @@ const InvoicesView: React.FC = () => {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 sm:gap-6 stagger-children">
         <Card className="p-3 sm:p-6 space-y-1 sm:space-y-2 card-hover metric-card-success border-l-4 border-l-success">
           <div className="flex items-center justify-between">
-            <p className="text-[10px] sm:text-body-sm text-muted-foreground">Të Ardhura</p>
+            <p className="text-[10px] sm:text-body-sm text-muted-foreground">Të Ardhura (këtë muaj)</p>
             <div className="p-1 sm:p-2 bg-success/10 rounded-lg">
               <DollarSign className="w-3.5 h-3.5 sm:w-5 sm:h-5 text-success" />
             </div>
           </div>
           <p className="text-sm sm:text-h2 text-foreground font-medium animate-count-up">
-            {totalRevenue.toLocaleString()} L
+            {Math.round(revenueMoM.cur).toLocaleString()} L
           </p>
           <p className={`text-[10px] sm:text-xs hidden sm:block ${revenueMoM.pct >= 0 ? 'text-success' : 'text-red-600'}`}>
             {revenueMoM.hasPrev
@@ -727,7 +731,7 @@ const InvoicesView: React.FC = () => {
             {projectedRevenue.toLocaleString()} L
           </p>
           <p className="text-[10px] sm:text-xs text-muted-foreground hidden sm:block">
-            Pritje: {pendingAmount.toLocaleString()} · Draft: {draftAmount.toLocaleString()} L
+            Pritje: {pendingAmount.toLocaleString()} · Vonuar: {overdueAmount.toLocaleString()} · Mbetje: {partialRemainingAmount.toLocaleString()} L
           </p>
         </Card>
       </div>
