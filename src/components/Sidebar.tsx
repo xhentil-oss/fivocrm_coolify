@@ -40,7 +40,16 @@ const allNavItems: NavEntry[] = [
   { path: '/app/crm', label: 'CRM Leads', icon: Users, permissionKey: 'canAccessCRM' },
   { path: '/app/deals', label: 'Marrëveshjet', icon: Handshake, permissionKey: 'canAccessCRM' },
   { path: '/app/customers', label: 'Klientët', icon: Users, permissionKey: 'canAccessCustomers' },
-  { path: '/app/tasks', label: 'Detyrat', icon: CheckSquare, permissionKey: 'canAccessTasks' },
+  // Detyrat — grouped: the task board + daily staff reports under one header.
+  {
+    group: 'tasks',
+    label: 'Detyrat',
+    icon: CheckSquare,
+    children: [
+      { path: '/app/tasks', label: 'Të gjitha detyrat', icon: CheckSquare, permissionKey: 'canAccessTasks' },
+      { path: '/app/daily-reports', label: 'Raportet Ditore', icon: FileText, permissionKey: 'canAccessTasks' },
+    ],
+  },
   { path: '/app/momentum', label: 'Momentum', icon: Rocket, permissionKey: 'canAccessProfile' },
   { path: '/app/goals', label: 'Objektivat', icon: Target, permissionKey: 'canAccessGoals' },
   { path: '/app/teams', label: 'Ekipet', icon: UsersRound, permissionKey: 'canAccessTeams' },

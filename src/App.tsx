@@ -48,6 +48,7 @@ const ProjectDetailView = lazyRetry(() => import('./views/ProjectDetailView'));
 const CRMView = lazyRetry(() => import('./views/CRMView'));
 const DealsView = lazyRetry(() => import('./views/DealsView'));
 const TasksView = lazyRetry(() => import('./views/TasksView'));
+const DailyReportsView = lazyRetry(() => import('./views/DailyReportsView'));
 const GoalsView = lazyRetry(() => import('./views/GoalsView'));
 const TeamsView = lazyRetry(() => import('./views/TeamsView'));
 const InvoicesView = lazyRetry(() => import('./views/InvoicesView'));
@@ -341,6 +342,7 @@ function AppContent() {
                       <Route path="/app/crm" element={<PermissionGate permissionKey="canAccessCRM"><CRMView /></PermissionGate>} />
                       <Route path="/app/deals" element={<PermissionGate permissionKey="canAccessCRM"><DealsView /></PermissionGate>} />
                       <Route path="/app/tasks" element={<PermissionGate permissionKey="canAccessTasks"><TasksView /></PermissionGate>} />
+                      <Route path="/app/daily-reports" element={<PermissionGate permissionKey="canAccessTasks"><DailyReportsView /></PermissionGate>} />
                       <Route path="/app/goals" element={<PermissionGate permissionKey="canAccessGoals"><GoalsView /></PermissionGate>} />
                       <Route path="/app/teams" element={<PermissionGate permissionKey="canAccessTeams"><TeamsView /></PermissionGate>} />
                       <Route path="/app/invoices" element={<PermissionGate permissionKey="canAccessInvoices"><InvoicesView /></PermissionGate>} />
