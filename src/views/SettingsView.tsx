@@ -178,6 +178,7 @@ const SettingsView: React.FC = () => {
     if (firestoreSettings.companyEmail) setCompanyEmail(firestoreSettings.companyEmail);
     if (firestoreSettings.companyPhone) setCompanyPhone(firestoreSettings.companyPhone);
     if (firestoreSettings.eurAllRate) setEurAllRate(firestoreSettings.eurAllRate);
+    if (firestoreSettings.usdAllRate) setUsdAllRate(firestoreSettings.usdAllRate);
     if (firestoreSettings.whatsappEnabled !== undefined) setWhatsappEnabled(firestoreSettings.whatsappEnabled);
     if (firestoreSettings.whatsappVpsUrl) setWhatsappVpsUrl(firestoreSettings.whatsappVpsUrl);
     if (firestoreSettings.whatsappVpsSecret) setWhatsappVpsSecret(firestoreSettings.whatsappVpsSecret);
@@ -207,8 +208,9 @@ const SettingsView: React.FC = () => {
     setMetaLoaded(true);
   }, [firestoreSettings]);
 
-  // ── EUR→ALL exchange rate ──
+  // ── Foreign → ALL exchange rates (shared by CRM, invoices and the calculator) ──
   const [eurAllRate, setEurAllRate] = useState(() => localStorage.getItem('eur_all_rate') || '100');
+  const [usdAllRate, setUsdAllRate] = useState(() => localStorage.getItem('usd_all_rate') || '92');
   const [rateSaved, setRateSaved] = useState(false);
 
   // ── WhatsApp integration settings ──
@@ -1524,11 +1526,11 @@ const SettingsView: React.FC = () => {
                 <Globe className="w-6 h-6 text-emerald-600" />
               </div>
               <div>
-                <h3 className="text-h4 text-foreground">Kursi i Këmbimit EUR → ALL</h3>
-                <p className="text-xs text-muted-foreground">Përdoret për konvertimin e faturave në EUR te të ardhurat totale në LEK</p>
+                <h3 className="text-h4 text-foreground">Kurset e Këmbimit → ALL</h3>
+                <p className="text-xs text-muted-foreground">Burim i vetëm i kurseve — zbatohet te faturat, CRM dhe kalkulatori i ofertave.</p>
               </div>
             </div>
-            <div className="flex items-center gap-4 max-w-sm">
+            <div className="flex items-center gap-4 max-w-md">
               <div className="flex-1">
                 <Label>1 EUR =</Label>
                 <div className="flex items-center gap-2">
@@ -1539,25 +1541,40 @@ const SettingsView: React.FC = () => {
                   <span className="text-sm text-muted-foreground font-medium whitespace-nowrap">ALL</span>
                 </div>
               </div>
+              <div className="flex-1">
+                <Label>1 USD =</Label>
+                <div className="flex items-center gap-2">
+                  <Input type="number" min="1" step="0.1" value={usdAllRate}
+                    onChange={(e) => setUsdAllRate(e.target.value)}
+                    className="font-mono"
+                  />
+                  <span className="text-sm text-muted-foreground font-medium whitespace-nowrap">ALL</span>
+                </div>
+              </div>
             </div>
             <div className="flex items-center justify-between">
               {rateSaved && (
                 <div className="flex items-center gap-2 text-success">
                   <CheckCircle2 className="w-4 h-4" />
-                  <span className="text-sm">Kursi u ruajt!</span>
+                  <span className="text-sm">Kurset u ruajtën!</span>
                 </div>
               )}
               <div className="ml-auto">
                 <Button onClick={() => {
-                  const rate = parseFloat(eurAllRate);
-                  if (rate > 0 && isFinite(rate)) {
-                    localStorage.setItem('eur_all_rate', String(rate));
-                    if (teamId) saveTeamSettings(teamId, { eurAllRate: String(rate) });
-                    setRateSaved(true);
-                    setTimeout(() => setRateSaved(false), 3000);
+                  const eur = parseFloat(eurAllRate);
+                  const usd = parseFloat(usdAllRate);
+                  if (eur > 0 && isFinite(eur)) {
+                    localStorage.setItem('eur_all_rate', String(eur));
+                    if (teamId) saveTeamSettings(teamId, { eurAllRate: String(eur) });
                   }
+                  if (usd > 0 && isFinite(usd)) {
+                    localStorage.setItem('usd_all_rate', String(usd));
+                    if (teamId) saveTeamSettings(teamId, { usdAllRate: String(usd) });
+                  }
+                  setRateSaved(true);
+                  setTimeout(() => setRateSaved(false), 3000);
                 }} disabled={!eurAllRate || parseFloat(eurAllRate) <= 0}>
-                  Ruaj Kursin
+                  Ruaj Kurset
                 </Button>
               </div>
             </div>

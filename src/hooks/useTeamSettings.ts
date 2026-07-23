@@ -31,6 +31,7 @@ export interface TeamSettings {
   companyPhone?: string;
   bankAccounts?: BankAccount[];
   eurAllRate?: string;
+  usdAllRate?: string;
   whatsappEnabled?: boolean;
   whatsappVpsUrl?: string;
   whatsappVpsSecret?: string;
@@ -128,6 +129,10 @@ export function useTeamSettingsSync(): void {
 
       if (settings.eurAllRate !== undefined) {
         localStorage.setItem('eur_all_rate', settings.eurAllRate);
+      }
+
+      if (settings.usdAllRate !== undefined) {
+        localStorage.setItem('usd_all_rate', settings.usdAllRate);
       }
 
       if (settings.whatsappEnabled !== undefined) {
