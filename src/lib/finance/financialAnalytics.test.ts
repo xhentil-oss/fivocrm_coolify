@@ -72,6 +72,20 @@ describe('rejected-expense exclusion', () => {
   });
 });
 
+describe('overdue invoices keep their partial payments', () => {
+  it('credits collected/outstanding for a partially-paid invoice that flipped to Overdue', () => {
+    const inv = mkInvoice({
+      status: 'Overdue',
+      total: 1000,
+      paidAmount: 400,
+      partialPayments: [{ amount: 400, paidAt: new Date('2026-06-10T12:00:00Z') }],
+    });
+    expect(getInvoiceOutstandingAll(inv)).toBe(600); // not the full 1000
+    const collectedJune = getInvoiceCollectedBetween(inv, new Date('2026-06-01'), new Date('2026-06-30T23:59:59'));
+    expect(collectedJune).toBe(400); // the banked 400 is not lost
+  });
+});
+
 describe('financial analytics engine', () => {
   it('builds available years from invoices, partial payments and expenses', () => {
     const invoices: Invoice[] = [

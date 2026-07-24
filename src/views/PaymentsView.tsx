@@ -181,7 +181,7 @@ const PaymentsView: React.FC = () => {
                     <td className="py-2.5 px-3 truncate max-w-[160px]">{p.customerId ? (customerName.get(p.customerId) || 'Pa klient') : 'Pa klient'}</td>
                     <td className="py-2.5 px-3">{p.method || 'Tjetër'}</td>
                     <td className="py-2.5 px-3 text-right tabular-nums font-semibold">
-                      {(p.amount || 0).toLocaleString()} {p.currency === 'EUR' ? '€' : p.currency === 'USD' ? '$' : 'L'}
+                      {(p.amount || 0).toLocaleString()} {p.currency === 'EUR' ? '€' : p.currency === 'USD' ? '$' : p.currency === 'GBP' ? '£' : 'L'}
                     </td>
                   </tr>
                 ))}
