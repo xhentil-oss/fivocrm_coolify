@@ -64,16 +64,17 @@ export function getInvoiceTotalAll(inv: Invoice): number {
   return toAll(inv.total ?? inv.amount ?? 0, inv.currency);
 }
 
-/** Amount already received against an invoice (full Paid OR Partial sum), in ALL. */
+/** Amount already received against an invoice, in ALL. Status-robust: a
+ *  partially-paid invoice that later flips to Overdue must still credit the
+ *  amount already banked (the cron transitions Partial → Overdue when late). */
 export function getInvoiceCollectedAll(inv: Invoice): number {
+  if (inv.status === 'Draft' || inv.status === 'Cancelled') return 0;
   if (inv.status === 'Paid') return getInvoiceTotalAll(inv);
-  if (inv.status === 'Partial') {
-    if (inv.partialPayments?.length) {
-      return inv.partialPayments.reduce((s, p) => s + toAll(p.amount ?? 0, inv.currency), 0);
-    }
-    return toAll(inv.paidAmount ?? 0, inv.currency);
+  // Pending/Partial/Overdue: credit any recorded partial payments.
+  if (inv.partialPayments?.length) {
+    return inv.partialPayments.reduce((s, p) => s + toAll(p.amount ?? 0, inv.currency), 0);
   }
-  return 0;
+  return toAll(inv.paidAmount ?? 0, inv.currency);
 }
 
 /** Amount still outstanding on an invoice (Accounts Receivable contribution), in ALL. */
@@ -90,18 +91,18 @@ export function getExpenseDate(exp: Expense): Date | null {
  *  Used for period-accurate cash-basis attribution (e.g. per staff member). */
 export function getInvoiceCollectedBetween(inv: Invoice, start: Date, end?: Date): number {
   const inRange = (d: Date | null) => !!d && d >= start && (!end || d <= end);
+  if (inv.status === 'Draft' || inv.status === 'Cancelled') return 0;
   if (inv.status === 'Paid') {
     return inRange(getInvoicePaidDate(inv)) ? getInvoiceTotalAll(inv) : 0;
   }
-  if (inv.status === 'Partial') {
-    if (inv.partialPayments?.length) {
-      return inv.partialPayments.reduce((s, p) => {
-        return inRange(parseDate(p.paidAt)) ? s + toAll(p.amount ?? 0, inv.currency) : s;
-      }, 0);
-    }
-    return inRange(getInvoicePaidDate(inv)) ? toAll(inv.paidAmount ?? 0, inv.currency) : 0;
+  // Partial/Overdue (and any Pending with recorded payments): attribute each
+  // recorded partial to its own payment date.
+  if (inv.partialPayments?.length) {
+    return inv.partialPayments.reduce((s, p) => {
+      return inRange(parseDate(p.paidAt)) ? s + toAll(p.amount ?? 0, inv.currency) : s;
+    }, 0);
   }
-  return 0;
+  return inRange(getInvoicePaidDate(inv)) ? toAll(inv.paidAmount ?? 0, inv.currency) : 0;
 }
 
 /** Billed (full invoice) amount if recognized within [start, end], in ALL (accrual). */
