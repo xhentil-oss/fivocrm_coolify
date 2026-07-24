@@ -334,6 +334,17 @@ const ProjectDetailView: React.FC = () => {
     await commentMutation.remove(commentId);
   };
 
+  const handleToggleReaction = async (commentId: string, emoji: string) => {
+    if (!user?.uid) return;
+    const c = comments?.find((x: any) => x.id === commentId);
+    const current: Record<string, string[]> = { ...((c as any)?.reactions || {}) };
+    const arr = Array.isArray(current[emoji]) ? [...current[emoji]] : [];
+    const i = arr.indexOf(user.uid);
+    if (i >= 0) arr.splice(i, 1); else arr.push(user.uid);
+    if (arr.length) current[emoji] = arr; else delete current[emoji];
+    await commentMutation.update(commentId, { reactions: current } as any);
+  };
+
   const formatDateCompact = (date: Date) => {
     if (!date || isNaN(new Date(date).getTime())) {
       return { text: 'Pa afat', className: 'text-muted-foreground' };
@@ -954,6 +965,7 @@ const ProjectDetailView: React.FC = () => {
               onAddComment={handleAddComment}
               onEditComment={handleEditComment}
               onDeleteComment={handleDeleteComment}
+              onToggleReaction={handleToggleReaction}
               onUpdate={handleTaskUpdate}
               onDelete={taskMutation.remove}
               projects={project ? [project] : undefined}

@@ -8,7 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useGoogleApi, DriveFile } from '../contexts/GoogleApiContext';
-import { Calendar as CalendarIcon, MessageSquare, Users, ChevronRight, ChevronDown, Clock, Play, Pause, Square, Paperclip, Upload, X, AtSign, Eye, Plus, Trash2, Edit2, Send, Hash, Check, Cloud, Maximize2, Minimize2, ImageIcon, Loader2, FileText, Download } from 'lucide-react';
+import { Calendar as CalendarIcon, MessageSquare, Users, ChevronRight, ChevronDown, Clock, Play, Pause, Square, Paperclip, Upload, X, AtSign, Eye, Plus, Trash2, Edit2, Send, Hash, Check, Cloud, Maximize2, Minimize2, ImageIcon, Loader2, FileText, Download, SmilePlus } from 'lucide-react';
 import GoogleDrivePicker from './GoogleDrivePicker';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -25,6 +25,9 @@ import { toast } from '../hooks/use-toast';
 import { useFileUpload } from '../hooks/useFileUpload';
 import type { Task, TaskComment } from '../types';
 
+// Quick-reaction emoji set — mirrors the chat reactions for a consistent feel.
+const COMMENT_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+
 interface TaskDetailPanelProps {
   task: Task;
   onClose: () => void;
@@ -34,6 +37,7 @@ interface TaskDetailPanelProps {
   onAddComment: (taskId: string, content: string) => void;
   onEditComment?: (commentId: string, content: string) => void | Promise<any>;
   onDeleteComment?: (commentId: string) => void | Promise<any>;
+  onToggleReaction?: (commentId: string, emoji: string) => void | Promise<any>;
   onUpdate: (id: string, data: any) => Promise<any>;
   onDelete: (id: string) => Promise<any>;
   projects?: { id: string; name: string }[];
@@ -52,6 +56,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   onAddComment,
   onEditComment,
   onDeleteComment,
+  onToggleReaction,
   onUpdate,
   onDelete,
   projects = [],
@@ -88,6 +93,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentText, setEditingCommentText] = useState('');
   const [confirmDeleteCommentId, setConfirmDeleteCommentId] = useState<string | null>(null);
+  // Which comment's emoji picker is open (WhatsApp/Slack-style reactions on comments).
+  const [reactionPickerId, setReactionPickerId] = useState<string | null>(null);
+  const toggleReaction = (commentId: string, emoji: string) => {
+    setReactionPickerId(null);
+    onToggleReaction?.(commentId, emoji);
+  };
 
   const startEditComment = (c: TaskComment) => {
     setConfirmDeleteCommentId(null);
@@ -2061,8 +2072,48 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                                 {renderCommentWithMentions(comment.content, isCurrentUser)}
                                 {(comment as any).edited && <span className="opacity-60 text-[10px] ml-1">(edituar)</span>}
                               </div>
+                              {/* Reaction chips — one pill per emoji with its count; click to toggle your own. */}
+                              {(() => {
+                                const reactions = (comment as any).reactions as Record<string, string[]> | undefined;
+                                const entries = reactions ? Object.entries(reactions).filter(([, ids]) => Array.isArray(ids) && ids.length > 0) : [];
+                                if (entries.length === 0) return null;
+                                return (
+                                  <div className={`flex flex-wrap gap-1 ${isCurrentUser ? 'justify-end' : 'justify-start'}`}>
+                                    {entries.map(([emoji, ids]) => {
+                                      const mine = !!user?.uid && ids.includes(user.uid);
+                                      return (
+                                        <button
+                                          key={emoji}
+                                          type="button"
+                                          onClick={() => onToggleReaction && toggleReaction(comment.id, emoji)}
+                                          disabled={!onToggleReaction}
+                                          title={ids.map(id => getUserDisplayName(id)).join(', ')}
+                                          className={`inline-flex items-center gap-0.5 rounded-full px-1.5 py-0.5 text-[11px] border transition-colors ${mine ? 'bg-primary/10 border-primary/40 text-foreground' : 'bg-muted/60 border-transparent hover:bg-muted text-muted-foreground'}`}
+                                        >
+                                          <span>{emoji}</span>
+                                          <span className="font-medium">{ids.length}</span>
+                                        </button>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              })()}
                               <div className={`flex items-center gap-2 px-1 ${isCurrentUser ? 'justify-end' : 'justify-start'}`}>
                                 <span className="text-[10px] text-muted-foreground">{timeLabel}</span>
+                                {onToggleReaction && (
+                                  <div className="relative">
+                                    <button type="button" onClick={() => setReactionPickerId(reactionPickerId === comment.id ? null : comment.id)} aria-label="Reago" className="text-muted-foreground hover:text-foreground transition-colors flex items-center">
+                                      <SmilePlus className="w-3.5 h-3.5" />
+                                    </button>
+                                    {reactionPickerId === comment.id && (
+                                      <div className={`absolute bottom-full mb-1 z-20 flex gap-0.5 bg-popover border rounded-full shadow-lg px-1.5 py-1 ${isCurrentUser ? 'right-0' : 'left-0'}`}>
+                                        {COMMENT_REACTIONS.map(emoji => (
+                                          <button key={emoji} type="button" onClick={() => toggleReaction(comment.id, emoji)} className="text-base hover:scale-125 transition-transform leading-none">{emoji}</button>
+                                        ))}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
                                 {isCurrentUser && onEditComment && (
                                   <button type="button" onClick={() => startEditComment(comment)} className="text-[10px] text-muted-foreground hover:text-foreground transition-colors">Edito</button>
                                 )}

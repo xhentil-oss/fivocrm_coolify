@@ -1017,6 +1017,7 @@ export interface TaskComment {
   senderType?: 'client' | 'team';
   createdByUserId?: string;
   edited?: boolean;
+  reactions?: Record<string, string[]>; // emoji -> userId[]
   createdAt: Date;
   updatedAt: Date;
 }

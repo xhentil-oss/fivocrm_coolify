@@ -459,6 +459,17 @@ const TasksView: React.FC = () => {
     await commentMutation.remove(commentId);
   };
 
+  const handleToggleReaction = async (commentId: string, emoji: string) => {
+    if (!user?.uid) return;
+    const c = comments?.find(x => x.id === commentId);
+    const current: Record<string, string[]> = { ...((c as any)?.reactions || {}) };
+    const arr = Array.isArray(current[emoji]) ? [...current[emoji]] : [];
+    const i = arr.indexOf(user.uid);
+    if (i >= 0) arr.splice(i, 1); else arr.push(user.uid);
+    if (arr.length) current[emoji] = arr; else delete current[emoji];
+    await commentMutation.update(commentId, { reactions: current } as any);
+  };
+
   // --- @dnd-kit drag-and-drop for kanban ---
   // Mouse: drag after a small move. Touch: drag only after a 200ms hold, so normal
   // finger-scrolling through the list/board isn't hijacked into a drag.
@@ -1368,6 +1379,7 @@ const TasksView: React.FC = () => {
             onAddComment={handleAddComment}
             onEditComment={handleEditComment}
             onDeleteComment={handleDeleteComment}
+            onToggleReaction={handleToggleReaction}
             onUpdate={taskMutation.update}
             onDelete={taskMutation.remove}
             projects={projects}
