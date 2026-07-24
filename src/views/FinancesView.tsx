@@ -75,13 +75,19 @@ const FinancesView: React.FC = () => {
 
   // ── This month vs last month ── (salary is resolved per month via history,
   // so past months use the salary that applied then, not today's.)
+  // The CURRENT month is month-to-date, so its salary is prorated to elapsed
+  // days — otherwise a full month's payroll vs a few days of collections would
+  // show a false loss early each month.
   const { thisMonth, lastMonth } = useMemo(() => {
     const inv = invoices || [];
     const exp = expenses || [];
     const cur = monthWindow(now, 0);
     const prev = monthWindow(now, -1);
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const elapsedFraction = Math.min(1, now.getDate() / daysInMonth);
+    const curSalary = totalSalaryForMonth(teamMembers, cur.end) * elapsedFraction;
     return {
-      thisMonth: monthProfit(inv, exp, totalSalaryForMonth(teamMembers, cur.end), cur.start, cur.end),
+      thisMonth: monthProfit(inv, exp, curSalary, cur.start, cur.end),
       lastMonth: monthProfit(inv, exp, totalSalaryForMonth(teamMembers, prev.end), prev.start, prev.end),
     };
   }, [invoices, expenses, teamMembers, now]);
@@ -220,10 +226,10 @@ const FinancesView: React.FC = () => {
     [invoices, expenses, teamMembers, now],
   );
 
-  // ── Next-month profit forecast (project-pipeline based) ──
+  // ── Next-month profit forecast (project pipeline + recurring invoices) ──
   const forecast = useMemo(
-    () => forecastNextMonth(projects, expenses, teamMembers, now),
-    [projects, expenses, teamMembers, now],
+    () => forecastNextMonth(projects, invoices, expenses, teamMembers, now),
+    [projects, invoices, expenses, teamMembers, now],
   );
 
   // ── Plain-language alarms ──
@@ -341,7 +347,7 @@ const FinancesView: React.FC = () => {
           <BreakdownRow
             icon={<ArrowDownRight className="w-4 h-4 text-red-600" />}
             label="− Rrogat"
-            hint="Rrogat mujore të ekipit aktiv"
+            hint="Rrogat e ekipit aktiv (pjesa deri sot)"
             amount={-thisMonth.salary}
           />
           <BreakdownRow
