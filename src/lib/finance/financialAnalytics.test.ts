@@ -53,6 +53,7 @@ describe('parseDate', () => {
     const iso = '2026-06-15T00:00:00.000Z';
     expect(parseDate({ toDate: () => new Date(iso) })?.toISOString()).toBe(iso);
     expect(parseDate({ seconds: Math.floor(new Date(iso).getTime() / 1000) })?.getUTCFullYear()).toBe(2026);
+    expect(parseDate({ _seconds: Math.floor(new Date(iso).getTime() / 1000) })?.getUTCFullYear()).toBe(2026);
     expect(parseDate(new Date(iso))?.toISOString()).toBe(iso);
     expect(parseDate(null)).toBeNull();
     expect(parseDate('not-a-date')).toBeNull();

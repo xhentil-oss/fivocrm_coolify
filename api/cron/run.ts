@@ -592,7 +592,10 @@ async function runRecurringInvoices() {
     // even if the cron runs late or is triggered manually.
     const scheduledYear = nextDate.getFullYear();
     const scheduledMonth = nextDate.getMonth();
-    const invoiceNumber = `REC-${scheduledYear}-${String(scheduledMonth + 1).padStart(2, '0')}-${doc.id.slice(0, 6).toUpperCase()}`;
+    const scheduledDay = nextDate.getDate();
+    // Include the day so sub-monthly (weekly) children in the same month get
+    // distinct numbers instead of colliding on REC-YYYY-MM-<parent>.
+    const invoiceNumber = `REC-${scheduledYear}-${String(scheduledMonth + 1).padStart(2, '0')}-${String(scheduledDay).padStart(2, '0')}-${doc.id.slice(0, 6).toUpperCase()}`;
     const newInvoiceRef = db.collection('invoices').doc();
 
     ops.push(newInvoiceRef.set({
