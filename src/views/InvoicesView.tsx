@@ -1631,6 +1631,18 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     const discountAmount = calculateDiscountAmount(resolvedSubtotal);
     const total = resolvedSubtotal - discountAmount + tax;
 
+    // Default next-recurrence = ONE cycle after this (first) invoice's due date,
+    // so the mother covers period 1 and the first auto-generated child starts
+    // period 2 (instead of duplicating period 1). Explicit user value wins.
+    const defaultNextRecurring = () => {
+      const d = new Date(dueDate || invoiceDate || new Date());
+      if (recurringFrequency === 'weekly') d.setDate(d.getDate() + 7);
+      else if (recurringFrequency === 'quarterly') d.setMonth(d.getMonth() + 3);
+      else if (recurringFrequency === 'yearly') d.setFullYear(d.getFullYear() + 1);
+      else d.setMonth(d.getMonth() + 1); // monthly
+      return d;
+    };
+
     const invoiceData: any = {
       customerId: selectedCustomerId,
       projectId: selectedProjectId || '',
@@ -1655,9 +1667,10 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       isRecurring,
       isRecurringPaused: isRecurring ? isRecurringPaused : false,
       recurringFrequency: isRecurring ? recurringFrequency : undefined,
-      // nextRecurringDate: user-set value takes priority; fallback to dueDate only for new invoices
+      // nextRecurringDate: user-set value takes priority; else default to one
+      // full cycle after the due date so the first child doesn't re-bill period 1.
       nextRecurringDate: isRecurring
-        ? (nextRecurringDate || dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000))
+        ? (nextRecurringDate || defaultNextRecurring())
         : null,
       // "Repeat until" — cleared when recurrence is off so a stale end-date can't linger.
       recurringEndDate: isRecurring ? (recurringEndDate || null) : null,

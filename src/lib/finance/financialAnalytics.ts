@@ -32,8 +32,11 @@ export function parseDate(value: unknown): Date | null {
     const d = v.toDate();
     return d instanceof Date && !Number.isNaN(d.getTime()) ? d : null;
   }
-  if (typeof v.seconds === 'number') {
-    const d = new Date(v.seconds * 1000);
+  // Client SDK: { seconds }. Admin SDK Timestamp.toJSON(): { _seconds }.
+  const secs = typeof v.seconds === 'number' ? v.seconds
+    : (typeof v._seconds === 'number' ? v._seconds : null);
+  if (secs != null) {
+    const d = new Date(secs * 1000);
     return Number.isNaN(d.getTime()) ? null : d;
   }
   const d = new Date(value as string);
