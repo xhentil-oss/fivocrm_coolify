@@ -12,6 +12,7 @@ import { Separator } from '../../components/ui/separator';
 import { FileText, Search, Eye, DollarSign, Calendar, CreditCard, Check, ExternalLink, Building2, Download } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
 import { toAll } from '../../lib/utils';
+import { StatCardsSkeleton, ListCardSkeleton } from './PortalSkeletons';
 import type { Invoice, InvoiceItem, Service, Customer } from '../../types';
 import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../../lib/native';
 
@@ -22,6 +23,8 @@ const PortalInvoicesView: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState<string>('__all__');
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
+  const PAGE_SIZE = 15;
+  const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
 
   // Handle Stripe redirect params
   useEffect(() => {
@@ -153,6 +156,11 @@ const PortalInvoicesView: React.FC = () => {
     });
   }, [invoices, statusFilter, searchQuery]);
 
+  // Reset the visible window whenever the filter/search changes.
+  useEffect(() => { setVisibleCount(PAGE_SIZE); }, [statusFilter, searchQuery]);
+  const visibleInvoices = filteredInvoices.slice(0, visibleCount);
+  const hasMoreInvoices = filteredInvoices.length > visibleCount;
+
   const selectedItems = invoiceItems?.filter(item => item.invoiceId === selectedInvoice?.id) || [];
 
   const getServiceName = (serviceId?: string) => {
@@ -168,8 +176,13 @@ const PortalInvoicesView: React.FC = () => {
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-muted-foreground">Duke ngarkuar faturat...</div>
+      <div className="space-y-6">
+        <div className="space-y-2">
+          <div className="h-8 w-40 rounded-md bg-muted animate-pulse" />
+          <div className="h-4 w-64 rounded-md bg-muted animate-pulse" />
+        </div>
+        <StatCardsSkeleton count={3} />
+        <ListCardSkeleton rows={5} />
       </div>
     );
   }
@@ -261,7 +274,7 @@ const PortalInvoicesView: React.FC = () => {
         </Card>
       ) : (
         <div className="space-y-3">
-          {filteredInvoices.map(invoice => (
+          {visibleInvoices.map(invoice => (
             <Card key={invoice.id} className="hover:shadow-md transition-shadow">
               <CardContent className="py-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -326,6 +339,14 @@ const PortalInvoicesView: React.FC = () => {
               </CardContent>
             </Card>
           ))}
+
+          {hasMoreInvoices && (
+            <div className="flex justify-center pt-2">
+              <Button variant="outline" onClick={() => setVisibleCount(c => c + PAGE_SIZE)}>
+                Shfaq më shumë ({filteredInvoices.length - visibleCount})
+              </Button>
+            </div>
+          )}
         </div>
       )}
 

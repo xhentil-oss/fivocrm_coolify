@@ -5,11 +5,12 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useToast } from '../../hooks/use-toast';
 import {
-  ScrollText, ChevronDown, ChevronUp, Loader2, FileText, CheckCircle2, XCircle,
+  ScrollText, ChevronDown, ChevronUp, Loader2, FileText, CheckCircle2, XCircle, Search,
 } from 'lucide-react';
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
 import { Separator } from '../../components/ui/separator';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../components/ui/dialog';
 import { Textarea } from '../../components/ui/textarea';
@@ -30,6 +31,13 @@ const STATUS_LABELS: Record<string, string> = {
   Expired: 'Skaduar',
 };
 
+const STATUS_FILTERS = [
+  { value: 'all', label: 'Të gjitha' },
+  { value: 'Sent', label: 'Pret Firmën' },
+  { value: 'Signed', label: 'Nënshkruara' },
+  { value: 'Rejected', label: 'Refuzuara' },
+];
+
 const PortalContractsView: React.FC = () => {
   const { user } = useAuth();
   const { customerId, isLoading: portalLoading } = useClientPortal();
@@ -48,6 +56,8 @@ const PortalContractsView: React.FC = () => {
   const [rejectingContract, setRejectingContract] = useState<Contract | null>(null);
   const [rejectReason, setRejectReason] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   const visibleContracts = useMemo(() => {
     if (!contracts) return [];
@@ -59,6 +69,15 @@ const PortalContractsView: React.FC = () => {
         return tb - ta;
       });
   }, [contracts]);
+
+  const filteredContracts = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return visibleContracts.filter(c => {
+      if (statusFilter !== 'all' && c.status !== statusFilter) return false;
+      if (q && !(c.title || '').toLowerCase().includes(q)) return false;
+      return true;
+    });
+  }, [visibleContracts, search, statusFilter]);
 
   const formatDate = (d: any) => {
     if (!d) return '—';
@@ -129,6 +148,36 @@ const PortalContractsView: React.FC = () => {
         </p>
       </div>
 
+      {/* Search + status filter */}
+      {visibleContracts.length > 0 && (
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Kërko kontratë..."
+              className="pl-9"
+            />
+          </div>
+          <div className="flex gap-1.5 overflow-x-auto pb-1 -mb-1">
+            {STATUS_FILTERS.map(f => (
+              <button
+                key={f.value}
+                onClick={() => setStatusFilter(f.value)}
+                className={`px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${
+                  statusFilter === f.value
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground hover:bg-muted/70'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {visibleContracts.length === 0 ? (
         <Card>
           <CardContent className="py-16 text-center space-y-3">
@@ -136,9 +185,16 @@ const PortalContractsView: React.FC = () => {
             <p className="text-muted-foreground">Nuk keni kontratat ende.</p>
           </CardContent>
         </Card>
+      ) : filteredContracts.length === 0 ? (
+        <Card>
+          <CardContent className="py-16 text-center space-y-3">
+            <Search className="w-10 h-10 mx-auto text-muted-foreground/30" />
+            <p className="text-muted-foreground">Asnjë kontratë nuk përputhet me kërkimin.</p>
+          </CardContent>
+        </Card>
       ) : (
         <div className="space-y-3">
-          {visibleContracts.map(c => {
+          {filteredContracts.map(c => {
             const isExpanded = expandedId === c.id;
             return (
               <Card key={c.id} className="overflow-hidden">

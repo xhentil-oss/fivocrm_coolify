@@ -1177,7 +1177,7 @@ export type NotificationType =
   | 'invoice_paid' | 'invoice_overdue' | 'invoice_created' | 'invoice_reminder_sent'
   | 'invoice_reminder1_sent' | 'invoice_reminder2_sent' | 'auto_invoice_created'
   | 'lead_created' | 'lead_assigned' | 'lead_converted' | 'lead_follow_up'
-  | 'quote_accepted' | 'quote_rejected'
+  | 'quote_accepted' | 'quote_rejected' | 'quote_sent' | 'contract_sent' | 'invoice_sent'
   | 'goal_achieved' | 'goal_assigned' | 'goal_overdue'
   | 'client_message' | 'staff_message' | 'project_comment' | 'client_request'
   | 'recurring_task_created' | 'recurring_expense_created'

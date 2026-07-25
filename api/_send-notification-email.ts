@@ -34,7 +34,7 @@ const CATEGORY_TYPES: Record<string, string[]> = {
   tasks:    ['task_overdue', 'task_due_soon', 'task_assigned', 'task_collaborator_added', 'task_mention', 'recurring_task_created', 'goal_overdue', 'goal_assigned', 'goal_achieved', 'blocker_reported'],
   messages: ['client_message', 'staff_message', 'project_comment', 'client_request'],
   projects: ['project_created', 'project_completed', 'project_open_reminder', 'project_cycle_reset', 'lead_converted', 'lead_assigned', 'lead_follow_up', 'guest_project_invited', 'guest_task_new', 'guest_task_update', 'project_status_changed'],
-  invoices: ['invoice_overdue', 'invoice_paid', 'invoice_reminder_sent', 'auto_invoice_created', 'invoice_created', 'recurring_expense_created', 'expense_submitted', 'quote_accepted', 'quote_rejected'],
+  invoices: ['invoice_overdue', 'invoice_paid', 'invoice_reminder_sent', 'auto_invoice_created', 'invoice_created', 'invoice_sent', 'recurring_expense_created', 'expense_submitted', 'quote_accepted', 'quote_rejected', 'quote_sent', 'contract_sent'],
 };
 function categoryOf(type?: string): string | null {
   if (!type) return null;

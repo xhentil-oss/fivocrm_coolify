@@ -25,15 +25,27 @@ import {
 } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Loader2 } from 'lucide-react';
+import PortalPushPrompt from './PortalPushPrompt';
 
+// Full menu — shown in the desktop sidebar and the mobile drawer.
 const navItems = [
   { to: '/portal', icon: LayoutDashboard, label: 'Paneli Kryesor', end: true },
   { to: '/portal/invoices', icon: FileText, label: 'Faturat' },
+  { to: '/portal/chat', icon: MessageCircle, label: 'Mesazhet' },
   { to: '/portal/contracts', icon: ScrollText, label: 'Kontratat' },
   { to: '/portal/services', icon: ShoppingBag, label: 'Shërbimet' },
   { to: '/portal/projects', icon: FolderKanban, label: 'Projektet' },
   { to: '/portal/preventiva', icon: Calculator, label: 'Preventiva' },
   { to: '/portal/social', icon: Share2, label: 'Rrjetet Sociale' },
+];
+
+// Curated set for the mobile bottom bar — 4 primary destinations + a "More"
+// button that opens the full drawer. Keeps tabs readable on small screens.
+const bottomNavItems = [
+  { to: '/portal', icon: LayoutDashboard, label: 'Paneli', end: true },
+  { to: '/portal/invoices', icon: FileText, label: 'Faturat' },
+  { to: '/portal/chat', icon: MessageCircle, label: 'Mesazhet' },
+  { to: '/portal/projects', icon: FolderKanban, label: 'Projektet' },
 ];
 
 const PortalLayout: React.FC = () => {
@@ -238,6 +250,7 @@ const PortalLayout: React.FC = () => {
           (inset-grown) mobile nav. */}
       <main className="lg:ml-[262px]" style={{ paddingTop: contentTop }}>
         <div className="p-4 sm:p-6 lg:p-8" style={{ paddingBottom: 'calc(5rem + env(safe-area-inset-bottom))' }}>
+          <PortalPushPrompt />
           <Outlet />
         </div>
       </main>
@@ -249,7 +262,7 @@ const PortalLayout: React.FC = () => {
         style={{ height: 'calc(4rem + env(safe-area-inset-bottom))', paddingBottom: 'env(safe-area-inset-bottom)' }}
         className="fixed bottom-0 left-0 right-0 z-40 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 border-t flex items-stretch lg:hidden"
       >
-        {navItems.map(item => {
+        {bottomNavItems.map(item => {
           const Icon = item.icon;
           const isChatItem = item.to === '/portal/chat';
           return (
@@ -283,6 +296,17 @@ const PortalLayout: React.FC = () => {
             </NavLink>
           );
         })}
+        {/* "More" opens the full menu drawer */}
+        <button
+          type="button"
+          onClick={() => setMobileOpen(true)}
+          className="flex-1 flex flex-col items-center justify-center gap-0.5 text-muted-foreground transition-colors"
+        >
+          <div className="p-1.5 rounded-xl">
+            <Menu className="w-5 h-5" />
+          </div>
+          <span className="text-[10px] font-medium leading-none">Më shumë</span>
+        </button>
       </nav>
     </div>
   );

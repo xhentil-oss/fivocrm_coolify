@@ -306,7 +306,7 @@ export function useClientPortal() {
             type: 'new_client',
             title: 'Klient i ri u regjistrua',
             message: `${displayName} (${user.email}) u regjistrua në portal.`,
-            read: false,
+            isRead: false,
           }).catch(() => { /* non-critical */ });
         }
       }).then(() => {

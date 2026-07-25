@@ -38,6 +38,7 @@ import { toAll, getRateToAll, getTimestampMs } from '../lib/utils';
 import { toast } from '../hooks/use-toast';
 import { getStatusColor, getInvoiceStatusLabel } from '../lib/statusColors';
 import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../lib/native';
+import { resolvePortalUserId } from '../lib/notifyClient';
 
 const InvoicesView: React.FC = () => {
   const permissions = usePermissions();
@@ -218,6 +219,22 @@ const InvoicesView: React.FC = () => {
       if (!response.ok) {
         const data = await response.json().catch(() => ({}));
         throw new Error(data.error || 'Dërgimi dështoi');
+      }
+      // Also push an in-app notification to the portal client (auto push + email
+      // via the notification choke point), so they see it inside the portal too.
+      const inv = invoices?.find(i => i.id === invoiceId);
+      const uid = await resolvePortalUserId(inv?.customerId);
+      if (uid) {
+        const num = inv?.invoiceNumber || `INV-${invoiceId.slice(0, 6)}`;
+        await notificationMutation.create({
+          userId: uid,
+          type: 'invoice_sent',
+          title: '🧾 Faturë e re',
+          message: `Keni një faturë të re: ${num}`,
+          isRead: false,
+          actionUrl: '/portal/invoices',
+          actionLabel: 'Shiko Faturën',
+        } as any).catch(() => { /* non-blocking */ });
       }
       toast({ title: 'Fatura u dërgua me email me sukses!' });
     } catch (err: any) {

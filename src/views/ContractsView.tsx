@@ -21,6 +21,7 @@ import { Command, CommandEmpty, CommandInput, CommandItem, CommandList } from '.
 import { Separator } from '../components/ui/separator';
 import ContractEditor, { ContractEditorHandle } from '../components/ContractEditor';
 import { CONTRACT_TEMPLATES, ContractParties } from '../lib/contractTemplates';
+import { resolvePortalUserId } from '../lib/notifyClient';
 import type { Contract, Customer, Quote, Invoice, Service, TeamMember } from '../types';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -61,6 +62,7 @@ const ContractsView: React.FC = () => {
   const { data: services, loading: servicesLoading } = useCollection<Service>('services');
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers');
   const contractMutation = useMutation<Contract>('contracts');
+  const notificationMutation = useMutation<any>('notifications');
 
   const editorRef = useRef<ContractEditorHandle>(null);
   const draggedService = useRef<Service | null>(null);
@@ -309,6 +311,19 @@ const ContractsView: React.FC = () => {
     setSendingId(c.id);
     try {
       await contractMutation.update(c.id, { status: 'Sent', sentAt: new Date(), updatedAt: new Date() } as any);
+      // Notify the portal client (auto push + email via the notification choke point).
+      const uid = await resolvePortalUserId(c.customerId);
+      if (uid) {
+        await notificationMutation.create({
+          userId: uid,
+          type: 'contract_sent',
+          title: '✍️ Kontratë e re për firmë',
+          message: `Keni një kontratë të re: ${c.title || 'Kontratë'}`,
+          isRead: false,
+          actionUrl: '/portal/contracts',
+          actionLabel: 'Shiko Kontratën',
+        } as any).catch(() => { /* non-blocking */ });
+      }
       toast({ title: '✅ Kontrata u dërgua te klienti!' });
     } catch {
       toast({ title: 'Gabim', variant: 'destructive' });

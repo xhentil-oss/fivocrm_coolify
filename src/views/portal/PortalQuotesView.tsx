@@ -4,7 +4,9 @@ import { useCollection, useDocument, useMutation } from '../../hooks/useFirestor
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
-import { FileText, Calculator, CheckCircle2, XCircle, ChevronDown, ChevronUp } from 'lucide-react';
+import { Input } from '../../components/ui/input';
+import { FileText, Calculator, CheckCircle2, XCircle, ChevronDown, ChevronUp, Search, Clock } from 'lucide-react';
+import { CardGridSkeleton } from './PortalSkeletons';
 import { useToast } from '../../hooks/use-toast';
 import type { Quote, Customer, Lead, Notification } from '../../types';
 
@@ -13,6 +15,24 @@ const statusMap: Record<string, { label: string; class: string }> = {
   Sent: { label: 'Dërguar', class: 'bg-blue-100 text-blue-700' },
   Accepted: { label: 'Pranuar', class: 'bg-green-100 text-green-700' },
   Rejected: { label: 'Refuzuar', class: 'bg-red-100 text-red-700' },
+  Expired: { label: 'Skaduar', class: 'bg-gray-100 text-gray-500' },
+};
+
+const STATUS_FILTERS = [
+  { value: 'all', label: 'Të gjitha' },
+  { value: 'Sent', label: 'Në pritje' },
+  { value: 'Accepted', label: 'Pranuara' },
+  { value: 'Rejected', label: 'Refuzuara' },
+];
+
+// A quote is expired if it was only Sent (never answered) and its validity date has passed.
+const isQuoteExpired = (q: Quote): boolean => {
+  if (q.status !== 'Sent' || !q.validUntil) return false;
+  const d = q.validUntil instanceof Date ? q.validUntil : (q.validUntil as any)?.toDate?.() ?? null;
+  if (!d) return false;
+  const end = new Date(d);
+  end.setHours(23, 59, 59, 999);
+  return end.getTime() < Date.now();
 };
 
 const PortalQuotesView: React.FC = () => {
@@ -22,6 +42,8 @@ const PortalQuotesView: React.FC = () => {
   const notificationMutation = useMutation<Notification>('notifications');
   const [respondingId, setRespondingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   // Active staff members — used to notify the team when a client responds to a quote.
   const { data: allTeamMembers } = useCollection<any>('teamMembers', {
@@ -75,10 +97,26 @@ const PortalQuotesView: React.FC = () => {
       });
   }, [quotesByCustomer, quotesByLead]);
 
+  const filteredQuotes = React.useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return myQuotes.filter(quote => {
+      if (statusFilter !== 'all' && quote.status !== statusFilter) return false;
+      if (q) {
+        const hay = `${quote.label || ''} ${quote.result?.suggestedLabel || ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [myQuotes, search, statusFilter]);
+
   if (loading) {
     return (
-      <div className="flex items-center justify-center py-20">
-        <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-primary" />
+      <div className="space-y-6">
+        <div className="space-y-2">
+          <div className="h-7 w-40 rounded-md bg-muted animate-pulse" />
+          <div className="h-4 w-72 rounded-md bg-muted animate-pulse" />
+        </div>
+        <CardGridSkeleton count={3} cols="" />
       </div>
     );
   }
@@ -92,6 +130,36 @@ const PortalQuotesView: React.FC = () => {
         </p>
       </div>
 
+      {/* Search + status filter */}
+      {myQuotes.length > 0 && (
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="relative flex-1">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+              placeholder="Kërko preventivë..."
+              className="pl-9"
+            />
+          </div>
+          <div className="flex gap-1.5 overflow-x-auto pb-1 -mb-1">
+            {STATUS_FILTERS.map(f => (
+              <button
+                key={f.value}
+                onClick={() => setStatusFilter(f.value)}
+                className={`px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${
+                  statusFilter === f.value
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground hover:bg-muted/70'
+                }`}
+              >
+                {f.label}
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
+
       {myQuotes.length === 0 ? (
         <Card>
           <CardContent className="py-16 text-center">
@@ -102,14 +170,22 @@ const PortalQuotesView: React.FC = () => {
             </p>
           </CardContent>
         </Card>
+      ) : filteredQuotes.length === 0 ? (
+        <Card>
+          <CardContent className="py-16 text-center">
+            <Search className="w-10 h-10 mx-auto text-muted-foreground/40 mb-3" />
+            <p className="text-muted-foreground font-medium">Asnjë preventivë nuk përputhet me kërkimin</p>
+          </CardContent>
+        </Card>
       ) : (
         <div className="space-y-6">
-          {myQuotes.map(q => {
+          {filteredQuotes.map(q => {
             const cur = q.currency === 'EUR' ? '€' : q.currency === 'USD' ? '$' : 'L';
-            const st = statusMap[q.status] || statusMap.Draft;
+            const expired = isQuoteExpired(q);
+            const st = expired ? statusMap.Expired : (statusMap[q.status] || statusMap.Draft);
             const categories = q.result?.categories || [];
             const isExpanded = expandedId === q.id;
-            const isPending = q.status === 'Sent';
+            const isPending = q.status === 'Sent' && !expired;
 
             const handleRespond = async (status: 'Accepted' | 'Rejected') => {
               setRespondingId(q.id + status);
@@ -155,6 +231,7 @@ const PortalQuotesView: React.FC = () => {
 
             return (
               <Card key={q.id} className={`overflow-hidden border-2 transition-colors ${
+                expired ? 'border-border opacity-60' :
                 q.status === 'Accepted' ? 'border-green-200' :
                 q.status === 'Rejected' ? 'border-red-200' :
                 'border-border'
@@ -297,6 +374,18 @@ const PortalQuotesView: React.FC = () => {
                       <XCircle className="w-4 h-4 text-red-500" />
                       {respondingId === q.id + 'Rejected' ? 'Duke refuzuar...' : 'Mos Prano'}
                     </Button>
+                  </div>
+                )}
+
+                {/* Expired notice */}
+                {expired && (
+                  <div className="px-6 py-3 bg-muted/40 border-t flex items-center gap-2 text-muted-foreground text-sm">
+                    <Clock className="w-4 h-4 shrink-0" />
+                    <span>
+                      Kjo ofertë ka skaduar
+                      {q.validUntil instanceof Date ? ` më ${q.validUntil.toLocaleDateString('sq-AL')}` : ''}.
+                      Na kontaktoni për një ofertë të re.
+                    </span>
                   </div>
                 )}
 

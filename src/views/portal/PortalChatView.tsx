@@ -104,10 +104,23 @@ const PortalChatView: React.FC = () => {
       : `client-${customerId}`)
     : '';
 
+  // Windowed message loading: fetch only the most recent `messageLimit` messages
+  // (newest-first server-side), then sort ascending for display. "Load older"
+  // grows the window. Portal client has no businessId → this query is not
+  // team-scoped, so orderBy+limit apply server-side.
+  const MESSAGE_PAGE = 50;
+  const [messageLimit, setMessageLimit] = useState(MESSAGE_PAGE);
   const { data: rawMessages, loading } = useCollection<ChatMessage>('messages', {
     where: [{ field: 'channelId', operator: '==', value: channelId }],
+    orderBy: { field: 'createdAt', direction: 'desc' },
+    limit: messageLimit,
     skipTeamFilter: true,
   });
+  // If the window is full, there may be older messages to load.
+  const hasOlderMessages = (rawMessages?.length || 0) >= messageLimit;
+
+  // Reset the window when switching channels.
+  useEffect(() => { setMessageLimit(MESSAGE_PAGE); }, [channelId]);
 
   // Sort client-side to avoid Firestore composite index requirement
   const messages = React.useMemo(() => {
@@ -225,11 +238,22 @@ const PortalChatView: React.FC = () => {
     );
   }, [responsibleUserId, teamMembers, selectedProjectId, customerProjects, channelId, notificationMutation]);
 
-  // Auto-scroll on new messages and when switching project channels
+  // Auto-scroll on new messages and when switching project channels.
+  // When the user loads OLDER messages we must NOT jump to the bottom — instead
+  // we restore the scroll position so their view stays anchored where they were.
   const prevCountRef = useRef(0);
+  const loadingOlderRef = useRef(false);
+  const prevScrollHeightRef = useRef(0);
   useEffect(() => {
     const count = messages?.length || 0;
-    if (count > prevCountRef.current) {
+    if (loadingOlderRef.current) {
+      // Older messages just prepended — keep the viewport anchored.
+      requestAnimationFrame(() => {
+        const vp = getScroller();
+        if (vp) vp.scrollTop = vp.scrollHeight - prevScrollHeightRef.current;
+        loadingOlderRef.current = false;
+      });
+    } else if (count > prevCountRef.current) {
       requestAnimationFrame(() => {
         const vp = getScroller();
         if (vp) vp.scrollTop = vp.scrollHeight;
@@ -237,6 +261,13 @@ const PortalChatView: React.FC = () => {
     }
     prevCountRef.current = count;
   }, [messages?.length]);
+
+  const loadOlderMessages = () => {
+    const vp = getScroller();
+    prevScrollHeightRef.current = vp ? vp.scrollHeight : 0;
+    loadingOlderRef.current = true;
+    setMessageLimit(l => l + MESSAGE_PAGE);
+  };
 
   useEffect(() => {
     requestAnimationFrame(() => {
@@ -601,7 +632,19 @@ const PortalChatView: React.FC = () => {
               /* Messages with Date Separators */
               (() => {
                 let lastDateKey = '';
-                return messages.map((msg: any, idx: number) => {
+                return [
+                  hasOlderMessages && (
+                    <div key="load-older" className="flex justify-center py-2">
+                      <button
+                        onClick={loadOlderMessages}
+                        disabled={loading}
+                        className="text-xs font-medium text-primary hover:underline disabled:opacity-50 px-3 py-1 rounded-full bg-primary/5"
+                      >
+                        {loading ? 'Duke ngarkuar...' : 'Ngarko mesazhe më të vjetra'}
+                      </button>
+                    </div>
+                  ),
+                  ...messages.map((msg: any, idx: number) => {
                   const own = isOwnMessage(msg.senderId);
                   const dateKey = getDateKey(msg.createdAt);
                   const showDateSeparator = dateKey !== lastDateKey;
@@ -764,7 +807,8 @@ const PortalChatView: React.FC = () => {
                       </div>
                     </React.Fragment>
                   );
-                });
+                })
+                ];
               })()
             )}
           </div>

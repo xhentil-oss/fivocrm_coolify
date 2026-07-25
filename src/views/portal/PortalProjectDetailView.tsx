@@ -9,20 +9,17 @@ import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/ca
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
-import { Label } from '../../components/ui/label';
 import { Textarea } from '../../components/ui/textarea';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../../components/ui/tabs';
 import { ScrollArea } from '../../components/ui/scroll-area';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../../components/ui/select';
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../../components/ui/dialog';
 
 import {
   FolderKanban, ArrowLeft, CheckCircle2, Clock, Circle,
-  MessageSquare, Send, ClipboardList, Plus, DollarSign,
-  CalendarDays, ChevronDown, ChevronRight,
+  MessageSquare, Send, DollarSign,
+  CalendarDays, ChevronDown, ChevronRight, Loader2,
 } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
-import type { Project, Task, TaskComment, ClientRequest, Team, TeamMember } from '../../types';
+import type { Project, Task, TaskComment, TeamMember } from '../../types';
 
 interface ProjectComment {
   id: string;
@@ -34,22 +31,6 @@ interface ProjectComment {
   updatedAt: Date;
 }
 
-const CATEGORIES = [
-  { value: 'Design', label: 'Dizajn' },
-  { value: 'Development', label: 'Zhvillim' },
-  { value: 'Support', label: 'Suport Teknik' },
-  { value: 'Marketing', label: 'Marketing' },
-  { value: 'Consulting', label: 'Konsulencë' },
-  { value: 'Other', label: 'Tjetër' },
-] as const;
-
-const PRIORITIES = [
-  { value: 'low', label: 'E Ulët' },
-  { value: 'medium', label: 'Mesatare' },
-  { value: 'high', label: 'E Lartë' },
-  { value: 'urgent', label: 'Urgjente' },
-] as const;
-
 const PortalProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
@@ -58,14 +39,13 @@ const PortalProjectDetailView: React.FC = () => {
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('overview');
   const [commentText, setCommentText] = useState('');
-  const [isRequestOpen, setIsRequestOpen] = useState(false);
   const commentScrollRef = useRef<HTMLDivElement>(null);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
   const [taskCommentTexts, setTaskCommentTexts] = useState<Record<string, string>>({});
   const [sendingTaskComment, setSendingTaskComment] = useState<string | null>(null);
 
   // Fetch project
-  const { data: project } = useDocument<Project>('projects', projectId || '');
+  const { data: project, loading: projectLoading } = useDocument<Project>('projects', projectId || '');
 
   // Fetch tasks for this project, scoped by customerId so the RLS rule
   // (isPortalClientFor) holds for every returned doc.
@@ -123,24 +103,7 @@ const PortalProjectDetailView: React.FC = () => {
     });
   }, [rawComments]);
 
-  // Requests linked to this project
-  const { data: rawRequests } = useCollection<ClientRequest>('clientRequests', {
-    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
-    skipTeamFilter: true,
-  });
-  const projectRequests = React.useMemo(() => {
-    if (!rawRequests) return [];
-    return rawRequests
-      .filter(r => (r as any).projectId === projectId)
-      .sort((a, b) => {
-        const ta = a.createdAt instanceof Date ? a.createdAt.getTime() : 0;
-        const tb = b.createdAt instanceof Date ? b.createdAt.getTime() : 0;
-        return tb - ta;
-      });
-  }, [rawRequests, projectId]);
-
-  // Teams and members for notifications
-  const { data: teams } = useCollection<Team>('teams');
+  // Team members for notifications
   const { data: allTeamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
     skipTeamFilter: true, // portal client has no businessId → avoids the loading-forever guard
@@ -211,17 +174,6 @@ const PortalProjectDetailView: React.FC = () => {
       case 'On Hold': return 'Në Pritje';
       case 'Completed': return 'Përfunduar';
       default: return status;
-    }
-  };
-
-  const getRequestStatusColor = (status: string) => {
-    switch (status) {
-      case 'New': return 'bg-blue-100 text-blue-800';
-      case 'In Review': return 'bg-accent-soft text-primary';
-      case 'In Progress': return 'bg-yellow-100 text-yellow-800';
-      case 'Completed': return 'bg-green-100 text-green-800';
-      case 'Rejected': return 'bg-red-100 text-red-800';
-      default: return 'bg-gray-100 text-gray-800';
     }
   };
 
@@ -328,84 +280,18 @@ const PortalProjectDetailView: React.FC = () => {
     }
   };
 
-  // Smart routing for requests (same logic as PortalRequestsView)
-  const getTeamForCategory = (category: string): string | undefined => {
-    if (!teams) return undefined;
-    const deptMap: Record<string, string[]> = {
-      Design: ['design', 'dizajn', 'kreativ', 'creative'],
-      Development: ['development', 'zhvillim', 'dev', 'it', 'tech', 'teknologji'],
-      Support: ['support', 'suport', 'helpdesk'],
-      Marketing: ['marketing'],
-      Consulting: ['consulting', 'konsulencë', 'management', 'menaxhim'],
-    };
-    const keywords = deptMap[category] || [];
-    const match = teams.find(team => {
-      const dept = (team.department || '').toLowerCase();
-      const name = (team.name || '').toLowerCase();
-      return keywords.some(k => dept.includes(k) || name.includes(k));
-    });
-    return match?.id;
-  };
-
-  // Create support request linked to this project
-  const handleCreateRequest = async (formData: FormData) => {
-    const title = formData.get('title') as string;
-    const description = formData.get('description') as string;
-    const category = formData.get('category') as string;
-    const priority = formData.get('priority') as string;
-
-    if (!title || !description || !category || !priority || !user || !customerId || !projectId) return;
-
-    const assignedTeamId = getTeamForCategory(category) || project?.teamId;
-
-    // Use addDoc directly — portal users have getGlobalTeamId()=null which makes
-    // useMutation.create() throw for team-scoped collections.
-    const resolvedTeamId = allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
-    await addDoc(collection(db, 'clientRequests'), {
-      customerId,
-      clientUserId: user.uid,
-      title,
-      description,
-      category,
-      status: 'New',
-      priority,
-      ...(assignedTeamId ? { assignedTeamId } : {}),
-      projectId,
-      ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
-      createdAt: Timestamp.now(),
-      updatedAt: Timestamp.now(),
-      createdByUserId: user.uid,
-    });
-
-    // Notify team — only admins of THIS project's tenant (allTeamMembers is read
-    // cross-tenant, so scope by the project's businessId to avoid notifying other
-    // tenants' admins / the platform super-admin).
-    const projBiz = (project as any)?.businessId;
-    const adminMembers = allTeamMembers?.filter(m => m.role === 'Admin' && (!projBiz || (m as any).businessId === projBiz)) || [];
-    const assignedMembers = assignedTeamId
-      ? allTeamMembers?.filter(m => m.teamId === assignedTeamId) || []
-      : [];
-    const notifyIds = new Set([...adminMembers.map(m => m.userId), ...assignedMembers.map(m => m.userId)]);
-
-    for (const uid of notifyIds) {
-      notificationMutation.create({
-        userId: uid,
-        type: 'client_request',
-        title: `Kërkesë e re — ${project?.name || 'Projekt'}`,
-        message: title,
-        isRead: false,
-        actionType: 'navigate',
-        actionUrl: `/app/projects/${projectId}`,
-        actionLabel: 'Shiko Projektin',
-      } as any).catch(err => console.error('[Notifications] client_request dërgim dështoi:', err));
-    }
-
-    setIsRequestOpen(false);
-    toast({
-      title: 'Kërkesa u dërgua',
-      description: 'Ekipi ynë do ta shqyrtojë kërkesën tuaj së shpejti.',
-    });
-  };
+  if (projectLoading && !project) {
+    return (
+      <div className="space-y-6">
+        <Button variant="ghost" size="sm" onClick={() => navigate('/portal/projects')} className="gap-2">
+          <ArrowLeft className="h-4 w-4" /> Kthehu te Projektet
+        </Button>
+        <div className="flex items-center justify-center py-16">
+          <Loader2 className="h-8 w-8 animate-spin text-primary" />
+        </div>
+      </div>
+    );
+  }
 
   if (!project) {
     return (

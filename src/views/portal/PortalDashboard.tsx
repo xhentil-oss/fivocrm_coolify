@@ -5,10 +5,11 @@ import { useCollection, useDocument } from '../../hooks/useFirestore';
 import { getStatusColor } from '../../lib/statusColors';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
-import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2, Sparkles, Calculator, ArrowRight } from 'lucide-react';
+import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2, Sparkles, Calculator, ArrowRight, MessageCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useToast } from '../../hooks/use-toast';
 import { toAll } from '../../lib/utils';
+import { DashboardSkeleton } from './PortalSkeletons';
 import type { Invoice, InvoiceItem, Service, ClientRequest, Project, Task, Quote, Lead, ServiceInquiry } from '../../types';
 
 const QUOTES = [
@@ -24,8 +25,34 @@ const QUOTES = [
   'Sfidat e sotme janë arritjet e nesërme.',
 ];
 
+// Icon + color for each timeline event kind.
+const timelineVisual = (kind: string): { Icon: any; box: string } => {
+  switch (kind) {
+    case 'invoice': return { Icon: FileText, box: 'bg-blue-100 text-blue-600' };
+    case 'paid': return { Icon: CheckCircle2, box: 'bg-green-100 text-green-600' };
+    case 'quote': return { Icon: Calculator, box: 'bg-primary/15 text-primary' };
+    case 'project': return { Icon: FolderKanban, box: 'bg-purple-100 text-purple-600' };
+    case 'inquiry': return { Icon: ClipboardList, box: 'bg-amber-100 text-amber-600' };
+    case 'message': return { Icon: MessageCircle, box: 'bg-pink-100 text-pink-600' };
+    default: return { Icon: Sparkles, box: 'bg-muted text-muted-foreground' };
+  }
+};
+
+// Compact Albanian relative time.
+const timeAgo = (date: Date): string => {
+  const s = Math.floor((Date.now() - date.getTime()) / 1000);
+  if (s < 60) return 'tani';
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m} min më parë`;
+  const h = Math.floor(m / 60);
+  if (h < 24) return `${h} orë më parë`;
+  const d = Math.floor(h / 24);
+  if (d < 7) return `${d} ditë më parë`;
+  return date.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' });
+};
+
 const PortalDashboard: React.FC = () => {
-  const { customerId } = useClientPortal();
+  const { customerId, isLoading: portalLoading } = useClientPortal();
   const { user } = useAuth();
   const { toast } = useToast();
 
@@ -74,7 +101,7 @@ const PortalDashboard: React.FC = () => {
     prevStaffMsgCountRef.current = unreadStaffMsgs;
   }, [unreadStaffMsgs]);
 
-  const { data: rawInvoices } = useCollection<Invoice>('invoices', {
+  const { data: rawInvoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', {
     skip: !customerId,
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
@@ -230,7 +257,66 @@ const PortalDashboard: React.FC = () => {
   const recentInvoices = invoices?.slice(0, 5) || [];
   const recentRequests = requests?.slice(0, 5) || [];
 
+  // ── Unified activity timeline ──
+  // Aggregate events from the collections already loaded above (no extra reads):
+  // invoices created/paid, quotes sent, projects started, inquiries submitted, and
+  // staff chat messages. Sorted newest-first, capped at 8.
+  const timeline = React.useMemo(() => {
+    type Ev = { id: string; kind: string; title: string; desc: string; date: Date; to: string };
+    const evs: Ev[] = [];
+    const toDate = (v: any): Date | null =>
+      v instanceof Date ? v : (v?.toDate?.() ?? null);
 
+    (invoices || []).forEach(inv => {
+      const num = inv.invoiceNumber || `INV-${inv.id.slice(0, 6)}`;
+      const cur = (inv as any).currency === 'EUR' ? '€' : 'L';
+      const amount = `${(inv.total || inv.amount || 0).toLocaleString()} ${cur}`;
+      const created = toDate(inv.createdAt);
+      if (created) evs.push({ id: `inv-${inv.id}`, kind: 'invoice', title: `Faturë e re: ${num}`, desc: amount, date: created, to: '/portal/invoices' });
+      const paidAt = toDate((inv as any).paidAt);
+      if (inv.status === 'Paid' && paidAt) evs.push({ id: `paid-${inv.id}`, kind: 'paid', title: `Pagesa u konfirmua: ${num}`, desc: amount, date: paidAt, to: '/portal/invoices' });
+    });
+
+    myQuotes.forEach(q => {
+      const created = toDate(q.createdAt);
+      if (created) evs.push({ id: `q-${q.id}`, kind: 'quote', title: 'Preventivë e re', desc: q.label || q.result?.suggestedLabel || 'Ofertë', date: created, to: '/portal/preventiva' });
+    });
+
+    (rawProjects || []).forEach(p => {
+      const created = toDate(p.createdAt);
+      if (created) evs.push({ id: `proj-${p.id}`, kind: 'project', title: `Projekti "${p.name}"`, desc: 'Projekt i ri', date: created, to: `/portal/projects/${p.id}` });
+    });
+
+    (myInquiries || []).forEach(inq => {
+      if (inq.status === 'Draft') return;
+      const created = toDate(inq.createdAt);
+      const title = (inq as any).serviceTitle || inq.servicesInterestedIn?.[0] || 'Kërkesë shërbimi';
+      if (created) evs.push({ id: `inq-${inq.id}`, kind: 'inquiry', title: 'Kërkesë e dërguar', desc: title, date: created, to: `/portal/projects/inquiry/${inq.id}` });
+    });
+
+    (portalUserNotifs || []).forEach((n: any) => {
+      if (n.type !== 'staff_message') return;
+      const created = toDate(n.createdAt);
+      if (created) evs.push({ id: `msg-${n.id}`, kind: 'message', title: 'Mesazh nga ekipi', desc: n.message || n.title || '', date: created, to: '/portal/chat' });
+    });
+
+    return evs.sort((a, b) => b.date.getTime() - a.date.getTime()).slice(0, 8);
+  }, [invoices, myQuotes, rawProjects, myInquiries, portalUserNotifs]);
+
+  // A brand-new client has no data at all yet — show a guided welcome instead of
+  // a wall of zeros and empty cards.
+  const isBrandNew =
+    totalInvoices === 0 &&
+    customerProjects.length === 0 &&
+    activeInquiries.length === 0 &&
+    quotesCount === 0 &&
+    purchasedServicesCount === 0;
+
+  // Show a skeleton while the portal is still resolving the client, or while the
+  // first batch of invoice data is loading — otherwise the dashboard flashes zeros.
+  if (portalLoading || (!!customerId && invoicesLoading && !rawInvoices)) {
+    return <DashboardSkeleton />;
+  }
 
   return (
     <div className="space-y-6">
@@ -318,7 +404,91 @@ const PortalDashboard: React.FC = () => {
         </Link>
       </div>
 
+      {/* Onboarding welcome — only for a brand-new client with no data yet */}
+      {isBrandNew && (
+        <Card className="border-primary/25 bg-gradient-to-b from-primary/[0.05] to-primary/[0.12]">
+          <CardContent className="pt-6">
+            <div className="flex flex-col sm:flex-row items-start gap-4">
+              <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-brand-gradient shadow-md">
+                <Sparkles className="h-6 w-6 text-white" />
+              </div>
+              <div className="flex-1 space-y-3">
+                <div>
+                  <h2 className="text-lg font-bold">Mirë se vini në portalin tuaj! 🎉</h2>
+                  <p className="text-sm text-muted-foreground mt-1">
+                    Këtu do të gjeni faturat, projektet, preventivat dhe shërbimet tuaja — të gjitha në një vend.
+                    Ja disa hapa për të filluar:
+                  </p>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <Link to="/portal/services" className="flex items-start gap-2.5 rounded-xl border bg-card p-3 hover:shadow-md transition-shadow">
+                    <ShoppingBag className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold">Shfleto shërbimet</p>
+                      <p className="text-xs text-muted-foreground">Zbulo çfarë ofrojmë</p>
+                    </div>
+                  </Link>
+                  <Link to="/portal/chat" className="flex items-start gap-2.5 rounded-xl border bg-card p-3 hover:shadow-md transition-shadow">
+                    <MessageCircle className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold">Kontakto ekipin</p>
+                      <p className="text-xs text-muted-foreground">Përgjigje brenda 24 orëve</p>
+                    </div>
+                  </Link>
+                  <Link to="/portal/projects" className="flex items-start gap-2.5 rounded-xl border bg-card p-3 hover:shadow-md transition-shadow">
+                    <FolderKanban className="h-5 w-5 text-primary flex-shrink-0 mt-0.5" />
+                    <div>
+                      <p className="text-sm font-semibold">Kërko një shërbim</p>
+                      <p className="text-xs text-muted-foreground">Plotëso një anketë</p>
+                    </div>
+                  </Link>
+                </div>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Unified Activity Timeline */}
+      {!isBrandNew && timeline.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-lg flex items-center gap-2">
+              <Clock className="w-5 h-5 text-primary" />
+              Aktiviteti i Fundit
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="relative pl-6">
+              {/* vertical line */}
+              <div className="absolute left-[9px] top-1 bottom-1 w-px bg-border" />
+              <div className="space-y-4">
+                {timeline.map(ev => {
+                  const visual = timelineVisual(ev.kind);
+                  const Icon = visual.Icon;
+                  return (
+                    <Link key={ev.id} to={ev.to} className="flex items-start gap-3 group -ml-6">
+                      <div className={`relative z-10 flex h-[18px] w-[18px] flex-shrink-0 items-center justify-center rounded-full mt-0.5 ${visual.box}`}>
+                        <Icon className="h-2.5 w-2.5" />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center justify-between gap-2">
+                          <p className="text-sm font-medium truncate group-hover:text-primary transition-colors">{ev.title}</p>
+                          <span className="text-xs text-muted-foreground flex-shrink-0">{timeAgo(ev.date)}</span>
+                        </div>
+                        {ev.desc && <p className="text-xs text-muted-foreground truncate">{ev.desc}</p>}
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Recent Activity */}
+      {!isBrandNew && (
       <div className="grid grid-cols-1 gap-6">
         {/* Recent Invoices */}
         <Card>
@@ -351,7 +521,7 @@ const PortalDashboard: React.FC = () => {
                     </div>
                     <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
                       <span className="font-semibold text-sm">
-                        {(invoice.total || invoice.amount || 0).toLocaleString()} ALL
+                        {(invoice.total || invoice.amount || 0).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}
                       </span>
                       <Badge className={getStatusColor(invoice.status)} variant="secondary">
                         {invoice.status}
@@ -364,6 +534,7 @@ const PortalDashboard: React.FC = () => {
           </CardContent>
         </Card>
       </div>
+      )}
 
       {/* Active Projects — real active projects + submitted inquiries.
           A submitted anketë counts as an active project, so an inquiry-only

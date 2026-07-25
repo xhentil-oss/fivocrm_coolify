@@ -22,6 +22,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Separator } from '../components/ui/separator';
 import { safeHref, toAll } from '../lib/utils';
+import { resolvePortalUserId } from '../lib/notifyClient';
 import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract, Service } from '../types';
 
 const Customer360View: React.FC = () => {
@@ -81,6 +82,16 @@ const Customer360View: React.FC = () => {
   const activityMutation = useMutation<Activity>('activities');
   const quoteMutation = useMutation<Quote>('quotes');
   const contractMutation = useMutation<Contract>('contracts');
+  const notificationMutation = useMutation<any>('notifications');
+
+  // Notify the portal client (in-app → auto push + email via the notification
+  // choke point) when staff sends them something. No-op if the customer has no
+  // portal account.
+  const notifyClient = async (payload: { type: string; title: string; message?: string; actionUrl: string; actionLabel?: string }) => {
+    const uid = await resolvePortalUserId(customerId);
+    if (!uid) return;
+    await notificationMutation.create({ userId: uid, isRead: false, ...payload } as any).catch(() => { /* non-blocking */ });
+  };
   const requestMutation = useMutation<ClientRequest>('clientRequests');
   const customerMutation = useMutation<Customer>('customers');
 
@@ -857,7 +868,11 @@ const Customer360View: React.FC = () => {
                         {q.status === 'Draft' && (
                           <Button size="sm" variant="outline" className="w-full h-9 gap-1 text-blue-600 border-blue-200 hover:bg-blue-50" disabled={sendingQuoteId === q.id} onClick={async () => {
                             setSendingQuoteId(q.id);
-                            try { await quoteMutation.update(q.id, { status: 'Sent' }); toast({ title: '✅ Preventiva u dërgua te klienti!' }); }
+                            try {
+                              await quoteMutation.update(q.id, { status: 'Sent' });
+                              await notifyClient({ type: 'quote_sent', title: '📄 Preventivë e re', message: `Keni një preventivë të re: ${q.label || 'Ofertë'}`, actionUrl: '/portal/preventiva', actionLabel: 'Shiko Preventivën' });
+                              toast({ title: '✅ Preventiva u dërgua te klienti!' });
+                            }
                             catch { toast({ title: 'Gabim', description: 'Ndodhi një gabim', variant: 'destructive' }); }
                             finally { setSendingQuoteId(null); }
                           }}>
@@ -921,6 +936,7 @@ const Customer360View: React.FC = () => {
                                     setSendingQuoteId(q.id);
                                     try {
                                       await quoteMutation.update(q.id, { status: 'Sent' });
+                                      await notifyClient({ type: 'quote_sent', title: '📄 Preventivë e re', message: `Keni një preventivë të re: ${q.label || 'Ofertë'}`, actionUrl: '/portal/preventiva', actionLabel: 'Shiko Preventivën' });
                                       toast({ title: '✅ Preventiva u dërgua te klienti!' });
                                     } catch {
                                       toast({ title: 'Gabim', description: 'Ndodhi një gabim', variant: 'destructive' });
@@ -995,7 +1011,11 @@ const Customer360View: React.FC = () => {
                           {c.status === 'Draft' && (
                             <Button size="sm" variant="outline" className="w-full h-9 gap-1 text-blue-600 border-blue-200 hover:bg-blue-50" disabled={sendingContractId === c.id} onClick={async () => {
                               setSendingContractId(c.id);
-                              try { await contractMutation.update(c.id, { status: 'Sent', sentAt: new Date(), updatedAt: new Date() } as any); toast({ title: '✅ Kontrata u dërgua te klienti!' }); }
+                              try {
+                                await contractMutation.update(c.id, { status: 'Sent', sentAt: new Date(), updatedAt: new Date() } as any);
+                                await notifyClient({ type: 'contract_sent', title: '✍️ Kontratë e re për firmë', message: `Keni një kontratë të re: ${c.title || 'Kontratë'}`, actionUrl: '/portal/contracts', actionLabel: 'Shiko Kontratën' });
+                                toast({ title: '✅ Kontrata u dërgua te klienti!' });
+                              }
                               catch { toast({ title: 'Gabim', variant: 'destructive' }); }
                               finally { setSendingContractId(null); }
                             }}>
@@ -1061,6 +1081,7 @@ const Customer360View: React.FC = () => {
                                       setSendingContractId(c.id);
                                       try {
                                         await contractMutation.update(c.id, { status: 'Sent', sentAt: new Date(), updatedAt: new Date() } as any);
+                                        await notifyClient({ type: 'contract_sent', title: '✍️ Kontratë e re për firmë', message: `Keni një kontratë të re: ${c.title || 'Kontratë'}`, actionUrl: '/portal/contracts', actionLabel: 'Shiko Kontratën' });
                                         toast({ title: '✅ Kontrata u dërgua te klienti!' });
                                       } catch {
                                         toast({ title: 'Gabim', variant: 'destructive' });
