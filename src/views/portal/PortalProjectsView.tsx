@@ -1,17 +1,32 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCollection } from '../../hooks/useFirestore';
+import { useStartInquiry } from '../../hooks/useStartInquiry';
 import { getStatusColor } from '../../lib/statusColors';
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
-import { FolderKanban, ArrowRight, CheckCircle2, Clock, Pause, ClipboardList } from 'lucide-react';
+import { Button } from '../../components/ui/button';
+import { Input } from '../../components/ui/input';
+import { FolderKanban, ArrowRight, CheckCircle2, Clock, Pause, ClipboardList, Search, Plus } from 'lucide-react';
+import { StatCardsSkeleton, ListCardSkeleton } from './PortalSkeletons';
 import type { Project, Task, ServiceInquiry } from '../../types';
+
+const STATUS_FILTERS = [
+  { value: 'all', label: 'Të gjitha' },
+  { value: 'Active', label: 'Aktive' },
+  { value: 'Planning', label: 'Planifikim' },
+  { value: 'On Hold', label: 'Në Pritje' },
+  { value: 'Completed', label: 'Përfunduara' },
+];
 
 const PortalProjectsView: React.FC = () => {
   const { customerId } = useClientPortal();
   const { user } = useAuth();
+  const startInquiry = useStartInquiry();
+  const [search, setSearch] = useState('');
+  const [statusFilter, setStatusFilter] = useState('all');
 
   const { data: projectsByCustomer, loading: loadingByCustomer } = useCollection<Project>('projects', {
     skip: !customerId,
@@ -58,6 +73,15 @@ const PortalProjectsView: React.FC = () => {
     });
   }, [rawProjects, projectTasks]);
 
+  const filteredProjects = React.useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return projects.filter(p => {
+      if (statusFilter !== 'all' && p.status !== statusFilter) return false;
+      if (q && !(`${p.name} ${p.description || ''}`.toLowerCase().includes(q))) return false;
+      return true;
+    });
+  }, [projects, search, statusFilter]);
+
   const getStatusConfig = (status: string) => {
     switch (status) {
       case 'Active': return { color: getStatusColor('Active'), icon: <Clock className="h-4 w-4" /> };
@@ -77,30 +101,42 @@ const PortalProjectsView: React.FC = () => {
     }
   };
 
-  // Inquiry status → pill + progress hint
+  // Inquiry status → pill + progress hint. Briefet janë "projekte në plotësim":
+  // Draft = brief-i po plotësohet, çdo status tjetër = brief-i i dërguar.
   const inquiryMeta = (s: string) => {
     switch (s) {
-      case 'Draft': return { label: 'Anketa e papërfunduar', pill: 'bg-yellow-100 text-yellow-800', cta: 'Vazhdo anketën', pct: 25 };
-      case 'New': return { label: 'Në shqyrtim', pill: 'bg-blue-100 text-blue-800', cta: 'Shiko', pct: 100 };
-      case 'Reviewed': return { label: 'Në shqyrtim', pill: 'bg-accent-soft text-primary', cta: 'Shiko', pct: 100 };
-      case 'Converted': return { label: 'Konvertuar', pill: 'bg-green-100 text-green-800', cta: 'Shiko', pct: 100 };
+      case 'Draft': return { label: 'Draft · Brief në plotësim', pill: 'bg-yellow-100 text-yellow-800', cta: 'Vazhdo briefin', pct: 25 };
+      case 'New': return { label: 'Brief i dërguar', pill: 'bg-blue-100 text-blue-800', cta: 'Shiko', pct: 100 };
+      case 'Reviewed': return { label: 'Brief i dërguar', pill: 'bg-accent-soft text-primary', cta: 'Shiko', pct: 100 };
+      case 'Converted': return { label: 'Konvertuar në projekt', pill: 'bg-green-100 text-green-800', cta: 'Shiko', pct: 100 };
       default: return { label: s, pill: 'bg-gray-100 text-gray-800', cta: 'Shiko', pct: 100 };
     }
   };
 
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-muted-foreground">Duke ngarkuar projektet...</div>
+      <div className="space-y-8">
+        <div className="space-y-2">
+          <div className="h-8 w-40 rounded-md bg-muted animate-pulse" />
+          <div className="h-4 w-64 rounded-md bg-muted animate-pulse" />
+        </div>
+        <StatCardsSkeleton count={4} />
+        <ListCardSkeleton rows={4} />
       </div>
     );
   }
 
   return (
     <div className="space-y-8">
-      <div>
-        <h1 className="text-3xl font-bold tracking-tight">Projektet</h1>
-        <p className="text-muted-foreground mt-1">Shikoni progresin dhe detajet e projekteve tuaja</p>
+      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold tracking-tight">Projektet</h1>
+          <p className="text-muted-foreground mt-1">Shikoni progresin dhe detajet e projekteve tuaja</p>
+        </div>
+        <Button onClick={() => startInquiry()} className="gap-2 rounded-xl bg-brand-gradient text-white shadow-lg shadow-primary/25 hover:opacity-95 transition self-start">
+          <Plus className="w-4 h-4" />
+          Nis një projekt të ri
+        </Button>
       </div>
 
       {/* Stats */}
@@ -115,13 +151,13 @@ const PortalProjectsView: React.FC = () => {
       {myInquiries && myInquiries.length > 0 && (
         <div>
           <div className="flex items-center gap-2.5 mb-4">
-            <h2 className="text-lg font-semibold tracking-tight">Kërkesat & Anketat</h2>
+            <h2 className="text-lg font-semibold tracking-tight">Briefet e projekteve</h2>
             <span className="text-xs font-semibold text-muted-foreground bg-muted rounded-full px-2.5 py-0.5">{myInquiries.length}</span>
           </div>
           <div className="space-y-3">
             {myInquiries.map(inq => {
               const meta = inquiryMeta(inq.status);
-              const title = (inq as any).serviceTitle || inq.servicesInterestedIn?.[0] || 'Kërkesë shërbimi';
+              const title = (inq as any).serviceTitle || inq.servicesInterestedIn?.[0] || 'Brief-i i projektit';
               const isDraft = inq.status === 'Draft';
               return (
                 <Link key={inq.id} to={`/portal/projects/inquiry/${inq.id}`}>
@@ -137,12 +173,12 @@ const PortalProjectsView: React.FC = () => {
                             <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${meta.pill}`}>{meta.label}</span>
                           </div>
                           <p className="text-sm text-muted-foreground mt-0.5">
-                            {isDraft ? 'Plotësoni anketën që ekipi të përgatisë propozimin tuaj.' : 'Ekipi po e shqyrton kërkesën tuaj.'}
+                            {isDraft ? 'Plotësoni briefin që ekipi të përgatisë propozimin tuaj.' : 'Ekipi po e shqyrton briefin tuaj.'}
                           </p>
                         </div>
                         <div className="hidden sm:block w-36">
                           <div className="flex items-center justify-between text-xs mb-1">
-                            <span className="text-muted-foreground">Anketa</span>
+                            <span className="text-muted-foreground">Brief-i</span>
                             <span className="font-medium">{meta.pct}%</span>
                           </div>
                           <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
@@ -167,17 +203,59 @@ const PortalProjectsView: React.FC = () => {
         {myInquiries && myInquiries.length > 0 && (
           <h2 className="text-lg font-semibold tracking-tight mb-4">Projektet e Mia</h2>
         )}
+
+        {/* Search + status filter */}
+        {projects.length > 0 && (
+          <div className="flex flex-col sm:flex-row gap-3 mb-4">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Kërko projekt..."
+                className="pl-9"
+              />
+            </div>
+            <div className="flex gap-1.5 overflow-x-auto pb-1 -mb-1">
+              {STATUS_FILTERS.map(f => (
+                <button
+                  key={f.value}
+                  onClick={() => setStatusFilter(f.value)}
+                  className={`px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${
+                    statusFilter === f.value
+                      ? 'bg-primary text-primary-foreground'
+                      : 'bg-muted text-muted-foreground hover:bg-muted/70'
+                  }`}
+                >
+                  {f.label}
+                </button>
+              ))}
+            </div>
+          </div>
+        )}
+
         {projects.length === 0 ? (
           <Card className="rounded-2xl">
             <CardContent className="py-12 text-center">
               <FolderKanban className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
               <p className="text-muted-foreground font-medium">Nuk ka projekte akoma</p>
-              <p className="text-sm text-muted-foreground mt-1">Projektet tuaja do të shfaqen këtu kur ekipi t'i krijojë ato.</p>
+              <p className="text-sm text-muted-foreground mt-1 mb-5">Nisni një brief të ri dhe ekipi do ta kthejë në projekt për ju.</p>
+              <Button onClick={() => startInquiry()} className="gap-2 rounded-xl bg-brand-gradient text-white shadow-lg shadow-primary/25 hover:opacity-95 transition">
+                <Plus className="w-4 h-4" />
+                Nis një projekt të ri
+              </Button>
+            </CardContent>
+          </Card>
+        ) : filteredProjects.length === 0 ? (
+          <Card className="rounded-2xl">
+            <CardContent className="py-12 text-center">
+              <Search className="h-10 w-10 text-muted-foreground mx-auto mb-3" />
+              <p className="text-muted-foreground font-medium">Asnjë projekt nuk përputhet me kërkimin</p>
             </CardContent>
           </Card>
         ) : (
           <div className="space-y-3">
-            {projects.map(project => {
+            {filteredProjects.map(project => {
               const statusConfig = getStatusConfig(project.status);
               return (
                 <Link key={project.id} to={`/portal/projects/${project.id}`}>

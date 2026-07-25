@@ -2362,27 +2362,30 @@ const ServiceQuestionnaireForm: React.FC<Props> = ({ onSubmit, preselectedServic
 
   // ---------- Step 4: Budget & Materials ----------
 
-  // Live "profile completeness" meter — mirrors the CRM's getInquiryCompleteness.
+  // Live meter for the OPTIONAL business-profile extras (logo, foto, shërbimet e
+  // biznesit, përshkrimi, website, rrjetet sociale) — NUK mat fushat e detyrueshme
+  // të briefit. E njëjta llogaritje si te CRM (getInquiryCompleteness), prandaj
+  // etiketa e bën të qartë se janë shtesa opsionale, jo progresi i briefit.
   const renderCompleteness = () => {
     const c = getInquiryCompleteness(form as any);
     return (
       <div className="rounded-lg border p-4 bg-muted/20 space-y-2">
         <div className="flex items-center justify-between">
-          <span className="text-sm font-medium">Plotësimi i profilit</span>
-          <span className="text-sm font-semibold text-primary">{c.percent}%</span>
+          <span className="text-sm font-medium">Profili i biznesit (opsional)</span>
+          <span className="text-sm font-semibold text-primary">{c.filled}/{c.total} · {c.percent}%</span>
         </div>
         <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
           <div className="h-full bg-primary transition-all" style={{ width: `${c.percent}%` }} />
         </div>
         {c.missing.length > 0 ? (
           <div className="flex flex-wrap items-center gap-1.5 pt-1">
-            <span className="text-xs text-muted-foreground">Mund të shtoni:</span>
+            <span className="text-xs text-muted-foreground">Opsionale, por na ndihmojnë — mund të shtoni:</span>
             {c.missing.map(m => (
               <span key={m.key} className="text-xs rounded-full border px-2 py-0.5 text-muted-foreground">{m.label}</span>
             ))}
           </div>
         ) : (
-          <p className="text-xs text-success flex items-center gap-1"><Check className="w-3 h-3" /> Gjithçka e plotësuar — faleminderit!</p>
+          <p className="text-xs text-success flex items-center gap-1"><Check className="w-3 h-3" /> Profili i biznesit i plotësuar — faleminderit!</p>
         )}
       </div>
     );

@@ -134,7 +134,7 @@ const PortalInquiryView: React.FC = () => {
     if (wasDraft) await createLeadAndAutomations(formData, inquiryId);
     setEditing(false);
     toast({
-      title: wasDraft ? 'Anketa u dërgua me sukses!' : 'Anketa u përditësua!',
+      title: wasDraft ? 'Brief-i u dërgua me sukses!' : 'Brief-i u përditësua!',
       description: 'Ekipi ynë do t\'ju kontaktojë brenda 24 orëve.',
     });
     // Kërkesa (realtime) bëhet 'New' → komponenti kalon automatikisht te përmbledhja.
@@ -158,13 +158,13 @@ const PortalInquiryView: React.FC = () => {
           <ArrowLeft className="h-4 w-4" /> Projektet
         </Button>
         <Card className="rounded-2xl"><CardContent className="py-12 text-center">
-          <p className="text-muted-foreground">Kërkesa nuk u gjet</p>
+          <p className="text-muted-foreground">Brief-i nuk u gjet</p>
         </CardContent></Card>
       </div>
     );
   }
 
-  const serviceTitle = (inquiry as any).serviceTitle || (inquiry.servicesInterestedIn?.[0]) || 'Kërkesë shërbimi';
+  const serviceTitle = (inquiry as any).serviceTitle || (inquiry.servicesInterestedIn?.[0]) || 'Brief-i i projektit';
   const isDraft = inquiry.status === 'Draft';
 
   const isConverted = inquiry.status === 'Converted';
@@ -183,7 +183,7 @@ const PortalInquiryView: React.FC = () => {
             <CheckCircle2 className="h-6 w-6 text-white" />
           </div>
           <div className="flex-1">
-            <h2 className="font-bold">Anketa u dërgua me sukses!</h2>
+            <h2 className="font-bold">Brief-i u dërgua me sukses!</h2>
             <p className="text-sm text-muted-foreground">Ekipi do të shqyrtojë të dhënat dhe do t'ju kontaktojë brenda 24 orëve.</p>
           </div>
           <Badge className="bg-yellow-100 text-yellow-800 rounded-full whitespace-nowrap">{statusLabel}</Badge>
@@ -260,7 +260,7 @@ const PortalInquiryView: React.FC = () => {
           <div className="flex items-center gap-2">
             {!isConverted && (
               <Button className="gap-2 rounded-xl bg-brand-gradient text-white shadow-md shadow-primary/25 hover:opacity-95" onClick={() => setEditing(true)}>
-                <Edit3 className="h-4 w-4" /> Edito anketën
+                <Edit3 className="h-4 w-4" /> Edito briefin
               </Button>
             )}
             <Button variant="outline" className="gap-2 rounded-xl" onClick={() => navigate('/portal/projects')}>
@@ -290,7 +290,7 @@ const PortalInquiryView: React.FC = () => {
         <div className="flex-1">
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-bold tracking-tight">{serviceTitle}</h1>
-            <Badge className="bg-primary/10 text-primary rounded-full">{editing ? 'Duke edituar' : 'Kërkesë e re'}</Badge>
+            <Badge className="bg-primary/10 text-primary rounded-full">{editing ? 'Duke edituar' : 'Brief i ri'}</Badge>
           </div>
           <p className="text-sm text-muted-foreground">
             {editing ? 'Ndryshoni të dhënat dhe ruani përditësimin.' : 'Plotësoni të dhënat e projektit për të vazhduar me propozimin'}

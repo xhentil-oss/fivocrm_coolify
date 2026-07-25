@@ -1,16 +1,14 @@
-import React, { useMemo, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import React, { useMemo, useState } from 'react';
 import { useClientPortal } from '../../hooks/useClientPortal';
-import { useAuth } from '../../contexts/AuthContext';
 import { useCollection } from '../../hooks/useFirestore';
-import { addDoc, collection, Timestamp } from 'firebase/firestore';
-import { db } from '../../lib/firebase';
+import { useStartInquiry } from '../../hooks/useStartInquiry';
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
-import { ShoppingBag, Tag, DollarSign, FileText, Clock, Star, Check, TrendingUp, Megaphone, Navigation, Sparkles, Globe } from 'lucide-react';
+import { Input } from '../../components/ui/input';
+import { ShoppingBag, Tag, DollarSign, FileText, Clock, Star, Check, TrendingUp, Megaphone, Navigation, Sparkles, Globe, Search } from 'lucide-react';
+import { CardGridSkeleton } from './PortalSkeletons';
 import { sanitizeHtml } from '../../lib/utils';
-import { useToast } from '../../hooks/use-toast';
 import type { Invoice, InvoiceItem, Service } from '../../types';
 
 // Per-category icon + color for the catalog cards. Unknown categories fall back
@@ -34,10 +32,10 @@ function serviceVisual(category?: string) {
  * Klienti e plotëson anketën atje; kërkesa shfaqet edhe te tab-i Projektet.
  */
 const PortalServicesView: React.FC = () => {
-  const { user } = useAuth();
-  const { customerId, businessId } = useClientPortal();
-  const { toast } = useToast();
-  const navigate = useNavigate();
+  const { customerId } = useClientPortal();
+  const startInquiry = useStartInquiry();
+  const [search, setSearch] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('all');
 
   const { data: invoices } = useCollection<Invoice>('invoices', {
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
@@ -49,42 +47,6 @@ const PortalServicesView: React.FC = () => {
     skipTeamFilter: true,
   });
   const { data: services, loading } = useCollection<Service>('services', { skipTeamFilter: true });
-
-  // Resolve a teamId for portal users (they have no getGlobalTeamId()).
-  const { data: activeTeamMembers } = useCollection<any>('teamMembers', {
-    where: [{ field: 'status', operator: '==', value: 'Active' }],
-    skipTeamFilter: true,
-  });
-  const resolvedTeamId = activeTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
-
-  // Create a Draft inquiry, then open the questionnaire page inside Projects.
-  const startInquiry = useCallback(async (service?: Service) => {
-    try {
-      const ref = await addDoc(collection(db, 'serviceInquiries'), {
-        status: 'Draft',
-        isDraft: true,
-        lastSavedStep: 1,
-        customerId: customerId || undefined,
-        clientUserId: user?.uid || undefined,
-        // Seed the service from the catalog card so the form is pre-filled.
-        servicesInterestedIn: service?.category ? [service.category] : [],
-        serviceTitle: service?.title || service?.name || 'Kërkesë e re',
-        businessName: user?.displayName || '',
-        contactName: user?.displayName || '',
-        email: user?.email || '',
-        ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
-        // Stamp the tenant so the inquiry falls inside the admin's business-scoped
-        // queries (otherwise it is invisible in the staff Service Inquiries list).
-        ...(businessId ? { businessId } : {}),
-        createdAt: Timestamp.now(),
-        updatedAt: Timestamp.now(),
-        createdByUserId: user?.uid || null,
-      });
-      navigate(`/portal/projects/inquiry/${ref.id}`);
-    } catch {
-      toast({ title: 'Gabim', description: 'Nuk u krijua dot kërkesa. Provoni përsëri.', variant: 'destructive' });
-    }
-  }, [customerId, businessId, user, resolvedTeamId, navigate, toast]);
 
   const purchasedServiceDetails = useMemo(() => {
     if (!invoices || !invoiceItems || !services) return [];
@@ -111,10 +73,32 @@ const PortalServicesView: React.FC = () => {
 
   const allServices = services || [];
 
+  const categories = useMemo(() => {
+    const set = new Set<string>();
+    allServices.forEach(s => { if (s.category) set.add(s.category); });
+    return Array.from(set).sort();
+  }, [allServices]);
+
+  const filteredServices = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return allServices.filter(s => {
+      if (categoryFilter !== 'all' && s.category !== categoryFilter) return false;
+      if (q) {
+        const hay = `${s.title || ''} ${s.name || ''} ${s.category || ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [allServices, search, categoryFilter]);
+
   if (loading) {
     return (
-      <div className="flex items-center justify-center h-96">
-        <div className="text-muted-foreground">Duke ngarkuar shërbimet...</div>
+      <div className="space-y-8">
+        <div className="space-y-2">
+          <div className="h-8 w-40 rounded-md bg-muted animate-pulse" />
+          <div className="h-4 w-72 rounded-md bg-muted animate-pulse" />
+        </div>
+        <CardGridSkeleton count={6} />
       </div>
     );
   }
@@ -197,15 +181,61 @@ const PortalServicesView: React.FC = () => {
           <h2 className="text-lg font-semibold tracking-tight">Katalogu i Shërbimeve</h2>
           <span className="text-xs font-semibold text-muted-foreground bg-muted rounded-full px-2.5 py-0.5">{allServices.length}</span>
         </div>
+
+        {/* Search + category filter */}
+        {allServices.length > 0 && (
+          <div className="flex flex-col sm:flex-row gap-3 mb-5">
+            <div className="relative flex-1">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={e => setSearch(e.target.value)}
+                placeholder="Kërko shërbim..."
+                className="pl-9"
+              />
+            </div>
+            {categories.length > 0 && (
+              <div className="flex gap-1.5 overflow-x-auto pb-1 -mb-1">
+                <button
+                  onClick={() => setCategoryFilter('all')}
+                  className={`px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${
+                    categoryFilter === 'all' ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70'
+                  }`}
+                >
+                  Të gjitha
+                </button>
+                {categories.map(cat => (
+                  <button
+                    key={cat}
+                    onClick={() => setCategoryFilter(cat)}
+                    className={`px-3 py-1.5 rounded-full text-sm font-medium whitespace-nowrap transition-colors ${
+                      categoryFilter === cat ? 'bg-primary text-primary-foreground' : 'bg-muted text-muted-foreground hover:bg-muted/70'
+                    }`}
+                  >
+                    {cat}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
         {allServices.length === 0 ? (
           <Card className="rounded-2xl">
             <CardContent className="py-12 text-center">
               <p className="text-muted-foreground">Nuk ka shërbime në katalog</p>
             </CardContent>
           </Card>
+        ) : filteredServices.length === 0 ? (
+          <Card className="rounded-2xl">
+            <CardContent className="py-12 text-center">
+              <Search className="h-10 w-10 text-muted-foreground/40 mx-auto mb-3" />
+              <p className="text-muted-foreground">Asnjë shërbim nuk përputhet me kërkimin</p>
+            </CardContent>
+          </Card>
         ) : (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5 items-stretch">
-            {allServices.map((service) => {
+            {filteredServices.map((service) => {
               const isPurchased = purchasedServiceDetails.some(p => p.service.id === service.id);
               // "Më e zgjedhura" is driven by the real `featured` flag (set by admin).
               const isPopular = (service as any).featured === true;
