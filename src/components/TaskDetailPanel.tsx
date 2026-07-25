@@ -643,16 +643,25 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
       const mentionedArray = [...mentionedUids].filter(uid => uid !== user?.uid);
 
-      // Auto-add mentioned staff as task collaborators so they can see task + project
+      // Followers model (Asana / Linear / Salesforce Chatter): the people who get
+      // notified on a record are its *followers*, not the whole team. You become a
+      // follower by being assigned, @mentioned, or by commenting. `collaboratorIds`
+      // is that follower list here.
       const currentCollaboratorIds: string[] = Array.isArray((task as any).collaboratorIds)
         ? (task as any).collaboratorIds
         : [];
       const newCollaborators = mentionedArray.filter(uid => !currentCollaboratorIds.includes(uid));
-      if (newCollaborators.length > 0) {
+      // Commenting auto-follows YOU (so future replies reach you) — but you don't get
+      // an "added as collaborator" ping for your own action.
+      const senderFollows = !!user?.uid && !currentCollaboratorIds.includes(user.uid) && !newCollaborators.includes(user.uid);
+      const collaboratorAdditions = [...newCollaborators, ...(senderFollows ? [user!.uid] : [])];
+      if (collaboratorAdditions.length > 0) {
         await taskMutation.update(task.id, {
-          collaboratorIds: [...currentCollaboratorIds, ...newCollaborators],
+          collaboratorIds: [...currentCollaboratorIds, ...collaboratorAdditions],
         });
-        // Notify new collaborators they now have access
+      }
+      if (newCollaborators.length > 0) {
+        // Notify newly-mentioned staff they now follow (and can see) the task.
         await Promise.all(newCollaborators.map(uid =>
           notificationMutation.create({
             userId: uid,
@@ -681,6 +690,34 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           actionLabel: task.projectId ? 'Shiko Detyrën' : 'Shiko Detyrat',
         }));
       await Promise.all(mentionNotifPromises);
+
+      // Notify the task's participants (assignee, creator, collaborators, previous
+      // commenters) about the new comment — so a comment never goes unseen. Excludes
+      // the sender and anyone already notified above (mentions/new collaborators), so
+      // no one gets a double ping. This is scoped to people involved in the task, not
+      // the whole team, to avoid notification spam.
+      const excluded = new Set<string>(
+        [user?.uid, ...mentionedArray, ...newCollaborators].filter(Boolean) as string[],
+      );
+      const participantIds = new Set<string>();
+      if (task.assignedToUserId) participantIds.add(task.assignedToUserId);
+      if (task.createdByUserId) participantIds.add(task.createdByUserId);
+      currentCollaboratorIds.forEach(uid => participantIds.add(uid));
+      comments.forEach(c => { if (c.userId) participantIds.add(c.userId); });
+
+      const commentPreview = finalText.replace(/@\[([^\]]+)\]\([^)]+\)/g, '@$1').slice(0, 120);
+      const participantNotifPromises = [...participantIds]
+        .filter(uid => !excluded.has(uid))
+        .map(uid => notificationMutation.create({
+          userId: uid,
+          type: 'task_comment',
+          title: `💬 Koment i ri nga ${senderName}`,
+          message: `"${task.title}": ${commentPreview}`,
+          isRead: false,
+          actionUrl: task.projectId ? `/app/projects/${task.projectId}` : '/app/tasks',
+          actionLabel: task.projectId ? 'Shiko Detyrën' : 'Shiko Detyrat',
+        }));
+      await Promise.all(participantNotifPromises);
     } catch {
       // Comment failed to save — keep text so user can retry
     }
