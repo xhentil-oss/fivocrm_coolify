@@ -105,6 +105,7 @@ const DeleteAccountView = lazyRetry(() => import('./views/DeleteAccountView'));
 const ContractsView = lazyRetry(() => import('./views/ContractsView'));
 const PortalContractsView = lazyRetry(() => import('./views/portal/PortalContractsView'));
 const PortalSocialView = lazyRetry(() => import('./views/portal/PortalSocialView'));
+const PortalProfileView = lazyRetry(() => import('./views/portal/PortalProfileView'));
 
 function LazyFallback() {
   return (
@@ -269,6 +270,7 @@ function AppContent() {
         <Route path="preventiva" element={<Suspense fallback={<LazyFallback />}><PortalQuotesView /></Suspense>} />
         <Route path="contracts" element={<Suspense fallback={<LazyFallback />}><PortalContractsView /></Suspense>} />
         <Route path="social" element={<Suspense fallback={<LazyFallback />}><PortalSocialView /></Suspense>} />
+        <Route path="profile" element={<Suspense fallback={<LazyFallback />}><PortalProfileView /></Suspense>} />
       </Route>
       
       {/* Protected routes */}

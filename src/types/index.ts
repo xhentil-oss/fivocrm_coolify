@@ -457,6 +457,10 @@ export interface Customer {
   phone?: string;
   company?: string;
   address?: string;
+  /** Optional client-editable profile fields (self-service portal). */
+  website?: string;
+  taxId?: string;
+  avatarUrl?: string;
   teamId?: string;
   leadId?: string;
   assignedToUserId?: string;

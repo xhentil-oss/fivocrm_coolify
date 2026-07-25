@@ -26,6 +26,7 @@ import {
 import { Button } from '../../components/ui/button';
 import { Loader2 } from 'lucide-react';
 import PortalPushPrompt from './PortalPushPrompt';
+import PortalNotificationsBell from './PortalNotificationsBell';
 
 // Full menu — shown in the desktop sidebar and the mobile drawer.
 const navItems = [
@@ -37,6 +38,7 @@ const navItems = [
   { to: '/portal/projects', icon: FolderKanban, label: 'Projektet' },
   { to: '/portal/preventiva', icon: Calculator, label: 'Preventiva' },
   { to: '/portal/social', icon: Share2, label: 'Rrjetet Sociale' },
+  { to: '/portal/profile', icon: User, label: 'Profili im' },
 ];
 
 // Curated set for the mobile bottom bar — 4 primary destinations + a "More"
@@ -145,12 +147,17 @@ const PortalLayout: React.FC = () => {
         </div>
 
         <div className="ml-auto flex items-center gap-2 sm:gap-3">
-          <div className="flex items-center gap-2 rounded-full border bg-background/60 pl-1 pr-1 sm:pr-3 py-1">
+          <PortalNotificationsBell />
+          <NavLink
+            to="/portal/profile"
+            className="flex items-center gap-2 rounded-full border bg-background/60 pl-1 pr-1 sm:pr-3 py-1 hover:bg-background transition-colors"
+            title="Profili im"
+          >
             <div className="h-7 w-7 rounded-full bg-brand-gradient flex items-center justify-center flex-shrink-0">
               <span className="text-white text-[11px] font-semibold">{(user.email || 'K').slice(0, 2).toUpperCase()}</span>
             </div>
             <span className="text-sm text-muted-foreground hidden sm:block max-w-[200px] truncate">{user.email}</span>
-          </div>
+          </NavLink>
           <Button variant="outline" size="icon" className="rounded-full" onClick={() => { logout(); navigate('/login'); }} title="Dil">
             <LogOut className="h-4 w-4" />
           </Button>
