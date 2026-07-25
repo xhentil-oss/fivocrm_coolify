@@ -106,17 +106,11 @@ const PortalServicesView: React.FC = () => {
   return (
     <div className="space-y-10">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
-        <div>
-          <h1 className="text-3xl font-bold tracking-tight">Shërbimet</h1>
-          <p className="text-muted-foreground mt-2 text-[15px]">
-            Shërbimet tuaja të blera dhe katalogu i shërbimeve
-          </p>
-        </div>
-        <Button onClick={() => startInquiry()} className="gap-2 rounded-xl bg-brand-gradient text-white shadow-lg shadow-primary/25 hover:opacity-95 transition">
-          <FileText className="w-4 h-4" />
-          Kërko Shërbim
-        </Button>
+      <div>
+        <h1 className="text-3xl font-bold tracking-tight">Shërbimet</h1>
+        <p className="text-muted-foreground mt-2 text-[15px]">
+          Shërbimet tuaja të blera dhe katalogu i shërbimeve
+        </p>
       </div>
 
       {/* Purchased Services */}
