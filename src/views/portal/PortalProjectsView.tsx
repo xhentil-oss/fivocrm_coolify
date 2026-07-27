@@ -275,7 +275,7 @@ const PortalProjectsView: React.FC = () => {
                               <Badge className={statusConfig.color} variant="secondary">{getStatusLabel(project.status)}</Badge>
                               <span className="text-xs text-muted-foreground">{project.done}/{project.total} detyra</span>
                               {project.budget != null && project.budget > 0 && (
-                                <span className="text-xs text-muted-foreground">Buxheti: {project.budget.toLocaleString()} ALL</span>
+                                <span className="text-xs text-muted-foreground">Buxheti: {project.budget.toLocaleString()} {project.currency || 'ALL'}</span>
                               )}
                             </div>
                           </div>

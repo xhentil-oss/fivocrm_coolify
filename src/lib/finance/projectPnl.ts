@@ -197,7 +197,8 @@ export function computeProjectPnl(
   // ── Recognised revenue per project (one-time = budget; monthly = fee × active months).
   const revenueOf = (p: Project): { revenue: number; billingType: 'one-time' | 'monthly'; activeMonths: number } => {
     const bt = billingTypeOf(p);
-    const fee = p.budget || 0;
+    // Normalizo në ALL (kostot/pagat janë në ALL) që marzhi të jetë i saktë për EUR.
+    const fee = toAll(p.budget || 0, p.currency);
     if (bt === 'one-time') return { revenue: fee, billingType: bt, activeMonths: 1 };
     const projStart = parseDate(p.createdAt) ?? periodStart;
     const projEnd = parseDate((p as any).lastCompletedAt) ?? periodEnd;

@@ -32,7 +32,7 @@ import ProjectClientBrief from '../components/ProjectClientBrief';
 import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
 import { addFrequency, completeTask } from '../lib/recurringUtils';
-import { formatCurrency, toAll } from '../lib/utils';
+import { formatCurrency, toAll, canSeeFinancials } from '../lib/utils';
 import { computeProjectLabor } from '../lib/finance/laborCost';
 import { AlertTriangle } from 'lucide-react';
 import type { Task, Project, Team, TeamMember, TimeEntry, Expense } from '../types';
@@ -98,7 +98,9 @@ const ProjectDetailView: React.FC = () => {
   // Budget burn-down: labor cost (logged hours × member cost-rate) + expenses,
   // compared to the project budget. Plus realization (billable value vs cost).
   const budgetStats = React.useMemo(() => {
-    const budget = Number(project?.budget) || 0;
+    // Normalizo buxhetin në ALL (puna + shpenzimet janë në ALL) që krahasimi/marzhi
+    // të jenë të saktë edhe kur projekti është në EUR.
+    const budget = toAll(Number(project?.budget) || 0, project?.currency);
     const membersByUserId = new Map<string, TeamMember>();
     (teamMembers || []).forEach(m => { if (m.userId) membersByUserId.set(m.userId, m); });
     const labor = computeProjectLabor(timeEntries || [], membersByUserId);
@@ -113,7 +115,7 @@ const ProjectDetailView: React.FC = () => {
       billableHours: labor.billableHours,
       margin: budget > 0 ? budget - spent : labor.billableValue - spent,
     };
-  }, [project?.budget, teamMembers, timeEntries, projectExpenses]);
+  }, [project?.budget, project?.currency, teamMembers, timeEntries, projectExpenses]);
 
   // Total hours logged for the project and per task
   const { totalHours, hoursByTask } = React.useMemo(() => {
@@ -607,8 +609,8 @@ const ProjectDetailView: React.FC = () => {
           </div>
         </div>
 
-        {/* Budget burn-down (labor cost + expenses vs budget) */}
-        {(budgetStats.budget > 0 || budgetStats.spent > 0) && (
+        {/* Budget burn-down (labor cost + expenses vs budget) — vetëm Manager/Admin/SuperAdmin */}
+        {canSeeFinancials(permissions) && (budgetStats.budget > 0 || budgetStats.spent > 0) && (
           <div className="px-6 pb-4">
             <div className={`rounded-lg border p-3 ${budgetStats.overBudget ? 'border-red-300 bg-red-50 dark:bg-red-950/20' : 'border-border bg-muted/20'}`}>
               <div className="flex items-center justify-between gap-2 mb-2">

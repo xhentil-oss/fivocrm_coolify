@@ -13,6 +13,7 @@
 import type { Expense, TeamMember, Project, Invoice } from '../../types';
 import { parseDate, calculateExpensesBetween, getInvoiceTotalAll } from './financialAnalytics';
 import { totalSalaryForMonth } from './salaryHistory';
+import { toAll } from '../utils';
 
 export interface NextMonthForecast {
   year: number;
@@ -64,7 +65,8 @@ export function forecastNextMonth(
   let newProjectRevenue = 0;
   const countedProjectIds = new Set<string>();
   for (const p of projs) {
-    const budget = p.budget || 0;
+    // Normalizo në ALL që parashikimi të mos përziejë EUR me Lekë.
+    const budget = toAll(p.budget || 0, p.currency);
     if (budget <= 0) continue;
     if (billingTypeOf(p) === 'monthly') {
       if (ACTIVE_FOR_RECURRING.has(p.status)) {

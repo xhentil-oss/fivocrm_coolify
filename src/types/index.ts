@@ -295,6 +295,8 @@ export interface Project {
   teamId?: string;
   customerId?: string;
   budget?: number;
+  /** Monedha e `budget`/`spent`. Kur mungon, trajtohet si ALL (projektet legacy). */
+  currency?: 'ALL' | 'EUR';
   // How `budget` is interpreted for profit/P&L. 'one-time' = a single deal value
   // (web build, branding). 'monthly' = a recurring monthly fee (SEO, social,
   // maintenance) — the P&L multiplies it by the months active in the period.

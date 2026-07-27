@@ -168,7 +168,8 @@ export function computeStaffRevenue(
   const missingBudget = { count: 0, names: [] as string[] };
 
   periodProjects.forEach(p => {
-    const value = p.budget || 0;
+    // Normalizo në ALL që projektet në EUR të mos numërohen 1:1 me ato në Lekë.
+    const value = toAll(p.budget || 0, p.currency);
     const alloc = allocationFor(p);
     if (alloc.length === 0) return;
     const directExp = directExpensesOf(p.id);

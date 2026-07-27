@@ -109,6 +109,15 @@ export function toAll(amount: number, currency?: string): number {
   return (amount || 0) * getRateToAll(currency);
 }
 
+/**
+ * A lejohet ky përdorues të shohë të dhëna financiare (buxhet/çmim)?
+ * Vetëm Manager, Admin dhe SuperAdmin. (`isAdmin` mbulon Admin + Owner + SuperAdmin.)
+ * Burim i vetëm i rregullit — përdoret te buxheti i projektit dhe çmimi i briefit.
+ */
+export function canSeeFinancials(p: { isAdmin?: boolean; isManager?: boolean } | null | undefined): boolean {
+  return !!(p && (p.isAdmin || p.isManager));
+}
+
 // ── Currency / date formatting ──
 // Centralized so the 80+ ad-hoc .toLocaleDateString()/.toFixed() call sites can
 // converge on one implementation (sq-AL locale, consistent rounding).

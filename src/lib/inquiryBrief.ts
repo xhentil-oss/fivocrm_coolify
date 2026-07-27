@@ -186,11 +186,11 @@ export const PRICING_ROW_LABELS = ['Buxheti', 'Buxheti i reklamave (ad spend)', 
 
 /**
  * A lejohet ta shohë pjesën e çmimit të një briefi ky përdorues?
- * Vetëm Admin (përfshin Owner), SuperAdmin dhe SalesAgent. Të tjerët (Manager,
- * Sales, Member, Viewer, Guest) e shohin briefin PA buxhet.
+ * Vetëm Manager, Admin dhe SuperAdmin (i njëjti rregull si buxheti i projektit —
+ * shih `canSeeFinancials`). Të tjerët e shohin briefin PA buxhet.
  */
-export function canSeeInquiryPricing(p: { isAdmin?: boolean; isSuperAdmin?: boolean; role?: string | null }): boolean {
-  return !!(p.isAdmin || p.isSuperAdmin || p.role === 'SalesAgent');
+export function canSeeInquiryPricing(p: { isAdmin?: boolean; isManager?: boolean }): boolean {
+  return !!(p.isAdmin || p.isManager);
 }
 
 /** Kthen seksionet e strukturuara të anketës (vetëm fushat jo-bosh). */

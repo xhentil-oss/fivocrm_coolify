@@ -21,7 +21,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Separator } from '../components/ui/separator';
-import { safeHref, toAll } from '../lib/utils';
+import { safeHref, toAll, canSeeFinancials } from '../lib/utils';
 import { resolvePortalUserId } from '../lib/notifyClient';
 import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract, Service } from '../types';
 
@@ -668,10 +668,10 @@ const Customer360View: React.FC = () => {
                     <div className="w-full h-2 bg-muted rounded-full overflow-hidden">
                       <div className="h-full bg-primary rounded-full transition-all" style={{ width: `${p.pct}%` }} />
                     </div>
-                    {p.budget != null && (
+                    {p.budget != null && canSeeFinancials(permissions) && (
                       <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                        <span>Buxheti: {p.budget.toLocaleString()} ALL</span>
-                        <span>Shpenzuar: {(p.spent || 0).toLocaleString()} ALL</span>
+                        <span>Buxheti: {p.budget.toLocaleString()} {(p as any).currency || 'ALL'}</span>
+                        <span>Shpenzuar: {(p.spent || 0).toLocaleString()} {(p as any).currency || 'ALL'}</span>
                       </div>
                     )}
                   </div>

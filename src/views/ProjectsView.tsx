@@ -5,6 +5,7 @@ import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFir
 import { getNextInvoiceNumber } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
+import { canSeeFinancials } from '../lib/utils';
 import { Search, Plus, List, Users, ChevronDown, MoreVertical, Folder, Trash2, Edit } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
@@ -222,6 +223,7 @@ const ProjectsView: React.FC = () => {
 
     const budgetRaw = budgetStr ? parseFloat(budgetStr) : undefined;
     const budget = budgetRaw !== undefined && !isNaN(budgetRaw) ? budgetRaw : undefined;
+    const currency: 'ALL' | 'EUR' = (formData.get('currency') as string) === 'EUR' ? 'EUR' : 'ALL';
     const resolvedCustomerId = custId && custId !== '__none__' ? custId : undefined;
     const resolvedTeamId = teamId && teamId !== '__none__' ? teamId : undefined;
     const resolvedResponsible = responsibleUserId && responsibleUserId !== '__none__' ? responsibleUserId : undefined;
@@ -238,6 +240,7 @@ const ProjectsView: React.FC = () => {
       status,
       teamId: resolvedTeamId,
       budget,
+      currency,
       billingType,
       startDate,
       spent: 0,
@@ -286,6 +289,7 @@ const ProjectsView: React.FC = () => {
         amount: billableTotal,
         subtotal: billableTotal,
         total: billableTotal,
+        currency,
         tax: 0,
         status: 'Draft',
         notes: `Faturë e gjeneruar automatikisht për projektin periodik "${name}".`,
@@ -344,6 +348,7 @@ const ProjectsView: React.FC = () => {
         amount: billableTotal,
         subtotal: billableTotal,
         total: billableTotal,
+        currency,
         tax: 0,
         status: 'Draft',
         notes: `Faturë draft e krijuar automatikisht për projektin "${name}".`,
@@ -443,6 +448,7 @@ const ProjectsView: React.FC = () => {
 
     const budgetRaw = budgetStr ? parseFloat(budgetStr) : undefined;
     const budget = budgetRaw !== undefined && !isNaN(budgetRaw) ? budgetRaw : undefined;
+    const currency: 'ALL' | 'EUR' = (formData.get('currency') as string) === 'EUR' ? 'EUR' : 'ALL';
 
     const resolvedResponsible = responsibleUserId && responsibleUserId !== '__none__' ? responsibleUserId : undefined;
     // Mandatory owner: keep the responsible lead set on edit too.
@@ -459,6 +465,7 @@ const ProjectsView: React.FC = () => {
       status,
       teamId: teamId && teamId !== '__none__' ? teamId : undefined,
       budget,
+      currency,
       billingType,
       startDate,
       customerId: custId && custId !== '__none__' ? custId : undefined,
@@ -935,6 +942,8 @@ const ProjectForm: React.FC<{
   services?: Service[];
   initialData?: Project;
 }> = ({ onSubmit, teams, customers, teamMembers, services, initialData }) => {
+  const permissions = usePermissions();
+  const canSeeBudget = canSeeFinancials(permissions);
   const [teamId, setTeamId] = useState(initialData?.teamId || '__none__');
   const [custId, setCustId] = useState((initialData as any)?.customerId || '__none__');
   const [responsibleUserId, setResponsibleUserId] = useState(initialData?.responsibleUserId || '__none__');
@@ -943,6 +952,7 @@ const ProjectForm: React.FC<{
   const [memberUserIds, setMemberUserIds] = useState<string[]>(initialData?.memberUserIds || []);
   const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
   const [budgetInput, setBudgetInput] = useState(initialData?.budget ? String(initialData.budget) : '');
+  const [currency, setCurrency] = useState<'ALL' | 'EUR'>((initialData as any)?.currency === 'EUR' ? 'EUR' : 'ALL');
   const [billingType, setBillingType] = useState<'one-time' | 'monthly'>(
     initialData?.billingType || (initialData?.isRecurring ? 'monthly' : 'one-time'),
   );
@@ -1163,25 +1173,43 @@ const ProjectForm: React.FC<{
         </div>
       )}
 
-      {/* Budget */}
+      {/* Budget + currency — vetëm Manager/Admin/SuperAdmin. Të tjerët s'e shohin;
+          input-et e fshehura ruajnë vlerat ekzistuese që editimi të mos i fshijë. */}
+      {!canSeeBudget ? (
+        <>
+          <input type="hidden" name="budget" value={initialData?.budget != null ? String(initialData.budget) : ''} />
+          <input type="hidden" name="currency" value={(initialData as any)?.currency || 'ALL'} />
+        </>
+      ) : (
       <div>
-        <Label htmlFor="budget">Buxheti / Të Ardhurat e Projektit (L)</Label>
-        <Input
-          id="budget"
-          name="budget"
-          type="number"
-          step="0.01"
-          min="0"
-          value={serviceBudget !== null ? String(serviceBudget) : budgetInput}
-          onChange={serviceBudget !== null ? undefined : (e) => setBudgetInput(e.target.value)}
-          placeholder="0.00"
-          readOnly={serviceBudget !== null}
-          className={serviceBudget !== null ? 'bg-muted cursor-not-allowed' : ''}
-        />
+        <Label htmlFor="budget">Buxheti / Të Ardhurat e Projektit</Label>
+        <div className="flex gap-2">
+          <Input
+            id="budget"
+            name="budget"
+            type="number"
+            step="0.01"
+            min="0"
+            value={serviceBudget !== null ? String(serviceBudget) : budgetInput}
+            onChange={serviceBudget !== null ? undefined : (e) => setBudgetInput(e.target.value)}
+            placeholder="0.00"
+            readOnly={serviceBudget !== null}
+            className={`flex-1 ${serviceBudget !== null ? 'bg-muted cursor-not-allowed' : ''}`}
+          />
+          <input type="hidden" name="currency" value={currency} />
+          <Select value={currency} onValueChange={(v) => setCurrency(v as 'ALL' | 'EUR')}>
+            <SelectTrigger className="w-28 shrink-0"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="ALL">L (Lekë)</SelectItem>
+              <SelectItem value="EUR">€ (Euro)</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
         <p className="text-xs text-muted-foreground mt-1">
           {serviceBudget !== null ? 'Llogaritet automatikisht nga shërbimet e zgjedhura' : 'Shuma që projekti gjeneron si të ardhura'}
         </p>
       </div>
+      )}
 
       {/* Billing type — how the budget above is read in the P&L */}
       <div>

@@ -377,7 +377,7 @@ const PortalProjectDetailView: React.FC = () => {
               </div>
               <div className="text-right">
                 <span className="font-semibold">{(project.spent || 0).toLocaleString()}</span>
-                <span className="text-muted-foreground"> / {project.budget.toLocaleString()} ALL</span>
+                <span className="text-muted-foreground"> / {project.budget.toLocaleString()} {project.currency || 'ALL'}</span>
               </div>
             </div>
             <div className="w-full h-2 bg-muted rounded-full overflow-hidden mt-2">

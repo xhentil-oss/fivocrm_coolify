@@ -1,6 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Sparkles, TrendingUp, Clock, AlertTriangle, ChevronDown, ChevronUp, DollarSign, Flag, Zap } from 'lucide-react';
 import { Badge } from './ui/badge';
+import { toAll } from '../lib/utils';
 import type { Task, Project, Customer, Invoice } from '../types';
 
 interface SmartSuggestionsProps {
@@ -78,11 +79,12 @@ function computeTaskScore(
     if (project) {
       projectName = project.name;
 
-      // Project budget boost
+      // Project budget boost (normalizo në ALL që EUR të mos nën-vlerësohet)
       if (project.budget && project.budget > 0) {
-        const budgetScore = Math.min(15, Math.floor(project.budget / 1000));
+        const budgetAll = toAll(project.budget, project.currency);
+        const budgetScore = Math.min(15, Math.floor(budgetAll / 1000));
         score += budgetScore;
-        if (budgetScore >= 10) reasons.push(`Projekt me buxhet ${project.budget.toLocaleString()} L`);
+        if (budgetScore >= 10) reasons.push(`Projekt me buxhet ${project.budget.toLocaleString()} ${project.currency || 'ALL'}`);
       }
 
       // Customer revenue from invoices

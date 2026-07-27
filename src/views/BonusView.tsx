@@ -235,14 +235,15 @@ const BonusView: React.FC = () => {
               ((pp.memberUserIds as string[] | undefined) || []).includes(uid) ||
               pp.responsibleUserId === uid
             );
-            const totalAssignedBudget = assignedProjects.reduce((s, pp) => s + (pp.budget || 0), 0);
+            const totalAssignedBudget = assignedProjects.reduce((s, pp) => s + toAll(pp.budget || 0, pp.currency), 0);
             const fraction = totalAssignedBudget > 0
-              ? (p.budget || 0) / totalAssignedBudget
+              ? toAll(p.budget || 0, p.currency) / totalAssignedBudget
               : 1 / Math.max(1, assignedProjects.length);
             return sum + tmSalary * fraction;
           }, 0);
 
-          const budget = p.budget || 0;
+          // Normalizo në ALL që fitimi neto të mos përziejë EUR me kostot në Lekë.
+          const budget = toAll(p.budget || 0, p.currency);
           const net = budget - directExpenses - perProjectOffice - salaryCosts;
 
           return {
