@@ -178,9 +178,25 @@ const SERVICE_SECTIONS: ServiceSection[] = [
   },
 ];
 
+/**
+ * Etiketat e rreshtave që përmbajnë ÇMIM/buxhet — të fshihen kur përdoruesi
+ * s'ka të drejtë t'i shohë (shih `canSeeInquiryPricing`).
+ */
+export const PRICING_ROW_LABELS = ['Buxheti', 'Buxheti i reklamave (ad spend)', 'Buxheti mujor i reklamave'];
+
+/**
+ * A lejohet ta shohë pjesën e çmimit të një briefi ky përdorues?
+ * Vetëm Admin (përfshin Owner), SuperAdmin dhe SalesAgent. Të tjerët (Manager,
+ * Sales, Member, Viewer, Guest) e shohin briefin PA buxhet.
+ */
+export function canSeeInquiryPricing(p: { isAdmin?: boolean; isSuperAdmin?: boolean; role?: string | null }): boolean {
+  return !!(p.isAdmin || p.isSuperAdmin || p.role === 'SalesAgent');
+}
+
 /** Kthen seksionet e strukturuara të anketës (vetëm fushat jo-bosh). */
-export function getInquirySections(inquiry: ServiceInquiry): InquiryBrief {
+export function getInquirySections(inquiry: ServiceInquiry, opts?: { includePricing?: boolean }): InquiryBrief {
   const q = inquiry as ServiceInquiry & Record<string, any>;
+  const includePricing = opts?.includePricing !== false; // default: shfaqe
   const sections: BriefSection[] = [];
 
   // 1. Informacion Bazë
@@ -236,7 +252,7 @@ export function getInquirySections(inquiry: ServiceInquiry): InquiryBrief {
     if (sec) { used.add(svcSec.header); sections.push(sec); }
   }
 
-  // 4. Buxheti & Materialet
+  // 4. Buxheti & Materialet (rreshtat e çmimit filtrohen më poshtë kur s'lejohen)
   const budget = section('Buxheti & Materialet', [
     mk('Buxheti', q.budgetRange),
     mk('Buxheti i reklamave (ad spend)', q.adBudget),
@@ -253,7 +269,14 @@ export function getInquirySections(inquiry: ServiceInquiry): InquiryBrief {
   ]);
   if (budget) sections.push(budget);
 
-  return { urgent: isTruthy(q.isUrgent), sections };
+  // Fshi rreshtat e çmimit kur s'lejohen; hiq seksionet që mbeten bosh.
+  const finalSections = includePricing
+    ? sections
+    : sections
+        .map(s => ({ ...s, rows: s.rows.filter(r => !PRICING_ROW_LABELS.includes(r.label)) }))
+        .filter(s => s.rows.length > 0);
+
+  return { urgent: isTruthy(q.isUrgent), sections: finalSections };
 }
 
 function formatDate(d: Date): string {

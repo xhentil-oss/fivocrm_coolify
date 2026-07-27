@@ -1,6 +1,7 @@
 import React from 'react';
 import { useDocument } from '../hooks/useFirestore';
-import { getInquirySections, getInquiryCompleteness } from '../lib/inquiryBrief';
+import { usePermissions } from '../contexts/PermissionsContext';
+import { getInquirySections, getInquiryCompleteness, canSeeInquiryPricing } from '../lib/inquiryBrief';
 import { Badge } from './ui/badge';
 import { ClipboardList, ChevronDown, AlertTriangle, AlertCircle, Image as ImageIcon, FileText, ExternalLink } from 'lucide-react';
 import type { ServiceInquiry } from '../types';
@@ -12,11 +13,13 @@ import type { ServiceInquiry } from '../types';
  */
 const ProjectClientBrief: React.FC<{ inquiryId?: string }> = ({ inquiryId }) => {
   const [open, setOpen] = React.useState(true);
+  const permissions = usePermissions();
   const { data: inquiry, loading } = useDocument<ServiceInquiry>('serviceInquiries', inquiryId || '');
 
   if (!inquiryId || loading || !inquiry) return null;
 
-  const { urgent, sections } = getInquirySections(inquiry);
+  // Pjesa e çmimit shihet vetëm nga Admin/SuperAdmin/SalesAgent.
+  const { urgent, sections } = getInquirySections(inquiry, { includePricing: canSeeInquiryPricing(permissions) });
   const completeness = getInquiryCompleteness(inquiry);
   const logoUrl = inquiry.logoUrl;
   const materialFiles = inquiry.materialFiles || [];

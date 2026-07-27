@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import type { ServiceInquiry, Lead, Project } from '../types';
 import { safeHref } from '../lib/utils';
-import { buildProjectDescription, appendBrief, getInquiryCompleteness, getInquirySections } from '../lib/inquiryBrief';
+import { buildProjectDescription, appendBrief, getInquiryCompleteness, getInquirySections, canSeeInquiryPricing } from '../lib/inquiryBrief';
 import { FolderKanban } from 'lucide-react';
 import ServiceQuestionnaireForm from '../components/ServiceQuestionnaireForm';
 
@@ -32,6 +32,8 @@ const ServiceInquiriesView: React.FC = () => {
   // have isAdmin=true but a role of 'SuperAdmin'/custom, so a string compare hid these actions.
   const canDelete = permissions.isAdmin || permissions.isManager;
   const canEdit = permissions.isAdmin || permissions.isManager;
+  // Çmimi/buxheti i briefit: vetëm Admin/SuperAdmin/SalesAgent.
+  const canSeePricing = canSeeInquiryPricing(permissions);
   const [selectedInquiry, setSelectedInquiry] = useState<ServiceInquiry | null>(null);
   const [editing, setEditing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -334,7 +336,8 @@ const ServiceInquiriesView: React.FC = () => {
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           {filtered.map(inquiry => {
             const isUrgent = inquiry.timeline === 'Menjëherë' || inquiry.isUrgent === 'Po';
-            const isHighValue = ['100,000–300,000 L', '300,000+ L'].includes(inquiry.budgetRange);
+            // "High value" nxjerr tërthorazi buxhetin — trego vetëm te ata që lejohen.
+            const isHighValue = canSeePricing && ['100,000–300,000 L', '300,000+ L'].includes(inquiry.budgetRange);
             const missingCount = getInquiryCompleteness(inquiry).missing.length;
 
             return (
@@ -386,7 +389,7 @@ const ServiceInquiriesView: React.FC = () => {
                   {/* Footer info */}
                   <div className="flex items-center justify-between text-xs text-muted-foreground pt-2 border-t">
                     <div className="flex items-center gap-3">
-                      {getBudgetBadge(inquiry.budgetRange)}
+                      {canSeePricing && getBudgetBadge(inquiry.budgetRange)}
                       {isUrgent && (
                         <span className="flex items-center gap-0.5 text-red-600">
                           <AlertCircle className="w-3 h-3" />
@@ -690,10 +693,12 @@ const ServiceInquiriesView: React.FC = () => {
                     Buxheti & Afati
                   </h4>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 bg-muted/30 rounded-lg p-4">
-                    <div>
-                      <span className="text-xs text-muted-foreground">Buxheti</span>
-                      <div className="mt-1">{getBudgetBadge(selectedInquiry.budgetRange)}</div>
-                    </div>
+                    {canSeePricing && (
+                      <div>
+                        <span className="text-xs text-muted-foreground">Buxheti</span>
+                        <div className="mt-1">{getBudgetBadge(selectedInquiry.budgetRange)}</div>
+                      </div>
+                    )}
                     <InfoRow icon={Clock} label="Afati" value={selectedInquiry.timeline} />
                     <InfoRow icon={AlertCircle} label="Urgjent" value={selectedInquiry.isUrgent || '—'} />
                     <InfoRow icon={User} label="Vendimmarrësi" value={selectedInquiry.decisionMaker} />
@@ -794,7 +799,7 @@ const ServiceInquiriesView: React.FC = () => {
                 {/* Section 5: Service-Specific (dinamik nga inquiryBrief — mbulon të gjitha shërbimet) */}
                 {(() => {
                   const TOP = new Set(['Informacion Bazë', 'Shërbimet e biznesit', 'Shërbimi & Objektivi', 'Buxheti & Materialet']);
-                  const specific = getInquirySections(selectedInquiry).sections.filter(s => !TOP.has(s.title));
+                  const specific = getInquirySections(selectedInquiry, { includePricing: canSeePricing }).sections.filter(s => !TOP.has(s.title));
                   return specific.map(sec => (
                     <div key={sec.title} className="space-y-3">
                       <h4 className="text-sm font-semibold flex items-center gap-2 text-primary">
