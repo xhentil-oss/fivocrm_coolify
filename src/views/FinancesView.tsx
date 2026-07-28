@@ -230,23 +230,47 @@ const FinancesView: React.FC = () => {
   }, [teamMembers]);
 
   // ── Revenue generated per project responsible ──
-  // Reuses the period-aware projectPnl rows so figures match the project P&L
-  // card and respect billingType (monthly retainers annualised over the period).
+  // Has its own month filter (independent of the project-P&L card). Uses the
+  // period-aware projectPnl engine (respects billingType) and keeps each
+  // responsible's per-project breakdown so a row can expand to show it.
+  const [staffMonth, setStaffMonth] = useState<string>('all');
+  const [expandedStaff, setExpandedStaff] = useState<string | null>(null);
+
+  const staffMonthOptions = useMemo(() => {
+    const opts: { value: string; label: string }[] = [{ value: 'all', label: 'Të gjitha' }];
+    for (let i = 0; i < 12; i++) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      opts.push({ value: `${d.getFullYear()}-${d.getMonth()}`, label: `${MONTH_NAMES_FULL[d.getMonth()]} ${d.getFullYear()}` });
+    }
+    return opts;
+  }, [now]);
+
   const staffRevenue = useMemo(() => {
-    const map = new Map<string, { userId: string; name: string; revenue: number; projects: number }>();
+    let opts: ProjectPnlOptions;
+    if (staffMonth === 'all') {
+      opts = { allTime: true, mode: 'all', now };
+    } else {
+      const [y, m] = staffMonth.split('-').map(Number);
+      const start = new Date(y, m, 1, 0, 0, 0, 0);
+      const end = new Date(y, m + 1, 0, 23, 59, 59, 999);
+      opts = { range: { start, end }, mode: 'all', months: 1, now };
+    }
+    const pnl = computeProjectPnl(projects, teamMembers, expenses, opts);
+    const map = new Map<string, { userId: string; name: string; revenue: number; projects: { id: string; name: string; revenue: number }[] }>();
     let unattributed = 0;
-    for (const r of projectPnl.rows) {
+    for (const r of pnl.rows) {
       const uid = r.responsibleUserId;
       if (!uid) { unattributed += r.revenue; continue; }
-      const row = map.get(uid) || { userId: uid, name: memberNameById.get(uid) || 'I panjohur', revenue: 0, projects: 0 };
+      const row = map.get(uid) || { userId: uid, name: memberNameById.get(uid) || 'I panjohur', revenue: 0, projects: [] };
       row.revenue += r.revenue;
-      row.projects += 1;
+      row.projects.push({ id: r.id, name: r.name, revenue: r.revenue });
       map.set(uid, row);
     }
-    const rows = Array.from(map.values()).sort((a, b) => b.revenue - a.revenue);
-    const total = rows.reduce((s, r) => s + r.revenue, 0) + unattributed;
-    return { rows, unattributed, total };
-  }, [projectPnl, memberNameById]);
+    const rows = Array.from(map.values())
+      .map(r => ({ ...r, projects: r.projects.sort((a, b) => b.revenue - a.revenue) }))
+      .sort((a, b) => b.revenue - a.revenue);
+    return { rows, unattributed };
+  }, [projects, teamMembers, expenses, staffMonth, memberNameById, now]);
 
   // ── Forward-looking cashflow health (recurring inflow vs fixed outflow) ──
   const cashflow = useMemo(
@@ -472,32 +496,60 @@ const FinancesView: React.FC = () => {
         <ProjectPnlBlock pnl={projectPnl} customerNameById={customerNameById} />
       </Card>
 
-      {/* 4c — Revenue per project responsible */}
+      {/* 4c — Revenue per project responsible (own month filter + drill-down) */}
       <Card className="p-5">
-        <div className="flex items-center gap-2 mb-1">
-          <Users className="w-4 h-4 text-sky-600" />
-          <h2 className="text-sm font-semibold">Të ardhurat sipas përgjegjësit</h2>
+        <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
+          <div className="flex items-center gap-2">
+            <Users className="w-4 h-4 text-sky-600" />
+            <h2 className="text-sm font-semibold">Të ardhurat sipas përgjegjësit</h2>
+          </div>
+          <select
+            value={staffMonth}
+            onChange={(e) => { setStaffMonth(e.target.value); setExpandedStaff(null); }}
+            className="h-8 px-2.5 text-xs rounded-md border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+          >
+            {staffMonthOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
         </div>
         <p className="text-xs text-muted-foreground mb-3">
-          Të ardhurat që ka gjeneruar çdo përgjegjës projekti — sipas së njëjtës periudhë të zgjedhur më lart.
+          Të ardhurat që ka gjeneruar çdo përgjegjës. Kliko një person për të parë projektet e tij me vlerën e secilit.
         </p>
         {staffRevenue.rows.length === 0 ? (
           <p className="text-sm text-muted-foreground">Ende pa projekte me përgjegjës për këtë periudhë.</p>
         ) : (
-          <ul className="space-y-2.5">
+          <ul className="space-y-1.5">
             {staffRevenue.rows.map(r => {
               const pct = staffRevenue.rows[0].revenue > 0 ? Math.round((r.revenue / staffRevenue.rows[0].revenue) * 100) : 0;
+              const open = expandedStaff === r.userId;
               return (
-                <li key={r.userId}>
-                  <div className="flex items-center justify-between gap-2 mb-0.5">
-                    <span className="text-sm text-foreground truncate flex-1 min-w-0">
-                      {r.name} <span className="text-xs text-muted-foreground">· {r.projects} {r.projects === 1 ? 'projekt' : 'projekte'}</span>
-                    </span>
-                    <span className="text-sm font-semibold tabular-nums shrink-0">{formatALL(r.revenue)}</span>
-                  </div>
-                  <div className="h-1.5 rounded-full bg-muted overflow-hidden">
-                    <div className="h-full bg-sky-500/70 rounded-full" style={{ width: `${Math.max(2, pct)}%` }} />
-                  </div>
+                <li key={r.userId} className="rounded-lg border border-border/60">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedStaff(open ? null : r.userId)}
+                    className="w-full text-left p-2.5 hover:bg-muted/30 rounded-lg transition-colors"
+                    aria-expanded={open}
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-0.5">
+                      <span className="text-sm text-foreground truncate flex-1 min-w-0 flex items-center gap-1.5">
+                        <span className={`text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`}>›</span>
+                        {r.name} <span className="text-xs text-muted-foreground">· {r.projects.length} {r.projects.length === 1 ? 'projekt' : 'projekte'}</span>
+                      </span>
+                      <span className="text-sm font-semibold tabular-nums shrink-0">{formatALL(r.revenue)}</span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                      <div className="h-full bg-sky-500/70 rounded-full" style={{ width: `${Math.max(2, pct)}%` }} />
+                    </div>
+                  </button>
+                  {open && (
+                    <ul className="px-3 pb-2.5 pt-0.5 space-y-1 border-t border-border/40">
+                      {r.projects.map(p => (
+                        <li key={p.id} className="flex items-center justify-between gap-2 text-xs pt-1.5">
+                          <span className="text-muted-foreground truncate flex-1 min-w-0">{p.name}</span>
+                          <span className="tabular-nums text-foreground shrink-0">{formatALL(p.revenue)}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
                 </li>
               );
             })}
