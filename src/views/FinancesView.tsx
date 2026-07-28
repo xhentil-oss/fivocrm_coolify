@@ -220,6 +220,34 @@ const FinancesView: React.FC = () => {
     [customers],
   );
 
+  // userId → display name (for the per-responsible revenue card).
+  const memberNameById = useMemo(() => {
+    const m = new Map<string, string>();
+    (teamMembers || []).forEach(tm => {
+      if (tm.userId) m.set(tm.userId, tm.displayName || (tm as any).email || 'Pa emër');
+    });
+    return m;
+  }, [teamMembers]);
+
+  // ── Revenue generated per project responsible ──
+  // Reuses the period-aware projectPnl rows so figures match the project P&L
+  // card and respect billingType (monthly retainers annualised over the period).
+  const staffRevenue = useMemo(() => {
+    const map = new Map<string, { userId: string; name: string; revenue: number; projects: number }>();
+    let unattributed = 0;
+    for (const r of projectPnl.rows) {
+      const uid = r.responsibleUserId;
+      if (!uid) { unattributed += r.revenue; continue; }
+      const row = map.get(uid) || { userId: uid, name: memberNameById.get(uid) || 'I panjohur', revenue: 0, projects: 0 };
+      row.revenue += r.revenue;
+      row.projects += 1;
+      map.set(uid, row);
+    }
+    const rows = Array.from(map.values()).sort((a, b) => b.revenue - a.revenue);
+    const total = rows.reduce((s, r) => s + r.revenue, 0) + unattributed;
+    return { rows, unattributed, total };
+  }, [projectPnl, memberNameById]);
+
   // ── Forward-looking cashflow health (recurring inflow vs fixed outflow) ──
   const cashflow = useMemo(
     () => computeCashflowHealth(invoices, expenses, teamMembers, now),
@@ -442,6 +470,44 @@ const FinancesView: React.FC = () => {
         </p>
 
         <ProjectPnlBlock pnl={projectPnl} customerNameById={customerNameById} />
+      </Card>
+
+      {/* 4c — Revenue per project responsible */}
+      <Card className="p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <Users className="w-4 h-4 text-sky-600" />
+          <h2 className="text-sm font-semibold">Të ardhurat sipas përgjegjësit</h2>
+        </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          Të ardhurat që ka gjeneruar çdo përgjegjës projekti — sipas së njëjtës periudhë të zgjedhur më lart.
+        </p>
+        {staffRevenue.rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">Ende pa projekte me përgjegjës për këtë periudhë.</p>
+        ) : (
+          <ul className="space-y-2.5">
+            {staffRevenue.rows.map(r => {
+              const pct = staffRevenue.rows[0].revenue > 0 ? Math.round((r.revenue / staffRevenue.rows[0].revenue) * 100) : 0;
+              return (
+                <li key={r.userId}>
+                  <div className="flex items-center justify-between gap-2 mb-0.5">
+                    <span className="text-sm text-foreground truncate flex-1 min-w-0">
+                      {r.name} <span className="text-xs text-muted-foreground">· {r.projects} {r.projects === 1 ? 'projekt' : 'projekte'}</span>
+                    </span>
+                    <span className="text-sm font-semibold tabular-nums shrink-0">{formatALL(r.revenue)}</span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                    <div className="h-full bg-sky-500/70 rounded-full" style={{ width: `${Math.max(2, pct)}%` }} />
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {staffRevenue.unattributed > 0 && (
+          <p className="text-[11px] text-amber-600 mt-2">
+            {formatALL(staffRevenue.unattributed)} pa përgjegjës të caktuar — cakto një përgjegjës te projektet për t'i atribuar.
+          </p>
+        )}
       </Card>
 
       {/* 5 — Trend */}
