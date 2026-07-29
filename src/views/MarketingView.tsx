@@ -30,11 +30,12 @@ const MarketingView: React.FC = () => {
   const [waOpen, setWaOpen] = useState(false);
   const settings = useTeamSettingsData();
 
-  // Is an email provider configured in Settings? (SMTP needs host+user+pass.)
+  // Is an email provider configured in Settings? Credentials live in the server-only
+  // vault (teamSecrets), so we check the `has*` markers rather than the secret value.
   const configuredProvider =
     settings?.emailProvider === 'smtp'
-      ? (settings?.emailSmtpHost && settings?.emailSmtpUser && settings?.emailSmtpPass ? 'smtp' : null)
-      : (settings?.emailApiKey ? (settings?.emailProvider || 'resend') : null);
+      ? (settings?.emailSmtpHost && settings?.emailSmtpUser && settings?.hasEmailSmtpPass ? 'smtp' : null)
+      : (settings?.hasEmailApiKey ? (settings?.emailProvider || 'resend') : null);
 
   return (
     <div className="p-4 sm:p-6 w-full min-w-0 max-w-4xl mx-auto space-y-5">

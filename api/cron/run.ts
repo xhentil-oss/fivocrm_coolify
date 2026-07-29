@@ -6,6 +6,10 @@ import { runWhmcsSync, runWhmcsClientSync } from '../_whmcsSync.js';
 import { sendBulkEmail, renderMergeTokens } from '../_mailer.js';
 import { syncAllAccounts, currentPeriod } from '../_social.js';
 import { sendReportsForPeriod } from '../_socialEmail.js';
+// Credentials live in `teamSecrets` (client-unreadable), NOT in `teamSettings`.
+// Always resolve tenant config through getTeamConfig so secrets are merged in.
+import { getTeamConfig, SECRET_FIELDS, writeTeamSecrets } from '../_tenantConfig.js';
+import { syncTenantClaims } from '../_tenantClaims.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 function authorize(req: VercelRequest): boolean {
@@ -341,8 +345,7 @@ async function runOverdueReminders() {
   };
   const getTeamSettings = async (teamId: string) => {
     if (tsCache.has(teamId)) return tsCache.get(teamId);
-    const d = await db.collection('teamSettings').doc(teamId).get();
-    const data = d.exists ? d.data() : null;
+    const data = await getTeamConfig(teamId);
     tsCache.set(teamId, data);
     return data;
   };
@@ -1054,8 +1057,7 @@ async function runLeadFollowUpReminders() {
   const getTeamSettings = async (teamId: string) => {
     if (!teamId) return null;
     if (tsCache.has(teamId)) return tsCache.get(teamId);
-    const doc = await db.collection('teamSettings').doc(teamId).get();
-    const data = doc.exists ? doc.data() : null;
+    const data = await getTeamConfig(teamId);
     tsCache.set(teamId, data);
     return data;
   };
@@ -1240,8 +1242,7 @@ async function runLeadWhatsappAutoReminders() {
   const tplCache = new Map<string, any>();
   const getTeamSettings = async (teamId: string) => {
     if (tsCache.has(teamId)) return tsCache.get(teamId);
-    const doc = await db.collection('teamSettings').doc(teamId).get();
-    const data = doc.exists ? doc.data() : null;
+    const data = await getTeamConfig(teamId);
     tsCache.set(teamId, data);
     return data;
   };
@@ -1539,8 +1540,7 @@ async function runWhatsappBroadcasts() {
       if (!tplDoc.exists) { await bDoc.ref.update({ status: 'failed', error: 'Template mungon', updatedAt: now }); continue; }
       const tpl = tplDoc.data() as any;
 
-      const tsDoc = await db.collection('teamSettings').doc(b.teamId).get();
-      const settings = (tsDoc.data() as any) || {};
+      const settings = await getTeamConfig(b.teamId);
       const useBaileys = b.channel === 'baileys';
 
       // Resolve channel credentials up front.
@@ -1731,8 +1731,7 @@ async function runEmailCampaigns() {
       }
 
       // Per-team email provider config (Settings → Integrime); falls back to env.
-      const tsDoc = await db.collection('teamSettings').doc(c.teamId).get();
-      const ts = (tsDoc.data() as any) || {};
+      const ts = await getTeamConfig(c.teamId);
       const mailerConfig = {
         emailProvider: ts.emailProvider,
         emailApiKey: ts.emailApiKey,
@@ -1840,7 +1839,7 @@ function makeTeamSettingsCache() {
   const cache = new Map<string, any>();
   const get = async (teamId: string) => {
     if (!teamId) return {};
-    if (!cache.has(teamId)) cache.set(teamId, (await db.collection('teamSettings').doc(teamId).get()).data() || {});
+    if (!cache.has(teamId)) cache.set(teamId, await getTeamConfig(teamId));
     return cache.get(teamId);
   };
   const cfgFor = async (teamId: string) => {
@@ -2176,6 +2175,271 @@ async function runBackfillMemberKeys(opts?: { dryRun?: boolean }) {
   return { total: snap.size, alreadyKeyed, reKeyed, dedupedDuplicates, skippedIncomplete, errors, dryRun: !!opts?.dryRun };
 }
 
+// ── JOB: migrate-team-secrets (credential vault cutover) ─────────────────────
+// Moves credentials out of `teamSettings` (readable by every member of the
+// business) into `teamSecrets` (denied to ALL clients), mirrors `has*` markers and
+// deletes the plaintext copies. Also strips `metaChannels[].accessToken` into
+// `metaChannelTokens`. Idempotent — re-runs are no-ops once a team is clean.
+async function runMigrateTeamSecrets(opts?: { dryRun?: boolean }) {
+  const snap = await db.collection('teamSettings').get();
+  const moved: Record<string, string[]> = {};
+  let teamsTouched = 0, tokensMoved = 0;
+  const errors: string[] = [];
+
+  for (const d of snap.docs) {
+    const s = d.data() as any;
+    const secrets: Record<string, any> = {};
+    for (const field of SECRET_FIELDS) {
+      if (field === 'metaChannelTokens') continue;
+      if (typeof s[field] === 'string' && s[field].trim()) secrets[field] = s[field].trim();
+    }
+    // Per-channel Meta access tokens → a single map in the vault.
+    const channels: any[] = Array.isArray(s.metaChannels) ? s.metaChannels : [];
+    const tokenMap: Record<string, string> = {};
+    for (const ch of channels) {
+      if (ch?.phoneNumberId && ch?.accessToken) tokenMap[ch.phoneNumberId] = ch.accessToken;
+    }
+    if (Object.keys(tokenMap).length) {
+      secrets.metaChannelTokens = tokenMap;
+      tokensMoved += Object.keys(tokenMap).length;
+    }
+    if (Object.keys(secrets).length === 0) continue;
+
+    moved[d.id] = Object.keys(secrets);
+    teamsTouched++;
+    if (opts?.dryRun) continue;
+    try {
+      // writeTeamSecrets also mirrors has* flags and deletes the plaintext copies.
+      await writeTeamSecrets(d.id, secrets);
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      console.error(`[migrate-team-secrets] ${d.id} failed:`, msg);
+      errors.push(`${d.id}: ${msg.slice(0, 200)}`);
+    }
+  }
+  return { teams: snap.size, teamsTouched, tokensMoved, moved, errors, dryRun: !!opts?.dryRun };
+}
+
+// ── JOB: tenant-hierarchy (a team must live INSIDE a business) ───────────────
+// Enforces the two-level model on existing data:
+//   1. every `teams` doc gets a `businessId` pointing at a REAL `businesses` doc
+//      (inherited from the owner's other teams / its members, else a business is
+//      created for it),
+//   2. `publicTenants/{subdomain}` — the minimal, public subdomain→tenant map — is
+//      rebuilt, so `businesses` no longer has to be world-readable for the portal
+//      to resolve its tenant.
+async function runTenantHierarchy(opts?: { dryRun?: boolean }) {
+  const now = admin.firestore.Timestamp.now();
+  const [teamsSnap, bizSnap, membersSnap] = await Promise.all([
+    db.collection('teams').get(),
+    db.collection('businesses').get(),
+    db.collection('teamMembers').get(),
+  ]);
+
+  const businessIds = new Set(bizSnap.docs.map((d) => d.id));
+  const ownerToBusiness = new Map<string, string>();     // team owner uid → businessId
+  const teamToBusiness = new Map<string, string>();      // teamId → businessId
+  for (const d of teamsSnap.docs) {
+    const t = d.data() as any;
+    if (t.businessId && businessIds.has(t.businessId)) {
+      teamToBusiness.set(d.id, t.businessId);
+      if (t.createdByUserId) ownerToBusiness.set(t.createdByUserId, t.businessId);
+    }
+  }
+  // Members can also reveal the business of a team that lost its own key.
+  const memberBusinessByTeam = new Map<string, string>();
+  for (const d of membersSnap.docs) {
+    const m = d.data() as any;
+    if (m.teamId && m.businessId && businessIds.has(m.businessId) && !memberBusinessByTeam.has(m.teamId)) {
+      memberBusinessByTeam.set(m.teamId, m.businessId);
+    }
+  }
+
+  let attached = 0, businessesCreated = 0, alreadyOk = 0;
+  const errors: string[] = [];
+
+  for (const d of teamsSnap.docs) {
+    const t = d.data() as any;
+    if (t.businessId && businessIds.has(t.businessId)) { alreadyOk++; continue; }
+
+    let bid: string | null =
+      memberBusinessByTeam.get(d.id)
+      || (t.createdByUserId ? ownerToBusiness.get(t.createdByUserId) || null : null);
+
+    // The team's stale businessId may point at a business that no longer exists, or
+    // at the teamId itself (the legacy "no business layer" convention) — in both
+    // cases the team needs a real parent business.
+    if (!bid) {
+      if (opts?.dryRun) { attached++; continue; }
+      try {
+        const bizRef = db.collection('businesses').doc();
+        await bizRef.set({
+          name: t.name || 'Biznes',
+          ownerId: t.createdByUserId || null,
+          status: 'active',
+          createdAt: now,
+          updatedAt: now,
+          createdByUserId: t.createdByUserId || null,
+          // Provenance so this is auditable after the fact.
+          createdBy: 'tenant-hierarchy-migration',
+          migratedFromTeamId: d.id,
+        });
+        bid = bizRef.id;
+        businessIds.add(bid);
+        businessesCreated++;
+        if (t.createdByUserId) ownerToBusiness.set(t.createdByUserId, bid);
+      } catch (err: any) {
+        errors.push(`business for team ${d.id}: ${String(err?.message || err).slice(0, 200)}`);
+        continue;
+      }
+    }
+    if (opts?.dryRun) { attached++; continue; }
+    try {
+      await d.ref.set({ businessId: bid, updatedAt: now }, { merge: true });
+      teamToBusiness.set(d.id, bid!);
+      attached++;
+    } catch (err: any) {
+      errors.push(`team ${d.id}: ${String(err?.message || err).slice(0, 200)}`);
+    }
+  }
+
+  // ── publicTenants: the ONLY world-readable slice of tenant metadata ──
+  let subdomains = 0;
+  if (!opts?.dryRun) {
+    for (const d of bizSnap.docs) {
+      const b = d.data() as any;
+      const sub = typeof b.portalSubdomain === 'string' ? b.portalSubdomain.trim().toLowerCase() : '';
+      if (!sub) continue;
+      // A team of that business, so portal-created docs get a consistent teamId.
+      let teamId: string | null = null;
+      for (const [tid, bid] of teamToBusiness) if (bid === d.id) { teamId = tid; break; }
+      try {
+        await db.collection('publicTenants').doc(sub).set({
+          businessId: d.id,
+          teamId,
+          name: b.name || null,
+          portalSubdomain: sub,
+          updatedAt: now,
+        }, { merge: true });
+        subdomains++;
+      } catch (err: any) {
+        errors.push(`publicTenants/${sub}: ${String(err?.message || err).slice(0, 200)}`);
+      }
+    }
+  }
+
+  return {
+    teams: teamsSnap.size, alreadyOk, attached, businessesCreated, subdomains,
+    errors, dryRun: !!opts?.dryRun,
+  };
+}
+
+// ── JOB: backfill-tenant-keys ────────────────────────────────────────────────
+// Stamps the tenant key on collections whose reads are being hardened but which
+// were never part of the Phase-2 businessId backfill: `channels` (chat), and the
+// identity/structure docs `userProfiles` + `clientPortalAccess`. A doc without the
+// key is invisible to a business-scoped query, so this MUST run before the matching
+// rules are deployed (see workspace/SECURITY_RULES_CUTOVER_RUNBOOK.md).
+async function runBackfillTenantKeys(opts?: { dryRun?: boolean }) {
+  const now = admin.firestore.Timestamp.now();
+  const [teamsSnap, membersSnap, customersSnap] = await Promise.all([
+    db.collection('teams').get(),
+    db.collection('teamMembers').get(),
+    db.collection('customers').get(),
+  ]);
+  const teamToBusiness = new Map<string, string>();
+  for (const d of teamsSnap.docs) {
+    const b = (d.data() as any).businessId;
+    teamToBusiness.set(d.id, b || d.id);
+  }
+  const memberByUid = new Map<string, any>();
+  for (const d of membersSnap.docs) {
+    const m = d.data() as any;
+    if (m.userId && !memberByUid.has(m.userId)) memberByUid.set(m.userId, m);
+  }
+  const customerById = new Map<string, any>();
+  for (const d of customersSnap.docs) customerById.set(d.id, d.data());
+
+  const results: Record<string, { scanned: number; updated: number; unresolved: number }> = {};
+
+  // channels — tenant from the channel's teamId
+  {
+    const snap = await db.collection('channels').get();
+    let updated = 0, unresolved = 0;
+    for (const d of snap.docs) {
+      const c = d.data() as any;
+      if (c.businessId) continue;
+      const bid = c.teamId ? teamToBusiness.get(c.teamId) || c.teamId : null;
+      if (!bid) { unresolved++; continue; }
+      if (!opts?.dryRun) await d.ref.set({ businessId: bid, updatedAt: now }, { merge: true });
+      updated++;
+    }
+    results.channels = { scanned: snap.size, updated, unresolved };
+  }
+
+  // userProfiles — tenant from the user's membership
+  {
+    const snap = await db.collection('userProfiles').get();
+    let updated = 0, unresolved = 0;
+    for (const d of snap.docs) {
+      const p = d.data() as any;
+      if (p.businessId) continue;
+      const m = p.userId ? memberByUid.get(p.userId) : null;
+      const bid = m?.businessId || (m?.teamId ? teamToBusiness.get(m.teamId) : null);
+      if (!bid) { unresolved++; continue; }
+      if (!opts?.dryRun) {
+        await d.ref.set({ businessId: bid, ...(m?.teamId ? { teamId: m.teamId } : {}), updatedAt: now }, { merge: true });
+      }
+      updated++;
+    }
+    results.userProfiles = { scanned: snap.size, updated, unresolved };
+  }
+
+  // clientPortalAccess — tenant from the linked customer
+  {
+    const snap = await db.collection('clientPortalAccess').get();
+    let updated = 0, unresolved = 0;
+    for (const d of snap.docs) {
+      const a = d.data() as any;
+      if (a.businessId) continue;
+      const c = a.customerId ? customerById.get(a.customerId) : null;
+      const bid = c?.businessId || (c?.teamId ? teamToBusiness.get(c.teamId) : null) || (a.teamId ? teamToBusiness.get(a.teamId) : null);
+      if (!bid) { unresolved++; continue; }
+      if (!opts?.dryRun) await d.ref.set({ businessId: bid, updatedAt: now }, { merge: true });
+      updated++;
+    }
+    results.clientPortalAccess = { scanned: snap.size, updated, unresolved };
+  }
+
+  const totalUpdated = Object.values(results).reduce((n, r) => n + r.updated, 0);
+  return { results, totalUpdated, dryRun: !!opts?.dryRun };
+}
+
+// ── JOB: sync-tenant-claims ─────────────────────────────────────────────────
+// Materialises bid/tid/roles onto every member's Auth token, so Firestore rules can
+// stop trusting the client-written users/{uid} document. Users must refresh their ID
+// token (sign out/in, or the app's automatic getIdToken(true)) to pick it up.
+async function runSyncTenantClaims(opts?: { dryRun?: boolean }) {
+  const membersSnap = await db.collection('teamMembers').get();
+  const uids = new Map<string, string>(); // uid → email
+  for (const d of membersSnap.docs) {
+    const m = d.data() as any;
+    if (m.userId && m.status !== 'Inactive') uids.set(m.userId, m.email || '');
+  }
+  let synced = 0;
+  const errors: string[] = [];
+  for (const [uid, email] of uids) {
+    if (opts?.dryRun) { synced++; continue; }
+    try {
+      await syncTenantClaims(uid, email || undefined);
+      synced++;
+    } catch (err: any) {
+      errors.push(`${uid}: ${String(err?.message || err).slice(0, 160)}`);
+    }
+  }
+  return { users: uids.size, synced, errors, dryRun: !!opts?.dryRun };
+}
+
 // ── JOB: backfill-customerid (Phase 4.3b Wave 3) ─────────────────────────────
 // Stamps customerId onto parent-linked child records so portal clients can read
 // their own data under server-side RLS (isPortalClientFor). Staff isolation uses
@@ -2360,8 +2624,7 @@ async function runInquiryMaterialsReminders() {
   const tsCache = new Map<string, any>();
   const getTeamSettings = async (teamId: string) => {
     if (tsCache.has(teamId)) return tsCache.get(teamId);
-    const d = await db.collection('teamSettings').doc(teamId).get();
-    const data = d.exists ? d.data() : null;
+    const data = await getTeamConfig(teamId);
     tsCache.set(teamId, data);
     return data;
   };
@@ -2676,6 +2939,36 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'backfill-customerid':
         result = await runBackfillCustomerId({ reset: req.query.reset === '1' });
         break;
+      // ── Tenant-isolation hardening jobs (super-admin only: they rewrite tenant
+      // keys, move credentials and mint custom claims across the whole platform) ──
+      case 'migrate-team-secrets': {
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runMigrateTeamSecrets({ dryRun: req.query.dryRun === '1' });
+        break;
+      }
+      case 'tenant-hierarchy': {
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runTenantHierarchy({ dryRun: req.query.dryRun === '1' });
+        break;
+      }
+      case 'backfill-tenant-keys': {
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runBackfillTenantKeys({ dryRun: req.query.dryRun === '1' });
+        break;
+      }
+      case 'sync-tenant-claims': {
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runSyncTenantClaims({ dryRun: req.query.dryRun === '1' });
+        break;
+      }
       case 'project-completion-reminder':
         result = await runProjectCompletionReminder();
         break;

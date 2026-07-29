@@ -35,12 +35,14 @@ const ConversationOwnerBar: React.FC<{ channelId: string }> = ({ channelId }) =>
 
   const { data: conversation } = useDocument<Conversation>('conversations', channelId || undefined);
   const { data: customer } = useDocument<any>('customers', customerId || undefined);
+  // Business-scoped: an unscoped read of teamMembers/teams is denied outright by the
+  // hardened rules (they would touch other tenants' documents), and this bar only ever
+  // needs the active tenant's staff anyway.
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
     skipTeamFilter: true,
-    skipBusinessFilter: true,
   });
-  const { data: teams } = useCollection<any>('teams', { skipTeamFilter: true, skipBusinessFilter: true });
+  const { data: teams } = useCollection<any>('teams', { skipTeamFilter: true });
 
   const routingMembers: RoutingMember[] = useMemo(
     () => (teamMembers || []).map((m) => ({

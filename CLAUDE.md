@@ -69,6 +69,10 @@
 | `expenses` | Business expenses |
 | `timeEntries` | Time tracking |
 | `services` | Service catalog |
+| `products` | Shop products (variants, inventory, SEO) |
+| `productCategories` / `productBrands` | Shop catalog taxonomy |
+| `stockMovements` | Append-only inventory ledger |
+| `shopOrders` | Shop orders (portal + back office) |
 | `serviceInquiries` | Landing page form submissions |
 | `standups` | Morning standup entries |
 | `dailyReports` | Daily staff reports |
@@ -78,11 +82,36 @@
 
 ## Key Architectural Rules
 
-### Data Scoping
-- All collections are **team-scoped** via `teamId` field.
-- `useCollection()` hook from `useFirestore.ts` automatically applies `teamId` filter.
-- Use `skipTeamFilter: true` only for portal views and cross-team lookups.
-- `setGlobalTeamId()` / `getGlobalTeamId()` manage the active team context.
+### Data Scoping — two-level tenancy (business > team)
+
+**`businessId` is THE tenant/isolation key. `teamId` is a DEPARTMENT INSIDE one business**
+(required + immutable on `teams`; a team can never exist outside a business or move
+between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_ENTERPRISE.md`.
+
+- `useCollection()` (`useFirestore.ts`) auto-applies `where('businessId','==',active)` to
+  everything in `businessIsolatedAlways` — including `teams`, `userProfiles`, `channels`,
+  `clientPortalAccess`. `setGlobalBusinessId()` / `getGlobalBusinessId()` hold the context.
+- **Firestore rules are NOT filters**: an unscoped query over a scoped collection is
+  denied outright. Client scoping and rules must always agree.
+- `skipBusinessFilter: true` is only for identity bootstrap (`usePermissions`) and the
+  portal — and a portal read MUST then constrain itself (own uid/email, or its own
+  `businessId`), or the `isTeamScoped && !scopeId` guard leaves it loading forever.
+- Authorization comes from **server-minted custom claims**, not from a client document:
+  `bid` (businessId = proof of STAFF membership), `tid`, `roles`, `cid` (portal
+  customerId), `pbid` (portal client's tenant — deliberately NOT `bid`), `superAdmin`.
+  Minted by `api/_tenantClaims.ts`; reconciled client-side by
+  `ensureTenantClaims()` (`src/lib/tenantClaims.ts`). `users/{uid}` remains only as a
+  membership-backed fallback for tokens that predate the rollout.
+- **Credentials never live in `teamSettings`** (it is readable by the whole business).
+  They go to `teamSecrets/{teamId}` (`read, write: if false`) via
+  `POST /api/tenant-secrets`; the UI only sees `has*` booleans. Server code reads them
+  with `getTeamConfig()` (`api/_tenantConfig.ts`), never `teamSettings` directly.
+- The **client portal never reads `teamMembers`**. Notification recipients, conversation
+  routing and the sales follow-up task are resolved server-side by `POST /api/notify-staff`.
+- Adding a collection? → `businessIsolatedAlways` + stamp `businessId` on create + a rule
+  using `isBusinessMember(resource.data.businessId)` + a negative cross-tenant test in
+  `scripts/firestore-rules.test.mjs` (35 tests; run them in the emulator before any
+  `firebase deploy --only firestore:rules`).
 
 ### Import Paths
 - Use **relative paths** for all local imports (e.g., `'../components/ui/card'`).
@@ -96,9 +125,42 @@
 - `dialog.tsx` lives at `src/components/ui/dialog/index.tsx` (moved for Linux compatibility).
 - All views are **lazy-loaded** via `lazyRetry()` wrapper for chunk resilience.
 
+### Modules (activation & SaaS plan gating)
+- **`src/lib/modules.ts` is the single source of truth** for what a module is: id,
+  route(s), label, `permissionKey`, `minPlan`, `optional`, `defaultOff`, group.
+- Three gates, resolved together by `moduleBlockReason()`:
+  1. **permission** — the user's role must grant `permissionKey`;
+  2. **plan** — `businesses.plan` must reach `minPlan` (`trial` ranks highest so trials
+     can evaluate everything; an unknown plan is treated as trial, never as locked);
+  3. **toggle** — the path must not be in `businesses.disabledModules`.
+- `useModules()` reads/writes that state; `<ModuleGate moduleId="…">` guards routes
+  (use it **instead of** `<PermissionGate>` — the permission check is in the registry).
+- Consumers: Sidebar, MobileBottomNav, CommandPalette, TenantsView (super-admin
+  per-tenant chips), Cilësimet → **Modulet** (owner self-service via
+  `ModulesSettingsPanel`). Adding a module to the registry wires all of them.
+- Firestore rules only let the business **owner** write `businesses/{id}`, so a
+  non-owner admin gets a read-only module manager.
+
+### Shop / Products module (`id: 'shop'`, `minPlan: 'pro'`, off by default)
+- Staff: `/app/products` (catalog, inventory, taxonomy tabs) + `/app/shop-orders`.
+- Client portal: `/portal/shop` (catalog → cart → order). The "Dyqani" portal nav
+  item appears only when the tenant has ≥1 portal-visible product.
+- Pure logic lives in `src/lib/shop/` and is unit-tested (no Firestore):
+  `pricing.ts` (variant/tier resolution, net-vs-gross tax, order totals, margin),
+  `inventory.ts` (stock state, fulfilment checks, movement signs, valuation),
+  `variants.ts` (option axes → variant matrix, preserving typed-in data),
+  `product.ts` (slug/SKU/order numbering, validation, CSV mapping).
+- Stock is never set directly — every change is a `stockMovements` entry, and orders
+  decrement stock once, guarded by `shopOrder.stockApplied`.
+- Order lines are price **snapshots**, so later catalog edits never rewrite history.
+
 ### Roles & Permissions
 - Roles: `Admin`, `Manager`, `Sales`, `SalesAgent`, `Member`, `Viewer`
 - Permission checks via `usePermissions()` hook and `<PermissionGate>` component.
+- Adding a `canAccessX` flag means touching: `UserPermissions`, `fullAccessPermissions`,
+  `restrictedPermissions`, every role branch in `usePermissions.ts`, `simulateRole` in
+  `PermissionsContext.tsx`, `MODULES`/`DEFAULT_TEMPLATES` in `SettingsView.tsx`,
+  `TeamMember`/`TeamInvite` types, TeamsView checkboxes, and `createTenant.ts`.
 - Client portal users are separate — they use `clientPortalAccess` collection.
 
 ---

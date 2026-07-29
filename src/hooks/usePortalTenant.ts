@@ -1,6 +1,17 @@
 import { useMemo } from 'react';
-import { useCollection } from './useFirestore';
-import type { Business, Team } from '../types';
+import { useDocument } from './useFirestore';
+
+/**
+ * `publicTenants/{subdomain}` — the ONLY world-readable slice of tenant metadata.
+ * Written by the server (Relax CRM subdomain editor + the `tenant-hierarchy` job);
+ * `read: if true`, `write: if false` in Firestore rules.
+ */
+export interface PublicTenant {
+  businessId: string;
+  teamId: string | null;
+  name?: string | null;
+  portalSubdomain?: string;
+}
 
 /**
  * Resolves the portal tenant from the current hostname (subdomain-per-tenant).
@@ -51,25 +62,17 @@ export function usePortalTenant(): PortalTenant {
     []
   );
 
-  // businesses/teams are not team-scoped, so these read freely (auth only).
-  const { data: bizMatches, loading: bizLoading } = useCollection<Business>('businesses', {
-    skip: !subdomain,
-    where: subdomain ? [{ field: 'portalSubdomain', operator: '==', value: subdomain }] : undefined,
-    skipTeamFilter: true,
-  });
-  const tenantBusinessId = bizMatches?.[0]?.id || null;
-
-  const { data: teamMatches, loading: teamLoading } = useCollection<Team>('teams', {
-    skip: !tenantBusinessId,
-    where: tenantBusinessId ? [{ field: 'businessId', operator: '==', value: tenantBusinessId }] : undefined,
-    skipTeamFilter: true,
-  });
-  const tenantTeamId = teamMatches?.[0]?.id || null;
+  // Resolved from `publicTenants/{subdomain}` — a deliberately minimal, PUBLIC map
+  // (businessId, teamId, name) maintained by the server. Previously this read the
+  // `businesses` and `teams` collections directly, which is exactly why both had to
+  // stay `read: if isAuth()` (i.e. every tenant's record readable by anyone signed
+  // in). With the map in its own collection, both can be locked to their members.
+  const { data: tenantDoc, loading } = useDocument<PublicTenant>('publicTenants', subdomain || undefined);
 
   return {
     subdomain,
-    tenantBusinessId,
-    tenantTeamId,
-    loading: !!subdomain && (bizLoading || (!!tenantBusinessId && teamLoading)),
+    tenantBusinessId: tenantDoc?.businessId || null,
+    tenantTeamId: tenantDoc?.teamId || null,
+    loading: !!subdomain && loading,
   };
 }

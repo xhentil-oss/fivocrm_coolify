@@ -52,7 +52,7 @@ const timeAgo = (date: Date): string => {
 };
 
 const PortalDashboard: React.FC = () => {
-  const { customerId, isLoading: portalLoading } = useClientPortal();
+  const { customerId, businessId: portalBusinessId, isLoading: portalLoading } = useClientPortal();
   const { user } = useAuth();
   const { toast } = useToast();
 
@@ -122,7 +122,15 @@ const PortalDashboard: React.FC = () => {
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });
-  useCollection<Service>('services', { skipTeamFilter: true });
+  useCollection<Service>('services', {
+    // The service catalogue is tenant data: scope it to the client's OWN business.
+    // Reading it unscoped (the old `skipTeamFilter` behaviour) returned every
+    // tenant's catalogue and pricing to any signed-in client.
+    skip: !portalBusinessId,
+    where: portalBusinessId ? [{ field: 'businessId', operator: '==', value: portalBusinessId }] : undefined,
+    skipTeamFilter: true,
+    skipBusinessFilter: true,
+  });
 
   const { data: rawRequests } = useCollection<ClientRequest>('clientRequests', {
     skip: !customerId,

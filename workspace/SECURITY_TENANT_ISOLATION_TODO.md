@@ -1,5 +1,27 @@
 # CRITICAL — Firestore rules tenant-isolation remediation
 
+> ## ⚠️ SUPERSEDED — see `workspace/TENANT_ISOLATION_ENTERPRISE.md`
+>
+> Every item below is now **RESOLVED** (Jul 2026 enterprise-hardening pass), and the
+> "Root cause" section is out of date in two ways:
+>
+> 1. `users/{uid}` is no longer freely self-writable — the Jul 20 cutover validates the
+>    tenant keys on write (`usersTenantOk`), and the boundary now comes from
+>    server-minted custom claims (`bid`/`tid`/`roles`/`cid`/`pbid`) with the users doc
+>    only as a membership-backed fallback.
+> 2. The vector that actually stayed open was not self-attestation but **invite forgery**:
+>    `teamInvites` was client-creatable, so a forged invite + `/api/accept-invite`
+>    granted an Admin membership in any tenant. That is fixed (provenance check +
+>    locked invite rules), together with the credential leak via `teamSettings`, the
+>    staff/salary leak via `teamMembers`, and all ~15 remaining `read: if isAuth()`
+>    collections.
+>
+> Keep this file only as the historical record of the audit. The current architecture,
+> the residual work (compensation split), and the DEPLOY RUNBOOK live in
+> `workspace/TENANT_ISOLATION_ENTERPRISE.md`.
+
+---
+
 > Found in the Jul 2026 full-platform QA/security audit. These are the highest-severity
 > findings, but they **cannot be safely deployed blind** — a bad `firestore.rules`
 > deploy locks real tenants out of production. Each item below needs a coordinated

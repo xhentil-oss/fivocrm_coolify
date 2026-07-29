@@ -17,11 +17,29 @@ export interface MetaChannel {
   label: string;
   phone: string;
   phoneNumberId: string;
+  /** Only ever populated in the Settings form while typing a NEW token. The stored
+   *  value lives in `teamSecrets.metaChannelTokens[phoneNumberId]` (server-only). */
   accessToken: string;
   businessAccountId?: string;
 }
 
+/**
+ * NON-SECRET tenant configuration, stored at `teamSettings/{teamId}` and readable
+ * by members of the team's business.
+ *
+ * Credentials are NOT here — they live in `teamSecrets/{teamId}`, which Firestore
+ * rules deny to every client (see api/_tenantConfig.ts). The `has*` booleans below
+ * are the only thing the UI learns about them. Write them via
+ * `saveTenantSecrets()` (src/lib/tenantSecrets.ts), never `saveTeamSettings()`.
+ */
 export interface TeamSettings {
+  // ── credential presence markers (mirrored by the server on vault writes) ──
+  hasAiApiKey?: boolean;
+  hasEmailApiKey?: boolean;
+  hasEmailSmtpPass?: boolean;
+  hasWhatsappVpsSecret?: boolean;
+  hasMetaWebhookVerifyToken?: boolean;
+  hasMetaChannelTokens?: boolean;
   // Company identity (used in contract templates)
   companyName?: string;
   companyAddress?: string;
@@ -34,9 +52,11 @@ export interface TeamSettings {
   usdAllRate?: string;
   whatsappEnabled?: boolean;
   whatsappVpsUrl?: string;
+  /** @deprecated moved to teamSecrets — never read/written from the client. */
   whatsappVpsSecret?: string;
   metaEnabled?: boolean;
   metaChannels?: MetaChannel[];
+  /** @deprecated moved to teamSecrets. */
   metaWebhookVerifyToken?: string;
   metaPhoneNumberIds?: string[];
   // WhatsApp automation (Faza 4)
@@ -66,12 +86,14 @@ export interface TeamSettings {
   taskListOrder?: string[];
   // AI Assistant (FivoAI) — configured per-team from Settings → Integrime
   aiProvider?: 'gemini' | 'openai';
-  aiApiKey?: string;        // stored in Firestore; read server-side by /api/ai-chat
+  /** @deprecated moved to teamSecrets (server-only). */
+  aiApiKey?: string;
   aiModel?: string;         // optional model override (e.g. gemini-2.5-flash, gpt-4o-mini)
   // Email marketing provider — configured per-team from Settings → Integrime.
   // Read server-side by api/_mailer.ts (via teamSettings) when sending campaigns.
   emailProvider?: 'resend' | 'sendgrid' | 'mailgun' | 'brevo' | 'smtp';
-  emailApiKey?: string;         // Resend / SendGrid / Mailgun API key
+  /** @deprecated moved to teamSecrets (server-only). */
+  emailApiKey?: string;
   emailFromEmail?: string;      // verified sender address (e.g. marketing@domain.com)
   emailFromName?: string;       // default display name
   emailMailgunDomain?: string;  // Mailgun only: sending domain
@@ -79,6 +101,7 @@ export interface TeamSettings {
   emailSmtpHost?: string;       // custom SMTP (falls back to env SMTP_* if empty)
   emailSmtpPort?: number;
   emailSmtpUser?: string;
+  /** @deprecated moved to teamSecrets (server-only). */
   emailSmtpPass?: string;
   // Auto-reminder e-mails to clients whose submitted questionnaire is still
   // missing materials (logo/photos/services/…). Handled by the cron job
@@ -90,10 +113,31 @@ export interface TeamSettings {
   leadCadenceDays?: number[];
 }
 
-/** Write partial teamSettings to Firestore (merge, not overwrite). */
+/** Credential fields that must never be written to `teamSettings` (see tenantSecrets). */
+const SECRET_FIELDS = [
+  'aiApiKey', 'emailApiKey', 'emailSmtpPass', 'whatsappVpsSecret', 'metaWebhookVerifyToken',
+] as const;
+
+/**
+ * Write partial teamSettings to Firestore (merge, not overwrite).
+ *
+ * Credential fields are stripped defensively: `teamSettings` is readable by every
+ * member of the business, so a secret written here would be exposed. Use
+ * `saveTenantSecrets()` for those.
+ */
 export async function saveTeamSettings(teamId: string, partial: Partial<TeamSettings>): Promise<void> {
+  const safe: Record<string, any> = { ...partial };
+  for (const f of SECRET_FIELDS) {
+    if (f in safe) {
+      console.warn(`[teamSettings] refusing to store credential "${f}" — use saveTenantSecrets()`);
+      delete safe[f];
+    }
+  }
+  if (Array.isArray(safe.metaChannels)) {
+    safe.metaChannels = safe.metaChannels.map(({ accessToken: _t, ...rest }: any) => rest);
+  }
   const docRef = doc(db, 'teamSettings', teamId);
-  await setDoc(docRef, { ...partial, updatedAt: serverTimestamp() }, { merge: true });
+  await setDoc(docRef, { ...safe, updatedAt: serverTimestamp() }, { merge: true });
 }
 
 /**
@@ -142,10 +186,6 @@ export function useTeamSettingsSync(): void {
 
       if (settings.whatsappVpsUrl !== undefined) {
         localStorage.setItem('whatsapp_vps_url', settings.whatsappVpsUrl);
-      }
-
-      if (settings.whatsappVpsSecret !== undefined) {
-        localStorage.setItem('whatsapp_vps_secret', settings.whatsappVpsSecret);
       }
 
       if (settings.cronSettings !== undefined) {

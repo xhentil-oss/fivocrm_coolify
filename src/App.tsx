@@ -15,6 +15,7 @@ import { AndroidBackButton } from './components/AndroidBackButton';
 import DailyReportPopup from './components/DailyReportPopup';
 import CommandPalette from './components/CommandPalette';
 import PermissionGate from './components/PermissionGate';
+import ModuleGate from './components/ModuleGate';
 import PendingInvitesBanner from './components/PendingInvitesBanner';
 import { GoogleApiProvider } from './contexts/GoogleApiContext';
 import { PermissionsProvider, usePermissions } from './contexts/PermissionsContext';
@@ -64,6 +65,8 @@ const SettingsView = lazyRetry(() => import('./views/SettingsView'));
 const TenantsView = lazyRetry(() => import('./views/TenantsView'));
 const CustomersView = lazyRetry(() => import('./views/CustomersView'));
 const ServicesView = lazyRetry(() => import('./views/ServicesView'));
+const ProductsView = lazyRetry(() => import('./views/ProductsView'));
+const ShopOrdersView = lazyRetry(() => import('./views/ShopOrdersView'));
 const ServiceInquiriesView = lazyRetry(() => import('./views/ServiceInquiriesView'));
 const ExpensesView = lazyRetry(() => import('./views/ExpensesView'));
 const WorkspaceView = lazyRetry(() => import('./views/WorkspaceView'));
@@ -80,6 +83,7 @@ const PortalProjectsView = lazyRetry(() => import('./views/portal/PortalProjects
 const PortalInquiryView = lazyRetry(() => import('./views/portal/PortalInquiryView'));
 const PortalProjectDetailView = lazyRetry(() => import('./views/portal/PortalProjectDetailView'));
 const PortalQuotesView = lazyRetry(() => import('./views/portal/PortalQuotesView'));
+const PortalShopView = lazyRetry(() => import('./views/portal/PortalShopView'));
 const OnboardingWizard = lazyRetry(() => import('./components/OnboardingWizard'));
 const SeoLandingPage = lazyRetry(() => import('./views/landing/SeoLandingPage'));
 const RealEstateLandingPage = lazyRetry(() => import('./views/landing/RealEstateLandingPage'));
@@ -261,6 +265,7 @@ function AppContent() {
         <Route index element={<Suspense fallback={<LazyFallback />}><PortalDashboard /></Suspense>} />
         <Route path="invoices" element={<Suspense fallback={<LazyFallback />}><PortalInvoicesView /></Suspense>} />
         <Route path="services" element={<Suspense fallback={<LazyFallback />}><PortalServicesView /></Suspense>} />
+        <Route path="shop" element={<Suspense fallback={<LazyFallback />}><PortalShopView /></Suspense>} />
         <Route path="chat" element={<Suspense fallback={<LazyFallback />}><PortalChatView /></Suspense>} />
         {/* Requests removed — chat is now the single support channel. Redirect old links. */}
         <Route path="requests" element={<Navigate to="/portal/chat" replace />} />
@@ -360,6 +365,10 @@ function AppContent() {
                       <Route path="/app/customers" element={<PermissionGate permissionKey="canAccessCustomers"><CustomersView /></PermissionGate>} />
                       <Route path="/app/customers/:customerId" element={<PermissionGate permissionKey="canAccessCustomers"><Customer360View /></PermissionGate>} />
                       <Route path="/app/services" element={<PermissionGate permissionKey="canAccessServices"><ServicesView /></PermissionGate>} />
+                      {/* Shop module — <ModuleGate> enforces permission + plan + per-tenant
+                          toggle, so a disabled module can't be reached by URL either. */}
+                      <Route path="/app/products" element={<ModuleGate moduleId="shop"><ProductsView /></ModuleGate>} />
+                      <Route path="/app/shop-orders" element={<ModuleGate moduleId="shop"><ShopOrdersView /></ModuleGate>} />
                       <Route path="/app/service-inquiries" element={<PermissionGate permissionKey="canAccessCRM"><ServiceInquiriesView /></PermissionGate>} />
                       <Route path="/app/expenses" element={<PermissionGate permissionKey="canAccessExpenses"><ExpensesView /></PermissionGate>} />
                       <Route path="/app/workspace" element={<PermissionGate permissionKey="canAccessProjects"><WorkspaceView /></PermissionGate>} />

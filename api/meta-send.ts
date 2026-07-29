@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminAuth, adminDb, Timestamp } from './_firebaseAdmin.js';
+import { getTeamConfig } from './_tenantConfig.js';
 
 /**
  * Send a WhatsApp message via Meta Cloud API.
@@ -102,11 +103,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // Load Meta credentials from team settings
-  const settingsSnap = await adminDb.collection('teamSettings').doc(teamId).get();
-  if (!settingsSnap.exists) {
+  // Access tokens live in teamSecrets (client-unreadable) — getTeamConfig merges them.
+  const settings = await getTeamConfig(teamId);
+  if (!settings || Object.keys(settings).length === 0) {
     return res.status(404).json({ error: 'Team settings nuk u gjetën' });
   }
-  const settings = settingsSnap.data()!;
 
   // If channelPhone is specified, find matching channel. Otherwise use first channel.
   let accessToken: string | undefined;

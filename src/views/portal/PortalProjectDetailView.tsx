@@ -20,6 +20,7 @@ import {
 } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
 import type { Project, Task, TaskComment, TeamMember } from '../../types';
+import { notifyStaff } from '../../lib/notifyStaff';
 
 interface ProjectComment {
   id: string;
@@ -35,7 +36,7 @@ const PortalProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { customerId } = useClientPortal();
+  const { customerId, businessId: portalBusinessId } = useClientPortal();
   const { toast } = useToast();
   const [activeTab, setActiveTab] = useState('overview');
   const [commentText, setCommentText] = useState('');
@@ -103,14 +104,15 @@ const PortalProjectDetailView: React.FC = () => {
     });
   }, [rawComments]);
 
-  // Team members for notifications
-  const { data: allTeamMembers } = useCollection<TeamMember>('teamMembers', {
-    where: [{ field: 'status', operator: '==', value: 'Active' }],
-    skipTeamFilter: true, // portal client has no businessId → avoids the loading-forever guard
+  // The portal never reads `teamMembers` — notification recipients are resolved
+  // server-side within the client's own business (/api/notify-staff).
+  // Comment display names come from `userProfiles`, scoped to that same business.
+  const { data: userProfiles } = useCollection<any>('userProfiles', {
+    skip: !portalBusinessId,
+    where: portalBusinessId ? [{ field: 'businessId', operator: '==', value: portalBusinessId }] : undefined,
+    skipTeamFilter: true,
+    skipBusinessFilter: true,
   });
-
-  // User profiles for comment display names
-  const { data: userProfiles } = useCollection<any>('userProfiles');
 
   const notificationMutation = useMutation<any>('notifications');
 
@@ -184,7 +186,7 @@ const PortalProjectDetailView: React.FC = () => {
 
     try {
       // Use addDoc — portal users can't use useMutation.create() on team-scoped collections
-      const commentTeamId = allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
+      const commentTeamId = (project as any)?.teamId || null;
       await addDoc(collection(db, 'projectComments'), {
         projectId,
         content: commentText.trim(),
@@ -199,25 +201,18 @@ const PortalProjectDetailView: React.FC = () => {
         createdByUserId: user.uid,
       });
 
-      // Notify project team
-      if (project?.teamId && allTeamMembers) {
-        const projectTeamMembers = allTeamMembers.filter(
-          m => m.teamId === project.teamId && m.status === 'Active'
-        );
-        for (const member of projectTeamMembers) {
-          notificationMutation.create({
-            userId: member.userId,
-            type: 'project_comment',
-            title: `Koment i ri nga klienti — ${project.name}`,
-            message: commentText.length > 100 ? commentText.slice(0, 100) + '...' : commentText,
-            isRead: false,
-            actionType: 'navigate',
-            actionUrl: `/app/projects/${projectId}`,
-            actionLabel: 'Shiko Projektin',
-          } as any).catch(err => console.error('[Notifications] project_comment dërgim dështoi:', err));
-        }
+      // Notify the project's staff — resolved server-side inside this tenant.
+      if (project) {
+        void notifyStaff({
+          type: 'project_comment',
+          title: `Koment i ri nga klienti — ${project.name}`,
+          message: commentText.length > 100 ? commentText.slice(0, 100) + '...' : commentText,
+          actionUrl: `/app/projects/${projectId}`,
+          actionLabel: 'Shiko Projektin',
+          projectId: projectId || undefined,
+          responsibleUserId: (project as any).responsibleUserId || null,
+        });
       }
-
       setCommentText('');
       toast({ title: 'Komenti u dërgua' });
     } catch {
@@ -232,7 +227,7 @@ const PortalProjectDetailView: React.FC = () => {
 
     setSendingTaskComment(taskId);
     try {
-      const resolvedTeamId = allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
+      const resolvedTeamId = (project as any)?.teamId || null;
       await addDoc(collection(db, 'taskComments'), {
         taskId,
         content: text,
@@ -247,29 +242,18 @@ const PortalProjectDetailView: React.FC = () => {
         updatedAt: Timestamp.now(),
       });
 
-      // Notify task assignee + project team members
+      // Notify the task assignee + the project's staff — resolved server-side inside
+      // this tenant (the portal must not read the staff directory).
       const task = tasks.find(t => t.id === taskId);
-      if (project?.teamId && allTeamMembers) {
-        const notifyIds = new Set<string>();
-        // Task assignee
-        if (task?.assignedToUserId) notifyIds.add(task.assignedToUserId);
-        // All active team members of the project
-        allTeamMembers
-          .filter(m => m.teamId === project.teamId && m.status === 'Active')
-          .forEach(m => notifyIds.add(m.userId));
-
-        for (const uid of notifyIds) {
-          notificationMutation.create({
-            userId: uid,
-            type: 'project_comment',
-            title: `Koment klienti — ${task?.title || 'Detyrë'}`,
-            message: text.length > 100 ? text.slice(0, 100) + '...' : text,
-            isRead: false,
-            actionUrl: `/app/tasks?task=${taskId}`,
-            actionLabel: 'Shiko Detyrën',
-          } as any).catch(() => {});
-        }
-      }
+      void notifyStaff({
+        type: 'project_comment',
+        title: `Koment klienti — ${task?.title || 'Detyrë'}`,
+        message: text.length > 100 ? text.slice(0, 100) + '...' : text,
+        actionUrl: `/app/tasks?task=${taskId}`,
+        actionLabel: 'Shiko Detyrën',
+        projectId: projectId || undefined,
+        responsibleUserId: task?.assignedToUserId || (project as any)?.responsibleUserId || null,
+      });
 
       setTaskCommentTexts(prev => ({ ...prev, [taskId]: '' }));
       toast({ title: 'Komenti u dërgua' });

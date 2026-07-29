@@ -222,6 +222,10 @@ const JoinInviteView: React.FC = () => {
           await addDoc(collection(db, 'userProfiles'), {
             userId: user.uid,
             displayName: user.displayName || user.email?.split('@')[0] || '',
+            // Tenant keys: the staff directory is business-scoped, so a profile
+            // without them is invisible in mentions/chat name lookups.
+            teamId: invite.teamId,
+            businessId,
             createdAt: Timestamp.now(),
             updatedAt: Timestamp.now(),
             createdByUserId: user.uid,

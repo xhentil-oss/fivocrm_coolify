@@ -385,6 +385,8 @@ export interface TeamMember {
   canAccessChat?: boolean;
   canAccessCustomers?: boolean;
   canAccessServices?: boolean;
+  /** Shop module (products, inventory, orders). */
+  canAccessProducts?: boolean;
   canAccessExpenses?: boolean;
   canAccessProfile?: boolean;
   monthlySalary?: number;
@@ -620,6 +622,282 @@ export interface Service {
   billingPeriod?: string;   // e.g. "në muaj", "një herë"
   featured?: boolean;       // highlight as "Më e zgjedhura"
   teamId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+// ── Shop / Products module (enterprise catalog) ──
+// A `Product` is a sellable good, unlike `Service` (an agency engagement): it has
+// stock, variants, suppliers and shipping. The whole module is toggleable per
+// tenant and plan-gated — see src/lib/modules.ts.
+
+export type ProductType = 'physical' | 'digital' | 'service' | 'bundle';
+export type ProductStatus = 'Draft' | 'Active' | 'Archived';
+/** What happens when stock hits zero. */
+export type StockPolicy = 'deny' | 'backorder' | 'preorder';
+
+/** One configurable axis, e.g. "Madhësia" → ['S','M','L']. Max 3 axes in the UI. */
+export interface ProductOption {
+  name: string;
+  values: string[];
+}
+
+/** A concrete sellable combination of option values. Stored inline on the product. */
+export interface ProductVariant {
+  /** Stable local id (crypto.randomUUID) — variants are an embedded array. */
+  id: string;
+  /** One value per option name, e.g. { 'Madhësia': 'M', 'Ngjyra': 'E zezë' }. */
+  optionValues: Record<string, string>;
+  sku?: string;
+  barcode?: string;
+  /** Overrides the product price when set; undefined → inherit from the product. */
+  price?: number;
+  compareAtPrice?: number;
+  costPrice?: number;
+  stockQty?: number;
+  lowStockThreshold?: number;
+  weightGrams?: number;
+  imageUrl?: string;
+  isActive?: boolean;
+  position?: number;
+}
+
+/** Quantity break (B2B wholesale): ordering >= minQty drops the unit price. */
+export interface ProductPriceTier {
+  minQty: number;
+  unitPrice: number;
+  label?: string;
+}
+
+export interface ProductMedia {
+  url: string;
+  alt?: string;
+  isPrimary?: boolean;
+  position?: number;
+}
+
+/** Free-form spec row rendered in the portal spec table. */
+export interface ProductAttribute {
+  name: string;
+  value: string;
+}
+
+export interface ProductDimensions {
+  lengthCm?: number;
+  widthCm?: number;
+  heightCm?: number;
+}
+
+export interface Product {
+  id: string;
+  // ── Identity ──
+  name: string;
+  slug?: string;
+  sku?: string;
+  /** EAN/UPC/GTIN. */
+  barcode?: string;
+  type?: ProductType;
+  status?: ProductStatus;
+  /** Published to the client-portal shop. Draft/Archived never show regardless. */
+  visibleInPortal?: boolean;
+  shortDescription?: string;
+  /** Rich HTML — always render through sanitizeHtml(). */
+  description?: string;
+  // ── Classification ──
+  categoryId?: string;
+  /** Denormalized so lists/CSV don't need a join. */
+  categoryName?: string;
+  brandId?: string;
+  brandName?: string;
+  tags?: string[];
+  // ── Pricing ──
+  price: number;
+  /** "Was" price — drives the discount badge when higher than price. */
+  compareAtPrice?: number;
+  /** COGS — drives margin reporting. Never exposed to the portal. */
+  costPrice?: number;
+  currency?: 'ALL' | 'EUR' | 'USD' | 'GBP';
+  /** VAT percent (Albania: 20). */
+  taxRatePercent?: number;
+  /** true → `price` already includes tax (gross pricing). */
+  taxIncluded?: boolean;
+  priceTiers?: ProductPriceTier[];
+  /** Unit of measure label, e.g. 'copë', 'kg', 'litër'. */
+  unit?: string;
+  // ── Inventory ──
+  trackInventory?: boolean;
+  stockQty?: number;
+  lowStockThreshold?: number;
+  stockPolicy?: StockPolicy;
+  warehouse?: string;
+  supplierName?: string;
+  supplierSku?: string;
+  leadTimeDays?: number;
+  reorderPoint?: number;
+  reorderQty?: number;
+  // ── Variants ──
+  options?: ProductOption[];
+  variants?: ProductVariant[];
+  // ── Media ──
+  images?: ProductMedia[];
+  // ── Shipping / physical ──
+  weightGrams?: number;
+  dimensions?: ProductDimensions;
+  requiresShipping?: boolean;
+  // ── Digital ──
+  downloadUrl?: string;
+  downloadLimit?: number;
+  licenseKeyRequired?: boolean;
+  // ── Bundle (type === 'bundle') ──
+  bundleItems?: { productId: string; quantity: number }[];
+  // ── Merchandising ──
+  featured?: boolean;
+  position?: number;
+  minOrderQty?: number;
+  maxOrderQty?: number;
+  relatedProductIds?: string[];
+  warrantyMonths?: number;
+  attributes?: ProductAttribute[];
+  // ── SEO ──
+  metaTitle?: string;
+  metaDescription?: string;
+  // ── Rollups (denormalized counters, written by order fulfilment) ──
+  soldCount?: number;
+  ratingAvg?: number;
+  ratingCount?: number;
+  publishedAt?: Date;
+  teamId?: string;
+  businessId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+/** Catalog category. `parentId` makes it a tree (one level is enough in practice). */
+export interface ProductCategory {
+  id: string;
+  name: string;
+  slug?: string;
+  parentId?: string;
+  description?: string;
+  imageUrl?: string;
+  position?: number;
+  teamId?: string;
+  businessId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export interface ProductBrand {
+  id: string;
+  name: string;
+  logoUrl?: string;
+  website?: string;
+  teamId?: string;
+  businessId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export type StockMovementType = 'in' | 'out' | 'adjustment' | 'sale' | 'return' | 'transfer';
+
+/** Append-only inventory ledger — every stock change is auditable. */
+export interface StockMovement {
+  id: string;
+  productId: string;
+  productName?: string;
+  variantId?: string;
+  variantLabel?: string;
+  type: StockMovementType;
+  /** Signed delta applied to stock (e.g. -3 for a sale). */
+  quantity: number;
+  /** Stock level right after this movement — lets the ledger be read standalone. */
+  balanceAfter?: number;
+  reason?: string;
+  /** Free reference: order number, invoice number, supplier doc… */
+  reference?: string;
+  shopOrderId?: string;
+  unitCost?: number;
+  warehouse?: string;
+  teamId?: string;
+  businessId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+export type ShopOrderStatus =
+  | 'Pending' | 'Confirmed' | 'Processing' | 'Shipped' | 'Delivered' | 'Cancelled' | 'Refunded';
+export type ShopPaymentStatus = 'Unpaid' | 'Partial' | 'Paid' | 'Refunded';
+
+/** Order line — a price snapshot, so later catalog edits never rewrite history. */
+export interface ShopOrderItem {
+  productId: string;
+  variantId?: string;
+  name: string;
+  variantLabel?: string;
+  sku?: string;
+  quantity: number;
+  unitPrice: number;
+  /** Absolute per-line discount in the order currency. */
+  discount?: number;
+  taxRatePercent?: number;
+  taxAmount?: number;
+  /** Net of discount, excluding tax. */
+  total: number;
+  imageUrl?: string;
+}
+
+export interface ShopAddress {
+  fullName?: string;
+  phone?: string;
+  line1?: string;
+  line2?: string;
+  city?: string;
+  postalCode?: string;
+  country?: string;
+  notes?: string;
+}
+
+export interface ShopOrder {
+  id: string;
+  /** Sequential human reference, e.g. 'POR-2026-0007'. */
+  orderNumber: string;
+  customerId?: string;
+  customerName?: string;
+  customerEmail?: string;
+  customerPhone?: string;
+  items: ShopOrderItem[];
+  currency: 'ALL' | 'EUR' | 'USD' | 'GBP';
+  subtotal: number;
+  discountTotal?: number;
+  taxTotal?: number;
+  shippingTotal?: number;
+  total: number;
+  status: ShopOrderStatus;
+  paymentStatus?: ShopPaymentStatus;
+  paymentMethod?: string;
+  shippingAddress?: ShopAddress;
+  shippingMethod?: string;
+  trackingNumber?: string;
+  shippedAt?: Date;
+  deliveredAt?: Date;
+  cancelledAt?: Date;
+  cancelReason?: string;
+  /** Set once converted to an invoice — prevents double billing. */
+  invoiceId?: string;
+  /** true after stock was decremented, so fulfilment stays idempotent. */
+  stockApplied?: boolean;
+  notes?: string;
+  internalNotes?: string;
+  /** 'portal' = placed by the client themselves; 'staff' = entered in the back office. */
+  source?: 'portal' | 'staff';
+  assignedToUserId?: string;
+  teamId?: string;
+  businessId?: string;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
@@ -1156,6 +1434,8 @@ export interface TeamInvite {
   canAccessChat?: boolean;
   canAccessCustomers?: boolean;
   canAccessServices?: boolean;
+  /** Shop module (products, inventory, orders). */
+  canAccessProducts?: boolean;
   canAccessExpenses?: boolean;
   canAccessProfile?: boolean;
   status: 'Pending' | 'Accepted' | 'Rejected' | 'Cancelled';

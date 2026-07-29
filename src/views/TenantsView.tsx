@@ -8,30 +8,21 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Building2, Search, Users, ShieldX, Loader2, Layers, SlidersHorizontal } from 'lucide-react';
-import { doc, updateDoc, Timestamp } from 'firebase/firestore';
+import { doc, updateDoc, setDoc, deleteDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { getTimestampMs } from '../lib/utils';
 import { setupBusinessLayer } from '../lib/businessMigration';
+import { MODULES, PLAN_LABELS, planIncludes } from '../lib/modules';
 import type { Team, TeamMember, Business } from '../types';
 
-// Modules that the super-admin can enable/disable per tenant (nav path → label).
-const TOGGLEABLE_MODULES: { path: string; label: string }[] = [
-  { path: '/app/projects', label: 'Projektet' },
-  { path: '/app/crm', label: 'CRM Leads' },
-  { path: '/app/deals', label: 'Marrëveshjet' },
-  { path: '/app/customers', label: 'Klientët' },
-  { path: '/app/tasks', label: 'Detyrat' },
-  { path: '/app/goals', label: 'Objektivat' },
-  { path: '/app/services', label: 'Shërbimet' },
-  { path: '/app/invoices', label: 'Faturat' },
-  { path: '/app/contracts', label: 'Kontratat' },
-  { path: '/app/expenses', label: 'Shpenzimet' },
-  { path: '/app/chat', label: 'Chat' },
-  { path: '/app/whatsapp', label: 'WhatsApp' },
-  { path: '/app/price-calculator', label: 'Kalkulatori' },
-  { path: '/app/landing-pages', label: 'Landing Pages' },
-  { path: '/app/bonus', label: 'Bonuset' },
-];
+// Modules the super-admin can enable/disable per tenant. Sourced from the shared
+// registry (src/lib/modules.ts) so a new module is toggleable the moment it is
+// registered — this list used to drift out of sync with the Sidebar by hand.
+const TOGGLEABLE_MODULES = MODULES.filter(m => m.optional).map(m => ({
+  path: m.path,
+  label: m.label,
+  minPlan: m.minPlan,
+}));
 
 // Super-admin "Relax CRM" panel: lists every tenant (team) — i.e. FivoCRM's own
 // customers — across all workspaces. Read-only for now: editing a tenant's
@@ -68,6 +59,43 @@ const TenantsView: React.FC = () => {
   const [portalBackfilling, setPortalBackfilling] = useState(false);
   const [cidBackfilling, setCidBackfilling] = useState(false);
   const [cidProgress, setCidProgress] = useState('');
+  // Tenant-isolation hardening jobs (see workspace/TENANT_ISOLATION_ENTERPRISE.md).
+  const [hardeningJob, setHardeningJob] = useState<string | null>(null);
+
+  /**
+   * Run one of the tenant-hardening migrations. They are super-admin gated server-side
+   * and idempotent, so re-running is safe. Order matters on a first run:
+   *   tenant-hierarchy → backfill-tenant-keys → migrate-team-secrets → sync-tenant-claims
+   */
+  const runHardeningJob = async (job: string, label: string, dryRun = false) => {
+    if (hardeningJob || !user) return;
+    setHardeningJob(job);
+    try {
+      const token = await user.getIdToken(true);
+      const res = await fetch(`/api/cron/run?job=${job}&manual=1${dryRun ? '&dryRun=1' : ''}`, {
+        method: 'GET', headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || `Gabim serveri (${res.status})`);
+      const r = data.result || data;
+      const summary = [
+        r.attached !== undefined && `${r.attached} ekipe u lidhën me biznes`,
+        r.businessesCreated ? `${r.businessesCreated} biznese të krijuara` : null,
+        r.subdomains !== undefined && `${r.subdomains} subdomain-e`,
+        r.totalUpdated !== undefined && `${r.totalUpdated} dokumente u stampuan`,
+        r.teamsTouched !== undefined && `${r.teamsTouched} ekipe · ${r.tokensMoved || 0} token-e në kasafortë`,
+        r.synced !== undefined && `${r.synced}/${r.users} përdorues me claims`,
+      ].filter(Boolean).join(' · ');
+      toast({
+        title: `${label}${dryRun ? ' (provë)' : ''} u krye`,
+        description: summary || 'Pa ndryshime.',
+      });
+    } catch (err: any) {
+      toast({ title: `${label} dështoi`, description: err?.message || 'Provo përsëri.', variant: 'destructive' });
+    } finally {
+      setHardeningJob(null);
+    }
+  };
 
   // Phase 4.3b Wave 3: stamp customerId on parent-linked child records
   // (invoiceItems, tasks, projectComments, taskComments) so portal clients keep
@@ -258,6 +286,23 @@ const TenantsView: React.FC = () => {
     if (sub === (biz.portalSubdomain || '')) return;
     try {
       await updateDoc(doc(db, 'businesses', biz.id), { portalSubdomain: sub || null, updatedAt: Timestamp.now() });
+      // Mirror into `publicTenants/{subdomain}` — the minimal PUBLIC map the portal
+      // uses to resolve <sub>.fivocrm.com → tenant. Without it the portal would need
+      // to read `businesses`, which is now locked to its own members.
+      const prev = (biz.portalSubdomain || '').trim().toLowerCase();
+      if (prev && prev !== sub) {
+        await deleteDoc(doc(db, 'publicTenants', prev)).catch(() => { /* may not exist */ });
+      }
+      if (sub) {
+        const teamId = teams?.find((t: any) => t.businessId === biz.id)?.id || null;
+        await setDoc(doc(db, 'publicTenants', sub), {
+          businessId: biz.id,
+          teamId,
+          name: biz.name || null,
+          portalSubdomain: sub,
+          updatedAt: Timestamp.now(),
+        }, { merge: true });
+      }
       toast({ title: 'Subdomain u ruajt', description: sub ? `${sub}.fivocrm.com/portal` : 'Subdomain u hoq.' });
     } catch (err: any) {
       toast({ title: 'Dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
@@ -345,6 +390,36 @@ const TenantsView: React.FC = () => {
             </Button>
           </div>
         </div>
+
+        <div className="flex items-start gap-3 mt-4 pt-4 border-t border-border/50">
+          <div className="h-9 w-9 rounded-lg bg-primary/10 flex items-center justify-center flex-shrink-0">
+            <ShieldX className="h-4 w-4 text-primary" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-medium text-sm">Izolimi enterprise — migrimet (ekzekuto me radhë)</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              1) <strong>Hierarkia</strong>: çdo ekip brenda një biznesi real + harta publike e subdomain-eve.
+              2) <strong>Çelësat</strong>: businessId në channels/userProfiles/portal-access.
+              3) <strong>Kasaforta</strong>: kredencialet nga teamSettings → teamSecrets (klienti nuk i lexon më).
+              4) <strong>Claims</strong>: bid/tid/roles në token-in e çdo anëtari (pas kësaj: <strong>dil dhe hyr sërish</strong>).
+              Pastaj deploy-o rregullat — hapat në workspace/TENANT_ISOLATION_ENTERPRISE.md.
+            </p>
+          </div>
+          <div className="flex flex-col gap-1.5 flex-shrink-0">
+            <Button size="sm" variant="outline" onClick={() => runHardeningJob('tenant-hierarchy', '1. Hierarkia')} disabled={!!hardeningJob}>
+              {hardeningJob === 'tenant-hierarchy' ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> …</> : '1. Hierarkia'}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => runHardeningJob('backfill-tenant-keys', '2. Çelësat')} disabled={!!hardeningJob}>
+              {hardeningJob === 'backfill-tenant-keys' ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> …</> : '2. Çelësat'}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => runHardeningJob('migrate-team-secrets', '3. Kasaforta')} disabled={!!hardeningJob}>
+              {hardeningJob === 'migrate-team-secrets' ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> …</> : '3. Kasaforta'}
+            </Button>
+            <Button size="sm" variant="outline" onClick={() => runHardeningJob('sync-tenant-claims', '4. Claims')} disabled={!!hardeningJob}>
+              {hardeningJob === 'sync-tenant-claims' ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> …</> : '4. Claims'}
+            </Button>
+          </div>
+        </div>
       </Card>
 
       {/* Summary */}
@@ -401,17 +476,24 @@ const TenantsView: React.FC = () => {
                   <div className="flex flex-wrap gap-1.5">
                     {TOGGLEABLE_MODULES.map(m => {
                       const off = disabled.has(m.path);
+                      // A module above the tenant's plan stays visible but marked, so
+                      // it's obvious why the tenant can't see it even when toggled on.
+                      const planLocked = !planIncludes(b.plan, m.minPlan);
                       return (
                         <button
                           key={m.path}
                           onClick={() => toggleModule(b, m.path)}
+                          title={planLocked ? `Kërkon planin ${PLAN_LABELS[m.minPlan]}` : undefined}
                           className={`px-2.5 py-1 rounded-full text-[11px] font-medium border transition-colors ${
                             off
                               ? 'bg-muted text-muted-foreground border-border line-through'
-                              : 'bg-primary/10 text-primary border-primary/20'
+                              : planLocked
+                                ? 'bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800'
+                                : 'bg-primary/10 text-primary border-primary/20'
                           }`}
                         >
                           {m.label}
+                          {planLocked && !off && ` · ${PLAN_LABELS[m.minPlan]}`}
                         </button>
                       );
                     })}

@@ -5,6 +5,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { collection, addDoc, updateDoc, doc, Timestamp, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { notifyStaff } from '../lib/notifyStaff';
 import type { ClientPortalAccess, Customer } from '../types';
 
 /**
@@ -61,6 +62,10 @@ export function useClientPortal() {
     {
       skip: !user,
       where: user ? [{ field: 'userId', operator: '==', value: user.uid }] : undefined,
+      // Portal clients have no active business; the query is authorized per-document
+      // by `userId == uid` in the hardened clientPortalAccess rule.
+      skipBusinessFilter: true,
+      skipTeamFilter: true,
     }
   );
 
@@ -70,6 +75,9 @@ export function useClientPortal() {
     {
       skip: !user?.email,
       where: user?.email ? [{ field: 'email', operator: '==', value: user.email.toLowerCase() }] : undefined,
+      // Authorized per-document by `email == token.email` in the hardened rule.
+      skipBusinessFilter: true,
+      skipTeamFilter: true,
     }
   );
 
@@ -83,14 +91,12 @@ export function useClientPortal() {
     }
   );
 
-  // Fetch team members to notify admins and resolve teamId
-  const { data: allTeamMembers, loading: teamMembersLoading } = useCollection<any>('teamMembers', {
-    where: [{ field: 'status', operator: '==', value: 'Active' }],
-    // Portal clients have no businessId; without skipTeamFilter the team-scoped
-    // read stays loading forever (useFirestore guards isTeamScoped && !scopeId),
-    // which freezes the whole portal on a spinner.
-    skipTeamFilter: true,
-  });
+  // NOTE: this hook used to read `teamMembers` cross-tenant (skipTeamFilter) to pick
+  // notification recipients and to guess a teamId. That exposed every tenant's staff
+  // records to any signed-in client, and the "first member found" fallback is what
+  // once dropped new clients into an arbitrary tenant. Recipients are now resolved
+  // server-side (/api/notify-staff) and the tenant comes from the subdomain or the
+  // explicit VITE_DEFAULT_* configuration only.
 
   // Filter to get only Active access records
   const activeByUserId = byUserId?.filter(a => a.status === 'Active') || [];
@@ -138,15 +144,13 @@ export function useClientPortal() {
   // Without this fallback, apex-host clients were created with no businessId and
   // became invisible in the business-scoped admin views.
   const resolveBusinessId = useCallback(() => {
+    // Subdomain tenant → configured default → fail closed. There is deliberately no
+    // "look at some team member" fallback: it required a cross-tenant read and landed
+    // new clients in an arbitrary business.
     if (tenantBusinessId) return tenantBusinessId;
     if (DEFAULT_BUSINESS_ID) return DEFAULT_BUSINESS_ID;
-    // Only derive from a team we ACTUALLY resolved (subdomain tenant or configured
-    // default). Never fall back to an arbitrary cross-tenant member's businessId —
-    // that dropped clients into a random business. Unresolved → null (fail closed).
-    const teamId = resolveTeamId();
-    if (!teamId) return null;
-    return allTeamMembers?.find((m: any) => m.teamId === teamId && m.businessId)?.businessId || null;
-  }, [tenantBusinessId, resolveTeamId, allTeamMembers]);
+    return null;
+  }, [tenantBusinessId]);
 
   const createDoc = useCallback(async (collName: string, data: Record<string, any>) => {
     const teamId = resolveTeamId();
@@ -169,7 +173,7 @@ export function useClientPortal() {
   // Auto-create: if no portal access exists, create Customer + Access + Lead
   useEffect(() => {
     if (previewCustomerId) return; // admin preview — never auto-create records
-    if (!user?.email || authLoading || byUserIdLoading || byEmailLoading || customersLoading || teamMembersLoading) return;
+    if (!user?.email || authLoading || byUserIdLoading || byEmailLoading || customersLoading) return;
     if (autoCreating || didAutoCreate.current) return;
     // Block if ANY portal access record already exists (any status), not just Active.
     // This prevents re-creation for users who have Pending/legacy records.
@@ -282,24 +286,16 @@ export function useClientPortal() {
           });
         } catch { /* non-critical — a staff member can pair them from the CRM */ }
 
-        // Notify admin team members — ONLY of this client's tenant. allTeamMembers
-        // is read cross-tenant (skipTeamFilter), so without the businessId filter a
-        // new client would notify EVERY tenant's admins, including the platform
-        // super-admin. Require a resolved businessId; if the tenant can't be
-        // determined we skip notifying entirely rather than spamming all tenants.
-        const notifyBusinessId = resolveBusinessId();
-        const admins = notifyBusinessId
-          ? (allTeamMembers || []).filter((m: any) => m.role === 'Admin' && m.businessId === notifyBusinessId)
-          : [];
-        for (const admin of admins) {
-          createDoc('notifications', {
-            userId: admin.userId,
-            type: 'new_client',
-            title: 'Klient i ri u regjistrua',
-            message: `${displayName} (${user.email}) u regjistrua në portal.`,
-            isRead: false,
-          }).catch(() => { /* non-critical */ });
-        }
+        // Notify the tenant's admins — recipients are resolved server-side from this
+        // client's own customer → businessId, so a new client can never fan out to
+        // other tenants' admins (nor does the browser need the staff directory).
+        void notifyStaff({
+          type: 'new_client',
+          title: 'Klient i ri u regjistrua',
+          message: `${displayName} (${user.email}) u regjistrua në portal.`,
+          actionUrl: '/app/customers',
+          actionLabel: 'Shiko Klientin',
+        });
       }).then(() => {
         _moduleCreatedForUid = user.uid;
         _moduleCreatingForUid = null;
@@ -315,7 +311,7 @@ export function useClientPortal() {
       });
       })(); // end async IIFE
     }
-  }, [user, authLoading, anyByUserId, anyByEmail, byUserIdLoading, byEmailLoading, matchingCustomers, customersLoading, teamMembersLoading, autoCreating, createDoc, allTeamMembers, tenantBusinessId, resolveBusinessId]);
+  }, [user, authLoading, anyByUserId, anyByEmail, byUserIdLoading, byEmailLoading, matchingCustomers, customersLoading, autoCreating, createDoc, tenantBusinessId, resolveBusinessId]);
 
   const access = (activeByUserId.find(a => a.customerId) || activeByUserId[0])
     || (activeByEmail.find(a => a.customerId) || activeByEmail[0])
@@ -361,7 +357,7 @@ export function useClientPortal() {
   }, [user?.uid, resolvedCustomerId]);
 
   // Keep isLoading=true in the gap between "queries done" and "useEffect fires auto-create"
-  const queriesLoaded = !byUserIdLoading && !byEmailLoading && !customersLoading && !teamMembersLoading;
+  const queriesLoaded = !byUserIdLoading && !byEmailLoading && !customersLoading;
   const hasNoAccess = activeByUserId.length === 0 && activeByEmail.length === 0;
   const pendingAutoCreate = !!user?.email && queriesLoaded && hasNoAccess && !autoCreating && !didAutoCreate.current;
 
@@ -372,15 +368,24 @@ export function useClientPortal() {
       portalAccess: null,
       customerId: previewCustomerId,
       businessId: null,
+      teamId: null,
       isLoading: false,
     };
   }
+
+  // The tenant's team (department) for portal-created docs that need a teamId.
+  const resolvedTeamIdOut =
+    (preferredCustomer as any)?.teamId
+    || (access as any)?.teamId
+    || resolveTeamId()
+    || null;
 
   return {
     isClient: !!access || autoCreating || autoCreated,
     portalAccess: access,
     customerId: resolvedCustomerId,
     businessId: resolvedBusinessId,
-    isLoading: authLoading || byUserIdLoading || byEmailLoading || teamMembersLoading || autoCreating || pendingAutoCreate,
+    teamId: resolvedTeamIdOut,
+    isLoading: authLoading || byUserIdLoading || byEmailLoading || autoCreating || pendingAutoCreate,
   };
 }

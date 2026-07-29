@@ -1,7 +1,8 @@
 import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Receipt, MessageSquare, MessageCircle, Target, UserCircle, DollarSign, Shield, FileText, Briefcase, LayoutDashboard, Timer, Award, PieChart, Calculator, Globe, ScrollText, Handshake, Building2, Wallet, ChevronDown, PiggyBank, Megaphone, TrendingUp, Rocket, Share2 } from 'lucide-react';
+import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Receipt, MessageSquare, MessageCircle, Target, UserCircle, DollarSign, Shield, FileText, Briefcase, LayoutDashboard, Timer, Award, PieChart, Calculator, Globe, ScrollText, Handshake, Building2, Wallet, ChevronDown, PiggyBank, Megaphone, TrendingUp, Rocket, Share2, Package } from 'lucide-react';
 import { cn } from '../lib/utils';
+import { isPathEnabled, type PlanKey } from '../lib/modules';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useCollection, useDocument, useGlobalBusinessId } from '../hooks/useFirestore';
@@ -54,6 +55,7 @@ const allNavItems: NavEntry[] = [
   { path: '/app/goals', label: 'Objektivat', icon: Target, permissionKey: 'canAccessGoals' },
   { path: '/app/teams', label: 'Ekipet', icon: UsersRound, permissionKey: 'canAccessTeams' },
   { path: '/app/services', label: 'Shërbimet', icon: Receipt, permissionKey: 'canAccessServices' },
+  { path: '/app/products', label: 'Dyqani', icon: Package, permissionKey: 'canAccessProducts' },
   { path: '/app/service-inquiries', label: 'Kërkesat', icon: FileText, permissionKey: 'canAccessCRM' },
   { path: '/app/contracts', label: 'Kontratat', icon: ScrollText, permissionKey: 'canAccessInvoices' },
   { path: '/app/workspace', label: 'Workspace', icon: Briefcase, permissionKey: 'canAccessProjects' },
@@ -180,22 +182,29 @@ const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile 
     prevUnreadRef.current = unreadChatCount;
   }, [unreadChatCount, unreadDmLoading, unreadClientLoading, playNotificationSound]);
 
-  // Filter nav items based on user permissions
-  // While loading, show only profile to avoid unauthorized flicker
-  // Per-tenant module toggles: hide nav items the super-admin disabled for this
-  // business. Super-admins (no businessId scoping) always see everything.
+  // Filter nav items based on user permissions.
+  // While loading, show only profile to avoid unauthorized flicker.
+  // Module availability (plan tier + per-tenant toggle) is resolved by the shared
+  // registry in lib/modules, so the sidebar and <ModuleGate> can never disagree
+  // about what this tenant has.
   const { data: business } = useDocument<Business>('businesses', businessId || undefined);
   const disabledModules = useMemo(
-    () => new Set((business as any)?.disabledModules || []),
+    () => ((business as any)?.disabledModules as string[] | undefined) || [],
     [business],
   );
+  const plan = ((business as any)?.plan as PlanKey) || 'trial';
 
   const canSeeLeaf = useCallback((item: NavItem) => {
     const permKey = item.permissionKey as keyof typeof permissions;
     if (permissions[permKey] !== true) return false;
-    // super-admin bypasses module toggles
-    return permissions.isSuperAdmin || !disabledModules.has(item.path);
-  }, [permissions, disabledModules]);
+    // Routes with no registered module (Dashboard, Profili, Cilësimet…) pass through.
+    return isPathEnabled(item.path, {
+      plan,
+      disabledModules,
+      isSuperAdmin: permissions.isSuperAdmin,
+      permissions: permissions as unknown as Record<string, any>,
+    });
+  }, [permissions, disabledModules, plan]);
 
   // Resolve permissions/module toggles per entry. Groups keep only their
   // visible children and drop out entirely when none remain.

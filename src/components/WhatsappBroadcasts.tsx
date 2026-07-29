@@ -65,7 +65,8 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
 
   const channels = settings?.metaChannels || [];
   const metaEnabled = !!settings?.metaEnabled && channels.length > 0;
-  const vpsConfigured = !!settings?.whatsappVpsUrl && !!settings?.whatsappVpsSecret;
+  // The VPS secret lives in the server-only vault → check the presence marker.
+  const vpsConfigured = !!settings?.whatsappVpsUrl && !!settings?.hasWhatsappVpsSecret;
   const connectedAgents = (waAccounts || []).filter((a) => a.enabled);
 
   const [sendChannel, setSendChannel] = useState<'meta' | 'baileys'>('meta');

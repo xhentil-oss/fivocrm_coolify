@@ -158,6 +158,9 @@ const teamScopedCollections = new Set([
   'chatSnippets', 'whatsappAccounts', 'whatsappThreads', 'waTemplates', 'waBroadcasts',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments',
   'socialAccounts', 'socialSnapshots',
+  // Shop module (products/orders). Portal reads pass skipTeamFilter and scope by
+  // businessId explicitly, so membership here mainly enforces teamId on create.
+  'products', 'productCategories', 'productBrands', 'stockMovements', 'shopOrders',
   // whatsappMessages reads pass skipTeamFilter (they scope by teamId+phone
   // explicitly), so being in this set only enforces teamId on create.
   'whatsappMessages',
@@ -188,15 +191,28 @@ const businessIsolatedAlways = new Set<string>([
   'timeEntries', 'standups', 'dailyReports', 'dailyFocus', 'productivitySettings', 'weeklyReviews', 'customIndustries', 'activities',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments',
   'socialAccounts', 'socialSnapshots',
+  // Shop catalog + orders are tenant records: a staff user must never see another
+  // tenant's products, even from a view that passes skipTeamFilter.
+  'products', 'productCategories', 'productBrands', 'stockMovements', 'shopOrders',
   'domains',
   'teamMembers', 'teamInvites',
+  // ── Structure/identity collections, now tenant-scoped as well ──
+  // A TEAM IS A DEPARTMENT INSIDE A BUSINESS, so a team list is always read within
+  // the active business — never platform-wide. `userProfiles`, `channels` and
+  // `clientPortalAccess` carry the tenant key too, so the hardened Firestore rules
+  // can reject any query that would touch another tenant's documents (rules are not
+  // filters: an unscoped query over a scoped collection fails outright).
+  // Portal clients have no businessId, so every portal read of these MUST pass
+  // `skipBusinessFilter: true` and constrain the query itself (own uid/email, or the
+  // client's own businessId) — see useClientPortal and the portal views.
+  'teams', 'userProfiles', 'channels', 'clientPortalAccess',
+  'auditLogs',
 ]);
 
 // Identity/structure collections a super-admin reads cross-business (the agency
-// owner manages teams platform-wide). `teams` is already unscoped; scoping only
-// teamMembers/teamInvites made member counts show 0 for the owner. DATA collections
+// owner manages tenants platform-wide from the Relax CRM console). DATA collections
 // are NOT here, so they stay strictly business-scoped even for super-admins.
-const SUPER_ADMIN_BYPASS_COLLECTIONS = new Set<string>(['teamMembers', 'teamInvites']);
+const SUPER_ADMIN_BYPASS_COLLECTIONS = new Set<string>(['teamMembers', 'teamInvites', 'teams']);
 
 // "Reference" collections that change rarely but are subscribed on almost every
 // screen. Reading them with a live onSnapshot keeps an open stream + re-reads the
@@ -295,10 +311,17 @@ export function useCollection<T = DocumentData>(
   // no tenant's records leak into another tenant's /app.
   const superAdminBypass = superAdmin && SUPER_ADMIN_BYPASS_COLLECTIONS.has(collectionName);
   const forceBusinessScope = !!reactiveBusinessId && businessIsolatedAlways.has(collectionName) && !options?.skipBusinessFilter && !superAdminBypass;
-  const isTeamScoped = teamScopedCollections.has(collectionName)
+  // Two ways a read gets the mandatory tenant predicate:
+  //   • forceBusinessScope — the collection is business-isolated, so scoping applies
+  //     even when the caller passed skipTeamFilter (only skipBusinessFilter opts out).
+  //     This branch no longer requires membership in teamScopedCollections, so purely
+  //     structural collections (teams, userProfiles, clientPortalAccess) can be
+  //     tenant-scoped on READ without forcing a teamId on CREATE.
+  //   • the legacy team-scoped list, unless the caller opted out with skipTeamFilter.
+  const isTeamScoped = !superAdminBypass
     && !globalReadCollections.has(collectionName)
-    && !superAdminBypass
-    && (forceBusinessScope || !options?.skipTeamFilter);
+    && (forceBusinessScope
+        || (teamScopedCollections.has(collectionName) && !options?.skipTeamFilter));
   const scopeId = isTeamScoped ? reactiveBusinessId : null;
 
   // teamScopedWhere is folded into the cache key so a server-pushed variant

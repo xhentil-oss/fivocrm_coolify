@@ -14,6 +14,7 @@ import { useToast } from '../../hooks/use-toast';
 import ServiceQuestionnaireForm from '../../components/ServiceQuestionnaireForm';
 import { getInquiryCompleteness } from '../../lib/inquiryBrief';
 import type { ServiceInquiry, Notification } from '../../types';
+import { notifyStaff } from '../../lib/notifyStaff';
 
 /**
  * Faqja e anketës brenda Projekteve: /portal/projects/inquiry/:inquiryId
@@ -46,11 +47,12 @@ const PortalInquiryView: React.FC = () => {
 
   const inquiryMutation = useMutation<ServiceInquiry>('serviceInquiries');
   const notificationMutation = useMutation<Notification>('notifications');
-  const { data: activeTeamMembers } = useCollection<any>('teamMembers', {
-    where: [{ field: 'status', operator: '==', value: 'Active' }],
-    skipTeamFilter: true,
-  });
-  const resolvedTeamId = activeTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
+  // The portal never reads `teamMembers` (cross-tenant staff data). The follow-up
+  // task + notifications are created server-side by /api/notify-staff, which assigns
+  // them to sales staff of THIS client's business. The teamId for the lead comes from
+  // the tenant we resolved (subdomain), not from an arbitrary member.
+  const { tenantTeamId } = usePortalTenant();
+  const resolvedTeamId = tenantTeamId || null;
 
   const createLeadAndAutomations = async (formData: any, id: string) => {
     if ((inquiry as any)?.leadId) return; // already converted
@@ -89,37 +91,25 @@ const PortalInquiryView: React.FC = () => {
     await inquiryMutation.update(id, { leadId: leadRef.id });
 
     const taskPriority = formData.timeline === 'Menjëherë' || formData.isUrgent === 'Po' ? 'urgent' : 'high';
-    const tomorrow = new Date();
-    tomorrow.setDate(tomorrow.getDate() + 1);
-    const salesAdminMembers = activeTeamMembers?.filter((m: any) => (m.role === 'Admin' || m.canAccessCRM) && (!tenantBusinessId || m.businessId === tenantBusinessId)) || [];
 
-    await addDoc(collection(db, 'tasks'), {
-      title: `Kontakto lead: ${formData.contactName} (${formData.businessName})`,
-      description: `Lead i ri nga pyetësori i shërbimeve.\n\nShërbime: ${formData.servicesInterestedIn.join(', ')}\nObjektivi: ${formData.mainGoal}\nBuxheti: ${formData.budgetRange}\nAfati: ${formData.timeline}\nKontakt: ${formData.email} / ${formData.phoneNumber}${formData.preferredContactMethod ? '\nMënyra e preferuar: ' + formData.preferredContactMethod : ''}`,
-      status: 'Todo',
-      priority: taskPriority,
-      startDate: new Date(),
-      endDate: tomorrow,
-      dueDate: tomorrow,
-      assignedToUserId: salesAdminMembers?.[0]?.userId || '',
-      ...(resolvedTeamId ? { teamId: resolvedTeamId } : {}),
-      ...(businessId ? { businessId } : {}),
-      createdAt: Timestamp.now(),
-      updatedAt: Timestamp.now(),
-      createdByUserId: user?.uid || null,
+    // The follow-up task + the "new lead" notifications are created SERVER-SIDE:
+    // assigning the task needs the tenant's sales staff, and the portal must not read
+    // `teamMembers` (that was a cross-tenant read of every business's staff records).
+    // /api/notify-staff resolves both from this client's own customer → businessId.
+    await notifyStaff({
+      type: 'lead_created',
+      title: 'Lead i Ri nga Pyetësori',
+      message: `${formData.contactName} (${formData.businessName}) dorëzoi pyetësorin për: ${formData.servicesInterestedIn.join(', ')}`,
+      actionUrl: '/app/crm',
+      actionLabel: 'Shiko Lead-in',
+      task: {
+        title: `Kontakto lead: ${formData.contactName} (${formData.businessName})`,
+        description: `Lead i ri nga pyetësori i shërbimeve.\n\nShërbime: ${formData.servicesInterestedIn.join(', ')}\nObjektivi: ${formData.mainGoal}\nBuxheti: ${formData.budgetRange}\nAfati: ${formData.timeline}\nKontakt: ${formData.email} / ${formData.phoneNumber}${formData.preferredContactMethod ? '\nMënyra e preferuar: ' + formData.preferredContactMethod : ''}`,
+        priority: taskPriority,
+        dueInDays: 1,
+        leadId: leadRef.id,
+      },
     });
-
-    if (salesAdminMembers.length > 0) {
-      await Promise.all(
-        salesAdminMembers.map((m: any) => notificationMutation.create({
-          userId: m.userId,
-          type: 'lead_created',
-          title: 'Lead i Ri nga Pyetësori',
-          message: `${formData.contactName} (${formData.businessName}) dorëzoi pyetësorin për: ${formData.servicesInterestedIn.join(', ')}`,
-          isRead: false,
-        }))
-      );
-    }
   };
 
   const handleSubmit = async (formData: any) => {
