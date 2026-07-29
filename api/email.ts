@@ -7,6 +7,7 @@ import notificationHandler from './_send-notification-email.js';
 import marketingWebhookHandler from './_marketing-webhook.js';
 import acceptInviteHandler from './_accept-invite.js';
 import socialHandler from './_social-api.js';
+import linkContactHandler from './_link-contact.js';
 
 /**
  * Consolidated dispatcher (named "email" for historical reasons — it also routes
@@ -19,6 +20,7 @@ import socialHandler from './_social-api.js';
  *   /api/send-welcome-email       -> ?type=welcome
  *   /api/accept-invite            -> ?type=accept-invite
  *   /api/social                   -> ?type=social  (sub-dispatches on ?action=)
+ *   /api/link-contact             -> ?type=link-contact
  *
  * Created to stay under Vercel Hobby's 12-function limit.
  */
@@ -36,9 +38,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.url.includes('marketing-webhook')) type = 'marketing-webhook';
     else if (req.url.includes('accept-invite')) type = 'accept-invite';
     else if (req.url.includes('/api/social')) type = 'social';
+    else if (req.url.includes('link-contact')) type = 'link-contact';
   }
 
   switch (type) {
+    case 'link-contact':
+      // Pairs a customer with the CRM lead for the same person (portal bootstrap).
+      return linkContactHandler(req, res);
     case 'social':
       // Social Media module — sub-dispatches on ?action= (oauth/list/sync/...).
       return socialHandler(req, res);

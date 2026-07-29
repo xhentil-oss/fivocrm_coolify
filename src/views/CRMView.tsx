@@ -41,6 +41,7 @@ import { safeHref, phoneKeyDown, normalizeAlbanianPhone, getTimestampMs } from '
 import { TEMP_META } from '../lib/leadIntel';
 import { LEAD_STAGES, SELECTABLE_STATUSES, leadStageLabel } from '../lib/leadStages';
 import { calculateLeadScore } from '../lib/leadScore';
+import { findContactMatch, matchFieldLabel, type MatchField } from '../lib/contactIdentity';
 import { useLeadIntel } from '../hooks/useLeadIntel';
 import { useSavedSegments, type LeadSegment } from '../hooks/useSavedSegments';
 import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember, Quote, Deal } from '../types';
@@ -56,6 +57,14 @@ const CRMView: React.FC = () => {
   const { setDirty, isDirtyRef, discardOpen, requestClose, confirmDiscard, cancelDiscard } = useUnsavedChanges();
   const [lostReasonLead, setLostReasonLead] = useState<Lead | null>(null);
   const [lostReason, setLostReason] = useState('');
+  // The new lead turned out to be an existing CLIENT — the user picks what that means
+  // (open the client / log a new deal / keep the lead, linked) instead of being blocked.
+  const [dupCustomerPrompt, setDupCustomerPrompt] = useState<{
+    payload: Record<string, any>;
+    customer: Customer;
+    on: MatchField;
+  } | null>(null);
+  const [dupResolving, setDupResolving] = useState(false);
   const [activeTab, setActiveTab] = useState('all');
   const [saving, setSaving] = useState(false);
   const [leadToDelete, setLeadToDelete] = useState<Lead | null>(null);
@@ -130,6 +139,13 @@ const CRMView: React.FC = () => {
   const dealMutation = useMutation<Deal>('deals');
   const customerMutation = useMutation<Customer>('customers');
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
+  // Read with skipTeamFilter, and a super-admin's read bypasses the per-business
+  // rule — so scope to the active business before matching a lead to a client,
+  // or a link could be written across tenants.
+  const scopedCustomers = useMemo(
+    () => (customers || []).filter((c: any) => !activeBusinessId || !c.businessId || c.businessId === activeBusinessId),
+    [customers, activeBusinessId]
+  );
   const waTeamId = useGlobalTeamId();
   const waEnabled = useWhatsappEnabled();
   const waQuery = useMemo(() => ({
@@ -183,6 +199,43 @@ const CRMView: React.FC = () => {
 
   const getStatusLabel = leadStageLabel;
 
+  /**
+   * Writes a lead + its notification/activity trail. Shared by the normal create
+   * path and the "this is an existing client — create it anyway and link" path,
+   * so both produce identical records.
+   */
+  const persistLead = async (payload: Record<string, any>, linkedCustomer?: Customer) => {
+    const createdLead = await leadMutation.create({
+      ...payload,
+      ...(linkedCustomer ? { customerId: linkedCustomer.id } : {}),
+    } as any);
+    logLead(createdLead.id, 'created', 'Lead u krijua', payload.source ? `Burimi: ${payload.source}` : undefined);
+
+    // Reverse link, so the client profile knows about this new opportunity too.
+    // Never overwrite an existing pairing.
+    if (linkedCustomer && !(linkedCustomer as any).leadId) {
+      customerMutation.update(linkedCustomer.id, { leadId: createdLead.id } as any)
+        .catch(err => console.error('[CRMView] customer→lead link failed', err));
+    }
+
+    // Notify assigned user
+    if (payload.assignedToUserId && user && payload.assignedToUserId !== user.uid) {
+      await notificationMutation.create({
+        userId: payload.assignedToUserId,
+        type: 'lead_assigned',
+        title: 'Lead i asignuar ty',
+        message: `${user.displayName || 'Një admin'} të asignoi lead-in "${payload.name}"`,
+        isRead: false,
+        actionUrl: '/app/crm',
+        actionLabel: 'Shiko CRM',
+      }).catch(err => console.error('[Notifications] lead_assigned dërgim dështoi:', err));
+    }
+
+    logActivity('lead_created', `Lead i ri: ${payload.name}`, { entityType: 'lead', description: payload.company || payload.email || '' });
+    setIsCreateDialogOpen(false);
+    return createdLead;
+  };
+
   const handleCreateLead = async (formData: FormData) => {
     if (saving) return;
     setSaving(true);
@@ -192,35 +245,6 @@ const CRMView: React.FC = () => {
     const status = formData.get('status') as string;
     const lastFollowUpDate = formData.get('lastFollowUpDate') as string;
     const phoneNumber = formData.get('phoneNumber') as string;
-
-    // Duplicate check: email vs existing leads + customers
-    const normEmail = email?.toLowerCase().trim();
-    const normPhone = phoneNumber?.replace(/\D/g, '');
-    if (normEmail) {
-      // Dedup against the UNFILTERED source so restricted roles can't create dupes.
-      const dupLead = rawLeads?.find(l => l.email?.toLowerCase().trim() === normEmail);
-      const dupCustomer = customers?.find(c => c.email?.toLowerCase().trim() === normEmail);
-      if (dupLead) {
-        toast({ title: 'Email ekziston tek Leads!', description: `Lead "${dupLead.name}" ka të njëjtin email.`, variant: 'destructive' });
-        setSaving(false); return;
-      }
-      if (dupCustomer) {
-        toast({ title: 'Email ekziston tek Klientët!', description: `Klienti "${dupCustomer.name}" ka të njëjtin email.`, variant: 'destructive' });
-        setSaving(false); return;
-      }
-    }
-    if (normPhone && normPhone.length >= 7) {
-      const dupLead = rawLeads?.find(l => l.phoneNumber?.replace(/\D/g, '') === normPhone);
-      const dupCustomer = customers?.find(c => c.phone?.replace(/\D/g, '') === normPhone);
-      if (dupLead) {
-        toast({ title: 'Numri ekziston tek Leads!', description: `Lead "${dupLead.name}" ka të njëjtin numër telefoni.`, variant: 'destructive' });
-        setSaving(false); return;
-      }
-      if (dupCustomer) {
-        toast({ title: 'Numri ekziston tek Klientët!', description: `Klienti "${dupCustomer.name}" ka të njëjtin numër telefoni.`, variant: 'destructive' });
-        setSaving(false); return;
-      }
-    }
     const address = formData.get('address') as string;
     const company = formData.get('company') as string;
     const jobTitle = formData.get('jobTitle') as string;
@@ -239,7 +263,8 @@ const CRMView: React.FC = () => {
       setSaving(false); return;
     }
 
-    const createdLead = await leadMutation.create({
+    const parsedValue = estimatedValue && !isNaN(parseFloat(estimatedValue)) ? parseFloat(estimatedValue) : undefined;
+    const payload: Record<string, any> = {
       name,
       email: email || undefined,
       status,
@@ -253,30 +278,91 @@ const CRMView: React.FC = () => {
       businessCategory,
       notes: notes || undefined,
       tags: (() => { const t = parseTags(formData.get('tags') as string); return t.length ? t : undefined; })(),
-      estimatedValue: estimatedValue && !isNaN(parseFloat(estimatedValue)) ? parseFloat(estimatedValue) : undefined,
+      estimatedValue: parsedValue,
       probability: STAGE_PROBABILITY[status] ?? 10,
-      score: calculateLeadScore({ name, email, phoneNumber, company, estimatedValue: estimatedValue && !isNaN(parseFloat(estimatedValue)) ? parseFloat(estimatedValue) : undefined }),
+      score: calculateLeadScore({ name, email, phoneNumber, company, estimatedValue: parsedValue }),
       assignedToUserId: resolvedAssigned,
-    });
-    logLead(createdLead.id, 'created', 'Lead u krijua', source ? `Burimi: ${source}` : undefined);
+    };
 
-    // Notify assigned user
-    if (resolvedAssigned && user && resolvedAssigned !== user.uid) {
-      await notificationMutation.create({
-        userId: resolvedAssigned,
-        type: 'lead_assigned',
-        title: 'Lead i asignuar ty',
-        message: `${user.displayName || 'Një admin'} të asignoi lead-in "${name}"`,
-        isRead: false,
-        actionUrl: '/app/crm',
-        actionLabel: 'Shiko CRM',
-      }).catch(err => console.error('[Notifications] lead_assigned dërgim dështoi:', err));
+    // Identity check against the UNFILTERED sources, so a restricted role can't
+    // bypass a teammate's record. A second lead for the same person is always
+    // wrong — block it. An existing CLIENT is a different story: a client asking
+    // for a new service is a legitimate lead, so we offer a choice instead of a
+    // dead end (see the dialog below).
+    const candidate = { email, phone: phoneNumber, phoneNumber };
+    const dupLead = findContactMatch(candidate, rawLeads);
+    if (dupLead) {
+      toast({
+        title: `Lead ekzistues — ${matchFieldLabel(dupLead.on)} përputhet`,
+        description: `"${dupLead.record.name}" është tashmë në pipeline.`,
+        variant: 'destructive',
+        action: <ToastAction altText="Hap lead-in" onClick={() => openLead(dupLead.record)}>Hap lead-in</ToastAction>,
+      });
+      setSaving(false); return;
+    }
+    const dupCustomer = findContactMatch(candidate, scopedCustomers as any);
+    if (dupCustomer) {
+      setDupCustomerPrompt({ payload, customer: dupCustomer.record as Customer, on: dupCustomer.on });
+      setSaving(false); return;
     }
 
-    logActivity('lead_created', `Lead i ri: ${name}`, { entityType: 'lead', description: company || email || '' });
-    setIsCreateDialogOpen(false);
+    await persistLead(payload);
     } finally {
       setSaving(false);
+    }
+  };
+
+  // ── "This contact is already a client" — the three ways out ────────────────
+  const dupOpenCustomer = () => {
+    if (!dupCustomerPrompt) return;
+    const { customer } = dupCustomerPrompt;
+    setDupCustomerPrompt(null);
+    setIsCreateDialogOpen(false);
+    navigate(`/app/customers/${customer.id}`);
+  };
+
+  /** Repeat business from an existing client belongs in the deal pipeline. */
+  const dupCreateDeal = async () => {
+    if (!dupCustomerPrompt || dupResolving) return;
+    setDupResolving(true);
+    const { payload, customer } = dupCustomerPrompt;
+    try {
+      await dealMutation.create({
+        title: payload.name + (payload.company ? ` — ${payload.company}` : ''),
+        customerId: customer.id,
+        customerName: customer.name,
+        amount: payload.estimatedValue || 0,
+        currency: 'ALL', // the form's "Vlera e Parashikuar (L)" is in Lek
+        stage: 'Qualification',
+        ownerId: payload.assignedToUserId || undefined,
+        notes: payload.notes || undefined,
+        lastActivityAt: new Date(),
+      } as any);
+      toast({ title: 'Marrëveshje e krijuar', description: `${customer.name} → marrëveshje e re në "Kualifikim".` });
+      setDupCustomerPrompt(null);
+      setIsCreateDialogOpen(false);
+    } catch (err) {
+      console.error('[CRMView] deal create failed', err);
+      toast({ title: 'Gabim', description: 'Marrëveshja nuk u krijua.', variant: 'destructive' });
+    } finally {
+      setDupResolving(false);
+    }
+  };
+
+  /** Keep the lead, but pair it with the client so neither record is an orphan. */
+  const dupCreateLinkedLead = async () => {
+    if (!dupCustomerPrompt || dupResolving) return;
+    setDupResolving(true);
+    const { payload, customer } = dupCustomerPrompt;
+    try {
+      await persistLead(payload, customer);
+      toast({ title: 'Lead u krijua dhe u lidh', description: `I lidhur me klientin "${customer.name}".` });
+      setDupCustomerPrompt(null);
+    } catch (err) {
+      console.error('[CRMView] linked lead create failed', err);
+      toast({ title: 'Gabim', description: 'Lead-i nuk u krijua.', variant: 'destructive' });
+    } finally {
+      setDupResolving(false);
     }
   };
 
@@ -290,34 +376,25 @@ const CRMView: React.FC = () => {
       const lastFollowUpDate = formData.get('lastFollowUpDate') as string;
       const phoneNumber = formData.get('phoneNumber') as string;
 
-      // Duplicate check on edit (exclude current lead)
-      const normEmail = email?.toLowerCase().trim();
-      const normPhone = phoneNumber?.replace(/\D/g, '');
-      if (normEmail) {
-        // Dedup against the UNFILTERED source so restricted roles can't create dupes.
-        const dupLead = rawLeads?.find(l => l.id !== editLead.id && l.email?.toLowerCase().trim() === normEmail);
-        const dupCustomer = customers?.find(c => c.email?.toLowerCase().trim() === normEmail);
-        if (dupLead) {
-          toast({ title: 'Email ekziston tek Leads!', description: `Lead "${dupLead.name}" ka të njëjtin email.`, variant: 'destructive' });
-          setSaving(false); return;
-        }
-        if (dupCustomer) {
-          toast({ title: 'Email ekziston tek Klientët!', description: `Klienti "${dupCustomer.name}" ka të njëjtin email.`, variant: 'destructive' });
-          setSaving(false); return;
-        }
+      // A second lead for the same person is still wrong — block it. Matching a
+      // CLIENT is not: it means this lead IS that client, so we link the two
+      // instead of blocking (the old check also blocked editing any converted
+      // lead, since its own customer always matched).
+      const candidate = { email, phone: phoneNumber, phoneNumber };
+      const dupLead = findContactMatch(candidate, rawLeads, editLead.id);
+      if (dupLead) {
+        toast({
+          title: `Lead ekzistues — ${matchFieldLabel(dupLead.on)} përputhet`,
+          description: `"${dupLead.record.name}" është tashmë në pipeline.`,
+          variant: 'destructive',
+          action: <ToastAction altText="Hap lead-in" onClick={() => openLead(dupLead.record)}>Hap lead-in</ToastAction>,
+        });
+        setSaving(false); return;
       }
-      if (normPhone && normPhone.length >= 7) {
-        const dupLead = rawLeads?.find(l => l.id !== editLead.id && l.phoneNumber?.replace(/\D/g, '') === normPhone);
-        const dupCustomer = customers?.find(c => c.phone?.replace(/\D/g, '') === normPhone);
-        if (dupLead) {
-          toast({ title: 'Numri ekziston tek Leads!', description: `Lead "${dupLead.name}" ka të njëjtin numër telefoni.`, variant: 'destructive' });
-          setSaving(false); return;
-        }
-        if (dupCustomer) {
-          toast({ title: 'Numri ekziston tek Klientët!', description: `Klienti "${dupCustomer.name}" ka të njëjtin numër telefoni.`, variant: 'destructive' });
-          setSaving(false); return;
-        }
-      }
+      const matchedCustomer = editLead.customerId
+        ? null
+        : findContactMatch(candidate, scopedCustomers as any)?.record as Customer | undefined;
+
       const address = formData.get('address') as string;
       const company = formData.get('company') as string;
       const jobTitle = formData.get('jobTitle') as string;
@@ -353,7 +430,18 @@ const CRMView: React.FC = () => {
         probability: STAGE_PROBABILITY[status] ?? editLead.probability,
         score: calculateLeadScore({ name, email, phoneNumber, company, estimatedValue: estimatedValue && !isNaN(parseFloat(estimatedValue)) ? parseFloat(estimatedValue) : undefined }),
         assignedToUserId: resolvedAssigned,
+        ...(matchedCustomer ? { customerId: matchedCustomer.id } : {}),
       });
+
+      // The edited contact details now match an existing client — pair the two so
+      // the CRM never shows an unlinked lead next to that client's profile.
+      if (matchedCustomer) {
+        if (!(matchedCustomer as any).leadId) {
+          customerMutation.update(matchedCustomer.id, { leadId: editLead.id } as any)
+            .catch(err => console.error('[CRMView] customer→lead link failed', err));
+        }
+        toast({ title: 'U lidh me klientin', description: `Ky lead u lidh me klientin "${matchedCustomer.name}".` });
+      }
 
       // Notify if lead was reassigned to a different user
       if (resolvedAssigned && user && resolvedAssigned !== user.uid && resolvedAssigned !== editLead.assignedToUserId) {
@@ -649,14 +737,35 @@ const CRMView: React.FC = () => {
 
     // If status is "Converted", create a customer + portal access, then delete the lead
     if (newStatus === 'Converted') {
-      // Dedup: block conversion if a customer with the same email already exists
-      const normEmail = lead.email?.toLowerCase().trim();
-      if (normEmail) {
-        const existing = customers?.find(c => c.email?.toLowerCase().trim() === normEmail);
-        if (existing) {
-          toast({ title: 'Klienti ekziston tashmë', description: `Klient me email "${lead.email}" ekziston: "${existing.name}".`, variant: 'destructive' });
-          return;
+      // This person may already be a client (e.g. imported from WHMCS). Adopt that
+      // record instead of refusing the conversion — the old check dead-ended here,
+      // which is how leads ended up stuck next to their own client profile.
+      const existing = findContactMatch(
+        { email: lead.email, phone: lead.phoneNumber || lead.phone },
+        scopedCustomers as any
+      )?.record as Customer | undefined;
+      if (existing) {
+        try {
+          await leadMutation.update(lead.id, {
+            status: 'Converted',
+            probability: 100,
+            convertedAt: new Date(),
+            customerId: existing.id,
+          });
+          if (!(existing as any).leadId) {
+            await customerMutation.update(existing.id, { leadId: lead.id } as any);
+          }
+          logLead(lead.id, 'converted', `🎉 U lidh me klientin ekzistues "${existing.name}"`);
+          toast({
+            title: 'U lidh me klientin ekzistues',
+            description: `"${existing.name}" ishte tashmë klient — lead-i u lidh me të, pa krijuar dublikatë.`,
+            action: <ToastAction altText="Hap klientin" onClick={() => navigate(`/app/customers/${existing.id}`)}>Hap klientin</ToastAction>,
+          });
+        } catch (err) {
+          console.error('[CRMView] adopt existing customer failed', err);
+          toast({ title: 'Gabim', description: 'Lidhja me klientin ekzistues dështoi.', variant: 'destructive' });
         }
+        return;
       }
 
       let customerDoc: { id: string } | undefined | null = null;
@@ -963,7 +1072,7 @@ const CRMView: React.FC = () => {
       }
       if (isTyping) return;
       // Skip when any dialog/drawer is open
-      const anyDialogOpen = isCreateDialogOpen || !!editLead || !!selectedLead || !!leadToDelete || !!whatsappLead || !!lostReasonLead || discardOpen || shortcutsOpen;
+      const anyDialogOpen = isCreateDialogOpen || !!editLead || !!selectedLead || !!leadToDelete || !!whatsappLead || !!lostReasonLead || !!dupCustomerPrompt || discardOpen || shortcutsOpen;
       if (anyDialogOpen) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
 
@@ -1005,7 +1114,7 @@ const CRMView: React.FC = () => {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [filteredLeads, highlightedIndex, isCreateDialogOpen, editLead, selectedLead, leadToDelete, whatsappLead, lostReasonLead, discardOpen, shortcutsOpen, permissions.canEdit]);
+  }, [filteredLeads, highlightedIndex, isCreateDialogOpen, editLead, selectedLead, leadToDelete, whatsappLead, lostReasonLead, dupCustomerPrompt, discardOpen, shortcutsOpen, permissions.canEdit]);
 
   // Clamp highlighted index when filtered list shrinks
   useEffect(() => {
@@ -2415,6 +2524,41 @@ const CRMView: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+      {/* Existing client detected — a repeat request from a client is legitimate,
+          so offer the three sensible outcomes instead of blocking the save. */}
+      <Dialog open={!!dupCustomerPrompt} onOpenChange={(open) => { if (!open && !dupResolving) setDupCustomerPrompt(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Ky kontakt është klient</DialogTitle>
+          </DialogHeader>
+          {dupCustomerPrompt && (
+            <>
+              <p className="text-sm text-muted-foreground">
+                <span className="font-semibold text-foreground">{dupCustomerPrompt.customer.name}</span> është
+                tashmë klient dhe {matchFieldLabel(dupCustomerPrompt.on)} përputhet. Zgjidh si të vazhdojmë:
+              </p>
+              <div className="space-y-2 pt-1">
+                <Button variant="outline" className="w-full justify-start" onClick={dupOpenCustomer} disabled={dupResolving}>
+                  <UserCircle className="w-4 h-4 mr-2 shrink-0" />
+                  <span className="text-left">Hap klientin<span className="block text-xs text-muted-foreground font-normal">Shiko historikun, faturat dhe projektet</span></span>
+                </Button>
+                <Button variant="outline" className="w-full justify-start" onClick={dupCreateDeal} disabled={dupResolving}>
+                  <TrendingUp className="w-4 h-4 mr-2 shrink-0" />
+                  <span className="text-left">Krijo marrëveshje të re<span className="block text-xs text-muted-foreground font-normal">Shërbim i re për një klient ekzistues</span></span>
+                </Button>
+                <Button variant="outline" className="w-full justify-start" onClick={dupCreateLinkedLead} disabled={dupResolving}>
+                  <Plus className="w-4 h-4 mr-2 shrink-0" />
+                  <span className="text-left">Krijo lead dhe lidhe<span className="block text-xs text-muted-foreground font-normal">Mbaje në pipeline, i lidhur me klientin</span></span>
+                </Button>
+              </div>
+              <div className="flex justify-end pt-1">
+                <Button variant="ghost" onClick={() => setDupCustomerPrompt(null)} disabled={dupResolving}>Anulo</Button>
+              </div>
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
+
       {whatsappLead && waEnabled && (
         <WhatsAppChatPanel
           phone={whatsappLead.phoneNumber || whatsappLead.phone || ''}

@@ -264,32 +264,23 @@ export function useClientPortal() {
           status: 'Active',
         });
 
-        // Link to an existing lead for this email instead of creating a duplicate.
-        // Only create a fresh lead when none exists yet (so the client's login
-        // connects to whatever CRM history is already in the system).
+        // Pair this customer with the CRM lead for the same person — reusing an
+        // existing lead (e.g. from a landing-page submission) instead of creating
+        // a duplicate, and creating one only when none exists.
+        //
+        // Server-side on purpose: Firestore rules restrict `leads` writes to
+        // business members and only let a portal client READ leads already
+        // stamped with their own customerId, so a client can neither find nor
+        // link their own lead from here. /api/link-contact does it with admin
+        // credentials after verifying the caller owns the customer record.
         try {
-          const leadSnap = await getDocs(
-            query(collection(db, 'leads'), where('email', '==', user.email!.toLowerCase()))
-          );
-          if (leadSnap.empty) {
-            createDoc('leads', {
-              name: displayName,
-              email: user.email?.toLowerCase(),
-              status: 'New',
-              source: 'Portal - Google Sign In',
-              customerId: newCustomer.id,
-            }).catch(() => { /* non-critical */ });
-          } else {
-            // Attach the existing lead to the newly-created customer if unlinked.
-            const leadDoc = leadSnap.docs[0];
-            if (!leadDoc.data().customerId) {
-              updateDoc(doc(db, 'leads', leadDoc.id), {
-                customerId: newCustomer.id,
-                updatedAt: Timestamp.now(),
-              }).catch(() => { /* non-critical */ });
-            }
-          }
-        } catch { /* non-critical */ }
+          const idToken = await user.getIdToken();
+          await fetch('/api/link-contact', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${idToken}` },
+            body: JSON.stringify({ customerId: newCustomer.id }),
+          });
+        } catch { /* non-critical — a staff member can pair them from the CRM */ }
 
         // Notify admin team members — ONLY of this client's tenant. allTeamMembers
         // is read cross-tenant (skipTeamFilter), so without the businessId filter a

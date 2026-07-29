@@ -10,6 +10,7 @@
     { "source": "/api/send-notification-email",  "destination": "/api/email?type=notification" },
     { "source": "/api/accept-invite",            "destination": "/api/email?type=accept-invite" },
     { "source": "/api/social",                   "destination": "/api/email?type=social" },
+    { "source": "/api/link-contact",             "destination": "/api/email?type=link-contact" },
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/((?!api).*)", "destination": "/" }
   ],

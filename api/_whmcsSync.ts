@@ -17,6 +17,7 @@ import {
   type MappedClient,
   type MappedClientFull,
 } from './_whmcs.js';
+import { findLeadForContact, crossLinkLeadCustomer } from './_contactIdentity.js';
 
 /**
  * WHMCS → FivoCRM sync layer.
@@ -140,7 +141,28 @@ async function resolveCustomer(client: MappedClient | null, teamId: string | nul
     createdByUserId: null,
   });
   customerCache.set(email, ref.id);
+  // A prospect we were already working in the CRM just became a paying client
+  // in WHMCS — pair the two records instead of leaving a lead and a customer
+  // for the same person side by side.
+  await linkExistingLead(ref.id, { email, phone: client.phone, teamId });
   return ref.id;
+}
+
+/**
+ * Cross-links a WHMCS-sourced customer with a matching CRM lead, when one
+ * exists. Best-effort: a failed link must never fail the sync.
+ */
+async function linkExistingLead(
+  customerId: string,
+  lookup: { email?: string | null; phone?: string | null; teamId: string | null }
+): Promise<void> {
+  try {
+    const businessId = await resolveBusinessId(lookup.teamId);
+    const lead = await findLeadForContact(db, { ...lookup, businessId });
+    if (lead) await crossLinkLeadCustomer(db, lead.id, customerId);
+  } catch (err) {
+    console.error('[whmcsSync] lead cross-link failed', { customerId, err });
+  }
 }
 
 // ── Full customer upsert (dedicated client sync) ──────────────────────────────
@@ -149,20 +171,21 @@ async function resolveCustomer(client: MappedClient | null, teamId: string | nul
 async function upsertCustomer(c: MappedClientFull, teamId: string | null): Promise<'created' | 'updated'> {
   const now = Timestamp.now();
   let ref: FirebaseFirestore.DocumentReference | null = null;
+  let alreadyLinked = false;
 
   if (c.whmcsClientId) {
     const s = await db.collection('customers').where('whmcsClientId', '==', c.whmcsClientId).limit(1).get();
-    if (!s.empty) ref = s.docs[0].ref;
+    if (!s.empty) { ref = s.docs[0].ref; alreadyLinked = !!s.docs[0].data().leadId; }
   }
   if (!ref && c.email) {
     const s = await db.collection('customers').where('email', '==', c.email).limit(1).get();
-    if (!s.empty) ref = s.docs[0].ref;
+    if (!s.empty) { ref = s.docs[0].ref; alreadyLinked = !!s.docs[0].data().leadId; }
   }
   // Third fallback: exact phone match (only if it's a real number, never empty)
   // so a customer entered manually by phone isn't duplicated.
   if (!ref && c.phone && c.phone.replace(/\D/g, '').length >= 7) {
     const s = await db.collection('customers').where('phone', '==', c.phone).limit(1).get();
-    if (!s.empty) ref = s.docs[0].ref;
+    if (!s.empty) { ref = s.docs[0].ref; alreadyLinked = !!s.docs[0].data().leadId; }
   }
 
   const businessId = await resolveBusinessId(teamId);
@@ -180,10 +203,15 @@ async function upsertCustomer(c: MappedClientFull, teamId: string | null): Promi
   };
 
   if (!ref) {
-    await db.collection('customers').add({ ...payload, createdAt: now, createdByUserId: null });
+    const created = await db.collection('customers').add({ ...payload, createdAt: now, createdByUserId: null });
+    await linkExistingLead(created.id, { email: c.email, phone: c.phone, teamId });
     return 'created';
   }
   await ref.update(payload);
+  // Also link on update — the lead may have been created after the customer.
+  // Skipped once linked: this runs for every client on every sync and Firestore
+  // quota, not CPU, is the bottleneck here.
+  if (!alreadyLinked) await linkExistingLead(ref.id, { email: c.email, phone: c.phone, teamId });
   return 'updated';
 }
 
