@@ -14,6 +14,7 @@
     { "source": "/api/sync-claims",              "destination": "/api/email?type=sync-claims" },
     { "source": "/api/notify-staff",             "destination": "/api/email?type=notify-staff" },
     { "source": "/api/tenant-secrets",           "destination": "/api/email?type=tenant-secrets" },
+    { "source": "/api/billing",                  "destination": "/api/email?type=billing" },
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/((?!api).*)", "destination": "/" }
   ],

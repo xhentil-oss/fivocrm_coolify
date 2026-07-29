@@ -11,6 +11,7 @@ import linkContactHandler from './_link-contact.js';
 import syncClaimsHandler from './_sync-claims.js';
 import notifyStaffHandler from './_notify-staff.js';
 import tenantSecretsHandler from './_tenant-secrets.js';
+import billingHandler from './_billing.js';
 
 /**
  * Consolidated dispatcher (named "email" for historical reasons — it also routes
@@ -27,6 +28,7 @@ import tenantSecretsHandler from './_tenant-secrets.js';
  *   /api/sync-claims              -> ?type=sync-claims     (tenant custom claims)
  *   /api/notify-staff             -> ?type=notify-staff    (portal → own tenant's staff)
  *   /api/tenant-secrets           -> ?type=tenant-secrets  (write-only credential vault)
+ *   /api/billing                  -> ?type=billing         (Stripe subscription checkout/portal)
  *
  * Created to stay under Vercel Hobby's 12-function limit.
  */
@@ -48,6 +50,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.url.includes('sync-claims')) type = 'sync-claims';
     else if (req.url.includes('notify-staff')) type = 'notify-staff';
     else if (req.url.includes('tenant-secrets')) type = 'tenant-secrets';
+    else if (req.url.includes('/api/billing')) type = 'billing';
   }
 
   switch (type) {
@@ -60,6 +63,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     case 'tenant-secrets':
       // Write-only credential vault (teamSecrets is deny-all for clients).
       return tenantSecretsHandler(req, res);
+    case 'billing':
+      // SaaS subscription: Stripe Checkout (mode=subscription) + Billing Portal.
+      return billingHandler(req, res);
     case 'link-contact':
       // Pairs a customer with the CRM lead for the same person (portal bootstrap).
       return linkContactHandler(req, res);

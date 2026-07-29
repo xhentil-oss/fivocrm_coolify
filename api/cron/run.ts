@@ -10,6 +10,7 @@ import { sendReportsForPeriod } from '../_socialEmail.js';
 // Always resolve tenant config through getTeamConfig so secrets are merged in.
 import { getTeamConfig, SECRET_FIELDS, writeTeamSecrets } from '../_tenantConfig.js';
 import { syncTenantClaims } from '../_tenantClaims.js';
+import { writeAudit } from '../_audit.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 function authorize(req: VercelRequest): boolean {
@@ -2175,6 +2176,96 @@ async function runBackfillMemberKeys(opts?: { dryRun?: boolean }) {
   return { total: snap.size, alreadyKeyed, reKeyed, dedupedDuplicates, skippedIncomplete, errors, dryRun: !!opts?.dryRun };
 }
 
+// ── JOB: subscription-lifecycle (the SaaS money loop) ────────────────────────
+// Turns billing state into tenant state, every day:
+//   trialing + trialEndsAt passed          → past_due (grace clock starts)
+//   past_due for more than GRACE_DAYS      → suspended (rules freeze writes)
+//   canceled + period ended                → suspended
+// Owners are warned 3 days before the trial ends, on expiry, and on suspension.
+// Idempotent: a tenant already in the target state is skipped.
+const BILLING_GRACE_DAYS = 7;
+async function runSubscriptionLifecycle(opts?: { dryRun?: boolean }) {
+  const now = new Date();
+  const nowTs = admin.firestore.Timestamp.now();
+  const snap = await db.collection('businesses').get();
+
+  let warned = 0, expired = 0, suspended = 0, skipped = 0;
+  const actions: Array<{ businessId: string; action: string }> = [];
+
+  const notifyOwner = async (businessId: string, ownerId: string | null, title: string, message: string) => {
+    if (!ownerId || opts?.dryRun) return;
+    await db.collection('notifications').add({
+      userId: ownerId,
+      type: 'billing',
+      title,
+      message,
+      actionUrl: '/app/billing',
+      actionLabel: 'Hap Abonimin',
+      isRead: false,
+      businessId,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }).catch(() => { /* non-critical */ });
+  };
+
+  for (const d of snap.docs) {
+    const b = d.data() as any;
+    const status: string = b.status || 'trialing';
+    const ownerId: string | null = b.ownerId || null;
+
+    // Paying tenants and already-frozen ones need nothing.
+    if (status === 'active' || status === 'suspended') { skipped++; continue; }
+
+    const toDate = (v: any): Date | null =>
+      v?.toDate ? v.toDate() : (v ? new Date(v) : null);
+
+    // 1. Trial expiry → past_due (grace), or a warning 3 days out.
+    if (status === 'trialing') {
+      const trialEndsAt = toDate(b.trialEndsAt);
+      if (!trialEndsAt) { skipped++; continue; }
+      const daysLeft = Math.ceil((trialEndsAt.getTime() - now.getTime()) / 86_400_000);
+      if (daysLeft > 3) { skipped++; continue; }
+      if (daysLeft > 0) {
+        // Warn once per day-3 window (guarded by trialWarnedAt).
+        const warnedAt = toDate(b.trialWarnedAt);
+        if (warnedAt && now.getTime() - warnedAt.getTime() < 2 * 86_400_000) { skipped++; continue; }
+        if (!opts?.dryRun) await d.ref.set({ trialWarnedAt: nowTs, updatedAt: nowTs }, { merge: true });
+        await notifyOwner(d.id, ownerId,
+          `Provja mbaron pas ${daysLeft} ditë${daysLeft === 1 ? '' : 'ësh'}`,
+          'Zgjidh një plan për të vazhduar pa ndërprerje pas mbarimit të provës.');
+        warned++; actions.push({ businessId: d.id, action: 'trial_warning' });
+        continue;
+      }
+      // Trial is over and no subscription attached → grace period.
+      if (!opts?.dryRun) {
+        await d.ref.set({ status: 'past_due', pastDueSince: b.pastDueSince || nowTs, updatedAt: nowTs }, { merge: true });
+      }
+      await notifyOwner(d.id, ownerId, 'Provja mbaroi',
+        `Hapësira mbetet aktive për ${BILLING_GRACE_DAYS} ditë. Aktivizo një plan për të mos u pezulluar.`);
+      await writeAudit({ businessId: d.id, actorUid: null, action: 'billing.trial_expired', target: `business:${d.id}` });
+      expired++; actions.push({ businessId: d.id, action: 'trial_expired' });
+      continue;
+    }
+
+    // 2. Grace period exhausted → suspend (Firestore rules then deny writes).
+    if (status === 'past_due' || status === 'canceled') {
+      const since = toDate(b.pastDueSince) || toDate(b.currentPeriodEnd) || toDate(b.updatedAt);
+      if (!since) { skipped++; continue; }
+      const daysDue = Math.floor((now.getTime() - since.getTime()) / 86_400_000);
+      if (daysDue < BILLING_GRACE_DAYS) { skipped++; continue; }
+      if (!opts?.dryRun) {
+        await d.ref.set({ status: 'suspended', suspendedAt: nowTs, updatedAt: nowTs }, { merge: true });
+      }
+      await notifyOwner(d.id, ownerId, 'Hapësira u pezullua',
+        'Abonimi nuk është aktiv. Të dhënat ruhen; aktivizo pagesën për t\'i rikthyer shkrimet.');
+      await writeAudit({ businessId: d.id, actorUid: null, action: 'billing.suspended', target: `business:${d.id}`, meta: { daysDue } });
+      suspended++; actions.push({ businessId: d.id, action: 'suspended' });
+    }
+  }
+
+  return { businesses: snap.size, warned, expired, suspended, skipped, actions, dryRun: !!opts?.dryRun };
+}
+
 // ── JOB: migrate-team-secrets (credential vault cutover) ─────────────────────
 // Moves credentials out of `teamSettings` (readable by every member of the
 // business) into `teamSecrets` (denied to ALL clients), mirrors `has*` markers and
@@ -2941,6 +3032,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       // ── Tenant-isolation hardening jobs (super-admin only: they rewrite tenant
       // keys, move credentials and mint custom claims across the whole platform) ──
+      case 'subscription-lifecycle':
+        result = await runSubscriptionLifecycle({ dryRun: req.query.dryRun === '1' });
+        break;
       case 'migrate-team-secrets': {
         if (isManual && !(await callerIsSuperAdmin(req))) {
           return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
@@ -3034,7 +3128,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, campaignSteps, whmcs, inquiryReminders, projectRollup, leadCadence] = await Promise.allSettled([
+        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, campaignSteps, whmcs, inquiryReminders, projectRollup, leadCadence, subscriptions] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
           runOverdueReminders(),
@@ -3057,6 +3151,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           runInquiryMaterialsReminders(),
           runProjectSpendRollup(),
           runLeadCadenceSteps(),
+          runSubscriptionLifecycle(),
         ]);
         const settled = (r: PromiseSettledResult<any>) =>
           r.status === 'fulfilled' ? r.value : { error: (r.reason as Error)?.message || 'failed' };
@@ -3083,6 +3178,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           inquiryMaterialsReminders: settled(inquiryReminders),
           projectSpendRollup: settled(projectRollup),
           leadCadenceSteps: settled(leadCadence),
+          subscriptions: settled(subscriptions),
         };
         break;
       }

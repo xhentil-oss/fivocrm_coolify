@@ -336,6 +336,28 @@ export interface Business {
   plan?: 'trial' | 'starter' | 'pro' | 'business' | 'enterprise';
   status?: 'trialing' | 'active' | 'past_due' | 'suspended' | 'canceled';
   trialEndsAt?: Date;
+  // ── Subscription billing (written ONLY by the Stripe webhook / lifecycle cron;
+  // Firestore rules forbid a tenant from editing its own plan/status) ──
+  stripeCustomerId?: string;
+  stripeSubscriptionId?: string;
+  /** End of the paid period currently covered. */
+  currentPeriodEnd?: Date;
+  /** Set when a payment fails or a trial expires — starts the grace countdown. */
+  pastDueSince?: Date;
+  /** When the tenant was frozen (writes denied by rules). */
+  suspendedAt?: Date;
+  lastPaymentAt?: Date;
+  cancelAtPeriodEnd?: boolean;
+  /** Seats included by the plan (see api/_billingPlans.ts PLAN_SEATS). */
+  seats?: number;
+  /** Optional per-tenant overrides negotiated on an Enterprise contract. */
+  limits?: {
+    seats?: number;
+    customers?: number;
+    invoicesPerMonth?: number;
+    storageMb?: number;
+  };
+  billingEmail?: string;
   /** Nav paths disabled for this tenant (super-admin toggles per business). */
   disabledModules?: string[];
   /** Portal subdomain for this tenant: `<portalSubdomain>.fivocrm.com/portal`.

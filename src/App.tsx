@@ -62,6 +62,7 @@ const FinancesView = lazyRetry(() => import('./views/FinancesView'));
 const BonusView = lazyRetry(() => import('./views/BonusView'));
 const UserProfileView = lazyRetry(() => import('./views/UserProfileView'));
 const SettingsView = lazyRetry(() => import('./views/SettingsView'));
+const BillingView = lazyRetry(() => import('./views/BillingView'));
 const TenantsView = lazyRetry(() => import('./views/TenantsView'));
 const CustomersView = lazyRetry(() => import('./views/CustomersView'));
 const ServicesView = lazyRetry(() => import('./views/ServicesView'));
@@ -339,7 +340,12 @@ function AppContent() {
                   }`}
                 >
                   <PendingInvitesBanner />
+                  {/* Billing state made explicit: a banner while a trial/payment needs
+                      attention, and a hard block when the tenant is suspended (Firestore
+                      rules already deny its writes, so silence would just look broken). */}
+                  <SubscriptionBanner />
                   <ErrorBoundary>
+                    <SubscriptionGate>
                     <Suspense fallback={<LazyFallback />}>
                     <Routes>
                       <Route path="/" element={<DefaultRedirect />} />
@@ -377,6 +383,8 @@ function AppContent() {
                       <Route path="/app/landing-pages" element={<PermissionGate permissionKey="canAccessServices"><Suspense fallback={<div className="p-8 text-center"><span className="animate-spin">⏳</span></div>}><LandingPagesView /></Suspense></PermissionGate>} />
                       <Route path="/app/contracts" element={<PermissionGate permissionKey="canAccessInvoices"><ContractsView /></PermissionGate>} />
                       <Route path="/app/settings" element={<PermissionGate permissionKey="canAccessProfile"><SettingsView /></PermissionGate>} />
+                      {/* Abonimi — reachable even while suspended so the owner can pay. */}
+                      <Route path="/app/billing" element={<PermissionGate permissionKey="canAccessProfile"><BillingView /></PermissionGate>} />
                       <Route path="*" element={
                       <div className="text-center py-20">
                         <h1 className="text-4xl font-bold text-foreground mb-4">404</h1>
