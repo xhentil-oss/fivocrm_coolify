@@ -87,6 +87,37 @@ before(async () => {
       status: 'Pending', token: 'tok-victim', invitedByUserId: 'victimOwner',
     });
     await setDoc(doc(db, 'userProfiles', 'profVictim'), { userId: 'vstaff', displayName: 'V Staff', businessId: VICTIM_BIZ });
+
+    // ── seed for the shop module (24+) ──
+    // A published product in MY tenant (what a portal client of bizMine may read),
+    // a DRAFT one in the same tenant (which they must not), and a published one in
+    // the VICTIM tenant (the cross-tenant read target).
+    await setDoc(doc(db, 'products', 'prodMinePublic'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, name: 'Karrige', price: 100,
+      status: 'Active', visibleInPortal: true, costPrice: 40,
+    });
+    await setDoc(doc(db, 'products', 'prodMineDraft'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, name: 'Prototip i pabotuar', price: 1,
+      status: 'Draft', visibleInPortal: false, costPrice: 0.5,
+    });
+    await setDoc(doc(db, 'products', 'prodVictim'), {
+      businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, name: 'Victim product', price: 999,
+      status: 'Active', visibleInPortal: true, costPrice: 500,
+    });
+    await setDoc(doc(db, 'productCategories', 'catVictim'), { businessId: VICTIM_BIZ, name: 'Victim cat' });
+    await setDoc(doc(db, 'stockMovements', 'moveVictim'), {
+      businessId: VICTIM_BIZ, productId: 'prodVictim', type: 'in', quantity: 10, unitCost: 500,
+    });
+    await setDoc(doc(db, 'shopOrders', 'orderVictim'), {
+      businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, orderNumber: 'POR-2026-0001',
+      customerId: 'custVictim', items: [], currency: 'ALL', subtotal: 0, total: 999,
+      status: 'Pending', source: 'portal',
+    });
+    await setDoc(doc(db, 'shopOrders', 'orderMine'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, orderNumber: 'POR-2026-0002',
+      customerId: 'cust1', items: [], currency: 'ALL', subtotal: 0, total: 100,
+      status: 'Pending', source: 'portal',
+    });
   });
 });
 
@@ -372,4 +403,117 @@ test('23. publicTenants is readable, not writable', async () => {
   await assertSucceeds(getDoc(doc(anon, 'publicTenants', 'victim')));
   const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
   await assertFails(setDoc(doc(alice, 'publicTenants', 'victim'), { businessId: MY_BIZ }, { merge: true }));
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Shop module (products / taxonomy / inventory ledger / orders)
+// Invariant 5 of TENANT_ISOLATION_ENTERPRISE.md: a new collection ships with a
+// negative cross-tenant test.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// 24. Staff of another tenant cannot read this tenant's catalog — not even the
+//     published part, which carries costPrice (margin intelligence).
+test('24a. cross-tenant staff cannot read another tenant products', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(getDoc(doc(alice, 'products', 'prodVictim')));
+});
+test('24b. staff read their own tenant products', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(getDoc(doc(alice, 'products', 'prodMinePublic')));
+  await assertSucceeds(getDoc(doc(alice, 'products', 'prodMineDraft')));
+});
+
+// 25. The portal client sees ONLY their own tenant's PUBLISHED catalog. This is the
+//     pair that makes the shop read rule safe: tenant match AND visibleInPortal.
+test('25a. portal client reads a published product of their own tenant', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertSucceeds(getDoc(doc(carol, 'products', 'prodMinePublic')));
+});
+test('25b. portal client cannot read an unpublished product of their own tenant', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(getDoc(doc(carol, 'products', 'prodMineDraft')));
+});
+test('25c. portal client cannot read another tenant published product', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(getDoc(doc(carol, 'products', 'prodVictim')));
+});
+
+// 26. A portal client is never staff: publishing/editing the catalog is staff-only.
+test('26a. portal client cannot create a product', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(setDoc(doc(carol, 'products', 'prodInjected'), {
+    businessId: MY_BIZ, name: 'Free stuff', price: 0, status: 'Active', visibleInPortal: true,
+  }));
+});
+test('26b. portal client cannot reprice a product', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(setDoc(doc(carol, 'products', 'prodMinePublic'), { price: 1 }, { merge: true }));
+});
+test('26c. staff cannot stamp a product into another tenant', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(setDoc(doc(alice, 'products', 'prodSmuggled'), {
+    businessId: VICTIM_BIZ, name: 'Smuggled', price: 1, status: 'Active',
+  }));
+});
+test('26d. a product can never be moved to another tenant by update', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(setDoc(doc(alice, 'products', 'prodMinePublic'), { businessId: VICTIM_BIZ }, { merge: true }));
+});
+
+// 27. Taxonomy follows the same boundary (the portal renders category filters).
+test('27. cross-tenant product categories are unreadable', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(getDoc(doc(alice, 'productCategories', 'catVictim')));
+});
+
+// 28. The inventory ledger is staff-only AND append-only: it carries unit costs and
+//     is the audit trail every stock number depends on.
+test('28a. portal client cannot read the inventory ledger', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(getDoc(doc(carol, 'stockMovements', 'moveVictim')));
+});
+test('28b. cross-tenant staff cannot read the inventory ledger', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(getDoc(doc(alice, 'stockMovements', 'moveVictim')));
+});
+test('28c. a stock movement cannot be rewritten', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'stockMovements', 'moveMine'), {
+      businessId: MY_BIZ, productId: 'prodMinePublic', type: 'in', quantity: 5,
+    });
+  });
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(setDoc(doc(alice, 'stockMovements', 'moveMine'), { quantity: 500 }, { merge: true }));
+});
+
+// 29. Orders: a client may place their own, read their own, and nothing else.
+test('29a. portal client creates their own Pending order', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertSucceeds(setDoc(doc(carol, 'shopOrders', 'orderNew'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, orderNumber: 'POR-2026-0003',
+    customerId: 'cust1', items: [], currency: 'ALL', subtotal: 0, total: 100,
+    status: 'Pending', source: 'portal', createdByUserId: 'carol',
+  }));
+});
+test('29b. portal client cannot place an order as another customer', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(setDoc(doc(carol, 'shopOrders', 'orderSpoofed'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, orderNumber: 'POR-2026-0004',
+    customerId: 'custVictim', items: [], currency: 'ALL', subtotal: 0, total: 1,
+    status: 'Pending', source: 'portal', createdByUserId: 'carol',
+  }));
+});
+test('29c. portal client cannot self-approve an order (no update)', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(setDoc(doc(carol, 'shopOrders', 'orderMine'),
+    { status: 'Delivered', paymentStatus: 'Paid' }, { merge: true }));
+});
+test('29d. portal client reads their own order but not another tenant order', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertSucceeds(getDoc(doc(carol, 'shopOrders', 'orderMine')));
+  await assertFails(getDoc(doc(carol, 'shopOrders', 'orderVictim')));
+});
+test('29e. cross-tenant staff cannot read another tenant orders', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(getDoc(doc(alice, 'shopOrders', 'orderVictim')));
 });
