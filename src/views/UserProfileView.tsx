@@ -67,6 +67,26 @@ interface UserProfileViewProps {
   userId?: string; // If provided, shows another user's profile (admin/manager view)
 }
 
+// Some task/project descriptions are stored as HTML (e.g. auto-created leads/
+// inquiries embed <p>/<br>). These list previews render as plain text, so strip the
+// tags + decode entities instead of showing raw "<p>…</p>". Pure string ops (no DOM)
+// so there's no XSS surface.
+const stripHtml = (html?: string): string => {
+  if (!html) return '';
+  return html
+    .replace(/<br\s*\/?>/gi, ' ')
+    .replace(/<\/(p|div|li|h[1-6])>/gi, ' ')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/gi, ' ')
+    .replace(/&amp;/gi, '&')
+    .replace(/&lt;/gi, '<')
+    .replace(/&gt;/gi, '>')
+    .replace(/&quot;/gi, '"')
+    .replace(/&#x27;|&#39;/gi, "'")
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
 const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
   const { user: currentUser } = useAuth();
   const { isAdmin, isOwner, isManager } = usePermissions();
@@ -594,7 +614,7 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
                     <div className="flex items-start justify-between">
                       <div>
                         <h4 className="font-medium">{task.title}</h4>
-                        <p className="text-sm text-muted-foreground">{task.description}</p>
+                        <p className="text-sm text-muted-foreground">{stripHtml(task.description)}</p>
                       </div>
                       <Badge>{task.status}</Badge>
                     </div>
@@ -622,7 +642,7 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
                       <div className="flex items-start justify-between">
                         <div>
                           <h4 className="font-medium">{project.name}</h4>
-                          <p className="text-sm text-muted-foreground">{project.description}</p>
+                          <p className="text-sm text-muted-foreground">{stripHtml(project.description)}</p>
                         </div>
                         <Badge>{project.status}</Badge>
                       </div>
@@ -635,7 +655,7 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
                     <div className="flex items-start justify-between">
                       <div>
                         <h4 className="font-medium">{project.name}</h4>
-                        <p className="text-sm text-muted-foreground">{project.description}</p>
+                        <p className="text-sm text-muted-foreground">{stripHtml(project.description)}</p>
                       </div>
                       <Badge>{project.status}</Badge>
                     </div>
@@ -658,7 +678,7 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
                       <div className="flex items-start justify-between mb-3">
                         <div>
                           <h4 className="font-medium">{goal.title}</h4>
-                          <p className="text-sm text-muted-foreground">{goal.description}</p>
+                          <p className="text-sm text-muted-foreground">{stripHtml(goal.description)}</p>
                         </div>
                         <Badge>{goal.status}</Badge>
                       </div>
@@ -683,7 +703,7 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
                     <div className="flex items-start justify-between mb-3">
                       <div>
                         <h4 className="font-medium">{goal.title}</h4>
-                        <p className="text-sm text-muted-foreground">{goal.description}</p>
+                        <p className="text-sm text-muted-foreground">{stripHtml(goal.description)}</p>
                       </div>
                       <Badge>{goal.status}</Badge>
                     </div>
