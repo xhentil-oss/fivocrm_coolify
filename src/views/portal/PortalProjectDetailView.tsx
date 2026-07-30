@@ -4,7 +4,7 @@ import { db } from '../../lib/firebase';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useAuth } from '../../contexts/AuthContext';
-import { useCollection, useMutation, useDocument } from '../../hooks/useFirestore';
+import { useCollection, useDocument } from '../../hooks/useFirestore';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -19,7 +19,7 @@ import {
   CalendarDays, ChevronDown, ChevronRight, Loader2,
 } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
-import type { Project, Task, TaskComment, TeamMember } from '../../types';
+import type { Project, Task, TaskComment } from '../../types';
 import { notifyStaff } from '../../lib/notifyStaff';
 import { useCommentFocus, COMMENT_FLASH_CLASS } from '../../hooks/useCommentFocus';
 import { taskDeepLink, projectCommentDeepLink } from '../../lib/deepLinks';
@@ -121,7 +121,6 @@ const PortalProjectDetailView: React.FC = () => {
     skipBusinessFilter: true,
   });
 
-  const notificationMutation = useMutation<any>('notifications');
 
   // Auto-scroll comments — skipped when a notification deep-links to a specific
   // comment, otherwise the jump-to-bottom would undo the scroll to that comment.
