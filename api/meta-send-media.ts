@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminAuth, adminDb, Timestamp } from './_firebaseAdmin.js';
+import { getTeamConfig } from './_tenantConfig.js';
 
 /**
  * Send a WhatsApp media message via Meta Cloud API.
@@ -148,9 +149,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // Load Meta credentials
-  const settingsSnap = await adminDb.collection('teamSettings').doc(teamId).get();
-  if (!settingsSnap.exists) return res.status(404).json({ error: 'Team settings nuk u gjetën' });
-  const settings = settingsSnap.data()!;
+  // Access tokens live in teamSecrets (client-unreadable) — getTeamConfig merges them.
+  const settings = await getTeamConfig(teamId);
+  if (!settings || Object.keys(settings).length === 0) return res.status(404).json({ error: 'Team settings nuk u gjetën' });
 
   // Now that we know the team's VPS, enforce the media-URL host whitelist
   // (Firebase/Google or the team's own VPS file host).

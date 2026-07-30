@@ -147,10 +147,11 @@ const MomentumView: React.FC = () => {
   const { data: standups } = useCollection<StandupEntry>('standups');
   const { data: goals } = useCollection<Goal>('goals');
   const { data: userProfiles } = useCollection<any>('userProfiles');
+  // Business-scoped (the scoreboard is per-tenant anyway): an unscoped teamMembers
+  // read is denied by the hardened rules because it would touch other tenants' staff.
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
     skipTeamFilter: true,
-    skipBusinessFilter: true,
   });
   const { data: focusDocs } = useCollection<DailyFocus>('dailyFocus', {
     skip: !user,

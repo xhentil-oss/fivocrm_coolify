@@ -32,7 +32,7 @@ function serviceVisual(category?: string) {
  * Klienti e plotëson anketën atje; kërkesa shfaqet edhe te tab-i Projektet.
  */
 const PortalServicesView: React.FC = () => {
-  const { customerId } = useClientPortal();
+  const { customerId, businessId: portalBusinessId } = useClientPortal();
   const startInquiry = useStartInquiry();
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('all');
@@ -46,7 +46,15 @@ const PortalServicesView: React.FC = () => {
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });
-  const { data: services, loading } = useCollection<Service>('services', { skipTeamFilter: true });
+  const { data: services, loading } = useCollection<Service>('services', {
+    // The service catalogue is tenant data: scope it to the client's OWN business.
+    // Reading it unscoped (the old `skipTeamFilter` behaviour) returned every
+    // tenant's catalogue and pricing to any signed-in client.
+    skip: !portalBusinessId,
+    where: portalBusinessId ? [{ field: 'businessId', operator: '==', value: portalBusinessId }] : undefined,
+    skipTeamFilter: true,
+    skipBusinessFilter: true,
+  });
 
   const purchasedServiceDetails = useMemo(() => {
     if (!invoices || !invoiceItems || !services) return [];

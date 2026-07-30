@@ -15,7 +15,9 @@ import { AndroidBackButton } from './components/AndroidBackButton';
 import DailyReportPopup from './components/DailyReportPopup';
 import CommandPalette from './components/CommandPalette';
 import PermissionGate from './components/PermissionGate';
+import ModuleGate from './components/ModuleGate';
 import PendingInvitesBanner from './components/PendingInvitesBanner';
+import SubscriptionGate, { SubscriptionBanner } from './components/SubscriptionGate';
 import { GoogleApiProvider } from './contexts/GoogleApiContext';
 import { PermissionsProvider, usePermissions } from './contexts/PermissionsContext';
 import { useTeamDataMigration } from './hooks/useTeamDataMigration';
@@ -49,6 +51,11 @@ const CRMView = lazyRetry(() => import('./views/CRMView'));
 const DealsView = lazyRetry(() => import('./views/DealsView'));
 const TasksView = lazyRetry(() => import('./views/TasksView'));
 const DailyReportsView = lazyRetry(() => import('./views/DailyReportsView'));
+const ReportsView = lazyRetry(() => import('./views/ReportsView'));
+const ReportDetailView = lazyRetry(() => import('./views/ReportDetailView'));
+const ReportingAdminView = lazyRetry(() => import('./views/ReportingAdminView'));
+const AccountabilityView = lazyRetry(() => import('./views/AccountabilityView'));
+const ClientHealthView = lazyRetry(() => import('./views/ClientHealthView'));
 const GoalsView = lazyRetry(() => import('./views/GoalsView'));
 const TeamsView = lazyRetry(() => import('./views/TeamsView'));
 const InvoicesView = lazyRetry(() => import('./views/InvoicesView'));
@@ -61,9 +68,12 @@ const FinancesView = lazyRetry(() => import('./views/FinancesView'));
 const BonusView = lazyRetry(() => import('./views/BonusView'));
 const UserProfileView = lazyRetry(() => import('./views/UserProfileView'));
 const SettingsView = lazyRetry(() => import('./views/SettingsView'));
+const BillingView = lazyRetry(() => import('./views/BillingView'));
 const TenantsView = lazyRetry(() => import('./views/TenantsView'));
 const CustomersView = lazyRetry(() => import('./views/CustomersView'));
 const ServicesView = lazyRetry(() => import('./views/ServicesView'));
+const ProductsView = lazyRetry(() => import('./views/ProductsView'));
+const ShopOrdersView = lazyRetry(() => import('./views/ShopOrdersView'));
 const ServiceInquiriesView = lazyRetry(() => import('./views/ServiceInquiriesView'));
 const ExpensesView = lazyRetry(() => import('./views/ExpensesView'));
 const WorkspaceView = lazyRetry(() => import('./views/WorkspaceView'));
@@ -80,6 +90,8 @@ const PortalProjectsView = lazyRetry(() => import('./views/portal/PortalProjects
 const PortalInquiryView = lazyRetry(() => import('./views/portal/PortalInquiryView'));
 const PortalProjectDetailView = lazyRetry(() => import('./views/portal/PortalProjectDetailView'));
 const PortalQuotesView = lazyRetry(() => import('./views/portal/PortalQuotesView'));
+const PortalShopView = lazyRetry(() => import('./views/portal/PortalShopView'));
+const PortalReportsView = lazyRetry(() => import('./views/portal/PortalReportsView'));
 const OnboardingWizard = lazyRetry(() => import('./components/OnboardingWizard'));
 const SeoLandingPage = lazyRetry(() => import('./views/landing/SeoLandingPage'));
 const RealEstateLandingPage = lazyRetry(() => import('./views/landing/RealEstateLandingPage'));
@@ -261,6 +273,8 @@ function AppContent() {
         <Route index element={<Suspense fallback={<LazyFallback />}><PortalDashboard /></Suspense>} />
         <Route path="invoices" element={<Suspense fallback={<LazyFallback />}><PortalInvoicesView /></Suspense>} />
         <Route path="services" element={<Suspense fallback={<LazyFallback />}><PortalServicesView /></Suspense>} />
+        <Route path="shop" element={<Suspense fallback={<LazyFallback />}><PortalShopView /></Suspense>} />
+        <Route path="reports" element={<Suspense fallback={<LazyFallback />}><PortalReportsView /></Suspense>} />
         <Route path="chat" element={<Suspense fallback={<LazyFallback />}><PortalChatView /></Suspense>} />
         {/* Requests removed — chat is now the single support channel. Redirect old links. */}
         <Route path="requests" element={<Navigate to="/portal/chat" replace />} />
@@ -334,7 +348,12 @@ function AppContent() {
                   }`}
                 >
                   <PendingInvitesBanner />
+                  {/* Billing state made explicit: a banner while a trial/payment needs
+                      attention, and a hard block when the tenant is suspended (Firestore
+                      rules already deny its writes, so silence would just look broken). */}
+                  <SubscriptionBanner />
                   <ErrorBoundary>
+                    <SubscriptionGate>
                     <Suspense fallback={<LazyFallback />}>
                     <Routes>
                       <Route path="/" element={<DefaultRedirect />} />
@@ -347,6 +366,15 @@ function AppContent() {
                       <Route path="/app/tasks" element={<PermissionGate permissionKey="canAccessTasks"><TasksView /></PermissionGate>} />
                       <Route path="/app/daily-reports" element={<PermissionGate permissionKey="canAccessTasks"><DailyReportsView /></PermissionGate>} />
                       <Route path="/app/goals" element={<PermissionGate permissionKey="canAccessGoals"><GoalsView /></PermissionGate>} />
+                      {/* Reporting & accountability module. ModuleGate (not PermissionGate)
+                          because access is permission + SaaS plan + tenant toggle. */}
+                      <Route path="/app/reports" element={<ModuleGate moduleId="reporting"><ReportsView /></ModuleGate>} />
+                      <Route path="/app/reports/:reportId" element={<ModuleGate moduleId="reporting"><ReportDetailView /></ModuleGate>} />
+                      <Route path="/app/report-templates" element={<ModuleGate moduleId="reporting"><ReportingAdminView /></ModuleGate>} />
+                      <Route path="/app/report-kpis" element={<ModuleGate moduleId="reporting"><ReportingAdminView /></ModuleGate>} />
+                      <Route path="/app/report-schedules" element={<ModuleGate moduleId="reporting"><ReportingAdminView /></ModuleGate>} />
+                      <Route path="/app/accountability" element={<ModuleGate moduleId="reporting"><AccountabilityView /></ModuleGate>} />
+                      <Route path="/app/client-health" element={<ModuleGate moduleId="reporting"><ClientHealthView /></ModuleGate>} />
                       <Route path="/app/teams" element={<PermissionGate permissionKey="canAccessTeams"><TeamsView /></PermissionGate>} />
                       <Route path="/app/invoices" element={<PermissionGate permissionKey="canAccessInvoices"><InvoicesView /></PermissionGate>} />
                       <Route path="/app/payments" element={<PermissionGate permissionKey="canAccessInvoices"><PaymentsView /></PermissionGate>} />
@@ -360,6 +388,10 @@ function AppContent() {
                       <Route path="/app/customers" element={<PermissionGate permissionKey="canAccessCustomers"><CustomersView /></PermissionGate>} />
                       <Route path="/app/customers/:customerId" element={<PermissionGate permissionKey="canAccessCustomers"><Customer360View /></PermissionGate>} />
                       <Route path="/app/services" element={<PermissionGate permissionKey="canAccessServices"><ServicesView /></PermissionGate>} />
+                      {/* Shop module — <ModuleGate> enforces permission + plan + per-tenant
+                          toggle, so a disabled module can't be reached by URL either. */}
+                      <Route path="/app/products" element={<ModuleGate moduleId="shop"><ProductsView /></ModuleGate>} />
+                      <Route path="/app/shop-orders" element={<ModuleGate moduleId="shop"><ShopOrdersView /></ModuleGate>} />
                       <Route path="/app/service-inquiries" element={<PermissionGate permissionKey="canAccessCRM"><ServiceInquiriesView /></PermissionGate>} />
                       <Route path="/app/expenses" element={<PermissionGate permissionKey="canAccessExpenses"><ExpensesView /></PermissionGate>} />
                       <Route path="/app/workspace" element={<PermissionGate permissionKey="canAccessProjects"><WorkspaceView /></PermissionGate>} />
@@ -368,6 +400,8 @@ function AppContent() {
                       <Route path="/app/landing-pages" element={<PermissionGate permissionKey="canAccessServices"><Suspense fallback={<div className="p-8 text-center"><span className="animate-spin">⏳</span></div>}><LandingPagesView /></Suspense></PermissionGate>} />
                       <Route path="/app/contracts" element={<PermissionGate permissionKey="canAccessInvoices"><ContractsView /></PermissionGate>} />
                       <Route path="/app/settings" element={<PermissionGate permissionKey="canAccessProfile"><SettingsView /></PermissionGate>} />
+                      {/* Abonimi — reachable even while suspended so the owner can pay. */}
+                      <Route path="/app/billing" element={<PermissionGate permissionKey="canAccessProfile"><BillingView /></PermissionGate>} />
                       <Route path="*" element={
                       <div className="text-center py-20">
                         <h1 className="text-4xl font-bold text-foreground mb-4">404</h1>
@@ -379,6 +413,7 @@ function AppContent() {
                     } />
                     </Routes>
                     </Suspense>
+                    </SubscriptionGate>
                   </ErrorBoundary>
                 </div>
               </main>

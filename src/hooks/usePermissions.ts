@@ -1,4 +1,8 @@
-import { useCollection, setGlobalTeamId, setGlobalBusinessId, setSuperAdmin } from './useFirestore';
+import { useCollection, useDocument, setGlobalTeamId, setGlobalBusinessId, setSuperAdmin } from './useFirestore';
+import { ensureTenantClaims } from '../lib/tenantClaims';
+// Reporting capabilities are resolved in ONE place so every role branch below
+// stays a single spread instead of seven hand-maintained booleans.
+import { reportingCapabilitiesFor, NO_REPORTING_CAPABILITIES } from '../lib/reporting/permissions';
 import { useAuth } from '../contexts/AuthContext';
 import { useMemo, useEffect, useRef } from 'react';
 import { doc, getDoc, updateDoc, setDoc, Timestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
@@ -16,7 +20,20 @@ export type UserPermissions = {
   canAccessTasks: boolean;
   canAccessCRM: boolean;
   canAccessInvoices: boolean;
+  /**
+   * Reporting & accountability module. Every internal role has it (everyone files
+   * their own daily/weekly report); what escalates by role are the six capability
+   * flags below. Defaults + per-member overrides live in
+   * `src/lib/reporting/permissions.ts` — do not hand-roll them per branch.
+   */
   canAccessReports: boolean;
+  canReviewReports?: boolean;
+  canApproveReports?: boolean;
+  canPublishReports?: boolean;
+  canViewAllReports?: boolean;
+  canViewConfidentialReports?: boolean;
+  canManageReportTemplates?: boolean;
+  canViewFinancialMetrics?: boolean;
   canAccessSettings: boolean;
   canAccessGoals: boolean;
   canAccessTeams: boolean;
@@ -24,6 +41,9 @@ export type UserPermissions = {
   canAccessWhatsapp: boolean;
   canAccessCustomers: boolean;
   canAccessServices: boolean;
+  /** Shop module (products, inventory, orders). Optional so legacy teamMember
+   *  records without the flag fall back to the service-catalog permission. */
+  canAccessProducts?: boolean;
   canAccessExpenses: boolean;
   canAccessMarketing?: boolean;
   canAccessProfile: boolean;
@@ -58,6 +78,7 @@ const fullAccessPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canAccessWhatsapp: true,
   canAccessCustomers: true,
   canAccessServices: true,
+  canAccessProducts: true,
   canAccessExpenses: true,
   canAccessMarketing: true,
   canAccessProfile: true,
@@ -66,6 +87,7 @@ const fullAccessPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canComment: true,
   canAssignTasks: true,
   canManageMembers: true,
+  ...reportingCapabilitiesFor('Admin'),
   isSuperAdmin: false,
 };
 
@@ -83,6 +105,7 @@ const restrictedPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canAccessWhatsapp: false,
   canAccessCustomers: false,
   canAccessServices: false,
+  canAccessProducts: false,
   canAccessExpenses: false,
   canAccessMarketing: false,
   canAccessProfile: true,
@@ -91,6 +114,8 @@ const restrictedPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canComment: false,
   canAssignTasks: false,
   canManageMembers: false,
+  // No team yet → no reporting surface at all (fail-closed).
+  ...NO_REPORTING_CAPABILITIES,
   isSuperAdmin: false,
 };
 
@@ -144,27 +169,68 @@ export function usePermissions(): UserPermissions {
     }
   }, [user, rawTeamMembersByEmail]);
 
-  const { data: teams, loading: teamsLoading, error: teamsError } = useCollection<any>('teams', {
-    skipTeamFilter: true,
-  });
-
-  // Check if the current user is the creator/owner of any team
-  const isOwner = useMemo(() => {
-    if (!user || !teams) return false;
-    return teams.some((t: any) => t.createdByUserId === user.uid);
-  }, [user, teams]);
-
-  // Don't stay stuck loading forever if Firebase returns an error.
-  // On error, isLoading becomes false but we still show restrictedPermissions (fail-safe).
-  const isLoading = userLoading || ((membersLoading || membersByEmailLoading) && !membersError && !membersByEmailError) || (teamsLoading && !teamsError);
-  const hasError = !!(membersError || membersByEmailError || teamsError);
-
-  // Super admin: full cross-team access for emails listed in VITE_SUPER_ADMIN_EMAILS
+  // Super admin: full cross-tenant access for emails listed in VITE_SUPER_ADMIN_EMAILS.
+  // Computed before the queries below because it decides whether `teams` may be read
+  // unscoped (platform console) or must stay scoped (every normal user).
   const isSuperAdmin = useMemo(() => {
     if (!user?.email) return false;
     const raw = (import.meta.env.VITE_SUPER_ADMIN_EMAILS as string) || '';
     return raw.split(',').map(e => e.trim().toLowerCase()).filter(Boolean).includes(user.email.toLowerCase());
   }, [user]);
+
+  // A TEAM LIVES INSIDE A BUSINESS, so a team is never read across tenants:
+  //   • owned teams  → constrained by createdByUserId (the only cross-business read a
+  //     normal user needs, and one the hardened `teams` rule allows per-document),
+  //   • the ACTIVE team → a single document read, authorized by membership.
+  // Reading the whole `teams` collection (the previous behaviour) is now impossible
+  // for a normal user: Firestore rules are not filters, so an unscoped query that
+  // touches another tenant's team is denied outright.
+  const { data: ownedTeams, loading: ownedTeamsLoading, error: ownedTeamsError } = useCollection<any>('teams', {
+    skip: !user || isSuperAdmin,
+    where: user ? [{ field: 'createdByUserId', operator: '==', value: user.uid }] : undefined,
+    skipTeamFilter: true,
+    skipBusinessFilter: true,
+  });
+
+  // Platform console (Relax CRM) — a super-admin legitimately enumerates all tenants.
+  const { data: allTeams, loading: allTeamsLoading, error: allTeamsError } = useCollection<any>('teams', {
+    skip: !isSuperAdmin,
+    skipTeamFilter: true,
+    skipBusinessFilter: true,
+  });
+
+  // Best membership (highest authority) — resolved before the permissions memo so the
+  // active team's document can be fetched by id.
+  const bestMembership = useMemo(() => {
+    if (!teamMembers.length) return null;
+    const order: Record<string, number> = { Admin: 0, Manager: 1, Sales: 2, SalesAgent: 3, Member: 4, Viewer: 5, Guest: 6 };
+    return [...teamMembers].sort((a, b) => (order[a.role] ?? 99) - (order[b.role] ?? 99))[0];
+  }, [teamMembers]);
+
+  const activeTeamId = (isSuperAdmin ? null : (ownedTeams?.[0]?.id || bestMembership?.teamId)) || undefined;
+  const { data: activeTeamDoc, loading: activeTeamLoading } = useDocument<any>('teams', activeTeamId);
+
+  // The team list handed to the permission resolver: only teams this user may see.
+  const teams = useMemo(() => {
+    if (isSuperAdmin) return allTeams || [];
+    const list: any[] = [...(ownedTeams || [])];
+    if (activeTeamDoc && !list.some(t => t.id === activeTeamDoc.id)) list.push(activeTeamDoc);
+    return list;
+  }, [isSuperAdmin, allTeams, ownedTeams, activeTeamDoc]);
+
+  const teamsLoading = isSuperAdmin ? allTeamsLoading : (ownedTeamsLoading || (!!activeTeamId && activeTeamLoading));
+  const teamsError = isSuperAdmin ? allTeamsError : ownedTeamsError;
+
+  // Check if the current user is the creator/owner of any team
+  const isOwner = useMemo(() => {
+    if (!user || isSuperAdmin) return false;
+    return (ownedTeams || []).length > 0;
+  }, [user, isSuperAdmin, ownedTeams]);
+
+  // Don't stay stuck loading forever if Firebase returns an error.
+  // On error, isLoading becomes false but we still show restrictedPermissions (fail-safe).
+  const isLoading = userLoading || ((membersLoading || membersByEmailLoading) && !membersError && !membersByEmailError) || (teamsLoading && !teamsError);
+  const hasError = !!(membersError || membersByEmailError || teamsError);
 
   const permissions = useMemo((): UserPermissions => {
     // Super admin: bypass all team scoping, full access to every team's data
@@ -260,10 +326,8 @@ export function usePermissions(): UserPermissions {
       };
     }
 
-    // Has team membership — use role-based permissions
-    // Sort by role priority; Guest is lowest (6)
-    const roleOrder: Record<string, number> = { Admin: 0, Manager: 1, Sales: 2, SalesAgent: 3, Member: 4, Viewer: 5, Guest: 6 };
-    const membership = [...teamMembers].sort((a, b) => (roleOrder[a.role] ?? 99) - (roleOrder[b.role] ?? 99))[0];
+    // Has team membership — use role-based permissions (highest authority wins).
+    const membership = bestMembership!;
     const team = teams?.find((t: any) => t.id === membership.teamId);
     const memberIsAdmin = membership.role === 'Admin';
     const memberIsManager = membership.role === 'Manager';
@@ -299,6 +363,7 @@ export function usePermissions(): UserPermissions {
         canAccessChat: false,
         canAccessCustomers: false,
         canAccessServices: false,
+        canAccessProducts: false,
         canAccessExpenses: false,
         canAccessProfile: true,
         canAccessTimeTracking: false,
@@ -306,6 +371,9 @@ export function usePermissions(): UserPermissions {
         canComment: true,
         canAssignTasks: false,
         canManageMembers: false,
+        // Reporting capabilities: role defaults + per-member overrides, resolved in
+        // one place. Spread AFTER the literals so an override always wins.
+        ...reportingCapabilitiesFor(membership.role, membership),
         role: 'Guest',
         dataScope: 'readonly',
         teamId: membership.teamId,
@@ -333,6 +401,8 @@ export function usePermissions(): UserPermissions {
         canAccessChat: true,
         canAccessCustomers: true,
         canAccessServices: true,
+        // Sales sells whatever the tenant sells — services and products alike.
+        canAccessProducts: true,
         canAccessExpenses: membership.canAccessExpenses === true,
         canAccessMarketing: true,
         canAccessProfile: true,
@@ -341,6 +411,9 @@ export function usePermissions(): UserPermissions {
         canComment: true,
         canAssignTasks: false,
         canManageMembers: false,
+        // Reporting capabilities: role defaults + per-member overrides, resolved in
+        // one place. Spread AFTER the literals so an override always wins.
+        ...reportingCapabilitiesFor(membership.role, membership),
         role: membership.role,
         dataScope: 'team',
         teamId: membership.teamId,
@@ -368,6 +441,7 @@ export function usePermissions(): UserPermissions {
         canAccessChat: true,
         canAccessCustomers: membership.canAccessCustomers === true || membership.canAccessCRM === true,
         canAccessServices: membership.canAccessServices === true || membership.canAccessInvoices === true,
+        canAccessProducts: membership.canAccessProducts === true || membership.canAccessServices === true,
         canAccessExpenses: membership.canAccessExpenses === true || membership.canAccessInvoices === true,
         canAccessProfile: true,
         canAccessTimeTracking: true,
@@ -375,6 +449,9 @@ export function usePermissions(): UserPermissions {
         canComment: true,
         canAssignTasks: true,
         canManageMembers: false,
+        // Reporting capabilities: role defaults + per-member overrides, resolved in
+        // one place. Spread AFTER the literals so an override always wins.
+        ...reportingCapabilitiesFor(membership.role, membership),
         role: membership.role,
         dataScope: 'team',
         teamId: membership.teamId,
@@ -403,6 +480,7 @@ export function usePermissions(): UserPermissions {
         canAccessWhatsapp: true,
         canAccessCustomers: true,
         canAccessServices: true,
+        canAccessProducts: true,
         canAccessExpenses: false,
         canAccessMarketing: true,
         canAccessProfile: true,
@@ -411,6 +489,9 @@ export function usePermissions(): UserPermissions {
         canComment: true,
         canAssignTasks: true,
         canManageMembers: false,
+        // Reporting capabilities: role defaults + per-member overrides, resolved in
+        // one place. Spread AFTER the literals so an override always wins.
+        ...reportingCapabilitiesFor(membership.role, membership),
         role: membership.role,
         dataScope: 'assigned',
         teamId: membership.teamId,
@@ -441,6 +522,7 @@ export function usePermissions(): UserPermissions {
       canAccessWhatsapp: membership.canAccessWhatsapp === true || membership.canAccessChat === true,
       canAccessCustomers: membership.canAccessCustomers === true || membership.canAccessCRM === true,
       canAccessServices: membership.canAccessServices === true || membership.canAccessInvoices === true,
+      canAccessProducts: membership.canAccessProducts === true || membership.canAccessServices === true,
       canAccessExpenses: membership.canAccessExpenses === true || membership.canAccessInvoices === true,
       canAccessProfile: true,
       canAccessTimeTracking: !isViewer ? true : membership.canAccessTasks === true,
@@ -448,6 +530,9 @@ export function usePermissions(): UserPermissions {
       canComment: true,
       canAssignTasks: false,
       canManageMembers: false,
+      // Reporting capabilities: role defaults + per-member overrides, resolved in
+      // one place. Spread AFTER the literals so an override always wins.
+      ...reportingCapabilitiesFor(membership.role, membership),
       role: membership.role,
       dataScope: isViewer ? 'readonly' : 'assigned',
       teamId: membership.teamId,
@@ -459,7 +544,7 @@ export function usePermissions(): UserPermissions {
       isSuperAdmin: false,
       isLoading: false,
     };
-  }, [user, teamMembers, teams, isOwner, isLoading, isSuperAdmin]);
+  }, [user, teamMembers, teams, bestMembership, isOwner, isLoading, isSuperAdmin, hasError]);
 
   // One-time normalization: if teamMember.userId is stored as email instead of UID,
   // update it and reassign any tasks/records that reference the old email-based userId.
@@ -539,18 +624,24 @@ export function usePermissions(): UserPermissions {
           persistedTeamIdRef.current = chosen;
           setDoc(doc(db, 'users', user.uid), { teamId: chosen, businessId: chosenBiz, updatedAt: Timestamp.now() }, { merge: true }).catch(() => {});
         }
+        // Keep the signed claims aligned with the console's active tenant.
+        void ensureTenantClaims({ teamId: chosen, businessId: chosenBiz });
       })();
       return () => { cancelled = true; };
     }
     if (!permissions.isLoading && permissions.teamId !== null) {
       setGlobalTeamId(permissions.teamId);
-      // Resolve the active business: the team's businessId, or the teamId itself when
-      // the business layer isn't set up yet (keeps behavior identical pre-migration).
-      const activeBiz = (teams || []).find((t: any) => t.id === permissions.teamId)?.businessId || permissions.teamId;
+      // Resolve the active business — the tenant this team belongs to. Priority:
+      // the membership's own businessId (server-written on invite accept), then the
+      // team document, then the teamId itself for legacy teams with no business layer.
+      const activeBiz =
+        (bestMembership?.teamId === permissions.teamId ? bestMembership?.businessId : null)
+        || (teams || []).find((t: any) => t.id === permissions.teamId)?.businessId
+        || permissions.teamId;
       setGlobalBusinessId(activeBiz);
-      // Persist the active teamId + businessId to users/{uid} so Firestore rules can
-      // scope team/business-sensitive reads. teamMember docs use random IDs, so rules
-      // can't do a direct membership lookup; this self-write gives a deterministic path.
+      // Persist the active teamId + businessId to users/{uid} — the FALLBACK path for
+      // rules while a session has no tenant claims yet (the write is itself validated
+      // against a real membership by the `users` rule).
       if (user && persistedTeamIdRef.current !== permissions.teamId) {
         persistedTeamIdRef.current = permissions.teamId;
         setDoc(
@@ -559,8 +650,11 @@ export function usePermissions(): UserPermissions {
           { merge: true }
         ).catch(() => {});
       }
+      // Reconcile the SIGNED tenant identity (custom claims) with what we resolved.
+      // This is the authoritative boundary for Firestore rules; no-op when it matches.
+      void ensureTenantClaims({ teamId: permissions.teamId, businessId: activeBiz });
     }
-  }, [isSuperAdmin, permissions.isLoading, permissions.teamId, user, teamMembers, teams]);
+  }, [isSuperAdmin, permissions.isLoading, permissions.teamId, user, teamMembers, teams, bestMembership]);
 
   return permissions;
 }

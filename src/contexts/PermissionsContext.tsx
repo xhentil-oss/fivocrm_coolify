@@ -1,5 +1,8 @@
 import React, { createContext, useContext, useState, useMemo } from 'react';
 import { usePermissions as usePermissionsBase, UserPermissions } from '../hooks/usePermissions';
+// Role preview must simulate the reporting capabilities too, otherwise "view as
+// Member" would keep the owner's approve/publish powers and the preview would lie.
+import { reportingCapabilitiesFor } from '../lib/reporting/permissions';
 
 export type { UserPermissions };
 
@@ -30,10 +33,11 @@ function simulateRole(role: PreviewRole, base: UserPermissions): UserPermissions
         canAccessProjects: true, canAccessTasks: true, canAccessCRM: true,
         canAccessInvoices: true, canAccessReports: true, canAccessSettings: true,
         canAccessGoals: true, canAccessTeams: true, canAccessChat: true, canAccessWhatsapp: true,
-        canAccessCustomers: true, canAccessServices: true, canAccessExpenses: true,
+        canAccessCustomers: true, canAccessServices: true, canAccessProducts: true, canAccessExpenses: true,
         canAccessMarketing: true,
         canAccessProfile: true, canAccessTimeTracking: true,
         canEdit: true, canComment: true, canAssignTasks: true, canManageMembers: true,
+        ...reportingCapabilitiesFor('Admin'),
         role: 'Admin', dataScope: 'all', isAdmin: true, isOwner: false, isManager: false, isGuest: false,
       };
     case 'Sales':
@@ -42,10 +46,11 @@ function simulateRole(role: PreviewRole, base: UserPermissions): UserPermissions
         canAccessProjects: true, canAccessTasks: true, canAccessCRM: true,
         canAccessInvoices: true, canAccessReports: true, canAccessSettings: false,
         canAccessGoals: true, canAccessTeams: false, canAccessChat: true, canAccessWhatsapp: true,
-        canAccessCustomers: true, canAccessServices: true, canAccessExpenses: false,
+        canAccessCustomers: true, canAccessServices: true, canAccessProducts: true, canAccessExpenses: false,
         canAccessMarketing: true,
         canAccessProfile: true, canAccessTimeTracking: true,
         canEdit: true, canComment: true, canAssignTasks: false, canManageMembers: false,
+        ...reportingCapabilitiesFor('Sales'),
         role: 'Sales', dataScope: 'team', isAdmin: false, isOwner: false, isManager: false, isGuest: false,
       };
     case 'SalesAgent':
@@ -54,10 +59,11 @@ function simulateRole(role: PreviewRole, base: UserPermissions): UserPermissions
         canAccessProjects: false, canAccessTasks: true, canAccessCRM: true,
         canAccessInvoices: true, canAccessReports: false, canAccessSettings: false,
         canAccessGoals: false, canAccessTeams: false, canAccessChat: true, canAccessWhatsapp: true,
-        canAccessCustomers: true, canAccessServices: true, canAccessExpenses: false,
+        canAccessCustomers: true, canAccessServices: true, canAccessProducts: true, canAccessExpenses: false,
         canAccessMarketing: true,
         canAccessProfile: true, canAccessTimeTracking: true,
         canEdit: true, canComment: true, canAssignTasks: true, canManageMembers: false,
+        ...reportingCapabilitiesFor('SalesAgent'),
         role: 'SalesAgent', dataScope: 'assigned', isAdmin: false, isOwner: false, isManager: false, isGuest: false,
       };
     case 'Manager':
@@ -66,9 +72,10 @@ function simulateRole(role: PreviewRole, base: UserPermissions): UserPermissions
         canAccessProjects: true, canAccessTasks: true, canAccessCRM: false,
         canAccessInvoices: false, canAccessReports: true, canAccessSettings: false,
         canAccessGoals: true, canAccessTeams: false, canAccessChat: true, canAccessWhatsapp: true,
-        canAccessCustomers: false, canAccessServices: false, canAccessExpenses: false,
+        canAccessCustomers: false, canAccessServices: false, canAccessProducts: false, canAccessExpenses: false,
         canAccessProfile: true, canAccessTimeTracking: true,
         canEdit: true, canComment: true, canAssignTasks: true, canManageMembers: false,
+        ...reportingCapabilitiesFor('Manager'),
         role: 'Manager', dataScope: 'team', isAdmin: false, isOwner: false, isManager: true, isGuest: false,
       };
     case 'Member':
@@ -77,9 +84,10 @@ function simulateRole(role: PreviewRole, base: UserPermissions): UserPermissions
         canAccessProjects: true, canAccessTasks: true, canAccessCRM: false,
         canAccessInvoices: false, canAccessReports: false, canAccessSettings: false,
         canAccessGoals: true, canAccessTeams: false, canAccessChat: true, canAccessWhatsapp: true,
-        canAccessCustomers: false, canAccessServices: false, canAccessExpenses: false,
+        canAccessCustomers: false, canAccessServices: false, canAccessProducts: false, canAccessExpenses: false,
         canAccessProfile: true, canAccessTimeTracking: true,
         canEdit: true, canComment: true, canAssignTasks: false, canManageMembers: false,
+        ...reportingCapabilitiesFor('Member'),
         role: 'Member', dataScope: 'assigned', isAdmin: false, isOwner: false, isManager: false, isGuest: false,
       };
     case 'Viewer':
@@ -88,9 +96,10 @@ function simulateRole(role: PreviewRole, base: UserPermissions): UserPermissions
         canAccessProjects: true, canAccessTasks: true, canAccessCRM: false,
         canAccessInvoices: false, canAccessReports: false, canAccessSettings: false,
         canAccessGoals: false, canAccessTeams: false, canAccessChat: true, canAccessWhatsapp: true,
-        canAccessCustomers: false, canAccessServices: false, canAccessExpenses: false,
+        canAccessCustomers: false, canAccessServices: false, canAccessProducts: false, canAccessExpenses: false,
         canAccessProfile: true, canAccessTimeTracking: false,
         canEdit: false, canComment: true, canAssignTasks: false, canManageMembers: false,
+        ...reportingCapabilitiesFor('Viewer'),
         role: 'Viewer', dataScope: 'readonly', isAdmin: false, isOwner: false, isManager: false, isGuest: false,
       };
     case 'Guest':
@@ -99,9 +108,10 @@ function simulateRole(role: PreviewRole, base: UserPermissions): UserPermissions
         canAccessProjects: true, canAccessTasks: true, canAccessCRM: false,
         canAccessInvoices: false, canAccessReports: false, canAccessSettings: false,
         canAccessGoals: false, canAccessTeams: false, canAccessChat: false, canAccessWhatsapp: false,
-        canAccessCustomers: false, canAccessServices: false, canAccessExpenses: false,
+        canAccessCustomers: false, canAccessServices: false, canAccessProducts: false, canAccessExpenses: false,
         canAccessProfile: true, canAccessTimeTracking: false,
         canEdit: false, canComment: true, canAssignTasks: false, canManageMembers: false,
+        ...reportingCapabilitiesFor('Guest'),
         role: 'Guest', dataScope: 'readonly', isAdmin: false, isOwner: false, isManager: false, isGuest: true,
       };
     default:

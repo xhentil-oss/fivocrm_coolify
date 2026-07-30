@@ -2,6 +2,8 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import Stripe from 'stripe';
 import admin, { adminDb as db } from './_firebaseAdmin.js';
 import { whmcsConfigured, pushInvoicePayment } from './_whmcs.js';
+import { planForPriceId, seatsForPlan, tenantStatusFromStripe } from './_billingPlans.js';
+import { writeAudit } from './_audit.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2026-02-25.clover',
@@ -136,6 +138,155 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
+  // ── SaaS SUBSCRIPTION lifecycle (the tenant's own plan) ────────────────────
+  // Distinct from the block above, which is a TENANT'S CLIENT paying an invoice
+  // (mode: 'payment'). Here the FivoCRM tenant pays FivoCRM (mode: 'subscription').
+  try {
+    await handleSubscriptionEvent(event);
+  } catch (err: any) {
+    console.error('[Stripe Webhook] subscription handling failed:', err?.message || err);
+    // A 500 makes Stripe retry, which is what we want for a transient write failure —
+    // the handler is idempotent.
+    return res.status(500).json({ error: 'Failed to apply subscription state' });
+  }
+
   // Acknowledge the event
   return res.status(200).json({ received: true });
+}
+
+/** Resolve the tenant a Stripe object belongs to, without trusting client input. */
+async function resolveBusinessId(args: {
+  metadataBusinessId?: string | null;
+  customerId?: string | null;
+}): Promise<string | null> {
+  if (args.metadataBusinessId) return args.metadataBusinessId;
+  if (!args.customerId) return null;
+  const snap = await db.collection('businesses')
+    .where('stripeCustomerId', '==', args.customerId).limit(1).get();
+  return snap.empty ? null : snap.docs[0].id;
+}
+
+/**
+ * Apply subscription state onto `businesses/{id}`.
+ *
+ * The PLAN is always derived from the Stripe Price actually being billed, never from
+ * the checkout request — so a tampered request body cannot grant a higher tier. The
+ * STATUS maps Stripe's subscription status onto the tenant lifecycle, which Firestore
+ * rules then enforce (`tenantActive()` freezes writes for a suspended tenant).
+ */
+async function handleSubscriptionEvent(event: Stripe.Event): Promise<void> {
+  const now = admin.firestore.Timestamp.now();
+
+  // 1. Checkout finished → attach customer + subscription to the tenant.
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object as Stripe.Checkout.Session;
+    if (session.mode !== 'subscription') return;
+    const businessId = await resolveBusinessId({
+      metadataBusinessId: session.metadata?.businessId || session.client_reference_id,
+      customerId: typeof session.customer === 'string' ? session.customer : null,
+    });
+    if (!businessId) {
+      console.warn('[Stripe Webhook] subscription checkout without a resolvable businessId');
+      return;
+    }
+    const subscriptionId = typeof session.subscription === 'string' ? session.subscription : null;
+    let plan: string | null = null;
+    let periodEnd: number | null = null;
+    let stripeStatus = 'active';
+    if (subscriptionId) {
+      const sub = await stripe.subscriptions.retrieve(subscriptionId);
+      plan = planForPriceId(sub.items.data[0]?.price?.id) || (session.metadata?.plan as string) || null;
+      periodEnd = ((sub as any).current_period_end as number) || null;
+      stripeStatus = sub.status;
+    }
+    await db.collection('businesses').doc(businessId).set({
+      stripeCustomerId: typeof session.customer === 'string' ? session.customer : null,
+      stripeSubscriptionId: subscriptionId,
+      ...(plan ? { plan, seats: seatsForPlan(plan) } : {}),
+      status: tenantStatusFromStripe(stripeStatus),
+      ...(periodEnd ? { currentPeriodEnd: admin.firestore.Timestamp.fromMillis(periodEnd * 1000) } : {}),
+      pastDueSince: admin.firestore.FieldValue.delete(),
+      suspendedAt: admin.firestore.FieldValue.delete(),
+      updatedAt: now,
+    }, { merge: true });
+    await writeAudit({
+      businessId, actorUid: null, action: 'billing.subscription_started',
+      target: `plan:${plan || 'unknown'}`, meta: { subscriptionId },
+    });
+    return;
+  }
+
+  // 2. Subscription created/updated/deleted → keep plan + status in sync.
+  if (event.type === 'customer.subscription.created'
+    || event.type === 'customer.subscription.updated'
+    || event.type === 'customer.subscription.deleted') {
+    const sub = event.data.object as Stripe.Subscription;
+    const businessId = await resolveBusinessId({
+      metadataBusinessId: (sub.metadata?.businessId as string) || null,
+      customerId: typeof sub.customer === 'string' ? sub.customer : null,
+    });
+    if (!businessId) return;
+
+    const deleted = event.type === 'customer.subscription.deleted';
+    const plan = planForPriceId(sub.items.data[0]?.price?.id);
+    const status = deleted ? 'canceled' : tenantStatusFromStripe(sub.status);
+    const periodEnd = (sub as any).current_period_end as number | undefined;
+
+    const patch: Record<string, any> = {
+      stripeSubscriptionId: deleted ? admin.firestore.FieldValue.delete() : sub.id,
+      status,
+      cancelAtPeriodEnd: !!sub.cancel_at_period_end,
+      updatedAt: now,
+    };
+    // The tier is kept on cancellation so the owner still sees what they had; access
+    // is governed by `status`, not `plan`.
+    if (plan && !deleted) { patch.plan = plan; patch.seats = seatsForPlan(plan); }
+    if (periodEnd) patch.currentPeriodEnd = admin.firestore.Timestamp.fromMillis(periodEnd * 1000);
+    if (status === 'past_due') {
+      // Start the grace clock only once (the cron suspends when it runs out).
+      const snap = await db.collection('businesses').doc(businessId).get();
+      if (!(snap.data() as any)?.pastDueSince) patch.pastDueSince = now;
+    } else if (status === 'active') {
+      patch.pastDueSince = admin.firestore.FieldValue.delete();
+      patch.suspendedAt = admin.firestore.FieldValue.delete();
+    }
+
+    await db.collection('businesses').doc(businessId).set(patch, { merge: true });
+    await writeAudit({
+      businessId, actorUid: null, action: `billing.${event.type}`,
+      target: `subscription:${sub.id}`, meta: { status, plan: plan || null },
+    });
+    return;
+  }
+
+  // 3. Invoice paid / failed → status + grace clock.
+  if (event.type === 'invoice.paid' || event.type === 'invoice.payment_failed') {
+    const invoice = event.data.object as Stripe.Invoice;
+    // Only OUR subscription invoices matter here; a tenant's own client invoices are
+    // one-off payments (handled above) and carry no subscription.
+    const subscriptionId = (invoice as any).subscription;
+    if (!subscriptionId) return;
+    const businessId = await resolveBusinessId({
+      metadataBusinessId: (invoice.metadata?.businessId as string) || null,
+      customerId: typeof invoice.customer === 'string' ? invoice.customer : null,
+    });
+    if (!businessId) return;
+
+    if (event.type === 'invoice.paid') {
+      await db.collection('businesses').doc(businessId).set({
+        status: 'active',
+        pastDueSince: admin.firestore.FieldValue.delete(),
+        suspendedAt: admin.firestore.FieldValue.delete(),
+        lastPaymentAt: now,
+        updatedAt: now,
+      }, { merge: true });
+      await writeAudit({ businessId, actorUid: null, action: 'billing.invoice_paid', target: `invoice:${invoice.id}` });
+    } else {
+      const snap = await db.collection('businesses').doc(businessId).get();
+      const patch: Record<string, any> = { status: 'past_due', updatedAt: now };
+      if (!(snap.data() as any)?.pastDueSince) patch.pastDueSince = now;
+      await db.collection('businesses').doc(businessId).set(patch, { merge: true });
+      await writeAudit({ businessId, actorUid: null, action: 'billing.payment_failed', target: `invoice:${invoice.id}` });
+    }
+  }
 }

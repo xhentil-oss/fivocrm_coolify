@@ -7,6 +7,12 @@ import notificationHandler from './_send-notification-email.js';
 import marketingWebhookHandler from './_marketing-webhook.js';
 import acceptInviteHandler from './_accept-invite.js';
 import socialHandler from './_social-api.js';
+import linkContactHandler from './_link-contact.js';
+import syncClaimsHandler from './_sync-claims.js';
+import notifyStaffHandler from './_notify-staff.js';
+import tenantSecretsHandler from './_tenant-secrets.js';
+import billingHandler from './_billing.js';
+import reportsHandler from './_reports.js';
 
 /**
  * Consolidated dispatcher (named "email" for historical reasons — it also routes
@@ -19,6 +25,12 @@ import socialHandler from './_social-api.js';
  *   /api/send-welcome-email       -> ?type=welcome
  *   /api/accept-invite            -> ?type=accept-invite
  *   /api/social                   -> ?type=social  (sub-dispatches on ?action=)
+ *   /api/link-contact             -> ?type=link-contact
+ *   /api/sync-claims              -> ?type=sync-claims     (tenant custom claims)
+ *   /api/notify-staff             -> ?type=notify-staff    (portal → own tenant's staff)
+ *   /api/tenant-secrets           -> ?type=tenant-secrets  (write-only credential vault)
+ *   /api/billing                  -> ?type=billing         (Stripe subscription checkout/portal)
+ *   /api/reports                  -> ?type=reports         (client report actions + email delivery)
  *
  * Created to stay under Vercel Hobby's 12-function limit.
  */
@@ -36,9 +48,35 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.url.includes('marketing-webhook')) type = 'marketing-webhook';
     else if (req.url.includes('accept-invite')) type = 'accept-invite';
     else if (req.url.includes('/api/social')) type = 'social';
+    else if (req.url.includes('link-contact')) type = 'link-contact';
+    else if (req.url.includes('sync-claims')) type = 'sync-claims';
+    else if (req.url.includes('notify-staff')) type = 'notify-staff';
+    else if (req.url.includes('tenant-secrets')) type = 'tenant-secrets';
+    else if (req.url.includes('/api/billing')) type = 'billing';
+    else if (req.url.includes('/api/reports')) type = 'reports';
   }
 
   switch (type) {
+    case 'sync-claims':
+      // Materialises server-authoritative tenant claims (bid/tid/roles/cid).
+      return syncClaimsHandler(req, res);
+    case 'notify-staff':
+      // Portal client → the staff of their OWN tenant (recipients resolved server-side).
+      return notifyStaffHandler(req, res);
+    case 'tenant-secrets':
+      // Write-only credential vault (teamSecrets is deny-all for clients).
+      return tenantSecretsHandler(req, res);
+    case 'reports':
+      // Reporting module: client view/ack/approve/reject/comment + staff email send.
+      // The client's own writes are denied by Firestore rules, so this is the only
+      // way a client decision can be recorded — and it re-checks ownership.
+      return reportsHandler(req, res);
+    case 'billing':
+      // SaaS subscription: Stripe Checkout (mode=subscription) + Billing Portal.
+      return billingHandler(req, res);
+    case 'link-contact':
+      // Pairs a customer with the CRM lead for the same person (portal bootstrap).
+      return linkContactHandler(req, res);
     case 'social':
       // Social Media module — sub-dispatches on ?action= (oauth/list/sync/...).
       return socialHandler(req, res);
@@ -60,7 +98,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     default:
       return res.status(400).json({
         error: 'Unknown email type',
-        detail: 'Expected ?type=invite|invoice|lead-reminder|welcome|notification',
+        detail: 'Expected ?type=invite|invoice|lead-reminder|welcome|notification|reports',
       });
   }
 }

@@ -17,7 +17,7 @@ import type { Invoice, InvoiceItem, Service, Customer } from '../../types';
 import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../../lib/native';
 
 const PortalInvoicesView: React.FC = () => {
-  const { customerId } = useClientPortal();
+  const { customerId, businessId: portalBusinessId } = useClientPortal();
   const { user } = useAuth();
   const { toast } = useToast();
   const [statusFilter, setStatusFilter] = useState<string>('__all__');
@@ -60,7 +60,15 @@ const PortalInvoicesView: React.FC = () => {
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });
-  const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
+  const { data: services } = useCollection<Service>('services', {
+    // The service catalogue is tenant data: scope it to the client's OWN business.
+    // Reading it unscoped (the old `skipTeamFilter` behaviour) returned every
+    // tenant's catalogue and pricing to any signed-in client.
+    skip: !portalBusinessId,
+    where: portalBusinessId ? [{ field: 'businessId', operator: '==', value: portalBusinessId }] : undefined,
+    skipTeamFilter: true,
+    skipBusinessFilter: true,
+  });
   // Read only the client's own customer doc (server-side RLS: isPortalClientDoc).
   const { data: customer } = useDocument<Customer>('customers', customerId || undefined);
   useMutation<Invoice>('invoices');

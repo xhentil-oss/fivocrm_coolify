@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import OpenAI from 'openai';
 import { adminAuth, adminDb } from './_firebaseAdmin.js';
+import { getTeamConfig } from './_tenantConfig.js';
 
 const SYSTEM_PROMPT = `Ti je FivoAI, asistenti inteligjent i platformës FivoCRM. Flet shqip dhe ndihmon stafin dhe klientët me detyra specifike biznesi.
 
@@ -126,8 +127,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       teamAuthorized = isMember || isPortalClient;
       if (teamAuthorized) {
-        const settingsSnap = await adminDb.collection('teamSettings').doc(teamId).get();
-        const s = settingsSnap.data() || {};
+        // Credentials come from the server-only vault (teamSecrets), merged in.
+        const s = await getTeamConfig(teamId);
         if (s.aiApiKey) {
           teamApiKey = s.aiApiKey;
           teamProvider = s.aiProvider === 'openai' ? 'openai' : 'gemini';

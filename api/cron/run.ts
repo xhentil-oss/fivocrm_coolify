@@ -6,6 +6,14 @@ import { runWhmcsSync, runWhmcsClientSync } from '../_whmcsSync.js';
 import { sendBulkEmail, renderMergeTokens } from '../_mailer.js';
 import { syncAllAccounts, currentPeriod } from '../_social.js';
 import { sendReportsForPeriod } from '../_socialEmail.js';
+// Credentials live in `teamSecrets` (client-unreadable), NOT in `teamSettings`.
+// Always resolve tenant config through getTeamConfig so secrets are merged in.
+import { getTeamConfig, SECRET_FIELDS, writeTeamSecrets } from '../_tenantConfig.js';
+import { syncTenantClaims } from '../_tenantClaims.js';
+import { writeAudit } from '../_audit.js';
+// Reporting module jobs. Kept in their own file: they are self-contained,
+// idempotent, and this file is already 3.4k lines.
+import { runReportSchedules, runReportReminders, runClientHealthRollup } from '../_reportJobs.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 function authorize(req: VercelRequest): boolean {
@@ -163,6 +171,44 @@ function addFrequency(date: Date, frequency: string, dayOfWeek?: number, dayOfMo
   return d;
 }
 
+
+/**
+ * Tenant-scoped audience read for campaigns/broadcasts.
+ *
+ * These jobs used to read `leads`/`customers`/`domains` in FULL for every campaign,
+ * on the (once-true, now false) assumption that those collections were not
+ * tenant-isolated. Two problems: a tenant's broadcast could reach ANOTHER tenant's
+ * contacts, and the read cost of one campaign scaled with the whole platform.
+ * Everything now filters by the campaign's own businessId, with a teamId fallback for
+ * legacy docs created before the business layer.
+ */
+async function tenantScopedDocs(
+  collection: string,
+  scope: { businessId?: string | null; teamId?: string | null },
+): Promise<Array<{ id: string; data: any }>> {
+  const out: Array<{ id: string; data: any }> = [];
+  const seen = new Set<string>();
+  const push = (snap: admin.firestore.QuerySnapshot) => {
+    for (const d of snap.docs) {
+      if (seen.has(d.id)) continue;
+      seen.add(d.id);
+      out.push({ id: d.id, data: d.data() });
+    }
+  };
+  if (scope.businessId) {
+    push(await db.collection(collection).where('businessId', '==', scope.businessId).get());
+  }
+  // Legacy docs stamped only with teamId (pre-businessId backfill).
+  if (scope.teamId && scope.teamId !== scope.businessId) {
+    push(await db.collection(collection).where('teamId', '==', scope.teamId).get());
+  }
+  if (!scope.businessId && !scope.teamId) {
+    // Fail closed rather than fanning out across tenants.
+    console.warn(`[cron] ${collection} audience skipped: campaign has no tenant key`);
+  }
+  return out;
+}
+
 // ── JOB: task-deadline-alerts ─────────────────────────────────────────────────
 async function runTaskDeadlineAlerts() {
   const transporter = makeTransporter();
@@ -176,7 +222,12 @@ async function runTaskDeadlineAlerts() {
   // alerted as "due soon" still gets a fresh "overdue" alert once it passes its
   // deadline (the old single `dueNotificationSent` flag suppressed that). Legacy
   // tasks (missing overdueNotificationSent) are caught for a one-time overdue alert.
-  const tasksSnap = await db.collection('tasks').get();
+  // Only tasks whose deadline is already inside the alert window can produce an
+  // alert, so the range filter does the work Firestore is good at. Previously this
+  // read EVERY task of EVERY tenant on every run.
+  const tasksSnap = await db.collection('tasks')
+    .where('endDate', '<=', admin.firestore.Timestamp.fromDate(alertThreshold))
+    .get();
   let notified = 0;
   const ops: Promise<any>[] = [];
 
@@ -341,8 +392,7 @@ async function runOverdueReminders() {
   };
   const getTeamSettings = async (teamId: string) => {
     if (tsCache.has(teamId)) return tsCache.get(teamId);
-    const d = await db.collection('teamSettings').doc(teamId).get();
-    const data = d.exists ? d.data() : null;
+    const data = await getTeamConfig(teamId);
     tsCache.set(teamId, data);
     return data;
   };
@@ -978,7 +1028,15 @@ async function runGoalOverdueAlerts() {
   const now = new Date();
   const twoWeeksAgo = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
 
-  const goalsSnap = await db.collection('goals').get();
+  // A goal can only be overdue by dueDate, or (when it has none) by being older than
+  // two weeks — two indexed range queries instead of reading every tenant's goals.
+  const [byDue, byCreated] = await Promise.all([
+    db.collection('goals').where('dueDate', '<=', admin.firestore.Timestamp.fromDate(now)).get(),
+    db.collection('goals').where('createdAt', '<=', admin.firestore.Timestamp.fromDate(twoWeeksAgo)).get(),
+  ]);
+  const goalDocs = new Map<string, admin.firestore.QueryDocumentSnapshot>();
+  for (const d of [...byDue.docs, ...byCreated.docs]) goalDocs.set(d.id, d);
+  const goalsSnap = { empty: goalDocs.size === 0, docs: Array.from(goalDocs.values()) };
   if (goalsSnap.empty) return { notified: 0 };
 
   let notified = 0;
@@ -1054,8 +1112,7 @@ async function runLeadFollowUpReminders() {
   const getTeamSettings = async (teamId: string) => {
     if (!teamId) return null;
     if (tsCache.has(teamId)) return tsCache.get(teamId);
-    const doc = await db.collection('teamSettings').doc(teamId).get();
-    const data = doc.exists ? doc.data() : null;
+    const data = await getTeamConfig(teamId);
     tsCache.set(teamId, data);
     return data;
   };
@@ -1240,8 +1297,7 @@ async function runLeadWhatsappAutoReminders() {
   const tplCache = new Map<string, any>();
   const getTeamSettings = async (teamId: string) => {
     if (tsCache.has(teamId)) return tsCache.get(teamId);
-    const doc = await db.collection('teamSettings').doc(teamId).get();
-    const data = doc.exists ? doc.data() : null;
+    const data = await getTeamConfig(teamId);
     tsCache.set(teamId, data);
     return data;
   };
@@ -1539,8 +1595,7 @@ async function runWhatsappBroadcasts() {
       if (!tplDoc.exists) { await bDoc.ref.update({ status: 'failed', error: 'Template mungon', updatedAt: now }); continue; }
       const tpl = tplDoc.data() as any;
 
-      const tsDoc = await db.collection('teamSettings').doc(b.teamId).get();
-      const settings = (tsDoc.data() as any) || {};
+      const settings = await getTeamConfig(b.teamId);
       const useBaileys = b.channel === 'baileys';
 
       // Resolve channel credentials up front.
@@ -1569,8 +1624,9 @@ async function runWhatsappBroadcasts() {
       const audience: string[] = seg.audience?.length ? seg.audience : ['leads'];
       const byPhone = new Map<string, { id: string; name?: string; phone: string; [k: string]: any }>();
       // "Has a registered domain" filter → set of customerIds owning a domain.
+      const audienceScope = { businessId: (b as any).businessId || null, teamId: b.teamId || null };
       const domainCustomerIds: Set<string> | null = seg.hasDomain
-        ? new Set((await db.collection('domains').get()).docs.map(d => d.data().customerId).filter(Boolean).map(String))
+        ? new Set((await tenantScopedDocs('domains', audienceScope)).map(d => d.data.customerId).filter(Boolean).map(String))
         : null;
 
       // Tag filtering (normalize array/comma-string; support ANY/ALL + legacy single tag).
@@ -1589,12 +1645,10 @@ async function runWhatsappBroadcasts() {
       };
 
       if (audience.includes('leads')) {
-        // Leads aren't team-isolated in this app (loaded app-wide with
-        // skipTeamFilter, rules: read if isAuth), so include them all — matching
-        // the /app/crm view — then narrow by the segment filters.
-        const leadsSnap = await db.collection('leads').get();
-        for (const d of leadsSnap.docs) {
-          const l = d.data() as any;
+        // Leads of THIS tenant only. (This used to read every tenant's leads, which
+        // both leaked contacts across tenants and made the cost platform-wide.)
+        for (const { id: leadId, data: l } of await tenantScopedDocs('leads', audienceScope)) {
+          const d = { id: leadId };
           const rawPhone = l.phone || l.phoneNumber;
           if (!rawPhone) continue;
           if (seg.statuses?.length && !seg.statuses.includes(l.status)) continue;
@@ -1607,11 +1661,9 @@ async function runWhatsappBroadcasts() {
         }
       }
       if (audience.includes('customers')) {
-        // Customers aren't team-isolated in this app (read: isAuth, no reliable
-        // teamId), so we include them all — matching the /app/customers view.
-        const custSnap = await db.collection('customers').get();
-        for (const d of custSnap.docs) {
-          const c = d.data() as any;
+        // Customers of THIS tenant only (see the note on leads above).
+        for (const { id: custId, data: c } of await tenantScopedDocs('customers', audienceScope)) {
+          const d = { id: custId };
           if (!c.phone) continue;
           if (!matchesTags(c)) continue;
           if (seg.assignedToUserId && c.assignedToUserId !== seg.assignedToUserId) continue;
@@ -1731,8 +1783,7 @@ async function runEmailCampaigns() {
       }
 
       // Per-team email provider config (Settings → Integrime); falls back to env.
-      const tsDoc = await db.collection('teamSettings').doc(c.teamId).get();
-      const ts = (tsDoc.data() as any) || {};
+      const ts = await getTeamConfig(c.teamId);
       const mailerConfig = {
         emailProvider: ts.emailProvider,
         emailApiKey: ts.emailApiKey,
@@ -1751,8 +1802,9 @@ async function runEmailCampaigns() {
       const seg = c.segment || {};
       const audience: string[] = seg.audience?.length ? seg.audience : ['leads'];
       // "Has a registered domain" filter → set of customerIds owning a domain.
+      const audienceScope = { businessId: (c as any).businessId || null, teamId: c.teamId || null };
       const domainCustomerIds: Set<string> | null = seg.hasDomain
-        ? new Set((await db.collection('domains').get()).docs.map(d => d.data().customerId).filter(Boolean).map(String))
+        ? new Set((await tenantScopedDocs('domains', audienceScope)).map(d => d.data.customerId).filter(Boolean).map(String))
         : null;
       const wantTags: string[] = seg.tags?.length ? seg.tags : (seg.tag ? [seg.tag] : []);
       const tagMatchAll = seg.tagMatch === 'all';
@@ -1770,9 +1822,9 @@ async function runEmailCampaigns() {
 
       const byEmail = new Map<string, { id: string; name?: string; company?: string; email: string }>();
       if (audience.includes('leads')) {
-        const leadsSnap = await db.collection('leads').get();
-        for (const d of leadsSnap.docs) {
-          const l = d.data() as any;
+        // Leads of THIS tenant only — a campaign must never reach another tenant's list.
+        for (const { id: leadId, data: l } of await tenantScopedDocs('leads', audienceScope)) {
+          const d = { id: leadId };
           const email = normalizeEmail(l.email);
           if (!isValidCampaignEmail(email)) continue;
           if (seg.statuses?.length && !seg.statuses.includes(l.status)) continue;
@@ -1784,9 +1836,8 @@ async function runEmailCampaigns() {
         }
       }
       if (audience.includes('customers')) {
-        const custSnap = await db.collection('customers').get();
-        for (const d of custSnap.docs) {
-          const cu = d.data() as any;
+        for (const { id: custId, data: cu } of await tenantScopedDocs('customers', audienceScope)) {
+          const d = { id: custId };
           const email = normalizeEmail(cu.email);
           if (!isValidCampaignEmail(email)) continue;
           if (!matchesTags(cu)) continue;
@@ -1840,7 +1891,7 @@ function makeTeamSettingsCache() {
   const cache = new Map<string, any>();
   const get = async (teamId: string) => {
     if (!teamId) return {};
-    if (!cache.has(teamId)) cache.set(teamId, (await db.collection('teamSettings').doc(teamId).get()).data() || {});
+    if (!cache.has(teamId)) cache.set(teamId, await getTeamConfig(teamId));
     return cache.get(teamId);
   };
   const cfgFor = async (teamId: string) => {
@@ -2176,6 +2227,495 @@ async function runBackfillMemberKeys(opts?: { dryRun?: boolean }) {
   return { total: snap.size, alreadyKeyed, reKeyed, dedupedDuplicates, skippedIncomplete, errors, dryRun: !!opts?.dryRun };
 }
 
+// ── Tenant data lifecycle (GDPR / DPA) ───────────────────────────────────────
+// Every collection that can hold a tenant's data, so "give me everything you have"
+// and "delete everything you have" are answerable — a hard requirement in any
+// enterprise DPA, and previously not implementable at all.
+const TENANT_DATA_COLLECTIONS = [
+  ...BACKFILL_COLLECTIONS,
+  'payments', 'domains', 'dailyFocus', 'productivitySettings', 'weeklyReviews',
+  'emailCampaigns', 'emailTemplates', 'campaignEnrollments', 'waTemplates', 'waBroadcasts',
+  'socialSnapshots', 'products', 'productCategories', 'productBrands', 'stockMovements',
+  'shopOrders', 'conversations', 'auditLogs', 'notifications',
+];
+
+/**
+ * JOB: tenant-export — everything the platform holds for one tenant, as JSON.
+ * Super-admin only. Time-budgeted: returns `truncated: true` with the collections it
+ * did not reach, so a huge tenant can be exported in several calls.
+ */
+async function runTenantExport(businessId: string, opts?: { maxDocs?: number }) {
+  if (!businessId) throw new Error('businessId required');
+  const started = Date.now();
+  const BUDGET_MS = 40_000;
+  const maxDocs = opts?.maxDocs && opts.maxDocs > 0 ? opts.maxDocs : 20_000;
+
+  const data: Record<string, any[]> = {};
+  const counts: Record<string, number> = {};
+  const skipped: string[] = [];
+  let total = 0;
+
+  // The tenant's own structure documents first.
+  const bizSnap = await db.collection('businesses').doc(businessId).get();
+  data.businesses = bizSnap.exists ? [{ id: bizSnap.id, ...(bizSnap.data() as any) }] : [];
+  const teamsSnap = await db.collection('teams').where('businessId', '==', businessId).get();
+  data.teams = teamsSnap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+  // teamSettings is keyed by teamId; teamSecrets is deliberately NOT exported.
+  data.teamSettings = [];
+  for (const t of teamsSnap.docs) {
+    const s = await db.collection('teamSettings').doc(t.id).get();
+    if (s.exists) data.teamSettings.push({ id: s.id, ...(s.data() as any) });
+  }
+
+  for (const coll of TENANT_DATA_COLLECTIONS) {
+    if (Date.now() - started > BUDGET_MS || total >= maxDocs) { skipped.push(coll); continue; }
+    try {
+      const snap = await db.collection(coll).where('businessId', '==', businessId).get();
+      data[coll] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+      counts[coll] = snap.size;
+      total += snap.size;
+    } catch (err: any) {
+      counts[coll] = -1;
+      console.error(`[tenant-export] ${coll} failed:`, err?.message || err);
+    }
+  }
+
+  await writeAudit({
+    businessId, actorUid: null, action: 'tenant.export',
+    target: `business:${businessId}`, meta: { docs: total, truncated: skipped.length > 0 },
+  });
+
+  return {
+    businessId, exportedAt: new Date().toISOString(), docs: total, counts,
+    truncated: skipped.length > 0, skipped, data,
+  };
+}
+
+/**
+ * JOB: tenant-delete — irreversible erasure of one tenant.
+ * Super-admin only AND requires `confirm` to equal the businessId, so it can never be
+ * triggered by a stray request. Resumable + time-budgeted; the business document itself
+ * is removed last, so an interrupted run can always be resumed.
+ */
+async function runTenantDelete(businessId: string, confirm: string, opts?: { dryRun?: boolean }) {
+  if (!businessId) throw new Error('businessId required');
+  if (confirm !== businessId) {
+    throw new Error('Confirmation mismatch: pass confirm=<businessId> to delete a tenant');
+  }
+  const started = Date.now();
+  const BUDGET_MS = 40_000;
+  const deleted: Record<string, number> = {};
+  let totalDeleted = 0;
+  let exhausted = false;
+
+  const deleteQuery = async (coll: string, snap: admin.firestore.QuerySnapshot) => {
+    let n = 0;
+    // Batches of 400 (Firestore limit is 500 writes per batch).
+    for (let i = 0; i < snap.docs.length; i += 400) {
+      if (Date.now() - started > BUDGET_MS) { exhausted = true; break; }
+      const batch = db.batch();
+      for (const d of snap.docs.slice(i, i + 400)) batch.delete(d.ref);
+      if (!opts?.dryRun) await batch.commit();
+      n += Math.min(400, snap.docs.length - i);
+    }
+    deleted[coll] = (deleted[coll] || 0) + n;
+    totalDeleted += n;
+  };
+
+  for (const coll of TENANT_DATA_COLLECTIONS) {
+    if (exhausted) break;
+    try {
+      const snap = await db.collection(coll).where('businessId', '==', businessId).limit(2000).get();
+      if (!snap.empty) await deleteQuery(coll, snap);
+      if (snap.size === 2000) exhausted = true; // more remain → resume with another call
+    } catch (err: any) {
+      console.error(`[tenant-delete] ${coll} failed:`, err?.message || err);
+    }
+  }
+
+  // Structure + credentials last, and only once the data is gone.
+  if (!exhausted) {
+    const teamsSnap = await db.collection('teams').where('businessId', '==', businessId).get();
+    for (const t of teamsSnap.docs) {
+      if (!opts?.dryRun) {
+        await db.collection('teamSettings').doc(t.id).delete().catch(() => {});
+        await db.collection('teamSecrets').doc(t.id).delete().catch(() => {});
+        await t.ref.delete().catch(() => {});
+      }
+      totalDeleted += 3;
+    }
+    // publicTenants entry (subdomain → tenant) and finally the business itself.
+    const bizSnap = await db.collection('businesses').doc(businessId).get();
+    const sub = bizSnap.exists ? (bizSnap.data() as any)?.portalSubdomain : null;
+    if (sub && !opts?.dryRun) await db.collection('publicTenants').doc(String(sub)).delete().catch(() => {});
+    if (!opts?.dryRun) await db.collection('businesses').doc(businessId).delete().catch(() => {});
+  }
+
+  // The audit entry is written OUTSIDE the tenant (businessId kept for traceability)
+  // and survives the deletion, which is what a DPA asks for.
+  await writeAudit({
+    businessId, actorUid: null, action: opts?.dryRun ? 'tenant.delete_dry_run' : 'tenant.delete',
+    target: `business:${businessId}`, meta: { deleted, totalDeleted, complete: !exhausted },
+  });
+
+  return { businessId, deleted, totalDeleted, complete: !exhausted, dryRun: !!opts?.dryRun };
+}
+
+// ── JOB: subscription-lifecycle (the SaaS money loop) ────────────────────────
+// Turns billing state into tenant state, every day:
+//   trialing + trialEndsAt passed          → past_due (grace clock starts)
+//   past_due for more than GRACE_DAYS      → suspended (rules freeze writes)
+//   canceled + period ended                → suspended
+// Owners are warned 3 days before the trial ends, on expiry, and on suspension.
+// Idempotent: a tenant already in the target state is skipped.
+const BILLING_GRACE_DAYS = 7;
+async function runSubscriptionLifecycle(opts?: { dryRun?: boolean }) {
+  const now = new Date();
+  const nowTs = admin.firestore.Timestamp.now();
+  const snap = await db.collection('businesses').get();
+
+  let warned = 0, expired = 0, suspended = 0, skipped = 0;
+  const actions: Array<{ businessId: string; action: string }> = [];
+
+  const notifyOwner = async (businessId: string, ownerId: string | null, title: string, message: string) => {
+    if (!ownerId || opts?.dryRun) return;
+    await db.collection('notifications').add({
+      userId: ownerId,
+      type: 'billing',
+      title,
+      message,
+      actionUrl: '/app/billing',
+      actionLabel: 'Hap Abonimin',
+      isRead: false,
+      businessId,
+      createdAt: nowTs,
+      updatedAt: nowTs,
+    }).catch(() => { /* non-critical */ });
+  };
+
+  for (const d of snap.docs) {
+    const b = d.data() as any;
+    const status: string = b.status || 'trialing';
+    const ownerId: string | null = b.ownerId || null;
+
+    // Paying tenants and already-frozen ones need nothing.
+    if (status === 'active' || status === 'suspended') { skipped++; continue; }
+
+    const toDate = (v: any): Date | null =>
+      v?.toDate ? v.toDate() : (v ? new Date(v) : null);
+
+    // 1. Trial expiry → past_due (grace), or a warning 3 days out.
+    if (status === 'trialing') {
+      const trialEndsAt = toDate(b.trialEndsAt);
+      if (!trialEndsAt) { skipped++; continue; }
+      const daysLeft = Math.ceil((trialEndsAt.getTime() - now.getTime()) / 86_400_000);
+      if (daysLeft > 3) { skipped++; continue; }
+      if (daysLeft > 0) {
+        // Warn once per day-3 window (guarded by trialWarnedAt).
+        const warnedAt = toDate(b.trialWarnedAt);
+        if (warnedAt && now.getTime() - warnedAt.getTime() < 2 * 86_400_000) { skipped++; continue; }
+        if (!opts?.dryRun) await d.ref.set({ trialWarnedAt: nowTs, updatedAt: nowTs }, { merge: true });
+        await notifyOwner(d.id, ownerId,
+          `Provja mbaron pas ${daysLeft} ditë${daysLeft === 1 ? '' : 'ësh'}`,
+          'Zgjidh një plan për të vazhduar pa ndërprerje pas mbarimit të provës.');
+        warned++; actions.push({ businessId: d.id, action: 'trial_warning' });
+        continue;
+      }
+      // Trial is over and no subscription attached → grace period.
+      if (!opts?.dryRun) {
+        await d.ref.set({ status: 'past_due', pastDueSince: b.pastDueSince || nowTs, updatedAt: nowTs }, { merge: true });
+      }
+      await notifyOwner(d.id, ownerId, 'Provja mbaroi',
+        `Hapësira mbetet aktive për ${BILLING_GRACE_DAYS} ditë. Aktivizo një plan për të mos u pezulluar.`);
+      await writeAudit({ businessId: d.id, actorUid: null, action: 'billing.trial_expired', target: `business:${d.id}` });
+      expired++; actions.push({ businessId: d.id, action: 'trial_expired' });
+      continue;
+    }
+
+    // 2. Grace period exhausted → suspend (Firestore rules then deny writes).
+    if (status === 'past_due' || status === 'canceled') {
+      const since = toDate(b.pastDueSince) || toDate(b.currentPeriodEnd) || toDate(b.updatedAt);
+      if (!since) { skipped++; continue; }
+      const daysDue = Math.floor((now.getTime() - since.getTime()) / 86_400_000);
+      if (daysDue < BILLING_GRACE_DAYS) { skipped++; continue; }
+      if (!opts?.dryRun) {
+        await d.ref.set({ status: 'suspended', suspendedAt: nowTs, updatedAt: nowTs }, { merge: true });
+      }
+      await notifyOwner(d.id, ownerId, 'Hapësira u pezullua',
+        'Abonimi nuk është aktiv. Të dhënat ruhen; aktivizo pagesën për t\'i rikthyer shkrimet.');
+      await writeAudit({ businessId: d.id, actorUid: null, action: 'billing.suspended', target: `business:${d.id}`, meta: { daysDue } });
+      suspended++; actions.push({ businessId: d.id, action: 'suspended' });
+    }
+  }
+
+  return { businesses: snap.size, warned, expired, suspended, skipped, actions, dryRun: !!opts?.dryRun };
+}
+
+// ── JOB: migrate-team-secrets (credential vault cutover) ─────────────────────
+// Moves credentials out of `teamSettings` (readable by every member of the
+// business) into `teamSecrets` (denied to ALL clients), mirrors `has*` markers and
+// deletes the plaintext copies. Also strips `metaChannels[].accessToken` into
+// `metaChannelTokens`. Idempotent — re-runs are no-ops once a team is clean.
+async function runMigrateTeamSecrets(opts?: { dryRun?: boolean }) {
+  const snap = await db.collection('teamSettings').get();
+  const moved: Record<string, string[]> = {};
+  let teamsTouched = 0, tokensMoved = 0;
+  const errors: string[] = [];
+
+  for (const d of snap.docs) {
+    const s = d.data() as any;
+    const secrets: Record<string, any> = {};
+    for (const field of SECRET_FIELDS) {
+      if (field === 'metaChannelTokens') continue;
+      if (typeof s[field] === 'string' && s[field].trim()) secrets[field] = s[field].trim();
+    }
+    // Per-channel Meta access tokens → a single map in the vault.
+    const channels: any[] = Array.isArray(s.metaChannels) ? s.metaChannels : [];
+    const tokenMap: Record<string, string> = {};
+    for (const ch of channels) {
+      if (ch?.phoneNumberId && ch?.accessToken) tokenMap[ch.phoneNumberId] = ch.accessToken;
+    }
+    if (Object.keys(tokenMap).length) {
+      secrets.metaChannelTokens = tokenMap;
+      tokensMoved += Object.keys(tokenMap).length;
+    }
+    if (Object.keys(secrets).length === 0) continue;
+
+    moved[d.id] = Object.keys(secrets);
+    teamsTouched++;
+    if (opts?.dryRun) continue;
+    try {
+      // writeTeamSecrets also mirrors has* flags and deletes the plaintext copies.
+      await writeTeamSecrets(d.id, secrets);
+    } catch (err: any) {
+      const msg = String(err?.message || err);
+      console.error(`[migrate-team-secrets] ${d.id} failed:`, msg);
+      errors.push(`${d.id}: ${msg.slice(0, 200)}`);
+    }
+  }
+  return { teams: snap.size, teamsTouched, tokensMoved, moved, errors, dryRun: !!opts?.dryRun };
+}
+
+// ── JOB: tenant-hierarchy (a team must live INSIDE a business) ───────────────
+// Enforces the two-level model on existing data:
+//   1. every `teams` doc gets a `businessId` pointing at a REAL `businesses` doc
+//      (inherited from the owner's other teams / its members, else a business is
+//      created for it),
+//   2. `publicTenants/{subdomain}` — the minimal, public subdomain→tenant map — is
+//      rebuilt, so `businesses` no longer has to be world-readable for the portal
+//      to resolve its tenant.
+async function runTenantHierarchy(opts?: { dryRun?: boolean }) {
+  const now = admin.firestore.Timestamp.now();
+  const [teamsSnap, bizSnap, membersSnap] = await Promise.all([
+    db.collection('teams').get(),
+    db.collection('businesses').get(),
+    db.collection('teamMembers').get(),
+  ]);
+
+  const businessIds = new Set(bizSnap.docs.map((d) => d.id));
+  const ownerToBusiness = new Map<string, string>();     // team owner uid → businessId
+  const teamToBusiness = new Map<string, string>();      // teamId → businessId
+  for (const d of teamsSnap.docs) {
+    const t = d.data() as any;
+    if (t.businessId && businessIds.has(t.businessId)) {
+      teamToBusiness.set(d.id, t.businessId);
+      if (t.createdByUserId) ownerToBusiness.set(t.createdByUserId, t.businessId);
+    }
+  }
+  // Members can also reveal the business of a team that lost its own key.
+  const memberBusinessByTeam = new Map<string, string>();
+  for (const d of membersSnap.docs) {
+    const m = d.data() as any;
+    if (m.teamId && m.businessId && businessIds.has(m.businessId) && !memberBusinessByTeam.has(m.teamId)) {
+      memberBusinessByTeam.set(m.teamId, m.businessId);
+    }
+  }
+
+  let attached = 0, businessesCreated = 0, alreadyOk = 0;
+  const errors: string[] = [];
+
+  for (const d of teamsSnap.docs) {
+    const t = d.data() as any;
+    if (t.businessId && businessIds.has(t.businessId)) { alreadyOk++; continue; }
+
+    let bid: string | null =
+      memberBusinessByTeam.get(d.id)
+      || (t.createdByUserId ? ownerToBusiness.get(t.createdByUserId) || null : null);
+
+    // The team's stale businessId may point at a business that no longer exists, or
+    // at the teamId itself (the legacy "no business layer" convention) — in both
+    // cases the team needs a real parent business.
+    if (!bid) {
+      if (opts?.dryRun) { attached++; continue; }
+      try {
+        const bizRef = db.collection('businesses').doc();
+        await bizRef.set({
+          name: t.name || 'Biznes',
+          ownerId: t.createdByUserId || null,
+          status: 'active',
+          createdAt: now,
+          updatedAt: now,
+          createdByUserId: t.createdByUserId || null,
+          // Provenance so this is auditable after the fact.
+          createdBy: 'tenant-hierarchy-migration',
+          migratedFromTeamId: d.id,
+        });
+        bid = bizRef.id;
+        businessIds.add(bid);
+        businessesCreated++;
+        if (t.createdByUserId) ownerToBusiness.set(t.createdByUserId, bid);
+      } catch (err: any) {
+        errors.push(`business for team ${d.id}: ${String(err?.message || err).slice(0, 200)}`);
+        continue;
+      }
+    }
+    if (opts?.dryRun) { attached++; continue; }
+    try {
+      await d.ref.set({ businessId: bid, updatedAt: now }, { merge: true });
+      teamToBusiness.set(d.id, bid!);
+      attached++;
+    } catch (err: any) {
+      errors.push(`team ${d.id}: ${String(err?.message || err).slice(0, 200)}`);
+    }
+  }
+
+  // ── publicTenants: the ONLY world-readable slice of tenant metadata ──
+  let subdomains = 0;
+  if (!opts?.dryRun) {
+    for (const d of bizSnap.docs) {
+      const b = d.data() as any;
+      const sub = typeof b.portalSubdomain === 'string' ? b.portalSubdomain.trim().toLowerCase() : '';
+      if (!sub) continue;
+      // A team of that business, so portal-created docs get a consistent teamId.
+      let teamId: string | null = null;
+      for (const [tid, bid] of teamToBusiness) if (bid === d.id) { teamId = tid; break; }
+      try {
+        await db.collection('publicTenants').doc(sub).set({
+          businessId: d.id,
+          teamId,
+          name: b.name || null,
+          portalSubdomain: sub,
+          updatedAt: now,
+        }, { merge: true });
+        subdomains++;
+      } catch (err: any) {
+        errors.push(`publicTenants/${sub}: ${String(err?.message || err).slice(0, 200)}`);
+      }
+    }
+  }
+
+  return {
+    teams: teamsSnap.size, alreadyOk, attached, businessesCreated, subdomains,
+    errors, dryRun: !!opts?.dryRun,
+  };
+}
+
+// ── JOB: backfill-tenant-keys ────────────────────────────────────────────────
+// Stamps the tenant key on collections whose reads are being hardened but which
+// were never part of the Phase-2 businessId backfill: `channels` (chat), and the
+// identity/structure docs `userProfiles` + `clientPortalAccess`. A doc without the
+// key is invisible to a business-scoped query, so this MUST run before the matching
+// rules are deployed (see workspace/SECURITY_RULES_CUTOVER_RUNBOOK.md).
+async function runBackfillTenantKeys(opts?: { dryRun?: boolean }) {
+  const now = admin.firestore.Timestamp.now();
+  const [teamsSnap, membersSnap, customersSnap] = await Promise.all([
+    db.collection('teams').get(),
+    db.collection('teamMembers').get(),
+    db.collection('customers').get(),
+  ]);
+  const teamToBusiness = new Map<string, string>();
+  for (const d of teamsSnap.docs) {
+    const b = (d.data() as any).businessId;
+    teamToBusiness.set(d.id, b || d.id);
+  }
+  const memberByUid = new Map<string, any>();
+  for (const d of membersSnap.docs) {
+    const m = d.data() as any;
+    if (m.userId && !memberByUid.has(m.userId)) memberByUid.set(m.userId, m);
+  }
+  const customerById = new Map<string, any>();
+  for (const d of customersSnap.docs) customerById.set(d.id, d.data());
+
+  const results: Record<string, { scanned: number; updated: number; unresolved: number }> = {};
+
+  // channels — tenant from the channel's teamId
+  {
+    const snap = await db.collection('channels').get();
+    let updated = 0, unresolved = 0;
+    for (const d of snap.docs) {
+      const c = d.data() as any;
+      if (c.businessId) continue;
+      const bid = c.teamId ? teamToBusiness.get(c.teamId) || c.teamId : null;
+      if (!bid) { unresolved++; continue; }
+      if (!opts?.dryRun) await d.ref.set({ businessId: bid, updatedAt: now }, { merge: true });
+      updated++;
+    }
+    results.channels = { scanned: snap.size, updated, unresolved };
+  }
+
+  // userProfiles — tenant from the user's membership
+  {
+    const snap = await db.collection('userProfiles').get();
+    let updated = 0, unresolved = 0;
+    for (const d of snap.docs) {
+      const p = d.data() as any;
+      if (p.businessId) continue;
+      const m = p.userId ? memberByUid.get(p.userId) : null;
+      const bid = m?.businessId || (m?.teamId ? teamToBusiness.get(m.teamId) : null);
+      if (!bid) { unresolved++; continue; }
+      if (!opts?.dryRun) {
+        await d.ref.set({ businessId: bid, ...(m?.teamId ? { teamId: m.teamId } : {}), updatedAt: now }, { merge: true });
+      }
+      updated++;
+    }
+    results.userProfiles = { scanned: snap.size, updated, unresolved };
+  }
+
+  // clientPortalAccess — tenant from the linked customer
+  {
+    const snap = await db.collection('clientPortalAccess').get();
+    let updated = 0, unresolved = 0;
+    for (const d of snap.docs) {
+      const a = d.data() as any;
+      if (a.businessId) continue;
+      const c = a.customerId ? customerById.get(a.customerId) : null;
+      const bid = c?.businessId || (c?.teamId ? teamToBusiness.get(c.teamId) : null) || (a.teamId ? teamToBusiness.get(a.teamId) : null);
+      if (!bid) { unresolved++; continue; }
+      if (!opts?.dryRun) await d.ref.set({ businessId: bid, updatedAt: now }, { merge: true });
+      updated++;
+    }
+    results.clientPortalAccess = { scanned: snap.size, updated, unresolved };
+  }
+
+  const totalUpdated = Object.values(results).reduce((n, r) => n + r.updated, 0);
+  return { results, totalUpdated, dryRun: !!opts?.dryRun };
+}
+
+// ── JOB: sync-tenant-claims ─────────────────────────────────────────────────
+// Materialises bid/tid/roles onto every member's Auth token, so Firestore rules can
+// stop trusting the client-written users/{uid} document. Users must refresh their ID
+// token (sign out/in, or the app's automatic getIdToken(true)) to pick it up.
+async function runSyncTenantClaims(opts?: { dryRun?: boolean }) {
+  const membersSnap = await db.collection('teamMembers').get();
+  const uids = new Map<string, string>(); // uid → email
+  for (const d of membersSnap.docs) {
+    const m = d.data() as any;
+    if (m.userId && m.status !== 'Inactive') uids.set(m.userId, m.email || '');
+  }
+  let synced = 0;
+  const errors: string[] = [];
+  for (const [uid, email] of uids) {
+    if (opts?.dryRun) { synced++; continue; }
+    try {
+      await syncTenantClaims(uid, email || undefined);
+      synced++;
+    } catch (err: any) {
+      errors.push(`${uid}: ${String(err?.message || err).slice(0, 160)}`);
+    }
+  }
+  return { users: uids.size, synced, errors, dryRun: !!opts?.dryRun };
+}
+
 // ── JOB: backfill-customerid (Phase 4.3b Wave 3) ─────────────────────────────
 // Stamps customerId onto parent-linked child records so portal clients can read
 // their own data under server-side RLS (isPortalClientFor). Staff isolation uses
@@ -2360,8 +2900,7 @@ async function runInquiryMaterialsReminders() {
   const tsCache = new Map<string, any>();
   const getTeamSettings = async (teamId: string) => {
     if (tsCache.has(teamId)) return tsCache.get(teamId);
-    const d = await db.collection('teamSettings').doc(teamId).get();
-    const data = d.exists ? d.data() : null;
+    const data = await getTeamConfig(teamId);
     tsCache.set(teamId, data);
     return data;
   };
@@ -2517,7 +3056,7 @@ async function runLeadCadenceSteps() {
 // each project's `spent`, so Reports/Customer360 margins reflect real labor cost
 // instead of the stale creation-time 0. Also stores laborCost/billableValue/
 // loggedHours for realization. Mirrors src/lib/finance/laborCost.ts — keep in sync.
-async function runProjectSpendRollup() {
+async function runProjectSpendRollup(opts?: { full?: boolean }) {
   const DEFAULT_RATES: Record<string, number> = { EUR: 100, USD: 92, GBP: 118, ALL: 1, LEK: 1 };
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
   const entryHours = (e: any): number => {
@@ -2526,13 +3065,74 @@ async function runProjectSpendRollup() {
     return (s && en && en > s) ? (en - s) / 3_600_000 : 0;
   };
 
-  const [projectsSnap, entriesSnap, membersSnap, expensesSnap, tsSnap] = await Promise.all([
-    db.collection('projects').get(),
-    db.collection('timeEntries').get(),
+  // ── INCREMENTAL by default ────────────────────────────────────────────────
+  // The full version read EVERY project, time entry and expense on the platform on
+  // every daily run — cost that grew with the number of tenants rather than with the
+  // work actually done. Now we look at what changed since the last run and recompute
+  // only the affected projects (a full pass still runs when there is no state yet, or
+  // when ?full=1 is passed).
+  const stateRef = db.collection('migrations').doc('projectSpendRollup');
+  const stateSnap = await stateRef.get();
+  const lastRunAt: admin.firestore.Timestamp | null =
+    (!opts?.full && stateSnap.exists ? (stateSnap.data() as any)?.lastRunAt : null) || null;
+
+  let projectDocs: admin.firestore.QueryDocumentSnapshot[];
+  let entryDocs: admin.firestore.QueryDocumentSnapshot[];
+  let expenseDocs: admin.firestore.QueryDocumentSnapshot[];
+  let mode: 'full' | 'incremental' = 'full';
+
+  const [membersSnap, tsSnap] = await Promise.all([
     db.collection('teamMembers').get(),
-    db.collection('expenses').get(),
     db.collection('teamSettings').get(),
   ]);
+
+  if (lastRunAt) {
+    mode = 'incremental';
+    // Which projects were touched? Anything with a new/edited time entry or expense.
+    const [touchedEntries, touchedExpenses] = await Promise.all([
+      db.collection('timeEntries').where('updatedAt', '>', lastRunAt).get(),
+      db.collection('expenses').where('updatedAt', '>', lastRunAt).get(),
+    ]);
+    const projectIds = new Set<string>();
+    for (const d of [...touchedEntries.docs, ...touchedExpenses.docs]) {
+      const pid = (d.data() as any).projectId;
+      if (pid) projectIds.add(String(pid));
+    }
+    if (projectIds.size === 0) {
+      await stateRef.set({ lastRunAt: admin.firestore.Timestamp.now() }, { merge: true });
+      return { updated: 0, projects: 0, mode, skipped: 'no-changes' };
+    }
+    // Recompute those projects from their COMPLETE history (totals must stay absolute,
+    // not deltas), reading only the slices that belong to them.
+    const ids = Array.from(projectIds);
+    const chunks: string[][] = [];
+    for (let i = 0; i < ids.length; i += 10) chunks.push(ids.slice(i, i + 10)); // Firestore `in` cap
+    const projectChunks = await Promise.all(
+      chunks.map((c) => db.collection('projects').where(admin.firestore.FieldPath.documentId(), 'in', c).get()),
+    );
+    const entryChunks = await Promise.all(
+      chunks.map((c) => db.collection('timeEntries').where('projectId', 'in', c).get()),
+    );
+    const expenseChunks = await Promise.all(
+      chunks.map((c) => db.collection('expenses').where('projectId', 'in', c).get()),
+    );
+    projectDocs = projectChunks.flatMap((s) => s.docs);
+    entryDocs = entryChunks.flatMap((s) => s.docs);
+    expenseDocs = expenseChunks.flatMap((s) => s.docs);
+  } else {
+    const [projectsSnapFull, entriesSnapFull, expensesSnapFull] = await Promise.all([
+      db.collection('projects').get(),
+      db.collection('timeEntries').get(),
+      db.collection('expenses').get(),
+    ]);
+    projectDocs = projectsSnapFull.docs;
+    entryDocs = entriesSnapFull.docs;
+    expenseDocs = expensesSnapFull.docs;
+  }
+
+  const projectsSnap = { docs: projectDocs, size: projectDocs.length };
+  const entriesSnap = { docs: entryDocs };
+  const expensesSnap = { docs: expenseDocs };
 
   // Per-team exchange rates (admin-set) so `spent` matches the client's toAll().
   const ratesByTeam = new Map<string, Record<string, number>>();
@@ -2603,7 +3203,8 @@ async function runProjectSpendRollup() {
     }
   }
   await settleAll(ops, 'project-spend-rollup');
-  return { updated, projects: projectsSnap.size };
+  await stateRef.set({ lastRunAt: now }, { merge: true });
+  return { updated, projects: projectsSnap.size, mode };
 }
 
 // ── Social media analytics — monthly pull ────────────────────────────────────
@@ -2676,6 +3277,61 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'backfill-customerid':
         result = await runBackfillCustomerId({ reset: req.query.reset === '1' });
         break;
+      // ── Tenant-isolation hardening jobs (super-admin only: they rewrite tenant
+      // keys, move credentials and mint custom claims across the whole platform) ──
+      case 'subscription-lifecycle':
+        result = await runSubscriptionLifecycle({ dryRun: req.query.dryRun === '1' });
+        break;
+      // ── GDPR/DPA: export or erase one tenant. Super-admin only; delete also
+      // requires confirm=<businessId> so it can never fire by accident. ──
+      case 'tenant-export': {
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runTenantExport(String(req.query.businessId || ''), {
+          maxDocs: req.query.maxDocs ? Number(req.query.maxDocs) : undefined,
+        });
+        break;
+      }
+      case 'tenant-delete': {
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runTenantDelete(
+          String(req.query.businessId || ''),
+          String(req.query.confirm || ''),
+          { dryRun: req.query.dryRun === '1' },
+        );
+        break;
+      }
+      case 'migrate-team-secrets': {
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runMigrateTeamSecrets({ dryRun: req.query.dryRun === '1' });
+        break;
+      }
+      case 'tenant-hierarchy': {
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runTenantHierarchy({ dryRun: req.query.dryRun === '1' });
+        break;
+      }
+      case 'backfill-tenant-keys': {
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runBackfillTenantKeys({ dryRun: req.query.dryRun === '1' });
+        break;
+      }
+      case 'sync-tenant-claims': {
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runSyncTenantClaims({ dryRun: req.query.dryRun === '1' });
+        break;
+      }
       case 'project-completion-reminder':
         result = await runProjectCompletionReminder();
         break;
@@ -2731,17 +3387,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         result = await runInquiryMaterialsReminders();
         break;
       case 'project-spend-rollup':
-        result = await runProjectSpendRollup();
+        result = await runProjectSpendRollup({ full: req.query.full === '1' });
         break;
       case 'lead-cadence-steps':
         result = await runLeadCadenceSteps();
+        break;
+      case 'report-schedules':
+        // Generate draft reports from active schedules. Idempotent via generationKey.
+        result = await runReportSchedules();
+        break;
+      case 'report-reminders':
+        // Deadline reminders + the overdue escalation ladder. Each rung fires once.
+        result = await runReportReminders();
+        break;
+      case 'client-health-rollup':
+        // Persist a client-health snapshot per tenant per month (trend history).
+        result = await runClientHealthRollup();
         break;
       case 'social-monthly-sync':
         result = await runSocialMonthlySync(req.query.period as string | undefined, { email: req.query.email !== '0' });
         break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, campaignSteps, whmcs, inquiryReminders, projectRollup, leadCadence] = await Promise.allSettled([
+        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, campaignSteps, whmcs, inquiryReminders, projectRollup, leadCadence, subscriptions, reportSchedules, reportReminders] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
           runOverdueReminders(),
@@ -2764,6 +3432,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           runInquiryMaterialsReminders(),
           runProjectSpendRollup(),
           runLeadCadenceSteps(),
+          runSubscriptionLifecycle(),
+          runReportSchedules(),
+          runReportReminders(),
         ]);
         const settled = (r: PromiseSettledResult<any>) =>
           r.status === 'fulfilled' ? r.value : { error: (r.reason as Error)?.message || 'failed' };
@@ -2790,11 +3461,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           inquiryMaterialsReminders: settled(inquiryReminders),
           projectSpendRollup: settled(projectRollup),
           leadCadenceSteps: settled(leadCadence),
+          subscriptions: settled(subscriptions),
+          reportSchedules: settled(reportSchedules),
+          reportReminders: settled(reportReminders),
         };
         break;
       }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup` });
     }
 
     return res.status(200).json({ success: true, job, ...result, timestamp: new Date().toISOString() });

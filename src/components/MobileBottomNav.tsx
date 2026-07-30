@@ -4,16 +4,20 @@ import {
   LayoutDashboard, CheckSquare, MessageSquare, Users,
   Grid3x3, X, FolderKanban, Target, Receipt, BarChart3,
   Timer, DollarSign, Settings, UserCircle, Briefcase,
-  Award, UsersRound, FileText, Shield, Wallet,
+  Award, UsersRound, FileText, Shield, Wallet, Package,
 } from 'lucide-react';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useCollection } from '../hooks/useFirestore';
+import { useModules } from '../hooks/useModules';
 
 const MobileBottomNav: React.FC = () => {
   const [showMore, setShowMore] = useState(false);
   const { user } = useAuth();
   const permissions = usePermissions();
+  // Mobile nav previously ignored per-tenant module toggles, so a disabled module
+  // stayed reachable from the "Më shumë" drawer. Same registry as the sidebar now.
+  const { isEnabled } = useModules();
 
   // ── Unread chat badge (mirrors Sidebar logic) ──
   const unreadDmQuery = useMemo(() => !user ? undefined : {
@@ -51,12 +55,13 @@ const MobileBottomNav: React.FC = () => {
     { to: '/app/tasks',     icon: CheckSquare,     label: 'Detyrat',  perm: 'canAccessTasks' },
     { to: '/app/chat',      icon: MessageSquare,   label: 'Chat',     perm: 'canAccessChat' },
     { to: '/app/customers', icon: Users,           label: 'Klientët', perm: 'canAccessCustomers' },
-  ].filter(item => canAccess(item.perm));
+  ].filter(item => canAccess(item.perm) && isEnabled(item.to));
 
   // ── "Më shumë" drawer items ──
   const moreItems = [
     { to: '/app/projects',      icon: FolderKanban, label: 'Projektet',   perm: 'canAccessProjects' },
     { to: '/app/crm',           icon: Shield,       label: 'CRM',         perm: 'canAccessCRM' },
+    { to: '/app/products',      icon: Package,      label: 'Dyqani',      perm: 'canAccessProducts' },
     { to: '/app/invoices',      icon: Receipt,      label: 'Faturat',     perm: 'canAccessInvoices' },
     { to: '/app/expenses',      icon: DollarSign,   label: 'Shpenzimet',  perm: 'canAccessExpenses' },
     { to: '/app/goals',         icon: Target,       label: 'Objektivat',  perm: 'canAccessGoals' },
@@ -66,7 +71,7 @@ const MobileBottomNav: React.FC = () => {
     { to: '/app/bonus',         icon: Award,        label: 'Bonuset',     perm: 'canAccessProfile' },
     { to: '/app/profile',       icon: UserCircle,   label: 'Profili',     perm: 'canAccessProfile' },
     { to: '/app/settings',      icon: Settings,     label: 'Cilësimet',   perm: 'canAccessSettings' },
-  ].filter(item => canAccess(item.perm));
+  ].filter(item => canAccess(item.perm) && isEnabled(item.to));
 
   return (
     <>

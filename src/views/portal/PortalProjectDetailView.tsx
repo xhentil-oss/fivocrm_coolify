@@ -4,7 +4,7 @@ import { db } from '../../lib/firebase';
 import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useAuth } from '../../contexts/AuthContext';
-import { useCollection, useMutation, useDocument } from '../../hooks/useFirestore';
+import { useCollection, useDocument } from '../../hooks/useFirestore';
 import { Card, CardContent, CardHeader, CardTitle } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -19,7 +19,8 @@ import {
   CalendarDays, ChevronDown, ChevronRight, Loader2,
 } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
-import type { Project, Task, TaskComment, TeamMember } from '../../types';
+import type { Project, Task, TaskComment } from '../../types';
+import { notifyStaff } from '../../lib/notifyStaff';
 import { useCommentFocus, COMMENT_FLASH_CLASS } from '../../hooks/useCommentFocus';
 import { taskDeepLink, projectCommentDeepLink } from '../../lib/deepLinks';
 
@@ -37,7 +38,7 @@ const PortalProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
   const { user } = useAuth();
-  const { customerId } = useClientPortal();
+  const { customerId, businessId: portalBusinessId } = useClientPortal();
   const { toast } = useToast();
   // Arriving from a "përgjigje nga ekipi" notification: open the discussion tab and
   // scroll to that comment instead of dropping the client on the overview.
@@ -110,16 +111,16 @@ const PortalProjectDetailView: React.FC = () => {
     });
   }, [rawComments]);
 
-  // Team members for notifications
-  const { data: allTeamMembers } = useCollection<TeamMember>('teamMembers', {
-    where: [{ field: 'status', operator: '==', value: 'Active' }],
-    skipTeamFilter: true, // portal client has no businessId → avoids the loading-forever guard
+  // The portal never reads `teamMembers` — notification recipients are resolved
+  // server-side within the client's own business (/api/notify-staff).
+  // Comment display names come from `userProfiles`, scoped to that same business.
+  const { data: userProfiles } = useCollection<any>('userProfiles', {
+    skip: !portalBusinessId,
+    where: portalBusinessId ? [{ field: 'businessId', operator: '==', value: portalBusinessId }] : undefined,
+    skipTeamFilter: true,
+    skipBusinessFilter: true,
   });
 
-  // User profiles for comment display names
-  const { data: userProfiles } = useCollection<any>('userProfiles');
-
-  const notificationMutation = useMutation<any>('notifications');
 
   // Auto-scroll comments — skipped when a notification deep-links to a specific
   // comment, otherwise the jump-to-bottom would undo the scroll to that comment.
@@ -193,7 +194,7 @@ const PortalProjectDetailView: React.FC = () => {
 
     try {
       // Use addDoc — portal users can't use useMutation.create() on team-scoped collections
-      const commentTeamId = allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
+      const commentTeamId = (project as any)?.teamId || null;
       const createdRef = await addDoc(collection(db, 'projectComments'), {
         projectId,
         content: commentText.trim(),
@@ -208,26 +209,19 @@ const PortalProjectDetailView: React.FC = () => {
         createdByUserId: user.uid,
       });
 
-      // Notify project team
-      if (project?.teamId && allTeamMembers) {
-        const projectTeamMembers = allTeamMembers.filter(
-          m => m.teamId === project.teamId && m.status === 'Active'
-        );
-        for (const member of projectTeamMembers) {
-          notificationMutation.create({
-            userId: member.userId,
-            type: 'project_comment',
-            title: `Koment i ri nga klienti — ${project.name}`,
-            message: commentText.length > 100 ? commentText.slice(0, 100) + '...' : commentText,
-            isRead: false,
-            actionType: 'navigate',
-            // Land on the comment itself, not just the project page.
-            actionUrl: projectCommentDeepLink(projectId, createdRef.id),
-            actionLabel: 'Shiko Komentin',
-          } as any).catch(err => console.error('[Notifications] project_comment dërgim dështoi:', err));
-        }
+      // Notify the project's staff — resolved server-side inside this tenant.
+      if (project) {
+        void notifyStaff({
+          type: 'project_comment',
+          title: `Koment i ri nga klienti — ${project.name}`,
+          message: commentText.length > 100 ? commentText.slice(0, 100) + '...' : commentText,
+          // Land on the comment itself, not just the project page.
+          actionUrl: projectCommentDeepLink(projectId, createdRef.id),
+          actionLabel: 'Shiko Komentin',
+          projectId: projectId || undefined,
+          responsibleUserId: (project as any).responsibleUserId || null,
+        });
       }
-
       setCommentText('');
       toast({ title: 'Komenti u dërgua' });
     } catch {
@@ -242,7 +236,7 @@ const PortalProjectDetailView: React.FC = () => {
 
     setSendingTaskComment(taskId);
     try {
-      const resolvedTeamId = allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
+      const resolvedTeamId = (project as any)?.teamId || null;
       const createdRef = await addDoc(collection(db, 'taskComments'), {
         taskId,
         content: text,
@@ -257,30 +251,19 @@ const PortalProjectDetailView: React.FC = () => {
         updatedAt: Timestamp.now(),
       });
 
-      // Notify task assignee + project team members
+      // Notify the task assignee + the project's staff — resolved server-side inside
+      // this tenant (the portal must not read the staff directory).
       const task = tasks.find(t => t.id === taskId);
-      if (project?.teamId && allTeamMembers) {
-        const notifyIds = new Set<string>();
-        // Task assignee
-        if (task?.assignedToUserId) notifyIds.add(task.assignedToUserId);
-        // All active team members of the project
-        allTeamMembers
-          .filter(m => m.teamId === project.teamId && m.status === 'Active')
-          .forEach(m => notifyIds.add(m.userId));
-
-        for (const uid of notifyIds) {
-          notificationMutation.create({
-            userId: uid,
-            type: 'project_comment',
-            title: `Koment klienti — ${task?.title || 'Detyrë'}`,
-            message: text.length > 100 ? text.slice(0, 100) + '...' : text,
-            isRead: false,
-            // Opens the task panel on this comment (the old `?task=` param was never read).
-            actionUrl: taskDeepLink(taskId, projectId, createdRef.id),
-            actionLabel: 'Shiko Komentin',
-          } as any).catch(() => {});
-        }
-      }
+      void notifyStaff({
+        type: 'project_comment',
+        title: `Koment klienti — ${task?.title || 'Detyrë'}`,
+        message: text.length > 100 ? text.slice(0, 100) + '...' : text,
+        // Opens the task panel on this comment (the old `?task=` param was never read).
+        actionUrl: taskDeepLink(taskId, projectId, createdRef.id),
+        actionLabel: 'Shiko Komentin',
+        projectId: projectId || undefined,
+        responsibleUserId: task?.assignedToUserId || (project as any)?.responsibleUserId || null,
+      });
 
       setTaskCommentTexts(prev => ({ ...prev, [taskId]: '' }));
       toast({ title: 'Komenti u dërgua' });

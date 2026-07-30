@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare, Copy, Phone, Cloud, UserCircle, QrCode, Wifi, WifiOff, ScrollText, Sparkles, Mail } from 'lucide-react';
+import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare, Copy, Phone, Cloud, UserCircle, QrCode, Wifi, WifiOff, ScrollText, Sparkles, Mail, Boxes } from 'lucide-react';
 import { WhatsAppAccount, TeamMember, UserProfile } from '../types';
 import { MetaChannel } from '../hooks/useTeamSettings';
 import { swiftKeyDown, ibanChange } from '../lib/utils';
@@ -10,18 +10,21 @@ import { Input } from '../components/ui/input';
 import { Switch } from '../components/ui/switch';
 import { Separator } from '../components/ui/separator';
 import WhatsAppStatusBadge from '../components/WhatsAppStatusBadge';
+import ModulesSettingsPanel from '../components/ModulesSettingsPanel';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Checkbox } from '../components/ui/checkbox';
 import { Badge } from '../components/ui/badge';
 import { useCollection, useMutation, setGlobalWaEnabled, useGlobalTeamId } from '../hooks/useFirestore';
 import { saveTeamSettings, useTeamSettingsData } from '../hooks/useTeamSettings';
+import { saveTenantSecrets } from '../lib/tenantSecrets';
 import { isBreakReminderEnabled, setBreakReminderEnabled } from '../hooks/useBreakReminder';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { getDocs, getDoc, setDoc, query, where, collection, writeBatch, doc, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { toast } from '../hooks/use-toast';
+import { reportingCapabilitiesFor } from '../lib/reporting/permissions';
 
 // ─── CronJobCard sub-component ───────────────────────────────────────────────
 interface CronJobCardProps {
@@ -181,16 +184,15 @@ const SettingsView: React.FC = () => {
     if (firestoreSettings.usdAllRate) setUsdAllRate(firestoreSettings.usdAllRate);
     if (firestoreSettings.whatsappEnabled !== undefined) setWhatsappEnabled(firestoreSettings.whatsappEnabled);
     if (firestoreSettings.whatsappVpsUrl) setWhatsappVpsUrl(firestoreSettings.whatsappVpsUrl);
-    if (firestoreSettings.whatsappVpsSecret) setWhatsappVpsSecret(firestoreSettings.whatsappVpsSecret);
+    // Credentials are NOT loaded back: they live in the server-only vault
+    // (teamSecrets). The `has*` flags below tell the UI they are configured.
     if (firestoreSettings.cronSettings) setCronSettings(firestoreSettings.cronSettings);
     if (firestoreSettings.stripePublishableKey) setStripePublishableKey(firestoreSettings.stripePublishableKey);
     if (firestoreSettings.stripeMode) setStripeMode(firestoreSettings.stripeMode);
     // AI Assistant
     if (firestoreSettings.aiProvider) setAiProvider(firestoreSettings.aiProvider);
-    if (firestoreSettings.aiApiKey) setAiApiKey(firestoreSettings.aiApiKey);
     if (firestoreSettings.aiModel) setAiModel(firestoreSettings.aiModel);
     if (firestoreSettings.emailProvider) setEmailProvider(firestoreSettings.emailProvider);
-    if (firestoreSettings.emailApiKey) setEmailApiKey(firestoreSettings.emailApiKey);
     if (firestoreSettings.emailFromEmail) setEmailFromEmail(firestoreSettings.emailFromEmail);
     if (firestoreSettings.emailFromName) setEmailFromName(firestoreSettings.emailFromName);
     if (firestoreSettings.emailMailgunDomain) setEmailMailgunDomain(firestoreSettings.emailMailgunDomain);
@@ -198,13 +200,12 @@ const SettingsView: React.FC = () => {
     if (firestoreSettings.emailSmtpHost) setEmailSmtpHost(firestoreSettings.emailSmtpHost);
     if (firestoreSettings.emailSmtpPort) setEmailSmtpPort(String(firestoreSettings.emailSmtpPort));
     if (firestoreSettings.emailSmtpUser) setEmailSmtpUser(firestoreSettings.emailSmtpUser);
-    if (firestoreSettings.emailSmtpPass) setEmailSmtpPass(firestoreSettings.emailSmtpPass);
     if (firestoreSettings.inquiryMaterialsReminderEnabled !== undefined) setInquiryReminderOn(firestoreSettings.inquiryMaterialsReminderEnabled);
     if (firestoreSettings.inquiryMaterialsReminderDays !== undefined) setInquiryReminderDays(String(firestoreSettings.inquiryMaterialsReminderDays));
     // Meta Cloud API
     if (firestoreSettings.metaEnabled !== undefined) setMetaEnabled(firestoreSettings.metaEnabled);
     if (firestoreSettings.metaChannels) setMetaChannels(firestoreSettings.metaChannels);
-    if (firestoreSettings.metaWebhookVerifyToken) setMetaWebhookVerifyToken(firestoreSettings.metaWebhookVerifyToken);
+    // metaWebhookVerifyToken + per-channel access tokens are credentials → vault only.
     setMetaLoaded(true);
   }, [firestoreSettings]);
 
@@ -216,7 +217,9 @@ const SettingsView: React.FC = () => {
   // ── WhatsApp integration settings ──
   const [whatsappEnabled, setWhatsappEnabled] = useState(() => localStorage.getItem('whatsapp_enabled') === 'true');
   const [whatsappVpsUrl, setWhatsappVpsUrl] = useState(() => localStorage.getItem('whatsapp_vps_url') || '');
-  const [whatsappVpsSecret, setWhatsappVpsSecret] = useState(() => localStorage.getItem('whatsapp_vps_secret') || '');
+  // Always starts empty: the stored secret lives in the server-only vault and is
+  // never sent to the browser. Typing a value replaces it; leaving it blank keeps it.
+  const [whatsappVpsSecret, setWhatsappVpsSecret] = useState('');
   const [whatsappSaved, setWhatsappSaved] = useState(false);
 
   // ── WhatsApp Accounts (multi-agent Baileys) ──
@@ -460,22 +463,30 @@ const SettingsView: React.FC = () => {
     setTimeout(() => setStripeSaved(false), 3000);
   };
 
-  const handleSaveAiSettings = () => {
+  const handleSaveAiSettings = async () => {
     if (!teamId) return;
     saveTeamSettings(teamId, {
       aiProvider,
-      aiApiKey: aiApiKey.trim(),
       aiModel: aiModel.trim(),
     });
+    // The API key goes to the server-only vault (never stored in teamSettings).
+    if (aiApiKey.trim()) {
+      try {
+        await saveTenantSecrets(teamId, { aiApiKey: aiApiKey.trim() });
+        setAiApiKey('');
+      } catch (e) {
+        toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' });
+        return;
+      }
+    }
     setAiSaved(true);
     setTimeout(() => setAiSaved(false), 3000);
   };
 
-  const handleSaveEmailSettings = () => {
+  const handleSaveEmailSettings = async () => {
     if (!teamId) return;
     saveTeamSettings(teamId, {
       emailProvider,
-      emailApiKey: emailApiKey.trim(),
       emailFromEmail: emailFromEmail.trim(),
       emailFromName: emailFromName.trim(),
       emailMailgunDomain: emailMailgunDomain.trim(),
@@ -483,8 +494,19 @@ const SettingsView: React.FC = () => {
       emailSmtpHost: emailSmtpHost.trim(),
       emailSmtpPort: Number(emailSmtpPort) || 465,
       emailSmtpUser: emailSmtpUser.trim(),
-      emailSmtpPass: emailSmtpPass.trim(),
     });
+    // API key + SMTP password → server-only vault.
+    try {
+      await saveTenantSecrets(teamId, {
+        ...(emailApiKey.trim() ? { emailApiKey: emailApiKey.trim() } : {}),
+        ...(emailSmtpPass.trim() ? { emailSmtpPass: emailSmtpPass.trim() } : {}),
+      });
+      if (emailApiKey.trim()) setEmailApiKey('');
+      if (emailSmtpPass.trim()) setEmailSmtpPass('');
+    } catch (e) {
+      toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' });
+      return;
+    }
     setEmailSaved(true);
     setTimeout(() => setEmailSaved(false), 3000);
   };
@@ -538,11 +560,20 @@ const SettingsView: React.FC = () => {
     if (teamId) saveTeamSettings(teamId, { whatsappEnabled: val });
   };
 
-  const handleSaveWhatsappSettings = () => {
+  const handleSaveWhatsappSettings = async () => {
     localStorage.setItem('whatsapp_enabled', String(whatsappEnabled));
     localStorage.setItem('whatsapp_vps_url', whatsappVpsUrl);
-    localStorage.setItem('whatsapp_vps_secret', whatsappVpsSecret);
-    if (teamId) saveTeamSettings(teamId, { whatsappEnabled, whatsappVpsUrl, whatsappVpsSecret });
+    if (teamId) saveTeamSettings(teamId, { whatsappEnabled, whatsappVpsUrl });
+    // The VPS secret is a credential → server-only vault.
+    if (teamId && whatsappVpsSecret.trim()) {
+      try {
+        await saveTenantSecrets(teamId, { whatsappVpsSecret: whatsappVpsSecret.trim() });
+        setWhatsappVpsSecret('');
+      } catch (e) {
+        toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' });
+        return;
+      }
+    }
     setWhatsappSaved(true);
     setTimeout(() => setWhatsappSaved(false), 3000);
   };
@@ -553,10 +584,29 @@ const SettingsView: React.FC = () => {
     if (teamId) saveTeamSettings(teamId, { metaEnabled: val });
   };
 
-  const handleSaveMetaSettings = () => {
+  const handleSaveMetaSettings = async () => {
+    if (!teamId) return;
     // Denormalize phoneNumberIds for Firestore array-contains querying in webhook
     const metaPhoneNumberIds = metaChannels.map(ch => ch.phoneNumberId).filter(Boolean);
-    if (teamId) saveTeamSettings(teamId, { metaEnabled, metaChannels, metaWebhookVerifyToken, metaPhoneNumberIds });
+    // Channel METADATA stays in teamSettings; the per-channel access token is a
+    // credential and goes to the vault keyed by phoneNumberId.
+    const channelMeta = metaChannels.map(({ accessToken: _t, ...rest }) => rest) as MetaChannel[];
+    const metaChannelTokens: Record<string, string> = {};
+    for (const ch of metaChannels) {
+      if (ch.phoneNumberId && ch.accessToken?.trim()) metaChannelTokens[ch.phoneNumberId] = ch.accessToken.trim();
+    }
+    saveTeamSettings(teamId, { metaEnabled, metaChannels: channelMeta, metaPhoneNumberIds });
+    try {
+      await saveTenantSecrets(teamId, {
+        ...(Object.keys(metaChannelTokens).length ? { metaChannelTokens } : {}),
+        ...(metaWebhookVerifyToken.trim() ? { metaWebhookVerifyToken: metaWebhookVerifyToken.trim() } : {}),
+      });
+      setMetaChannels(prev => prev.map(ch => ({ ...ch, accessToken: '' })));
+      setMetaWebhookVerifyToken('');
+    } catch (e) {
+      toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' });
+      return;
+    }
     setMetaSaved(true);
     setTimeout(() => setMetaSaved(false), 3000);
   };
@@ -635,7 +685,19 @@ const SettingsView: React.FC = () => {
               <span className="hidden sm:inline">Rolet & Lejet</span>
             </TabsTrigger>
           )}
+          {(isAdmin || isOwner) && (
+            <TabsTrigger value="modules" className="data-[state=active]:bg-background data-[state=active]:text-primary min-w-fit">
+              <Boxes className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">Modulet</span>
+            </TabsTrigger>
+          )}
         </TabsList>
+
+        {(isAdmin || isOwner) && (
+          <TabsContent value="modules" className="space-y-6">
+            <ModulesSettingsPanel />
+          </TabsContent>
+        )}
 
         <TabsContent value="profile" className="space-y-6">
           <Card className="p-6 space-y-6">
@@ -1011,6 +1073,9 @@ const SettingsView: React.FC = () => {
                     ? 'Merreni falas te Google AI Studio (pa kartë krediti). Ruhet i sigurt dhe përdoret vetëm nga serveri.'
                     : 'Merreni te platform.openai.com. Ruhet i sigurt dhe përdoret vetëm nga serveri.'}
                 </p>
+                {firestoreSettings?.hasAiApiKey && (
+                  <p className="text-xs text-success flex items-center gap-1"><Shield className="w-3 h-3" /> Kredencial i ruajtur në kasafortën e serverit — lëri bosh për të mos e ndryshuar.</p>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -1101,6 +1166,9 @@ const SettingsView: React.FC = () => {
                     autoComplete="off"
                     className="w-full h-11 px-4 bg-background border border-border rounded-md text-body text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono text-sm" />
                   <p className="text-xs text-muted-foreground">Ruhet i sigurt dhe përdoret vetëm nga serveri gjatë dërgimit.</p>
+                  {firestoreSettings?.hasEmailApiKey && (
+                    <p className="text-xs text-success flex items-center gap-1"><Shield className="w-3 h-3" /> Kredencial i ruajtur në kasafortën e serverit — lëri bosh për të mos e ndryshuar.</p>
+                  )}
                 </div>
               ) : (
                 <div className="grid sm:grid-cols-2 gap-4">
@@ -1123,6 +1191,9 @@ const SettingsView: React.FC = () => {
                     <label className="text-body-sm text-foreground font-medium">Fjalëkalimi</label>
                     <input type="password" value={emailSmtpPass} onChange={(e) => setEmailSmtpPass(e.target.value)} autoComplete="off"
                       className="w-full h-11 px-4 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
+                    {firestoreSettings?.hasEmailSmtpPass && (
+                      <p className="text-xs text-success flex items-center gap-1"><Shield className="w-3 h-3" /> Kredencial i ruajtur në kasafortën e serverit — lëri bosh për të mos e ndryshuar.</p>
+                    )}
                   </div>
                 </div>
               )}
@@ -1644,6 +1715,9 @@ const SettingsView: React.FC = () => {
                     <p className="text-xs text-muted-foreground">
                       I njëjtë me <code className="bg-muted px-1 rounded text-xs">WHATSAPP_VPS_SECRET</code> në env variables të serverit VPS
                     </p>
+                    {firestoreSettings?.hasWhatsappVpsSecret && (
+                      <p className="text-xs text-success flex items-center gap-1"><Shield className="w-3 h-3" /> Kredencial i ruajtur në kasafortën e serverit — lëri bosh për të mos e ndryshuar.</p>
+                    )}
                   </div>
                 </div>
                 <Separator />
@@ -2003,6 +2077,9 @@ const SettingsView: React.FC = () => {
                             placeholder="EAAxxxxxxx..."
                             className="w-full h-9 px-3 bg-background border border-border rounded-md text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary font-mono"
                           />
+                          {firestoreSettings?.hasMetaChannelTokens && (
+                            <p className="text-xs text-success flex items-center gap-1"><Shield className="w-3 h-3" /> Kredencial i ruajtur në kasafortën e serverit — lëri bosh për të mos e ndryshuar.</p>
+                          )}
                         </div>
                       </div>
                     </Card>
@@ -2178,8 +2255,18 @@ const MODULES: { key: string; label: string }[] = [
   { key: 'canAccessCustomers',   label: 'Klientët' },
   { key: 'canAccessInvoices',    label: 'Faturat' },
   { key: 'canAccessServices',    label: 'Shërbimet' },
+  { key: 'canAccessProducts',    label: 'Dyqani & Produktet' },
   { key: 'canAccessExpenses',    label: 'Shpenzimet' },
-  { key: 'canAccessReports',     label: 'Raportet' },
+  { key: 'canAccessReports',     label: 'Raportimi' },
+  // Reporting capabilities. `canAccessReports` above is the module gate (everyone
+  // files their own reports); these escalate what a role may do with OTHERS' work.
+  { key: 'canReviewReports',          label: '↳ Shqyrto raporte' },
+  { key: 'canApproveReports',         label: '↳ Aprovo brenda' },
+  { key: 'canPublishReports',         label: '↳ Publiko & dërgo te klienti' },
+  { key: 'canViewAllReports',         label: '↳ Shiko të gjitha raportet' },
+  { key: 'canViewConfidentialReports',label: '↳ Seksione konfidenciale' },
+  { key: 'canManageReportTemplates',  label: '↳ Menaxho template & KPI' },
+  { key: 'canViewFinancialMetrics',   label: '↳ Metrika financiare' },
   { key: 'canAccessTimeTracking',label: 'Orari' },
   { key: 'canAccessChat',        label: 'Chat' },
   { key: 'canAccessWhatsapp',    label: 'WhatsApp' },
@@ -2221,32 +2308,39 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
   Sales: {
     canAccessProjects: false, canAccessTasks: false, canAccessGoals: false,
     canAccessCRM: true, canAccessCustomers: true, canAccessInvoices: true,
-    canAccessServices: true, canAccessExpenses: false, canAccessReports: true,
+    canAccessServices: true, canAccessProducts: true, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
+    // Reporting defaults come from the module's own resolver, so the template shown
+    // here can never drift from what usePermissions actually grants.
+    ...reportingCapabilitiesFor('Sales'),
   },
   SalesAgent: {
     canAccessProjects: false, canAccessTasks: true, canAccessGoals: false,
     canAccessCRM: true, canAccessCustomers: true, canAccessInvoices: true,
-    canAccessServices: true, canAccessExpenses: false, canAccessReports: false,
+    canAccessServices: true, canAccessProducts: true, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
+    ...reportingCapabilitiesFor('SalesAgent'),
   },
   Manager: {
     canAccessProjects: true, canAccessTasks: true, canAccessGoals: true,
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
-    canAccessServices: false, canAccessExpenses: false, canAccessReports: true,
+    canAccessServices: false, canAccessProducts: false, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
+    ...reportingCapabilitiesFor('Manager'),
   },
   Member: {
     canAccessProjects: true, canAccessTasks: true, canAccessGoals: true,
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
-    canAccessServices: false, canAccessExpenses: false, canAccessReports: false,
+    canAccessServices: false, canAccessProducts: false, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
+    ...reportingCapabilitiesFor('Member'),
   },
   Viewer: {
     canAccessProjects: true, canAccessTasks: true, canAccessGoals: false,
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
-    canAccessServices: false, canAccessExpenses: false, canAccessReports: false,
+    canAccessServices: false, canAccessProducts: false, canAccessExpenses: false,
     canAccessTimeTracking: false, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
+    ...reportingCapabilitiesFor('Viewer'),
   },
 };
 

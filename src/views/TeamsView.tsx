@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
+import { useCollection, useMutation, useGlobalBusinessId, useIsSuperAdmin } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { getDocs, query, where, collection, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -37,6 +37,7 @@ import { cn } from '../lib/utils';
 import { appendSalaryChange } from '../lib/finance/salaryHistory';
 import { parseDate } from '../lib/finance/financialAnalytics';
 import { toast } from '../hooks/use-toast';
+import { useSubscription } from '../hooks/useSubscription';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -73,15 +74,28 @@ const TeamsView: React.FC = () => {
   const [teamToDelete, setTeamToDelete] = useState<Team | null>(null);
 
   const businessId = useGlobalBusinessId();
+  const isSuperAdmin = useIsSuperAdmin();
+  const { seats } = useSubscription();
+  // A team is a DEPARTMENT INSIDE a business, so the query is constrained to the
+  // active business server-side. (Client-side filtering is not enough any more: the
+  // hardened `teams` rule denies a query that would touch another tenant's team.)
   const { data: allTeams, loading: teamsLoading } = useCollection<Team>('teams', {
-    orderBy: { field: 'createdAt', direction: 'desc' }
+    skip: !businessId && !isSuperAdmin,
+    where: businessId && !isSuperAdmin
+      ? [{ field: 'businessId', operator: '==', value: businessId }]
+      : undefined,
+    skipTeamFilter: true,
   });
-  // teams isn't auto business-scoped (it's created via useMutation, which must not
-  // stamp a teamId), so scope it here: a business sees only its own departments.
-  const teams = useMemo(
-    () => (allTeams || []).filter(t => !businessId || (t as any).businessId === businessId),
-    [allTeams, businessId],
-  );
+  const teams = useMemo(() => {
+    const list = (allTeams || []).filter(t => !businessId || isSuperAdmin || (t as any).businessId === businessId);
+    // Sorted here rather than server-side: `where + orderBy` on different fields
+    // would need a composite index for no benefit at this size.
+    return [...list].sort((a, b) => {
+      const ta = (a as any).createdAt instanceof Date ? (a as any).createdAt.getTime() : 0;
+      const tb = (b as any).createdAt instanceof Date ? (b as any).createdAt.getTime() : 0;
+      return tb - ta;
+    });
+  }, [allTeams, businessId, isSuperAdmin]);
   // teamMembers/teamInvites are business-scoped by useCollection automatically.
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers');
   const { data: teamInvites } = useCollection<TeamInvite>('teamInvites');
@@ -97,10 +111,21 @@ const TeamsView: React.FC = () => {
     const name = formData.get('name') as string;
     const department = formData.get('department') as string;
 
+    // Every team must live inside a business — a team without a parent tenant would
+    // be invisible to business-scoped queries and unreachable by the hardened rules.
+    if (!businessId) {
+      toast({
+        title: 'Biznesi nuk u zgjidh',
+        description: 'Ekipi krijohet brenda një biznesi. Rifresko faqen dhe provo përsëri.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     const newTeam = await teamMutation.create({
       name,
       department,
-      ...(businessId ? { businessId } : {}),
+      businessId,
     } as any);
 
     // Auto-add creator as Admin member so they appear in mentions
@@ -108,6 +133,7 @@ const TeamsView: React.FC = () => {
       await memberMutation.create({
         userId: user.uid,
         teamId: newTeam.id,
+        businessId,
         role: 'Admin',
         email: user.email || '',
         displayName: user.displayName || user.email?.split('@')[0] || '',
@@ -122,6 +148,7 @@ const TeamsView: React.FC = () => {
         canAccessChat: true,
         canAccessCustomers: true,
         canAccessServices: true,
+        canAccessProducts: true,
         canAccessExpenses: true,
         canAccessProfile: true,
         invitedByUserId: user.uid,
@@ -189,6 +216,18 @@ const TeamsView: React.FC = () => {
   const handleInviteMember = async (formData: FormData) => {
     if (!selectedTeam || !user) return;
 
+    // Seat limit — surfaced BEFORE the invite is sent. /api/accept-invite enforces the
+    // same cap server-side, so this is UX, not the security boundary.
+    const activeCount = (teamMembers || []).filter(m => m.status === 'Active').length;
+    if (seats && activeCount >= seats) {
+      toast({
+        title: 'Vendet e planit u mbushën',
+        description: `Plani aktual përfshin ${seats} vende (${activeCount} të zëna). Përmirëso planin për të ftuar më shumë anëtarë.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
     const email = formData.get('email') as string;
     const role = formData.get('role') as string;
     const canAccessProjects = formData.get('canAccessProjects') === 'on';
@@ -202,6 +241,7 @@ const TeamsView: React.FC = () => {
     const canAccessChat = formData.get('canAccessChat') === 'on';
     const canAccessCustomers = formData.get('canAccessCustomers') === 'on';
     const canAccessServices = formData.get('canAccessServices') === 'on';
+    const canAccessProducts = formData.get('canAccessProducts') === 'on';
     const canAccessExpenses = formData.get('canAccessExpenses') === 'on';
     const canAccessProfile = formData.get('canAccessProfile') === 'on';
 
@@ -230,6 +270,8 @@ const TeamsView: React.FC = () => {
     await inviteMutation.create({
       email,
       teamId: selectedTeam.id,
+      // The tenant key comes from the TEAM being invited into, not the active session.
+      businessId: (selectedTeam as any).businessId || businessId,
       teamName: selectedTeam.name,
       role,
       invitedByUserId: user.uid,
@@ -246,6 +288,7 @@ const TeamsView: React.FC = () => {
       canAccessChat,
       canAccessCustomers,
       canAccessServices,
+      canAccessProducts,
       canAccessExpenses,
       canAccessProfile,
       status: 'Pending',
@@ -310,6 +353,7 @@ const TeamsView: React.FC = () => {
     const canAccessChat = formData.get('canAccessChat') === 'on';
     const canAccessCustomers = formData.get('canAccessCustomers') === 'on';
     const canAccessServices = formData.get('canAccessServices') === 'on';
+    const canAccessProducts = formData.get('canAccessProducts') === 'on';
     const canAccessExpenses = formData.get('canAccessExpenses') === 'on';
     const canAccessProfile = formData.get('canAccessProfile') === 'on';
 
@@ -329,6 +373,7 @@ const TeamsView: React.FC = () => {
       canAccessChat,
       canAccessCustomers,
       canAccessServices,
+      canAccessProducts,
       canAccessExpenses,
       canAccessProfile,
       invitedByUserId: user.uid,
@@ -1026,6 +1071,10 @@ const AddMemberForm: React.FC<{
             <Label htmlFor="addCanAccessServices" className="font-normal">Shërbimet</Label>
           </div>
           <div className="flex items-center gap-2">
+            <Checkbox id="addCanAccessProducts" name="canAccessProducts" />
+            <Label htmlFor="addCanAccessProducts" className="font-normal">Dyqani & Produktet</Label>
+          </div>
+          <div className="flex items-center gap-2">
             <Checkbox id="addCanAccessExpenses" name="canAccessExpenses" />
             <Label htmlFor="addCanAccessExpenses" className="font-normal">Shpenzimet</Label>
           </div>
@@ -1136,6 +1185,10 @@ const InviteMemberForm: React.FC<{
           <div className="flex items-center gap-2">
             <Checkbox id="canAccessServices" name="canAccessServices" />
             <Label htmlFor="canAccessServices" className="font-normal">Shërbimet</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="canAccessProducts" name="canAccessProducts" />
+            <Label htmlFor="canAccessProducts" className="font-normal">Dyqani & Produktet</Label>
           </div>
           <div className="flex items-center gap-2">
             <Checkbox id="canAccessExpenses" name="canAccessExpenses" />

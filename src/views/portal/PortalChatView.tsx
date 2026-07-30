@@ -15,7 +15,7 @@ import { useToast } from '../../hooks/use-toast';
 import { useVideoCall } from '../../hooks/useVideoCall';
 import VideoCallModal from '../../components/VideoCallModal';
 import type { ChatMessage, Project } from '../../types';
-import { ensureConversation } from '../../lib/conversationRouting';
+import { notifyStaff } from '../../lib/notifyStaff';
 
 const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
@@ -134,22 +134,31 @@ const PortalChatView: React.FC = () => {
       });
   }, [rawMessages]);
 
-  // Fetch team members only for the customer's project teams (for display names + notifications)
-  const projectTeamIds = React.useMemo(() => {
-    if (!customerProjects) return [];
-    return [...new Set(customerProjects.map(p => p.teamId).filter(Boolean))];
-  }, [customerProjects]);
-  const { data: allTeamMembers } = useCollection<any>('teamMembers', {
-    where: [{ field: 'status', operator: '==', value: 'Active' }],
-    skipTeamFilter: true, // portal client has no businessId → avoids the loading-forever guard
-  });
-  const teamMembers = React.useMemo(() => {
-    if (!allTeamMembers || projectTeamIds.length === 0) return allTeamMembers || [];
-    return allTeamMembers.filter((m: any) => projectTeamIds.includes(m.teamId));
-  }, [allTeamMembers, projectTeamIds]);
+  // The customer record — the client's own tenant keys + responsible rep come from it.
+  const { data: customer } = useDocument<any>('customers', customerId || undefined);
 
-  // Fetch user profiles for display names (only displayName exposed, no sensitive data)
-  const { data: userProfiles } = useCollection<any>('userProfiles');
+  // Tenant boundary stamped on client-created docs so staff see them in their scoped
+  // chat/unread badge. Prefer the customer's own businessId (set for existing agency
+  // clients via backfill and for subdomain clients), then the subdomain tenant.
+  const clientBusinessId = (customer as any)?.businessId || tenantBusinessId || null;
+
+  // teamId for client messages — required for the staff team-scoped reads. Prefer the
+  // tenant's own team (subdomain), then the customer's team. NEVER a cross-tenant
+  // member scan (that is how clients used to end up stamped with a random tenant).
+  const resolvedTeamId = tenantTeamId || (customer as any)?.teamId || null;
+
+  // NOTE: the portal deliberately does NOT read `teamMembers`. It used to read every
+  // tenant's staff records (skipTeamFilter) to pick notification recipients — a
+  // cross-tenant leak of staff data including compensation fields. Recipients and
+  // conversation routing are resolved server-side by /api/notify-staff instead.
+  //
+  // Display names come from `userProfiles`, scoped to the client's own business.
+  const { data: userProfiles } = useCollection<any>('userProfiles', {
+    skip: !clientBusinessId,
+    where: clientBusinessId ? [{ field: 'businessId', operator: '==', value: clientBusinessId }] : undefined,
+    skipTeamFilter: true,
+    skipBusinessFilter: true, // scoped explicitly above (portal users have no active business)
+  });
 
   const messageMutation = useMutation<ChatMessage>('messages');
   const notificationMutation = useMutation<any>('notifications');
@@ -176,19 +185,6 @@ const PortalChatView: React.FC = () => {
     return /^(javascript|data|vbscript|file):/i.test(u) ? undefined : u;
   };
 
-  // Resolve teamId so client messages include it — required for the admin's
-  // team-scoped useCollection('messages') to see them. Prefer the tenant's own team
-  // (subdomain) over an arbitrary cross-tenant member.
-  const resolvedTeamId = tenantTeamId || allTeamMembers?.find((m: any) => m.teamId)?.teamId || null;
-
-  // The customer record — used to find the responsible rep for the general channel.
-  const { data: customer } = useDocument<any>('customers', customerId || undefined);
-
-  // Tenant boundary stamped on client messages so staff see them in their scoped
-  // chat/unread badge. Prefer the customer's own businessId (set for existing
-  // agency clients via backfill and for subdomain clients), then the subdomain.
-  const clientBusinessId = (customer as any)?.businessId || tenantBusinessId || null;
-
   // The file-upload VPS URL lives in teamSettings but is synced to localStorage
   // only for staff. Portal clients must load it themselves so photo upload works.
   const { data: teamSettings } = useDocument<any>('teamSettings', resolvedTeamId || undefined);
@@ -212,31 +208,29 @@ const PortalChatView: React.FC = () => {
   // them via the notification choke point). Falls back to the project team /
   // admins when no responsible person is set.
   const notifyStaffOfClientMessage = React.useCallback(async (content: string, channelLabel: string) => {
-    let recipients: string[] = [];
-    if (responsibleUserId) {
-      recipients = [responsibleUserId];
-    } else if (teamMembers) {
-      const proj = selectedProjectId ? customerProjects?.find(x => x.id === selectedProjectId) : null;
-      const teamFallback = proj?.teamId ? teamMembers.filter((m: any) => m.teamId === proj.teamId && m.status === 'Active') : [];
-      const pool = teamFallback.length ? teamFallback : teamMembers.filter((m: any) => (m.role === 'Admin' || m.canAccessCRM) && (!tenantBusinessId || (m as any).businessId === tenantBusinessId));
-      recipients = pool.map((m: any) => m.userId);
-    }
     const preview = content.length > 100 ? content.slice(0, 100) + '...' : content;
-    await Promise.all(
-      [...new Set(recipients)].filter(Boolean).map(uid =>
-        notificationMutation.create({
-          userId: uid,
-          type: 'client_message',
-          title: `Mesazh i ri nga klienti${channelLabel ? ` — ${channelLabel}` : ''}`,
-          message: preview,
-          isRead: false,
-          actionUrl: '/app/chat',
-          actionLabel: 'Hap Chat',
-          linkTo: channelId,
-        } as any).catch(() => { /* don't block */ })
-      )
-    );
-  }, [responsibleUserId, teamMembers, selectedProjectId, customerProjects, channelId, notificationMutation]);
+    const proj = selectedProjectId ? customerProjects?.find(x => x.id === selectedProjectId) : null;
+    // Recipients (responsible person → project team → tenant admins) are resolved
+    // server-side inside the client's own business; the same call upserts the
+    // conversation thread with its owner + watchers.
+    await notifyStaff({
+      type: 'client_message',
+      title: `Mesazh i ri nga klienti${channelLabel ? ` — ${channelLabel}` : ''}`,
+      message: preview,
+      actionUrl: '/app/chat',
+      actionLabel: 'Hap Chat',
+      linkTo: channelId,
+      projectId: selectedProjectId || undefined,
+      responsibleUserId: responsibleUserId || null,
+      conversation: {
+        channelId,
+        channel: 'portal',
+        teamId: (proj as any)?.teamId || resolvedTeamId || null,
+        salesAgentId: (customer as any)?.salesAgentId || null,
+        subject: customer?.name || undefined,
+      },
+    });
+  }, [responsibleUserId, selectedProjectId, customerProjects, channelId, resolvedTeamId, customer]);
 
   // Auto-scroll on new messages and when switching project channels.
   // When the user loads OLDER messages we must NOT jump to the bottom — instead
@@ -340,21 +334,9 @@ const PortalChatView: React.FC = () => {
       // Bump last-activity so the staff sidebar sorts this conversation by recency.
       updateDoc(doc(db, 'customers', customerId), { lastClientMessageAt: Timestamp.now() }).catch(() => { /* non-blocking */ });
 
-      // Upsert the persistent conversation doc with owner + watchers so the thread
-      // is owned and supervised from the first message (Request 1).
-      const convProj = selectedProjectId ? customerProjects?.find(p => p.id === selectedProjectId) : null;
-      ensureConversation({
-        channelId,
-        channel: 'portal',
-        businessId: clientBusinessId,
-        teamId: (convProj as any)?.teamId || resolvedTeamId,
-        customerId,
-        ownerId: responsibleUserId,
-        salesAgentId: (customer as any)?.salesAgentId || null,
-        subject: customer?.name || undefined,
-        teamMembers: allTeamMembers || [],
-        actorUserId: user.uid,
-      }).catch(() => { /* non-blocking */ });
+      // The conversation thread (owner + watchers) is upserted server-side by
+      // /api/notify-staff below — computing watchers needs the tenant's staff list,
+      // which the portal must not read.
 
       // Route the message to the responsible person (in-app + email).
       const channelLabel = selectedProjectId
@@ -423,9 +405,6 @@ const PortalChatView: React.FC = () => {
     if (senderId === user?.uid) return 'Ju';
     const profile = userProfiles?.find((p: any) => p.userId === senderId);
     if (profile?.displayName) return profile.displayName;
-    const member = teamMembers?.find((m: any) => m.userId === senderId);
-    if (member?.email) return member.email.split('@')[0];
-    if (member) return `${member.role || 'Staf'}`;
     return 'Ekipi';
   };
 

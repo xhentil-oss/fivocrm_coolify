@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminDb, Timestamp } from './_firebaseAdmin.js';
 import { FieldValue } from 'firebase-admin/firestore';
+import { normContactEmail, findLeadForContact, findCustomerForContact, crossLinkLeadCustomer } from './_contactIdentity.js';
 
 /**
  * Combined landing-page API (public, no auth).
@@ -85,7 +86,9 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
   const { name, email, phone, website, message, packageId, packageName, source, category, company, estimatedValue } = req.body || {};
 
   const sName = sanitize(name, 100);
-  const sEmail = sanitize(email, 200);
+  // Lowercased at the door: dedup queries are exact-match, so a "Alba@x.al"
+  // submission must not slip past an existing "alba@x.al" lead/customer.
+  const sEmail = normContactEmail(sanitize(email, 200));
   if (!sName || !sEmail) {
     return res.status(400).json({ error: 'Emri dhe email janë të detyrueshëm.' });
   }
@@ -180,31 +183,42 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
       } catch { /* non-blocking */ }
     }
 
-    // Dedup: reuse an existing lead with the same email (or phone) in this team
-    // instead of creating a duplicate on repeat landing-page submissions.
+    // Identity resolution: reuse an existing lead for this person instead of
+    // creating a duplicate on repeat submissions, AND link to their customer
+    // record when they're already a client — an existing client asking for a
+    // new service is a real lead, but it must never become an orphan record
+    // sitting next to their client profile.
     let leadRef: FirebaseFirestore.DocumentReference | null = null;
+    let existingCustomerId: string | null = null;
     try {
-      const normPhone = (sPhone || '').replace(/\D/g, '');
-      let existing: FirebaseFirestore.QueryDocumentSnapshot | undefined;
-      if (sEmail) {
-        const q = await adminDb.collection('leads').where('email', '==', sEmail).get();
-        existing = q.docs.find(d => !teamId || d.data().teamId === teamId);
-      }
-      if (!existing && normPhone.length >= 7) {
-        const q = await adminDb.collection('leads').where('phoneNumber', '==', sPhone).get();
-        existing = q.docs.find(d => !teamId || d.data().teamId === teamId);
-      }
-      if (existing) {
-        leadRef = existing.ref;
-        await existing.ref.update({
+      const lookup = { email: sEmail, phone: sPhone, teamId };
+      const [existingLead, existingCustomer] = await Promise.all([
+        findLeadForContact(adminDb, lookup),
+        findCustomerForContact(adminDb, lookup),
+      ]);
+      existingCustomerId = existingCustomer?.id ?? null;
+      if (existingLead) {
+        leadRef = existingLead.ref;
+        await existingLead.ref.update({
           serviceInquiryId: inquiryRef.id,
           updatedAt: now,
-          notes: [existing.data()?.notes || '', `— Kërkesë e re nga ${sSource} (${new Date().toISOString().slice(0, 10)})`].filter(Boolean).join('\n'),
+          ...(existingCustomerId && !existingLead.data()?.customerId ? { customerId: existingCustomerId } : {}),
+          notes: [existingLead.data()?.notes || '', `— Kërkesë e re nga ${sSource} (${new Date().toISOString().slice(0, 10)})`].filter(Boolean).join('\n'),
         });
       }
-    } catch { /* non-blocking — fall through to create a new lead */ }
+    } catch (err) {
+      // Non-blocking — fall through to create a new lead rather than lose the submission.
+      console.error('[landing] contact identity lookup failed', err);
+    }
     if (!leadRef) {
-      leadRef = await adminDb.collection('leads').add(leadData);
+      leadRef = await adminDb.collection('leads').add({
+        ...leadData,
+        ...(existingCustomerId ? { customerId: existingCustomerId } : {}),
+      });
+    }
+    // Reverse link (customer → lead) so the client profile shows this inquiry.
+    if (existingCustomerId) {
+      await crossLinkLeadCustomer(adminDb, leadRef.id, existingCustomerId);
     }
 
     // 3. Link inquiry → lead

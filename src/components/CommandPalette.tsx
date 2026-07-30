@@ -1,5 +1,5 @@
 import React, { useMemo } from 'react';
-import { FolderKanban, Users, CheckSquare, BarChart3, Settings, Hash, MessageSquare, User as UserIcon, Wallet } from 'lucide-react';
+import { FolderKanban, Users, CheckSquare, BarChart3, Settings, Hash, MessageSquare, User as UserIcon, Wallet, Package } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   Dialog,
@@ -16,6 +16,7 @@ import {
 } from './ui/command';
 import { useCollection } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
+import { useModules } from '../hooks/useModules';
 import type { Channel, TeamMember, Customer } from '../types';
 
 interface CommandPaletteProps {
@@ -31,20 +32,27 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChange }) =
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers');
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
 
+  // The palette used to list every destination regardless of the tenant's modules or
+  // the user's role, so it could navigate straight into a blocked page.
+  const { isEnabled } = useModules();
+
   const commands = [
     { icon: FolderKanban, label: 'Shko te Projektet', path: '/app/projects' },
     { icon: Users, label: 'Shko te Klientët / Lead-et', path: '/app/crm' },
     { icon: CheckSquare, label: 'Shko te Detyrat', path: '/app/tasks' },
+    { icon: Package, label: 'Shko te Dyqani', path: '/app/products' },
+    { icon: Package, label: 'Shko te Porositë', path: '/app/shop-orders' },
     { icon: MessageSquare, label: 'Shko te Chati', path: '/app/chat' },
     { icon: Wallet, label: 'Shko te Financat', path: '/app/finances' },
     { icon: Settings, label: 'Shko te Cilësimet', path: '/app/settings' },
-  ];
+  ].filter(c => isEnabled(c.path));
 
   const actions = [
     { icon: FolderKanban, label: 'Krijo Projekt të Ri', path: '/app/projects' },
     { icon: Users, label: 'Krijo Lead të Ri', path: '/app/crm' },
     { icon: CheckSquare, label: 'Krijo Detyrë të Re', path: '/app/tasks' },
-  ];
+    { icon: Package, label: 'Krijo Produkt të Ri', path: '/app/products' },
+  ].filter(a => isEnabled(a.path));
 
   const handleSelect = (path: string) => {
     navigate(path);

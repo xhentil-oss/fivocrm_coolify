@@ -69,20 +69,54 @@
 | `expenses` | Business expenses |
 | `timeEntries` | Time tracking |
 | `services` | Service catalog |
+| `products` | Shop products (variants, inventory, SEO) |
+| `productCategories` / `productBrands` | Shop catalog taxonomy |
+| `stockMovements` | Append-only inventory ledger |
+| `shopOrders` | Shop orders (portal + back office) |
 | `serviceInquiries` | Landing page form submissions |
 | `standups` | Morning standup entries |
 | `dailyReports` | Daily staff reports |
 | `quotes` | Price calculator quotes (team-scoped) |
+| `reports` | Enterprise reports (blocks, workflow, approvals) |
+| `reportVersions` / `reportApprovals` / `reportEvents` | Append-only history, sign-off, audit |
+| `reportComments` | Report discussion (`internal` = the client boundary) |
+| `reportTemplates` / `reportSchedules` / `reportKpis` / `reportMetrics` | Reporting config + metric values |
+| `clientHealthScores` / `employeeReportScores` | Health + accountability rollups |
 
 ---
 
 ## Key Architectural Rules
 
-### Data Scoping
-- All collections are **team-scoped** via `teamId` field.
-- `useCollection()` hook from `useFirestore.ts` automatically applies `teamId` filter.
-- Use `skipTeamFilter: true` only for portal views and cross-team lookups.
-- `setGlobalTeamId()` / `getGlobalTeamId()` manage the active team context.
+### Data Scoping — two-level tenancy (business > team)
+
+**`businessId` is THE tenant/isolation key. `teamId` is a DEPARTMENT INSIDE one business**
+(required + immutable on `teams`; a team can never exist outside a business or move
+between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_ENTERPRISE.md`.
+
+- `useCollection()` (`useFirestore.ts`) auto-applies `where('businessId','==',active)` to
+  everything in `businessIsolatedAlways` — including `teams`, `userProfiles`, `channels`,
+  `clientPortalAccess`. `setGlobalBusinessId()` / `getGlobalBusinessId()` hold the context.
+- **Firestore rules are NOT filters**: an unscoped query over a scoped collection is
+  denied outright. Client scoping and rules must always agree.
+- `skipBusinessFilter: true` is only for identity bootstrap (`usePermissions`) and the
+  portal — and a portal read MUST then constrain itself (own uid/email, or its own
+  `businessId`), or the `isTeamScoped && !scopeId` guard leaves it loading forever.
+- Authorization comes from **server-minted custom claims**, not from a client document:
+  `bid` (businessId = proof of STAFF membership), `tid`, `roles`, `cid` (portal
+  customerId), `pbid` (portal client's tenant — deliberately NOT `bid`), `superAdmin`.
+  Minted by `api/_tenantClaims.ts`; reconciled client-side by
+  `ensureTenantClaims()` (`src/lib/tenantClaims.ts`). `users/{uid}` remains only as a
+  membership-backed fallback for tokens that predate the rollout.
+- **Credentials never live in `teamSettings`** (it is readable by the whole business).
+  They go to `teamSecrets/{teamId}` (`read, write: if false`) via
+  `POST /api/tenant-secrets`; the UI only sees `has*` booleans. Server code reads them
+  with `getTeamConfig()` (`api/_tenantConfig.ts`), never `teamSettings` directly.
+- The **client portal never reads `teamMembers`**. Notification recipients, conversation
+  routing and the sales follow-up task are resolved server-side by `POST /api/notify-staff`.
+- Adding a collection? → `businessIsolatedAlways` + stamp `businessId` on create + a rule
+  using `isBusinessMember(resource.data.businessId)` + a negative cross-tenant test in
+  `scripts/firestore-rules.test.mjs` (35 tests; run them in the emulator before any
+  `firebase deploy --only firestore:rules`).
 
 ### Import Paths
 - Use **relative paths** for all local imports (e.g., `'../components/ui/card'`).
@@ -96,9 +130,102 @@
 - `dialog.tsx` lives at `src/components/ui/dialog/index.tsx` (moved for Linux compatibility).
 - All views are **lazy-loaded** via `lazyRetry()` wrapper for chunk resilience.
 
+### Modules (activation & SaaS plan gating)
+- **`src/lib/modules.ts` is the single source of truth** for what a module is: id,
+  route(s), label, `permissionKey`, `minPlan`, `optional`, `defaultOff`, group.
+- Three gates, resolved together by `moduleBlockReason()`:
+  1. **permission** — the user's role must grant `permissionKey`;
+  2. **plan** — `businesses.plan` must reach `minPlan` (`trial` ranks highest so trials
+     can evaluate everything; an unknown plan is treated as trial, never as locked);
+  3. **toggle** — the path must not be in `businesses.disabledModules`.
+- `useModules()` reads/writes that state; `<ModuleGate moduleId="…">` guards routes
+  (use it **instead of** `<PermissionGate>` — the permission check is in the registry).
+- Consumers: Sidebar, MobileBottomNav, CommandPalette, TenantsView (super-admin
+  per-tenant chips), Cilësimet → **Modulet** (owner self-service via
+  `ModulesSettingsPanel`). Adding a module to the registry wires all of them.
+- Firestore rules only let the business **owner** write `businesses/{id}`, so a
+  non-owner admin gets a read-only module manager.
+
+### Shop / Products module (`id: 'shop'`, `minPlan: 'pro'`, off by default)
+- Staff: `/app/products` (catalog, inventory, taxonomy tabs) + `/app/shop-orders`.
+- Client portal: `/portal/shop` (catalog → cart → order). The "Dyqani" portal nav
+  item appears only when the tenant has ≥1 portal-visible product.
+- Pure logic lives in `src/lib/shop/` and is unit-tested (no Firestore):
+  `pricing.ts` (variant/tier resolution, net-vs-gross tax, order totals, margin),
+  `inventory.ts` (stock state, fulfilment checks, movement signs, valuation),
+  `variants.ts` (option axes → variant matrix, preserving typed-in data),
+  `product.ts` (slug/SKU/order numbering, validation, CSV mapping).
+- Stock is never set directly — every change is a `stockMovements` entry, and orders
+  decrement stock once, guarded by `shopOrder.stockApplied`.
+- Order lines are price **snapshots**, so later catalog edits never rewrite history.
+
+### Reporting & Accountability module (`id: 'reporting'`, `minPlan: 'pro'`)
+
+- Staff: `/app/reports` (+ `/reports/:id`), `/app/report-templates` (config: templates,
+  KPI, schedules), `/app/accountability`, `/app/client-health`.
+  Client portal: `/portal/reports`.
+- **`dailyReports` was EXTENDED, not replaced** — it stays the daily staff submission
+  (StaffDashboard, DailyReportPopup, Momentum all keep working). The new `reports`
+  collection is the versioned, block-based document behind weekly/monthly/quarterly
+  and client-facing reports; daily reports FEED it.
+- **The leak boundary is one function.** Portal, PDF and email all render
+  `redactForClient()` output (`src/lib/reporting/visibility.ts`). `CLIENT_VISIBILITIES`
+  is a closed allow-list, a new block defaults to `internal`, and `assertNoClientLeak()`
+  guards the publish/PDF path. Never build a client payload from a raw `Report`.
+- **Clients never write `reports`.** Their decisions and comments go through
+  `POST /api/reports` (`api/_reports.ts`), which re-checks ownership + publication +
+  transition legality. Firestore rules deny every client write, and versions,
+  approvals and events are append-only for everyone.
+- Workflow rules (publish needs internal approval, no self-approval, editing a
+  published report bumps the version and forces re-approval, client sign-off pins the
+  version, no hard delete once published) live in `src/lib/reporting/workflow.ts` and
+  are shared by the UI and the server — never re-implement a guard inline.
+- Editing a template must NEVER rewrite history: reports carry `templateKey` +
+  `templateVersion` and a deep copy of the blocks. System templates are duplicate-only.
+- Cron: `report-schedules`, `report-reminders`, `client-health-rollup`
+  (`api/_reportJobs.ts`) — all idempotent, keyed on
+  `generationKey = scheduleId:periodKey[:subjectId]` and per-rung `remindersSent` /
+  `escalationsSent`.
+- Permissions: `canAccessReports` is the module gate and is TRUE for every internal
+  role (everyone reports). Six capability flags escalate by role, defaulted in ONE
+  place (`src/lib/reporting/permissions.ts`) — do not hand-roll them per branch.
+- Full architecture, install steps and limitations: `workspace/REPORTING_MODULE.md`.
+
+### SaaS billing & tenant lifecycle
+
+- **Plans** live in two halves that must agree: `src/lib/billing.ts` (display: price,
+  seats, highlights) and `api/_billingPlans.ts` (Stripe price ids from env, `PLAN_SEATS`,
+  Stripe-status → tenant-status mapping). Modules are gated by `minPlan` in
+  `src/lib/modules.ts` — do not duplicate that list.
+- **The tenant never sets its own tier.** `businesses.plan/status` are written ONLY by
+  `api/stripe-webhook.ts` (plan derived from the price actually billed) and the
+  `subscription-lifecycle` cron. Firestore rules block a tenant from editing either.
+- **Lifecycle:** trialing → (trial ends) past_due → (7 days grace) suspended → (paid)
+  active. `tenantActive()` in the rules denies writes for a suspended tenant, and
+  `<SubscriptionGate>` turns that into an explicit screen instead of silent failures.
+  `/app/billing` + `/app/settings` stay reachable while suspended so the owner can pay.
+- **Seats** are enforced server-side in `api/_accept-invite.ts` (fail-closed). TeamsView
+  warns before sending an invite; Abonimi shows used/total.
+- **Credentials** never live in `teamSettings` (readable by the whole business) — they go
+  to `teamSecrets/{teamId}` (`read, write: if false`) via `POST /api/tenant-secrets`, and
+  server code reads them with `getTeamConfig()` (`api/_tenantConfig.ts`). The UI only sees
+  `has*` booleans.
+- **New API endpoints must go through `api/email.ts`** + a `vercel.json` rewrite — Vercel
+  Hobby caps the project at 12 functions and it is already at 12.
+- **Cost rule of thumb:** a cron job must never read a collection unfiltered. Scope by
+  `businessId` (or a range on an indexed field). `tenantScopedDocs()` in `api/cron/run.ts`
+  is the helper for audience reads; `project-spend-rollup` is incremental via a state doc.
+- **GDPR:** `?job=tenant-export&businessId=…` and
+  `?job=tenant-delete&businessId=…&confirm=…` (super-admin only). Full runbook:
+  `workspace/SAAS_HARDENING_RUNBOOK.md`.
+
 ### Roles & Permissions
 - Roles: `Admin`, `Manager`, `Sales`, `SalesAgent`, `Member`, `Viewer`
 - Permission checks via `usePermissions()` hook and `<PermissionGate>` component.
+- Adding a `canAccessX` flag means touching: `UserPermissions`, `fullAccessPermissions`,
+  `restrictedPermissions`, every role branch in `usePermissions.ts`, `simulateRole` in
+  `PermissionsContext.tsx`, `MODULES`/`DEFAULT_TEMPLATES` in `SettingsView.tsx`,
+  `TeamMember`/`TeamInvite` types, TeamsView checkboxes, and `createTenant.ts`.
 - Client portal users are separate — they use `clientPortalAccess` collection.
 
 ---
@@ -158,6 +285,8 @@ Each package includes:
 | `meta-webhook.ts` | `POST /api/meta-webhook` | Meta WhatsApp webhook |
 | `send-whatsapp.ts` | `POST /api/send-whatsapp` | Send WhatsApp messages |
 | `migrate-emails.ts` | `POST /api/migrate-emails` | Data migration utility |
+| `_reports.ts` | `POST /api/reports` | Client report actions (view/ack/approve/reject/comment) + staff email send |
+| `_reportJobs.ts` | Cron | report-schedules, report-reminders, client-health-rollup |
 | `cron/run.ts` | Cron | Scheduled jobs (recurring invoices, etc.) |
 
 ---
@@ -225,6 +354,7 @@ META_ACCESS_TOKEN        — Meta WhatsApp API
 - `workspace/TODO.md` — Pending tasks
 - `workspace/CHANGELOG.md` — History of changes
 - `workspace/DEBUGGING.md` — Debugging notes
+- `workspace/REPORTING_MODULE.md` — Reporting & accountability module (ERD, security, runbook)
 
 ---
 

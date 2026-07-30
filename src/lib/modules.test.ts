@@ -1,0 +1,126 @@
+import { describe, expect, it } from 'vitest';
+import {
+  MODULES,
+  MODULE_BY_ID,
+  defaultDisabledModulePaths,
+  findModuleForPath,
+  isModuleEnabled,
+  isPathEnabled,
+  moduleBlockReason,
+  planIncludes,
+} from './modules';
+
+const shop = MODULE_BY_ID.shop;
+
+const allowAll = { canAccessProducts: true, canAccessServices: true };
+
+describe('registry integrity', () => {
+  it('has unique ids and paths', () => {
+    expect(new Set(MODULES.map(m => m.id)).size).toBe(MODULES.length);
+    expect(new Set(MODULES.map(m => m.path)).size).toBe(MODULES.length);
+  });
+
+  it('registers the shop module on /app/products with its orders sub-route', () => {
+    expect(shop).toBeDefined();
+    expect(shop.path).toBe('/app/products');
+    expect(shop.extraPaths).toContain('/app/shop-orders');
+    expect(shop.permissionKey).toBe('canAccessProducts');
+  });
+
+  it('starts the shop disabled for brand-new tenants', () => {
+    expect(defaultDisabledModulePaths()).toContain('/app/products');
+  });
+});
+
+describe('findModuleForPath', () => {
+  it('resolves primary paths, extra paths and nested routes', () => {
+    expect(findModuleForPath('/app/products')?.id).toBe('shop');
+    expect(findModuleForPath('/app/products/abc123')?.id).toBe('shop');
+    expect(findModuleForPath('/app/shop-orders')?.id).toBe('shop');
+  });
+
+  it('returns nothing for ungated routes', () => {
+    expect(findModuleForPath('/app/dashboard')).toBeUndefined();
+    expect(findModuleForPath('/app/settings')).toBeUndefined();
+  });
+
+  it('does not treat a path prefix as a match', () => {
+    // '/app/product-feed' must not resolve to the '/app/products' module.
+    expect(findModuleForPath('/app/product-feed')).toBeUndefined();
+  });
+});
+
+describe('planIncludes', () => {
+  it('orders the paid tiers', () => {
+    expect(planIncludes('starter', 'pro')).toBe(false);
+    expect(planIncludes('pro', 'pro')).toBe(true);
+    expect(planIncludes('enterprise', 'business')).toBe(true);
+  });
+
+  it('gives trials the full product so they can evaluate it', () => {
+    expect(planIncludes('trial', 'enterprise')).toBe(true);
+  });
+
+  it('treats an unknown or missing plan as a trial rather than locking the tenant out', () => {
+    expect(planIncludes(undefined, 'business')).toBe(true);
+    expect(planIncludes('legacy-plan', 'business')).toBe(true);
+  });
+});
+
+describe('moduleBlockReason', () => {
+  it('allows the module when permission, plan and toggle all pass', () => {
+    expect(moduleBlockReason(shop, { plan: 'pro', permissions: allowAll })).toBeNull();
+  });
+
+  it('reports the missing permission before anything else', () => {
+    // A Viewer shouldn't be told to upgrade a plan they still couldn't use.
+    const reason = moduleBlockReason(shop, {
+      plan: 'starter',
+      disabledModules: ['/app/products'],
+      permissions: { canAccessProducts: false },
+    });
+    expect(reason).toBe('permission');
+  });
+
+  it('reports the plan before the tenant toggle', () => {
+    const reason = moduleBlockReason(shop, {
+      plan: 'starter',
+      disabledModules: ['/app/products'],
+      permissions: allowAll,
+    });
+    expect(reason).toBe('plan');
+  });
+
+  it('reports the tenant toggle last', () => {
+    expect(moduleBlockReason(shop, {
+      plan: 'business',
+      disabledModules: ['/app/products'],
+      permissions: allowAll,
+    })).toBe('disabled');
+  });
+
+  it('lets a super-admin through every gate', () => {
+    expect(moduleBlockReason(shop, {
+      plan: 'starter',
+      disabledModules: ['/app/products'],
+      permissions: { canAccessProducts: false },
+      isSuperAdmin: true,
+    })).toBeNull();
+  });
+
+  it('requires the permission key to be exactly true, not merely truthy', () => {
+    expect(isModuleEnabled(shop, { plan: 'pro', permissions: { canAccessProducts: 'yes' } })).toBe(false);
+  });
+});
+
+describe('isPathEnabled', () => {
+  it('gates every route the module owns', () => {
+    const ctx = { plan: 'pro' as const, disabledModules: ['/app/products'], permissions: allowAll };
+    expect(isPathEnabled('/app/products', ctx)).toBe(false);
+    expect(isPathEnabled('/app/shop-orders', ctx)).toBe(false);
+  });
+
+  it('leaves unregistered routes open', () => {
+    expect(isPathEnabled('/app/dashboard', { plan: 'starter', permissions: {} })).toBe(true);
+  });
+});

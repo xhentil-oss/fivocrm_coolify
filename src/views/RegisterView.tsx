@@ -10,6 +10,7 @@ import { Card } from '../components/ui/card';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Loader2, CheckCircle, UserPlus } from 'lucide-react';
+import { usePortalTenant } from '../hooks/usePortalTenant';
 
 interface ServiceOption {
   id: string;
@@ -20,6 +21,8 @@ interface ServiceOption {
 
 const RegisterView: React.FC = () => {
   const navigate = useNavigate();
+  // Which tenant a public registration belongs to (subdomain → publicTenants map).
+  const { tenantBusinessId, tenantTeamId } = usePortalTenant();
   const [firstName, setFirstName] = useState('');
   const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
@@ -92,18 +95,12 @@ const RegisterView: React.FC = () => {
       // Send email verification (non-blocking — don't fail registration if this errors)
       sendEmailVerification(user).catch(() => {});
 
-      // Resolve teamId from existing team members so new documents are visible
-      // to admins (team-scoped views filter by teamId).
-      let teamId: string | null = null;
-      let businessId: string | null = null;
-      try {
-        const tmSnap = await getDocs(
-          query(collection(db, 'teamMembers'), where('status', '==', 'Active'))
-        );
-        const memberDoc = tmSnap.docs.find(d => d.data().teamId);
-        teamId = memberDoc?.data().teamId || null;
-        businessId = memberDoc?.data().businessId || null;
-      } catch { /* non-critical */ }
+      // Resolve WHICH TENANT this public registration belongs to. Previously this
+      // scanned every tenant's `teamMembers` and used the first hit — a cross-tenant
+      // read that dropped registrants into an arbitrary business. Now: the portal
+      // subdomain (publicTenants) if present, else the configured default tenant.
+      let teamId: string | null = tenantTeamId || (import.meta.env.VITE_DEFAULT_TEAM_ID as string | undefined) || null;
+      let businessId: string | null = tenantBusinessId || (import.meta.env.VITE_DEFAULT_BUSINESS_ID as string | undefined) || null;
       // Stamp BOTH teamId and businessId — business-scoped reads filter on businessId,
       // so a lead/customer created with teamId only would be invisible in the CRM.
       const scopeFields = {
@@ -170,6 +167,9 @@ const RegisterView: React.FC = () => {
         await addDoc(collection(db, 'userProfiles'), {
           userId: user.uid,
           displayName: fullName,
+          // A public registrant is a CLIENT of this tenant, not staff: the tenant keys
+          // only make their display name resolvable inside that business.
+          ...scopeFields,
           createdAt: Timestamp.now(),
           updatedAt: Timestamp.now(),
           createdByUserId: user.uid,

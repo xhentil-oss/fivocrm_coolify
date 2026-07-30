@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
 import { buildInvoiceEmail } from './_invoiceEmail.js';
 import admin, { adminDb as db } from './_firebaseAdmin.js';
+import { tenantEmailIdentity } from './_tenantConfig.js';
 
 function isValidEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email) && !email.includes('\n') && !email.includes('\r');
@@ -222,8 +223,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     auth: { user: smtpUser, pass: process.env.SMTP_PASS },
   });
 
+  // The recipient is the TENANT'S client, so the mail must carry the tenant's identity
+  // (name + reply-to), not the platform's. Envelope sender stays the platform SMTP user
+  // unless the tenant configured its own verified sending address.
+  const identity = await tenantEmailIdentity(invoice.teamId, invoice.businessId);
   await transporter.sendMail({
-    from: `"FivoCRM" <${smtpUser}>`,
+    from: `"${identity.fromName}" <${identity.fromEmail || smtpUser}>`,
+    ...(identity.replyTo ? { replyTo: identity.replyTo } : {}),
     to: customer.email,
     subject,
     html,

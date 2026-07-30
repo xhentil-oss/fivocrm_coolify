@@ -9,6 +9,7 @@ import { FileText, Calculator, CheckCircle2, XCircle, ChevronDown, ChevronUp, Se
 import { CardGridSkeleton } from './PortalSkeletons';
 import { useToast } from '../../hooks/use-toast';
 import type { Quote, Customer, Lead, Notification } from '../../types';
+import { notifyStaff } from '../../lib/notifyStaff';
 
 const statusMap: Record<string, { label: string; class: string }> = {
   Draft: { label: 'Draft', class: 'bg-gray-100 text-gray-700' },
@@ -45,11 +46,9 @@ const PortalQuotesView: React.FC = () => {
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('all');
 
-  // Active staff members — used to notify the team when a client responds to a quote.
-  const { data: allTeamMembers } = useCollection<any>('teamMembers', {
-    where: [{ field: 'status', operator: '==', value: 'Active' }],
-    skipTeamFilter: true,
-  });
+  // The portal never reads `teamMembers` (that would expose another tenant's staff
+  // records). When a client accepts/rejects a quote the recipients are resolved
+  // server-side, inside the client's own business, by /api/notify-staff.
 
   // Read only the client's own customer doc (server-side RLS: isPortalClientDoc).
   const { data: customer } = useDocument<Customer>('customers', customerId || undefined);
@@ -195,26 +194,17 @@ const PortalQuotesView: React.FC = () => {
                 // Notify the staff: the quote's creator + Admin/Manager/Sales of its team.
                 const clientName = customer?.name || q.customerName || 'Klienti';
                 const recipientIds = new Set<string>();
-                if (q.createdByUserId) recipientIds.add(q.createdByUserId);
-                (allTeamMembers || []).forEach((m: any) => {
-                  if (m.teamId === q.teamId && ['Admin', 'Manager', 'Sales'].includes(m.role)) {
-                    if (m.userId) recipientIds.add(m.userId);
-                  }
-                });
                 const accepted = status === 'Accepted';
-                await Promise.all(
-                  [...recipientIds].map(uid =>
-                    notificationMutation.create({
-                      userId: uid,
-                      type: accepted ? 'quote_accepted' : 'quote_rejected',
-                      title: accepted ? '✅ Preventiva u pranua' : '❌ Preventiva u refuzua',
-                      message: `${clientName} ${accepted ? 'pranoi' : 'refuzoi'} preventivën "${q.label || 'pa emër'}".`,
-                      isRead: false,
-                      actionUrl: '/app/customers',
-                      actionLabel: 'Shiko Klientin',
-                    }).catch(() => { /* non-critical */ })
-                  )
-                );
+                await notifyStaff({
+                  type: accepted ? 'quote_accepted' : 'quote_rejected',
+                  title: accepted ? '✅ Preventiva u pranua' : '❌ Preventiva u refuzua',
+                  message: `${clientName} ${accepted ? 'pranoi' : 'refuzoi'} preventivën "${q.label || 'pa emër'}".`,
+                  actionUrl: '/app/customers',
+                  actionLabel: 'Shiko Klientin',
+                  // The quote's author is the most relevant recipient; the server adds
+                  // the tenant's admins/managers and validates membership.
+                  responsibleUserId: (q as any).createdByUserId || null,
+                });
 
                 toast({
                   title: status === 'Accepted' ? '✅ Preventiva u pranua!' : '❌ Preventiva u refuzua.',

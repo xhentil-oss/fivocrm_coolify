@@ -8,14 +8,92 @@ service cloud.firestore {
       return request.auth != null;
     }
 
-    // Server-trustworthy super-admin signal, backed by a custom auth claim set
-    // via scripts/set-super-admin-claims.cjs. Use as a global-read escape hatch
-    // when tightening per-team read rules (see workspace/SECURITY_RULES_MIGRATION.md):
-    //   allow read: if isTeamMember(resource.data.teamId) || isSuperAdmin();
-    // Defined now (additive, safe to deploy) so the phased tightening can rely on
-    // it without a second rules round-trip.
+    // ══════════════════════════════════════════════════════════════════════════
+    // TENANT IDENTITY — signed claims first, users/{uid} only as a fallback
+    // ══════════════════════════════════════════════════════════════════════════
+    // A tenant is a BUSINESS (`businesses/{bid}`). A TEAM (`teams/{tid}`) is a
+    // DEPARTMENT INSIDE exactly one business — `teams.businessId` is required and
+    // immutable, so the hierarchy is business → team → data.
+    //
+    // The boundary is read from the ID token (custom claims minted server-side by
+    // api/_tenantClaims.ts):
+    //     token.bid   businessId  — the isolation key
+    //     token.tid   teamId      — the department inside that business
+    //     token.roles ['owner'|'admin'|'manager'|…]
+    //     token.cid   customerId  — portal clients only
+    // The legacy `users/{uid}` marker is still accepted as a FALLBACK for sessions
+    // whose token predates the claims rollout. That document is itself validated on
+    // write (usersTenantOk below: a key may only be set when a real membership or an
+    // owned customer backs it), so the fallback is not a self-attestation hole — but
+    // the claim path is preferred because it is server-signed and costs no get().
+
     function isSuperAdmin() {
-      return isAuth() && request.auth.token.superAdmin == true;
+      return isAuth() && request.auth.token.get('superAdmin', false) == true;
+    }
+
+    function claimBid() { return request.auth.token.get('bid', ''); }
+    function claimTid() { return request.auth.token.get('tid', ''); }
+    function claimCid() { return request.auth.token.get('cid', ''); }
+    function claimRoles() { return request.auth.token.get('roles', []); }
+
+    function userDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+    function hasUserDoc() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    // STAFF membership of a tenant. Two accepted proofs:
+    //   1. `token.bid` — minted server-side ONLY from a real teamMembers row, or
+    //   2. the users/{uid} marker, BUT only when an actual membership document
+    //      `{teamId}_{uid}` exists to back it.
+    //
+    // The membership requirement in (2) is NOT redundant: a PORTAL CLIENT may
+    // legitimately write `users/{uid}.businessId` (the users rule validates it against
+    // their own customer's business), so accepting the marker alone would silently
+    // promote every client to staff of the tenant they belong to — read access to
+    // expenses, salaries, goals, reports. Clients have no membership, so they fail here
+    // and reach their own data via isPortalClientFor / isPortalClientOfBusiness.
+    function isBusinessMember(businessId) {
+      return isAuth()
+        && businessId is string
+        && businessId != ''
+        && (
+          claimBid() == businessId
+          || (hasUserDoc()
+              && userDoc().get('businessId', '') == businessId
+              && userDoc().get('teamId', '') != ''
+              && exists(membershipRef(userDoc().teamId, request.auth.uid)))
+        );
+    }
+
+    // Elevated authority inside the tenant (settings, credentials, member management).
+    function isBusinessAdmin(businessId) {
+      return isBusinessMember(businessId)
+        && ('admin' in claimRoles() || 'owner' in claimRoles() || 'manager' in claimRoles());
+    }
+
+    // Department membership. `{teamId}_{uid}` is the deterministic membership id
+    // (the backfill-member-keys job guarantees it), so this is corroborated server-side.
+    function isTeamMember(teamId) {
+      return isAuth()
+        && teamId is string
+        && teamId != ''
+        && (
+          claimTid() == teamId
+          || exists(membershipRef(teamId, request.auth.uid))
+          || (hasUserDoc() && userDoc().get('teamId', '') == teamId)
+        );
+    }
+
+    // ── Tenant lifecycle: a suspended tenant is read-only ──
+    // Enterprise/billing requirement: suspend-for-non-payment must be enforced by the
+    // database, not the UI. An absent business doc → treated as active, so legacy
+    // tenants (and the agency's own data) are never accidentally frozen.
+    function tenantActive(businessId) {
+      return !(businessId is string) || businessId == ''
+        || !exists(/databases/$(database)/documents/businesses/$(businessId))
+        || get(/databases/$(database)/documents/businesses/$(businessId)).data.get('status', 'active') != 'suspended';
     }
 
     // Verify that a team-scoped doc belongs to a team the user is a member of.
@@ -34,39 +112,50 @@ service cloud.firestore {
 
     // Check that the authenticated user created the team (team owner).
     // Used as a guard for sensitive team-level writes (teamSettings, etc.)
-    function isTeamOwner(teamId) {
-      return isAuth() &&
-        get(/databases/$(database)/documents/teams/$(teamId)).data.createdByUserId == request.auth.uid;
+    function teamRef(teamId) {
+      return /databases/$(database)/documents/teams/$(teamId);
     }
-
-    // Verify the requesting user's active team matches the given teamId.
-    // usePermissions writes the active teamId to users/{uid} on every
-    // authenticated load (src/hooks/usePermissions.ts).  Because teamMember docs
-    // use random IDs, a direct membership exists() check isn't possible — this
-    // self-written users doc gives rules a deterministic path to scope by team.
-    // NOTE: super-admins (teamId=null) and not-yet-migrated sessions won't match;
-    // deploy the frontend (which writes the teamId) before deploying these rules.
-    function isTeamMember(teamId) {
+    function isTeamOwner(teamId) {
       return isAuth()
         && teamId is string
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.teamId == teamId;
+        && exists(teamRef(teamId))
+        && get(teamRef(teamId)).data.createdByUserId == request.auth.uid;
     }
 
-    // Two-level tenancy isolation key. usePermissions writes users/{uid}.businessId
-    // on every load. Mirrors isTeamMember but for the businessId (tenant) boundary.
-    function isBusinessMember(businessId) {
-      return isAuth()
-        && businessId is string
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.businessId == businessId;
+    // The business a team belongs to (a TEAM LIVES INSIDE A BUSINESS). Used by the
+    // `teamSettings` and `counters` rules, whose document ids encode a teamId while
+    // authorization is a BUSINESS-level question.
+    //
+    // This function was previously CALLED in four places but never declared, which
+    // the rules compiler reports only as a warning ("Invalid function name"). At
+    // runtime an undefined call makes the whole expression error, and an errored
+    // condition denies — so `teamSettings` reads/writes and the invoice-number
+    // `counters` would have been denied for everyone once deployed.
+    //
+    // Returns '' for a missing/blank team, and `isBusinessMember('')` is false, so an
+    // unresolvable team fails closed rather than granting access.
+    function businessOfTeam(teamId) {
+      return teamId is string && teamId != '' && exists(teamRef(teamId))
+        ? get(teamRef(teamId)).data.get('businessId', '')
+        : '';
+    }
+    // Owner, or an Admin/Manager membership of that team — may invite + configure.
+    function isTeamAdmin(teamId) {
+      return isSuperAdmin()
+        || isTeamOwner(teamId)
+        || (isAuth()
+            && teamId is string
+            && exists(membershipRef(teamId, request.auth.uid))
+            && get(membershipRef(teamId, request.auth.uid)).data.get('role', '') in ['Admin', 'Manager']
+            && get(membershipRef(teamId, request.auth.uid)).data.get('status', 'Active') != 'Inactive');
     }
 
     // Staff write guard for tenant CRM records. Safe because reads are already
     // businessId-scoped, so any doc a staff user can open to edit carries a
     // businessId matching their own; super-admins manage cross-tenant.
     function canManageBusinessDoc() {
-      return isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      return isSuperAdmin()
+        || (isBusinessMember(resource.data.businessId) && tenantActive(resource.data.businessId));
     }
 
     // CREATE guard (enterprise "you can't write outside your tenant"): the NEW
@@ -74,7 +163,9 @@ service cloud.firestore {
     // layer so a buggy/hostile client can never stamp another tenant's id — the
     // isolation no longer depends on the app code being correct.
     function canCreateBusinessDoc() {
-      return isBusinessMember(request.resource.data.businessId) || isSuperAdmin();
+      return isSuperAdmin()
+        || (isBusinessMember(request.resource.data.businessId)
+            && tenantActive(request.resource.data.businessId));
     }
 
     // Portal self-service create: an authenticated user creating a record tied to
@@ -98,8 +189,9 @@ service cloud.firestore {
     function isPortalClientFor(customerId) {
       return isAuth()
         && customerId is string
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.customerId == customerId;
+        && customerId != ''
+        && (claimCid() == customerId
+            || (hasUserDoc() && userDoc().get('customerId', '') == customerId));
     }
 
     // Portal client reading their OWN customer doc, whose document id IS the
@@ -107,8 +199,8 @@ service cloud.firestore {
     // field). Used by the customers read rule.
     function isPortalClientDoc(docId) {
       return isAuth()
-        && exists(/databases/$(database)/documents/users/$(request.auth.uid))
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.customerId == docId;
+        && (claimCid() == docId
+            || (hasUserDoc() && userDoc().get('customerId', '') == docId));
     }
 
     // Access control for client-channel chat messages (channelId = `client-<cid>`
@@ -126,6 +218,49 @@ service cloud.firestore {
           channelId.split('-')[1] == get(/databases/$(database)/documents/users/$(request.auth.uid)).data.customerId
           || (exists(/databases/$(database)/documents/customers/$(channelId.split('-')[1]))
               && isBusinessMember(get(/databases/$(database)/documents/customers/$(channelId.split('-')[1])).data.businessId))
+        );
+    }
+
+    // Portal CLIENT belonging to a given BUSINESS. Needed by the shop catalog, which
+    // (unlike invoices/quotes) carries no customerId of its own to match on — the
+    // client's authorization comes from the tenant, plus the published flag.
+    //
+    // Preferred path is the signed claims: _tenantClaims mints `cid` for a portal
+    // client and derives `bid` from that customer's business, so this costs ZERO
+    // document reads. The users/{uid} path remains only for sessions whose token
+    // predates the claims rollout; both of its get()s use paths that are identical
+    // for every document in a query, so Firestore caches them (two lookups per
+    // query, not per document — unlike quoteAccessibleByPortal's per-doc lead get).
+    function usersCustomerId() {
+      return hasUserDoc() ? userDoc().get('customerId', '') : '';
+    }
+    function isPortalClientOfBusiness(businessId) {
+      return isAuth()
+        && businessId is string
+        && businessId != ''
+        && (
+          // `pbid` (portal business id) is a DIFFERENT claim from the staff `bid`, so a
+          // portal client can never be mistaken for staff of that business.
+          request.auth.token.get('pbid', '') == businessId
+          || (usersCustomerId() != ''
+              && exists(/databases/$(database)/documents/customers/$(usersCustomerId()))
+              && get(/databases/$(database)/documents/customers/$(usersCustomerId()))
+                   .data.get('businessId', '') == businessId)
+        );
+    }
+
+    // May the caller notify this user? Only inside their own tenant: either the target
+    // is staff of the same business, or they are a PORTAL CLIENT of it (their users doc
+    // carries customerId, not businessId — so resolve through the customer record).
+    function notifyTargetInMyTenant(targetUid) {
+      return exists(/databases/$(database)/documents/users/$(targetUid))
+        && (
+          isBusinessMember(get(/databases/$(database)/documents/users/$(targetUid)).data.get('businessId', ''))
+          || (get(/databases/$(database)/documents/users/$(targetUid)).data.get('customerId', '') != ''
+              && exists(/databases/$(database)/documents/customers/$(
+                   get(/databases/$(database)/documents/users/$(targetUid)).data.customerId))
+              && isBusinessMember(get(/databases/$(database)/documents/customers/$(
+                   get(/databases/$(database)/documents/users/$(targetUid)).data.customerId)).data.get('businessId', '')))
         );
     }
 
@@ -265,14 +400,254 @@ service cloud.firestore {
     }
 
     match /services/{docId} {
-      // NOTE: read stays `isAuth()` — the client portal (PortalServicesView,
-      // PortalDashboard, PortalInvoicesView) reads services with skipTeamFilter and
-      // portal clients aren't business members, so tightening read would break them.
-      // TODO (follow-up): scope the portal's services query by the client's business
-      // and gate read by a portal-of-business clause. Create/update ARE hardened.
-      allow read: if isAuth();
+      // WAS `read: if isAuth()` — every tenant's service catalogue + pricing was
+      // readable by any signed-in user, including portal clients of other tenants.
+      // The portal views now query `businessId == <their own business>`, so the
+      // per-document rule can require the tenant match.
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientOfBusiness(resource.data.businessId)
+        || isSuperAdmin();
       allow create: if canCreateBusinessDoc();
-      allow update, delete: if canManageBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    // ── Shop module (products, catalog taxonomy, inventory, orders) ──
+    // Unlike `services` above, the portal read is NOT `isAuth()`: PortalShopView
+    // queries `businessId == mine && visibleInPortal == true`, so the per-document
+    // rule can require both the tenant match and the published flag. A client can
+    // therefore never read another tenant's catalog, nor this tenant's drafts.
+    match /products/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || (resource.data.visibleInPortal == true
+            && isPortalClientOfBusiness(resource.data.businessId))
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    // Taxonomy is not sensitive on its own, but stays tenant-scoped: the portal shop
+    // renders category filters, so a client of this business may read them.
+    match /productCategories/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientOfBusiness(resource.data.businessId)
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    match /productBrands/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientOfBusiness(resource.data.businessId)
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    // Inventory ledger: staff only, and append-only by design — cost prices and
+    // stock history are never exposed to clients, and edits would destroy the audit
+    // trail the stock numbers rely on (corrections are new movements).
+    match /stockMovements/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if isSuperAdmin();
+      allow delete: if isSuperAdmin();
+    }
+
+    // Orders: staff manage them; a portal client reads their OWN orders and may
+    // create one for themselves. Clients cannot update (no self-approving a
+    // shipment or rewriting a price) — cancellations go through the team.
+    match /shopOrders/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc()
+        || (isPortalClientFor(request.resource.data.customerId)
+            && request.resource.data.source == 'portal'
+            && request.resource.data.status == 'Pending'
+            && isSelfCreate());
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // REPORTING & ACCOUNTABILITY MODULE
+    // ══════════════════════════════════════════════════════════════════════════
+    //
+    // The hard requirement: a report holds client-facing AND internal content in the
+    // SAME document, so the rules cannot decide visibility per block. They therefore
+    // enforce a coarser, verifiable invariant, and the block-level redaction happens
+    // in code (`src/lib/reporting/visibility.ts`) on top of it:
+    //
+    //   1. A client may only read a report that is (a) their own customer's,
+    //      (b) PUBLISHED, and (c) not soft-deleted. Drafts, internal-only kinds and
+    //      other tenants' reports are denied outright.
+    //   2. A client may NEVER write report content. Their two legitimate actions —
+    //      acknowledge/approve, and post a non-internal comment — are the only
+    //      client writes allowed, and the status transition goes through
+    //      `POST /api/reports` (server-side, `canTransition`-guarded) rather than a
+    //      direct field write.
+    //   3. Versions, approvals and the event stream are APPEND-ONLY for everyone.
+    //      An audit trail a client (or a staff member) can edit is not an audit trail.
+    //
+    // Because the client's own portal query is `businessId == mine && customerId ==
+    // mine && status in [published…]`, every per-document clause below holds for the
+    // narrowed query — rules are not filters, so the two must agree exactly.
+
+    // Report kinds a client may ever see. `client-risk` and `weekly-staff` are
+    // internal instruments and are excluded even if someone marks one published.
+    function reportKindIsClientFacing(kind) {
+      return kind in ['client-monthly', 'qbr', 'project-status', 'project-completion',
+                      'campaign-completion', 'website-launch', 'incident'];
+    }
+
+    // Statuses that mean "the client has been given this report".
+    function reportIsPublished(status) {
+      return status in ['published', 'sent', 'viewed', 'acknowledged',
+                        'client_approved', 'client_rejected'];
+    }
+
+    function portalMayReadReport() {
+      return isPortalClientFor(resource.data.get('customerId', ''))
+        && reportIsPublished(resource.data.get('status', ''))
+        && reportKindIsClientFacing(resource.data.get('kind', ''))
+        && resource.data.get('deletedAt', null) == null;
+    }
+
+    match /reports/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || portalMayReadReport()
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      // Staff edit within their tenant; the tenant key is immutable so an update can
+      // never move a report to another business. Client-driven fields are written by
+      // the server (admin SDK), which bypasses these rules by design.
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      // No hard delete from a client: the module soft-deletes (`deletedAt`) so that
+      // reports tied to financial/legal records survive. Super-admin only, for GDPR
+      // erasure via the tenant-delete job.
+      allow delete: if isSuperAdmin();
+    }
+
+    // Immutable snapshots. A client reads the version their sign-off refers to, so
+    // "approved v3" can always be reproduced exactly as it was approved.
+    match /reportVersions/{docId} {
+      // A client reads ONLY the `published` snapshots of their own reports — that is
+      // the exact artefact their sign-off refers to. `submitted`/`reopened` drafts
+      // are internal work in progress.
+      allow read: if isBusinessMember(resource.data.businessId)
+        || (isPortalClientFor(resource.data.get('customerId', ''))
+            && resource.data.get('reason', '') == 'published')
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Templates: staff-only. They contain the internal block structure (management
+    // sections, margin blocks), so a client never reads them.
+    match /reportTemplates/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    // Comments. `internal == true` is the leak boundary: the portal query filters on
+    // it AND the rule requires it to be false, so a client cannot widen the query to
+    // read the team's private discussion of their account.
+    match /reportComments/{docId} {
+      // `customerId` is denormalised onto the comment (the report's customer), so
+      // this is a single clause that matches the portal's narrowed query:
+      //   reportId == mine && internal == false
+      allow read: if isBusinessMember(resource.data.businessId)
+        || (resource.data.internal == false
+            && isPortalClientFor(resource.data.get('customerId', '')))
+        || isSuperAdmin();
+      // A client may comment on their own report, but only as a NON-internal comment
+      // authored by themselves — they cannot forge an internal note or another
+      // author's identity.
+      allow create: if canCreateBusinessDoc()
+        || (request.resource.data.internal == false
+            && isPortalClientFor(request.resource.data.get('customerId', ''))
+            && request.resource.data.get('authorCustomerId', '') == request.resource.data.get('customerId', '')
+            && request.resource.data.authorUserId == request.auth.uid
+            && isSelfCreate());
+      // Only the author edits/resolves their own comment; staff may resolve within
+      // the tenant. The `internal` flag is immutable — flipping it after the fact
+      // would move a private note into the client's view.
+      allow update: if (isAuth() && resource.data.createdByUserId == request.auth.uid
+                        && request.resource.data.internal == resource.data.internal)
+        || (canManageBusinessDoc() && request.resource.data.internal == resource.data.internal);
+      allow delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
+    }
+
+    // Approvals: append-only sign-off record. A client reads their own decisions and
+    // the fact that the report was approved internally, never the internal comments
+    // attached to those decisions — those live in reportComments.
+    match /reportApprovals/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.get('approverCustomerId', ''))
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      // Never mutable: a decision, its timestamp and the version it refers to are
+      // evidence (§15/§38.9).
+      allow update, delete: if false;
+    }
+
+    // The audit / status-history / delivery / view stream. Staff-readable within the
+    // tenant; clients never read it (it records who reviewed what internally), and
+    // nobody may ever edit it.
+    match /reportEvents/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      // Clients DO generate events (view, download, acknowledge) — but those are
+      // written server-side by /api/reports with the admin SDK, so no client write
+      // path is needed and none is granted.
+      allow create: if canCreateBusinessDoc();
+      allow update, delete: if false;
+    }
+
+    // Automation config, KPI definitions, metric sets, health/accountability
+    // rollups — all staff-only management data.
+    match /reportSchedules/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    match /reportKpis/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    // Raw metric values, including internal-only ones (margin, hours). Staff only —
+    // the client sees metrics through a published report's redacted snapshot.
+    match /reportMetrics/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    match /clientHealthScores/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    // Employee accountability data is CONFIDENTIAL EMPLOYEE INFORMATION (§2): a
+    // client must never reach it, and it is read within the tenant only.
+    match /employeeReportScores/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
     }
 
     // ── Phase 4.3a: staff-only collections (never read by the client portal,
@@ -312,9 +687,13 @@ service cloud.firestore {
     }
 
     match /channels/{docId} {
-      allow read: if isAuth();
-      allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      // WAS fully open to any signed-in user (channel names/topics of every tenant).
+      // Now tenant-scoped: `businessId` is stamped on create and backfilled by the
+      // `backfill-tenant-keys` job, and ChatView reads channels business-scoped.
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
     }
 
     // Persistent client conversation threads (Request 1: owner + watchers routing).
@@ -330,10 +709,12 @@ service cloud.firestore {
         || isSuperAdmin()
       );
       // Portal client opens their own thread; staff create within their business.
+      // The `businessId == null` escape hatch is gone: an untagged conversation is
+      // invisible to the tenant-scoped staff queries anyway, and it let any signed-in
+      // user create arbitrary threads.
       allow create: if isAuth() && (
         canAccessClientChannel(convId)
         || isBusinessMember(request.resource.data.businessId)
-        || request.resource.data.businessId == null
       );
       // Owner/manager/admin (business member) or the portal client (bumps
       // lastMessageAt on their own thread) may update; super-admin manages any.
@@ -452,15 +833,20 @@ service cloud.firestore {
     }
 
     match /expenseCategories/{docId} {
-      allow read: if isAuth();
-      allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      // Tenant taxonomy — was readable/writable by any signed-in user of any tenant.
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
     }
 
     match /serviceCategories/{docId} {
-      allow read: if isAuth();
-      allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientOfBusiness(resource.data.businessId)
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
     }
 
     match /projectComments/{docId} {
@@ -544,22 +930,102 @@ service cloud.firestore {
 
     // ── Global Collections (not team-scoped) ──
 
+    // ── teams: a DEPARTMENT INSIDE a business ────────────────────────────────
+    // `businessId` is REQUIRED on create and IMMUTABLE afterwards, so a team can
+    // never be moved between tenants and never exists outside one. Reads are scoped:
+    //   • members of the team's business (the normal, business-scoped team list),
+    //   • the team's own creator (the "which teams do I own" bootstrap query),
+    //   • a member of that specific team (single-document read by id),
+    //   • super-admin (the platform console).
+    // WAS `read: if isAuth()`, i.e. every tenant's org chart was public to any user.
     match /teams/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
-      allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
+      allow read: if isBusinessMember(resource.data.businessId)
+        || (isAuth() && resource.data.createdByUserId == request.auth.uid)
+        || isTeamMember(docId)
+        || isSuperAdmin();
+      // A new team must be planted inside a business the creator belongs to (or a
+      // business they own — the very first team of a fresh tenant, created by
+      // createTenant before any membership exists).
+      allow create: if isAuth()
+        && request.resource.data.businessId is string
+        && request.resource.data.createdByUserId == request.auth.uid
+        && (
+          isBusinessMember(request.resource.data.businessId)
+          || (exists(/databases/$(database)/documents/businesses/$(request.resource.data.businessId))
+              && get(/databases/$(database)/documents/businesses/$(request.resource.data.businessId)).data.ownerId == request.auth.uid)
+          || isSuperAdmin()
+        );
+      allow update: if isAuth()
+        && (resource.data.createdByUserId == request.auth.uid || isBusinessAdmin(resource.data.businessId) || isSuperAdmin())
+        && (isSuperAdmin() || request.resource.data.businessId == resource.data.businessId);
+      allow delete: if isAuth()
+        && (resource.data.createdByUserId == request.auth.uid || isSuperAdmin());
     }
 
     // ── businesses: the tenant / isolation boundary (Business > Team) ──
     match /businesses/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
-      // Owner manages their business; super-admin (claim) manages any (module toggles).
-      allow update, delete: if isAuth() && (resource.data.ownerId == request.auth.uid || isSuperAdmin());
+      // WAS `read: if isAuth()` — the full tenant list (names, owners, plans, trial
+      // state) was readable by every signed-in user, which is also how tenants got
+      // enumerated for the takeover chain. Now: members, the owner, and the platform
+      // console only. The portal resolves its tenant from `publicTenants` instead.
+      allow read: if isBusinessMember(docId)
+        || (isAuth() && resource.data.ownerId == request.auth.uid)
+        || isSuperAdmin();
+      // Self-serve signup: you may create a business you own.
+      allow create: if isAuth() && request.resource.data.ownerId == request.auth.uid;
+      // Owner manages their business; super-admin (claim) manages any (module toggles,
+      // plan/status). `status` is deliberately owner-writable ONLY by the platform:
+      // a tenant must not be able to un-suspend itself.
+      allow update: if isSuperAdmin()
+        || (isAuth() && resource.data.ownerId == request.auth.uid
+            && request.resource.data.get('status', '') == resource.data.get('status', '')
+            && request.resource.data.get('plan', '') == resource.data.get('plan', ''));
+      allow delete: if isSuperAdmin();
+    }
+
+    // ── publicTenants/{subdomain}: the ONLY world-readable tenant metadata ───────
+    // Minimal map (businessId, teamId, name) so `<sub>.fivocrm.com/portal` can resolve
+    // its tenant WITHOUT `businesses` having to be public. Written only by the Admin
+    // SDK / super-admin console.
+    match /publicTenants/{subdomain} {
+      allow read: if true;
+      allow write: if isSuperAdmin();
+    }
+
+    // ── auditLogs: append-only, per-tenant ─────────────────────────────────────
+    // "Who did what, when, in my tenant." Entries can be read inside the tenant by an
+    // admin, created by the server (Admin SDK bypasses rules) and NEVER updated or
+    // deleted by anyone — an audit trail that can be edited is not an audit trail.
+    match /auditLogs/{docId} {
+      allow read: if isBusinessAdmin(resource.data.businessId) || isSuperAdmin();
+      allow create: if isSuperAdmin();
+      allow update, delete: if false;
+    }
+
+    // ── teamSecrets: the tenant credential vault ───────────────────────────────
+    // SMTP passwords, ESP/AI API keys, WhatsApp VPS secret, Meta page tokens. NO
+    // client may read or write these: the app writes them through
+    // /api/tenant-secrets (Admin SDK) and only ever sees the `has*` booleans mirrored
+    // onto teamSettings. Previously these lived on `teamSettings`, which was
+    // `read: if isAuth()` — every tenant's credentials were readable by any user.
+    match /teamSecrets/{teamId} {
+      allow read, write: if false;
     }
 
     match /teamMembers/{docId} {
-      allow read: if isAuth();
+      // WAS `read: if isAuth()` — every tenant's staff records were readable by any
+      // signed-in user, INCLUDING monthlySalary/salaryHistory/hourly rates. Now:
+      //   • members of that business (the tenant's own staff list),
+      //   • your own membership row (identity bootstrap, before a tenant is resolved),
+      //   • the matching-email row (legacy records created before the uid was known),
+      //   • super-admin (platform console).
+      // The client portal no longer reads this collection at all — recipients and
+      // routing are resolved server-side by /api/notify-staff.
+      allow read: if isBusinessMember(resource.data.businessId)
+        || (isAuth() && resource.data.userId == request.auth.uid)
+        || (isAuth() && request.auth.token.email != null
+            && resource.data.get('email', '') == request.auth.token.email.lower())
+        || isSuperAdmin();
       // HARDENED: only the team owner may create memberships client-side. The one
       // legitimate non-owner path — accepting an invite — goes through the Admin SDK
       // (api/accept-invite), which validates the token + email and bypasses rules.
@@ -584,29 +1050,78 @@ service cloud.firestore {
       );
     }
 
+    // ── teamInvites: the privilege-escalation vector, now closed ───────────────
+    // WAS create/read/update/delete for ANY signed-in user. Combined with
+    // /api/accept-invite (which validated only "token + your email"), anyone could
+    // forge an invite for their own address into ANY team and be granted an Admin
+    // membership there — a full cross-tenant takeover. Now:
+    //   • only an owner/Admin/Manager of that team may mint or manage an invite,
+    //   • the invitee can read their own invite (email match) and accept it,
+    //   • api/_accept-invite additionally verifies the invite's PROVENANCE.
     match /teamInvites/{docId} {
-      // Require authentication to prevent enumeration of all invites
-      allow read: if isAuth();
-      allow create: if isAuth();
-      allow update, delete: if isAuth();
+      allow read: if isTeamAdmin(resource.data.teamId)
+        || (isAuth() && request.auth.token.email != null
+            && resource.data.get('email', '') == request.auth.token.email.lower())
+        || isSuperAdmin();
+      allow create: if isTeamAdmin(request.resource.data.teamId)
+        && request.resource.data.email is string
+        // An invite may not mint an Admin unless the issuer is an owner/Admin.
+        && (request.resource.data.get('role', 'Member') != 'Admin'
+            || isTeamOwner(request.resource.data.teamId)
+            || isSuperAdmin());
+      // The invitee may only flip the acceptance bookkeeping on their own invite.
+      allow update: if isTeamAdmin(resource.data.teamId)
+        || (isAuth() && request.auth.token.email != null
+            && resource.data.get('email', '') == request.auth.token.email.lower()
+            && request.resource.data.diff(resource.data).affectedKeys()
+                 .hasOnly(['status', 'acceptedByUserId', 'acceptedAt', 'updatedAt']));
+      allow delete: if isTeamAdmin(resource.data.teamId) || isSuperAdmin();
     }
 
     match /userProfiles/{docId} {
-      allow read: if isAuth();
-      allow create: if isAuth();
+      // Display names/avatars for @mentions and chat. Tenant-scoped like everything
+      // else (the profile carries businessId, stamped on create + backfilled), with a
+      // portal-of-business clause so a client can see the names of the staff they
+      // actually talk to. Legacy profiles without businessId stay readable to their
+      // owner only.
+      allow read: if isBusinessMember(resource.data.get('businessId', ''))
+        || isPortalClientOfBusiness(resource.data.get('businessId', ''))
+        || (isAuth() && resource.data.userId == request.auth.uid)
+        || isSuperAdmin();
+      allow create: if isAuth() && request.resource.data.userId == request.auth.uid;
       allow update: if isAuth() && resource.data.userId == request.auth.uid;
       allow delete: if false;
     }
 
     match /notifications/{docId} {
       allow read: if isAuth() && resource.data.userId == request.auth.uid;
-      allow create: if isAuth();
+      // WAS `create: if isAuth()` — anyone could inject a notification into ANY user's
+      // feed (cross-tenant spam / phishing with an attacker-controlled actionUrl).
+      // Now you may only notify yourself or someone in your own tenant. Portal clients
+      // notify staff through /api/notify-staff (Admin SDK), which resolves recipients
+      // from their own customer record.
+      allow create: if isAuth() && (
+        request.resource.data.userId == request.auth.uid
+        || notifyTargetInMyTenant(request.resource.data.userId)
+        || isSuperAdmin()
+      );
       allow update: if isAuth() && resource.data.userId == request.auth.uid;
       allow delete: if isAuth() && resource.data.userId == request.auth.uid;
     }
 
     match /clientPortalAccess/{docId} {
-      allow read: if isAuth();
+      // WAS `read: if isAuth()` — the portal roster of EVERY tenant (client emails +
+      // which customer/team they map to) was readable by any signed-in user. Now:
+      //   • staff of that tenant (docs carry businessId; backfilled by
+      //     `backfill-tenant-keys`, and staff queries are business-scoped),
+      //   • staff querying a specific customer they can already read,
+      //   • the portal user themselves (own uid or own verified email).
+      allow read: if isBusinessMember(resource.data.get('businessId', ''))
+        || isPortalClientFor(resource.data.customerId)
+        || (isAuth() && resource.data.get('userId', '') == request.auth.uid)
+        || (isAuth() && request.auth.token.email != null
+            && resource.data.get('email', '') == request.auth.token.email.lower())
+        || isSuperAdmin();
       // Self-create only: portal client (createdByUserId == own uid) or staff
       // creating a client's access (also stamps their own uid as creator).
       allow create: if isSelfCreate() || isSuperAdmin();
@@ -624,13 +1139,28 @@ service cloud.firestore {
          !request.resource.data.diff(resource.data).affectedKeys()
            .hasAny(['accessLevel', 'role', 'teamId', 'customerId', 'userId', 'email']))
       );
-      allow delete: if isAuth();
+      // Revoking portal access is a staff action (was: any signed-in user could
+      // delete any tenant's portal access records).
+      allow delete: if isBusinessMember(resource.data.get('businessId', ''))
+        || (isAuth() && resource.data.get('userId', '') == request.auth.uid)
+        || isSuperAdmin();
     }
 
     match /typingIndicators/{docId} {
-      allow read: if isAuth();
-      allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      // Ephemeral, but it leaks who is talking to whom: scope to the tenant.
+      allow read: if isBusinessMember(resource.data.get('businessId', ''))
+        || (isAuth() && resource.data.get('userId', '') == request.auth.uid)
+        || isTeamMember(resource.data.get('teamId', ''))
+        || isSuperAdmin();
+      allow create: if isAuth() && (
+        isBusinessMember(request.resource.data.get('businessId', ''))
+        || isTeamMember(request.resource.data.get('teamId', ''))
+      );
+      allow update, delete: if isAuth() && (
+        resource.data.get('userId', '') == request.auth.uid
+        || isBusinessMember(resource.data.get('businessId', ''))
+        || isTeamMember(resource.data.get('teamId', ''))
+      );
     }
 
     // Personal bookmarks of chat messages — each user can only see/modify their own.
@@ -642,11 +1172,17 @@ service cloud.firestore {
 
     // Team-wide saved replies / snippets — any team member can read, only creator can edit/delete.
     match /chatSnippets/{docId} {
-      allow read: if isAuth();
-      allow create: if canCreateForTeam();
+      allow read: if isBusinessMember(resource.data.get('businessId', ''))
+        || isTeamMember(resource.data.get('teamId', ''))
+        || isSuperAdmin();
+      allow create: if isAuth() && (
+        isBusinessMember(request.resource.data.get('businessId', ''))
+        || isTeamMember(request.resource.data.get('teamId', ''))
+      );
       allow update, delete: if isAuth() && (
         resource.data.createdByUserId == request.auth.uid ||
-        isTeamOwner(resource.data.teamId)
+        isTeamOwner(resource.data.teamId) ||
+        isSuperAdmin()
       );
     }
 
@@ -677,21 +1213,48 @@ service cloud.firestore {
     }
 
     match /workspaceFolders/{docId} {
-      allow read: if isAuth();
-      allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      allow read: if isBusinessMember(resource.data.get('businessId', ''))
+        || isTeamMember(resource.data.get('teamId', ''))
+        || isSuperAdmin();
+      allow create: if isAuth() && (
+        isBusinessMember(request.resource.data.get('businessId', ''))
+        || isTeamMember(request.resource.data.get('teamId', ''))
+      );
+      allow update, delete: if isAuth() && (
+        isBusinessMember(resource.data.get('businessId', ''))
+        || isTeamMember(resource.data.get('teamId', ''))
+      );
     }
 
     match /workspaceDriveFiles/{docId} {
-      allow read: if isAuth();
-      allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      // Google-Drive file references: names + links to a tenant's documents.
+      allow read: if isBusinessMember(resource.data.get('businessId', ''))
+        || isTeamMember(resource.data.get('teamId', ''))
+        || isSuperAdmin();
+      allow create: if isAuth() && (
+        isBusinessMember(request.resource.data.get('businessId', ''))
+        || isTeamMember(request.resource.data.get('teamId', ''))
+      );
+      allow update, delete: if isAuth() && (
+        isBusinessMember(resource.data.get('businessId', ''))
+        || isTeamMember(resource.data.get('teamId', ''))
+      );
     }
 
     match /roleTemplates/{docId} {
-      allow read: if isAuth();
-      allow create: if canCreateForTeam();
-      allow update, delete: if isAuth();
+      // Permission presets — an attacker reading/altering another tenant's templates
+      // is an authorization-policy tamper, so this is admin-gated inside the tenant.
+      allow read: if isBusinessMember(resource.data.get('businessId', ''))
+        || isTeamMember(resource.data.get('teamId', ''))
+        || isSuperAdmin();
+      allow create: if isAuth() && (
+        isBusinessAdmin(request.resource.data.get('businessId', ''))
+        || isTeamAdmin(request.resource.data.get('teamId', ''))
+      );
+      allow update, delete: if isAuth() && (
+        isBusinessAdmin(resource.data.get('businessId', ''))
+        || isTeamAdmin(resource.data.get('teamId', ''))
+      );
     }
 
     match /whatsappMessages/{docId} {
@@ -713,14 +1276,23 @@ service cloud.firestore {
     }
 
     match /whatsappAccounts/{docId} {
-      // Baileys agent config (labels, assignment, connected phone) — not secret.
-      // Reads/writes gated by auth only (like teamMembers/roleTemplates): the
-      // isTeamMember(doc.teamId) variant denied legitimate owner deletes whenever
-      // the active-team marker (users/{uid}.teamId) lagged a team switch, or when a
-      // legacy/server-created doc had no teamId. Queries still filter by teamId.
-      allow read: if isAuth();
-      allow create: if isAuth();
-      allow update, delete: if isAuth();
+      // Baileys agent config (labels, assignment, connected phone). Not a credential,
+      // but it is tenant data: it reveals another tenant's phone numbers and staff
+      // assignment. Scoped to the business, with a teamId fallback for legacy docs
+      // (the earlier strict isTeamMember-only variant denied legitimate owner deletes
+      // when the active-team marker lagged a team switch).
+      allow read: if isBusinessMember(resource.data.get('businessId', ''))
+        || isTeamMember(resource.data.get('teamId', ''))
+        || isSuperAdmin();
+      allow create: if isAuth() && (
+        isBusinessMember(request.resource.data.get('businessId', ''))
+        || isTeamMember(request.resource.data.get('teamId', ''))
+      );
+      allow update, delete: if isAuth() && (
+        isBusinessMember(resource.data.get('businessId', ''))
+        || isTeamMember(resource.data.get('teamId', ''))
+        || isSuperAdmin()
+      );
     }
 
     match /whatsappThreads/{docId} {
@@ -795,8 +1367,15 @@ service cloud.firestore {
     }
 
     match /lidMappings/{docId} {
-      allow read: if isAuth();
-      allow create, update: if isAuth();
+      // WhatsApp LID ↔ phone mapping. Written by the VPS/webhook (Admin SDK) and read
+      // by the Inbox; keep it tenant-scoped with a teamId fallback for legacy rows.
+      allow read: if isBusinessMember(resource.data.get('businessId', ''))
+        || isTeamMember(resource.data.get('teamId', ''))
+        || isSuperAdmin();
+      allow create, update: if isAuth() && (
+        isBusinessMember(request.resource.data.get('businessId', ''))
+        || isTeamMember(request.resource.data.get('teamId', ''))
+      );
       allow delete: if false;
     }
 
@@ -804,14 +1383,47 @@ service cloud.firestore {
     // Stores bank accounts, EUR rate, WhatsApp/Meta config, cron settings.
     // Only the team owner (createdByUserId on the teams doc) may write.
     match /teamSettings/{teamId} {
-      allow read: if isAuth();
-      allow write: if isTeamOwner(teamId);
+      // Non-secret tenant configuration (company identity, bank accounts, FX rates,
+      // feature flags, channel metadata, `has*` credential markers).
+      // WAS `read: if isAuth()` while ALSO holding emailApiKey / emailSmtpPass /
+      // aiApiKey / whatsappVpsSecret / Meta access tokens — i.e. every tenant's
+      // credentials were readable by every signed-in user, portal clients included.
+      // Credentials now live in `teamSecrets` (deny-all); this document is readable
+      // by the tenant only. The portal reads a single field (the file-upload VPS URL)
+      // for its own tenant's team, hence the portal-of-business clause.
+      allow read: if isBusinessMember(businessOfTeam(teamId))
+        || isPortalClientOfBusiness(businessOfTeam(teamId))
+        || isTeamMember(teamId)
+        || isSuperAdmin();
+      // Never allow a client to write credential fields here, even as an admin: they
+      // would be readable by every member of the business. /api/tenant-secrets is the
+      // only path (it writes teamSecrets and strips any plaintext copy).
+      // NOTE: `write` covers create too, where `resource` is null — hence the null
+      // guard (a diff() against a missing document raises and would deny, breaking
+      // tenant signup). On update only the CHANGED keys are inspected, so a tenant
+      // that still has a legacy plaintext secret in the document can keep editing
+      // other fields until the `migrate-team-secrets` job cleans it up.
+      allow write: if (isTeamAdmin(teamId) || isBusinessAdmin(businessOfTeam(teamId)))
+        && (
+          resource == null
+            ? !request.resource.data.keys().hasAny(['aiApiKey', 'emailApiKey', 'emailSmtpPass', 'whatsappVpsSecret', 'metaWebhookVerifyToken', 'metaChannelTokens'])
+            : !request.resource.data.diff(resource.data).affectedKeys()
+                 .hasAny(['aiApiKey', 'emailApiKey', 'emailSmtpPass', 'whatsappVpsSecret', 'metaWebhookVerifyToken', 'metaChannelTokens'])
+        );
     }
 
     // ── counters: atomic invoice number sequences ──
     // Read/write by any authenticated user (transaction-safe via Firestore SDK).
     match /counters/{docId} {
-      allow read, write: if isAuth();
+      // Invoice-number sequences, keyed `invoices_{teamId}`. WAS read/write for any
+      // signed-in user: another tenant could read your invoice volume or bump your
+      // sequence (duplicate or skipped invoice numbers — an accounting integrity issue).
+      // The doc id encodes the team, so authorization is a membership check on it.
+      allow read, write: if isAuth() && (
+        isTeamMember(docId.split('_')[1])
+        || isBusinessMember(businessOfTeam(docId.split('_')[1]))
+        || isSuperAdmin()
+      );
     }
 
     // ── users: per-user preferences and flags ──

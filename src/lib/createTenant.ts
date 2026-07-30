@@ -1,6 +1,8 @@
 import { doc, collection, setDoc, Timestamp } from 'firebase/firestore';
 import { db } from './firebase';
 import { setGlobalTeamId, setGlobalBusinessId } from '../hooks/useFirestore';
+import { defaultDisabledModulePaths } from './modules';
+import { syncTenantClaims } from './tenantClaims';
 
 /**
  * Creates a brand-new, isolated SaaS tenant for a freshly registered owner.
@@ -43,8 +45,10 @@ export async function createTenant({ uid, companyName, ownerName, ownerEmail }: 
     plan: 'trial',
     status: 'trialing',
     trialEndsAt,
-    // Landing pages are an agency-only (FivoCRM) module — off by default for tenants.
-    disabledModules: ['/app/landing-pages'],
+    // Modules flagged defaultOff in the registry start disabled (landing pages are
+    // agency-only; the shop is for retailers, not the service agencies that are the
+    // common case). The owner turns them on from Cilësimet → Modulet.
+    disabledModules: defaultDisabledModulePaths(),
     createdAt: now,
     updatedAt: now,
   });
@@ -73,7 +77,7 @@ export async function createTenant({ uid, companyName, ownerName, ownerEmail }: 
     canAccessInvoices: true, canAccessReports: true, canAccessSettings: true,
     canAccessWhatsapp: true, canAccessGoals: true, canAccessTeams: true,
     canAccessChat: true, canAccessCustomers: true, canAccessServices: true,
-    canAccessExpenses: true, canAccessProfile: true,
+    canAccessProducts: true, canAccessExpenses: true, canAccessProfile: true,
     createdByUserId: uid,
     createdAt: now,
     updatedAt: now,
@@ -95,6 +99,11 @@ export async function createTenant({ uid, companyName, ownerName, ownerEmail }: 
   await setDoc(doc(db, 'users', uid), { teamId, businessId, updatedAt: now }, { merge: true });
   setGlobalTeamId(teamId);
   setGlobalBusinessId(businessId);
+
+  // 6. Server-signed tenant identity (bid/tid/roles) — the authoritative boundary
+  //    used by Firestore rules. Best-effort: the users/{uid} marker above still
+  //    works as a fallback if the endpoint is briefly unavailable.
+  await syncTenantClaims();
 
   return teamId;
 }

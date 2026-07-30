@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import crypto from 'crypto';
 import { adminDb, Timestamp } from './_firebaseAdmin.js';
+import { getTeamConfig } from './_tenantConfig.js';
 
 /**
  * Meta WhatsApp Cloud API Webhook
@@ -260,7 +261,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         }
 
         // Load team settings once (used for auto-reply automation).
-        const teamSettings = (await adminDb.collection('teamSettings').doc(teamId).get()).data() as any || {};
+        const teamSettings = await getTeamConfig(teamId);
         const autoReplyChannel = (teamSettings.metaChannels || []).find((c: any) => c.phoneNumberId === metaPhoneNumberId);
 
         // Load team members + business once for conversation owner/watchers routing.

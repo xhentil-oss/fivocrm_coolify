@@ -1,8 +1,9 @@
 ﻿import React, { useState, useMemo, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { phoneKeyDown } from '../lib/utils';
+import { findContactMatch, matchFieldLabel } from '../lib/contactIdentity';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { getStatusColor, getPriorityColor } from '../lib/statusColors';
@@ -92,6 +93,22 @@ const CustomersView: React.FC = () => {
   // Role-based filtering: Member/Viewer see only customers they created
   const customers = useFilteredByOwner(rawCustomers);
   const { data: leads } = useCollection<Lead>('leads', { skipTeamFilter: true });
+  // `leads` is read with skipTeamFilter, and a super-admin's read bypasses the
+  // per-business rule — so scope to the active business before matching a lead
+  // to a customer, or a link could be written across tenants.
+  const activeBusinessId = useGlobalBusinessId();
+  const inActiveBusiness = (d: any) => !activeBusinessId || !d.businessId || d.businessId === activeBusinessId;
+  const scopedLeads = useMemo(
+    () => (leads || []).filter(inActiveBusiness),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [leads, activeBusinessId]
+  );
+  // Same reasoning for the customer side of the identity check.
+  const scopedCustomers = useMemo(
+    () => (rawCustomers || []).filter(inActiveBusiness),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [rawCustomers, activeBusinessId]
+  );
   // Existing tags across customers + leads → feed the tag picker so users reuse
   // tags instead of creating near-duplicates.
   const tagSuggestions = useMemo(() => {
@@ -119,6 +136,8 @@ const CustomersView: React.FC = () => {
   const customerMutation = useMutation<Customer>('customers');
   const customIndustryMutation = useMutation<any>('customIndustries');
   const accessMutation = useMutation<ClientPortalAccess>('clientPortalAccess');
+  // Used to pair a lead with the client it turned into (see handleCreateCustomer).
+  const leadMutation = useMutation<Lead>('leads');
   const requestMutation = useMutation<ClientRequest>('clientRequests');
 
   // Merge default + custom industries
@@ -277,33 +296,38 @@ const CustomersView: React.FC = () => {
       return;
     }
 
-    // Duplicate check against the WHOLE tenant (rawCustomers) — not the role-filtered
+    // Identity check against the WHOLE tenant (rawCustomers) — not the role-filtered
     // `customers`, or a Member/Viewer would bypass a teammate's existing record.
-    const normEmail = data.email?.toLowerCase().trim();
-    const normPhone = (data.phone as string | undefined)?.replace(/\D/g, '');
-    if (normEmail) {
-      if ((rawCustomers || []).some(c => c.email?.toLowerCase().trim() === normEmail)) {
-        toast({ title: 'Ky email ekziston tek Klientët!', description: 'Ka një klient me këtë email.', variant: 'destructive' });
-        return;
-      }
-      if (leads?.some((l: any) => l.email?.toLowerCase().trim() === normEmail)) {
-        toast({ title: 'Ky email ekziston tek Leads!', description: 'Ka një lead me këtë email.', variant: 'destructive' });
-        return;
-      }
+    // A second CLIENT for the same person is always wrong → block. A matching LEAD
+    // is not a duplicate but the same person at an earlier stage: create the client
+    // and pair the two, so the lead's history follows them instead of being orphaned.
+    const dupCustomer = findContactMatch(data, scopedCustomers);
+    if (dupCustomer) {
+      toast({
+        title: `Klienti ekziston — ${matchFieldLabel(dupCustomer.on)} përputhet`,
+        description: `"${dupCustomer.record.name}" është tashmë klient.`,
+        variant: 'destructive',
+      });
+      return;
     }
-    if (normPhone && normPhone.length >= 7) {
-      if ((rawCustomers || []).some(c => c.phone?.replace(/\D/g, '') === normPhone)) {
-        toast({ title: 'Ky numër ekziston tek Klientët!', description: 'Ka një klient me këtë numër telefoni.', variant: 'destructive' });
-        return;
-      }
-      if (leads?.some((l: any) => l.phoneNumber?.replace(/\D/g, '') === normPhone)) {
-        toast({ title: 'Ky numër ekziston tek Leads!', description: 'Ka një lead me këtë numër telefoni.', variant: 'destructive' });
-        return;
-      }
-    }
+    const matchedLead = findContactMatch(data, scopedLeads as any)?.record as Lead | undefined;
 
-    const created = await customerMutation.create(data as any);
+    const created = await customerMutation.create({
+      ...data,
+      ...(matchedLead ? { leadId: matchedLead.id } : {}),
+    } as any);
     setIsCreateDialogOpen(false);
+
+    // Pair the lead back to this client (and mark it converted — the prospect
+    // became a customer, which is exactly what this form just recorded).
+    if (matchedLead && created?.id) {
+      leadMutation.update(matchedLead.id, {
+        customerId: created.id,
+        ...(matchedLead.status !== 'Converted' ? { status: 'Converted', probability: 100, convertedAt: new Date() } : {}),
+      } as any)
+        .then(() => toast({ title: 'Lead-i u lidh', description: `"${matchedLead.name}" u lidh me këtë klient dhe u shënua si i konvertuar.` }))
+        .catch(err => console.error('[CustomersView] lead→customer link failed', err));
+    }
 
     // Auto-grant portal access if customer has email
     if (data.email && created?.id) {
@@ -405,32 +429,30 @@ const CustomersView: React.FC = () => {
       return;
     }
 
-    const normEmail = (data.email as string | undefined)?.toLowerCase().trim();
-    const normPhone = (data.phone as string | undefined)?.replace(/\D/g, '');
+    // Another CLIENT with the same details is a real duplicate → block. A matching
+    // LEAD is the same person earlier in the funnel → link it (the old check
+    // blocked here, which made every already-linked client uneditable).
+    const dupCustomer = findContactMatch(data, scopedCustomers, selectedCustomer.id);
+    if (dupCustomer) {
+      toast({
+        title: `Klienti ekziston — ${matchFieldLabel(dupCustomer.on)} përputhet`,
+        description: `"${dupCustomer.record.name}" ka të njëjtat të dhëna kontakti.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+    const matchedLead = selectedCustomer.leadId
+      ? null
+      : findContactMatch(data, scopedLeads as any)?.record as Lead | undefined;
 
-    // Duplicate checks against the WHOLE tenant (rawCustomers), excluding this customer.
-    if (normEmail) {
-      if ((rawCustomers || []).some(c => c.id !== selectedCustomer.id && c.email?.toLowerCase().trim() === normEmail)) {
-        toast({ title: 'Ky email ekziston tek Klientët!', description: 'Ka një klient tjetër me këtë email.', variant: 'destructive' });
-        return;
-      }
-      if (leads?.some((l: any) => l.email?.toLowerCase().trim() === normEmail)) {
-        toast({ title: 'Ky email ekziston tek Leads!', description: 'Ka një lead me këtë email.', variant: 'destructive' });
-        return;
-      }
+    await customerMutation.update(selectedCustomer.id, {
+      ...data,
+      ...(matchedLead ? { leadId: matchedLead.id } : {}),
+    } as any);
+    if (matchedLead && !matchedLead.customerId) {
+      leadMutation.update(matchedLead.id, { customerId: selectedCustomer.id } as any)
+        .catch(err => console.error('[CustomersView] lead→customer link failed', err));
     }
-    // Duplicate phone check (exclude current customer, check leads too)
-    if (normPhone && normPhone.length >= 7) {
-      if ((rawCustomers || []).some(c => c.id !== selectedCustomer.id && c.phone?.replace(/\D/g, '') === normPhone)) {
-        toast({ title: 'Ky numër ekziston tek Klientët!', description: 'Ka një klient tjetër me këtë numër telefoni.', variant: 'destructive' });
-        return;
-      }
-      if (leads?.some((l: any) => l.phoneNumber?.replace(/\D/g, '') === normPhone)) {
-        toast({ title: 'Ky numër ekziston tek Leads!', description: 'Ka një lead me këtë numër telefoni.', variant: 'destructive' });
-        return;
-      }
-    }
-    await customerMutation.update(selectedCustomer.id, data as any);
     setIsEditDialogOpen(false);
     setSelectedCustomer(null);
   };

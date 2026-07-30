@@ -4,38 +4,24 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { usePermissions } from '../../contexts/PermissionsContext';
 import { useCollection } from '../../hooks/useFirestore';
-import {
-  LayoutDashboard,
-  FileText,
-  ShoppingBag,
-  ClipboardList,
-  FolderKanban,
-  Calculator,
-  ScrollText,
-  LogOut,
-  Menu,
-  X,
-  User,
-  Eye,
-  EyeOff,
-  Sparkles,
-  MessageCircle,
-  ArrowRight,
-  Share2,
-} from 'lucide-react';
+import { LayoutDashboard, FileText, ShoppingBag, ClipboardList, FolderKanban, Calculator, ScrollText, LogOut, Menu, X, User, Eye, EyeOff, Sparkles, MessageCircle, ArrowRight, Share2, ShoppingCart } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Loader2 } from 'lucide-react';
 import PortalPushPrompt from './PortalPushPrompt';
 import PortalNotificationsBell from './PortalNotificationsBell';
 
 // Full menu — shown in the desktop sidebar and the mobile drawer.
+// `shopOnly` entries appear only when this tenant actually publishes products, so a
+// service agency's clients never see an empty shop tab.
 const navItems = [
   { to: '/portal', icon: LayoutDashboard, label: 'Paneli Kryesor', end: true },
   { to: '/portal/invoices', icon: FileText, label: 'Faturat' },
   { to: '/portal/chat', icon: MessageCircle, label: 'Mesazhet' },
   { to: '/portal/contracts', icon: ScrollText, label: 'Kontratat' },
   { to: '/portal/services', icon: ShoppingBag, label: 'Shërbimet' },
+  { to: '/portal/shop', icon: ShoppingCart, label: 'Dyqani', shopOnly: true },
   { to: '/portal/projects', icon: FolderKanban, label: 'Projektet' },
+  { to: '/portal/reports', icon: ClipboardList, label: 'Raportet' },
   { to: '/portal/preventiva', icon: Calculator, label: 'Preventiva' },
   { to: '/portal/social', icon: Share2, label: 'Rrjetet Sociale' },
   { to: '/portal/profile', icon: User, label: 'Profili im' },
@@ -53,7 +39,7 @@ const bottomNavItems = [
 const PortalLayout: React.FC = () => {
   const { user, logout } = useAuth();
   const permissions = usePermissions();
-  const { isClient, isLoading } = useClientPortal();
+  const { isClient, isLoading, businessId } = useClientPortal();
   const navigate = useNavigate();
   const [mobileOpen, setMobileOpen] = useState(false);
 
@@ -66,6 +52,24 @@ const PortalLayout: React.FC = () => {
   const unreadStaffMsgs = useMemo(
     () => portalNotifs?.filter((n: any) => n.type === 'staff_message' && !n.isRead).length || 0,
     [portalNotifs]
+  );
+
+  // ── Shop tab visibility ──
+  // Show "Dyqani" only when this client's tenant has at least one product published
+  // to the portal. Capped at 1 doc, so the check costs a single read.
+  const { data: portalProducts } = useCollection<any>('products', {
+    skip: !businessId,
+    where: [
+      { field: 'businessId', operator: '==', value: businessId || '' },
+      { field: 'visibleInPortal', operator: '==', value: true },
+    ],
+    skipTeamFilter: true,
+    limit: 1,
+  });
+  const hasShop = (portalProducts?.length || 0) > 0;
+  const visibleNavItems = useMemo(
+    () => navItems.filter(item => !(item as any).shopOnly || hasShop),
+    [hasShop],
   );
 
   // Admin "view as customer" preview — a real staff member is inspecting a
@@ -202,7 +206,7 @@ const PortalLayout: React.FC = () => {
       >
         <div className="px-5 pt-5 pb-2 text-[11px] font-semibold uppercase tracking-[0.09em] text-muted-foreground/70">Menuja</div>
         <nav className="px-4 space-y-1 flex-1 overflow-y-auto">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const Icon = item.icon;
             const isChatItem = item.to === '/portal/chat';
             return (

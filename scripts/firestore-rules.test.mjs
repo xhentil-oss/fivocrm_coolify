@@ -56,6 +56,68 @@ before(async () => {
     await setDoc(doc(db, 'messages', 'msg1'), {
       businessId: MY_BIZ, teamId: MY_TEAM, channelId: 'general-mine', senderId: 'zoe', content: 'hi',
     });
+
+    // ── seed for the tenant-isolation hardening tests (12+) ──
+
+    await setDoc(doc(db, 'businesses', MY_BIZ), { name: 'Mine', ownerId: 'aliceOwner', status: 'active' });
+    await setDoc(doc(db, 'businesses', VICTIM_BIZ), { name: 'Victim', ownerId: 'victimOwner', status: 'active' });
+    await setDoc(doc(db, 'businesses', 'bizSuspended'), { name: 'Late payer', ownerId: 'late', status: 'suspended' });
+    await setDoc(doc(db, 'teams', MY_TEAM), { businessId: MY_BIZ, createdByUserId: 'aliceOwner', name: 'Mine' });
+    await setDoc(doc(db, 'teams', 'teamSuspended'), { businessId: 'bizSuspended', createdByUserId: 'late' });
+    await setDoc(doc(db, 'teamMembers', 'teamSuspended_late'), {
+      userId: 'late', teamId: 'teamSuspended', businessId: 'bizSuspended', role: 'Admin', status: 'Active',
+    });
+    // Victim-tenant documents used as the cross-tenant read targets.
+    await setDoc(doc(db, 'teamSettings', VICTIM_TEAM), { companyName: 'Victim Ltd', hasEmailApiKey: true });
+    await setDoc(doc(db, 'teamSecrets', VICTIM_TEAM), { emailApiKey: 'super-secret' });
+    await setDoc(doc(db, 'services', 'svcVictim'), { businessId: VICTIM_BIZ, name: 'Victim service', price: 999 });
+    await setDoc(doc(db, 'channels', 'chVictim'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, name: 'victim-general' });
+    await setDoc(doc(db, 'teamMembers', `${VICTIM_TEAM}_vstaff`), {
+      userId: 'vstaff', teamId: VICTIM_TEAM, businessId: VICTIM_BIZ, role: 'Admin', status: 'Active',
+      email: 'vstaff@victim.com', monthlySalary: 250000,
+    });
+    await setDoc(doc(db, 'clientPortalAccess', 'paVictim'), {
+      businessId: VICTIM_BIZ, customerId: 'custVictim', userId: 'vclient', email: 'vclient@victim.com', status: 'Active',
+    });
+    await setDoc(doc(db, 'counters', `invoices_${VICTIM_TEAM}`), { last: 42 });
+    await setDoc(doc(db, 'auditLogs', 'auditVictim'), { businessId: VICTIM_BIZ, action: 'invite.accept', actorUid: 'vstaff' });
+    await setDoc(doc(db, 'publicTenants', 'victim'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, name: 'Victim' });
+    await setDoc(doc(db, 'teamInvites', 'invVictim'), {
+      teamId: VICTIM_TEAM, businessId: VICTIM_BIZ, email: 'someone@victim.com', role: 'Admin',
+      status: 'Pending', token: 'tok-victim', invitedByUserId: 'victimOwner',
+    });
+    await setDoc(doc(db, 'userProfiles', 'profVictim'), { userId: 'vstaff', displayName: 'V Staff', businessId: VICTIM_BIZ });
+
+    // ── seed for the shop module (24+) ──
+    // A published product in MY tenant (what a portal client of bizMine may read),
+    // a DRAFT one in the same tenant (which they must not), and a published one in
+    // the VICTIM tenant (the cross-tenant read target).
+    await setDoc(doc(db, 'products', 'prodMinePublic'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, name: 'Karrige', price: 100,
+      status: 'Active', visibleInPortal: true, costPrice: 40,
+    });
+    await setDoc(doc(db, 'products', 'prodMineDraft'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, name: 'Prototip i pabotuar', price: 1,
+      status: 'Draft', visibleInPortal: false, costPrice: 0.5,
+    });
+    await setDoc(doc(db, 'products', 'prodVictim'), {
+      businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, name: 'Victim product', price: 999,
+      status: 'Active', visibleInPortal: true, costPrice: 500,
+    });
+    await setDoc(doc(db, 'productCategories', 'catVictim'), { businessId: VICTIM_BIZ, name: 'Victim cat' });
+    await setDoc(doc(db, 'stockMovements', 'moveVictim'), {
+      businessId: VICTIM_BIZ, productId: 'prodVictim', type: 'in', quantity: 10, unitCost: 500,
+    });
+    await setDoc(doc(db, 'shopOrders', 'orderVictim'), {
+      businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, orderNumber: 'POR-2026-0001',
+      customerId: 'custVictim', items: [], currency: 'ALL', subtotal: 0, total: 999,
+      status: 'Pending', source: 'portal',
+    });
+    await setDoc(doc(db, 'shopOrders', 'orderMine'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, orderNumber: 'POR-2026-0002',
+      customerId: 'cust1', items: [], currency: 'ALL', subtotal: 0, total: 100,
+      status: 'Pending', source: 'portal',
+    });
   });
 });
 
@@ -170,4 +232,288 @@ test('10b. outsider cannot react to a message in another tenant', async () => {
 test('11. directMessages is denied for everyone', async () => {
   const alice = testEnv.authenticatedContext('alice', { email: 'alice@mine.com' }).firestore();
   await assertFails(setDoc(doc(alice, 'directMessages', 'dm1'), { teamId: MY_TEAM, x: 1 }));
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Tenant-isolation hardening pass (claims + team-inside-business + closed reads)
+// ══════════════════════════════════════════════════════════════════════════════
+
+/** Signed tenant claims, the way api/_tenantClaims.ts mints them. */
+const staffOf = (uid, bid, tid, roles = ['member'], email = `${uid}@x.com`) =>
+  testEnv.authenticatedContext(uid, { email, bid, tid, roles }).firestore();
+const portalOf = (uid, cid, email, pbid = MY_BIZ) =>
+  testEnv.authenticatedContext(uid, { email, cid, pbid }).firestore();
+const outsider = () => testEnv.authenticatedContext('mallory', { email: 'm@evil.com', bid: VICTIM_BIZ, tid: VICTIM_TEAM, roles: ['admin'] }).firestore();
+
+// 12. The credential vault is unreachable from any client, super-admin included.
+test('12. teamSecrets is deny-all (even for super-admin)', async () => {
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  await assertFails(getDoc(doc(sa, 'teamSecrets', VICTIM_TEAM)));
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(getDoc(doc(alice, 'teamSecrets', MY_TEAM)));
+  await assertFails(setDoc(doc(alice, 'teamSecrets', MY_TEAM), { emailApiKey: 'x' }));
+});
+
+// 13. teamSettings: readable inside the tenant, not across it; credential fields are
+//     rejected even for an admin of the tenant (they'd become member-readable).
+test('13a. cross-tenant teamSettings read is denied', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(getDoc(doc(alice, 'teamSettings', VICTIM_TEAM)));
+});
+test('13b. own-tenant teamSettings read is allowed', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'teamSettings', MY_TEAM), { companyName: 'Mine Ltd' });
+  });
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(getDoc(doc(alice, 'teamSettings', MY_TEAM)));
+});
+test('13c. writing a credential into teamSettings is denied', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(setDoc(doc(alice, 'teamSettings', MY_TEAM), { emailApiKey: 'leak-me' }, { merge: true }));
+});
+
+// 14. Cross-tenant reads of the collections that used to be `read: if isAuth()`.
+test('14. cross-tenant reads are denied across the board', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  for (const [col, id] of [
+    ['services', 'svcVictim'],
+    ['channels', 'chVictim'],
+    ['teamMembers', `${VICTIM_TEAM}_vstaff`],
+    ['clientPortalAccess', 'paVictim'],
+    ['counters', `invoices_${VICTIM_TEAM}`],
+    ['auditLogs', 'auditVictim'],
+    ['teams', VICTIM_TEAM],
+    ['businesses', VICTIM_BIZ],
+    ['userProfiles', 'profVictim'],
+    ['teamInvites', 'invVictim'],
+  ]) {
+    await assertFails(getDoc(doc(alice, col, id)));
+  }
+});
+
+// 15. A portal client cannot read the staff directory of ANY tenant (salary data).
+test('15. portal client cannot read teamMembers', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+  await assertFails(getDoc(doc(carol, 'teamMembers', `${VICTIM_TEAM}_vstaff`)));
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'teamMembers', `${MY_TEAM}_bob`), {
+      userId: 'bob', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Admin', status: 'Active', monthlySalary: 1,
+    });
+  });
+  await assertFails(getDoc(doc(carol, 'teamMembers', `${MY_TEAM}_bob`)));
+});
+
+// 16. A portal client reads their OWN tenant's service catalogue, never another's.
+test('16. portal client reads own business services only', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'services', 'svcMine'), { businessId: MY_BIZ, name: 'SEO' });
+  });
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+  await assertSucceeds(getDoc(doc(carol, 'services', 'svcMine')));
+  await assertFails(getDoc(doc(carol, 'services', 'svcVictim')));
+});
+
+// 17. The invite-forgery chain: an outsider cannot mint an invite into another team,
+//     and cannot smuggle an Admin invite into a team they only manage.
+test('17a. forging an invite into a victim team is denied', async () => {
+  const mallory = outsider();
+  await assertFails(setDoc(doc(mallory, 'teamInvites', 'inv-forged'), {
+    teamId: MY_TEAM, businessId: MY_BIZ, email: 'm@evil.com', role: 'Admin', status: 'Pending', token: 'tok-forged',
+  }));
+});
+test('17b. team owner may invite', async () => {
+  const owner = testEnv.authenticatedContext('aliceOwner', { email: 'owner@mine.com', bid: MY_BIZ, tid: MY_TEAM, roles: ['owner', 'admin'] }).firestore();
+  await assertSucceeds(setDoc(doc(owner, 'teamInvites', 'inv-ok'), {
+    teamId: MY_TEAM, businessId: MY_BIZ, email: 'new@mine.com', role: 'Member', status: 'Pending', token: 'tok-ok',
+  }));
+});
+test('17c. a Manager cannot mint an Admin invite', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'teamMembers', `${MY_TEAM}_mgr`), {
+      userId: 'mgr', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Manager', status: 'Active',
+    });
+  });
+  const mgr = staffOf('mgr', MY_BIZ, MY_TEAM, ['manager'], 'mgr@mine.com');
+  await assertFails(setDoc(doc(mgr, 'teamInvites', 'inv-esc'), {
+    teamId: MY_TEAM, businessId: MY_BIZ, email: 'x@mine.com', role: 'Admin', status: 'Pending', token: 'tok-esc',
+  }));
+  await assertSucceeds(setDoc(doc(mgr, 'teamInvites', 'inv-mgr'), {
+    teamId: MY_TEAM, businessId: MY_BIZ, email: 'y@mine.com', role: 'Member', status: 'Pending', token: 'tok-mgr',
+  }));
+});
+test('17d. the invitee can read their own invite', async () => {
+  const invitee = testEnv.authenticatedContext('newguy', { email: 'someone@victim.com' }).firestore();
+  await assertSucceeds(getDoc(doc(invitee, 'teamInvites', 'invVictim')));
+});
+
+// 18. A team must live inside a business, and can never be moved between tenants.
+test('18a. creating a team outside your business is denied', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(setDoc(doc(alice, 'teams', 'teamHijack'), {
+    name: 'Hijack', businessId: VICTIM_BIZ, createdByUserId: 'alice',
+  }));
+});
+test('18b. creating a team without a business is denied', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(setDoc(doc(alice, 'teams', 'teamOrphan'), { name: 'Orphan', createdByUserId: 'alice' }));
+});
+test('18c. creating a team inside your own business is allowed', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(setDoc(doc(alice, 'teams', 'teamDept2'), {
+    name: 'Dept 2', businessId: MY_BIZ, createdByUserId: 'alice',
+  }));
+});
+test('18d. moving a team to another business is denied', async () => {
+  const owner = testEnv.authenticatedContext('aliceOwner', { email: 'owner@mine.com', bid: MY_BIZ, tid: MY_TEAM, roles: ['owner', 'admin'] }).firestore();
+  await assertFails(setDoc(doc(owner, 'teams', MY_TEAM), { businessId: VICTIM_BIZ }, { merge: true }));
+});
+
+// 19. A suspended tenant is read-only (billing enforcement at the data layer).
+test('19. suspended tenant cannot write', async () => {
+  const late = staffOf('late', 'bizSuspended', 'teamSuspended', ['admin'], 'late@x.com');
+  await assertFails(setDoc(doc(late, 'customers', 'custNew'), { businessId: 'bizSuspended', name: 'New' }));
+});
+
+// 20. Notification injection into another tenant's user is denied.
+test('20. cannot inject a notification for a user outside your tenant', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'users', 'vstaff'), { teamId: VICTIM_TEAM, businessId: VICTIM_BIZ });
+  });
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(setDoc(doc(alice, 'notifications', 'notifEvil'), {
+    userId: 'vstaff', type: 'invoice_paid', title: 'Klikoni këtu', actionUrl: 'https://evil.example',
+  }));
+});
+
+// 21. A tenant cannot un-suspend itself / change its own plan.
+test('21. tenant cannot lift its own suspension', async () => {
+  const late = testEnv.authenticatedContext('late', { email: 'late@x.com', bid: 'bizSuspended', tid: 'teamSuspended', roles: ['owner', 'admin'] }).firestore();
+  await assertFails(setDoc(doc(late, 'businesses', 'bizSuspended'), { status: 'active' }, { merge: true }));
+});
+
+// 22. The audit trail can never be rewritten or erased.
+test('22. auditLogs are append-only', async () => {
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  await assertFails(setDoc(doc(sa, 'auditLogs', 'auditVictim'), { action: 'nothing.happened' }, { merge: true }));
+});
+
+// 23. The public subdomain map is world-readable but never client-writable.
+test('23. publicTenants is readable, not writable', async () => {
+  const anon = testEnv.unauthenticatedContext().firestore();
+  await assertSucceeds(getDoc(doc(anon, 'publicTenants', 'victim')));
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(setDoc(doc(alice, 'publicTenants', 'victim'), { businessId: MY_BIZ }, { merge: true }));
+});
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Shop module (products / taxonomy / inventory ledger / orders)
+// Invariant 5 of TENANT_ISOLATION_ENTERPRISE.md: a new collection ships with a
+// negative cross-tenant test.
+// ══════════════════════════════════════════════════════════════════════════════
+
+// 24. Staff of another tenant cannot read this tenant's catalog — not even the
+//     published part, which carries costPrice (margin intelligence).
+test('24a. cross-tenant staff cannot read another tenant products', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(getDoc(doc(alice, 'products', 'prodVictim')));
+});
+test('24b. staff read their own tenant products', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(getDoc(doc(alice, 'products', 'prodMinePublic')));
+  await assertSucceeds(getDoc(doc(alice, 'products', 'prodMineDraft')));
+});
+
+// 25. The portal client sees ONLY their own tenant's PUBLISHED catalog. This is the
+//     pair that makes the shop read rule safe: tenant match AND visibleInPortal.
+test('25a. portal client reads a published product of their own tenant', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertSucceeds(getDoc(doc(carol, 'products', 'prodMinePublic')));
+});
+test('25b. portal client cannot read an unpublished product of their own tenant', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(getDoc(doc(carol, 'products', 'prodMineDraft')));
+});
+test('25c. portal client cannot read another tenant published product', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(getDoc(doc(carol, 'products', 'prodVictim')));
+});
+
+// 26. A portal client is never staff: publishing/editing the catalog is staff-only.
+test('26a. portal client cannot create a product', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(setDoc(doc(carol, 'products', 'prodInjected'), {
+    businessId: MY_BIZ, name: 'Free stuff', price: 0, status: 'Active', visibleInPortal: true,
+  }));
+});
+test('26b. portal client cannot reprice a product', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(setDoc(doc(carol, 'products', 'prodMinePublic'), { price: 1 }, { merge: true }));
+});
+test('26c. staff cannot stamp a product into another tenant', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(setDoc(doc(alice, 'products', 'prodSmuggled'), {
+    businessId: VICTIM_BIZ, name: 'Smuggled', price: 1, status: 'Active',
+  }));
+});
+test('26d. a product can never be moved to another tenant by update', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(setDoc(doc(alice, 'products', 'prodMinePublic'), { businessId: VICTIM_BIZ }, { merge: true }));
+});
+
+// 27. Taxonomy follows the same boundary (the portal renders category filters).
+test('27. cross-tenant product categories are unreadable', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(getDoc(doc(alice, 'productCategories', 'catVictim')));
+});
+
+// 28. The inventory ledger is staff-only AND append-only: it carries unit costs and
+//     is the audit trail every stock number depends on.
+test('28a. portal client cannot read the inventory ledger', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(getDoc(doc(carol, 'stockMovements', 'moveVictim')));
+});
+test('28b. cross-tenant staff cannot read the inventory ledger', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(getDoc(doc(alice, 'stockMovements', 'moveVictim')));
+});
+test('28c. a stock movement cannot be rewritten', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'stockMovements', 'moveMine'), {
+      businessId: MY_BIZ, productId: 'prodMinePublic', type: 'in', quantity: 5,
+    });
+  });
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(setDoc(doc(alice, 'stockMovements', 'moveMine'), { quantity: 500 }, { merge: true }));
+});
+
+// 29. Orders: a client may place their own, read their own, and nothing else.
+test('29a. portal client creates their own Pending order', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertSucceeds(setDoc(doc(carol, 'shopOrders', 'orderNew'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, orderNumber: 'POR-2026-0003',
+    customerId: 'cust1', items: [], currency: 'ALL', subtotal: 0, total: 100,
+    status: 'Pending', source: 'portal', createdByUserId: 'carol',
+  }));
+});
+test('29b. portal client cannot place an order as another customer', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(setDoc(doc(carol, 'shopOrders', 'orderSpoofed'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, orderNumber: 'POR-2026-0004',
+    customerId: 'custVictim', items: [], currency: 'ALL', subtotal: 0, total: 1,
+    status: 'Pending', source: 'portal', createdByUserId: 'carol',
+  }));
+});
+test('29c. portal client cannot self-approve an order (no update)', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(setDoc(doc(carol, 'shopOrders', 'orderMine'),
+    { status: 'Delivered', paymentStatus: 'Paid' }, { merge: true }));
+});
+test('29d. portal client reads their own order but not another tenant order', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertSucceeds(getDoc(doc(carol, 'shopOrders', 'orderMine')));
+  await assertFails(getDoc(doc(carol, 'shopOrders', 'orderVictim')));
+});
+test('29e. cross-tenant staff cannot read another tenant orders', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(getDoc(doc(alice, 'shopOrders', 'orderVictim')));
 });

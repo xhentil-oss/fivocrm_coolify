@@ -8,6 +8,7 @@
  * The client only ever sees their own data.
  */
 import { adminDb } from './_firebaseAdmin.js';
+import { getTeamConfig } from './_tenantConfig.js';
 import { sendBulkEmail } from './_mailer.js';
 import type { MailerConfig } from './_mailer.js';
 
@@ -102,8 +103,7 @@ export async function sendCustomerReport(customerId: string, period: string): Pr
     // Resolve the team's email provider config (falls back to env inside mailer).
     let cfg: MailerConfig = {};
     if (cust.teamId) {
-      const ts = await adminDb.collection('teamSettings').doc(cust.teamId).get();
-      if (ts.exists) cfg = ts.data() as MailerConfig;
+      cfg = (await getTeamConfig(cust.teamId)) as MailerConfig;
     }
 
     const html = buildReportEmailHtml(cust.name || '', period, accounts);
