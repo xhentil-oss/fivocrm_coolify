@@ -28,6 +28,27 @@ import admin, { adminDb as db } from './_firebaseAdmin.js';
  * counterpart so the pair stays in step.
  */
 
+/**
+ * Firestore (Admin SDK included, since `ignoreUndefinedProperties` is not enabled on
+ * this app) rejects `undefined`. The report below is assembled from a stored template
+ * whose blocks are bags of optional fields, so every payload is stripped first.
+ * Mirrors `stripUndefined` in src/lib/reporting/blocks.ts — duplicated because /api
+ * is bundled separately and must not import the React-side module graph.
+ */
+function stripUndefined<T>(value: T): T {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map(v => stripUndefined(v)) as unknown as T;
+  if (typeof value !== 'object') return value;
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return value; // Date / Timestamp
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v === undefined) continue;
+    out[k] = stripUndefined(v);
+  }
+  return out as T;
+}
+
 // ── date helpers (mirror src/lib/reporting/period.ts) ─────────────────────────
 const pad = (n: number) => String(n).padStart(2, '0');
 const toIso = (d: Date) => `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
@@ -265,7 +286,7 @@ export async function runReportSchedules(): Promise<{ created: number; skipped: 
         const titleSubject = subject.name || sched.customerName || sched.projectName || '';
         const now2 = admin.firestore.Timestamp.now();
 
-        await db.collection('reports').add({
+        await db.collection('reports').add(stripUndefined({
           businessId: sched.businessId,
           ...(sched.teamId ? { teamId: sched.teamId } : {}),
           kind: sched.kind || tmpl.kind,
@@ -300,7 +321,7 @@ export async function runReportSchedules(): Promise<{ created: number; skipped: 
           createdAt: now2,
           updatedAt: now2,
           createdByUserId: null,
-        });
+        }));
         created++;
 
         if (sched.notifyAuthor !== false && authorUserId) {

@@ -20,7 +20,7 @@ import type {
   ReportTemplate,
   ReportVisibility,
 } from '../../types';
-import { TABLE_PRESETS, createBlock, normaliseOrder } from './blocks';
+import { TABLE_PRESETS, createBlock, normaliseOrder, stripUndefined } from './blocks';
 import { formatPeriodLabel } from './period';
 
 /** A template definition without tenant/doc fields — the seed shape. */
@@ -454,7 +454,8 @@ export function templateFromSeed(
   seed: TemplateSeed,
   kpiResolver?: (key: string) => string | undefined,
 ): Omit<ReportTemplate, 'id' | 'businessId' | 'createdAt' | 'updatedAt'> {
-  return {
+  // Firestore-safe: most seeds have no `service`, and `undefined` cannot be stored.
+  return stripUndefined({
     key: seed.key,
     name: seed.name,
     description: seed.description,
@@ -467,7 +468,7 @@ export function templateFromSeed(
     isDefault: false,
     usageCount: 0,
     archivedAt: null,
-  };
+  });
 }
 
 /**
@@ -540,7 +541,7 @@ export function instantiateTemplate(
   const title = args.title
     || `${template.name}${subjectLabel ? ` — ${subjectLabel}` : ''} · ${formatPeriodLabel(args.period)}`;
 
-  return {
+  return stripUndefined({
     businessId: args.businessId,
     teamId: args.teamId,
     kind: template.kind,
@@ -574,7 +575,7 @@ export function instantiateTemplate(
     deletedAt: null,
     remindersSent: [],
     escalationsSent: [],
-  };
+  });
 }
 
 /**
@@ -585,7 +586,7 @@ export function duplicateTemplate(
   source: ReportTemplate,
   name: string,
 ): Omit<ReportTemplate, 'id' | 'createdAt' | 'updatedAt'> {
-  return {
+  return stripUndefined({
     businessId: source.businessId,
     teamId: source.teamId,
     key: `${source.key}-copy-${source.version}`,
@@ -603,5 +604,5 @@ export function duplicateTemplate(
     isSystem: false,
     usageCount: 0,
     archivedAt: null,
-  };
+  });
 }

@@ -82,6 +82,38 @@ export function blockLabel(type: ReportBlockType): string {
 }
 
 /**
+ * Drop keys whose value is `undefined`, recursively.
+ *
+ * Firestore rejects `undefined` outright ("Unsupported field value: undefined").
+ * `useMutation` sanitises for us, but `writeBatch`/`setDoc` and the Admin SDK do
+ * NOT — and the seeder and the cron generator both use those. Since a block is a
+ * bag of optional fields (`title`, `source`, `chart`, `columns`…), a template built
+ * from a compact spec is full of `undefined` values, and every direct write of one
+ * would throw.
+ *
+ * So the builders below emit Firestore-safe objects, rather than relying on each
+ * call site to remember. `null` is preserved (Firestore accepts it and the module
+ * uses it meaningfully, e.g. `deletedAt: null`), and class instances — `Date`, a
+ * Firestore `Timestamp` — are passed through untouched. Deliberately implemented
+ * without importing anything from `firebase`, which is what keeps this whole
+ * directory unit-testable.
+ */
+export function stripUndefined<T>(value: T): T {
+  if (value === null || value === undefined) return value;
+  if (Array.isArray(value)) return value.map(v => stripUndefined(v)) as unknown as T;
+  if (typeof value !== 'object') return value;
+  // Only descend into PLAIN objects; Date/Timestamp/etc. must survive intact.
+  const proto = Object.getPrototypeOf(value);
+  if (proto !== Object.prototype && proto !== null) return value;
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    if (v === undefined) continue;
+    out[k] = stripUndefined(v);
+  }
+  return out as T;
+}
+
+/**
  * Deterministic block id. `crypto.randomUUID` isn't available in every runtime the
  * module touches (older Android WebViews, the Node cron), so the id is composed
  * from a caller-supplied seed — the generator passes an index, the UI a counter.
@@ -107,7 +139,9 @@ export function createBlock(
     ...(def?.defaults || {}),
     ...overrides,
   };
-  return base;
+  // `overrides` routinely carries explicit `undefined` (a compact template spec has
+  // no `chart`, no `columns`, …) and Firestore refuses to store those.
+  return stripUndefined(base);
 }
 
 /** Small stable string hash — only used for id readability, never for security. */

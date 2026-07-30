@@ -33,6 +33,9 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { KPI_CATALOG, formatKpiValue } from '../lib/reporting/kpi';
 import { TEMPLATE_SEEDS, duplicateTemplate, templateFromSeed } from '../lib/reporting/templates';
+// writeBatch bypasses useMutation's sanitiser, so every payload below is stripped
+// explicitly — Firestore rejects `undefined` outright.
+import { stripUndefined } from '../lib/reporting/blocks';
 import { nextRunAt } from '../lib/reporting/schedule';
 import type {
   Customer, ReportFrequency, ReportKind, ReportKpi, ReportSchedule, ReportService, ReportTemplate,
@@ -107,7 +110,7 @@ const ReportingAdminView: React.FC = () => {
         const batch = writeBatch(db);
         for (const seed of chunk) {
           const ref = doc(db, 'reportKpis', `${businessId}_${seed.key}`);
-          batch.set(ref, {
+          batch.set(ref, stripUndefined({
             businessId,
             ...(teamId ? { teamId } : {}),
             key: seed.key,
@@ -127,7 +130,7 @@ const ReportingAdminView: React.FC = () => {
             createdAt: now,
             updatedAt: now,
             createdByUserId: user?.uid || null,
-          });
+          }));
           kpiIdByKey.set(seed.key, ref.id);
         }
         await batch.commit();
@@ -138,14 +141,14 @@ const ReportingAdminView: React.FC = () => {
         for (const seed of chunk) {
           const body = templateFromSeed(seed, key => kpiIdByKey.get(key));
           const ref = doc(db, 'reportTemplates', `${businessId}_${seed.key}`);
-          batch.set(ref, {
+          batch.set(ref, stripUndefined({
             ...body,
             businessId,
             ...(teamId ? { teamId } : {}),
             createdAt: now,
             updatedAt: now,
             createdByUserId: user?.uid || null,
-          });
+          }));
         }
         await batch.commit();
       }

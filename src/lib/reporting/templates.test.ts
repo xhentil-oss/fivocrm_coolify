@@ -243,3 +243,79 @@ describe('duplicateTemplate', () => {
     expect(copy.blocks.length).toBe(source.blocks.length);
   });
 });
+
+/**
+ * Firestore refuses `undefined` ("Unsupported field value: undefined"). `useMutation`
+ * sanitises, but the seeder (`writeBatch`) and the cron generator (Admin SDK) write
+ * directly — and a template built from a compact spec is full of optional fields.
+ *
+ * This is a regression suite: seeding failed in production on
+ * `reportTemplates/..._weekly-employee` because `templateFromSeed` emitted
+ * `service: undefined`.
+ */
+describe('Firestore safety — no undefined anywhere', () => {
+  /** Every path in `value` whose leaf is literally `undefined`. */
+  const undefinedPaths = (value: unknown, path = ''): string[] => {
+    if (value === undefined) return [path || '(root)'];
+    if (value === null || typeof value !== 'object') return [];
+    if (Array.isArray(value)) return value.flatMap((v, i) => undefinedPaths(v, `${path}[${i}]`));
+    const proto = Object.getPrototypeOf(value);
+    if (proto !== Object.prototype && proto !== null) return []; // Date etc.
+    return Object.entries(value as Record<string, unknown>)
+      .flatMap(([k, v]) => undefinedPaths(v, path ? `${path}.${k}` : k));
+  };
+
+  it.each(TEMPLATE_SEEDS.map(s => s.key))('templateFromSeed("%s") stores cleanly', (key) => {
+    const body = templateFromSeed(TEMPLATE_SEED_BY_KEY[key]);
+    expect(undefinedPaths(body)).toEqual([]);
+  });
+
+  it('omits the key entirely rather than setting it to undefined', () => {
+    // `weekly-employee` has no service — the exact document that failed.
+    const body = templateFromSeed(TEMPLATE_SEED_BY_KEY['weekly-employee']);
+    expect('service' in body).toBe(false);
+    expect(TEMPLATE_SEED_BY_KEY['weekly-employee'].service).toBeUndefined();
+  });
+
+  it('keeps a service that IS defined', () => {
+    expect(templateFromSeed(TEMPLATE_SEED_BY_KEY['monthly-seo']).service).toBe('seo');
+  });
+
+  it('preserves null (Firestore accepts it and the module relies on it)', () => {
+    expect(templateFromSeed(TEMPLATE_SEED_BY_KEY.qbr).archivedAt).toBeNull();
+  });
+
+  it('instantiated reports store cleanly too (the cron writes these)', () => {
+    for (const seed of TEMPLATE_SEEDS) {
+      const template: ReportTemplate = {
+        id: `t-${seed.key}`,
+        businessId: 'biz1',
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        ...templateFromSeed(seed),
+      } as ReportTemplate;
+      const report = instantiateTemplate(template, {
+        businessId: 'biz1',
+        authorUserId: 'u1',
+        period: buildPeriod('monthly', '2026-07-15'),
+      });
+      expect(undefinedPaths(report), seed.key).toEqual([]);
+    }
+  });
+
+  it('duplicated templates store cleanly', () => {
+    const source = {
+      id: 't1', businessId: 'biz1', createdAt: new Date(), updatedAt: new Date(),
+      ...templateFromSeed(TEMPLATE_SEED_BY_KEY['weekly-employee']),
+    } as ReportTemplate;
+    expect(undefinedPaths(duplicateTemplate(source, 'Kopje'))).toEqual([]);
+  });
+
+  it('every seeded block is free of undefined fields', () => {
+    for (const seed of TEMPLATE_SEEDS) {
+      for (const block of expandBlocks(seed.blocks)) {
+        expect(undefinedPaths(block), `${seed.key}/${block.id}`).toEqual([]);
+      }
+    }
+  });
+});
