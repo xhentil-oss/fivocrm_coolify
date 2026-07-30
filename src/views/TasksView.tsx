@@ -80,6 +80,9 @@ const TasksView: React.FC = () => {
   const [page, setPage] = useState(0);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  // Comment to scroll to inside the panel — set only when a notification deep-links
+  // here. Tagged with its task so it never leaks onto another task you open next.
+  const [focusComment, setFocusComment] = useState<{ taskId: string; commentId: string } | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [panelExpanded, setPanelExpanded] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
@@ -264,18 +267,23 @@ const TasksView: React.FC = () => {
     };
   }, [baseTasksForStats, allTasks]);
 
-  // Open task from URL param (e.g. navigated from Dashboard)
+  // Open task from URL param (Dashboard link, or a comment notification which also
+  // carries `comment=<id>` so the panel can scroll straight to that comment).
+  // `task` is the legacy param name still present in older notifications.
   useEffect(() => {
-    const taskIdParam = searchParams.get('taskId');
-    if (taskIdParam && allTasks && allTasks.length > 0) {
-      const taskToSelect = allTasks.find(t => t.id === taskIdParam);
-      if (taskToSelect) {
-        setSelectedTask(taskToSelect);
-        // Clean up the URL param after selecting
-        setSearchParams({}, { replace: true });
-      }
-    }
-  }, [searchParams, allTasks]);
+    const taskIdParam = searchParams.get('taskId') || searchParams.get('task');
+    if (!taskIdParam) return;
+    // Fall back to the unfiltered list: a task you were @mentioned on may be
+    // filtered out of `allTasks` by the role filter, and the link must still open.
+    const taskToSelect = (allTasks || []).find(t => t.id === taskIdParam)
+      || (rawTasks || []).find(t => t.id === taskIdParam);
+    if (!taskToSelect) return;
+    setSelectedTask(taskToSelect);
+    const commentParam = searchParams.get('comment');
+    setFocusComment(commentParam ? { taskId: taskToSelect.id, commentId: commentParam } : null);
+    // Clean up the URL params after selecting
+    setSearchParams({}, { replace: true });
+  }, [searchParams, allTasks, rawTasks, setSearchParams]);
 
   // Keep selectedTask in sync with live Firestore data
   useEffect(() => {
@@ -445,7 +453,8 @@ const TasksView: React.FC = () => {
   };
 
   const handleAddComment = async (taskId: string, content: string) => {
-    await commentMutation.create({
+    // Return the created doc — the panel needs its id to deep-link the notifications.
+    return commentMutation.create({
       taskId,
       content,
     });
@@ -1372,11 +1381,12 @@ const TasksView: React.FC = () => {
           <TaskDetailPanel
             key={selectedTask.id}
             task={selectedTask}
-            onClose={() => { setSelectedTask(null); setPanelExpanded(false); }}
+            onClose={() => { setSelectedTask(null); setPanelExpanded(false); setFocusComment(null); }}
             onExpand={() => setPanelExpanded(p => !p)}
             isExpanded={panelExpanded}
             comments={comments?.filter(c => c.taskId === selectedTask.id) || []}
             onAddComment={handleAddComment}
+            focusCommentId={focusComment?.taskId === selectedTask.id ? focusComment.commentId : null}
             onEditComment={handleEditComment}
             onDeleteComment={handleDeleteComment}
             onToggleReaction={handleToggleReaction}

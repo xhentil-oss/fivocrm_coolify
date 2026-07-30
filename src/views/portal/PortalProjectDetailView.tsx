@@ -1,7 +1,7 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { addDoc, collection, Timestamp } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useSearchParams } from 'react-router-dom';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCollection, useMutation, useDocument } from '../../hooks/useFirestore';
@@ -21,6 +21,8 @@ import {
 import { useToast } from '../../hooks/use-toast';
 import type { Project, Task, TaskComment, TeamMember } from '../../types';
 import { notifyStaff } from '../../lib/notifyStaff';
+import { useCommentFocus, COMMENT_FLASH_CLASS } from '../../hooks/useCommentFocus';
+import { taskDeepLink, projectCommentDeepLink } from '../../lib/deepLinks';
 
 interface ProjectComment {
   id: string;
@@ -38,7 +40,12 @@ const PortalProjectDetailView: React.FC = () => {
   const { user } = useAuth();
   const { customerId, businessId: portalBusinessId } = useClientPortal();
   const { toast } = useToast();
-  const [activeTab, setActiveTab] = useState('overview');
+  // Arriving from a "përgjigje nga ekipi" notification: open the discussion tab and
+  // scroll to that comment instead of dropping the client on the overview.
+  const [searchParams] = useSearchParams();
+  const focusCommentId = searchParams.get('comment');
+  const { registerComment, isFlashing } = useCommentFocus(focusCommentId);
+  const [activeTab, setActiveTab] = useState(() => (focusCommentId ? 'comments' : 'overview'));
   const [commentText, setCommentText] = useState('');
   const commentScrollRef = useRef<HTMLDivElement>(null);
   const [expandedTaskId, setExpandedTaskId] = useState<string | null>(null);
@@ -116,12 +123,14 @@ const PortalProjectDetailView: React.FC = () => {
 
   const notificationMutation = useMutation<any>('notifications');
 
-  // Auto-scroll comments
+  // Auto-scroll comments — skipped when a notification deep-links to a specific
+  // comment, otherwise the jump-to-bottom would undo the scroll to that comment.
   useEffect(() => {
+    if (focusCommentId) return;
     if (commentScrollRef.current) {
       commentScrollRef.current.scrollTop = commentScrollRef.current.scrollHeight;
     }
-  }, [comments]);
+  }, [comments, focusCommentId]);
 
   // Task stats
   const taskStats = React.useMemo(() => {
@@ -187,7 +196,7 @@ const PortalProjectDetailView: React.FC = () => {
     try {
       // Use addDoc — portal users can't use useMutation.create() on team-scoped collections
       const commentTeamId = (project as any)?.teamId || null;
-      await addDoc(collection(db, 'projectComments'), {
+      const createdRef = await addDoc(collection(db, 'projectComments'), {
         projectId,
         content: commentText.trim(),
         userId: user.uid,
@@ -207,8 +216,9 @@ const PortalProjectDetailView: React.FC = () => {
           type: 'project_comment',
           title: `Koment i ri nga klienti — ${project.name}`,
           message: commentText.length > 100 ? commentText.slice(0, 100) + '...' : commentText,
-          actionUrl: `/app/projects/${projectId}`,
-          actionLabel: 'Shiko Projektin',
+          // Land on the comment itself, not just the project page.
+          actionUrl: projectCommentDeepLink(projectId, createdRef.id),
+          actionLabel: 'Shiko Komentin',
           projectId: projectId || undefined,
           responsibleUserId: (project as any).responsibleUserId || null,
         });
@@ -228,7 +238,7 @@ const PortalProjectDetailView: React.FC = () => {
     setSendingTaskComment(taskId);
     try {
       const resolvedTeamId = (project as any)?.teamId || null;
-      await addDoc(collection(db, 'taskComments'), {
+      const createdRef = await addDoc(collection(db, 'taskComments'), {
         taskId,
         content: text,
         userId: user.uid,
@@ -249,8 +259,9 @@ const PortalProjectDetailView: React.FC = () => {
         type: 'project_comment',
         title: `Koment klienti — ${task?.title || 'Detyrë'}`,
         message: text.length > 100 ? text.slice(0, 100) + '...' : text,
-        actionUrl: `/app/tasks?task=${taskId}`,
-        actionLabel: 'Shiko Detyrën',
+        // Opens the task panel on this comment (the old `?task=` param was never read).
+        actionUrl: taskDeepLink(taskId, projectId, createdRef.id),
+        actionLabel: 'Shiko Komentin',
         projectId: projectId || undefined,
         responsibleUserId: task?.assignedToUserId || (project as any)?.responsibleUserId || null,
       });
@@ -588,7 +599,13 @@ const PortalProjectDetailView: React.FC = () => {
                     comments.map(comment => {
                       const isOwn = comment.userId === user?.uid;
                       return (
-                        <div key={comment.id} className={`flex ${isOwn ? 'justify-end' : 'justify-start'}`}>
+                        <div
+                          key={comment.id}
+                          ref={registerComment(comment.id)}
+                          className={`flex scroll-mt-24 ${isOwn ? 'justify-end' : 'justify-start'} ${
+                            isFlashing(comment.id) ? `${COMMENT_FLASH_CLASS} p-1` : ''
+                          }`}
+                        >
                           <div className={`max-w-[75%] rounded-2xl px-4 py-2.5 ${
                             isOwn
                               ? 'bg-primary text-primary-foreground rounded-br-md'

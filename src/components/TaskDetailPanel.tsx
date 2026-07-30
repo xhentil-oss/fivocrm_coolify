@@ -23,6 +23,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from './ui/dialog';
 import RichTextEditor, { RichTextDisplay } from './RichTextEditor';
 import { toast } from '../hooks/use-toast';
 import { useFileUpload } from '../hooks/useFileUpload';
+import { useCommentFocus, COMMENT_FLASH_CLASS } from '../hooks/useCommentFocus';
+import { taskDeepLink } from '../lib/deepLinks';
 import type { Task, TaskComment } from '../types';
 
 // Quick-reaction emoji set — mirrors the chat reactions for a consistent feel.
@@ -34,7 +36,11 @@ interface TaskDetailPanelProps {
   onExpand?: () => void;
   isExpanded?: boolean;
   comments: TaskComment[];
-  onAddComment: (taskId: string, content: string) => void;
+  /** Returns the created comment (with its id) when the caller can provide it —
+   *  that id becomes the deep link carried by the comment notifications. */
+  onAddComment: (taskId: string, content: string) => void | Promise<any>;
+  /** Comment to scroll to + flash, set when arriving from a notification. */
+  focusCommentId?: string | null;
   onEditComment?: (commentId: string, content: string) => void | Promise<any>;
   onDeleteComment?: (commentId: string) => void | Promise<any>;
   onToggleReaction?: (commentId: string, emoji: string) => void | Promise<any>;
@@ -54,6 +60,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   isExpanded,
   comments,
   onAddComment,
+  focusCommentId,
   onEditComment,
   onDeleteComment,
   onToggleReaction,
@@ -68,6 +75,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const { user } = useAuth();
   const permissions = usePermissions();
   const isGuestMode = permissions.isGuest || isProjectGuest;
+  // Deep link from a comment notification → scroll to that comment and flash it.
+  const { registerComment, isFlashing } = useCommentFocus(focusCommentId);
   const { isConnected: isGoogleConnected } = useGoogleApi();
   const { upload: uploadCommentImage, uploading: commentImageUploading } = useFileUpload();
   const commentFileInputRef = useRef<HTMLInputElement | null>(null);
@@ -436,7 +445,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     if (!subtaskForm.title.trim() || !user) return;
 
     const subtaskAssignee = subtaskForm.assignedToUserId || user.uid;
-    await taskMutation.create({
+    const createdSubtask = await taskMutation.create({
       title: subtaskForm.title,
       description: subtaskForm.description,
       status: subtaskForm.status,
@@ -461,8 +470,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
         title: 'Nën-detyrë e Re e Caktuar',
         message: `Ju u caktuat te nën-detyra: ${subtaskForm.title}`,
         isRead: false,
-        actionUrl: '/app/tasks',
-        actionLabel: 'Shiko Detyrat',
+        actionUrl: (createdSubtask as any)?.id
+          ? taskDeepLink((createdSubtask as any).id, task.projectId)
+          : taskDeepLink(task.id, task.projectId),
+        actionLabel: 'Shiko Detyrën',
       }).catch(err => console.error('[Notifications] subtask_assigned dërgim dështoi:', err));
     }
 
@@ -635,8 +646,13 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     while ((m = newFormatRegex.exec(finalText)) !== null) mentionedUids.add(m[1]);
 
     try {
-      // Save comment first — then notify
-      await onAddComment(task.id, finalText);
+      // Save comment first — then notify. The created id (when the parent hands it
+      // back) turns every notification below into a link to THIS comment, not just
+      // to the task.
+      const created = await onAddComment(task.id, finalText);
+      const newCommentId: string | undefined = (created as any)?.id;
+      const commentLink = taskDeepLink(task.id, task.projectId, newCommentId);
+      const taskLabel = task.projectId ? 'Shiko Detyrën' : 'Shiko Detyrat';
       setCommentText('');
       setMentionMap({});
       playFrogSound();
@@ -669,8 +685,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             title: '📋 Shtuar si Bashkëpunëtor',
             message: `${user?.displayName || 'Dikush'} ju shtoi si bashkëpunëtor në detyrën: "${task.title}"`,
             isRead: false,
-            actionUrl: task.projectId ? `/app/projects/${task.projectId}` : '/app/tasks',
-            actionLabel: task.projectId ? 'Shiko Projektin' : 'Shiko Detyrat',
+            actionUrl: commentLink,
+            actionLabel: taskLabel,
           })
         ));
       }
@@ -686,8 +702,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           title: `💬 ${senderName} ju përmendi`,
           message: `Në detyrën: "${task.title}"`,
           isRead: false,
-          actionUrl: task.projectId ? `/app/projects/${task.projectId}` : '/app/tasks',
-          actionLabel: task.projectId ? 'Shiko Detyrën' : 'Shiko Detyrat',
+          actionUrl: commentLink,
+          actionLabel: taskLabel,
         }));
       await Promise.all(mentionNotifPromises);
 
@@ -714,8 +730,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           title: `💬 Koment i ri nga ${senderName}`,
           message: `"${task.title}": ${commentPreview}`,
           isRead: false,
-          actionUrl: task.projectId ? `/app/projects/${task.projectId}` : '/app/tasks',
-          actionLabel: task.projectId ? 'Shiko Detyrën' : 'Shiko Detyrat',
+          actionUrl: commentLink,
+          actionLabel: taskLabel,
         }));
       await Promise.all(participantNotifPromises);
     } catch {
@@ -1078,8 +1094,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                               title: 'Detyrë e Ri-caktuar',
                               message: `Detyra "${task.title}" u ri-caktua nga ti te ${user.displayName || 'një anëtar tjetër'}`,
                               isRead: false,
-                              actionUrl: task.projectId ? `/app/projects/${task.projectId}` : '/app/tasks',
-                              actionLabel: task.projectId ? 'Shiko Projektin' : 'Shiko Detyrat',
+                              actionUrl: taskDeepLink(task.id, task.projectId),
+                              actionLabel: 'Shiko Detyrën',
                             });
                             logActivity('update', `Detyra "${task.title}" u ri-caktua`, {
                               description: `Nga: ${prevAssignee || 'Pa caktuar'} → Te: ${user.uid}`,
@@ -1126,8 +1142,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                                         title: 'Detyrë e Re e Caktuar',
                                         message: `${user?.displayName || 'Dikush'} ju caktoi detyrën: ${task.title}`,
                                         isRead: false,
-                                        actionUrl: task.projectId ? `/app/projects/${task.projectId}` : '/app/tasks',
-                                        actionLabel: task.projectId ? 'Shiko Projektin' : 'Shiko Detyrat',
+                                        actionUrl: taskDeepLink(task.id, task.projectId),
+                                        actionLabel: 'Shiko Detyrën',
                                       });
                                     }
                                     logActivity('update', `Detyra "${task.title}" u ri-caktua`, {
@@ -1177,8 +1193,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                                   title: 'Detyrë e Re e Caktuar',
                                   message: `${user?.displayName || 'Dikush'} ju caktoi detyrën: ${task.title}`,
                                   isRead: false,
-                                  actionUrl: task.projectId ? `/app/projects/${task.projectId}` : '/app/tasks',
-                                  actionLabel: task.projectId ? 'Shiko Projektin' : 'Shiko Detyrat',
+                                  actionUrl: taskDeepLink(task.id, task.projectId),
+                                  actionLabel: 'Shiko Detyrën',
                                 });
                               }
                               logActivity('update', `Detyra "${task.title}" u ri-caktua`, {
@@ -1206,8 +1222,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                                 title: 'Detyrë e Re e Caktuar',
                                 message: `${user?.displayName || 'Dikush'} ju caktoi detyrën: ${task.title}`,
                                 isRead: false,
-                                actionUrl: task.projectId ? `/app/projects/${task.projectId}` : '/app/tasks',
-                                actionLabel: task.projectId ? 'Shiko Projektin' : 'Shiko Detyrat',
+                                actionUrl: taskDeepLink(task.id, task.projectId),
+                                actionLabel: 'Shiko Detyrën',
                               });
                             }
                             logActivity('update', `Detyra "${task.title}" u ri-caktua`, {
@@ -2064,7 +2080,13 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                     const showName = !prevComment || (prevComment.createdByUserId || prevComment.userId) !== (comment.createdByUserId || comment.userId);
 
                     return (
-                      <div key={comment.id} className={`flex gap-2 ${isCurrentUser ? 'flex-row-reverse' : 'flex-row'}`}>
+                      <div
+                        key={comment.id}
+                        ref={registerComment(comment.id)}
+                        className={`flex gap-2 scroll-mt-24 ${isCurrentUser ? 'flex-row-reverse' : 'flex-row'} ${
+                          isFlashing(comment.id) ? `${COMMENT_FLASH_CLASS} p-2 -mx-1` : ''
+                        }`}
+                      >
                         {/* Avatar — only show when author changes */}
                         <div className="flex-shrink-0 w-7">
                           {showName && (

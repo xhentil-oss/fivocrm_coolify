@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { DndContext, DragOverlay, closestCorners, MouseSensor, TouchSensor, useSensor, useSensors, useDroppable, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
@@ -31,6 +31,9 @@ import TaskDetailPanel from '../components/TaskDetailPanel';
 import ProjectClientBrief from '../components/ProjectClientBrief';
 import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
+import { useCommentFocus, COMMENT_FLASH_CLASS } from '../hooks/useCommentFocus';
+import { portalProjectCommentDeepLink } from '../lib/deepLinks';
+import { resolvePortalUserId } from '../lib/notifyClient';
 import { addFrequency, completeTask } from '../lib/recurringUtils';
 import { formatCurrency, toAll, canSeeFinancials } from '../lib/utils';
 import { computeProjectLabor } from '../lib/finance/laborCost';
@@ -40,12 +43,17 @@ import type { Task, Project, Team, TeamMember, TimeEntry, Expense } from '../typ
 const ProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const { user } = useAuth();
   const permissions = usePermissions();
   const { toast } = useToast();
 
   const [viewMode, setViewMode] = useState<'list' | 'board' | 'calendar'>('list');
   const [selectedTask, setSelectedTask] = useState<Task | null>(null);
+  // Deep links from comment notifications: which task comment / project comment to
+  // scroll to. Tagged with the task so it never leaks onto the next task opened.
+  const [focusComment, setFocusComment] = useState<{ taskId: string; commentId: string } | null>(null);
+  const [focusProjectCommentId, setFocusProjectCommentId] = useState<string | null>(null);
   const [isCreateTaskOpen, setIsCreateTaskOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isGuestDialogOpen, setIsGuestDialogOpen] = useState(false);
@@ -75,10 +83,23 @@ const ProjectDetailView: React.FC = () => {
   // Team-scoped (not skipTeamFilter) so we don't download every team's comments
   // from the whole database; comments are then matched per task client-side.
   const { data: comments } = useCollection<any>('taskComments');
+  // Project-level discussion with the client (the portal writes into the same
+  // collection). Staff had no view of these at all, so a "koment i ri nga klienti"
+  // notification had nowhere to land. Sorted client-side to avoid a composite index.
+  const { data: rawProjectComments } = useCollection<any>('projectComments', {
+    where: projectId ? [{ field: 'projectId', operator: '==', value: projectId }] : undefined,
+    skip: !projectId,
+    skipTeamFilter: true,
+  });
+  const projectComments = React.useMemo(() => {
+    const tms = (v: any) => (v instanceof Date ? v.getTime() : v?.toMillis?.() ?? 0);
+    return [...(rawProjectComments || [])].sort((a, b) => tms(a.createdAt) - tms(b.createdAt));
+  }, [rawProjectComments]);
 
   const projectMutation = useMutation<Project>('projects');
   const taskMutation = useMutation<Task>('tasks');
   const commentMutation = useMutation<any>('taskComments');
+  const projectCommentMutation = useMutation<any>('projectComments');
   const notificationMutation = useMutation<any>('notifications');
 
   // Time entries for this project — used to show logged hours
@@ -176,6 +197,26 @@ const ProjectDetailView: React.FC = () => {
     const guestIds: string[] = project.guestUserIds || [];
     return guestIds.includes(user.uid);
   }, [user, project]);
+
+  // Deep links from notifications: `?taskId=…&comment=…` opens the task panel on
+  // that comment, `?projectComment=…` focuses the client discussion below the list.
+  useEffect(() => {
+    const projectCommentParam = searchParams.get('projectComment');
+    const taskIdParam = searchParams.get('taskId');
+    if (!projectCommentParam && !taskIdParam) return;
+    if (projectCommentParam) setFocusProjectCommentId(projectCommentParam);
+    if (taskIdParam) {
+      // Fall back to the raw list: a task you were @mentioned on can be hidden by
+      // the role filter, and the notification link must still open it.
+      const target = (allTasks || []).find(t => t.id === taskIdParam)
+        || (rawProjectTasks || []).find(t => t.id === taskIdParam);
+      if (!target) return; // tasks still loading — retry on the next snapshot
+      setSelectedTask(target);
+      const commentParam = searchParams.get('comment');
+      setFocusComment(commentParam ? { taskId: target.id, commentId: commentParam } : null);
+    }
+    setSearchParams({}, { replace: true });
+  }, [searchParams, allTasks, rawProjectTasks, setSearchParams]);
 
   // Keep selectedTask in sync with live Firestore data
   useEffect(() => {
@@ -325,7 +366,34 @@ const ProjectDetailView: React.FC = () => {
   };
 
   const handleAddComment = async (taskId: string, content: string) => {
-    await commentMutation.create({ taskId, content });
+    // Return the created doc — the panel needs its id to deep-link the notifications.
+    return commentMutation.create({ taskId, content });
+  };
+
+  // Reply to the client in the project-level discussion. The client's notification
+  // links back to this exact comment in the portal.
+  const handleAddProjectComment = async (content: string) => {
+    const text = content.trim();
+    if (!text || !projectId) return;
+    const created = await projectCommentMutation.create({
+      projectId,
+      content: text,
+      userId: user?.uid || null,
+      senderType: 'team',
+      ...(project?.customerId ? { customerId: project.customerId } : {}),
+    } as any);
+    const uid = await resolvePortalUserId(project?.customerId);
+    if (uid) {
+      await notificationMutation.create({
+        userId: uid,
+        type: 'project_comment',
+        title: `💬 Përgjigje nga ekipi — ${project?.name || 'Projekti'}`,
+        message: text.slice(0, 120),
+        isRead: false,
+        actionUrl: portalProjectCommentDeepLink(projectId, (created as any)?.id),
+        actionLabel: 'Shiko Komentin',
+      }).catch(() => { /* non-blocking */ });
+    }
   };
 
   const handleEditComment = async (commentId: string, content: string) => {
@@ -883,6 +951,16 @@ const ProjectDetailView: React.FC = () => {
                   </div>
                 )}
               </div>
+
+              {/* Client discussion — where portal comments on the project land */}
+              <ProjectClientDiscussion
+                comments={projectComments}
+                currentUserId={user?.uid}
+                getName={getName}
+                focusCommentId={focusProjectCommentId}
+                onSend={handleAddProjectComment}
+                canReply={!isGuestOnProject}
+              />
             </div>
           )}
 
@@ -962,9 +1040,10 @@ const ProjectDetailView: React.FC = () => {
             <TaskDetailPanel
               key={selectedTask.id}
               task={selectedTask}
-              onClose={() => setSelectedTask(null)}
+              onClose={() => { setSelectedTask(null); setFocusComment(null); }}
               comments={comments?.filter(c => c.taskId === selectedTask.id) || []}
               onAddComment={handleAddComment}
+              focusCommentId={focusComment?.taskId === selectedTask.id ? focusComment.commentId : null}
               onEditComment={handleEditComment}
               onDeleteComment={handleDeleteComment}
               onToggleReaction={handleToggleReaction}
@@ -1006,6 +1085,108 @@ const ProjectDetailView: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+    </div>
+  );
+};
+
+/**
+ * Project-level discussion with the client.
+ *
+ * The portal has always let a client comment on the project, and staff got a
+ * notification for it — but there was no staff-side view, so the notification led
+ * to a page that didn't contain the comment. This is that view, and it is also the
+ * landing spot for the `?projectComment=<id>` deep link.
+ */
+const ProjectClientDiscussion: React.FC<{
+  comments: any[];
+  currentUserId?: string;
+  getName: (userId: string) => string;
+  focusCommentId?: string | null;
+  onSend: (content: string) => Promise<void>;
+  canReply: boolean;
+}> = ({ comments, currentUserId, getName, focusCommentId, onSend, canReply }) => {
+  const { registerComment, isFlashing } = useCommentFocus(focusCommentId);
+  const [text, setText] = useState('');
+  const [sending, setSending] = useState(false);
+
+  const send = async () => {
+    const body = text.trim();
+    if (!body || sending) return;
+    setSending(true);
+    try {
+      await onSend(body);
+      setText('');
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (comments.length === 0 && !canReply) return null;
+
+  return (
+    <div className="px-6 py-5 border-t space-y-3">
+      <h3 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
+        <MessageSquare className="w-4 h-4 text-muted-foreground" />
+        Diskutimi me klientin
+        {comments.length > 0 && (
+          <span className="text-xs font-normal text-muted-foreground">({comments.length})</span>
+        )}
+      </h3>
+
+      {comments.length === 0 ? (
+        <p className="text-sm text-muted-foreground">Pa komente nga klienti.</p>
+      ) : (
+        <div className="space-y-2">
+          {comments.map(c => {
+            const fromClient = c.senderType === 'client';
+            const authorName = fromClient ? 'Klienti' : (c.userId === currentUserId ? 'Ti' : getName(c.userId));
+            const at = c.createdAt instanceof Date ? c.createdAt : c.createdAt?.toDate?.();
+            return (
+              <div
+                key={c.id}
+                ref={registerComment(c.id)}
+                className={`scroll-mt-24 rounded-lg border p-3 ${
+                  fromClient ? 'bg-emerald-50/60 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-900'
+                    : 'bg-muted/30 border-border'
+                } ${isFlashing(c.id) ? COMMENT_FLASH_CLASS : ''}`}
+              >
+                <div className="flex items-center justify-between gap-2 mb-1">
+                  <span className="text-xs font-medium text-foreground flex items-center gap-1.5">
+                    {authorName}
+                    {fromClient && (
+                      <span className="text-[9px] bg-emerald-100 dark:bg-emerald-900/40 text-emerald-700 dark:text-emerald-300 px-1 py-0.5 rounded font-medium">Klient</span>
+                    )}
+                  </span>
+                  {at && (
+                    <span className="text-[11px] text-muted-foreground shrink-0">
+                      {at.toLocaleDateString('sq-AL', { day: '2-digit', month: 'short' })} {at.toLocaleTimeString('sq-AL', { hour: '2-digit', minute: '2-digit' })}
+                    </span>
+                  )}
+                </div>
+                <p className="text-sm text-foreground whitespace-pre-line break-words">{c.content}</p>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {canReply && (
+        <div className="flex items-end gap-2">
+          <Textarea
+            value={text}
+            onChange={e => setText(e.target.value)}
+            rows={2}
+            placeholder="Përgjigju klientit…"
+            className="text-base sm:text-sm min-h-[60px] resize-none"
+            onKeyDown={e => {
+              if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); void send(); }
+            }}
+          />
+          <Button size="sm" onClick={send} disabled={!text.trim() || sending}>
+            {sending ? 'Duke dërguar…' : 'Dërgo'}
+          </Button>
+        </div>
+      )}
     </div>
   );
 };
