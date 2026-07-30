@@ -121,6 +121,24 @@ service cloud.firestore {
         && exists(teamRef(teamId))
         && get(teamRef(teamId)).data.createdByUserId == request.auth.uid;
     }
+
+    // The business a team belongs to (a TEAM LIVES INSIDE A BUSINESS). Used by the
+    // `teamSettings` and `counters` rules, whose document ids encode a teamId while
+    // authorization is a BUSINESS-level question.
+    //
+    // This function was previously CALLED in four places but never declared, which
+    // the rules compiler reports only as a warning ("Invalid function name"). At
+    // runtime an undefined call makes the whole expression error, and an errored
+    // condition denies — so `teamSettings` reads/writes and the invoice-number
+    // `counters` would have been denied for everyone once deployed.
+    //
+    // Returns '' for a missing/blank team, and `isBusinessMember('')` is false, so an
+    // unresolvable team fails closed rather than granting access.
+    function businessOfTeam(teamId) {
+      return teamId is string && teamId != '' && exists(teamRef(teamId))
+        ? get(teamRef(teamId)).data.get('businessId', '')
+        : '';
+    }
     // Owner, or an Admin/Manager membership of that team — may invite + configure.
     function isTeamAdmin(teamId) {
       return isSuperAdmin()
