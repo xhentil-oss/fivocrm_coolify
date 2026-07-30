@@ -1,6 +1,6 @@
 import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Receipt, MessageSquare, MessageCircle, Target, UserCircle, DollarSign, Shield, FileText, Briefcase, LayoutDashboard, Timer, Award, PieChart, Calculator, Globe, ScrollText, Handshake, Building2, Wallet, ChevronDown, PiggyBank, Megaphone, TrendingUp, Rocket, Share2, Package } from 'lucide-react';
+import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Receipt, MessageSquare, MessageCircle, Target, UserCircle, DollarSign, Shield, FileText, Briefcase, LayoutDashboard, Timer, Award, PieChart, Calculator, Globe, ScrollText, Handshake, Building2, Wallet, ChevronDown, PiggyBank, Megaphone, TrendingUp, Rocket, Share2, Package, CreditCard, ClipboardList, HeartPulse } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { isPathEnabled, type PlanKey } from '../lib/modules';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -51,6 +51,16 @@ const allNavItems: NavEntry[] = [
       { path: '/app/daily-reports', label: 'Raportet Ditore', icon: FileText, permissionKey: 'canAccessTasks' },
     ],
   },
+  {
+    label: 'Raportimi',
+    icon: ClipboardList,
+    children: [
+      { path: '/app/reports', label: 'Raportet', icon: ClipboardList, permissionKey: 'canAccessReports' },
+      { path: '/app/accountability', label: 'Përgjegjshmëria', icon: Users, permissionKey: 'canAccessReports' },
+      { path: '/app/client-health', label: 'Shëndeti i klientëve', icon: HeartPulse, permissionKey: 'canAccessReports' },
+      { path: '/app/report-templates', label: 'Konfigurimi', icon: Settings, permissionKey: 'canAccessReports' },
+    ],
+  },
   { path: '/app/momentum', label: 'Momentum', icon: Rocket, permissionKey: 'canAccessProfile' },
   { path: '/app/goals', label: 'Objektivat', icon: Target, permissionKey: 'canAccessGoals' },
   { path: '/app/teams', label: 'Ekipet', icon: UsersRound, permissionKey: 'canAccessTeams' },
@@ -80,6 +90,9 @@ const allNavItems: NavEntry[] = [
   { path: '/app/landing-pages', label: 'Landing Pages', icon: Globe, permissionKey: 'canAccessServices' },
   { path: '/app/profile', label: 'Profili', icon: UserCircle, permissionKey: 'canAccessProfile' },
   { path: '/app/settings', label: 'Cilësimet', icon: Settings, permissionKey: 'canAccessProfile' },
+  // Abonimi is not a gated module: it must stay reachable on every plan (and while
+  // the tenant is suspended) so the owner can always pay.
+  { path: '/app/billing', label: 'Abonimi', icon: CreditCard, permissionKey: 'canAccessProfile' },
 ];
 
 const Sidebar: React.FC<SidebarProps> = ({ collapsed, mobileOpen, onCloseMobile }) => {

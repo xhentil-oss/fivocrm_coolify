@@ -39,4 +39,34 @@ export function initSentry() {
   else setTimeout(run, 0);
 }
 
+/**
+ * Tag every error with the tenant it happened in.
+ *
+ * Without this, a SaaS error feed is unusable: you can see that something broke but
+ * not whether it is one tenant's data/config or a platform-wide regression. Tags are
+ * queryable in Sentry, so `tenant:<businessId>` + `plan:<plan>` turn the feed into
+ * "which customer is affected".
+ */
+export function setTenantScope(ctx: {
+  businessId?: string | null;
+  teamId?: string | null;
+  plan?: string | null;
+  status?: string | null;
+  role?: string | null;
+}): void {
+  if (!SENTRY_DSN) return;
+  try {
+    Sentry.setTag('tenant', ctx.businessId || 'unknown');
+    if (ctx.plan) Sentry.setTag('plan', ctx.plan);
+    if (ctx.status) Sentry.setTag('tenant_status', ctx.status);
+    if (ctx.role) Sentry.setTag('role', ctx.role);
+    Sentry.setContext('tenant', {
+      businessId: ctx.businessId || null,
+      teamId: ctx.teamId || null,
+      plan: ctx.plan || null,
+      status: ctx.status || null,
+    });
+  } catch { /* telemetry must never break the app */ }
+}
+
 export { Sentry };

@@ -455,6 +455,183 @@ service cloud.firestore {
       allow delete: if canManageBusinessDoc();
     }
 
+    // ══════════════════════════════════════════════════════════════════════════
+    // REPORTING & ACCOUNTABILITY MODULE
+    // ══════════════════════════════════════════════════════════════════════════
+    //
+    // The hard requirement: a report holds client-facing AND internal content in the
+    // SAME document, so the rules cannot decide visibility per block. They therefore
+    // enforce a coarser, verifiable invariant, and the block-level redaction happens
+    // in code (`src/lib/reporting/visibility.ts`) on top of it:
+    //
+    //   1. A client may only read a report that is (a) their own customer's,
+    //      (b) PUBLISHED, and (c) not soft-deleted. Drafts, internal-only kinds and
+    //      other tenants' reports are denied outright.
+    //   2. A client may NEVER write report content. Their two legitimate actions —
+    //      acknowledge/approve, and post a non-internal comment — are the only
+    //      client writes allowed, and the status transition goes through
+    //      `POST /api/reports` (server-side, `canTransition`-guarded) rather than a
+    //      direct field write.
+    //   3. Versions, approvals and the event stream are APPEND-ONLY for everyone.
+    //      An audit trail a client (or a staff member) can edit is not an audit trail.
+    //
+    // Because the client's own portal query is `businessId == mine && customerId ==
+    // mine && status in [published…]`, every per-document clause below holds for the
+    // narrowed query — rules are not filters, so the two must agree exactly.
+
+    // Report kinds a client may ever see. `client-risk` and `weekly-staff` are
+    // internal instruments and are excluded even if someone marks one published.
+    function reportKindIsClientFacing(kind) {
+      return kind in ['client-monthly', 'qbr', 'project-status', 'project-completion',
+                      'campaign-completion', 'website-launch', 'incident'];
+    }
+
+    // Statuses that mean "the client has been given this report".
+    function reportIsPublished(status) {
+      return status in ['published', 'sent', 'viewed', 'acknowledged',
+                        'client_approved', 'client_rejected'];
+    }
+
+    function portalMayReadReport() {
+      return isPortalClientFor(resource.data.get('customerId', ''))
+        && reportIsPublished(resource.data.get('status', ''))
+        && reportKindIsClientFacing(resource.data.get('kind', ''))
+        && resource.data.get('deletedAt', null) == null;
+    }
+
+    match /reports/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || portalMayReadReport()
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      // Staff edit within their tenant; the tenant key is immutable so an update can
+      // never move a report to another business. Client-driven fields are written by
+      // the server (admin SDK), which bypasses these rules by design.
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      // No hard delete from a client: the module soft-deletes (`deletedAt`) so that
+      // reports tied to financial/legal records survive. Super-admin only, for GDPR
+      // erasure via the tenant-delete job.
+      allow delete: if isSuperAdmin();
+    }
+
+    // Immutable snapshots. A client reads the version their sign-off refers to, so
+    // "approved v3" can always be reproduced exactly as it was approved.
+    match /reportVersions/{docId} {
+      // A client reads ONLY the `published` snapshots of their own reports — that is
+      // the exact artefact their sign-off refers to. `submitted`/`reopened` drafts
+      // are internal work in progress.
+      allow read: if isBusinessMember(resource.data.businessId)
+        || (isPortalClientFor(resource.data.get('customerId', ''))
+            && resource.data.get('reason', '') == 'published')
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update, delete: if isSuperAdmin();
+    }
+
+    // Templates: staff-only. They contain the internal block structure (management
+    // sections, margin blocks), so a client never reads them.
+    match /reportTemplates/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    // Comments. `internal == true` is the leak boundary: the portal query filters on
+    // it AND the rule requires it to be false, so a client cannot widen the query to
+    // read the team's private discussion of their account.
+    match /reportComments/{docId} {
+      // `customerId` is denormalised onto the comment (the report's customer), so
+      // this is a single clause that matches the portal's narrowed query:
+      //   reportId == mine && internal == false
+      allow read: if isBusinessMember(resource.data.businessId)
+        || (resource.data.internal == false
+            && isPortalClientFor(resource.data.get('customerId', '')))
+        || isSuperAdmin();
+      // A client may comment on their own report, but only as a NON-internal comment
+      // authored by themselves — they cannot forge an internal note or another
+      // author's identity.
+      allow create: if canCreateBusinessDoc()
+        || (request.resource.data.internal == false
+            && isPortalClientFor(request.resource.data.get('customerId', ''))
+            && request.resource.data.get('authorCustomerId', '') == request.resource.data.get('customerId', '')
+            && request.resource.data.authorUserId == request.auth.uid
+            && isSelfCreate());
+      // Only the author edits/resolves their own comment; staff may resolve within
+      // the tenant. The `internal` flag is immutable — flipping it after the fact
+      // would move a private note into the client's view.
+      allow update: if (isAuth() && resource.data.createdByUserId == request.auth.uid
+                        && request.resource.data.internal == resource.data.internal)
+        || (canManageBusinessDoc() && request.resource.data.internal == resource.data.internal);
+      allow delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
+    }
+
+    // Approvals: append-only sign-off record. A client reads their own decisions and
+    // the fact that the report was approved internally, never the internal comments
+    // attached to those decisions — those live in reportComments.
+    match /reportApprovals/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.get('approverCustomerId', ''))
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      // Never mutable: a decision, its timestamp and the version it refers to are
+      // evidence (§15/§38.9).
+      allow update, delete: if false;
+    }
+
+    // The audit / status-history / delivery / view stream. Staff-readable within the
+    // tenant; clients never read it (it records who reviewed what internally), and
+    // nobody may ever edit it.
+    match /reportEvents/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      // Clients DO generate events (view, download, acknowledge) — but those are
+      // written server-side by /api/reports with the admin SDK, so no client write
+      // path is needed and none is granted.
+      allow create: if canCreateBusinessDoc();
+      allow update, delete: if false;
+    }
+
+    // Automation config, KPI definitions, metric sets, health/accountability
+    // rollups — all staff-only management data.
+    match /reportSchedules/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    match /reportKpis/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    // Raw metric values, including internal-only ones (margin, hours). Staff only —
+    // the client sees metrics through a published report's redacted snapshot.
+    match /reportMetrics/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    match /clientHealthScores/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    // Employee accountability data is CONFIDENTIAL EMPLOYEE INFORMATION (§2): a
+    // client must never reach it, and it is read within the tenant only.
+    match /employeeReportScores/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
     // ── Phase 4.3a: staff-only collections (never read by the client portal,
     // always businessId-scoped client-side) hardened to server-side tenant RLS.
     // Reads require the requester to belong to the doc's business (or be super-admin).

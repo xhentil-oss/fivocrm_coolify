@@ -73,6 +73,26 @@ export const MODULES: ModuleDef[] = [
   { id: 'projects', path: '/app/projects', label: 'Projektet', description: 'Projekte, milestone-e dhe buxhet.', permissionKey: 'canAccessProjects', minPlan: 'starter', optional: true, group: 'Operacione' },
   { id: 'tasks', path: '/app/tasks', label: 'Detyrat', description: 'Bordi i detyrave, etiketat, bllokuesit dhe përsëritjet.', permissionKey: 'canAccessTasks', minPlan: 'starter', optional: true, group: 'Operacione' },
   { id: 'goals', path: '/app/goals', label: 'Objektivat', description: 'OKR-të, key results dhe progresi automatik.', permissionKey: 'canAccessGoals', minPlan: 'pro', optional: true, group: 'Operacione' },
+  {
+    id: 'reporting',
+    path: '/app/reports',
+    label: 'Raportimi',
+    description: 'Raporte ditore/javore të stafit, raporte klientit me aprovime, PDF, portal, KPI dhe përgjegjshmëri.',
+    permissionKey: 'canAccessReports',
+    // Pro: the daily/weekly accountability half is useful to a small team; the
+    // client-facing half (approvals, PDF, portal publishing) is what agencies buy.
+    minPlan: 'pro',
+    optional: true,
+    extraPaths: [
+      '/app/reports/new',
+      '/app/report-templates',
+      '/app/report-kpis',
+      '/app/report-schedules',
+      '/app/accountability',
+      '/app/client-health',
+    ],
+    group: 'Operacione',
+  },
 
   // ── Shitje ──
   { id: 'services', path: '/app/services', label: 'Shërbimet', description: 'Katalogu i shërbimeve që faturohen.', permissionKey: 'canAccessServices', minPlan: 'starter', optional: true, group: 'Shitje' },

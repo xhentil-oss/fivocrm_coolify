@@ -158,6 +158,12 @@ const teamScopedCollections = new Set([
   'chatSnippets', 'whatsappAccounts', 'whatsappThreads', 'waTemplates', 'waBroadcasts',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments',
   'socialAccounts', 'socialSnapshots',
+  // Reporting & accountability module. Portal reads (published client reports and
+  // their non-internal comments) pass skipTeamFilter and scope by businessId +
+  // customerId explicitly, so membership here mainly enforces teamId on create.
+  'reports', 'reportVersions', 'reportTemplates', 'reportComments', 'reportApprovals',
+  'reportEvents', 'reportSchedules', 'reportKpis', 'reportMetrics',
+  'clientHealthScores', 'employeeReportScores',
   // Shop module (products/orders). Portal reads pass skipTeamFilter and scope by
   // businessId explicitly, so membership here mainly enforces teamId on create.
   'products', 'productCategories', 'productBrands', 'stockMovements', 'shopOrders',
@@ -191,6 +197,14 @@ const businessIsolatedAlways = new Set<string>([
   'timeEntries', 'standups', 'dailyReports', 'dailyFocus', 'productivitySettings', 'weeklyReviews', 'customIndustries', 'activities',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments',
   'socialAccounts', 'socialSnapshots',
+  // Reporting module. Reports carry client-facing AND internal content plus employee
+  // accountability data, so cross-tenant leakage here is the worst case in the
+  // product — every one of these is business-isolated even when a view passes
+  // skipTeamFilter. Portal reads MUST pass skipBusinessFilter and constrain the
+  // query themselves (own businessId + customerId + published status).
+  'reports', 'reportVersions', 'reportTemplates', 'reportComments', 'reportApprovals',
+  'reportEvents', 'reportSchedules', 'reportKpis', 'reportMetrics',
+  'clientHealthScores', 'employeeReportScores',
   // Shop catalog + orders are tenant records: a staff user must never see another
   // tenant's products, even from a view that passes skipTeamFilter.
   'products', 'productCategories', 'productBrands', 'stockMovements', 'shopOrders',

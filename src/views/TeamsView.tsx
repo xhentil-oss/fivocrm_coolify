@@ -37,6 +37,7 @@ import { cn } from '../lib/utils';
 import { appendSalaryChange } from '../lib/finance/salaryHistory';
 import { parseDate } from '../lib/finance/financialAnalytics';
 import { toast } from '../hooks/use-toast';
+import { useSubscription } from '../hooks/useSubscription';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -74,6 +75,7 @@ const TeamsView: React.FC = () => {
 
   const businessId = useGlobalBusinessId();
   const isSuperAdmin = useIsSuperAdmin();
+  const { seats } = useSubscription();
   // A team is a DEPARTMENT INSIDE a business, so the query is constrained to the
   // active business server-side. (Client-side filtering is not enough any more: the
   // hardened `teams` rule denies a query that would touch another tenant's team.)
@@ -214,6 +216,18 @@ const TeamsView: React.FC = () => {
   const handleInviteMember = async (formData: FormData) => {
     if (!selectedTeam || !user) return;
 
+    // Seat limit — surfaced BEFORE the invite is sent. /api/accept-invite enforces the
+    // same cap server-side, so this is UX, not the security boundary.
+    const activeCount = (teamMembers || []).filter(m => m.status === 'Active').length;
+    if (seats && activeCount >= seats) {
+      toast({
+        title: 'Vendet e planit u mbushën',
+        description: `Plani aktual përfshin ${seats} vende (${activeCount} të zëna). Përmirëso planin për të ftuar më shumë anëtarë.`,
+        variant: 'destructive',
+      });
+      return;
+    }
+
     const email = formData.get('email') as string;
     const role = formData.get('role') as string;
     const canAccessProjects = formData.get('canAccessProjects') === 'on';
@@ -256,6 +270,8 @@ const TeamsView: React.FC = () => {
     await inviteMutation.create({
       email,
       teamId: selectedTeam.id,
+      // The tenant key comes from the TEAM being invited into, not the active session.
+      businessId: (selectedTeam as any).businessId || businessId,
       teamName: selectedTeam.name,
       role,
       invitedByUserId: user.uid,

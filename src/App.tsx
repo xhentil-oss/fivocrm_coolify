@@ -17,6 +17,7 @@ import CommandPalette from './components/CommandPalette';
 import PermissionGate from './components/PermissionGate';
 import ModuleGate from './components/ModuleGate';
 import PendingInvitesBanner from './components/PendingInvitesBanner';
+import SubscriptionGate, { SubscriptionBanner } from './components/SubscriptionGate';
 import { GoogleApiProvider } from './contexts/GoogleApiContext';
 import { PermissionsProvider, usePermissions } from './contexts/PermissionsContext';
 import { useTeamDataMigration } from './hooks/useTeamDataMigration';
@@ -50,6 +51,11 @@ const CRMView = lazyRetry(() => import('./views/CRMView'));
 const DealsView = lazyRetry(() => import('./views/DealsView'));
 const TasksView = lazyRetry(() => import('./views/TasksView'));
 const DailyReportsView = lazyRetry(() => import('./views/DailyReportsView'));
+const ReportsView = lazyRetry(() => import('./views/ReportsView'));
+const ReportDetailView = lazyRetry(() => import('./views/ReportDetailView'));
+const ReportingAdminView = lazyRetry(() => import('./views/ReportingAdminView'));
+const AccountabilityView = lazyRetry(() => import('./views/AccountabilityView'));
+const ClientHealthView = lazyRetry(() => import('./views/ClientHealthView'));
 const GoalsView = lazyRetry(() => import('./views/GoalsView'));
 const TeamsView = lazyRetry(() => import('./views/TeamsView'));
 const InvoicesView = lazyRetry(() => import('./views/InvoicesView'));
@@ -85,6 +91,7 @@ const PortalInquiryView = lazyRetry(() => import('./views/portal/PortalInquiryVi
 const PortalProjectDetailView = lazyRetry(() => import('./views/portal/PortalProjectDetailView'));
 const PortalQuotesView = lazyRetry(() => import('./views/portal/PortalQuotesView'));
 const PortalShopView = lazyRetry(() => import('./views/portal/PortalShopView'));
+const PortalReportsView = lazyRetry(() => import('./views/portal/PortalReportsView'));
 const OnboardingWizard = lazyRetry(() => import('./components/OnboardingWizard'));
 const SeoLandingPage = lazyRetry(() => import('./views/landing/SeoLandingPage'));
 const RealEstateLandingPage = lazyRetry(() => import('./views/landing/RealEstateLandingPage'));
@@ -267,6 +274,7 @@ function AppContent() {
         <Route path="invoices" element={<Suspense fallback={<LazyFallback />}><PortalInvoicesView /></Suspense>} />
         <Route path="services" element={<Suspense fallback={<LazyFallback />}><PortalServicesView /></Suspense>} />
         <Route path="shop" element={<Suspense fallback={<LazyFallback />}><PortalShopView /></Suspense>} />
+        <Route path="reports" element={<Suspense fallback={<LazyFallback />}><PortalReportsView /></Suspense>} />
         <Route path="chat" element={<Suspense fallback={<LazyFallback />}><PortalChatView /></Suspense>} />
         {/* Requests removed — chat is now the single support channel. Redirect old links. */}
         <Route path="requests" element={<Navigate to="/portal/chat" replace />} />
@@ -358,6 +366,15 @@ function AppContent() {
                       <Route path="/app/tasks" element={<PermissionGate permissionKey="canAccessTasks"><TasksView /></PermissionGate>} />
                       <Route path="/app/daily-reports" element={<PermissionGate permissionKey="canAccessTasks"><DailyReportsView /></PermissionGate>} />
                       <Route path="/app/goals" element={<PermissionGate permissionKey="canAccessGoals"><GoalsView /></PermissionGate>} />
+                      {/* Reporting & accountability module. ModuleGate (not PermissionGate)
+                          because access is permission + SaaS plan + tenant toggle. */}
+                      <Route path="/app/reports" element={<ModuleGate moduleId="reporting"><ReportsView /></ModuleGate>} />
+                      <Route path="/app/reports/:reportId" element={<ModuleGate moduleId="reporting"><ReportDetailView /></ModuleGate>} />
+                      <Route path="/app/report-templates" element={<ModuleGate moduleId="reporting"><ReportingAdminView /></ModuleGate>} />
+                      <Route path="/app/report-kpis" element={<ModuleGate moduleId="reporting"><ReportingAdminView /></ModuleGate>} />
+                      <Route path="/app/report-schedules" element={<ModuleGate moduleId="reporting"><ReportingAdminView /></ModuleGate>} />
+                      <Route path="/app/accountability" element={<ModuleGate moduleId="reporting"><AccountabilityView /></ModuleGate>} />
+                      <Route path="/app/client-health" element={<ModuleGate moduleId="reporting"><ClientHealthView /></ModuleGate>} />
                       <Route path="/app/teams" element={<PermissionGate permissionKey="canAccessTeams"><TeamsView /></PermissionGate>} />
                       <Route path="/app/invoices" element={<PermissionGate permissionKey="canAccessInvoices"><InvoicesView /></PermissionGate>} />
                       <Route path="/app/payments" element={<PermissionGate permissionKey="canAccessInvoices"><PaymentsView /></PermissionGate>} />
@@ -396,6 +413,7 @@ function AppContent() {
                     } />
                     </Routes>
                     </Suspense>
+                    </SubscriptionGate>
                   </ErrorBoundary>
                 </div>
               </main>

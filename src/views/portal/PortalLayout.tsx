@@ -4,26 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { usePermissions } from '../../contexts/PermissionsContext';
 import { useCollection } from '../../hooks/useFirestore';
-import {
-  LayoutDashboard,
-  FileText,
-  ShoppingBag,
-  ClipboardList,
-  FolderKanban,
-  Calculator,
-  ScrollText,
-  LogOut,
-  Menu,
-  X,
-  User,
-  Eye,
-  EyeOff,
-  Sparkles,
-  MessageCircle,
-  ArrowRight,
-  Share2,
-  ShoppingCart,
-} from 'lucide-react';
+import { LayoutDashboard, FileText, ShoppingBag, ClipboardList, FolderKanban, Calculator, ScrollText, LogOut, Menu, X, User, Eye, EyeOff, Sparkles, MessageCircle, ArrowRight, Share2, ShoppingCart } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Loader2 } from 'lucide-react';
 import PortalPushPrompt from './PortalPushPrompt';
@@ -40,6 +21,7 @@ const navItems = [
   { to: '/portal/services', icon: ShoppingBag, label: 'Shërbimet' },
   { to: '/portal/shop', icon: ShoppingCart, label: 'Dyqani', shopOnly: true },
   { to: '/portal/projects', icon: FolderKanban, label: 'Projektet' },
+  { to: '/portal/reports', icon: ClipboardList, label: 'Raportet' },
   { to: '/portal/preventiva', icon: Calculator, label: 'Preventiva' },
   { to: '/portal/social', icon: Share2, label: 'Rrjetet Sociale' },
   { to: '/portal/profile', icon: User, label: 'Profili im' },

@@ -1,5 +1,10 @@
 // Firebase/Firestore type definitions for the application
 
+// Enterprise Reporting & Accountability module. Kept in its own file (the barrel is
+// already ~1700 lines) but re-exported here so consumers still import from '../types'.
+export * from './reporting';
+import type { DailyReportAccountability } from './reporting';
+
 export interface WhatsAppAccount {
   id: string;
   teamId: string;
@@ -400,6 +405,18 @@ export interface TeamMember {
   canAccessCRM?: boolean;
   canAccessInvoices?: boolean;
   canAccessReports?: boolean;
+  /**
+   * Reporting capabilities (per-member overrides of the role defaults in
+   * `src/lib/reporting/permissions.ts`). Undefined = use the role default, so
+   * adding a capability later never silently revokes it for existing members.
+   */
+  canReviewReports?: boolean;
+  canApproveReports?: boolean;
+  canPublishReports?: boolean;
+  canViewAllReports?: boolean;
+  canViewConfidentialReports?: boolean;
+  canManageReportTemplates?: boolean;
+  canViewFinancialMetrics?: boolean;
   canAccessSettings?: boolean;
   canAccessWhatsapp?: boolean;
   canAccessGoals?: boolean;
@@ -1450,6 +1467,18 @@ export interface TeamInvite {
   canAccessCRM?: boolean;
   canAccessInvoices?: boolean;
   canAccessReports?: boolean;
+  /**
+   * Reporting capabilities (per-member overrides of the role defaults in
+   * `src/lib/reporting/permissions.ts`). Undefined = use the role default, so
+   * adding a capability later never silently revokes it for existing members.
+   */
+  canReviewReports?: boolean;
+  canApproveReports?: boolean;
+  canPublishReports?: boolean;
+  canViewAllReports?: boolean;
+  canViewConfidentialReports?: boolean;
+  canManageReportTemplates?: boolean;
+  canViewFinancialMetrics?: boolean;
   canAccessSettings?: boolean;
   canAccessGoals?: boolean;
   canAccessTeams?: boolean;
@@ -1612,7 +1641,13 @@ export interface StandupEntry {
 
 // ── Daily Reports ──
 
-export interface DailyReport {
+/**
+ * Daily staff report. Extended by `DailyReportAccountability` (src/types/reporting.ts)
+ * with the enterprise accountability fields — structured status, billable split,
+ * dependencies, submission timing and manager review. Every added field is optional,
+ * so legacy documents and every existing reader stay valid.
+ */
+export interface DailyReport extends DailyReportAccountability {
   id: string;
   userId: string;
   teamId?: string;

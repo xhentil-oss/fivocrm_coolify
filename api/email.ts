@@ -12,6 +12,7 @@ import syncClaimsHandler from './_sync-claims.js';
 import notifyStaffHandler from './_notify-staff.js';
 import tenantSecretsHandler from './_tenant-secrets.js';
 import billingHandler from './_billing.js';
+import reportsHandler from './_reports.js';
 
 /**
  * Consolidated dispatcher (named "email" for historical reasons — it also routes
@@ -29,6 +30,7 @@ import billingHandler from './_billing.js';
  *   /api/notify-staff             -> ?type=notify-staff    (portal → own tenant's staff)
  *   /api/tenant-secrets           -> ?type=tenant-secrets  (write-only credential vault)
  *   /api/billing                  -> ?type=billing         (Stripe subscription checkout/portal)
+ *   /api/reports                  -> ?type=reports         (client report actions + email delivery)
  *
  * Created to stay under Vercel Hobby's 12-function limit.
  */
@@ -51,6 +53,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.url.includes('notify-staff')) type = 'notify-staff';
     else if (req.url.includes('tenant-secrets')) type = 'tenant-secrets';
     else if (req.url.includes('/api/billing')) type = 'billing';
+    else if (req.url.includes('/api/reports')) type = 'reports';
   }
 
   switch (type) {
@@ -63,6 +66,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     case 'tenant-secrets':
       // Write-only credential vault (teamSecrets is deny-all for clients).
       return tenantSecretsHandler(req, res);
+    case 'reports':
+      // Reporting module: client view/ack/approve/reject/comment + staff email send.
+      // The client's own writes are denied by Firestore rules, so this is the only
+      // way a client decision can be recorded — and it re-checks ownership.
+      return reportsHandler(req, res);
     case 'billing':
       // SaaS subscription: Stripe Checkout (mode=subscription) + Billing Portal.
       return billingHandler(req, res);
@@ -90,7 +98,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     default:
       return res.status(400).json({
         error: 'Unknown email type',
-        detail: 'Expected ?type=invite|invoice|lead-reminder|welcome|notification',
+        detail: 'Expected ?type=invite|invoice|lead-reminder|welcome|notification|reports',
       });
   }
 }

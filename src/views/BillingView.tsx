@@ -13,6 +13,7 @@ import {
   PLANS, PLAN_BY_KEY, priceFor, statusLabel, GRACE_DAYS,
   startSubscriptionCheckout, openBillingPortal, type BillingInterval,
 } from '../lib/billing';
+import AuditLogPanel from '../components/AuditLogPanel';
 import type { TeamMember } from '../types';
 
 /**
@@ -219,6 +220,9 @@ const BillingView: React.FC = () => {
         Pagesat procesohen nga Stripe. Nuk ruajmë të dhëna karte. Fatura dhe anulimi bëhen nga
         “Faturat &amp; karta”.
       </p>
+
+      {/* Audit trail — billing + security events of this tenant (admins only). */}
+      <AuditLogPanel />
     </div>
   );
 };

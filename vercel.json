@@ -1,33 +1,99 @@
 {
   "functions": {
-    "api/cron/run.ts": { "maxDuration": 60 }
+    "api/cron/run.ts": {
+      "maxDuration": 60
+    }
   },
   "rewrites": [
-    { "source": "/api/send-invite",              "destination": "/api/email?type=invite" },
-    { "source": "/api/send-invoice-email",       "destination": "/api/email?type=invoice" },
-    { "source": "/api/send-lead-reminder-email", "destination": "/api/email?type=lead-reminder" },
-    { "source": "/api/send-welcome-email",       "destination": "/api/email?type=welcome" },
-    { "source": "/api/send-notification-email",  "destination": "/api/email?type=notification" },
-    { "source": "/api/accept-invite",            "destination": "/api/email?type=accept-invite" },
-    { "source": "/api/social",                   "destination": "/api/email?type=social" },
-    { "source": "/api/link-contact",             "destination": "/api/email?type=link-contact" },
-    { "source": "/api/sync-claims",              "destination": "/api/email?type=sync-claims" },
-    { "source": "/api/notify-staff",             "destination": "/api/email?type=notify-staff" },
-    { "source": "/api/tenant-secrets",           "destination": "/api/email?type=tenant-secrets" },
-    { "source": "/api/billing",                  "destination": "/api/email?type=billing" },
-    { "source": "/api/(.*)", "destination": "/api/$1" },
-    { "source": "/((?!api).*)", "destination": "/" }
+    {
+      "source": "/api/send-invite",
+      "destination": "/api/email?type=invite"
+    },
+    {
+      "source": "/api/send-invoice-email",
+      "destination": "/api/email?type=invoice"
+    },
+    {
+      "source": "/api/send-lead-reminder-email",
+      "destination": "/api/email?type=lead-reminder"
+    },
+    {
+      "source": "/api/send-welcome-email",
+      "destination": "/api/email?type=welcome"
+    },
+    {
+      "source": "/api/send-notification-email",
+      "destination": "/api/email?type=notification"
+    },
+    {
+      "source": "/api/accept-invite",
+      "destination": "/api/email?type=accept-invite"
+    },
+    {
+      "source": "/api/social",
+      "destination": "/api/email?type=social"
+    },
+    {
+      "source": "/api/link-contact",
+      "destination": "/api/email?type=link-contact"
+    },
+    {
+      "source": "/api/sync-claims",
+      "destination": "/api/email?type=sync-claims"
+    },
+    {
+      "source": "/api/notify-staff",
+      "destination": "/api/email?type=notify-staff"
+    },
+    {
+      "source": "/api/tenant-secrets",
+      "destination": "/api/email?type=tenant-secrets"
+    },
+    {
+      "source": "/api/billing",
+      "destination": "/api/email?type=billing"
+    },
+    {
+      "source": "/api/reports",
+      "destination": "/api/email?type=reports"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/$1"
+    },
+    {
+      "source": "/((?!api).*)",
+      "destination": "/"
+    }
   ],
   "headers": [
     {
       "source": "/(.*)",
       "headers": [
-        { "key": "X-Content-Type-Options", "value": "nosniff" },
-        { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "X-XSS-Protection", "value": "1; mode=block" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
-        { "key": "Cross-Origin-Opener-Policy", "value": "same-origin-allow-popups" },
-        { "key": "Content-Security-Policy", "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com https://www.gstatic.com https://js.stripe.com https://accounts.google.com https://*.daily.co; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob: https://vps.fivocrm.com https://*.daily.co; connect-src 'self' https://wa.fivocrm.com https://vps.fivocrm.com https://*.googleapis.com https://*.firebaseio.com https://*.firebase.com https://firestore.googleapis.com wss://*.firebaseio.com https://api.stripe.com https://*.sentry.io https://accounts.google.com https://*.daily.co wss://*.daily.co https://api.daily.co; frame-src https://js.stripe.com https://accounts.google.com https://*.firebaseapp.com https://*.daily.co; object-src 'none'; base-uri 'self'" }
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "X-Frame-Options",
+          "value": "DENY"
+        },
+        {
+          "key": "X-XSS-Protection",
+          "value": "1; mode=block"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Cross-Origin-Opener-Policy",
+          "value": "same-origin-allow-popups"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://apis.google.com https://www.gstatic.com https://js.stripe.com https://accounts.google.com https://*.daily.co; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob: https:; media-src 'self' blob: https://vps.fivocrm.com https://*.daily.co; connect-src 'self' https://wa.fivocrm.com https://vps.fivocrm.com https://*.googleapis.com https://*.firebaseio.com https://*.firebase.com https://firestore.googleapis.com wss://*.firebaseio.com https://api.stripe.com https://*.sentry.io https://accounts.google.com https://*.daily.co wss://*.daily.co https://api.daily.co; frame-src https://js.stripe.com https://accounts.google.com https://*.firebaseapp.com https://*.daily.co; object-src 'none'; base-uri 'self'"
+        }
       ]
     }
   ]

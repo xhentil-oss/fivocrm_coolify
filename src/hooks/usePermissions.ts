@@ -1,5 +1,8 @@
 import { useCollection, useDocument, setGlobalTeamId, setGlobalBusinessId, setSuperAdmin } from './useFirestore';
 import { ensureTenantClaims } from '../lib/tenantClaims';
+// Reporting capabilities are resolved in ONE place so every role branch below
+// stays a single spread instead of seven hand-maintained booleans.
+import { reportingCapabilitiesFor, NO_REPORTING_CAPABILITIES } from '../lib/reporting/permissions';
 import { useAuth } from '../contexts/AuthContext';
 import { useMemo, useEffect, useRef } from 'react';
 import { doc, getDoc, updateDoc, setDoc, Timestamp, collection, query, where, getDocs, writeBatch } from 'firebase/firestore';
@@ -17,7 +20,20 @@ export type UserPermissions = {
   canAccessTasks: boolean;
   canAccessCRM: boolean;
   canAccessInvoices: boolean;
+  /**
+   * Reporting & accountability module. Every internal role has it (everyone files
+   * their own daily/weekly report); what escalates by role are the six capability
+   * flags below. Defaults + per-member overrides live in
+   * `src/lib/reporting/permissions.ts` — do not hand-roll them per branch.
+   */
   canAccessReports: boolean;
+  canReviewReports?: boolean;
+  canApproveReports?: boolean;
+  canPublishReports?: boolean;
+  canViewAllReports?: boolean;
+  canViewConfidentialReports?: boolean;
+  canManageReportTemplates?: boolean;
+  canViewFinancialMetrics?: boolean;
   canAccessSettings: boolean;
   canAccessGoals: boolean;
   canAccessTeams: boolean;
@@ -71,6 +87,7 @@ const fullAccessPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canComment: true,
   canAssignTasks: true,
   canManageMembers: true,
+  ...reportingCapabilitiesFor('Admin'),
   isSuperAdmin: false,
 };
 
@@ -97,6 +114,8 @@ const restrictedPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canComment: false,
   canAssignTasks: false,
   canManageMembers: false,
+  // No team yet → no reporting surface at all (fail-closed).
+  ...NO_REPORTING_CAPABILITIES,
   isSuperAdmin: false,
 };
 
@@ -352,6 +371,9 @@ export function usePermissions(): UserPermissions {
         canComment: true,
         canAssignTasks: false,
         canManageMembers: false,
+        // Reporting capabilities: role defaults + per-member overrides, resolved in
+        // one place. Spread AFTER the literals so an override always wins.
+        ...reportingCapabilitiesFor(membership.role, membership),
         role: 'Guest',
         dataScope: 'readonly',
         teamId: membership.teamId,
@@ -389,6 +411,9 @@ export function usePermissions(): UserPermissions {
         canComment: true,
         canAssignTasks: false,
         canManageMembers: false,
+        // Reporting capabilities: role defaults + per-member overrides, resolved in
+        // one place. Spread AFTER the literals so an override always wins.
+        ...reportingCapabilitiesFor(membership.role, membership),
         role: membership.role,
         dataScope: 'team',
         teamId: membership.teamId,
@@ -424,6 +449,9 @@ export function usePermissions(): UserPermissions {
         canComment: true,
         canAssignTasks: true,
         canManageMembers: false,
+        // Reporting capabilities: role defaults + per-member overrides, resolved in
+        // one place. Spread AFTER the literals so an override always wins.
+        ...reportingCapabilitiesFor(membership.role, membership),
         role: membership.role,
         dataScope: 'team',
         teamId: membership.teamId,
@@ -461,6 +489,9 @@ export function usePermissions(): UserPermissions {
         canComment: true,
         canAssignTasks: true,
         canManageMembers: false,
+        // Reporting capabilities: role defaults + per-member overrides, resolved in
+        // one place. Spread AFTER the literals so an override always wins.
+        ...reportingCapabilitiesFor(membership.role, membership),
         role: membership.role,
         dataScope: 'assigned',
         teamId: membership.teamId,
@@ -499,6 +530,9 @@ export function usePermissions(): UserPermissions {
       canComment: true,
       canAssignTasks: false,
       canManageMembers: false,
+      // Reporting capabilities: role defaults + per-member overrides, resolved in
+      // one place. Spread AFTER the literals so an override always wins.
+      ...reportingCapabilitiesFor(membership.role, membership),
       role: membership.role,
       dataScope: isViewer ? 'readonly' : 'assigned',
       teamId: membership.teamId,

@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
+import ActivationChecklist from '../components/ActivationChecklist';
 import { useToast } from '../hooks/use-toast';
 import { getPriorityColor, getStatusColor } from '../lib/statusColors';
 import {
@@ -445,6 +446,9 @@ const StaffDashboard: React.FC = () => {
     <>
       {/* <AdminTestPopup /> removed: popup feature no longer used */}
       <div className="max-w-6xl mx-auto space-y-6">
+
+      {/* Activation path for a new tenant — hides itself once every step is done. */}
+      <ActivationChecklist />
 
       {/* ── Hero: Greeting + Stats ── */}
       <div className="relative overflow-hidden rounded-xl bg-gradient-to-br from-primary/10 via-primary/5 to-transparent border border-primary/10 p-4 sm:p-6">

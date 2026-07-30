@@ -1,5 +1,6 @@
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
 import { useDocument, useGlobalBusinessId } from './useFirestore';
+import { setTenantScope } from '../lib/sentry';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { subscriptionState, type SubscriptionState } from '../lib/billing';
@@ -28,6 +29,18 @@ export function useSubscription(): SubscriptionInfo {
   const { data: business, loading } = useDocument<Business>('businesses', businessId || undefined);
 
   const state = useMemo(() => subscriptionState(business as any), [business]);
+
+  // Tag the error feed with this tenant, so a Sentry issue answers "which customer?".
+  useEffect(() => {
+    if (!businessId) return;
+    setTenantScope({
+      businessId,
+      teamId: permissions.teamId,
+      plan: state.plan,
+      status: state.status,
+      role: permissions.role,
+    });
+  }, [businessId, permissions.teamId, permissions.role, state.plan, state.status]);
 
   const seats = ((business as any)?.limits?.seats as number)
     || ((business as any)?.seats as number)

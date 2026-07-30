@@ -24,6 +24,7 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { getDocs, getDoc, setDoc, query, where, collection, writeBatch, doc, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { toast } from '../hooks/use-toast';
+import { reportingCapabilitiesFor } from '../lib/reporting/permissions';
 
 // ─── CronJobCard sub-component ───────────────────────────────────────────────
 interface CronJobCardProps {
@@ -2256,7 +2257,16 @@ const MODULES: { key: string; label: string }[] = [
   { key: 'canAccessServices',    label: 'Shërbimet' },
   { key: 'canAccessProducts',    label: 'Dyqani & Produktet' },
   { key: 'canAccessExpenses',    label: 'Shpenzimet' },
-  { key: 'canAccessReports',     label: 'Raportet' },
+  { key: 'canAccessReports',     label: 'Raportimi' },
+  // Reporting capabilities. `canAccessReports` above is the module gate (everyone
+  // files their own reports); these escalate what a role may do with OTHERS' work.
+  { key: 'canReviewReports',          label: '↳ Shqyrto raporte' },
+  { key: 'canApproveReports',         label: '↳ Aprovo brenda' },
+  { key: 'canPublishReports',         label: '↳ Publiko & dërgo te klienti' },
+  { key: 'canViewAllReports',         label: '↳ Shiko të gjitha raportet' },
+  { key: 'canViewConfidentialReports',label: '↳ Seksione konfidenciale' },
+  { key: 'canManageReportTemplates',  label: '↳ Menaxho template & KPI' },
+  { key: 'canViewFinancialMetrics',   label: '↳ Metrika financiare' },
   { key: 'canAccessTimeTracking',label: 'Orari' },
   { key: 'canAccessChat',        label: 'Chat' },
   { key: 'canAccessWhatsapp',    label: 'WhatsApp' },
@@ -2298,32 +2308,39 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
   Sales: {
     canAccessProjects: false, canAccessTasks: false, canAccessGoals: false,
     canAccessCRM: true, canAccessCustomers: true, canAccessInvoices: true,
-    canAccessServices: true, canAccessProducts: true, canAccessExpenses: false, canAccessReports: true,
+    canAccessServices: true, canAccessProducts: true, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
+    // Reporting defaults come from the module's own resolver, so the template shown
+    // here can never drift from what usePermissions actually grants.
+    ...reportingCapabilitiesFor('Sales'),
   },
   SalesAgent: {
     canAccessProjects: false, canAccessTasks: true, canAccessGoals: false,
     canAccessCRM: true, canAccessCustomers: true, canAccessInvoices: true,
-    canAccessServices: true, canAccessProducts: true, canAccessExpenses: false, canAccessReports: false,
+    canAccessServices: true, canAccessProducts: true, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
+    ...reportingCapabilitiesFor('SalesAgent'),
   },
   Manager: {
     canAccessProjects: true, canAccessTasks: true, canAccessGoals: true,
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
-    canAccessServices: false, canAccessProducts: false, canAccessExpenses: false, canAccessReports: true,
+    canAccessServices: false, canAccessProducts: false, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
+    ...reportingCapabilitiesFor('Manager'),
   },
   Member: {
     canAccessProjects: true, canAccessTasks: true, canAccessGoals: true,
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
-    canAccessServices: false, canAccessProducts: false, canAccessExpenses: false, canAccessReports: false,
+    canAccessServices: false, canAccessProducts: false, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
+    ...reportingCapabilitiesFor('Member'),
   },
   Viewer: {
     canAccessProjects: true, canAccessTasks: true, canAccessGoals: false,
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
-    canAccessServices: false, canAccessProducts: false, canAccessExpenses: false, canAccessReports: false,
+    canAccessServices: false, canAccessProducts: false, canAccessExpenses: false,
     canAccessTimeTracking: false, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
+    ...reportingCapabilitiesFor('Viewer'),
   },
 };
 

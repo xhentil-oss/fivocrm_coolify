@@ -77,6 +77,43 @@ export async function getTeamConfig(teamId: string): Promise<TeamConfig> {
   return merged;
 }
 
+/**
+ * Per-tenant email identity ("E1: shared sending identity").
+ *
+ * Mail still leaves through the PLATFORM's SMTP (no DNS setup asked of the tenant),
+ * but the recipient sees the tenant's own name and replies land in the tenant's
+ * inbox — instead of every tenant's clients receiving mail signed "FivoCRM".
+ *
+ *   From:     "Agjencia Shembull" <platform-smtp-user>
+ *   Reply-To: kontakt@agjencia-shembull.com
+ *
+ * A tenant that later configures its own verified domain (E2) overrides this by
+ * setting emailFromEmail, which is then used as the envelope sender.
+ */
+export async function tenantEmailIdentity(
+  teamId?: string | null,
+  businessId?: string | null,
+): Promise<{ fromName: string; replyTo?: string; fromEmail?: string }> {
+  const fallback = { fromName: 'FivoCRM' as string, replyTo: undefined, fromEmail: undefined };
+  try {
+    if (teamId) {
+      const s = await db.collection('teamSettings').doc(teamId).get();
+      const d = s.exists ? ((s.data() as any) || {}) : {};
+      const name = d.emailFromName || d.companyName;
+      const reply = d.emailFromEmail || d.companyEmail;
+      if (name || reply) {
+        return { fromName: name || fallback.fromName, replyTo: reply || undefined, fromEmail: d.emailFromEmail || undefined };
+      }
+    }
+    if (businessId) {
+      const b = await db.collection('businesses').doc(businessId).get();
+      const d = b.exists ? ((b.data() as any) || {}) : {};
+      if (d.name) return { fromName: d.name, replyTo: d.ownerEmail || undefined, fromEmail: undefined };
+    }
+  } catch { /* fall through to the platform identity */ }
+  return fallback;
+}
+
 function stripUndefined(obj: Record<string, any>): Record<string, any> {
   return Object.fromEntries(Object.entries(obj).filter(([, v]) => v !== undefined));
 }
