@@ -2847,6 +2847,10 @@ const ChatView: React.FC = () => {
           })()}
         />
 
+        {/* Sidebar-i i vjetër me seksione, i zëvendësuar nga <UnifiedChatList> më lart.
+            Mbahet i parkuar me `{false && …}` si referencë; `false &&` është i
+            qëllimshëm, ndaj heshtohet rregulli përkatës në vend që të fshihet kodi. */}
+        {/* eslint-disable-next-line no-constant-binary-expression */}
         {false && (<div className="flex-1 overflow-y-auto px-2 py-2 space-y-1">
           {/* AI Assistant - pinned at top */}
           <button
