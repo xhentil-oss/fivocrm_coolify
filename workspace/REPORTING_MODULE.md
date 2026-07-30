@@ -221,17 +221,36 @@ Java 17. Either install JDK 21 or pin the CLI version in CI.
 
 ### Cron
 
-Add to the existing schedule (or the VPS cron — see `vps-cron-setup`):
+There is no system `crontab`. Scheduling lives in `vps/server.ts`
+(`startCronSchedulers`), which triggers the Vercel function
+`/api/cron/run?job=…` with `CRON_SECRET`. The three reporting jobs are already
+registered there:
 
-| Job | Cadence | Purpose |
+| Job | Cadence | Why that cadence |
 |---|---|---|
-| `?job=report-schedules` | daily, early | generate draft reports from active schedules |
-| `?job=report-reminders` | every 1–2 h | deadline reminders + the escalation ladder |
-| `?job=client-health-rollup` | monthly (1st) | persist client-health snapshots |
+| `report-schedules` | every 60 min | a schedule carries a per-tenant LOCAL hour and fires once that hour passes; a daily tick would collapse every tenant's chosen hour into `CRON_DAILY_HOUR`. Reads only active schedules, so it is cheap. |
+| `report-reminders` | every 120 min | range query on `status` + `dueAt` (indexed), not a scan |
+| `client-health-rollup` | monthly, 1st at 04:00 UTC | previous month's numbers are complete |
 
-`report-schedules` and `report-reminders` are also included in `?job=run-all`, so a
-Hobby-plan single daily cron already covers generation and one escalation pass.
-All three are **idempotent** — re-running creates no duplicates and re-sends nothing.
+`report-schedules` and `report-reminders` also run inside `?job=run-all` (the daily
+08:00 UTC tick), so generation still happens even if the intervals are disabled.
+
+All three are **idempotent**: generation is keyed on
+`generationKey = scheduleId:periodKey[:subjectId]`, reminder/escalation rungs record
+themselves on the report, and the health rollup uses a deterministic document id.
+
+To deploy the schedule change on the VPS:
+
+```bash
+cd /root/fivocrm && git pull
+pm2 list                 # find the process name
+pm2 restart <name> --update-env
+pm2 logs <name> --lines 50 | grep CRON
+```
+
+`CRM_BASE_URL` and `CRON_SECRET` must be present in the PM2 env
+(`ecosystem.config.cjs`), otherwise `startCronSchedulers` logs a warning and does
+nothing.
 
 ### Configuration variables
 

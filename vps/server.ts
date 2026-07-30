@@ -883,6 +883,17 @@ function startCronSchedulers(): void {
   setInterval(() => { void triggerCronJob('whatsapp-broadcasts'); }, 5 * MIN);
   setInterval(() => { void triggerCronJob('lead-sla-stale-alerts'); }, 60 * MIN);
   setInterval(() => { void triggerCronJob('overdue-reminders'); }, 120 * MIN);
+  // ── Reporting module ──
+  // report-schedules reads ONLY active schedules (tiny), so it can tick hourly.
+  // That matters: a schedule carries a per-tenant local hour, and the job fires when
+  // that hour has passed. Ticking once a day would collapse every tenant's chosen
+  // hour into whatever CRON_DAILY_HOUR happens to be. Re-runs are free — generation
+  // is keyed on `generationKey = scheduleId:periodKey[:subjectId]` and skips itself.
+  setInterval(() => { void triggerCronJob('report-schedules'); }, 60 * MIN);
+  // report-reminders is a range query on an indexed field (status + dueAt), not a
+  // collection scan, and each reminder/escalation rung records itself on the report
+  // so nothing is ever sent twice. Same cadence as overdue-reminders.
+  setInterval(() => { void triggerCronJob('report-reminders'); }, 120 * MIN);
   // lead-wa-auto-reminders runs only in the daily run-all — it's a 7-day-inactivity
   // reminder, so a full-collection scan every 15 min was needless read pressure.
   // Everything else: once a day at ~08:00 UTC (same as the old Vercel daily cron).
@@ -900,6 +911,13 @@ function startCronSchedulers(): void {
     if (tomorrow.getUTCMonth() !== now.getUTCMonth()) {
       void triggerCronJob('social-monthly-sync');
     }
+  });
+  // Client-health snapshots: once a month, on the 1st at 04:00 UTC. The daily tick
+  // fires only on day 1, which is when the previous month's numbers are complete.
+  // The job uses a deterministic doc id per (tenant, customer, period), so a repeat
+  // run overwrites its own row instead of appending a duplicate.
+  scheduleDailyUtc(4, 0, () => {
+    if (new Date().getUTCDate() === 1) void triggerCronJob('client-health-rollup');
   });
   // Kick the frequent set shortly after boot so a restart doesn't stall a broadcast.
   setTimeout(() => { void triggerCronJob('whatsapp-broadcasts'); }, MIN);
