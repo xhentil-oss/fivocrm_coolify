@@ -10,7 +10,7 @@
  */
 
 import React, { useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle, CalendarDays, CheckCircle2, ChevronLeft, ChevronRight, Clock,
   Eye, FileText, Filter, Inbox, Plus, Search, Send, Users, X,
@@ -29,11 +29,13 @@ import { useCollection } from '../hooks/useFirestore';
 import { useUserNames } from '../hooks/useUserNames';
 import { useReports } from '../hooks/useReports';
 import {
-  EDITABLE_STATUSES, PUBLISHED_STATUSES, REVIEW_STATUSES, STATUS_LABELS, STATUS_TONE,
+  EDITABLE_STATUSES, PUBLISHED_STATUSES, REVIEW_STATUSES, SIDE_META, STATUS_LABELS,
+  STATUS_TONE, sideOfKind, type ReportSide,
 } from '../lib/reporting/workflow';
 import { HEALTH_CLASSES, HEALTH_LABELS } from '../lib/reporting/health';
 import { dueLabel, isOverdue } from '../lib/reporting/schedule';
 import { formatPeriodLabel } from '../lib/reporting/period';
+import DailyReportsView from './DailyReportsView';
 import type { Customer, Project, Report, ReportFrequency, ReportKind, ReportStatus, TeamMember } from '../types';
 
 const KIND_LABELS: Record<ReportKind, string> = {
@@ -68,6 +70,26 @@ const ReportsView: React.FC = () => {
   const { data: projects } = useCollection<Project>('projects');
   const { getName } = useUserNames(teamMembers);
 
+  // Audience is the PRIMARY axis and lives in the URL, so "send me the client
+  // reports" is a link rather than a set of instructions. `?side=` also lets the old
+  // /app/daily-reports route redirect straight to the right place.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const side: ReportSide = searchParams.get('side') === 'client' ? 'client' : 'internal';
+  const internalTab = searchParams.get('tab') === 'daily' ? 'daily' : 'list';
+
+  const setSide = (next: ReportSide) => {
+    const p = new URLSearchParams(searchParams);
+    p.set('side', next);
+    p.delete('tab');
+    setSearchParams(p, { replace: true });
+  };
+  const setInternalTab = (next: 'daily' | 'list') => {
+    const p = new URLSearchParams(searchParams);
+    p.set('side', 'internal');
+    if (next === 'daily') p.set('tab', 'daily'); else p.delete('tab');
+    setSearchParams(p, { replace: true });
+  };
+
   const [tab, setTab] = useState('mine');
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
@@ -82,13 +104,16 @@ const ReportsView: React.FC = () => {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return reports.filter(r => {
+      // Audience first: a client deliverable never appears under "Brenda agjencisë"
+      // and vice versa. Same function that draws the badge, so the two can't drift.
+      if (sideOfKind(r.kind) !== side) return false;
       if (q && !`${r.title} ${r.customerName || ''} ${r.projectName || ''}`.toLowerCase().includes(q)) return false;
       if (statusFilter !== 'all' && r.status !== statusFilter) return false;
       if (kindFilter !== 'all' && r.kind !== kindFilter) return false;
       if (customerFilter !== 'all' && r.customerId !== customerFilter) return false;
       return true;
     });
-  }, [reports, search, statusFilter, kindFilter, customerFilter]);
+  }, [reports, search, statusFilter, kindFilter, customerFilter, side]);
 
   const buckets = useMemo(() => ({
     mine: filtered.filter(r => r.authorUserId === user?.uid),
@@ -115,14 +140,61 @@ const ReportsView: React.FC = () => {
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold text-foreground">Raportimi</h1>
-          <p className="text-sm text-muted-foreground mt-0.5">
-            Raporte të stafit, statuse projektesh dhe raporte klientit — me aprovime dhe gjurmë auditi.
-          </p>
+          <p className="text-sm text-muted-foreground mt-0.5">{SIDE_META[side].hint}</p>
         </div>
         <Button onClick={() => setCreateOpen(true)} className="gap-1.5">
           <Plus className="w-4 h-4" /> Raport i re
         </Button>
       </div>
+
+      {/* THE primary split. Deliberately larger and louder than the tabs below it:
+          "who is this for" is the question people actually arrive with, and the old
+          layout answered it nowhere. */}
+      <div className="flex items-center gap-1.5 p-1 bg-muted rounded-xl w-fit">
+        {(['internal', 'client'] as const).map(s2 => (
+          <button
+            key={s2}
+            type="button"
+            onClick={() => setSide(s2)}
+            className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors flex items-center gap-2 ${
+              side === s2
+                ? s2 === 'client'
+                  ? 'bg-primary text-primary-foreground shadow-sm'
+                  : 'bg-card text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'}`}
+          >
+            {s2 === 'client' ? <Eye className="w-4 h-4" /> : <Users className="w-4 h-4" />}
+            {SIDE_META[s2].label}
+          </button>
+        ))}
+      </div>
+
+      {/* Internal side has two shapes of thing: the daily habit, and the reviewable
+          weekly/management reports. Client side has only reports. */}
+      {side === 'internal' && (
+        <div className="flex items-center gap-1 p-1 bg-muted/60 rounded-lg w-fit">
+          {([
+            { key: 'daily', label: 'Ditore' },
+            { key: 'list', label: 'Javore & menaxhimi' },
+          ] as const).map(t => (
+            <button
+              key={t.key}
+              type="button"
+              onClick={() => setInternalTab(t.key)}
+              className={`text-xs px-3 py-1.5 rounded-md transition-colors ${
+                internalTab === t.key ? 'bg-card shadow-sm text-foreground font-medium' : 'text-muted-foreground'}`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* The daily habit lives here now — same screen, no separate nav entry. */}
+      {side === 'internal' && internalTab === 'daily' ? (
+        <DailyReportsView embedded />
+      ) : (
+      <>
 
       {/* Stat tiles */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
@@ -237,6 +309,9 @@ const ReportsView: React.FC = () => {
         </TabsContent>
       </Tabs>
 
+      </>
+      )}
+
       <CreateReportDialog
         open={createOpen}
         onClose={() => setCreateOpen(false)}
@@ -328,6 +403,9 @@ const ReportList: React.FC<{
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2 flex-wrap">
                   <p className="font-medium text-foreground truncate">{r.title}</p>
+                  <Badge variant="outline" className={`text-[10px] font-semibold ${SIDE_META[sideOfKind(r.kind)].className}`}>
+                    {SIDE_META[sideOfKind(r.kind)].short}
+                  </Badge>
                   <Badge variant="outline" className={`text-[10px] ${TONE_CLASSES[STATUS_TONE[r.status]]}`}>
                     {STATUS_LABELS[r.status]}
                   </Badge>

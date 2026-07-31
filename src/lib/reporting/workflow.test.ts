@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   EDITABLE_STATUSES,
   PUBLISHED_STATUSES,
+  SIDE_META,
   STATUS_LABELS,
   canEditContent,
   canHardDelete,
@@ -9,6 +10,7 @@ import {
   isBlockEmpty,
   isClientFacingKind,
   nextStaffAction,
+  sideOfKind,
   transitionPatch,
 } from './workflow';
 import type { Report, ReportBlock, ReportStatus } from '../../types';
@@ -319,5 +321,47 @@ describe('helpers', () => {
     expect(nextStaffAction(rep({ status: 'submitted' }), approver)?.to).toBe('internally_approved');
     expect(nextStaffAction(rep({ status: 'internally_approved' }), approver)?.to).toBe('published');
     expect(nextStaffAction(rep({ status: 'archived' }), author)).toBeNull();
+  });
+});
+
+/**
+ * The reporting UI splits on audience before anything else. The tab filter and the
+ * row badge MUST read from this one function — otherwise a report can sit under
+ * "Brenda agjencisë" while wearing a "KLIENTI" badge, which is precisely the
+ * confusion the unification was meant to remove.
+ */
+describe('audience axis', () => {
+  it('puts every client deliverable on the client side', () => {
+    for (const kind of ['client-monthly', 'qbr', 'project-status',
+      'project-completion', 'campaign-completion', 'website-launch'] as const) {
+      expect(sideOfKind(kind), kind).toBe('client');
+    }
+  });
+
+  it('keeps staff and management instruments internal', () => {
+    for (const kind of ['weekly-staff', 'client-risk', 'custom'] as const) {
+      expect(sideOfKind(kind), kind).toBe('internal');
+    }
+  });
+
+  it('agrees with isClientFacingKind for every kind', () => {
+    const kinds = ['weekly-staff', 'project-status', 'client-monthly', 'qbr',
+      'project-completion', 'campaign-completion', 'website-launch', 'incident',
+      'client-risk', 'custom'] as const;
+    for (const kind of kinds) {
+      expect(sideOfKind(kind) === 'client', kind).toBe(isClientFacingKind(kind));
+    }
+  });
+
+  it('never leaves a side unlabelled', () => {
+    for (const side of ['internal', 'client'] as const) {
+      expect(SIDE_META[side].label.length).toBeGreaterThan(0);
+      expect(SIDE_META[side].short.length).toBeGreaterThan(0);
+      expect(SIDE_META[side].hint.length).toBeGreaterThan(0);
+    }
+  });
+
+  it('states plainly that internal never reaches the client', () => {
+    expect(SIDE_META.internal.hint).toContain('Nuk shkon kurrë tek klienti');
   });
 });

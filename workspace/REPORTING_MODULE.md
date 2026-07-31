@@ -57,6 +57,38 @@ measured.
 
 ---
 
+## 1b. Information architecture — audience is the primary axis
+
+Reporting had grown across four unrelated screens, and none of them answered the
+question people actually arrive with: *is this an obligation TO the agency, or a
+deliverable FOR a client?*
+
+| Was | Is now |
+|---|---|
+| `/app/daily-reports` (own nav entry) | `/app/reports` → **Brenda agjencisë** → Ditore. Old route redirects; bookmarks and the daily-report notification still work. |
+| `/app/reports` (mixed staff + client) | the hub, split by audience |
+| `/app/momentum` (read as a report) | renamed **"Performanca ime"**, moved next to Profili — it is the employee's own 4DX scoreboard, not an obligation |
+| `/app/social` (emails clients directly) | unchanged for now — see the open decision below |
+
+`sideOfKind()` + `SIDE_META` in `src/lib/reporting/workflow.ts` are the single source
+of truth: the tab filter AND the row badge read from the same function, so a report
+can never sit under "Brenda agjencisë" while wearing a `KLIENTI` badge. The audience
+lives in the URL (`?side=internal|client&tab=daily`), so "send me the client reports"
+is a link rather than a set of instructions.
+
+Sidebar went from seven reporting-ish entries across three groups to four under one.
+
+### Open decision — the second client-reporting path
+
+`/app/social` still emails monthly FB/IG analytics straight to the client, with **no
+internal approval, no pinned version and no audit trail**, in parallel to the module's
+publish flow. That duplication is the remaining source of confusion. Closing it means
+turning the social analytics into a KPI source that feeds `reportMetrics` (so it
+appears inside the approved monthly report) and retiring the standalone email — which
+is a visible change for any client who expects that email as-is. Not done unilaterally.
+
+---
+
 ## 2. Data model (Firestore)
 
 Firestore is document-oriented, so a report's blocks live INSIDE the report:

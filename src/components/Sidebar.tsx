@@ -35,7 +35,8 @@ type NavEntry = NavItem | NavGroup;
 const isGroup = (e: NavEntry): e is NavGroup => 'children' in e;
 
 const allNavItems: NavEntry[] = [
-  { path: '/app/tenants', label: 'Relax CRM', icon: Building2, permissionKey: 'isSuperAdmin' },
+  // Leaves the tenant shell entirely — the platform console is its own surface.
+  { path: '/superadmin', label: 'Konsola e Platformës', icon: Building2, permissionKey: 'isSuperAdmin' },
   { path: '/app/dashboard', label: 'Dashboard', icon: LayoutDashboard, permissionKey: 'canAccessProfile' },
   { path: '/app/projects', label: 'Projektet', icon: FolderKanban, permissionKey: 'canAccessProjects' },
   { path: '/app/crm', label: 'CRM Leads', icon: Users, permissionKey: 'canAccessCRM' },
@@ -48,10 +49,13 @@ const allNavItems: NavEntry[] = [
     icon: CheckSquare,
     children: [
       { path: '/app/tasks', label: 'Të gjitha detyrat', icon: CheckSquare, permissionKey: 'canAccessTasks' },
-      { path: '/app/daily-reports', label: 'Raportet Ditore', icon: FileText, permissionKey: 'canAccessTasks' },
     ],
   },
   {
+    // ONE reporting group. The audience split (Brenda agjencisë / Për klientët) is a
+    // switch INSIDE /app/reports rather than separate nav entries — reporting used to
+    // be spread over four unrelated screens and nobody could tell which report was an
+    // obligation to the agency and which was a deliverable for a client.
     label: 'Raportimi',
     icon: ClipboardList,
     children: [
@@ -61,7 +65,6 @@ const allNavItems: NavEntry[] = [
       { path: '/app/report-templates', label: 'Konfigurimi', icon: Settings, permissionKey: 'canAccessReports' },
     ],
   },
-  { path: '/app/momentum', label: 'Momentum', icon: Rocket, permissionKey: 'canAccessProfile' },
   { path: '/app/goals', label: 'Objektivat', icon: Target, permissionKey: 'canAccessGoals' },
   { path: '/app/teams', label: 'Ekipet', icon: UsersRound, permissionKey: 'canAccessTeams' },
   { path: '/app/services', label: 'Shërbimet', icon: Receipt, permissionKey: 'canAccessServices' },
@@ -88,6 +91,7 @@ const allNavItems: NavEntry[] = [
   },
   { path: '/app/price-calculator', label: 'Kalkulatori', icon: Calculator, permissionKey: 'canAccessServices' },
   { path: '/app/landing-pages', label: 'Landing Pages', icon: Globe, permissionKey: 'canAccessServices' },
+  { path: '/app/momentum', label: 'Performanca ime', icon: Rocket, permissionKey: 'canAccessProfile' },
   { path: '/app/profile', label: 'Profili', icon: UserCircle, permissionKey: 'canAccessProfile' },
   { path: '/app/settings', label: 'Cilësimet', icon: Settings, permissionKey: 'canAccessProfile' },
   // Abonimi is not a gated module: it must stay reachable on every plan (and while

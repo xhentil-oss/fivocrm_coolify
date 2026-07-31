@@ -284,6 +284,43 @@ export function isClientFacingKind(kind: Report['kind']): boolean {
     || kind === 'website-launch';
 }
 
+/**
+ * THE primary axis of the reporting UI.
+ *
+ * Reporting was scattered over four screens (`/app/reports`, `/app/daily-reports`,
+ * `/app/momentum`, `/app/social`) and nobody could tell at a glance which report was
+ * an obligation TO the agency and which was a deliverable FOR a client. Making the
+ * audience the top-level split fixes that — but only if the tab filter and the badge
+ * read from the SAME function, otherwise a report can sit under "internal" while
+ * being labelled "client".
+ */
+export type ReportSide = 'internal' | 'client';
+
+export function sideOfKind(kind: Report['kind']): ReportSide {
+  return isClientFacingKind(kind) ? 'client' : 'internal';
+}
+
+export const SIDE_META: Record<ReportSide, {
+  label: string;
+  short: string;
+  hint: string;
+  /** Token classes for the badge — client is primary-coloured, internal is muted. */
+  className: string;
+}> = {
+  internal: {
+    label: 'Brenda agjencisë',
+    short: 'BRENDA',
+    hint: 'Punonjësi → agjencia. Nuk shkon kurrë tek klienti.',
+    className: 'bg-muted text-muted-foreground border-border',
+  },
+  client: {
+    label: 'Për klientët',
+    short: 'KLIENTI',
+    hint: 'Agjencia → klienti. Kalon nga aprovimi dhe publikohet në portal.',
+    className: 'bg-primary/10 text-primary border-primary/40',
+  },
+};
+
 /** Is a required block still unfilled? Type-aware so a chart isn't "empty". */
 export function isBlockEmpty(block: Report['blocks'][number]): boolean {
   switch (block.type) {

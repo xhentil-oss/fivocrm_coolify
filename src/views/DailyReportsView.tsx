@@ -74,7 +74,16 @@ const moodIcons: Record<string, { icon: React.ComponentType<any>; color: string;
   struggling: { icon: Frown, color: 'text-error', label: 'Vështirë' },
 };
 
-const DailyReportsView: React.FC = () => {
+interface DailyReportsViewProps {
+  /**
+   * Rendered inside the reporting hub (`/app/reports` → Brenda agjencisë → Ditore)
+   * rather than as a standalone page. Suppresses the page title so the hub's own
+   * heading is not duplicated; everything else is identical.
+   */
+  embedded?: boolean;
+}
+
+const DailyReportsView: React.FC<DailyReportsViewProps> = ({ embedded = false }) => {
   const { user } = useAuth();
   const permissions = usePermissions();
   const isManagerOrAbove = permissions.isAdmin || permissions.isOwner || permissions.isManager;
@@ -231,17 +240,19 @@ const DailyReportsView: React.FC = () => {
 
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* Header — omitted when embedded, so the hub heading is not duplicated. */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <h1 className="text-lg sm:text-h2 text-foreground flex items-center gap-2">
-            <FileText className="w-5 h-5 sm:w-6 sm:h-6" />
-            Raportet Ditore
-          </h1>
-          <p className="text-xs sm:text-body text-muted-foreground mt-0.5">
-            {isManagerOrAbove ? 'Pamje e raporteve të ekipit' : 'Raportet e mia ditore'}
-          </p>
-        </div>
+        {embedded ? <div /> : (
+          <div>
+            <h1 className="text-lg sm:text-h2 text-foreground flex items-center gap-2">
+              <FileText className="w-5 h-5 sm:w-6 sm:h-6" />
+              Raportet Ditore
+            </h1>
+            <p className="text-xs sm:text-body text-muted-foreground mt-0.5">
+              {isManagerOrAbove ? 'Pamje e raporteve të ekipit' : 'Raportet e mia ditore'}
+            </p>
+          </div>
+        )}
         <div className="flex gap-2">
           {isManagerOrAbove && (
             <Button size="sm" variant="outline" onClick={handleAiSummary} disabled={aiLoading}>

@@ -17,6 +17,7 @@ import CommandPalette from './components/CommandPalette';
 import PermissionGate from './components/PermissionGate';
 import ModuleGate from './components/ModuleGate';
 import PendingInvitesBanner from './components/PendingInvitesBanner';
+import ImpersonationBanner from './components/ImpersonationBanner';
 import SubscriptionGate, { SubscriptionBanner } from './components/SubscriptionGate';
 import { GoogleApiProvider } from './contexts/GoogleApiContext';
 import { PermissionsProvider, usePermissions } from './contexts/PermissionsContext';
@@ -50,7 +51,6 @@ const ProjectDetailView = lazyRetry(() => import('./views/ProjectDetailView'));
 const CRMView = lazyRetry(() => import('./views/CRMView'));
 const DealsView = lazyRetry(() => import('./views/DealsView'));
 const TasksView = lazyRetry(() => import('./views/TasksView'));
-const DailyReportsView = lazyRetry(() => import('./views/DailyReportsView'));
 const ReportsView = lazyRetry(() => import('./views/ReportsView'));
 const ReportDetailView = lazyRetry(() => import('./views/ReportDetailView'));
 const ReportingAdminView = lazyRetry(() => import('./views/ReportingAdminView'));
@@ -69,7 +69,7 @@ const BonusView = lazyRetry(() => import('./views/BonusView'));
 const UserProfileView = lazyRetry(() => import('./views/UserProfileView'));
 const SettingsView = lazyRetry(() => import('./views/SettingsView'));
 const BillingView = lazyRetry(() => import('./views/BillingView'));
-const TenantsView = lazyRetry(() => import('./views/TenantsView'));
+const SuperAdminConsole = lazyRetry(() => import('./views/superadmin/SuperAdminConsole'));
 const CustomersView = lazyRetry(() => import('./views/CustomersView'));
 const ServicesView = lazyRetry(() => import('./views/ServicesView'));
 const ProductsView = lazyRetry(() => import('./views/ProductsView'));
@@ -287,6 +287,14 @@ function AppContent() {
         <Route path="profile" element={<Suspense fallback={<LazyFallback />}><PortalProfileView /></Suspense>} />
       </Route>
       
+      {/* Platform console — deliberately OUTSIDE the /app shell: /app is one tenant's
+          workspace, this is the cross-tenant operator view. Gated again inside. */}
+      <Route path="/superadmin/*" element={
+        <ProtectedRoute>
+          <Suspense fallback={<LazyFallback />}><SuperAdminConsole /></Suspense>
+        </ProtectedRoute>
+      } />
+
       {/* Protected routes */}
       <Route path="/*" element={
         <ProtectedRoute>
@@ -347,6 +355,9 @@ function AppContent() {
                       : 'overflow-y-auto p-3 sm:p-6 lg:p-8'
                   }`}
                 >
+                  {/* Working inside another tenant (platform console) must never be
+                      invisible — the workspace looks identical otherwise. */}
+                  <ImpersonationBanner />
                   <PendingInvitesBanner />
                   {/* Billing state made explicit: a banner while a trial/payment needs
                       attention, and a hard block when the tenant is suspended (Firestore
@@ -358,13 +369,17 @@ function AppContent() {
                     <Routes>
                       <Route path="/" element={<DefaultRedirect />} />
                       <Route path="/app/dashboard" element={<StaffDashboard />} />
-                      <Route path="/app/tenants" element={<PermissionGate permissionKey="isSuperAdmin"><TenantsView /></PermissionGate>} />
+                      {/* The console moved out of the tenant shell — keep old links alive. */}
+                      <Route path="/app/tenants" element={<Navigate to="/superadmin" replace />} />
                       <Route path="/app/projects" element={<PermissionGate permissionKey="canAccessProjects"><ProjectsView /></PermissionGate>} />
                       <Route path="/app/projects/:projectId" element={<PermissionGate permissionKey="canAccessProjects"><ProjectDetailView /></PermissionGate>} />
                       <Route path="/app/crm" element={<PermissionGate permissionKey="canAccessCRM"><CRMView /></PermissionGate>} />
                       <Route path="/app/deals" element={<PermissionGate permissionKey="canAccessCRM"><DealsView /></PermissionGate>} />
                       <Route path="/app/tasks" element={<PermissionGate permissionKey="canAccessTasks"><TasksView /></PermissionGate>} />
-                      <Route path="/app/daily-reports" element={<PermissionGate permissionKey="canAccessTasks"><DailyReportsView /></PermissionGate>} />
+                      {/* Daily reports now live inside the hub. Kept as a redirect so
+                          existing bookmarks and the daily-report notification deep
+                          link keep working. */}
+                      <Route path="/app/daily-reports" element={<Navigate to="/app/reports?side=internal&tab=daily" replace />} />
                       <Route path="/app/goals" element={<PermissionGate permissionKey="canAccessGoals"><GoalsView /></PermissionGate>} />
                       {/* Reporting & accountability module. ModuleGate (not PermissionGate)
                           because access is permission + SaaS plan + tenant toggle. */}

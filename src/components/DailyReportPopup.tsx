@@ -293,7 +293,7 @@ const DailyReportPopup: React.FC = () => {
             title: 'Pengesa raportuar',
             message: `${submitterName}: "${blockers.trim().slice(0, 120)}"`,
             isRead: false,
-            actionUrl: '/app/daily-reports',
+            actionUrl: '/app/reports?side=internal&tab=daily',
             actionLabel: 'Shiko raportin',
           } as any);
         }
