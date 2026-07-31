@@ -102,6 +102,18 @@ async function accountsForScope(teamId?: string | null, businessId?: string | nu
   return [...byId.values()];
 }
 
+// Resolve a PORTAL client's own customer from their uid (server-trusted, via
+// users/{uid}.customerId which useClientPortal mirrors). Used for client
+// self-connect: the customerId is NEVER taken from client input.
+async function resolvePortalCustomer(uid: string): Promise<{ customerId: string; teamId: string | null; businessId: string | null } | null> {
+  const u = (await adminDb.collection('users').doc(uid).get()).data();
+  const customerId = u?.customerId;
+  if (!customerId) return null;
+  const cust = (await adminDb.collection('customers').doc(customerId).get()).data();
+  if (!cust) return null;
+  return { customerId, teamId: cust.teamId || null, businessId: cust.businessId || null };
+}
+
 // Strip the access token before returning an account to the browser.
 function publicAccount(id: string, a: any) {
   return {
@@ -134,23 +146,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (action === 'oauth-url') {
       const uid = await requireAuth(req);
       if (!uid) return res.status(401).json({ error: 'Missing or invalid token' });
-      const teamId = String(req.query.teamId || '');
-      const businessId = String(req.query.businessId || '');
-      const customerId = String(req.query.customerId || '');
-      if (!customerId || (!teamId && !businessId)) return res.status(400).json({ error: 'customerId dhe teamId/businessId janë të detyrueshëm' });
-      if (!(await memberOf(uid, teamId, businessId))) return res.status(403).json({ error: 'Nuk jeni anëtar i këtij ekipi' });
-      const state = signState({ uid, teamId, businessId, customerId });
+      const portal = req.query.portal === '1';
+      let teamId: string | null, businessId: string | null, customerId: string;
+      if (portal) {
+        // Client self-connect: customerId comes from the session, not the request.
+        const pc = await resolvePortalCustomer(uid);
+        if (!pc) return res.status(403).json({ error: 'Nuk u identifikua klienti' });
+        ({ teamId, businessId, customerId } = pc);
+      } else {
+        teamId = String(req.query.teamId || '');
+        businessId = String(req.query.businessId || '');
+        customerId = String(req.query.customerId || '');
+        if (!customerId || (!teamId && !businessId)) return res.status(400).json({ error: 'customerId dhe teamId/businessId janë të detyrueshëm' });
+        if (!(await memberOf(uid, teamId, businessId))) return res.status(403).json({ error: 'Nuk jeni anëtar i këtij ekipi' });
+      }
+      const state = signState({ uid, teamId, businessId, customerId, portal });
       return res.status(200).json({ url: buildLoginUrl(APP_ID, redirectUri(req), state) });
     }
 
     // ── GET oauth-callback (browser redirect from Facebook) ────────────────────
     if (action === 'oauth-callback') {
-      const back = (params: string) => res.redirect(302, `${appUrl(req)}/app/social?${params}`);
+      // Route back to the portal when the client self-connected, else the staff app.
+      const backTo = (isPortal: boolean, params: string) => res.redirect(302, `${appUrl(req)}/${isPortal ? 'portal' : 'app'}/social?${params}`);
       if (req.query.error) {
-        return back(`error=${encodeURIComponent(String(req.query.error_description || req.query.error))}`);
+        return backTo(false, `error=${encodeURIComponent(String(req.query.error_description || req.query.error))}`);
       }
       const state = verifyState(String(req.query.state || ''));
-      if (!state) return back(`error=${encodeURIComponent('Sesioni skadoi ose është i pavlefshëm — provoni sërish')}`);
+      if (!state) return backTo(false, `error=${encodeURIComponent('Sesioni skadoi ose është i pavlefshëm — provoni sërish')}`);
+      const back = (params: string) => backTo(!!state.portal, params);
       const code = String(req.query.code || '');
       if (!code) return back(`error=${encodeURIComponent('Kodi i autorizimit mungon')}`);
 
@@ -267,21 +290,30 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       const uid = await requireAuth(req);
       if (!uid) return res.status(401).json({ error: 'Missing or invalid token' });
       if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return res.status(503).json({ error: 'Google OAuth nuk është konfiguruar (GOOGLE_CLIENT_ID/SECRET)' });
-      const teamId = String(req.query.teamId || '');
-      const businessId = String(req.query.businessId || '');
-      const customerId = String(req.query.customerId || '');
-      if (!customerId || (!teamId && !businessId)) return res.status(400).json({ error: 'customerId dhe teamId/businessId janë të detyrueshëm' });
-      if (!(await memberOf(uid, teamId, businessId))) return res.status(403).json({ error: 'Nuk jeni anëtar i këtij ekipi' });
-      const state = signState({ uid, teamId, businessId, customerId, provider: 'google' });
+      const portal = req.query.portal === '1';
+      let teamId: string | null, businessId: string | null, customerId: string;
+      if (portal) {
+        const pc = await resolvePortalCustomer(uid);
+        if (!pc) return res.status(403).json({ error: 'Nuk u identifikua klienti' });
+        ({ teamId, businessId, customerId } = pc);
+      } else {
+        teamId = String(req.query.teamId || '');
+        businessId = String(req.query.businessId || '');
+        customerId = String(req.query.customerId || '');
+        if (!customerId || (!teamId && !businessId)) return res.status(400).json({ error: 'customerId dhe teamId/businessId janë të detyrueshëm' });
+        if (!(await memberOf(uid, teamId, businessId))) return res.status(403).json({ error: 'Nuk jeni anëtar i këtij ekipi' });
+      }
+      const state = signState({ uid, teamId, businessId, customerId, provider: 'google', portal });
       return res.status(200).json({ url: buildGoogleAuthUrl(GOOGLE_CLIENT_ID, googleRedirectUri(req), state) });
     }
 
     // ── GET google-callback (browser redirect from Google) ─────────────────────
     if (action === 'google-callback') {
-      const back = (params: string) => res.redirect(302, `${appUrl(req)}/app/social?${params}`);
-      if (req.query.error) return back(`error=${encodeURIComponent(String(req.query.error_description || req.query.error))}`);
-      if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return back(`error=${encodeURIComponent('Google OAuth nuk është konfiguruar')}`);
+      const backTo = (isPortal: boolean, params: string) => res.redirect(302, `${appUrl(req)}/${isPortal ? 'portal' : 'app'}/social?${params}`);
+      if (req.query.error) return backTo(false, `error=${encodeURIComponent(String(req.query.error_description || req.query.error))}`);
+      if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return backTo(false, `error=${encodeURIComponent('Google OAuth nuk është konfiguruar')}`);
       const state = verifyState(String(req.query.state || ''));
+      const back = (params: string) => backTo(!!state?.portal, params);
       if (!state) return back(`error=${encodeURIComponent('Sesioni skadoi ose është i pavlefshëm — provoni sërish')}`);
       const code = String(req.query.code || '');
       if (!code) return back(`error=${encodeURIComponent('Kodi i autorizimit mungon')}`);
