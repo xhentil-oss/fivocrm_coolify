@@ -6,6 +6,7 @@ import admin, { adminDb as db } from './_firebaseAdmin.js';
  *   ?job=report-schedules       generate draft reports from `reportSchedules`
  *   ?job=report-reminders       reminders + escalations for open/overdue reports
  *   ?job=client-health-rollup   persist a client-health snapshot per period
+ *   ?job=report-metrics-social  socialSnapshots → reportMetrics (KPI source)
  *
  * ALL THREE ARE IDEMPOTENT. The cron is at-least-once (Vercel retries, deploys
  * overlap, admins press the manual trigger), so every job re-derives its work from
@@ -621,6 +622,148 @@ function computeHealth(s: {
       : score >= 55 ? 'attention'
         : score >= 35 ? 'at_risk' : 'critical';
   return { score, category, factors: withImpact };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// JOB: report-metrics-social — socialSnapshots → reportMetrics
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Turns the monthly Facebook/Instagram snapshots into reporting KPI values, so a
+ * monthly client report can carry real social figures instead of hand-typed ones.
+ *
+ * Purely ADDITIVE: `/app/social` keeps sending its own monthly email exactly as
+ * before (the owner chose to keep it), and this job only writes `reportMetrics`.
+ * Nothing here reads or changes that email path.
+ *
+ * Idempotent: the document id is `${businessId}_customer:${customerId}_${periodKey}`,
+ * so a re-run overwrites its own row. `merge: true` means a re-run also cannot wipe
+ * metrics that another source (manual entry, a future GA4 adapter) put in the same
+ * period — only the social keys are rewritten.
+ *
+ * Mirrors src/lib/reporting/sources/social.ts. Duplicated because /api is bundled
+ * separately and must not import the React-side module graph; the unit tests over
+ * there are the specification for these numbers.
+ */
+const SOCIAL_KPI_KEYS = [
+  'social_reach', 'social_impressions', 'engagement', 'engagement_rate',
+  'followers_gained', 'followers_lost', 'net_follower_growth',
+  'profile_visits', 'link_clicks', 'posts_published',
+] as const;
+
+function sumOrNull(list: any[], pick: (m: any) => unknown): number | null {
+  let total = 0;
+  let seen = false;
+  for (const s of list) {
+    const v = pick(s.metrics || {});
+    if (typeof v === 'number' && Number.isFinite(v)) { total += v; seen = true; }
+  }
+  return seen ? total : null;
+}
+
+/** Mirror of mapSocialSnapshotsToKpis. A metric the platform did not return stays null. */
+function mapSocialToKpis(list: any[]): Record<string, number | null> {
+  const reach = sumOrNull(list, m => m.reach);
+  const engagement = sumOrNull(list, m => m.engagement);
+
+  let gained = 0, lost = 0, net = 0, growthSeen = false;
+  for (const s of list) {
+    const g = (s.metrics || {}).followerGrowth;
+    if (typeof g !== 'number' || !Number.isFinite(g)) continue;
+    growthSeen = true;
+    net += g;
+    if (g >= 0) gained += g; else lost += Math.abs(g);
+  }
+
+  return {
+    social_reach: reach,
+    social_impressions: sumOrNull(list, m => m.impressions),
+    engagement,
+    // Recomputed from the sums — averaging two ratios over different audience sizes
+    // describes neither account.
+    engagement_rate: engagement !== null && reach !== null && reach > 0
+      ? Math.round((engagement / reach) * 10000) / 100
+      : null,
+    followers_gained: growthSeen ? gained : null,
+    followers_lost: growthSeen ? lost : null,
+    net_follower_growth: growthSeen ? net : null,
+    profile_visits: sumOrNull(list, m => m.profileViews),
+    link_clicks: sumOrNull(list, m => m.linkClicks),
+    posts_published: sumOrNull(list, m => m.postsCount),
+  };
+}
+
+export async function runReportMetricsSocial(
+  periodKey?: string,
+): Promise<{ written: number; skipped: number; period: string }> {
+  // Default to the month that just ended, which is what the social sync fetches.
+  const now = new Date();
+  const target = periodKey || (() => {
+    const d = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+    return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}`;
+  })();
+
+  // Range-free equality on an indexed field, scoped to one period — never a scan of
+  // every snapshot ever taken.
+  const snaps = await db.collection('socialSnapshots').where('period', '==', target).get();
+  if (snaps.empty) {
+    console.log(`[report-metrics-social] no snapshots for ${target}`);
+    return { written: 0, skipped: 0, period: target };
+  }
+
+  // Group by tenant + customer. A client usually has both a page and an IG account.
+  const groups = new Map<string, any[]>();
+  for (const d of snaps.docs) {
+    const data = d.data() as any;
+    const businessId = data.businessId || data.teamId;
+    if (!businessId || !data.customerId) continue;
+    const key = `${businessId}|${data.customerId}`;
+    groups.set(key, [...(groups.get(key) || []), data]);
+  }
+
+  let written = 0;
+  let skipped = 0;
+
+  for (const [key, list] of groups) {
+    const [businessId, customerId] = key.split('|');
+    const values = mapSocialToKpis(list);
+
+    // Every metric null means the API returned nothing usable. Writing that row would
+    // claim "we measured and found nothing", which is not what happened.
+    if (!Object.values(values).some(v => v !== null)) { skipped++; continue; }
+
+    const origins: Record<string, string> = {};
+    for (const k of SOCIAL_KPI_KEYS) if (values[k] !== null) origins[k] = 'social:meta';
+
+    const first = list[0];
+    const ref = db.collection('reportMetrics').doc(`${businessId}_customer:${customerId}_${target}`);
+    try {
+      await ref.set(stripUndefined({
+        businessId,
+        customerId,
+        service: 'social',
+        periodKey: target,
+        periodStart: `${target}-01`,
+        periodEnd: toIso(new Date(Date.UTC(
+          Number(target.slice(0, 4)), Number(target.slice(5, 7)), 0,
+        ))),
+        // Dotted paths would be needed to merge INTO maps; instead the whole social
+        // slice is rewritten while `merge: true` preserves sibling top-level fields.
+        values,
+        origins,
+        syncedAt: admin.firestore.Timestamp.now(),
+        updatedAt: admin.firestore.Timestamp.now(),
+        createdAt: admin.firestore.Timestamp.now(),
+        createdByUserId: null,
+      }), { merge: true });
+      written++;
+    } catch (err) {
+      console.error(`[report-metrics-social] ${key} failed:`, err);
+    }
+  }
+
+  console.log(`[report-metrics-social] period=${target} written=${written} skipped=${skipped}`);
+  return { written, skipped, period: target };
 }
 
 // ── shared helpers ────────────────────────────────────────────────────────────

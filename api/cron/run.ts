@@ -13,7 +13,7 @@ import { syncTenantClaims } from '../_tenantClaims.js';
 import { writeAudit } from '../_audit.js';
 // Reporting module jobs. Kept in their own file: they are self-contained,
 // idempotent, and this file is already 3.4k lines.
-import { runReportSchedules, runReportReminders, runClientHealthRollup } from '../_reportJobs.js';
+import { runReportSchedules, runReportReminders, runClientHealthRollup, runReportMetricsSocial } from '../_reportJobs.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 function authorize(req: VercelRequest): boolean {
@@ -3404,6 +3404,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         // Persist a client-health snapshot per tenant per month (trend history).
         result = await runClientHealthRollup();
         break;
+      case 'report-metrics-social':
+        // socialSnapshots → reportMetrics, so the monthly client report can carry
+        // real social figures. Additive: /app/social keeps its own email.
+        result = await runReportMetricsSocial(req.query.period as string | undefined);
+        break;
       case 'social-monthly-sync':
         result = await runSocialMonthlySync(req.query.period as string | undefined, { email: req.query.email !== '0' });
         break;
@@ -3468,7 +3473,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social` });
     }
 
     return res.status(200).json({ success: true, job, ...result, timestamp: new Date().toISOString() });

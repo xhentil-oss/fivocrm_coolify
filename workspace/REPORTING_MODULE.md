@@ -78,14 +78,35 @@ is a link rather than a set of instructions.
 
 Sidebar went from seven reporting-ish entries across three groups to four under one.
 
-### Open decision — the second client-reporting path
+### Social as a KPI source (decision (b) — additive, nothing retired)
 
-`/app/social` still emails monthly FB/IG analytics straight to the client, with **no
-internal approval, no pinned version and no audit trail**, in parallel to the module's
-publish flow. That duplication is the remaining source of confusion. Closing it means
-turning the social analytics into a KPI source that feeds `reportMetrics` (so it
-appears inside the approved monthly report) and retiring the standalone email — which
-is a visible change for any client who expects that email as-is. Not done unilaterally.
+`/app/social` keeps sending its own monthly FB/IG email exactly as before; the owner
+chose not to change what clients already receive. On top of that, social figures now
+also flow into the reporting module:
+
+```
+socialSnapshots ──[report-metrics-social]──> reportMetrics ──["Merr metrikat"]──> report.kpiValues
+```
+
+- `src/lib/reporting/sources/social.ts` maps snapshot metrics onto the catalog keys
+  (`social_reach`, `engagement_rate`, `net_follower_growth`, …). 14 unit tests.
+- Figures are **summed across platforms** (a client's page + IG together is what
+  "reach this month" means), except `engagement_rate`, which is recomputed from the
+  summed engagement and reach — averaging two ratios over different audience sizes
+  describes neither account.
+- A metric the Meta API did not return stays `null`, never 0 — same rule, same reason
+  as the accountability metrics.
+- `report-metrics-social` runs on the 1st at 05:00 UTC, after `social-monthly-sync`
+  has pulled the finished month. Idempotent: deterministic doc id, `merge: true`, so a
+  re-run rewrites only the social keys and cannot wipe manually entered ones.
+- In the report, **"Merr metrikat"** pulls the report's own period plus the previous
+  one (so cards can compare) and **snapshots** the values onto the report — a later
+  re-sync never rewrites a published report (rule 15).
+
+**The duplication remains by choice**: two paths still reach the client, and only one
+of them has approval, versioning and an audit trail. If that ever becomes a problem,
+closing it is now a small step — the KPI source already exists, so it is only the
+standalone email that would need retiring.
 
 ---
 

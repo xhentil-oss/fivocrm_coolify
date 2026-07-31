@@ -919,6 +919,12 @@ function startCronSchedulers(): void {
   scheduleDailyUtc(4, 0, () => {
     if (new Date().getUTCDate() === 1) void triggerCronJob('client-health-rollup');
   });
+  // Social → reportMetrics. Runs on the 1st, AFTER social-monthly-sync has pulled the
+  // month that just ended (that job fires on the last day at 22:00), so the monthly
+  // client report finds real figures rather than an empty KPI block.
+  scheduleDailyUtc(5, 0, () => {
+    if (new Date().getUTCDate() === 1) void triggerCronJob('report-metrics-social');
+  });
   // Kick the frequent set shortly after boot so a restart doesn't stall a broadcast.
   setTimeout(() => { void triggerCronJob('whatsapp-broadcasts'); }, MIN);
   console.log(`[CRON] ✅ Schedulerët aktiv → ${CRM_BASE_URL} (daily run-all @ ${CRON_DAILY_HOUR}:00 UTC)`);

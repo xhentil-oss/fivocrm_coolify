@@ -15,7 +15,7 @@
  */
 
 import { useCallback, useMemo } from 'react';
-import { Timestamp, doc, getDocs, collection, query, where, limit, updateDoc } from 'firebase/firestore';
+import { Timestamp, doc, getDoc, getDocs, collection, query, where, limit, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -44,6 +44,7 @@ import {
 import { checkReportQuality } from '../lib/reporting/quality';
 import { instantiateTemplate, pickTemplate } from '../lib/reporting/templates';
 import { buildPeriod } from '../lib/reporting/period';
+import { buildKpiValues } from '../lib/reporting/kpi';
 import { reportDeepLink } from '../lib/deepLinks';
 import type {
   Report,
@@ -59,6 +60,7 @@ import type {
   ReportStatus,
   ReportTemplate,
   ReportVersion,
+  ReportMetricSet,
 } from '../types';
 
 /** Snapshots are taken on submit and on publish — the two moments that matter. */
@@ -473,6 +475,58 @@ export function useReports(options: UseReportsOptions = {}) {
     } as any);
   }, [commentsApi, user]);
 
+  // ── metric ingestion ──────────────────────────────────────────────────────────
+
+  /**
+   * Fill the report's KPI snapshot from `reportMetrics` for its own period, plus the
+   * previous period so every card can show a comparison.
+   *
+   * `reportMetrics` is written by the integration jobs (currently
+   * `report-metrics-social`; GA4/Ads adapters will write the same shape), and it is
+   * deliberately separate from the report: deleting or re-drafting a report never
+   * loses the underlying numbers.
+   *
+   * Values are SNAPSHOTTED onto the report, not referenced — that is what makes rule
+   * 15 true (a historical report keeps the figures it was published with, even if the
+   * source is later re-synced).
+   */
+  const pullMetrics = useCallback(async (report: Report): Promise<{ filled: number }> => {
+    const bid = report.businessId;
+    const scopeKey = report.projectId ? `project:${report.projectId}`
+      : report.customerId ? `customer:${report.customerId}` : null;
+    if (!scopeKey) throw new Error('Raporti nuk ka klient apo projekt, ndaj nuk ka metrika për të marrë.');
+
+    const prev = previousPeriodKey(report.period.key);
+    const read = async (periodKey: string): Promise<Record<string, number | null>> => {
+      const snap = await getDoc(doc(db, 'reportMetrics', `${bid}_${scopeKey}_${periodKey}`));
+      return snap.exists() ? ((snap.data() as ReportMetricSet).values || {}) : {};
+    };
+
+    const [current, previous] = await Promise.all([read(report.period.key), prev ? read(prev) : Promise.resolve({})]);
+
+    // Only KPIs the report actually references — pulling the whole catalog onto every
+    // report would bloat the document and show the client metrics nobody chose.
+    const referenced = new Set((report.blocks || []).flatMap(b => b.kpiIds || []));
+    const relevant = (kpis || []).filter(k => referenced.has(k.id));
+    if (!relevant.length) throw new Error('Asnjë bllok KPI në raport. Shtoni një bllok me KPI së pari.');
+
+    const values = buildKpiValues(relevant, current, previous, {
+      customerId: report.customerId,
+      projectId: report.projectId,
+      service: report.service,
+      periodKey: report.period.key,
+    });
+    const filled = values.filter(v => v.value !== null && v.value !== undefined).length;
+
+    await reportsApi.update(report.id, {
+      kpiValues: values,
+      revision: (report.revision || 1) + 1,
+    } as any);
+    await logEvent(report, 'updated', { field: 'kpiValues', meta: { filled, of: values.length } });
+
+    return { filled };
+  }, [kpis, reportsApi, logEvent]);
+
   // ── idempotency helper (shared with the cron) ─────────────────────────────────
 
   /** Has a report already been generated for this (schedule, period)? */
@@ -509,6 +563,7 @@ export function useReports(options: UseReportsOptions = {}) {
     addComment,
     resolveComment,
     logEvent,
+    pullMetrics,
     findByGenerationKey,
   };
 }
@@ -551,5 +606,26 @@ export function useReport(reportId: string | undefined) {
 }
 
 const tms = (d: Date | undefined) => (d instanceof Date ? d.getTime() : 0);
+
+/**
+ * Previous period key, by string arithmetic on the canonical form. Kept local rather
+ * than importing `previousPeriod`, because that needs a full ReportPeriod and here
+ * only the key is known.
+ */
+function previousPeriodKey(key: string): string | null {
+  const month = /^(\d{4})-(\d{2})$/.exec(key);
+  if (month) {
+    const y = Number(month[1]);
+    const m = Number(month[2]);
+    return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+  }
+  const quarter = /^(\d{4})-Q([1-4])$/.exec(key);
+  if (quarter) {
+    const y = Number(quarter[1]);
+    const q = Number(quarter[2]);
+    return q === 1 ? `${y - 1}-Q4` : `${y}-Q${q - 1}`;
+  }
+  return null;
+}
 
 export default useReports;

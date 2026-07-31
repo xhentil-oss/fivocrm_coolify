@@ -15,7 +15,7 @@ import React, { useMemo, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import {
   AlertTriangle, ArrowLeft, BadgeCheck, CheckCircle2, ClipboardCheck, Download,
-  Eye, FileText, History, Lock, Pencil, Save, Send, Sparkles, Trash2, XCircle,
+  Eye, FileText, History, Lock, Pencil, RefreshCw, Save, Send, Sparkles, Trash2, XCircle,
 } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -77,7 +77,7 @@ const ReportDetailView: React.FC = () => {
   const { comments, versions, approvals, events } = useReport(reportId);
   const {
     kpis, viewer, actorFor, audienceFor, saveContent, setHealth, transition,
-    addComment, resolveComment, softDelete, logEvent,
+    addComment, resolveComment, softDelete, logEvent, pullMetrics,
   } = useReports({ skip: true });
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
   const { getName } = useUserNames(teamMembers);
@@ -89,6 +89,7 @@ const ReportDetailView: React.FC = () => {
   const [reasonFor, setReasonFor] = useState<ReportStatus | null>(null);
   const [reason, setReason] = useState('');
   const [healthDialog, setHealthDialog] = useState(false);
+  const [pulling, setPulling] = useState(false);
 
   const dirty = draftBlocks !== null || draftTitle !== null;
   useUnsavedChanges(dirty);
@@ -257,6 +258,33 @@ const ReportDetailView: React.FC = () => {
             {dirty && (
               <Button onClick={save} disabled={saving} className="gap-1.5">
                 <Save className="w-4 h-4" /> {saving ? 'Duke ruajtur…' : 'Ruaj'}
+              </Button>
+            )}
+            {/* Pulls figures the integration jobs collected (currently Facebook/
+                Instagram via report-metrics-social) into this report's KPI snapshot,
+                together with the previous period so the cards can compare. */}
+            {(report.customerId || report.projectId) && editable && (
+              <Button
+                variant="outline" size="sm" className="gap-1.5"
+                disabled={pulling}
+                onClick={async () => {
+                  setPulling(true);
+                  try {
+                    const { filled } = await pullMetrics(report);
+                    toast({
+                      title: filled ? `${filled} KPI u mbushën` : 'Pa metrika për këtë periudhë',
+                      description: filled
+                        ? 'Vlerat u fiksuan në raport; një sinkronizim i mëpasshëm nuk i ndryshon.'
+                        : 'Integrimet nuk kanë shkruar të dhëna për këtë periudhë. Plotësojini me dorë.',
+                    });
+                  } catch (err: any) {
+                    toast({ title: 'Nuk u marrën metrikat', description: err?.message, variant: 'destructive' });
+                  } finally {
+                    setPulling(false);
+                  }
+                }}
+              >
+                <RefreshCw className={`w-4 h-4 ${pulling ? 'animate-spin' : ''}`} /> Merr metrikat
               </Button>
             )}
             <Button variant="outline" size="sm" onClick={() => exportPdf('internal')} className="gap-1.5">
