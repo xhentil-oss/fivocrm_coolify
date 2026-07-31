@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { useCollection, useMutation, useGlobalBusinessId, useIsSuperAdmin } from '../hooks/useFirestore';
+import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { getDocs, query, where, collection, deleteDoc, doc, updateDoc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -74,20 +74,24 @@ const TeamsView: React.FC = () => {
   const [teamToDelete, setTeamToDelete] = useState<Team | null>(null);
 
   const businessId = useGlobalBusinessId();
-  const isSuperAdmin = useIsSuperAdmin();
   const { seats } = useSubscription();
-  // A team is a DEPARTMENT INSIDE a business, so the query is constrained to the
-  // active business server-side. (Client-side filtering is not enough any more: the
-  // hardened `teams` rule denies a query that would touch another tenant's team.)
+  // A team is a DEPARTMENT INSIDE a business, so this page NEVER leaves the active
+  // business — super-admins included. `teams`/`teamMembers`/`teamInvites` are in
+  // SUPER_ADMIN_BYPASS_COLLECTIONS, so useCollection drops its automatic businessId
+  // filter for them; without the explicit predicate below a super-admin saw every
+  // tenant's department here, which read as "teams created themselves". Cross-tenant
+  // listing lives in the console (/app/tenants), not in department management.
+  const businessScope = useMemo(
+    () => (businessId ? [{ field: 'businessId', operator: '==', value: businessId }] : undefined),
+    [businessId]
+  );
   const { data: allTeams, loading: teamsLoading } = useCollection<Team>('teams', {
-    skip: !businessId && !isSuperAdmin,
-    where: businessId && !isSuperAdmin
-      ? [{ field: 'businessId', operator: '==', value: businessId }]
-      : undefined,
+    skip: !businessId,
+    where: businessScope,
     skipTeamFilter: true,
   });
   const teams = useMemo(() => {
-    const list = (allTeams || []).filter(t => !businessId || isSuperAdmin || (t as any).businessId === businessId);
+    const list = (allTeams || []).filter(t => (t as any).businessId === businessId);
     // Sorted here rather than server-side: `where + orderBy` on different fields
     // would need a composite index for no benefit at this size.
     return [...list].sort((a, b) => {
@@ -95,10 +99,15 @@ const TeamsView: React.FC = () => {
       const tb = (b as any).createdAt instanceof Date ? (b as any).createdAt.getTime() : 0;
       return tb - ta;
     });
-  }, [allTeams, businessId, isSuperAdmin]);
-  // teamMembers/teamInvites are business-scoped by useCollection automatically.
-  const { data: teamMembers } = useCollection<TeamMember>('teamMembers');
-  const { data: teamInvites } = useCollection<TeamInvite>('teamInvites');
+  }, [allTeams, businessId]);
+  const { data: teamMembers } = useCollection<TeamMember>('teamMembers', {
+    skip: !businessId,
+    where: businessScope,
+  });
+  const { data: teamInvites } = useCollection<TeamInvite>('teamInvites', {
+    skip: !businessId,
+    where: businessScope,
+  });
 
   const { getName, getInitials } = useUserNames(teamMembers || []);
   
