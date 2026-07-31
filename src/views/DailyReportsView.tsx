@@ -50,6 +50,23 @@ function getWeekDates(offset: number): { start: string; end: string; days: strin
   return { start: days[0], end: days[6], days };
 }
 
+/** §3.1 daily status — the structured counterpart to the free-text `mood`. */
+const DAILY_STATUS_META: Record<string, { label: string; cls: string }> = {
+  on_track: { label: 'Në rrugë', cls: 'bg-success/10 text-success border-success/30' },
+  needs_attention: { label: 'Kërkon vëmendje', cls: 'bg-warning/10 text-warning border-warning/30' },
+  blocked: { label: 'Bllokuar', cls: 'bg-error/10 text-error border-error/30' },
+  at_risk: { label: 'Në rrezik', cls: 'bg-error/10 text-error border-error/30' },
+  completed: { label: 'Përfunduar', cls: 'bg-primary/10 text-primary border-primary/30' },
+};
+
+const WORK_LOCATION_LABELS: Record<string, string> = {
+  office: 'Zyrë', remote: 'Remote', client_site: 'Tek klienti', field: 'Terren', travel: 'Udhëtim',
+};
+
+const WORKING_STATUS_LABELS: Record<string, string> = {
+  working: 'Punë', partial: 'Ditë e pjesshme', leave: 'Leje', sick: 'Sëmundje', holiday: 'Festë',
+};
+
 const moodIcons: Record<string, { icon: React.ComponentType<any>; color: string; label: string }> = {
   great: { icon: Smile, color: 'text-success', label: 'Shkëlqyer' },
   good: { icon: Smile, color: 'text-primary', label: 'Mirë' },
@@ -73,6 +90,9 @@ const DailyReportsView: React.FC = () => {
   });
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
   const { data: projects } = useCollection<Project>('projects');
+  // Managers resolve blockers from the detail dialog. (`CreateReportDialog` further
+  // down has its OWN mutation — that one is out of scope here.)
+  const reportMutation = useMutation<DailyReport>('dailyReports');
   const { getName, getInitials } = useUserNames(teamMembers);
 
   const activeMembers = useMemo(() => {
@@ -508,6 +528,95 @@ const DailyReportsView: React.FC = () => {
                 </div>
               )}
 
+              {/* Blocker lifecycle: marking a blocker resolved is what makes "average
+                  blocker resolution time" measurable. Without it every blocker reads as
+                  permanently unresolved and the accountability panel over-flags people. */}
+              {selectedReport.blockers?.trim() && isManagerOrAbove && (
+                <div className="flex items-center justify-between gap-2 -mt-2">
+                  {selectedReport.blockerResolvedAt ? (
+                    <span className="text-xs text-success flex items-center gap-1.5">
+                      <CheckCircle2 className="w-3.5 h-3.5" /> Pengesa u zgjidh
+                    </span>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">Pengesa është e hapur</span>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={async () => {
+                      const resolved = !!selectedReport.blockerResolvedAt;
+                      try {
+                        await reportMutation.update(selectedReport.id, {
+                          blockerResolvedAt: resolved ? null : new Date(),
+                        } as any);
+                        setSelectedReport({
+                          ...selectedReport,
+                          blockerResolvedAt: resolved ? undefined : new Date(),
+                        });
+                        toast({ title: resolved ? 'Pengesa u rihap' : 'Pengesa u shënua e zgjidhur' });
+                      } catch (err: any) {
+                        toast({ title: 'Nuk u ruajt', description: err?.message, variant: 'destructive' });
+                      }
+                    }}
+                  >
+                    {selectedReport.blockerResolvedAt ? 'Rihap' : 'Shëno të zgjidhur'}
+                  </Button>
+                </div>
+              )}
+
+              {(selectedReport.risks?.trim() || selectedReport.helpNeeded?.trim()
+                || selectedReport.clientDependencies?.trim() || selectedReport.internalDependencies?.trim()) && (
+                <div className="space-y-3">
+                  {selectedReport.risks?.trim() && (
+                    <div>
+                      <Label className="flex items-center gap-2 mb-1 text-warning">
+                        <AlertTriangle className="w-4 h-4" /> Në rrezik
+                      </Label>
+                      <p className="text-sm whitespace-pre-wrap bg-warning/5 border border-warning/20 p-3 rounded-lg">
+                        {selectedReport.risks}
+                      </p>
+                    </div>
+                  )}
+                  {selectedReport.helpNeeded?.trim() && (
+                    <div>
+                      <Label className="mb-1 text-primary">Kërkon ndihmë / aprovim</Label>
+                      <p className="text-sm whitespace-pre-wrap bg-primary/5 border border-primary/20 p-3 rounded-lg">
+                        {selectedReport.helpNeeded}
+                      </p>
+                    </div>
+                  )}
+                  {(selectedReport.clientDependencies?.trim() || selectedReport.internalDependencies?.trim()) && (
+                    <div className="grid sm:grid-cols-2 gap-2">
+                      {selectedReport.clientDependencies?.trim() && (
+                        <div className="bg-muted/50 p-2.5 rounded-lg">
+                          <span className="text-xs text-muted-foreground block">Pret nga klienti</span>
+                          <span className="text-sm">{selectedReport.clientDependencies}</span>
+                        </div>
+                      )}
+                      {selectedReport.internalDependencies?.trim() && (
+                        <div className="bg-muted/50 p-2.5 rounded-lg">
+                          <span className="text-xs text-muted-foreground block">Pret nga ekipi</span>
+                          <span className="text-sm">{selectedReport.internalDependencies}</span>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Management-only note — honours the visibility promised in the form. */}
+              {selectedReport.notes?.trim() && isManagerOrAbove && (
+                <div>
+                  <Label className="mb-1 flex items-center gap-1.5">
+                    Për menaxhimin
+                    <Badge variant="outline" className="text-[10px]">vetëm menaxhimi</Badge>
+                  </Label>
+                  <p className="text-sm whitespace-pre-wrap bg-muted p-3 rounded-lg">
+                    {selectedReport.notes}
+                  </p>
+                </div>
+              )}
+
               {selectedReport.planTomorrow?.trim() && (
                 <div>
                   <Label className="flex items-center gap-2 mb-1 text-primary">
@@ -519,11 +628,33 @@ const DailyReportsView: React.FC = () => {
                 </div>
               )}
 
-              <div className="flex items-center gap-4 pt-2 text-sm text-muted-foreground">
+              <div className="flex items-center gap-3 flex-wrap pt-2 text-sm text-muted-foreground">
+                {selectedReport.dailyStatus && (
+                  <Badge variant="outline" className={`text-[10px] ${DAILY_STATUS_META[selectedReport.dailyStatus].cls}`}>
+                    {DAILY_STATUS_META[selectedReport.dailyStatus].label}
+                  </Badge>
+                )}
+                {selectedReport.workLocation && (
+                  <span className="text-xs">{WORK_LOCATION_LABELS[selectedReport.workLocation]}</span>
+                )}
+                {selectedReport.workingStatus && selectedReport.workingStatus !== 'working' && (
+                  <Badge variant="outline" className="text-[10px]">
+                    {WORKING_STATUS_LABELS[selectedReport.workingStatus]}
+                  </Badge>
+                )}
                 {selectedReport.hoursWorked && (
                   <span className="flex items-center gap-1">
                     <Clock className="w-3.5 h-3.5" /> {selectedReport.hoursWorked} orë
+                    {/* Absent split means "not measured" — never rendered as 0h. */}
+                    {selectedReport.billableHours !== undefined && (
+                      <span className="text-xs">({selectedReport.billableHours}h të faturueshme)</span>
+                    )}
                   </span>
+                )}
+                {selectedReport.wasLate && (
+                  <Badge variant="outline" className="text-[10px] bg-warning/10 text-warning border-warning/30">
+                    dorëzuar me vonesë
+                  </Badge>
                 )}
                 {selectedReport.mood && (() => {
                   const m = moodIcons[selectedReport.mood];

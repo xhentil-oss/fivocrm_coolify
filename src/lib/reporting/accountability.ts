@@ -112,27 +112,39 @@ export function computeEmployeeMetrics(input: AccountabilityInput): EmployeeAcco
 
   let hoursWorked = 0;
   let billableHours = 0;
+  /** Was the billable/non-billable split actually measured? See the type doc. */
+  let billableKnown = false;
   if (entries.length) {
     for (const e of entries) {
       const hrs = entryDurationMinutes(e) / 60;
       hoursWorked += hrs;
       if (e.isBillable !== false) billableHours += hrs;
     }
+    // A time entry always states whether it is billable, so the split IS known.
+    billableKnown = true;
   } else {
     for (const r of submitted) {
       hoursWorked += r.hoursWorked || 0;
       billableHours += r.billableHours ?? 0;
     }
-    // No per-report split recorded at all → billable is unknown, not zero.
-    if (!submitted.some(r => r.billableHours !== undefined)) billableHours = 0;
+    // Known only if at least one report actually carried the split. Otherwise the
+    // total stays unknown — reporting 0 here would render as "0h billable / 100%
+    // non-billable", which reads as a finding about the person rather than a gap in
+    // the data. See EmployeeAccountabilityMetrics.billableHours.
+    billableKnown = submitted.some(r => r.billableHours !== undefined);
   }
+
   const reportedNonBillable = submitted.reduce((s, r) => s + (r.nonBillableHours || 0), 0);
   const nonBillableHours = reportedNonBillable > 0
-    ? reportedNonBillable
-    : Math.max(0, round1(hoursWorked - billableHours));
+    ? round1(reportedNonBillable)
+    : billableKnown
+      ? Math.max(0, round1(hoursWorked - billableHours))
+      : null;
 
   const capacity = elapsedWorkDays.length * contracted;
-  const utilisationRate = capacity > 0 && hoursWorked > 0
+  // Utilisation is billable-over-capacity, so an unknown numerator makes the whole
+  // ratio unknown — never 0%.
+  const utilisationRate = billableKnown && capacity > 0 && hoursWorked > 0
     ? round2(billableHours / capacity)
     : null;
 
@@ -174,8 +186,8 @@ export function computeEmployeeMetrics(input: AccountabilityInput): EmployeeAcco
     tasksOverdue: overdue.length,
     completionRate: completionRate === null ? null : round2(completionRate),
     hoursWorked: round1(hoursWorked),
-    billableHours: round1(billableHours),
-    nonBillableHours: round1(nonBillableHours),
+    billableHours: billableKnown ? round1(billableHours) : null,
+    nonBillableHours,
     utilisationRate,
     blockersReported: withBlockers.length,
     blockersUnresolved: unresolved.length,
@@ -324,8 +336,11 @@ export interface TeamAccountabilitySummary {
   unresolvedBlockers: number;
   overdueTasks: number;
   totalHours: number;
-  billableHours: number;
+  /** NULL when nobody's split was measured — see the per-person metric. */
+  billableHours: number | null;
   billableUtilisation: number | null;
+  /** How many of `members` actually have a measured billable split. */
+  membersWithMeasuredHours: number;
 }
 
 export function summariseTeam(
@@ -337,7 +352,12 @@ export function summariseTeam(
   const expected = sum(m => m.expectedDailyReports);
   const submitted = sum(m => m.submittedDailyReports);
   const hours = sum(m => m.hoursWorked);
-  const billable = sum(m => m.billableHours);
+
+  // Only members whose split was actually measured contribute; if none were, the
+  // team total is unknown rather than 0 (same rule as the per-person metric).
+  const measured = entries.filter(e => e.metrics.billableHours !== null);
+  const billable = measured.reduce((s, e) => s + (e.metrics.billableHours as number), 0);
+  const measuredHours = measured.reduce((s, e) => s + e.metrics.hoursWorked, 0);
 
   return {
     members: entries.length,
@@ -349,8 +369,11 @@ export function summariseTeam(
     unresolvedBlockers: sum(m => m.blockersUnresolved),
     overdueTasks: sum(m => m.tasksOverdue),
     totalHours: round1(hours),
-    billableHours: round1(billable),
-    billableUtilisation: hours > 0 ? round2(billable / hours) : null,
+    billableHours: measured.length ? round1(billable) : null,
+    // Denominator is the hours of the SAME people whose split is known, otherwise
+    // the ratio silently mixes measured billable hours with unmeasured totals.
+    billableUtilisation: measuredHours > 0 ? round2(billable / measuredHours) : null,
+    membersWithMeasuredHours: measured.length,
   };
 }
 

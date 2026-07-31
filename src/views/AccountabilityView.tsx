@@ -150,9 +150,14 @@ const AccountabilityView: React.FC = () => {
         />
         <Tile
           label="Orë të faturueshme"
-          value={`${team.billableHours}h`}
-          sub={team.billableUtilisation === null ? `${team.totalHours}h gjithsej`
-            : `${Math.round(team.billableUtilisation * 100)}% e ${team.totalHours}h`}
+          value={team.billableHours === null ? '—' : `${team.billableHours}h`}
+          sub={team.billableHours === null
+            ? `${team.totalHours}h gjithsej · ndarja nuk matet`
+            : team.billableUtilisation === null
+              ? `${team.totalHours}h gjithsej`
+              : `${Math.round(team.billableUtilisation * 100)}% e ${team.totalHours}h`
+              + (team.membersWithMeasuredHours < team.members
+                ? ` · ${team.membersWithMeasuredHours}/${team.members} të matur` : '')}
         />
       </div>
 
@@ -260,7 +265,10 @@ const AccountabilityView: React.FC = () => {
                   <Metric label="Detyra vonuar" value={String(metrics.tasksOverdue)}
                     tone={metrics.tasksOverdue > 4 ? 'warning' : undefined} />
                   <Metric label="Orë" value={`${metrics.hoursWorked}h`} />
-                  <Metric label="Faturueshme" value={`${metrics.billableHours}h`} />
+                  <Metric
+                    label="Faturueshme"
+                    value={metrics.billableHours === null ? '—' : `${metrics.billableHours}h`}
+                  />
                   <Metric
                     label="Utilizim"
                     value={metrics.utilisationRate === null ? '—' : `${Math.round(metrics.utilisationRate * 100)}%`}

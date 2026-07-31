@@ -198,6 +198,50 @@ describe('computeEmployeeMetrics — hours', () => {
     });
     expect(m.hoursWorked).toBe(8);
     expect(m.billableHours).toBe(6);
+    expect(m.nonBillableHours).toBe(2);
+  });
+
+  // A false 0 is worse than an honest blank: "0h billable / 100% non-billable" reads
+  // as a finding about the person, when in truth nothing was measured.
+  it('reports an UNMEASURED billable split as null, never as zero', () => {
+    const m = computeEmployeeMetrics({
+      userId: 'u1',
+      period: WEEK,
+      // Hours reported, but no billable split and no time entries.
+      dailyReports: [daily('2026-07-27', { hoursWorked: 8 })],
+      now: FRIDAY,
+    });
+    expect(m.hoursWorked).toBe(8);
+    expect(m.billableHours).toBeNull();
+    expect(m.nonBillableHours).toBeNull();
+    expect(m.utilisationRate).toBeNull();
+  });
+
+  it('treats the split as known once ANY report carries it', () => {
+    const m = computeEmployeeMetrics({
+      userId: 'u1',
+      period: WEEK,
+      dailyReports: [
+        daily('2026-07-27', { hoursWorked: 8, billableHours: 5 }),
+        daily('2026-07-28', { hoursWorked: 8 }),
+      ],
+      now: FRIDAY,
+    });
+    expect(m.billableHours).toBe(5);
+    expect(m.nonBillableHours).toBe(11); // 16 worked − 5 billable
+  });
+
+  it('treats time entries as always measured (each states isBillable)', () => {
+    const m = computeEmployeeMetrics({
+      userId: 'u1',
+      period: WEEK,
+      dailyReports: [],
+      timeEntries: [entry('2026-07-27', 120, false)], // 2h, non-billable
+      now: FRIDAY,
+    });
+    expect(m.billableHours).toBe(0);        // genuinely zero, and known
+    expect(m.nonBillableHours).toBe(2);
+    expect(m.utilisationRate).toBe(0);
   });
 
   it('computes utilisation against elapsed capacity', () => {
@@ -216,6 +260,7 @@ describe('computeEmployeeMetrics — hours', () => {
   it('returns null utilisation when nothing was logged', () => {
     const m = computeEmployeeMetrics({ userId: 'u1', period: WEEK, dailyReports: [], now: FRIDAY });
     expect(m.utilisationRate).toBeNull();
+    expect(m.billableHours).toBeNull();
   });
 });
 
@@ -366,13 +411,38 @@ describe('summariseTeam', () => {
     expect(s.members).toBe(2);
     expect(s.submissionRate).toBe(0.8);
     expect(s.totalHours).toBe(70);
+    expect(s.billableHours).toBe(47);
     expect(s.billableUtilisation).toBe(0.67);
+    expect(s.membersWithMeasuredHours).toBe(2);
+  });
+
+  it('excludes unmeasured members from the billable ratio instead of diluting it', () => {
+    const base = computeEmployeeMetrics({ userId: 'u1', period: WEEK, dailyReports: [], now: FRIDAY });
+    const s = summariseTeam([
+      // measured: 8 of 10 hours billable
+      { userId: 'a', metrics: { ...base, hoursWorked: 10, billableHours: 8 } },
+      // unmeasured: 40 hours worked, split unknown — must not drag the ratio down
+      { userId: 'b', metrics: { ...base, hoursWorked: 40, billableHours: null } },
+    ]);
+    expect(s.totalHours).toBe(50);
+    expect(s.billableHours).toBe(8);
+    expect(s.billableUtilisation).toBe(0.8);
+    expect(s.membersWithMeasuredHours).toBe(1);
+  });
+
+  it('reports team billable hours as null when nobody was measured', () => {
+    const base = computeEmployeeMetrics({ userId: 'u1', period: WEEK, dailyReports: [], now: FRIDAY });
+    const s = summariseTeam([{ userId: 'a', metrics: { ...base, hoursWorked: 20, billableHours: null } }]);
+    expect(s.billableHours).toBeNull();
+    expect(s.billableUtilisation).toBeNull();
+    expect(s.membersWithMeasuredHours).toBe(0);
   });
 
   it('handles an empty team without dividing by zero', () => {
     const s = summariseTeam([]);
     expect(s.members).toBe(0);
     expect(s.submissionRate).toBeNull();
+    expect(s.billableHours).toBeNull();
     expect(s.billableUtilisation).toBeNull();
   });
 });

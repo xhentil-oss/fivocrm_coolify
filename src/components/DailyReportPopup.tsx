@@ -19,6 +19,12 @@ import type { DailyReport, Project, Task, Lead, StandupEntry, TeamMember, Notifi
 
 const POPUP_HOUR = 16;
 const POPUP_MINUTE = 45;
+/**
+ * Local hour the daily report is due. Drives `dueAt`/`wasLate`, which are what make
+ * "late reports" and "average submission delay" measurable at all — before this the
+ * accountability dashboard could only ever report 0 late reports.
+ */
+const DAILY_DUE_HOUR = 18;
 
 function getTodayString(): string {
   const d = new Date();
@@ -41,6 +47,18 @@ const DailyReportPopup: React.FC = () => {
   const [selectedTaskIds, setSelectedTaskIds] = useState<string[]>([]);
   const [customFields, setCustomFields] = useState<Record<string, string | number>>({});
   const [submitting, setSubmitting] = useState(false);
+  // ── §3.1 accountability fields ──
+  const [dailyStatus, setDailyStatus] = useState<NonNullable<DailyReport['dailyStatus']>>('on_track');
+  const [workLocation, setWorkLocation] = useState<NonNullable<DailyReport['workLocation']>>('office');
+  const [workingStatus, setWorkingStatus] = useState<NonNullable<DailyReport['workingStatus']>>('working');
+  const [billableHours, setBillableHours] = useState<string>('');
+  const [risks, setRisks] = useState('');
+  const [helpNeeded, setHelpNeeded] = useState('');
+  const [clientDependencies, setClientDependencies] = useState('');
+  const [internalDependencies, setInternalDependencies] = useState('');
+  const [mgmtNotes, setMgmtNotes] = useState('');
+  // The extra section stays collapsed so the daily habit remains a 30-second job.
+  const [showDetails, setShowDetails] = useState(false);
 
   const serviceLine = useMyServiceLine();
   const today = getTodayString();
@@ -210,6 +228,25 @@ const DailyReportPopup: React.FC = () => {
         await taskMutation.update(taskId, { status: 'Done' } as any);
       }
 
+      // The deadline is a real instant, so lateness is measurable rather than guessed.
+      const now = new Date();
+      const dueAt = new Date(now);
+      dueAt.setHours(DAILY_DUE_HOUR, 0, 0, 0);
+
+      const workedHours = parseFloat(hoursWorked) || 8;
+      // Only send the split when the person actually typed it — an absent split must
+      // stay ABSENT, so the dashboard shows "not measured" instead of a false 0h.
+      const billable = billableHours.trim() === '' ? undefined
+        : Math.max(0, Math.min(workedHours, parseFloat(billableHours) || 0));
+
+      // Customers are DERIVED from the projects already selected, rather than asking
+      // for the same information twice (the spec's "the system should suggest").
+      const derivedCustomerIds = Array.from(new Set(
+        selectedProjectIds
+          .map(id => (projects || []).find(p => p.id === id)?.customerId)
+          .filter((c): c is string => !!c),
+      ));
+
       await reportMutation.create({
         userId: user.uid,
         date: today,
@@ -217,12 +254,27 @@ const DailyReportPopup: React.FC = () => {
         openItems: openItems.trim(),
         blockers: blockers.trim(),
         planTomorrow: planTomorrow.trim(),
-        hoursWorked: parseFloat(hoursWorked) || 8,
+        hoursWorked: workedHours,
         projectIds: selectedProjectIds,
         completedTaskIds: allCompletedIds.length > 0 ? allCompletedIds : undefined,
         mood,
         serviceLine: normalizeServiceLine(serviceLine) || undefined,
         customFields: Object.keys(customFields).length ? customFields : undefined,
+        // ── §3.1 accountability ──
+        dailyStatus,
+        workLocation,
+        workingStatus,
+        billableHours: billable,
+        nonBillableHours: billable === undefined ? undefined : Math.max(0, workedHours - billable),
+        customerIds: derivedCustomerIds.length ? derivedCustomerIds : undefined,
+        risks: risks.trim() || undefined,
+        helpNeeded: helpNeeded.trim() || undefined,
+        clientDependencies: clientDependencies.trim() || undefined,
+        internalDependencies: internalDependencies.trim() || undefined,
+        notes: mgmtNotes.trim() || undefined,
+        submittedAt: now,
+        dueAt,
+        wasLate: now.getTime() > dueAt.getTime(),
       } as any);
 
       // Notify admin/manager when blocker is reported
@@ -453,6 +505,60 @@ const DailyReportPopup: React.FC = () => {
             onChange={(k, v) => setCustomFields((prev) => ({ ...prev, [k]: v }))}
           />
 
+          {/* ── Statusi i ditës (§3.1) ─────────────────────────────── */}
+          <div className="grid sm:grid-cols-3 gap-3">
+            <div className="sm:col-span-3">
+              <Label className="mb-1.5">Statusi i ditës</Label>
+              <div className="flex flex-wrap gap-1.5">
+                {([
+                  { key: 'on_track', label: 'Në rrugë', cls: 'border-success/40 bg-success/10 text-success' },
+                  { key: 'needs_attention', label: 'Kërkon vëmendje', cls: 'border-warning/40 bg-warning/10 text-warning' },
+                  { key: 'blocked', label: 'Bllokuar', cls: 'border-error/40 bg-error/10 text-error' },
+                  { key: 'at_risk', label: 'Në rrezik', cls: 'border-error/40 bg-error/10 text-error' },
+                  { key: 'completed', label: 'Përfunduar', cls: 'border-primary/40 bg-primary/10 text-primary' },
+                ] as const).map(({ key, label, cls }) => (
+                  <button
+                    key={key}
+                    type="button"
+                    onClick={() => setDailyStatus(key)}
+                    className={`text-xs px-2.5 py-1.5 rounded-lg border transition-all ${
+                      dailyStatus === key ? cls : 'border-border text-muted-foreground hover:border-primary/40'}`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <Label className="mb-1.5 text-xs">Vendi i punës</Label>
+              <select
+                value={workLocation}
+                onChange={(e) => setWorkLocation(e.target.value as typeof workLocation)}
+                className="w-full h-9 rounded-md border border-border bg-background px-2 text-sm"
+              >
+                <option value="office">Zyrë</option>
+                <option value="remote">Remote</option>
+                <option value="client_site">Tek klienti</option>
+                <option value="field">Në terren</option>
+                <option value="travel">Udhëtim</option>
+              </select>
+            </div>
+            <div>
+              <Label className="mb-1.5 text-xs">Statusi i punës</Label>
+              <select
+                value={workingStatus}
+                onChange={(e) => setWorkingStatus(e.target.value as typeof workingStatus)}
+                className="w-full h-9 rounded-md border border-border bg-background px-2 text-sm"
+              >
+                <option value="working">Ditë normale pune</option>
+                <option value="partial">Ditë e pjesshme</option>
+                <option value="leave">Leje</option>
+                <option value="sick">Sëmundje</option>
+                <option value="holiday">Festë</option>
+              </select>
+            </div>
+          </div>
+
           {/* ── 2. Open items ──────────────────────────────────────── */}
           <div>
             <Label className="flex items-center gap-2 mb-1.5">
@@ -500,6 +606,81 @@ const DailyReportPopup: React.FC = () => {
             />
           </div>
 
+          {/* ── Detaje shtesë (§3.1 pyetjet 5–7) ───────────────────── */}
+          {/* Collapsed by default so the daily habit stays a 30-second job, but it
+              opens ITSELF the moment a blocker is reported — that is exactly when
+              management needs the risk, the dependency and the ask. */}
+          <div className="rounded-lg border border-border">
+            <button
+              type="button"
+              onClick={() => setShowDetails(v => !v)}
+              className="w-full flex items-center justify-between px-3 py-2 text-sm"
+            >
+              <span className="flex items-center gap-2 text-muted-foreground">
+                <TrendingUp className="w-4 h-4" />
+                Detaje shtesë
+                {(risks || helpNeeded || clientDependencies || internalDependencies || mgmtNotes) && (
+                  <Badge variant="outline" className="text-[10px]">plotësuar</Badge>
+                )}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                {showDetails || blockers.trim() ? 'mbyll' : 'hap'}
+              </span>
+            </button>
+
+            {(showDetails || blockers.trim()) && (
+              <div className="px-3 pb-3 space-y-3 border-t border-border pt-3">
+                <div>
+                  <Label className="mb-1.5 text-xs">A është ndonjë afat, klient apo projekt në rrezik?</Label>
+                  <Textarea
+                    value={risks}
+                    onChange={(e) => setRisks(e.target.value)}
+                    placeholder="p.sh. Dorëzimi i së mërkurës rrezikohet nëse materialet nuk vijnë nesër…"
+                    rows={2}
+                  />
+                </div>
+                <div>
+                  <Label className="mb-1.5 text-xs">Kërkon aprovim apo ndihmë nga dikush?</Label>
+                  <Textarea
+                    value={helpNeeded}
+                    onChange={(e) => setHelpNeeded(e.target.value)}
+                    placeholder="p.sh. Duhet miratimi i buxhetit nga menaxheri…"
+                    rows={2}
+                  />
+                </div>
+                <div className="grid sm:grid-cols-2 gap-3">
+                  <div>
+                    <Label className="mb-1.5 text-xs">Pres nga klienti</Label>
+                    <Input
+                      value={clientDependencies}
+                      onChange={(e) => setClientDependencies(e.target.value)}
+                      placeholder="p.sh. tekstet, aksesin"
+                    />
+                  </div>
+                  <div>
+                    <Label className="mb-1.5 text-xs">Pres nga ekipi</Label>
+                    <Input
+                      value={internalDependencies}
+                      onChange={(e) => setInternalDependencies(e.target.value)}
+                      placeholder="p.sh. dizajnin nga Ana"
+                    />
+                  </div>
+                </div>
+                <div>
+                  <Label className="mb-1.5 text-xs flex items-center gap-1.5">
+                    Çfarë duhet të dijë menaxhimi?
+                    <span className="text-[10px] text-muted-foreground">(shihet vetëm nga menaxhimi)</span>
+                  </Label>
+                  <Textarea
+                    value={mgmtNotes}
+                    onChange={(e) => setMgmtNotes(e.target.value)}
+                    rows={2}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+
           {/* ── Hours + Mood ───────────────────────────────────────── */}
           <div className="grid grid-cols-2 gap-4">
             <div>
@@ -512,6 +693,22 @@ const DailyReportPopup: React.FC = () => {
                 value={hoursWorked}
                 onChange={(e) => setHoursWorked(e.target.value)}
               />
+              <div className="mt-2">
+                <Label className="mb-1 text-xs text-muted-foreground">
+                  Nga këto, të faturueshme <span className="opacity-70">(opsionale)</span>
+                </Label>
+                <Input
+                  type="number"
+                  min="0"
+                  max={hoursWorked || '24'}
+                  step="0.5"
+                  value={billableHours}
+                  onChange={(e) => setBillableHours(e.target.value)}
+                  placeholder="—"
+                />
+                {/* Left blank on purpose = "not measured". The dashboard shows a dash
+                    rather than 0h, so nobody looks 100% non-billable by accident. */}
+              </div>
             </div>
             <div>
               <Label className="mb-1.5">Si u ndjeva sot</Label>

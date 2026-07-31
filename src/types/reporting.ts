@@ -667,8 +667,16 @@ export interface EmployeeAccountabilityMetrics {
   tasksOverdue: number;
   completionRate: number | null;      // 0–1
   hoursWorked: number;
-  billableHours: number;
-  nonBillableHours: number;
+  /**
+   * NULL means "not measured", not "zero".
+   *
+   * The split is only known when the person tracked time or filled the billable
+   * fields on their daily report. Reporting 0 in that case is worse than reporting
+   * nothing: it renders as "0h billable / 100% non-billable" and reads like a
+   * finding about the person rather than a gap in the data.
+   */
+  billableHours: number | null;
+  nonBillableHours: number | null;
   utilisationRate: number | null;     // 0–1
   blockersReported: number;
   blockersUnresolved: number;

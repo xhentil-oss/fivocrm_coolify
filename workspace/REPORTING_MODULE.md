@@ -19,12 +19,41 @@ shapes, so they are two stores rather than one:
 | Feeds | StaffDashboard, DailyReportPopup, Momentum | weekly/monthly/quarterly aggregation |
 
 **Nothing was rebuilt.** `dailyReports` gained optional accountability fields
-(`DailyReportAccountability` in `src/types/reporting.ts`) — structured status,
-billable split, dependencies, submission timing, manager review, blocker lifecycle.
-Every field is optional, so legacy documents and every existing reader stay valid.
+(`DailyReportAccountability` in `src/types/reporting.ts`) — structured status, work
+location, working status, billable split, risks, help needed, client/internal
+dependencies, management note, submission timing and blocker lifecycle. Every field
+is optional, so legacy documents and every existing reader stay valid.
+
+Those fields are **captured** by the existing daily form (`DailyReportPopup`) and
+**shown** in the manager view (`DailyReportsView`):
+
+- `dailyStatus`, `workLocation`, `workingStatus` and the billable split sit inline —
+  one tap / one number, so the daily habit stays a 30-second job.
+- The §3.1 questions 5–7 (risk, help needed, dependencies, management note) live
+  behind a collapsed "Detaje shtesë" section that **opens itself when a blocker is
+  reported** — precisely when management needs the context.
+- `submittedAt` / `dueAt` / `wasLate` are stamped on submit (`DAILY_DUE_HOUR = 18`
+  local). Without them "late reports" and "average submission delay" could only ever
+  report 0.
+- `customerIds` is **derived** from the projects already selected rather than asking
+  for the same fact twice.
+- A manager marks a blocker resolved from the detail dialog, which is what makes
+  "average blocker resolution time" measurable — otherwise every blocker reads as
+  permanently unresolved and the accountability panel over-flags people.
+
 Task completion reads `status === 'Done'` + `updatedAt`, and time is measured with
 `entryDurationMinutes()`, i.e. the same conventions the Momentum engine already
 uses — so the two features can never disagree about "completed this week".
+
+### "Not measured" is not zero
+
+`billableHours` / `nonBillableHours` / `utilisationRate` are `number | null`, and the
+dashboard renders `—` for null. The billable split is only *known* when the person
+tracked time or filled the field; reporting 0 in that case renders as
+"0h billable / 100% non-billable", which reads as a finding about the person rather
+than a gap in the data. `summariseTeam()` likewise excludes unmeasured members from
+the team ratio instead of diluting it, and reports how many of the team were actually
+measured.
 
 ---
 
