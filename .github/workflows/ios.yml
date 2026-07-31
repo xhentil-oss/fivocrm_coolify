@@ -1,0 +1,169 @@
+# iOS build — runs on GitHub's macOS runners, because the repo is developed on
+# Windows and Xcode only exists on macOS.
+#
+# Manual only (workflow_dispatch): macOS minutes bill at 10x on private repos, so
+# this must never fire on every push.
+#
+# Two modes:
+#   • verify (default)  — compiles for the simulator, no signing, no secrets.
+#                         This is the "does the native project still build" check.
+#   • testflight        — archives, signs and uploads to TestFlight. Needs the
+#                         secrets listed below.
+#
+# Secrets:
+#   GOOGLE_SERVICE_INFO_PLIST_BASE64  base64 of ios GoogleService-Info.plist
+#                                     (required — the app crashes without it)
+#   APPLE_TEAM_ID                     10-char Apple Developer team id
+#   ASC_KEY_ID / ASC_ISSUER_ID        App Store Connect API key id + issuer id
+#   ASC_KEY_P8_BASE64                 base64 of the AuthKey_<KEYID>.p8 file
+#   VITE_*                            the same web env vars Vercel uses
+name: iOS
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: What to do
+        type: choice
+        default: verify
+        options: [verify, testflight]
+      build_number:
+        description: CFBundleVersion (TestFlight requires a new one each upload)
+        type: string
+        default: ''
+
+jobs:
+  ios:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode.app
+
+      - run: npm ci
+
+      # The web bundle is what actually ships inside the app; the native shell is
+      # just a WebView. Same command Vercel runs.
+      - name: Build web bundle
+        run: npm run build
+        env:
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
+          VITE_FIREBASE_VAPID_KEY: ${{ secrets.VITE_FIREBASE_VAPID_KEY }}
+          VITE_API_BASE_URL: ${{ secrets.VITE_API_BASE_URL }}
+          VITE_VPS_URL: ${{ secrets.VITE_VPS_URL }}
+          VITE_DEFAULT_TEAM_ID: ${{ secrets.VITE_DEFAULT_TEAM_ID }}
+          VITE_DEFAULT_BUSINESS_ID: ${{ secrets.VITE_DEFAULT_BUSINESS_ID }}
+          VITE_STRIPE_PUBLISHABLE_KEY: ${{ secrets.VITE_STRIPE_PUBLISHABLE_KEY }}
+
+      # ios/ is gitignored (same as android/), so the native project is generated
+      # here and then configured by the script that owns every Xcode-side setting.
+      - name: Generate iOS project
+        run: npx cap add ios
+
+      - name: Install GoogleService-Info.plist
+        env:
+          PLIST: ${{ secrets.GOOGLE_SERVICE_INFO_PLIST_BASE64 }}
+        run: |
+          if [ -z "$PLIST" ]; then
+            echo "::warning::GOOGLE_SERVICE_INFO_PLIST_BASE64 is not set — the app will crash on launch."
+          else
+            echo "$PLIST" | base64 --decode > ios/App/App/GoogleService-Info.plist
+          fi
+
+      - name: Configure iOS project
+        run: npm run ios:configure
+
+      - name: Set build number
+        if: inputs.build_number != ''
+        run: |
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion ${{ inputs.build_number }}" ios/App/App/Info.plist 2>/dev/null || true
+          sed -i '' "s/CURRENT_PROJECT_VERSION = .*/CURRENT_PROJECT_VERSION = ${{ inputs.build_number }};/" ios/App/App.xcodeproj/project.pbxproj
+
+      # ── verify: compile for the simulator, no certificates involved ──────────
+      - name: Build for simulator
+        if: inputs.mode == 'verify'
+        run: |
+          xcodebuild \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Debug \
+            -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      # ── testflight: archive + upload ─────────────────────────────────────────
+      - name: Prepare App Store Connect API key
+        if: inputs.mode == 'testflight'
+        env:
+          KEY: ${{ secrets.ASC_KEY_P8_BASE64 }}
+          KEY_ID: ${{ secrets.ASC_KEY_ID }}
+        run: |
+          mkdir -p ~/private_keys
+          echo "$KEY" | base64 --decode > ~/private_keys/AuthKey_$KEY_ID.p8
+
+      - name: Archive
+        if: inputs.mode == 'testflight'
+        run: |
+          xcodebuild archive \
+            -project ios/App/App.xcodeproj \
+            -scheme App \
+            -configuration Release \
+            -destination 'generic/platform=iOS' \
+            -archivePath build/App.xcarchive \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
+            -authenticationKeyID ${{ secrets.ASC_KEY_ID }} \
+            -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }} \
+            DEVELOPMENT_TEAM=${{ secrets.APPLE_TEAM_ID }}
+
+      - name: Export IPA
+        if: inputs.mode == 'testflight'
+        run: |
+          cat > build/ExportOptions.plist <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0">
+          <dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>${{ secrets.APPLE_TEAM_ID }}</string>
+            <key>uploadSymbols</key><true/>
+            <key>destination</key><string>export</string>
+          </dict>
+          </plist>
+          PLIST
+          xcodebuild -exportArchive \
+            -archivePath build/App.xcarchive \
+            -exportOptionsPlist build/ExportOptions.plist \
+            -exportPath build/ipa \
+            -allowProvisioningUpdates \
+            -authenticationKeyPath ~/private_keys/AuthKey_${{ secrets.ASC_KEY_ID }}.p8 \
+            -authenticationKeyID ${{ secrets.ASC_KEY_ID }} \
+            -authenticationKeyIssuerID ${{ secrets.ASC_ISSUER_ID }}
+
+      - name: Upload to TestFlight
+        if: inputs.mode == 'testflight'
+        run: |
+          xcrun altool --upload-app -f build/ipa/App.ipa -t ios \
+            --apiKey ${{ secrets.ASC_KEY_ID }} \
+            --apiIssuer ${{ secrets.ASC_ISSUER_ID }}
+
+      - name: Keep the IPA as an artifact
+        if: inputs.mode == 'testflight'
+        uses: actions/upload-artifact@v4
+        with:
+          name: FivoCRM-ios
+          path: build/ipa/*.ipa
+          if-no-files-found: warn

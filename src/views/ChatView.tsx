@@ -2241,7 +2241,11 @@ const ChatView: React.FC = () => {
         setRecordingDuration(0);
         setIsRecording(false);
         if (blob.size < 500) return; // ignore tiny accidental presses
-        const fileName = `voice-${Date.now()}.webm`;
+        // iOS/Safari records audio/mp4, not webm — name the file after what was
+        // actually recorded, or the file host serves it with the wrong
+        // Content-Type and playback fails.
+        const ext = /mp4|aac/.test(blob.type) ? 'm4a' : /ogg/.test(blob.type) ? 'ogg' : 'webm';
+        const fileName = `voice-${Date.now()}.${ext}`;
         const file = new File([blob], fileName, { type: blob.type });
         try {
           const res = await uploadAttachment(file, 'voice-notes');

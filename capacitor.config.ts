@@ -7,6 +7,15 @@ const config: CapacitorConfig = {
   server: {
     androidScheme: 'https',
   },
+  ios: {
+    // Edge-to-edge: WKWebView must not add its own safe-area insets, otherwise
+    // they stack on top of the env(safe-area-inset-*) padding the fixed top/bottom
+    // bars already apply (see index.css / TopNavBar / MobileBottomNav).
+    contentInset: 'never',
+    // Matches the splash + app background so there is no white flash on launch
+    // or when the WebView bounces past its content.
+    backgroundColor: '#09090B',
+  },
   plugins: {
     FirebaseAuthentication: {
       // We keep the Firebase JS SDK as the source of truth: the native plugin

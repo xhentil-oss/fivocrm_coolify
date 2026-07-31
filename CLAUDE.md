@@ -19,7 +19,7 @@
 | Styling | Tailwind CSS + shadcn/ui (Radix UI) |
 | Backend/DB | Firebase (Firestore, Auth, Storage) |
 | Serverless API | Vercel Functions (`/api/` folder) |
-| Mobile | Capacitor v8 (Android) |
+| Mobile | Capacitor v8 (Android + iOS) |
 | Email | Nodemailer via VPS server (`/vps/`) |
 | Payments | Stripe |
 | AI | OpenAI (chat assistant) |
@@ -219,6 +219,27 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   `?job=tenant-delete&businessId=…&confirm=…` (super-admin only). Full runbook:
   `workspace/SAAS_HARDENING_RUNBOOK.md`.
 
+### Native apps (Capacitor: Android + iOS)
+- `android/` and `ios/` are **gitignored build artefacts** — regenerate with
+  `npx cap add <platform>`. Nothing may live only inside them.
+- **Every Xcode-side setting for iOS lives in `scripts/ios-configure.cjs`**, never in
+  a manual Xcode click: Info.plist usage strings + URL scheme, `App.entitlements`
+  (push) + `CODE_SIGN_ENTITLEMENTS`, `PrivacyInfo.xcprivacy`, the shared
+  `App.xcscheme`, `GoogleService-Info.plist` bundling, and the AppIcon/splash
+  (generated from the same vector "X" as the Android icon by
+  `scripts/ios-brand-assets.cjs`). It is idempotent — run it after **every**
+  `cap sync ios` (`npm run ios:sync` does both).
+- `cap sync` on Windows writes Windows paths into `ios/App/CapApp-SPM/Package.swift`,
+  which are invalid Swift escapes and break every plugin. The configure script fixes
+  them; do not "clean up" that step.
+- A platform-only API must be branched on `Capacitor.getPlatform()`
+  (`StatusBar.setBackgroundColor` = Android-only, `Keyboard.setAccessoryBarVisible`
+  = iOS-only) — an unguarded call rejects and surfaces as a startup error.
+- iOS builds/archives need macOS: `.github/workflows/ios.yml` (manual, `verify` =
+  unsigned simulator build, `testflight` = signed upload). Full runbook, Apple
+  account steps and the App Store IAP/`Sign in with Apple` decisions:
+  `workspace/IOS_BUILD.md`.
+
 ### Roles & Permissions
 - Roles: `Admin`, `Manager`, `Sales`, `SalesAgent`, `Member`, `Viewer`
 - Permission checks via `usePermissions()` hook and `<PermissionGate>` component.
@@ -307,6 +328,12 @@ npm run test
 npm run android:sync   # build + cap sync
 npm run android:open   # open in Android Studio
 npm run android:run    # run on device/emulator
+
+# iOS (ios:add/configure/sync run on Windows; open/run/build need macOS)
+npm run ios:add        # cap add ios + configure (first time only)
+npm run ios:sync       # build + cap sync ios + configure
+npm run ios:configure  # re-apply every Xcode-side setting (idempotent)
+npm run ios:open       # open in Xcode (macOS)
 
 # Lint
 npm run lint

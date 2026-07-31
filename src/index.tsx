@@ -23,13 +23,20 @@ import { SplashScreen } from '@capacitor/splash-screen';
 import { Keyboard } from '@capacitor/keyboard';
 
 if (Capacitor.isNativePlatform()) {
-  StatusBar.setStyle({ style: Style.Dark });
-  StatusBar.setBackgroundColor({ color: '#09090B' });
-  // setAccessoryBarVisible is iOS-only — it throws "not implemented" on Android.
-  if (Capacitor.getPlatform() === 'ios') {
-    Keyboard.setAccessoryBarVisible({ isVisible: true });
+  const platform = Capacitor.getPlatform();
+  // Each of these rejects on the platform that doesn't implement it, which would
+  // surface as an unhandled promise rejection at startup — so guard and swallow.
+  void StatusBar.setStyle({ style: Style.Dark }).catch(() => {});
+  if (platform === 'android') {
+    // setBackgroundColor is Android-only; on iOS the status bar is transparent and
+    // the WebView's own background shows through.
+    void StatusBar.setBackgroundColor({ color: '#09090B' }).catch(() => {});
   }
-  SplashScreen.hide();
+  if (platform === 'ios') {
+    // setAccessoryBarVisible is iOS-only — it throws "not implemented" on Android.
+    void Keyboard.setAccessoryBarVisible({ isVisible: true }).catch(() => {});
+  }
+  void SplashScreen.hide().catch(() => {});
 }
 
 ReactDOM.createRoot(document.getElementById('app')!).render(
