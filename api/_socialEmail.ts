@@ -37,6 +37,28 @@ function metricCell(label: string, value: string, sub?: string): string {
 }
 
 function accountBlock(a: any): string {
+  // Google Search Console — website search visibility (different metric shape).
+  if (a.platform === 'search-console') {
+    const s = a.seo?.metrics || {};
+    return `
+  <div style="border:1px solid #e5e7eb;border-radius:14px;padding:18px;margin:0 0 16px;">
+    <div style="margin-bottom:12px;">
+      <span style="display:inline-block;font-size:11px;font-weight:600;color:#fff;background:#059669;border-radius:999px;padding:3px 10px;">Search Console</span>
+      <span style="font-size:15px;font-weight:700;color:#0f172a;margin-left:8px;">${a.accountName || ''}</span>
+    </div>
+    <table role="presentation" cellpadding="0" cellspacing="6" style="width:100%;border-collapse:separate;">
+      <tr>
+        ${metricCell('Klikime', fmt(s.clicks))}
+        ${metricCell('Shfaqje', fmt(s.impressions))}
+      </tr>
+      <tr>
+        ${metricCell('CTR', `${s.ctr ?? 0}%`)}
+        ${metricCell('Pozicioni', String(s.position ?? 0), 'më i ulët = më mirë')}
+      </tr>
+    </table>
+  </div>`;
+  }
+
   const m = a.metrics || {};
   const isIg = a.platform === 'instagram';
   const badge = isIg ? 'Instagram' : 'Facebook';

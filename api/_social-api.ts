@@ -6,6 +6,10 @@ import {
 } from './_meta-insights.js';
 import { syncAccount, syncAllAccounts, currentPeriod } from './_social.js';
 import { sendCustomerReport } from './_socialEmail.js';
+import { buildGoogleAuthUrl, exchangeGoogleCode, listGscSites } from './_gsc.js';
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 
 /**
  * Social Media module API — connect Facebook/Instagram accounts and pull their
@@ -34,6 +38,13 @@ function appUrl(req: VercelRequest): string {
 
 function redirectUri(req: VercelRequest): string {
   return process.env.SOCIAL_OAUTH_REDIRECT || `${appUrl(req)}/api/social?action=oauth-callback`;
+}
+function googleRedirectUri(req: VercelRequest): string {
+  return process.env.GSC_OAUTH_REDIRECT || `${appUrl(req)}/api/social?action=google-callback`;
+}
+// Display name from a GSC siteUrl (sc-domain:example.com / https://example.com/).
+function gscSiteName(siteUrl: string): string {
+  return siteUrl.replace(/^sc-domain:/, '').replace(/^https?:\/\//, '').replace(/\/$/, '');
 }
 
 // ── Signed OAuth state (survives the round-trip through Facebook) ─────────────
@@ -109,9 +120,10 @@ function publicAccount(id: string, a: any) {
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const action = String(req.query.action || '');
 
+  // APP_SECRET is also the HMAC key for signed OAuth state (Meta + Google). The
+  // Google actions still need it; the callbacks must be able to report the misconfig.
   if (!APP_ID || !APP_SECRET) {
-    // oauth-callback must still be able to report the misconfig to the user.
-    if (action === 'oauth-callback') {
+    if (action === 'oauth-callback' || action === 'google-callback') {
       return res.redirect(302, `${appUrl(req)}/app/social?error=${encodeURIComponent('Meta App nuk është konfiguruar (META_APP_ID/SECRET)')}`);
     }
     return res.status(503).json({ error: 'Meta App nuk është konfiguruar (vendos META_APP_ID dhe META_APP_SECRET)' });
@@ -248,6 +260,59 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       const results = await syncAllAccounts(p, { teamId, businessId });
       return res.status(200).json({ success: true, results });
+    }
+
+    // ── GET google-oauth-url (Search Console connect) ──────────────────────────
+    if (action === 'google-oauth-url') {
+      const uid = await requireAuth(req);
+      if (!uid) return res.status(401).json({ error: 'Missing or invalid token' });
+      if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return res.status(503).json({ error: 'Google OAuth nuk është konfiguruar (GOOGLE_CLIENT_ID/SECRET)' });
+      const teamId = String(req.query.teamId || '');
+      const businessId = String(req.query.businessId || '');
+      const customerId = String(req.query.customerId || '');
+      if (!customerId || (!teamId && !businessId)) return res.status(400).json({ error: 'customerId dhe teamId/businessId janë të detyrueshëm' });
+      if (!(await memberOf(uid, teamId, businessId))) return res.status(403).json({ error: 'Nuk jeni anëtar i këtij ekipi' });
+      const state = signState({ uid, teamId, businessId, customerId, provider: 'google' });
+      return res.status(200).json({ url: buildGoogleAuthUrl(GOOGLE_CLIENT_ID, googleRedirectUri(req), state) });
+    }
+
+    // ── GET google-callback (browser redirect from Google) ─────────────────────
+    if (action === 'google-callback') {
+      const back = (params: string) => res.redirect(302, `${appUrl(req)}/app/social?${params}`);
+      if (req.query.error) return back(`error=${encodeURIComponent(String(req.query.error_description || req.query.error))}`);
+      if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) return back(`error=${encodeURIComponent('Google OAuth nuk është konfiguruar')}`);
+      const state = verifyState(String(req.query.state || ''));
+      if (!state) return back(`error=${encodeURIComponent('Sesioni skadoi ose është i pavlefshëm — provoni sërish')}`);
+      const code = String(req.query.code || '');
+      if (!code) return back(`error=${encodeURIComponent('Kodi i autorizimit mungon')}`);
+
+      const custSnap = await adminDb.collection('customers').doc(state.customerId).get();
+      if (!custSnap.exists) return back(`error=${encodeURIComponent('Klienti nuk u gjet')}`);
+      const cust = custSnap.data()!;
+      const businessId = cust.businessId || state.businessId || null;
+      const teamId = state.teamId || cust.teamId || null;
+      const scopeKey = businessId || teamId;
+
+      const { accessToken, refreshToken } = await exchangeGoogleCode(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, googleRedirectUri(req), code);
+      if (!refreshToken) return back(`error=${encodeURIComponent('Google nuk ktheu refresh token — provoni sërish dhe lejoni aksesin')}`);
+      const sites = await listGscSites(accessToken);
+      if (!sites.length) return back(`error=${encodeURIComponent('Asnjë sit i verifikuar në Search Console për këtë llogari Google')}`);
+
+      const now = Timestamp.now();
+      let connected = 0;
+      for (const site of sites) {
+        const safe = site.siteUrl.replace(/[^a-zA-Z0-9]/g, '_');
+        await adminDb.collection('socialAccounts').doc(`${scopeKey}_gsc_${safe}`).set({
+          teamId, businessId, customerId: state.customerId,
+          platform: 'search-console', name: gscSiteName(site.siteUrl), externalId: site.siteUrl,
+          username: null, pictureUrl: null,
+          accessToken: refreshToken, tokenExpiresAt: null,
+          connected: true, lastSyncedAt: null, lastSyncError: null,
+          updatedAt: now, createdByUserId: state.uid, createdAt: now,
+        }, { merge: true });
+        connected++;
+      }
+      return back(`connected=${connected}`);
     }
 
     // ── POST send-report (manual "Dërgo raportin me email") ────────────────────

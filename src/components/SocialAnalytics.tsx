@@ -5,7 +5,7 @@ import {
 } from 'recharts';
 import {
   Facebook, Instagram, Users, Eye, Heart, TrendingUp, Activity,
-  Image as ImageIcon, MapPin, Mail, Loader2,
+  Image as ImageIcon, MapPin, Mail, Loader2, Globe, MousePointerClick, Percent, Search, FileText,
 } from 'lucide-react';
 import type { SocialSnapshot } from '../types';
 
@@ -39,7 +39,112 @@ const StatTile: React.FC<{ icon: React.ComponentType<{ className?: string }>; la
 );
 
 const PlatformIcon: React.FC<{ platform: string; className?: string }> = ({ platform, className }) =>
-  platform === 'instagram' ? <Instagram className={className} /> : <Facebook className={className} />;
+  platform === 'instagram' ? <Instagram className={className} />
+  : platform === 'search-console' ? <Globe className={className} />
+  : <Facebook className={className} />;
+
+// Google Search Console report body (website search visibility).
+const SeoReport: React.FC<{ seo: NonNullable<SocialSnapshot['seo']> }> = ({ seo }) => {
+  const m = seo.metrics;
+  const daily = (seo.daily || []).map((d) => ({ ...d, label: d.date.slice(8) }));
+  const topCountries = seo.countries ? Object.entries(seo.countries).sort(([, a], [, b]) => b - a).slice(0, 6) : [];
+  const Table: React.FC<{ icon: React.ComponentType<{ className?: string }>; title: string; rows: NonNullable<SocialSnapshot['seo']>['topQueries']; keyLabel: string }> = ({ icon: Icon, title, rows, keyLabel }) => (
+    <div className="border border-border rounded-xl bg-card overflow-hidden">
+      <h3 className="text-sm font-semibold px-4 pt-4 pb-2 flex items-center gap-1.5"><Icon className="w-4 h-4 text-primary" /> {title}</h3>
+      {rows.length === 0 ? <p className="text-sm text-muted-foreground px-4 pb-4">S'ka të dhëna.</p> : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-[11px] uppercase text-muted-foreground border-b border-border">
+                <th className="text-left font-medium px-4 py-2">{keyLabel}</th>
+                <th className="text-right font-medium px-4 py-2">Klikime</th>
+                <th className="text-right font-medium px-4 py-2">Shfaqje</th>
+                <th className="text-right font-medium px-4 py-2">CTR</th>
+                <th className="text-right font-medium px-4 py-2">Poz.</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.slice(0, 10).map((r, i) => (
+                <tr key={i} className="border-b border-border/60 last:border-0">
+                  <td className="px-4 py-2 truncate max-w-[260px]" title={r.key}>{r.key}</td>
+                  <td className="px-4 py-2 text-right tabular-nums font-medium">{fmt(r.clicks)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums text-muted-foreground">{fmt(r.impressions)}</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{r.ctr}%</td>
+                  <td className="px-4 py-2 text-right tabular-nums">{r.position}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div className="space-y-5">
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+        <StatTile icon={MousePointerClick} label="Klikime" value={fmt(m.clicks)} tint={CYAN} />
+        <StatTile icon={Eye} label="Shfaqje" value={fmt(m.impressions)} tint={NAVY} />
+        <StatTile icon={Percent} label="CTR" value={`${m.ctr}%`} tint={GREEN} />
+        <StatTile icon={TrendingUp} label="Pozicioni mesatar" value={String(m.position)} sub="më i ulët = më mirë" tint={AMBER} />
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-4">
+        <div className="border border-border rounded-xl p-4 bg-card">
+          <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5"><MousePointerClick className="w-4 h-4 text-primary" /> Klikime ditore</h3>
+          {daily.length ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <AreaChart data={daily} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="seo-clicks" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={CYAN} stopOpacity={0.3} />
+                    <stop offset="100%" stopColor={CYAN} stopOpacity={0.02} />
+                  </linearGradient>
+                </defs>
+                <XAxis dataKey="label" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} interval={4} />
+                <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={40} allowDecimals={false} />
+                <Tooltip formatter={(v: number) => [fmt(v), 'Klikime']} labelFormatter={(l) => `Dita ${l}`} />
+                <Area type="monotone" dataKey="clicks" stroke={CYAN} strokeWidth={2.5} fill="url(#seo-clicks)" />
+              </AreaChart>
+            </ResponsiveContainer>
+          ) : <p className="text-sm text-muted-foreground py-10 text-center">S'ka të dhëna ditore.</p>}
+        </div>
+        <div className="border border-border rounded-xl p-4 bg-card">
+          <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5"><Eye className="w-4 h-4 text-primary" /> Shfaqje ditore</h3>
+          {daily.length ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <RBarChart data={daily} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                <XAxis dataKey="label" tick={{ fontSize: 10 }} tickLine={false} axisLine={false} interval={4} />
+                <YAxis tick={{ fontSize: 11 }} tickLine={false} axisLine={false} width={40} allowDecimals={false} />
+                <Tooltip formatter={(v: number) => [fmt(v), 'Shfaqje']} labelFormatter={(l) => `Dita ${l}`} />
+                <Bar dataKey="impressions" radius={[3, 3, 0, 0]} fill={NAVY} fillOpacity={0.85} />
+              </RBarChart>
+            </ResponsiveContainer>
+          ) : <p className="text-sm text-muted-foreground py-10 text-center">S'ka të dhëna ditore.</p>}
+        </div>
+      </div>
+
+      <div className="grid lg:grid-cols-2 gap-4">
+        <Table icon={Search} title="Fjalët kyçe kryesore" rows={seo.topQueries || []} keyLabel="Kërkimi" />
+        <Table icon={FileText} title="Faqet kryesore" rows={seo.topPages || []} keyLabel="Faqja" />
+      </div>
+
+      {topCountries.length > 0 && (
+        <div className="border border-border rounded-xl p-4 bg-card">
+          <h3 className="text-sm font-semibold mb-3 flex items-center gap-1.5"><MapPin className="w-4 h-4 text-primary" /> Klikime sipas shtetit</h3>
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+            {topCountries.map(([c, n], i) => (
+              <div key={i} className="flex items-center gap-2 text-sm">
+                <span className="text-muted-foreground uppercase">{c}</span>
+                <span className="font-medium ml-auto tabular-nums">{fmt(n)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 interface Props {
   snapshots: (SocialSnapshot & { id: string })[];
@@ -164,7 +269,15 @@ const SocialAnalytics: React.FC<Props> = ({ snapshots, loading, emptyHint, onSen
         )}
       </div>
 
-      {!current || !m ? (
+      {!current ? (
+        <div className="border border-border rounded-xl p-8 text-center text-sm text-muted-foreground">
+          S'ka të dhëna për këtë muaj.
+        </div>
+      ) : current.platform === 'search-console' ? (
+        current.seo
+          ? <SeoReport seo={current.seo} />
+          : <div className="border border-border rounded-xl p-8 text-center text-sm text-muted-foreground">S'ka të dhëna për këtë muaj.</div>
+      ) : !m ? (
         <div className="border border-border rounded-xl p-8 text-center text-sm text-muted-foreground">
           S'ka të dhëna për këtë muaj.
         </div>

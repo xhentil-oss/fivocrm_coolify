@@ -6,6 +6,10 @@
 import type { QueryDocumentSnapshot } from 'firebase-admin/firestore';
 import { adminDb, Timestamp } from './_firebaseAdmin.js';
 import { fetchSnapshot, monthRange } from './_meta-insights.js';
+import { refreshGoogleToken, fetchSearchConsoleSnapshot } from './_gsc.js';
+
+const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '';
+const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 
 // Current month as 'YYYY-MM' in UTC.
 export function currentPeriod(): string {
@@ -19,50 +23,65 @@ export interface SyncResult {
   period: string;
   followers?: number;
   reach?: number;
+  clicks?: number;
   error?: string;
 }
 
 // Pull one account's insights for `period` and upsert its socialSnapshots doc.
 // Idempotent: the snapshot id is `${accountId}_${period}`, so re-running a month
-// overwrites rather than duplicating.
+// overwrites rather than duplicating. Branches by platform: Meta (FB/IG) vs
+// Google Search Console.
 export async function syncAccount(accountDoc: QueryDocumentSnapshot, period: string): Promise<SyncResult> {
   const a = accountDoc.data();
+  const { start, end } = monthRange(period);
+  const now = Timestamp.now();
+  const base = {
+    teamId: a.teamId,
+    businessId: a.businessId ?? null,
+    customerId: a.customerId,
+    accountId: accountDoc.id,
+    platform: a.platform,
+    accountName: a.name,
+    username: a.username ?? null,
+    pictureUrl: a.pictureUrl ?? null,
+    period,
+    periodStart: Timestamp.fromDate(start),
+    periodEnd: Timestamp.fromDate(end),
+    fetchedAt: now,
+    updatedAt: now,
+    createdByUserId: null,
+    createdAt: now,
+  };
+  const snapRef = adminDb.collection('socialSnapshots').doc(`${accountDoc.id}_${period}`);
+
   try {
+    if (a.platform === 'search-console') {
+      // Google Search Console: refresh-token → access-token → search analytics.
+      if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) throw new Error('Google OAuth nuk është konfiguruar (GOOGLE_CLIENT_ID/SECRET)');
+      const accessToken = await refreshGoogleToken(GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET, a.accessToken);
+      const seo = await fetchSearchConsoleSnapshot(a.externalId, accessToken, period);
+      await snapRef.set({ ...base, seo: { metrics: seo.metrics, daily: seo.daily, topQueries: seo.topQueries, topPages: seo.topPages, countries: seo.countries ?? null, devices: seo.devices ?? null } }, { merge: true });
+      const note = seo.errors && seo.errors.length ? seo.errors.join(' | ').slice(0, 500) : null;
+      await accountDoc.ref.update({ lastSyncedAt: now, lastSyncError: note, updatedAt: now });
+      return { accountId: accountDoc.id, platform: a.platform, period, clicks: seo.metrics.clicks };
+    }
+
+    // Meta (Facebook Pages + Instagram).
     const data = await fetchSnapshot(
       { accessToken: a.accessToken, externalId: a.externalId, platform: a.platform },
       period,
     );
-    const { start, end } = monthRange(period);
-    const now = Timestamp.now();
     const topPosts = data.topPosts.map((p) => ({
       ...p,
       timestamp: p.timestamp ? Timestamp.fromDate(p.timestamp) : null,
     }));
-
-    await adminDb.collection('socialSnapshots').doc(`${accountDoc.id}_${period}`).set(
-      {
-        teamId: a.teamId,
-        businessId: a.businessId ?? null,
-        customerId: a.customerId,
-        accountId: accountDoc.id,
-        platform: a.platform,
-        accountName: a.name,
-        username: a.username ?? null,
-        pictureUrl: a.pictureUrl ?? null,
-        period,
-        periodStart: Timestamp.fromDate(start),
-        periodEnd: Timestamp.fromDate(end),
-        metrics: data.metrics,
-        daily: data.daily,
-        topPosts,
-        demographics: data.demographics ?? null,
-        fetchedAt: now,
-        updatedAt: now,
-        createdByUserId: null,
-        createdAt: now,
-      },
-      { merge: true },
-    );
+    await snapRef.set({
+      ...base,
+      metrics: data.metrics,
+      daily: data.daily,
+      topPosts,
+      demographics: data.demographics ?? null,
+    }, { merge: true });
 
     // Surface non-fatal Graph API failures (deprecated metric, missing perm) so
     // the staff UI explains why a metric came back 0 instead of failing silently.

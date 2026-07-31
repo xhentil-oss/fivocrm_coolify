@@ -192,14 +192,14 @@ export interface SocialAccount {
   teamId: string;
   businessId?: string;
   customerId: string;            // CRM customer this account belongs to (drives portal scoping of snapshots)
-  platform: 'facebook' | 'instagram';
-  name: string;                  // Page name / IG @handle shown in the UI
-  externalId: string;            // FB Page id, or IG business account id
+  platform: 'facebook' | 'instagram' | 'search-console';
+  name: string;                  // Page name / IG @handle / GSC site shown in the UI
+  externalId: string;            // FB Page id, IG business account id, or GSC siteUrl (sc-domain:… / https://…)
   pageId?: string;               // instagram: the linked FB Page id (insights are page-mediated)
   username?: string;             // IG @handle / page vanity name
   pictureUrl?: string;           // avatar
-  accessToken: string;           // long-lived Page access token (server-use only, never sent to portal)
-  tokenExpiresAt?: Date | null;  // null = never expires (system-user token)
+  accessToken: string;           // Meta: long-lived Page token · GSC: Google refresh token (server-only, never sent to portal)
+  tokenExpiresAt?: Date | null;  // null = never expires (system-user / refresh token)
   connected: boolean;            // false after a disconnect (row kept for history)
   lastSyncedAt?: Date | null;
   lastSyncError?: string | null;
@@ -250,6 +250,35 @@ export interface SocialDemographics {
   country?: Record<string, number>;
 }
 
+// ── Google Search Console (website search visibility) ──────────────────────
+export interface SeoMetrics {
+  clicks: number;
+  impressions: number;
+  ctr: number;        // click-through rate, 0-100 (%)
+  position: number;   // average position (lower = better)
+  clicksGrowth?: number; // vs the prior month, if computed
+}
+export interface SeoDailyPoint {
+  date: string;       // 'YYYY-MM-DD'
+  clicks: number;
+  impressions: number;
+}
+export interface SeoRow {
+  key: string;        // the query text or page URL
+  clicks: number;
+  impressions: number;
+  ctr: number;        // %
+  position: number;
+}
+export interface SeoSnapshot {
+  metrics: SeoMetrics;
+  daily: SeoDailyPoint[];
+  topQueries: SeoRow[];
+  topPages: SeoRow[];
+  countries?: Record<string, number>; // clicks by country code
+  devices?: Record<string, number>;   // clicks by device (DESKTOP/MOBILE/TABLET)
+}
+
 // A monthly analytics snapshot for one SocialAccount. Written once per month by
 // the cron sync (one Graph API call per account → one doc), so Firebase cost is
 // negligible. Holds headline metrics + a daily breakdown + top posts. This is
@@ -260,17 +289,19 @@ export interface SocialSnapshot {
   businessId?: string;
   customerId: string;            // portal scoping
   accountId: string;
-  platform: 'facebook' | 'instagram';
+  platform: 'facebook' | 'instagram' | 'search-console';
   accountName: string;           // denormalized (portal never reads SocialAccount)
   username?: string;
   pictureUrl?: string;
   period: string;                // 'YYYY-MM' — the reported month
   periodStart: Date;
   periodEnd: Date;
-  metrics: SocialMetrics;
-  daily: SocialDailyPoint[];     // per-day breakdown within the month
-  topPosts: SocialPost[];        // best posts of the month
+  // Social platforms fill these; a search-console snapshot fills `seo` instead.
+  metrics?: SocialMetrics;
+  daily?: SocialDailyPoint[];    // per-day breakdown within the month
+  topPosts?: SocialPost[];       // best posts of the month
   demographics?: SocialDemographics; // audience split (IG business, ≥100 followers)
+  seo?: SeoSnapshot;             // Google Search Console (platform === 'search-console')
   fetchedAt: Date;
   createdAt: Date;
   updatedAt: Date;

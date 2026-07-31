@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Share2, Facebook, Instagram, Plus, RefreshCw, Trash2, CheckCircle2, AlertCircle, Link2, X,
+  Share2, Facebook, Instagram, Plus, RefreshCw, Trash2, CheckCircle2, AlertCircle, Link2, X, Globe,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -17,7 +17,7 @@ const TABS: { key: Tab; label: string }[] = [
 
 interface ApiAccount {
   id: string;
-  platform: 'facebook' | 'instagram';
+  platform: 'facebook' | 'instagram' | 'search-console';
   name: string;
   username: string | null;
   pictureUrl: string | null;
@@ -101,6 +101,18 @@ const SocialMediaView: React.FC = () => {
     try {
       const { url } = await authFetch(`/api/social?action=oauth-url&${scopeQs}&customerId=${encodeURIComponent(selectedCustomer)}`);
       window.location.href = url; // hand off to Facebook Login
+    } catch (e) {
+      setBanner({ kind: 'err', text: (e as Error).message });
+      setBusy(null);
+    }
+  };
+
+  const handleConnectGoogle = async () => {
+    if ((!teamId && !businessId) || !selectedCustomer) { setBanner({ kind: 'err', text: 'Zgjidhni një klient së pari.' }); return; }
+    setBusy('connect-google');
+    try {
+      const { url } = await authFetch(`/api/social?action=google-oauth-url&${scopeQs}&customerId=${encodeURIComponent(selectedCustomer)}`);
+      window.location.href = url; // hand off to Google
     } catch (e) {
       setBanner({ kind: 'err', text: (e as Error).message });
       setBusy(null);
@@ -208,7 +220,7 @@ const SocialMediaView: React.FC = () => {
             <div className="border border-border rounded-xl p-4 bg-card space-y-3">
               <h3 className="text-sm font-semibold flex items-center gap-1.5"><Link2 className="w-4 h-4 text-primary" /> Lidh një llogari të re</h3>
               <p className="text-[13px] text-muted-foreground">
-                Zgjidhni klientin, pastaj hyni me Facebook për të autorizuar aksesin te Faqja dhe llogaria Instagram e lidhur. Të dhënat merren automatikisht një herë në muaj.
+                Zgjidhni klientin, pastaj autorizoni: <strong>Facebook</strong> (Faqja + Instagram e lidhur) ose <strong>Google Search Console</strong> (dukshmëria e webit në Google). Të dhënat merren automatikisht një herë në muaj.
               </p>
               <div className="flex flex-col sm:flex-row gap-2">
                 <select
@@ -221,10 +233,17 @@ const SocialMediaView: React.FC = () => {
                 </select>
                 <button
                   onClick={handleConnect}
-                  disabled={busy === 'connect' || !selectedCustomer}
-                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm font-medium disabled:opacity-50"
+                  disabled={busy !== null || !selectedCustomer}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg bg-primary text-primary-foreground px-4 py-2 text-sm font-medium disabled:opacity-50 whitespace-nowrap"
                 >
-                  <Plus className="w-4 h-4" /> {busy === 'connect' ? 'Duke hapur…' : 'Lidh me Facebook'}
+                  <Facebook className="w-4 h-4" /> {busy === 'connect' ? 'Duke hapur…' : 'Lidh Facebook/IG'}
+                </button>
+                <button
+                  onClick={handleConnectGoogle}
+                  disabled={busy !== null || !selectedCustomer}
+                  className="inline-flex items-center justify-center gap-2 rounded-lg border border-border bg-background px-4 py-2 text-sm font-medium disabled:opacity-50 whitespace-nowrap hover:bg-accent"
+                >
+                  <Globe className="w-4 h-4" /> {busy === 'connect-google' ? 'Duke hapur…' : 'Lidh Search Console'}
                 </button>
               </div>
             </div>
@@ -252,8 +271,8 @@ const SocialMediaView: React.FC = () => {
               <div className="divide-y divide-border/60">
                 {accounts.map((a) => (
                   <div key={a.id} className="flex items-center gap-3 px-4 py-3">
-                    <span className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${a.platform === 'instagram' ? 'bg-pink-500/10 text-pink-500' : 'bg-blue-500/10 text-blue-600'}`}>
-                      {a.platform === 'instagram' ? <Instagram className="w-4.5 h-4.5" /> : <Facebook className="w-4.5 h-4.5" />}
+                    <span className={`w-9 h-9 rounded-lg flex items-center justify-center flex-shrink-0 ${a.platform === 'instagram' ? 'bg-pink-500/10 text-pink-500' : a.platform === 'search-console' ? 'bg-emerald-500/10 text-emerald-600' : 'bg-blue-500/10 text-blue-600'}`}>
+                      {a.platform === 'instagram' ? <Instagram className="w-4.5 h-4.5" /> : a.platform === 'search-console' ? <Globe className="w-4.5 h-4.5" /> : <Facebook className="w-4.5 h-4.5" />}
                     </span>
                     <div className="min-w-0 flex-1">
                       <p className="text-sm font-medium truncate">{a.name}</p>
