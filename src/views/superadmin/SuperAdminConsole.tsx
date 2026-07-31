@@ -1,11 +1,13 @@
 import React from 'react';
 import { Routes, Route, NavLink, Navigate, Link } from 'react-router-dom';
-import { ShieldX, Building2, ScrollText, ArrowLeft, Loader2 } from 'lucide-react';
+import { ShieldX, Building2, ScrollText, ArrowLeft, Loader2, Wrench } from 'lucide-react';
 import { usePermissions } from '../../contexts/PermissionsContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTenantOverride } from '../../lib/platformContext';
 import AuditLogPanel from '../../components/AuditLogPanel';
-import TenantsView from '../TenantsView';
+import PlatformDashboard from './PlatformDashboard';
+import TenantDetailView from './TenantDetailView';
+import PlatformJobsView from './PlatformJobsView';
 
 /**
  * The PLATFORM console (/superadmin) — FivoCRM as a SaaS operator.
@@ -21,6 +23,7 @@ import TenantsView from '../TenantsView';
 
 const NAV = [
   { to: '/superadmin', end: true, label: 'Tenantët', Icon: Building2 },
+  { to: '/superadmin/jobs', end: false, label: 'Punët', Icon: Wrench },
   { to: '/superadmin/audit', end: false, label: 'Audit', Icon: ScrollText },
 ];
 
@@ -99,7 +102,9 @@ const SuperAdminConsole: React.FC = () => {
 
       <main className="flex-1 min-h-0 overflow-y-auto">
         <Routes>
-          <Route index element={<TenantsView />} />
+          <Route index element={<PlatformDashboard />} />
+          <Route path="tenants/:businessId" element={<TenantDetailView />} />
+          <Route path="jobs" element={<PlatformJobsView />} />
           <Route
             path="audit"
             element={

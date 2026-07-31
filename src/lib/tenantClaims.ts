@@ -92,7 +92,15 @@ export async function ensureTenantClaims(expected: { teamId: string | null; busi
   if (matches) { _lastSyncedKey = key; return; }
 
   if (_inFlight) { await _inFlight; return; }
-  _inFlight = syncTenantClaims({ teamId: expected.teamId });
+  _inFlight = syncTenantClaims({
+    teamId: expected.teamId,
+    // Only a platform super-admin may pin a business server-side — /api/sync-claims
+    // answers 403 to anyone else who sends one, and nobody else needs it: for a
+    // normal user `bid` is derived from their membership. A super-admin visiting
+    // another tenant DOES need it, otherwise the re-mint would silently drag their
+    // token back to their own business while the UI shows the visited one.
+    businessId: current?.superAdmin ? expected.businessId : null,
+  });
   try {
     await _inFlight;
     _lastSyncedKey = key;

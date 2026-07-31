@@ -116,9 +116,8 @@ const InvoicesView: React.FC = () => {
   const { data: teamMembers } = useCollection<any>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
   });
-  // Super-admins read teamMembers across ALL tenants (SUPER_ADMIN_BYPASS_COLLECTIONS),
-  // so scope notification recipients to the ACTIVE business — otherwise a super-admin
-  // marking an invoice paid would notify other tenants' admins.
+  // Defence in depth: reads are already business-scoped, but notification recipients
+  // re-check businessId — marking an invoice paid must never email another tenant.
   const activeBusinessId = useGlobalBusinessId();
   const scopedMembers = useMemo(
     () => (teamMembers || []).filter((m: any) => !activeBusinessId || !m.businessId || m.businessId === activeBusinessId),

@@ -2,7 +2,7 @@
  * Module registry — the single source of truth for "what is a module".
  *
  * Before this file, module state lived in three disconnected places: the Sidebar's
- * nav list, TenantsView's local TOGGLEABLE_MODULES array, and the per-role
+ * nav list, the console's local TOGGLEABLE_MODULES array, and the per-role
  * `canAccessX` permission flags. Nothing consulted the tenant's SaaS `plan`, and a
  * disabled module's route was still reachable by typing the URL.
  *

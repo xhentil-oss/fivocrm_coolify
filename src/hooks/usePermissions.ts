@@ -1,5 +1,6 @@
-import { useCollection, useDocument, setGlobalTeamId, setGlobalBusinessId, setSuperAdmin } from './useFirestore';
+import { useCollection, useDocument, setGlobalTeamId, setGlobalBusinessId } from './useFirestore';
 import { ensureTenantClaims } from '../lib/tenantClaims';
+import { useTenantOverride } from '../lib/platformContext';
 // Reporting capabilities are resolved in ONE place so every role branch below
 // stays a single spread instead of seven hand-maintained booleans.
 import { reportingCapabilitiesFor, NO_REPORTING_CAPABILITIES } from '../lib/reporting/permissions';
@@ -172,6 +173,9 @@ export function usePermissions(): UserPermissions {
   // Super admin: full cross-tenant access for emails listed in VITE_SUPER_ADMIN_EMAILS.
   // Computed before the queries below because it decides whether `teams` may be read
   // unscoped (platform console) or must stay scoped (every normal user).
+  // Tenant pinned from the platform console, if any (see lib/platformContext).
+  const tenantOverride = useTenantOverride();
+
   const isSuperAdmin = useMemo(() => {
     if (!user?.email) return false;
     const raw = (import.meta.env.VITE_SUPER_ADMIN_EMAILS as string) || '';
@@ -589,15 +593,24 @@ export function usePermissions(): UserPermissions {
   //   must NOT reset globalTeamId back to null and wipe out team-scoped collection data.
   const persistedTeamIdRef = useRef<string | null>(null);
   useEffect(() => {
-    setSuperAdmin(isSuperAdmin);
-    // Super admin READS bypass team scoping (cross-team view), but WRITES must
-    // still stamp a teamId — otherwise every team-scoped create throws
-    // "Cannot create … without an active team". Give them a default active
-    // team (their own membership, else the first team) so creates work. This
-    // does NOT re-enable team filtering on reads (the superAdmin flag bypasses
-    // it regardless of globalTeamId). Context-aware creates (e.g. a task inside
-    // a project) still pass an explicit teamId, which takes precedence.
+    // A super-admin resolves with teamId=null (they belong to the platform, not to a
+    // department), so the branch below gives them a concrete ACTIVE team/business.
+    // Reads are scoped to it exactly like anyone else's — since the console can enter
+    // a tenant explicitly, there is no cross-tenant read mode any more — and writes
+    // need it too, or every team-scoped create throws "without an active team".
+    // Context-aware creates (e.g. a task inside a project) still pass an explicit
+    // teamId, which takes precedence.
     if (isSuperAdmin) {
+      // The platform console can pin an explicit tenant ("Hyr" in /superadmin). That
+      // choice WINS over the heuristic below — entering a tenant is the whole point.
+      // users/{uid} is deliberately not touched here: that marker describes the
+      // super-admin's OWN home business, not the one they are visiting.
+      if (tenantOverride) {
+        setGlobalTeamId(tenantOverride.teamId);
+        setGlobalBusinessId(tenantOverride.businessId);
+        void ensureTenantClaims({ teamId: tenantOverride.teamId, businessId: tenantOverride.businessId });
+        return;
+      }
       // Candidate active teams: the super-admin's own memberships, else all teams.
       const candidates = (teamMembers.length ? teamMembers.map((m: any) => m.teamId) : (teams || []).map((t: any) => t.id))
         .filter(Boolean) as string[];
@@ -654,7 +667,7 @@ export function usePermissions(): UserPermissions {
       // This is the authoritative boundary for Firestore rules; no-op when it matches.
       void ensureTenantClaims({ teamId: permissions.teamId, businessId: activeBiz });
     }
-  }, [isSuperAdmin, permissions.isLoading, permissions.teamId, user, teamMembers, teams, bestMembership]);
+  }, [isSuperAdmin, tenantOverride, permissions.isLoading, permissions.teamId, user, teamMembers, teams, bestMembership]);
 
   return permissions;
 }

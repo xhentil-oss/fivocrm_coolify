@@ -53,13 +53,14 @@ problem is entirely in the client identity/UX layer.**
 
 | Where | What it does | Fate |
 |---|---|---|
-| `useFirestore.ts:229` `SUPER_ADMIN_BYPASS_COLLECTIONS` | drops `businessId` filter for `teams`/`teamMembers`/`teamInvites` | **delete** (Phase 1) |
-| `useFirestore.ts:326-339` `superAdminBypass` | applies the above inside `useCollection` | **delete** (Phase 1) |
-| `useFirestore.ts:101-120` `setSuperAdmin` / `useIsSuperAdmin` | reactive global flag feeding the bypass | keep the hook (console needs it), drop its use in `useCollection` |
-| `TeamsView.tsx:76-100` | **already fixed** — passes an explicit `businessId` predicate for all three collections (commit `60bc2b7`) | keep; becomes redundant-but-harmless after Phase 1 |
-| `CRMView.tsx:129`, `ProjectsView.tsx:80`, `InvoicesView.tsx:119`, `DealsView.tsx:76` | read `teamMembers` relying on the bypass for name resolution | fixed for free by Phase 1 |
-| `TenantsView.tsx:49-53` | passes `skipBusinessFilter: true` **explicitly** | keep — the one legitimate cross-tenant reader |
-| `usePermissions.ts:196-200` | `allTeams` unscoped, `skipBusinessFilter: true` | keep, but move behind the console (Phase 3) |
+| `useFirestore.ts:229` `SUPER_ADMIN_BYPASS_COLLECTIONS` | dropped `businessId` filter for `teams`/`teamMembers`/`teamInvites` | ✅ deleted (Phase 1) |
+| `useFirestore.ts:326-339` `superAdminBypass` | applied the above inside `useCollection` | ✅ deleted (Phase 1) |
+| `useFirestore.ts:101-120` `setSuperAdmin` / `useIsSuperAdmin` | reactive global flag feeding the bypass | ✅ deleted — nothing consumed it once the bypass was gone |
+| `TeamsView.tsx:76-100` | explicit `businessId` predicate for all three collections (commit `60bc2b7`) | kept as defence in depth |
+| `CRMView.tsx:129`, `ProjectsView.tsx:80`, `InvoicesView.tsx:119`, `DealsView.tsx:76` | read `teamMembers` relying on the bypass for name resolution | ✅ fixed by Phase 1; their re-filters kept |
+| `TenantsView.tsx` `members` / `businesses` | passed `skipBusinessFilter: true` **explicitly** | kept — the legitimate cross-tenant reader |
+| `TenantsView.tsx` `teams` | relied on the implicit bypass | ✅ now opts out explicitly (else "Hyr" breaks) |
+| `usePermissions.ts:196-200` | `allTeams` unscoped, `skipBusinessFilter: true` | kept, but move behind the console (Phase 3) |
 
 Note that `TenantsView` already opts out explicitly, which is why the global
 bypass can be deleted without breaking the console.
@@ -107,23 +108,30 @@ console", with entering someone else's account being a recorded action.
 
 ## 4. Phases
 
-### Phase 1 — remove the global bypass (small, low risk)
+### Phase 1 — SHIPPED (31 Jul 2026), after Phase 2
 
-Delete `SUPER_ADMIN_BYPASS_COLLECTIONS` and the `superAdminBypass` branch in
-`useCollection`. `teams`/`teamMembers`/`teamInvites` then behave for a super-admin
-exactly as for anybody else: scoped to the active business unless the caller
-passes `skipBusinessFilter` (only `TenantsView` and the `usePermissions` bootstrap
-do).
+Done second on purpose: removing the bypass leaves no way to see another tenant, so
+the switcher had to exist first.
 
-- **Files:** `src/hooks/useFirestore.ts` (two blocks), plus the now-stale comments
-  in `CRMView`/`ProjectsView`/`InvoicesView`/`DealsView`.
+`SUPER_ADMIN_BYPASS_COLLECTIONS`, the `superAdminBypass` branch in `useCollection`,
+and the whole reactive `setSuperAdmin`/`useIsSuperAdmin` store are **gone**. Scoping
+is now identical for every user: a read is business-scoped unless the caller passes
+`skipBusinessFilter`. `permissions.isSuperAdmin` stays as the capability flag.
+
+- **Files:** `src/hooks/useFirestore.ts` (three blocks removed), `usePermissions.ts`
+  (no longer publishes the flag), plus refreshed comments in `CRMView`/`ProjectsView`/
+  `InvoicesView`/`DealsView` — their defensive `businessId` re-filters were kept as
+  defence in depth.
+- **The one place that had to be updated:** `TenantsView`'s `teams` query relied on
+  the implicit bypass and now passes `skipBusinessFilter: true` explicitly. Without
+  it the console cannot resolve a tenant's default team, which breaks "Hyr" and the
+  subdomain mapping.
+- `usePermissions`' `allTeams` and the two identity queries already opted out
+  explicitly, so the bootstrap was unaffected.
 - **Precondition (verified 31 Jul 2026):** all 18 `teamMembers` and all 62
-  `teamInvites` carry a `businessId`, so nothing disappears behind the filter.
-  Re-verify before shipping if much time has passed.
-- **Effect:** `/app` shows nothing from other tenants — including for debugging.
-  Until Phase 2 lands, inspecting another tenant means the Firebase console.
-- **Watch out:** `usePermissions.ts:196-200` (`allTeams`) must keep
-  `skipBusinessFilter: true`, otherwise the console loses its tenant list.
+  `teamInvites` carry a `businessId`, so nothing disappeared behind the filter.
+- **Effect:** `/app` shows nothing from other tenants. Inspecting another tenant is
+  now a deliberate act: enter it from the console.
 
 ### Phase 2 — SHIPPED (31 Jul 2026) as `/superadmin`
 
@@ -169,6 +177,53 @@ tenant page. Splitting it is cosmetic and can wait.
    banner in `/app` while the active business is not your own, with "Dil".
 5. Nice-to-have on the tenant list: MRR/plan mix and seat usage, both derivable
    from `businesses` + `teamMembers` without new collections.
+
+### Phase 2b — the console itself (31 Jul 2026)
+
+The first cut mounted the old tenant list inside the new shell. That list was a row
+of chips; running a SaaS needs the commercial terms to be editable and the money to
+be visible. The console is now three pages:
+
+| Route | View | What it is |
+|---|---|---|
+| `/superadmin` | `PlatformDashboard.tsx` | MRR/ARR, tenants by lifecycle state, trials ending within 7 days, tenants needing attention; searchable, status-filtered, sortable tenant table (created / MRR / members / name); "Hyr" per row |
+| `/superadmin/tenants/:businessId` | `TenantDetailView.tsx` | plan · status · trial end · seat override (+ audit note), module toggles, team roster, portal subdomain, GDPR export/delete |
+| `/superadmin/jobs` | `PlatformJobsView.tsx` | the migration/backfill runners, moved off the tenant page |
+| `/superadmin/audit` | `AuditLogPanel` | the active tenant's trail |
+
+`TenantsView.tsx` is **deleted** — its list became the dashboard, its job runners
+became the jobs page. Shared labels live in `superadmin/tenantMeta.tsx`.
+
+**Writes go through the server, not Firestore.** `POST /api/platform-admin`
+(`api/_platformAdmin.ts`, dispatched by `api/email.ts?type=platform-admin` + a
+`vercel.json` rewrite, so the function count stays at 12) handles `update-plan` and
+`set-modules`. Rules would let a super-admin write `businesses/{id}` directly; the
+endpoint exists for what the client cannot give: validation against one list of
+plans/statuses, an audit entry with before/after, and detection of a conflict with a
+live Stripe subscription.
+
+Three behaviours worth remembering:
+
+- **Seats follow the plan.** Changing the plan rewrites `seats`, or a downgrade would
+  silently keep the old allowance. `limits.seats` is the negotiated override and is
+  left alone unless explicitly set (empty = back to the plan's).
+- **Status changes fix their own timestamps.** Setting `suspended` stamps
+  `suspendedAt`; anything else clears it (and clears `pastDueSince` unless the new
+  status is `past_due`), otherwise the `subscription-lifecycle` cron would re-derive
+  a state contradicting what was just set by hand.
+- **Stripe wins in the end.** A manual tier on a subscribed tenant is overwritten by
+  the next webhook. The detail page shows an amber warning before the edit and the
+  save toast repeats it.
+
+Deletion is resumable server-side (`complete: false` when the time budget runs out),
+so the UI loops until it reports complete — a half-erased tenant is the opposite of
+what a DPA request asks for. The confirm prompt asks for the tenant NAME (what a
+human can verify), while the API is sent `confirm=<businessId>` (what it demands).
+
+`platformAdmin.ts` also holds the pure read-side logic — `tenantMrr`,
+`platformStats`, `daysUntil` — unit-tested in `platformAdmin.test.ts` (9 tests). MRR
+counts only `status === 'active'`: a trial is not revenue, and a suspended tenant
+still has `plan: 'pro'` written on it.
 
 ### Phase 3 — restore the real identity (risky, do separately)
 

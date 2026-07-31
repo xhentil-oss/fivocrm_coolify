@@ -37,12 +37,16 @@ const ACTION_LABELS: Record<string, string> = {
   'billing.suspended': 'Hapësira u pezullua',
   'tenant.export': 'Eksport i të dhënave',
   'tenant.delete': 'Fshirje e të dhënave',
+  'platform.plan_change': 'Ndryshoi paketën/statusin (platformë)',
+  'platform.modules_change': 'Ndryshoi modulet (platformë)',
 };
 
 const CATEGORY_OF = (action: string): 'billing' | 'security' | 'data' | 'other' => {
   if (action.startsWith('billing.')) return 'billing';
   if (action.startsWith('tenant.')) return 'data';
-  if (action.startsWith('secrets.') || action.startsWith('claims.') || action.startsWith('invite.')) return 'security';
+  // platform.* is a super-admin acting on the tenant from outside it — the same
+  // "someone changed the boundary" category as secrets/claims, not routine billing.
+  if (action.startsWith('secrets.') || action.startsWith('claims.') || action.startsWith('invite.') || action.startsWith('platform.')) return 'security';
   return 'other';
 };
 

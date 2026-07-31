@@ -77,9 +77,8 @@ const ProjectsView: React.FC = () => {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
   const teamMembers = useUniqueTeamMembers(rawTeamMembers);
-  // Super-admins read teamMembers across ALL tenants (SUPER_ADMIN_BYPASS_COLLECTIONS),
-  // so scope the project member/responsible pickers to the ACTIVE business — otherwise
-  // other tenants' people (e.g. another business's admin) leak into the form.
+  // Defence in depth: reads are already business-scoped, but the member/responsible
+  // pickers re-check businessId so no foreign person can reach the form.
   const activeBusinessId = useGlobalBusinessId();
   const formTeamMembers = useMemo(
     () => (teamMembers || []).filter((m: any) => !activeBusinessId || !m.businessId || m.businessId === activeBusinessId),

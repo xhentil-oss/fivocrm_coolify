@@ -97,27 +97,11 @@ export function useGlobalBusinessId(): string | null {
   return useSyncExternalStore(_subscribeBusinessId, _getBusinessIdSnapshot);
 }
 
-// ---- Reactive super-admin flag — bypasses all team filters ----
-let _isSuperAdmin: boolean = false;
-let _superAdminListeners: (() => void)[] = [];
-
-function _subscribeSuperAdmin(l: () => void) {
-  _superAdminListeners = [..._superAdminListeners, l];
-  return () => { _superAdminListeners = _superAdminListeners.filter(x => x !== l); };
-}
-
-function _getSuperAdminSnapshot() { return _isSuperAdmin; }
-
-export function setSuperAdmin(val: boolean) {
-  if (_isSuperAdmin !== val) {
-    _isSuperAdmin = val;
-    for (const l of _superAdminListeners) l();
-  }
-}
-
-export function useIsSuperAdmin(): boolean {
-  return useSyncExternalStore(_subscribeSuperAdmin, _getSuperAdminSnapshot);
-}
+// A reactive super-admin flag used to live here and switched scoping off globally.
+// It is gone on purpose: scoping is now identical for everyone, and a super-admin
+// reaches another tenant only by entering it (lib/platformContext), which changes
+// the ACTIVE business rather than removing the filter. `permissions.isSuperAdmin`
+// remains the right source for capability checks.
 
 // ---- Reactive WhatsApp enabled flag ----
 let _waEnabled: boolean = localStorage.getItem('whatsapp_enabled') === 'true';
@@ -223,11 +207,6 @@ const businessIsolatedAlways = new Set<string>([
   'auditLogs',
 ]);
 
-// Identity/structure collections a super-admin reads cross-business (the agency
-// owner manages tenants platform-wide from the Relax CRM console). DATA collections
-// are NOT here, so they stay strictly business-scoped even for super-admins.
-const SUPER_ADMIN_BYPASS_COLLECTIONS = new Set<string>(['teamMembers', 'teamInvites', 'teams']);
-
 // "Reference" collections that change rarely but are subscribed on almost every
 // screen. Reading them with a live onSnapshot keeps an open stream + re-reads the
 // whole list on every (re)mount. Instead we read them ONCE via getDocs and serve
@@ -315,16 +294,14 @@ export function useCollection<T = DocumentData>(
   // Two-level tenancy: isolation is by businessId (the tenant). teamId is now a
   // sub-group (department) within a business, so it no longer scopes reads.
   const reactiveBusinessId = useGlobalBusinessId();
-  const superAdmin = useIsSuperAdmin();
-  // Tenant isolation applies to everyone for DATA collections (customers, invoices,
-  // leads, …) — scoped to the active business; cross-tenant reads need an explicit
-  // skipBusinessFilter (Relax CRM console). EXCEPTION: super-admins bypass scoping for
-  // IDENTITY/structure collections (teamMembers/teamInvites) so the agency owner can
-  // manage teams across the platform — `teams` is already unscoped, so scoping only
-  // teamMembers made member counts wrongly show 0. Data collections stay scoped, so
-  // no tenant's records leak into another tenant's /app.
-  const superAdminBypass = superAdmin && SUPER_ADMIN_BYPASS_COLLECTIONS.has(collectionName);
-  const forceBusinessScope = !!reactiveBusinessId && businessIsolatedAlways.has(collectionName) && !options?.skipBusinessFilter && !superAdminBypass;
+  // Tenant isolation applies to EVERYONE, super-admins included: a read is scoped to
+  // the active business unless the caller opts out explicitly with skipBusinessFilter
+  // (the platform console and the identity bootstrap — nobody else). There used to be
+  // an implicit super-admin bypass for teams/teamMembers/teamInvites; it made every
+  // tenant's departments and people show up inside the agency's own /app. Since the
+  // console can now enter a tenant deliberately (lib/platformContext), an implicit
+  // cross-tenant read has no remaining purpose.
+  const forceBusinessScope = !!reactiveBusinessId && businessIsolatedAlways.has(collectionName) && !options?.skipBusinessFilter;
   // Two ways a read gets the mandatory tenant predicate:
   //   • forceBusinessScope — the collection is business-isolated, so scoping applies
   //     even when the caller passed skipTeamFilter (only skipBusinessFilter opts out).
@@ -332,8 +309,7 @@ export function useCollection<T = DocumentData>(
   //     structural collections (teams, userProfiles, clientPortalAccess) can be
   //     tenant-scoped on READ without forcing a teamId on CREATE.
   //   • the legacy team-scoped list, unless the caller opted out with skipTeamFilter.
-  const isTeamScoped = !superAdminBypass
-    && !globalReadCollections.has(collectionName)
+  const isTeamScoped = !globalReadCollections.has(collectionName)
     && (forceBusinessScope
         || (teamScopedCollections.has(collectionName) && !options?.skipTeamFilter));
   const scopeId = isTeamScoped ? reactiveBusinessId : null;
@@ -519,7 +495,7 @@ export function useCollection<T = DocumentData>(
         }
       }
     };
-  }, [collectionName, whereKey, orderKey, skipTeamFilter, limitVal, scopeId, superAdmin, options?.skip, user?.uid]);
+  }, [collectionName, whereKey, orderKey, skipTeamFilter, limitVal, scopeId, options?.skip, user?.uid]);
 
   return { data, loading, error };
 }

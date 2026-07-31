@@ -133,8 +133,16 @@ export async function resolveTenantClaims(
   // Super-admin impersonation ("view as tenant") — only ever honored for a real
   // super-admin, and audited by the caller.
   if (isSuper && opts?.preferBusinessId) {
-    bid = opts.preferBusinessId;
-    if (!tid) tid = null;
+    const target = opts.preferBusinessId;
+    if (bid !== target) {
+      // `tid` must live inside `bid`. Left alone it would still point at the
+      // operator's OWN department, so a team-scoped rule would authorize against
+      // the wrong tenant while the rest of the app reads the visited one. Keep the
+      // requested team only when it genuinely belongs to the target business.
+      const wanted = opts.preferTeamId || null;
+      tid = wanted && (await businessOfTeam(wanted)) === target ? wanted : null;
+    }
+    bid = target;
   }
 
   // ── portal client identity ──

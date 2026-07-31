@@ -198,8 +198,12 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   Stripe-status → tenant-status mapping). Modules are gated by `minPlan` in
   `src/lib/modules.ts` — do not duplicate that list.
 - **The tenant never sets its own tier.** `businesses.plan/status` are written ONLY by
-  `api/stripe-webhook.ts` (plan derived from the price actually billed) and the
-  `subscription-lifecycle` cron. Firestore rules block a tenant from editing either.
+  `api/stripe-webhook.ts` (plan derived from the price actually billed), the
+  `subscription-lifecycle` cron, and — as an explicit, audited OVERRIDE — a platform
+  super-admin via `POST /api/platform-admin` (`api/_platformAdmin.ts`). Firestore rules
+  block a tenant from editing either. An override on a tenant with a live subscription
+  is transient: the next Stripe event rewrites it, and both the UI and the endpoint
+  response say so.
 - **Lifecycle:** trialing → (trial ends) past_due → (7 days grace) suspended → (paid)
   active. `tenantActive()` in the rules denies writes for a suspended tenant, and
   `<SubscriptionGate>` turns that into an explicit screen instead of silent failures.
@@ -307,6 +311,7 @@ Each package includes:
 | `send-whatsapp.ts` | `POST /api/send-whatsapp` | Send WhatsApp messages |
 | `migrate-emails.ts` | `POST /api/migrate-emails` | Data migration utility |
 | `_reports.ts` | `POST /api/reports` | Client report actions (view/ack/approve/reject/comment) + staff email send |
+| `_platformAdmin.ts` | `POST /api/platform-admin` | Platform console writes: tenant plan/status/trial/seats + module toggles (super-admin only, audited) |
 | `_reportJobs.ts` | Cron | report-schedules, report-reminders, client-health-rollup |
 | `cron/run.ts` | Cron | Scheduled jobs (recurring invoices, etc.) |
 

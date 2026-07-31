@@ -58,6 +58,10 @@
       "destination": "/api/email?type=reports"
     },
     {
+      "source": "/api/platform-admin",
+      "destination": "/api/email?type=platform-admin"
+    },
+    {
       "source": "/api/(.*)",
       "destination": "/api/$1"
     },

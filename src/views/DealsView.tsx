@@ -73,8 +73,8 @@ const DealsView: React.FC = () => {
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: rawMembers } = useCollection<TeamMember>('teamMembers', { where: [{ field: 'status', operator: '==', value: 'Active' }] });
   const teamMembers = useUniqueTeamMembers(rawMembers);
-  // Super-admins read teamMembers across ALL tenants (SUPER_ADMIN_BYPASS_COLLECTIONS),
-  // so scope the owner/assignee picker to the ACTIVE business.
+  // Defence in depth: reads are already business-scoped, but the owner/assignee picker
+  // re-checks businessId anyway.
   const activeBusinessId = useGlobalBusinessId();
   const scopedMembers = useMemo(
     () => (teamMembers || []).filter((m: any) => !activeBusinessId || !m.businessId || m.businessId === activeBusinessId),

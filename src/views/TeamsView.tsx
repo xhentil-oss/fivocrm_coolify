@@ -76,11 +76,11 @@ const TeamsView: React.FC = () => {
   const businessId = useGlobalBusinessId();
   const { seats } = useSubscription();
   // A team is a DEPARTMENT INSIDE a business, so this page NEVER leaves the active
-  // business — super-admins included. `teams`/`teamMembers`/`teamInvites` are in
-  // SUPER_ADMIN_BYPASS_COLLECTIONS, so useCollection drops its automatic businessId
-  // filter for them; without the explicit predicate below a super-admin saw every
-  // tenant's department here, which read as "teams created themselves". Cross-tenant
-  // listing lives in the console (/app/tenants), not in department management.
+  // business — super-admins included. useCollection now scopes these three
+  // collections for everyone, so the explicit predicate below is belt-and-braces:
+  // it is what made this page correct while the super-admin bypass still existed
+  // (every tenant's department showed up here, reading as "teams created
+  // themselves"). Cross-tenant listing lives in the console (/superadmin).
   const businessScope = useMemo(
     () => (businessId ? [{ field: 'businessId', operator: '==', value: businessId }] : undefined),
     [businessId]

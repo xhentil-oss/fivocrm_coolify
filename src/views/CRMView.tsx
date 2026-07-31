@@ -126,9 +126,9 @@ const CRMView: React.FC = () => {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
   });
   const teamMembers = useUniqueTeamMembers(rawTeamMembers);
-  // Super-admins read teamMembers across ALL tenants (SUPER_ADMIN_BYPASS_COLLECTIONS),
-  // so scope assignee pickers / notification recipients to the ACTIVE business —
-  // otherwise other tenants' people leak into dropdowns and notifications.
+  // Defence in depth: reads are already business-scoped, but assignee pickers and
+  // notification recipients re-check businessId so a stray unscoped member can never
+  // reach a dropdown or an email.
   const activeBusinessId = useGlobalBusinessId();
   const scopedMembers = useMemo(
     () => (teamMembers || []).filter((m: any) => !activeBusinessId || !m.businessId || m.businessId === activeBusinessId),

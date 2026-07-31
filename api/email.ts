@@ -13,6 +13,7 @@ import notifyStaffHandler from './_notify-staff.js';
 import tenantSecretsHandler from './_tenant-secrets.js';
 import billingHandler from './_billing.js';
 import reportsHandler from './_reports.js';
+import platformAdminHandler from './_platformAdmin.js';
 
 /**
  * Consolidated dispatcher (named "email" for historical reasons — it also routes
@@ -31,6 +32,7 @@ import reportsHandler from './_reports.js';
  *   /api/tenant-secrets           -> ?type=tenant-secrets  (write-only credential vault)
  *   /api/billing                  -> ?type=billing         (Stripe subscription checkout/portal)
  *   /api/reports                  -> ?type=reports         (client report actions + email delivery)
+ *   /api/platform-admin           -> ?type=platform-admin  (super-admin tenant administration)
  *
  * Created to stay under Vercel Hobby's 12-function limit.
  */
@@ -54,9 +56,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.url.includes('tenant-secrets')) type = 'tenant-secrets';
     else if (req.url.includes('/api/billing')) type = 'billing';
     else if (req.url.includes('/api/reports')) type = 'reports';
+    else if (req.url.includes('platform-admin')) type = 'platform-admin';
   }
 
   switch (type) {
+    case 'platform-admin':
+      // Platform console writes (tenant plan/status/seats/modules). Super-admin only,
+      // validated + audited server-side — see api/_platformAdmin.ts.
+      return platformAdminHandler(req, res);
     case 'sync-claims':
       // Materialises server-authoritative tenant claims (bid/tid/roles/cid).
       return syncClaimsHandler(req, res);
