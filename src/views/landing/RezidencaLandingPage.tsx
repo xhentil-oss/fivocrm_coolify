@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Building2, CheckCircle2, X, ArrowRight, Clock, Shield, Target,
-  Phone, ArrowUpRight, BarChart3, Search, MessageSquare, Plane,
+  Phone, ArrowUpRight, BarChart3, Search, MessageSquare, Plus,
 } from 'lucide-react';
 import LandingMobileMenu from './LandingMobileMenu';
 import ClientLogos from './ClientLogos';
@@ -51,9 +51,9 @@ interface Pkg {
    matësi është lead i kualifikuar → vizitë → shitje. */
 const PACKAGES: Pkg[] = [
   {
-    id: 'prezenca-rezidenciale',
-    name: 'Prezencë Rezidenciale',
-    tagline: 'Baza e matjes dhe një prezencë që i bën hije cilësisë së projektit.',
+    id: 'baza-rezidenciale',
+    name: 'Baza Rezidenciale',
+    tagline: 'Baza e matjes dhe një prani që u përgjigjet cilësisë së projektit.',
     price: '1.200 €',
     priceNote: '/ muaj + buxheti i reklamave',
     audience: ['Projekte në fazë ndërtimi', 'Zhvillues pa matje të instaluar', 'Shitje që ecin me rekomandime'],
@@ -65,7 +65,7 @@ const PACKAGES: Pkg[] = [
           '12 postime në muaj',
           '8 reels në muaj: tipologji, pamje, ecuria e punimeve',
           'Dizajn grafik dhe shkrim tekstesh, shqip dhe anglisht',
-          '1 ditë xhirimi në muaj, në kantier dhe në ambientet e përfunduara',
+          '1 ditë xhirimi në muaj, në kantier dhe në mjediset e përfunduara',
           'Kalendar publikimi i aprovuar paraprakisht',
           'Menaxhim bazë i komenteve dhe i mesazheve',
         ],
@@ -87,19 +87,19 @@ const PACKAGES: Pkg[] = [
         ],
       },
     ],
-    excluded: ['Buxheti i reklamave', 'Google Search', 'Xhirim me dron', 'Faqe hyrëse sipas tipologjisë', 'Video tour', 'Ndërlidhje me CRM'],
+    excluded: ['Buxheti i reklamave', 'Google Search', 'Xhirim me dron', 'Faqe hyrëse sipas tipologjisë', 'Shëtitje video e tipologjive', 'Ndërlidhje me CRM'],
   },
   {
     id: 'motor-leadesh',
     name: 'Motor Lead-esh',
-    tagline: 'Blerësi që kërkon me qëllim blerjeje të gjen, dhe kërkesa e tij mbërrin e kualifikuar.',
+    tagline: 'Blerësi që ka vendosur të blejë ju gjen, dhe kërkesa e tij mbërrin e kualifikuar.',
     price: '1.900 €',
     priceNote: '/ muaj + buxheti i reklamave',
     popular: true,
     badge: 'E rekomanduar',
-    audience: ['Projekte në shitje aktive', 'Shitje ndaj Shqipërisë, Kosovës dhe diasporës', 'Ekipe që duan kosto për lead të matur'],
+    audience: ['Projekte në shitje aktive', 'Shitje ndaj Shqipërisë, Kosovës dhe diasporës', 'Ekipe që duan të dinë sa kushton një lead'],
     groups: [
-      { title: 'Gjithçka nga Prezencë Rezidenciale, plus:', items: [] },
+      { title: 'Gjithçka nga Baza Rezidenciale, plus:', items: [] },
       {
         title: 'Përmbajtja',
         items: [
@@ -112,8 +112,8 @@ const PACKAGES: Pkg[] = [
       {
         title: 'Reklamat dhe kërkesa',
         items: [
-          'Meta Ads të plota, me testim kreativësh',
-          'Google Search për fjalë me qëllim blerjeje',
+          'Meta Ads të plota, me testim të materialeve reklamuese',
+          'Google Search për fjalë kyçe që tregojnë synim blerjeje',
           'Segmentim: Shqipëri, Kosovë dhe diasporë (Italia, Gjermania, Zvicra, Britania)',
           'Retargeting i vizitorëve të faqes dhe i shikuesve të videove',
           'Faqe hyrëse sipas tipologjisë, me formular dhe WhatsApp',
@@ -129,16 +129,16 @@ const PACKAGES: Pkg[] = [
         ],
       },
     ],
-    excluded: ['Buxheti i reklamave', 'Video tour për tipologji', 'Sekuenca e email-eve', 'Prezantim investitori', 'Bashkëpunime me media'],
+    excluded: ['Buxheti i reklamave', 'Shëtitje video për tipologji', 'Sekuenca e email-eve', 'Prezantim për investitorin', 'Bashkëpunime me media'],
   },
   {
     id: 'shitje-360',
     name: 'Shitje 360',
-    tagline: 'Për fazën e lançimit dhe për objektiva agresive shitjeje, përfshirë investitorët e diasporën.',
+    tagline: 'Për hedhjen në shitje të një faze të re dhe për objektiva ambicioze, përfshirë investitorët dhe diasporën.',
     price: '3.200 €',
     priceNote: '/ muaj + buxheti i reklamave',
     badge: 'Zgjidhja e plotë',
-    audience: ['Fazë lançimi ose faza e re e projektit', 'Shitje ndaj investitorëve', 'Objektiva mujore shitjeje'],
+    audience: ['Hedhje në shitje e një faze të re', 'Shitje ndaj investitorëve', 'Objektiva mujore shitjeje'],
     groups: [
       { title: 'Gjithçka nga Motor Lead-esh, plus:', items: [] },
       {
@@ -146,16 +146,16 @@ const PACKAGES: Pkg[] = [
         items: [
           '20 postime dhe 20 reels në muaj',
           '3 ditë xhirimi në muaj',
-          'Video tour profesionale për secilën tipologji, 60–90 sekonda',
-          'Xhirim mujor me dron i projektit dhe i bregdetit',
-          'Prezantim investitori në PDF dhe katalog i tipologjive',
+          'Shëtitje video profesionale për secilën tipologji, 60–90 sekonda',
+          'Xhirim mujor me dron, i projektit dhe i bregdetit',
+          'Prezantim për investitorin në PDF dhe katalog i tipologjive',
         ],
       },
       {
         title: 'Rritja e kërkesës',
         items: [
           'Sekuencë e pesë email-eve për lead-et që nuk vendosin menjëherë',
-          'Fushata sezonale dhe fushata të dedikuara për diasporën',
+          'Fushata sezonale dhe fushata të posaçme për diasporën',
           'Dy bashkëpunime në muaj me krijues përmbajtjeje ose media',
           'Përmbajtje edhe në një gjuhë të tretë: italisht ose gjermanisht',
         ],
@@ -163,27 +163,27 @@ const PACKAGES: Pkg[] = [
       {
         title: 'Bashkëpunimi me shitjet',
         items: [
-          'Konfigurim i pipeline-it në CRM dhe trajnim i ekipit të shitjeve',
-          'Takim mujor performance me ekipin e shitjeve',
-          'Raport i mbylljes: lead-e, vizita, oferta, shitje sipas burimit',
+          'Konfigurim i kanalit të shitjeve në CRM dhe trajnim i ekipit',
+          'Takim mujor për performancën me ekipin e shitjeve',
+          'Raport i shitjeve të mbyllura: lead-e, vizita, oferta, shitje sipas burimit',
         ],
       },
     ],
-    excluded: ['Buxheti i reklamave', 'Komisione mediatike', 'Prodhim 3D dhe render arkitekturore'],
+    excluded: ['Buxheti i reklamave', 'Kostoja e blerjes së medias', 'Prodhim 3D dhe renderime arkitekturore'],
   },
   {
     id: 'custom',
     name: 'Sipas kërkesës',
-    tagline: 'Kur projekti ka nevojë për më shumë se një retainer mujor.',
+    tagline: 'Kur projekti ka nevojë për më shumë se një marrëveshje mujore.',
     price: 'Me preventiv',
     priceNote: '',
-    audience: ['Lançim i një faze të re', 'Disa projekte njëkohësisht', 'Panair, event ose fushatë televizive'],
+    audience: ['Hedhje në shitje e një faze të re', 'Disa projekte njëkohësisht', 'Panair, aktivitet ose fushatë televizive'],
     groups: [
       {
         title: 'Mund të përfshijë',
         items: [
-          'Prodhim 3D dhe render arkitekturore',
-          'Fushata televizive dhe në ambiente të hapura',
+          'Prodhim 3D dhe renderime arkitekturore',
+          'Fushata televizive dhe reklamë në mjedise të hapura (bilborda)',
           'Panaire pronash brenda dhe jashtë vendit',
           'Faqe e re interneti me katalog tipologjish dhe kërkesë vizite',
           'Fushata në gjuhë të tjera për tregje të veçanta',
@@ -203,7 +203,7 @@ const COMPARE: { label: string; values: [string, string, string] }[] = [
   { label: 'Meta Ads', values: ['Bazë', 'Të plota', 'Të plota'] },
   { label: 'Google Search', values: ['—', 'Po', 'Po'] },
   { label: 'Faqe hyrëse sipas tipologjisë', values: ['—', 'Po', 'Po'] },
-  { label: 'Video tour për tipologji', values: ['—', '—', 'Po'] },
+  { label: 'Shëtitje video për tipologji', values: ['—', '—', 'Po'] },
   { label: 'Lead-i në WhatsApp dhe CRM', values: ['—', 'Po', 'Po'] },
   { label: 'Kualifikim i lead-it', values: ['Formular', 'I plotë', 'I plotë'] },
   { label: 'Sekuencë email-esh', values: ['—', '—', 'Po'] },
@@ -214,8 +214,8 @@ const COMPARE: { label: string; values: [string, string, string] }[] = [
 const ADDONS: { name: string; price: string }[] = [
   { name: 'Ditë shtesë xhirimi', price: '250 € – 400 €' },
   { name: 'Xhirim me dron, jashtë paketës', price: '120 € – 180 €' },
-  { name: 'Video tour për një tipologji', price: '350 € – 600 €' },
-  { name: 'Katalog tipologjish ose prezantim investitori (PDF)', price: '400 € – 700 €' },
+  { name: 'Shëtitje video për një tipologji', price: '350 € – 600 €' },
+  { name: 'Katalog tipologjish ose prezantim për investitorin (PDF)', price: '400 € – 700 €' },
   { name: 'Bashkëpunim me krijues përmbajtjeje', price: '300 € – 800 €' },
   { name: 'Gjuhë shtesë e përmbajtjes', price: '150 € / muaj' },
   { name: 'Render 3D dhe animacion arkitekturor', price: 'Me preventiv' },
@@ -324,7 +324,7 @@ export default function RezidencaLandingPage() {
             </FadeIn>
             <FadeIn delay={200}>
               <p className="mt-8 text-lg sm:text-xl text-gray-600 max-w-2xl mx-auto leading-relaxed">
-                Një apartament i shitur mbulon një vit të plotë marketingu. Ndaj matësi i punës tonë nuk është pëlqimi, por kërkesa e kualifikuar — me buxhet, tipologji dhe afat blerjeje — që mbërrin drejt e në duart e ekipit të shitjeve.
+                Një apartament i shitur mbulon një vit të plotë marketingu. Ndaj treguesi i punës tonë nuk është pëlqimi, por kërkesa e kualifikuar — me buxhet, tipologji dhe afat blerjeje — që mbërrin drejt e në duart e ekipit të shitjeve.
               </p>
             </FadeIn>
             <FadeIn delay={300}>
@@ -365,17 +365,17 @@ export default function RezidencaLandingPage() {
               {
                 icon: BarChart3,
                 title: 'Asgjë nuk matet',
-                desc: 'Pa Meta Pixel dhe pa Google Analytics 4 të instaluar, nuk dihet nga vjen kërkesa, sa kushton dhe cila reklamë e prodhoi. Buxheti shpenzohet me përshtypje, jo me të dhëna.',
+                desc: 'Pa Meta Pixel dhe pa Google Analytics 4 të instaluar, nuk dihet nga vjen kërkesa, sa kushton dhe cila reklamë e prodhoi. Buxheti shpenzohet me hamendje, jo me të dhëna.',
               },
               {
                 icon: Search,
                 title: 'Blerësi kërkon, ju nuk dukeni',
-                desc: 'Prania vetëm në Instagram kap atë që shfleton për kënaqësi. Ai që shkruan në Google “apartament me pamje nga deti” është blerësi me qëllim — dhe atje takohet me konkurrentin.',
+                desc: 'Prania vetëm në Instagram kap atë që shfleton për kënaqësi. Ai që shkruan në Google “apartament me pamje nga deti” është blerësi që ka vendosur të blejë — dhe atje takohet me konkurrentin.',
               },
               {
                 icon: MessageSquare,
                 title: 'Lead-i ftohet para se t’i përgjigjeni',
-                desc: 'Kërkesat mbërrijnë në inbox, në telefon dhe në email, pa u regjistruar gjëkund. Kur ekipi i shitjeve kthen përgjigje pas dy ditësh, blerësi ka folur me tre projekte të tjera.',
+                desc: 'Kërkesat mbërrijnë në mesazhet e drejtpërdrejta, në telefon dhe në email, pa u regjistruar gjëkund. Kur ekipi i shitjeve kthen përgjigje pas dy ditësh, blerësi ka folur me tre projekte të tjera.',
               },
             ].map((p, i) => (
               <FadeIn key={i} delay={i * 150}>
@@ -536,7 +536,7 @@ export default function RezidencaLandingPage() {
               <FadeIn key={a.name} delay={i * 80}>
                 <div className="flex items-center justify-between gap-4 p-5 rounded-xl bg-gray-800/60 border border-gray-700 hover:border-emerald-500/50 transition-colors">
                   <span className="text-sm text-gray-200 flex items-center gap-2">
-                    <Plane className="w-4 h-4 text-emerald-400 flex-shrink-0" />{a.name}
+                    <Plus className="w-4 h-4 text-emerald-400 flex-shrink-0" />{a.name}
                   </span>
                   <span className="text-sm font-semibold text-emerald-300 whitespace-nowrap">{a.price}</span>
                 </div>
@@ -562,7 +562,7 @@ export default function RezidencaLandingPage() {
                 <p className="text-sm font-semibold uppercase tracking-widest text-emerald-400 mb-4">Gati për të filluar?</p>
                 <h2 className="text-3xl sm:text-4xl font-bold leading-tight">Merrni një plan konkret për projektin tuaj</h2>
                 <p className="mt-5 text-gray-300 leading-relaxed text-lg">
-                  Para çdo oferte, shikojmë matjen që kini instaluar, prezencën aktuale dhe konkurrentët që shfaqen për kërkimet e blerësit. Rezultatin e diskutojmë me ju, pa detyrim.
+                  Para çdo oferte, shikojmë matjen që keni instaluar, praninë aktuale dhe konkurrentët që shfaqen për kërkimet e blerësit. Rezultatin e diskutojmë me ju, pa detyrim.
                 </p>
                 <div className="mt-8 space-y-4">
                   {[
