@@ -194,9 +194,13 @@ const PKG_ACCENTS = [
   'from-violet-600 to-purple-600',
 ];
 
-/* Referencat — logot pritet te jene ne static/logot/<slug>.png (ose .svg, duke
-   ndryshuar shtesen ne ClientLogo). Nese skedari mungon, shfaqet emri si tekst,
-   ndaj seksioni funksionon edhe pa asete. */
+/* Referencat — pamja kryesore eshte NJE foto e rrjetit te logove:
+   static/logot/klientet.png  ->  /logot/klientet.png
+   Nese ajo foto mungon, faqja bie ne logot individuale
+   (static/logot/<slug>.png) dhe, ne mungese te tyre, ne emrin si tekst.
+   Kjo e ben seksionin te sigurt: nuk shfaqet kurre bosh. */
+const CLIENTS_IMAGE = '/logot/klientet.png';
+
 interface Client { name: string; slug: string }
 
 const CLIENTS: Client[] = [
@@ -238,6 +242,7 @@ function ClientLogo({ name, slug }: Client) {
 
 export default function RindertimWebsiteLandingPage() {
   const [selected, setSelected] = useState<Pkg | null>(null);
+  const [imageFailed, setImageFailed] = useState(false);
   const [formData, setFormData] = useState({ name: '', email: '', phone: '', website: '', message: '' });
   const [formSent, setFormSent] = useState(false);
   const [formError, setFormError] = useState('');
@@ -478,15 +483,27 @@ export default function RindertimWebsiteLandingPage() {
               </p>
             </div>
           </FadeIn>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px bg-gray-200 rounded-2xl overflow-hidden border border-gray-200">
-            {CLIENTS.map((c, i) => (
-              <FadeIn key={c.slug} className="bg-white" delay={Math.min(i * 40, 480)}>
-                <div className="h-28 flex items-center justify-center p-5">
-                  <ClientLogo {...c} />
-                </div>
-              </FadeIn>
-            ))}
-          </div>
+          {imageFailed ? (
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px bg-gray-200 rounded-2xl overflow-hidden border border-gray-200">
+              {CLIENTS.map((c, i) => (
+                <FadeIn key={c.slug} className="bg-white" delay={Math.min(i * 40, 480)}>
+                  <div className="h-28 flex items-center justify-center p-5">
+                    <ClientLogo {...c} />
+                  </div>
+                </FadeIn>
+              ))}
+            </div>
+          ) : (
+            <FadeIn delay={150}>
+              {/* Foto e vetme e rrjetit te logove. Ne ekrane te vegjel rrjeti
+                  rreshqet horizontalisht, qe logot te mbeten te lexueshme. */}
+              <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
+                <img src={CLIENTS_IMAGE} alt="Logot e klientëve që kanë zgjedhur të punojnë me ne"
+                  loading="lazy" onError={() => setImageFailed(true)}
+                  className="w-full min-w-[680px] h-auto block" />
+              </div>
+            </FadeIn>
+          )}
         </div>
       </section>
 
