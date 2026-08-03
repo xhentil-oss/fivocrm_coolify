@@ -92,7 +92,7 @@ const PACKAGES: Pkg[] = [
   {
     id: 'motor-leadesh',
     name: 'Motor Lead-esh',
-    tagline: 'Blerësi që ka vendosur të blejë ju gjen, dhe kërkesa e tij mbërrin e kualifikuar.',
+    tagline: 'Kërkesa të kualifikuara nga Meta dhe Google Search, të regjistruara në CRM dhe të matura nga klikimi i parë deri në takim.',
     price: '1.900 €',
     priceNote: '/ muaj + buxheti i reklamave',
     popular: true,
