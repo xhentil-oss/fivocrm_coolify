@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Shield, Sun, Camera, Car, Croissant, Store } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Shield, Sun, Camera, Car, Croissant, Store, Layers } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -135,6 +135,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Code2,
     color: 'text-blue-600',
     gradient: 'from-blue-500 to-navy-700',
+    status: 'active',
+  },
+  {
+    id: 'rindertim-website',
+    title: 'Rindërtim Website B2B',
+    description: 'Paketa rindërtimi për website korporativ B2B dhe katalog produktesh — Corporate Rebuild (1.490 €), B2B Growth (2.490 €), Brand & Content 360 (4.190 €).',
+    path: '/rindertim-website',
+    category: 'Website',
+    icon: Layers,
+    color: 'text-indigo-600',
+    gradient: 'from-blue-600 to-indigo-600',
     status: 'active',
   },
   {
