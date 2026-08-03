@@ -318,13 +318,13 @@ export default function RezidencaLandingPage() {
             </FadeIn>
             <FadeIn delay={100}>
               <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.12]">
-                Jo më ndjekës. Ju duhen{' '}
-                <span className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 bg-clip-text text-transparent">blerës të kualifikuar</span>
+                Ndjekësit nuk blejnë shtëpi.{' '}
+                <span className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 bg-clip-text text-transparent">Njerëzit blejnë.</span>
               </h1>
             </FadeIn>
             <FadeIn delay={200}>
               <p className="mt-8 text-lg sm:text-xl text-gray-600 max-w-2xl mx-auto leading-relaxed">
-                Një apartament i shitur mbulon një vit të plotë marketingu. Ndaj treguesi i punës tonë nuk është pëlqimi, por kërkesa e kualifikuar — me buxhet, tipologji dhe afat blerjeje — që mbërrin drejt e në duart e ekipit të shitjeve.
+                Ju e dini më mirë se kushdo: një apartament i shitur paguan një vit të tërë marketing. Ndaj puna jonë nuk mbaron me një postim që merr pëlqime. Mbaron kur ekipi juaj i shitjeve ulet përballë një njeriu që e di çfarë kërkon, ka buxhetin në dorë dhe e ka vendosur kur do të blejë.
               </p>
             </FadeIn>
             <FadeIn delay={300}>
