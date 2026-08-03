@@ -54,13 +54,13 @@ const PACKAGES: Pkg[] = [
     deadline: '18–22 ditë pune',
     included: [
       'Strategjia dhe struktura:',
-      'Analizë e website-it dhe e strukturës aktuale',
-      'Planifikim i arkitekturës së re të faqeve',
-      'Migrim dhe riorganizim i përmbajtjes ekzistuese',
+      'Analizë e faqes aktuale të internetit dhe e strukturës së saj',
+      'Planifikim i strukturës së re të faqeve',
+      'Transferim dhe riorganizim i përmbajtjes ekzistuese',
       'Korrigjim bazë i teksteve ekzistuese',
       'Dizajn dhe zhvillim:',
-      'Dizajn modern dhe profesional, i përshtatur me brandin',
-      'Zhvillim responsive për desktop, tablet dhe telefon',
+      'Dizajn modern dhe profesional, i përshtatur me identitetin e kompanisë',
+      'Zhvillim i përshtatur për kompjuter, tablet dhe telefon',
       'Deri në 12 faqe gjithsej',
       'Një gjuhë: shqip',
       'Faqe kryesore, Rreth nesh, Galeri dhe Kontakt',
@@ -69,17 +69,17 @@ const PACKAGES: Pkg[] = [
       'Formular kontakti',
       'Integrim me WhatsApp, telefon, email dhe hartë',
       'SEO dhe performanca:',
-      'Optimizim bazë SEO on-page',
+      'Optimizim bazë SEO brenda faqes',
       'Tituj dhe përshkrime SEO për faqet kryesore',
-      'Sitemap dhe konfigurim i indeksimit',
+      'Hartë e faqes (sitemap) dhe konfigurim i indeksimit',
       'Lidhje me Google Analytics 4 dhe Search Console',
       'Optimizim bazë i shpejtësisë së ngarkimit',
       'Ridrejtim i URL-ve kryesore të vjetra',
-      'Konfigurim bazë i sigurisë dhe i backup-it',
+      'Konfigurim bazë i sigurisë dhe i kopjeve rezervë',
       'Dorëzimi:',
-      'Akses i plotë administratori',
+      'Akses i plotë si administrator',
       '1 orë trajnim për menaxhimin e përmbajtjes',
-      '2 raunde korrigjimesh',
+      '2 cikle korrigjimesh',
       '30 ditë garanci teknike pas publikimit',
     ],
     excluded: [
@@ -93,7 +93,7 @@ const PACKAGES: Pkg[] = [
   {
     id: 'b2b-growth',
     name: 'B2B Growth',
-    tagline: 'Platformë korporative B2B që prezanton produktet dhe gjeneron kërkesa konkrete për ofertë.',
+    tagline: 'Platformë korporative B2B që paraqet produktet dhe sjell kërkesa konkrete për ofertë.',
     price: 2490,
     deadline: '25–30 ditë pune',
     popular: true,
@@ -104,7 +104,7 @@ const PACKAGES: Pkg[] = [
       'Deri në 18 faqe gjithsej',
       'Dy gjuhë: shqip dhe anglisht',
       'Deri në 12 faqe të strukturuara produktesh',
-      'Strukturë profesionale për çdo produkt: përshkrim, material, dimensione, trashësi/mikron, ngjyra, përdorime, opsione personalizimi dhe sektorë',
+      'Strukturë profesionale për çdo produkt: përshkrim, material, dimensione, trashësia në mikron, ngjyra, përdorime, mundësi personalizimi dhe sektorë',
       'Faqe “Sektorët që shërbejmë”',
       'Faqe “Cilësia dhe standardet”',
       'Faqe “Riciklimi dhe qëndrueshmëria”',
@@ -113,56 +113,56 @@ const PACKAGES: Pkg[] = [
       'Seksion me pyetjet më të shpeshta',
       'Kërkesat për ofertë:',
       'Formular specifik “Kërko ofertë” për çdo produkt',
-      'Fusha për produktin, dimensionet, sasinë, materialin, stampimin me logo dhe afatin',
+      'Fusha për produktin, dimensionet, sasinë, materialin, shtypjen e logos dhe afatin',
       'Formularë me mbrojtje kundër mesazheve të padëshiruara',
       'Matje e klikimeve në telefon, email, WhatsApp dhe formularë',
       'Përmbajtja dhe SEO:',
-      'Copywriting dhe ristrukturim profesional i teksteve deri në 15 faqe',
-      'Arkitekturë e fjalëve kyçe',
+      'Shkrim dhe ristrukturim profesional i teksteve deri në 15 faqe',
+      'Strukturë e fjalëve kyçe',
       'Optimizim SEO i thelluar për faqet kryesore',
       'URL të pastra dhe schema markup',
       'Ridrejtime 301 nga faqet e vjetra',
       'Dorëzimi:',
-      '3 raunde korrigjimesh',
-      '2 orë trajnim dhe video e regjistruar e trajnimit',
+      '3 cikle korrigjimesh',
+      '2 orë trajnim dhe regjistrim video i trajnimit',
       '60 ditë garanci teknike pas publikimit',
     ],
     excluded: [
       'Fotografi dhe video profesionale',
-      'Katalog ose company profile PDF',
-      'Landing pages sipas sektorëve',
+      'Katalog ose profil i kompanisë në PDF',
+      'Faqe hyrëse sipas sektorëve',
     ],
   },
   {
     id: 'brand-content-360',
     name: 'Brand & Content 360',
-    tagline: 'Rindërtim i plotë i prezencës digjitale: website, fotografi, video dhe materiale prezantuese.',
+    tagline: 'Rindërtim i plotë i pranisë dixhitale: faqe interneti, fotografi, video dhe materiale prezantuese.',
     price: 4190,
     deadline: '35–45 ditë pune',
     badge: 'Zgjidhja e plotë',
     included: [
       'Gjithçka nga B2B Growth, plus:',
-      'Website i zgjeruar:',
+      'Faqja e internetit, e zgjeruar:',
       'Deri në 25 faqe gjithsej',
-      '5 landing pages SEO sipas sektorëve ose përdorimeve',
+      '5 faqe hyrëse SEO sipas sektorëve ose përdorimeve',
       'Optimizim i konvertimeve',
       'Integrim i kërkesave me email ose CRM, kur integrimi teknik është i disponueshëm',
       'Fotografia:',
-      'Një ditë e plotë prodhimi në ambientet e kompanisë',
+      'Një ditë e plotë prodhimi në mjediset e kompanisë',
       'Planifikim paraprak i fotografive dhe i videove',
       'Fotografim i produkteve, fabrikës, makinerive dhe procesit të prodhimit',
-      'Fotografim i magazinimit, stafit, kontrollit të cilësisë dhe stampimit',
-      '50–70 fotografi të edituara profesionalisht',
+      'Fotografim i magazinimit, personelit, kontrollit të cilësisë dhe shtypjes së logos',
+      '50–70 fotografi të përpunuara profesionalisht',
       'Video:',
-      '1 video korporative 60–90 sekonda',
+      '1 video korporative me kohëzgjatje 60–90 sekonda',
       '5 video vertikale për Instagram, Facebook, TikTok dhe LinkedIn',
-      'Versione të videos për website dhe për rrjetet sociale',
+      'Versione të videos për faqen e internetit dhe për rrjetet sociale',
       'Krijim i skenarit dhe i strukturës së videos',
-      'Tekst profesional për narracion ose titra',
+      'Tekst profesional për zërin narrator ose për titrat',
       'Materiale dhe mbështetje:',
-      'Katalog ose company profile PDF deri në 12 faqe',
-      'Analizë e sjelljes së vizitorëve pas lançimit',
-      'Raport pas lançimit me rekomandime për përmirësim',
+      'Katalog ose profil i kompanisë në PDF, deri në 12 faqe',
+      'Analizë e sjelljes së vizitorëve pas publikimit',
+      'Raport pas publikimit me rekomandime për përmirësim',
       '90 ditë mirëmbajtje teknike',
     ],
     excluded: [
@@ -177,13 +177,13 @@ const COMPARE: { label: string; values: [string, string, string] }[] = [
   { label: 'Gjuhët', values: ['Shqip', 'Shqip + Anglisht', 'Shqip + Anglisht'] },
   { label: 'Faqe të strukturuara produktesh', values: ['Katalog kategorish', 'Deri në 12 faqe', 'Deri në 12 faqe'] },
   { label: 'Formular “Kërko ofertë” për produkt', values: ['—', 'Po', 'Po'] },
-  { label: 'Copywriting profesional', values: ['Korrigjim bazë', 'Deri në 15 faqe', 'Deri në 15 faqe'] },
-  { label: 'Optimizim SEO', values: ['Bazë', 'I thelluar', 'I thelluar + landing pages'] },
+  { label: 'Shkrim profesional i teksteve', values: ['Korrigjim bazë', 'Deri në 15 faqe', 'Deri në 15 faqe'] },
+  { label: 'Optimizim SEO', values: ['Bazë', 'I thelluar', 'I thelluar + faqe hyrëse'] },
   { label: 'Fotografi profesionale', values: ['—', '—', '50–70 fotografi'] },
   { label: 'Video', values: ['—', '—', '1 korporative + 5 vertikale'] },
   { label: 'Katalog PDF', values: ['—', '—', 'Deri në 12 faqe'] },
   { label: 'Trajnim', values: ['1 orë', '2 orë + video', '2 orë + video'] },
-  { label: 'Raunde korrigjimesh', values: ['2', '3', '3'] },
+  { label: 'Cikle korrigjimesh', values: ['2', '3', '3'] },
   { label: 'Mbështetje pas publikimit', values: ['30 ditë', '60 ditë', '90 ditë'] },
   { label: 'Afati i realizimit', values: ['18–22 ditë pune', '25–30 ditë pune', '35–45 ditë pune'] },
 ];
@@ -216,9 +216,9 @@ export default function RindertimWebsiteLandingPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           ...formData,
-          category: 'Rindërtim Website B2B',
+          category: 'Rindërtim Faqe Interneti B2B',
           packageId: selected?.id || '',
-          packageName: selected ? `Rindërtim Website — ${selected.name} (€${selected.price})` : 'Rindërtim Website B2B',
+          packageName: selected ? `Rindërtim Faqe Interneti — ${selected.name} (€${selected.price})` : 'Rindërtim Faqe Interneti B2B',
         }),
       });
       const data = await res.json();
@@ -255,11 +255,11 @@ export default function RindertimWebsiteLandingPage() {
           <div className="flex items-center gap-3">
             <button onClick={() => scrollTo('kontakt')}
               className="px-5 py-2.5 text-sm font-semibold text-white rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg hover:shadow-blue-500/25 transition-all hover:-translate-y-0.5">
-              Merr Ofertën
+              Merrni Ofertën
             </button>
             <LandingMobileMenu
               links={navLinks}
-              ctaLabel="Merr Ofertën"
+              ctaLabel="Merrni Ofertën"
               onCta={() => scrollTo('kontakt')}
               accentClass="bg-gradient-to-r from-blue-600 to-indigo-600"
             />
@@ -281,20 +281,20 @@ export default function RindertimWebsiteLandingPage() {
             </FadeIn>
             <FadeIn delay={100}>
               <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.12]">
-                Rindërtimi i website-it korporativ dhe i{' '}
-                <span className="bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 bg-clip-text text-transparent">katalogut digjital të produkteve</span>
+                Rindërtimi i faqes korporative të internetit dhe i{' '}
+                <span className="bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 bg-clip-text text-transparent">katalogut dixhital të produkteve</span>
               </h1>
             </FadeIn>
             <FadeIn delay={200}>
               <p className="mt-8 text-lg sm:text-xl text-gray-600 max-w-2xl mx-auto leading-relaxed">
-                Një platformë moderne që prezanton kapacitetet e kompanisë, organizon qartë produktet dhe i shndërron vizitorët në kërkesa konkrete për ofertë.
+                Një platformë moderne që paraqet kapacitetet e kompanisë, organizon qartë produktet dhe i shndërron vizitorët në kërkesa konkrete për ofertë.
               </p>
             </FadeIn>
             <FadeIn delay={300}>
               <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
                 <button onClick={() => scrollTo('paketat')}
                   className="group w-full sm:w-auto px-8 py-4 text-lg font-semibold text-white rounded-xl bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-xl hover:shadow-blue-500/25 transition-all hover:-translate-y-1 flex items-center justify-center gap-2">
-                  Shiko Paketat
+                  Shikoni Paketat
                   <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
                 </button>
                 <button onClick={() => scrollTo('kontakt')}
@@ -307,7 +307,7 @@ export default function RindertimWebsiteLandingPage() {
               <div className="mt-14 flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-sm text-gray-400">
                 <span className="flex items-center gap-1.5"><Shield className="w-4 h-4 text-green-500" /> Çmime të qarta, pa kosto të fshehura</span>
                 <span className="flex items-center gap-1.5"><Clock className="w-4 h-4 text-blue-500" /> Afate të përcaktuara në ofertë</span>
-                <span className="flex items-center gap-1.5"><Star className="w-4 h-4 text-violet-500" /> Website, përmbajtje dhe SEO nga një partner</span>
+                <span className="flex items-center gap-1.5"><Star className="w-4 h-4 text-violet-500" /> Faqe interneti, përmbajtje dhe SEO nga një partner i vetëm</span>
               </div>
             </FadeIn>
           </div>
@@ -322,7 +322,7 @@ export default function RindertimWebsiteLandingPage() {
               <p className="text-sm font-semibold uppercase tracking-widest text-blue-600 mb-3">Paketat</p>
               <h2 className="text-3xl sm:text-4xl font-bold">Tri alternativa, me përmbajtje të përcaktuar qartë</h2>
               <p className="mt-4 text-gray-600 max-w-2xl mx-auto">
-                Çdo paketë përcakton numrin e faqeve, gjuhët, përmbajtjen, raundet e korrigjimeve dhe mbështetjen pas publikimit. Çmimet janë orientuese dhe pa TVSH, nëse aplikohet.
+                Çdo paketë përcakton numrin e faqeve, gjuhët, përmbajtjen, ciklet e korrigjimeve dhe mbështetjen pas publikimit. Çmimet janë orientuese dhe pa TVSH, sipas rastit.
               </p>
             </div>
           </FadeIn>
@@ -348,7 +348,7 @@ export default function RindertimWebsiteLandingPage() {
                       </p>
                       <button onClick={() => scrollTo('kontakt', pkg)}
                         className={`mt-5 w-full py-3 rounded-xl text-sm font-semibold transition-all hover:-translate-y-0.5 ${pkg.popular ? 'bg-gradient-to-r from-blue-600 to-indigo-600 text-white hover:shadow-lg hover:shadow-blue-500/25' : 'bg-gray-100 text-gray-900 hover:bg-gray-200'}`}>
-                        {isSel ? '✓ Zgjedhur' : 'Zgjidh këtë paketë'}
+                        {isSel ? '✓ Zgjedhur' : 'Zgjidhni këtë paketë'}
                       </button>
                       <ul className="mt-6 space-y-2.5">
                         {pkg.included.map((f, fi) => (
@@ -375,7 +375,7 @@ export default function RindertimWebsiteLandingPage() {
           </div>
           <FadeIn delay={400}>
             <p className="mt-10 text-center text-sm text-gray-500">
-              Afati fillon pas dorëzimit të materialeve dhe të akseseve. Përmbajtja shtesë jashtë limitit të paketës tarifohet veçmas.
+              Afati nis pasi të dorëzohen materialet dhe të jepen akseset. Përmbajtja shtesë jashtë kufirit të paketës tarifohet veçmas.
             </p>
           </FadeIn>
         </div>
@@ -388,7 +388,7 @@ export default function RindertimWebsiteLandingPage() {
             <div className="text-center mb-14">
               <p className="text-sm font-semibold uppercase tracking-widest text-blue-600 mb-3">Krahasim</p>
               <h2 className="text-3xl sm:text-4xl font-bold">Dallimet kryesore mes paketave</h2>
-              <p className="mt-4 text-gray-600 max-w-xl mx-auto">Një pamje e përmbledhur e atyre elementeve që bëjnë diferencën në rezultat.</p>
+              <p className="mt-4 text-gray-600 max-w-xl mx-auto">Një pamje e përmbledhur e atyre elementeve që përcaktojnë rezultatin.</p>
             </div>
           </FadeIn>
           <FadeIn delay={150}>
@@ -436,13 +436,13 @@ export default function RindertimWebsiteLandingPage() {
                 <p className="text-sm font-semibold uppercase tracking-widest text-blue-400 mb-4">Gati për të filluar?</p>
                 <h2 className="text-3xl sm:text-4xl font-bold leading-tight">Merrni ofertën e detajuar për paketën që zgjodhët</h2>
                 <p className="mt-5 text-gray-300 leading-relaxed text-lg">
-                  Në ofertën përfundimtare përcaktohen numri i faqeve, funksionalitetet, afatet, raundet e korrigjimeve dhe mbështetja — pa kosto të paqarta gjatë projektit.
+                  Në ofertën përfundimtare përcaktohen numri i faqeve, funksionet, afatet, ciklet e korrigjimeve dhe mbështetja — pa kosto të paqarta gjatë projektit.
                 </p>
                 <div className="mt-8 space-y-4">
                   {[
                     'Konsultim falas, pa detyrim',
                     'Ofertë e personalizuar brenda 24 orëve',
-                    'Ju merrni akses të plotë dhe pronësi të website-it',
+                    'Ju merrni akses të plotë dhe pronësinë e faqes së internetit',
                   ].map((p, i) => (
                     <div key={i} className="flex items-center gap-3"><CheckCircle2 className="w-5 h-5 text-green-400" /><span className="text-gray-300">{p}</span></div>
                   ))}
@@ -486,12 +486,12 @@ export default function RindertimWebsiteLandingPage() {
                     </div>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1.5">Website-i aktual (nëse ka)</label>
+                    <label className="block text-sm font-medium text-gray-300 mb-1.5">Faqja aktuale e internetit (nëse ka)</label>
                     <input type="url" value={formData.website} onChange={e => setFormData(p => ({ ...p, website: e.target.value }))}
                       className="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="https://example.com" />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-300 mb-1.5">Mesazh (opsional)</label>
+                    <label className="block text-sm font-medium text-gray-300 mb-1.5">Mesazh (jo i detyrueshëm)</label>
                     <textarea rows={3} value={formData.message} onChange={e => setFormData(p => ({ ...p, message: e.target.value }))}
                       className="w-full px-4 py-3 rounded-xl bg-white/10 border border-white/20 text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none" placeholder="Sa kategori dhe sa produkte dëshironi të publikohen? Në sa gjuhë?" />
                   </div>

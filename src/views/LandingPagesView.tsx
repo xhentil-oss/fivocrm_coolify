@@ -139,8 +139,8 @@ const LANDING_PAGES: LandingPageEntry[] = [
   },
   {
     id: 'rindertim-website',
-    title: 'Rindërtim Website B2B',
-    description: 'Paketa rindërtimi për website korporativ B2B dhe katalog produktesh — Corporate Rebuild (1.490 €), B2B Growth (2.490 €), Brand & Content 360 (4.190 €).',
+    title: 'Rindërtim Faqe Interneti B2B',
+    description: 'Paketat e rindërtimit për faqe korporative B2B dhe katalog produktesh — Corporate Rebuild (1.490 €), B2B Growth (2.490 €), Brand & Content 360 (4.190 €).',
     path: '/rindertim-website',
     category: 'Website',
     icon: Layers,
