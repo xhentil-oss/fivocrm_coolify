@@ -46,164 +46,206 @@ interface Pkg {
   popular?: boolean;
 }
 
-/* Paketat janë ndërtuar rreth shitjes së pronave, jo rreth rezervimeve:
-   matësi është lead i kualifikuar → vizitë → shitje. */
+/* Paketat ndjekin strukturen e /social-media (Starter -> Growth -> Pro -> Agency),
+   te pershtatura per shitjen e rezidencave: permbajtja tregon tipologjite,
+   kantierin dhe destinacionin, reklamat targetojne Shqiperine, Kosoven dhe
+   diasporen, dhe matja nis nga instalimi i Pixel-it e GA4-es. */
 const PACKAGES: Pkg[] = [
   {
-    id: 'start',
-    name: 'Start',
+    id: 'starter',
+    name: 'Starter',
     price: '1.200 €',
     priceNote: '/ muaj + buxheti i reklamave',
     audience: ['Projekte në fazë ndërtimi', 'Zhvillues pa matje të instaluar', 'Shitje që ecin me rekomandime'],
     groups: [
       {
-        title: 'Përmbajtja dhe menaxhimi',
+        title: 'Platformat dhe përmbajtja',
         items: [
-          'Menaxhim i 2 platformave (Instagram + Facebook)',
+          'Menaxhim i 2 platformave (Facebook + Instagram)',
           '12 postime në muaj',
           '8 reels në muaj: tipologji, pamje, ecuria e punimeve',
-          'Dizajn grafik dhe shkrim tekstesh, shqip dhe anglisht',
-          '1 ditë xhirimi në muaj, në kantier dhe në mjediset e përfunduara',
-          'Kalendar publikimi i aprovuar paraprakisht',
-          'Menaxhim bazë i komenteve dhe i mesazheve',
-        ],
-      },
-      {
-        title: 'Matja — themeli që zakonisht mungon',
-        items: [
-          'Instalim i Meta Pixel dhe Google Analytics 4',
-          'Konfigurim i konvertimeve: formular, klikim telefoni, WhatsApp',
-          'Formular që kualifikon: tipologjia, buxheti, afati, vendndodhja e blerësit',
-          'Raport mujor: shfaqje, ndërveprime, lead-e dhe kosto për lead',
+          'Dizajn grafik profesional',
+          'Shkrim tekstesh, shqip dhe anglisht',
+          'Kalendar mujor i përmbajtjes',
+          'Publikim në orarin më të përshtatshëm të audiencës',
         ],
       },
       {
         title: 'Reklamat',
         items: [
-          'Konfigurim dhe menaxhim bazë i fushatave Meta',
-          'Një audiencë kryesore dhe retargeting bazë',
+          'Konfigurim i fushatave Meta Ads',
+          '1 fushatë aktive',
+          'Targetim bazë i audiencës',
+        ],
+      },
+      {
+        title: 'Matja dhe raportimi',
+        items: [
+          'Instalim i Meta Pixel dhe Google Analytics 4',
+          'Konfigurim i konvertimeve: formular, telefon, WhatsApp',
+          'Formular që kualifikon: tipologjia, buxheti, afati',
+          'Raport mujor: shfaqje, ndërveprime, kërkesa',
         ],
       },
     ],
-    excluded: ['Buxheti i reklamave', 'Google Search', 'Xhirim me dron', 'Faqe hyrëse sipas tipologjisë', 'Video prezantuese e tipologjive', 'Ndërlidhje me CRM'],
+    excluded: ['Buxheti i reklamave', 'TikTok / LinkedIn / YouTube', 'Ditë xhirimi', 'Xhirim me dron', 'Google Ads', 'Video prezantuese e tipologjive'],
   },
   {
-    id: 'business',
-    name: 'Business',
+    id: 'growth',
+    name: 'Growth',
     price: '1.900 €',
     priceNote: '/ muaj + buxheti i reklamave',
-    popular: true,
-    badge: 'E rekomanduar',
+    badge: 'Popullor',
     audience: ['Projekte në shitje aktive', 'Shitje ndaj Shqipërisë, Kosovës dhe diasporës', 'Ekipe që duan të dinë sa kushton një lead'],
     groups: [
-      { title: 'Gjithçka nga Start, plus:', items: [] },
       {
-        title: 'Përmbajtja',
+        title: 'Platformat dhe përmbajtja',
         items: [
-          '16 postime dhe 14 reels në muaj',
-          '2 ditë xhirimi në muaj, përfshirë xhirim me dron',
-          'Përmbajtje sipas tipologjisë: 1+1, 2+1, dupleks, vila',
-          'Përmbajtje për destinacionin — plazhi, promenada, infrastruktura, si argument investimi',
+          'Menaxhim i 3 platformave (Facebook + Instagram + TikTok)',
+          '16 postime në muaj',
+          '14 reels në muaj',
+          '1 ditë xhirimi në muaj, në kantier dhe në mjediset e përfunduara',
+          'Dizajn grafik dhe identitet vizual',
+          'Shkrim tekstesh me rrëfim, sipas tipologjive',
+          'Stories dhe Highlights për secilën tipologji',
+          'Kalendar strategjik i përmbajtjes',
         ],
       },
       {
-        title: 'Reklamat dhe kërkesa',
+        title: 'Reklamat',
         items: [
-          'Meta Ads të plota, me testim të materialeve reklamuese',
+          'Menaxhim i plotë i Meta Ads',
+          '2–3 fushata aktive',
           'Google Search për fjalë kyçe që tregojnë synim blerjeje',
-          'Segmentim: Shqipëri, Kosovë dhe diasporë (Italia, Gjermania, Zvicra, Britania)',
-          'Retargeting i vizitorëve të faqes dhe i shikuesve të videove',
-          'Faqe hyrëse sipas tipologjisë, me formular dhe WhatsApp',
+          'Targetim i avancuar: Shqipëri, Kosovë dhe diasporë',
+          'Retargeting i vizitorëve dhe i shikuesve të videove',
+          'Optimizim javor i fushatave',
         ],
       },
       {
-        title: 'Rruga e lead-it',
+        title: 'Kërkesat dhe raportimi',
         items: [
           'Lead-i mbërrin menjëherë në WhatsApp dhe në email',
           'Regjistrim automatik në CRM, me burimin dhe fushatën',
-          'Kualifikim: buxheti, tipologjia, afati i blerjes, vendndodhja',
+          'Faqe hyrëse sipas tipologjisë, me formular dhe WhatsApp',
+          'Menaxhim bazë i komenteve dhe i mesazheve',
           'Raport dyjavor: lead-e, kosto për lead, cilësia sipas burimit',
         ],
       },
     ],
-    excluded: ['Buxheti i reklamave', 'Video prezantuese sipas tipologjisë', 'Sekuenca e email-eve', 'Prezantim për investitorin', 'Bashkëpunime me media'],
+    excluded: ['Buxheti i reklamave', 'LinkedIn / YouTube', 'Video prezantuese e tipologjive', 'Sekuenca e email-eve', 'Bashkëpunime me media'],
   },
   {
-    id: 'premium',
-    name: 'Premium',
+    id: 'pro',
+    name: 'Pro',
     price: '3.200 €',
     priceNote: '/ muaj + buxheti i reklamave',
-    badge: 'Zgjidhja e plotë',
+    popular: true,
+    badge: 'Më i zgjedhuri',
     audience: ['Hedhje në shitje e një faze të re', 'Shitje ndaj investitorëve', 'Objektiva mujore shitjeje'],
     groups: [
-      { title: 'Gjithçka nga Business, plus:', items: [] },
       {
-        title: 'Prodhimi',
+        title: 'Platformat dhe përmbajtja',
         items: [
-          '20 postime dhe 20 reels në muaj',
-          '3 ditë xhirimi në muaj',
-          'Video prezantuese profesionale për secilën tipologji, 60–90 sekonda',
-          'Xhirim mujor me dron, i projektit dhe i bregdetit',
-          'Prezantim për investitorin në PDF dhe katalog i tipologjive',
+          'Menaxhim i 4 platformave (Facebook + Instagram + TikTok + LinkedIn)',
+          '24 postime në muaj',
+          '20 reels në muaj',
+          '2 ditë xhirimi në muaj, përfshirë xhirim me dron',
+          'Video prezantuese për secilën tipologji, 60–90 sekonda',
+          'Dizajn grafik premium',
+          'Montazh video dhe titra',
+          'Kalendar strategjik tremujor',
         ],
       },
       {
-        title: 'Rritja e kërkesës',
+        title: 'Reklamat',
         items: [
-          'Sekuencë e pesë email-eve për lead-et që nuk vendosin menjëherë',
+          'Meta Ads të plota',
+          'Google Search dhe Display',
+          '4–6 fushata aktive',
+          'Audienca të përafruara dhe retargeting i shtresuar',
+          'Testim A/B i materialeve reklamuese',
           'Fushata sezonale dhe fushata të posaçme për diasporën',
-          'Dy bashkëpunime në muaj me krijues përmbajtjeje ose media',
-          'Përmbajtje edhe në një gjuhë të tretë: italisht ose gjermanisht',
         ],
       },
       {
-        title: 'Bashkëpunimi me shitjet',
+        title: 'Shitjet dhe raportimi',
         items: [
-          'Konfigurim i kanalit të shitjeve në CRM dhe trajnim i ekipit',
+          'Menaxhim aktiv i komenteve dhe i mesazheve',
+          'Kanali i shitjeve në CRM dhe trajnim i ekipit',
+          'Sekuencë email-esh për lead-et që nuk vendosin menjëherë',
+          'Prezantim për investitorin në PDF dhe katalog i tipologjive',
+          'Raport javor dhe mujor',
           'Takim mujor për performancën me ekipin e shitjeve',
-          'Raport i shitjeve të mbyllura: lead-e, vizita, oferta, shitje sipas burimit',
         ],
       },
     ],
-    excluded: ['Buxheti i reklamave', 'Kostoja e blerjes së medias', 'Prodhim 3D dhe renderime arkitekturore'],
+    excluded: ['Buxheti i reklamave', 'YouTube Ads', 'Prodhim 3D dhe renderime arkitekturore', 'Kostoja e blerjes së medias'],
   },
   {
-    id: 'sipas-projektit',
-    name: 'Sipas Projektit',
-    price: 'Me preventiv',
-    priceNote: '',
-    audience: ['Hedhje në shitje e një faze të re', 'Disa projekte njëkohësisht', 'Panair, aktivitet ose fushatë televizive'],
+    id: 'agency',
+    name: 'Agency',
+    price: '4.900 €',
+    priceNote: '/ muaj + buxheti i reklamave',
+    badge: 'Shërbim i plotë',
+    audience: ['Zhvillime me disa faza ose projekte', 'Shitje në tregje të jashtme', 'Kompani që duan ekip të dedikuar'],
     groups: [
       {
-        title: 'Mund të përfshijë',
+        title: 'Platformat dhe përmbajtja',
         items: [
-          'Prodhim 3D dhe renderime arkitekturore',
-          'Fushata televizive dhe reklamë në mjedise të hapura (bilborda)',
-          'Panaire pronash brenda dhe jashtë vendit',
-          'Faqe e re interneti me katalog tipologjish dhe kërkesë vizite',
-          'Fushata në gjuhë të tjera për tregje të veçanta',
-          'Marrëveshje me portale ndërkombëtare pronash',
+          'Menaxhim i 5 platformave (Facebook + Instagram + TikTok + LinkedIn + YouTube)',
+          '32+ postime në muaj',
+          '28+ reels në muaj',
+          '3+ ditë xhirimi në muaj',
+          'Film i shkurtër prezantues i projektit',
+          'Xhirim mujor me dron, i projektit dhe i bregdetit',
+          'Sistem i plotë vizual i markës',
+          'Përmbajtje në shqip, anglisht dhe në një gjuhë të tretë',
+        ],
+      },
+      {
+        title: 'Reklama në të gjithë rrugën e blerësit',
+        items: [
+          'Meta Ads, Google Ads dhe TikTok Ads',
+          'YouTube Ads',
+          'Fushata pa kufi',
+          'Strategji e plotë: njohje, kërkesë, shitje',
+          'Email marketing i automatizuar',
+          'Lidhje me CRM dhe ndjekje e lead-eve deri në mbyllje',
+          'Buxhet i optimizuar mes platformave',
+        ],
+      },
+      {
+        title: 'Ekipi dhe strategjia',
+        items: [
+          'Menaxher i dedikuar i klientit',
+          'Menaxher i dedikuar i përmbajtjes',
+          'Menaxhim i komunikimit shtatë ditë në javë',
+          'Bashkëpunime me krijues përmbajtjeje dhe media',
+          'Menaxhim i reputacionit në internet',
+          'Raport javor, mujor dhe tremujor',
+          'Strategji vjetore e shitjeve',
         ],
       },
     ],
-    excluded: [],
+    excluded: ['Buxheti i reklamave'],
   },
 ];
 
-const COMPARE: { label: string; values: [string, string, string] }[] = [
-  { label: 'Postime në muaj', values: ['12', '16', '20'] },
-  { label: 'Reels në muaj', values: ['8', '14', '20'] },
-  { label: 'Ditë xhirimi në muaj', values: ['1', '2', '3'] },
-  { label: 'Xhirim me dron', values: ['—', 'Po', 'Mujor'] },
-  { label: 'Meta Ads', values: ['Bazë', 'Të plota', 'Të plota'] },
-  { label: 'Google Search', values: ['—', 'Po', 'Po'] },
-  { label: 'Faqe hyrëse sipas tipologjisë', values: ['—', 'Po', 'Po'] },
-  { label: 'Video prezantuese sipas tipologjisë', values: ['—', '—', 'Po'] },
-  { label: 'Lead-i në WhatsApp dhe CRM', values: ['—', 'Po', 'Po'] },
-  { label: 'Kualifikim i lead-it', values: ['Formular', 'I plotë', 'I plotë'] },
-  { label: 'Sekuencë email-esh', values: ['—', '—', 'Po'] },
-  { label: 'Gjuhët e përmbajtjes', values: ['SQ + EN', 'SQ + EN', 'SQ + EN + 1'] },
-  { label: 'Raportimi', values: ['Mujor', 'Dyjavor', 'Dyjavor + takim'] },
+const COMPARE: { label: string; values: [string, string, string, string] }[] = [
+  { label: 'Platforma', values: ['2', '3', '4', '5'] },
+  { label: 'Postime në muaj', values: ['12', '16', '24', '32+'] },
+  { label: 'Reels në muaj', values: ['8', '14', '20', '28+'] },
+  { label: 'Ditë xhirimi në muaj', values: ['—', '1', '2', '3+'] },
+  { label: 'Xhirim me dron', values: ['—', '—', 'Po', 'Mujor'] },
+  { label: 'Meta Ads', values: ['Konfigurim', 'Të plota', 'Të plota', 'Të plota'] },
+  { label: 'Google Ads', values: ['—', 'Search', 'Search + Display', 'Të plota'] },
+  { label: 'Video prezantuese sipas tipologjisë', values: ['—', '—', 'Po', 'Po'] },
+  { label: 'Lead-i në WhatsApp dhe CRM', values: ['—', 'Po', 'Po', 'Po'] },
+  { label: 'Sekuencë email-esh', values: ['—', '—', 'Po', 'Po'] },
+  { label: 'Gjuhët e përmbajtjes', values: ['SQ + EN', 'SQ + EN', 'SQ + EN', 'SQ + EN + 1'] },
+  { label: 'Raportimi', values: ['Mujor', 'Dyjavor', 'Javor + mujor', 'Javor + tremujor'] },
+  { label: 'Ekip i dedikuar', values: ['—', '—', '—', 'Po'] },
 ];
 
 const ADDONS: { name: string; price: string }[] = [
@@ -363,9 +405,9 @@ export default function RezidencaLandingPage() {
           <FadeIn>
             <div className="text-center mb-16">
               <p className="text-sm font-semibold uppercase tracking-widest text-emerald-600 mb-3">Paketat</p>
-              <h2 className="text-3xl sm:text-4xl font-bold">Katër nivele, sipas fazës në të cilën ndodhet projekti</h2>
+              <h2 className="text-3xl sm:text-4xl font-bold">Katër paketa — një zgjidhje për fazën e projektit tuaj</h2>
               <p className="mt-4 text-gray-600 max-w-2xl mx-auto">
-                Faturim mujor, pa kontratë afatgjatë. Buxheti i reklamave paguhet drejtpërdrejt platformave dhe nuk përfshihet — për projekte rezidenciale rekomandojmë 1.200 € – 3.000 € në muaj, sipas fazës. Çmimet pa TVSH, sipas rastit.
+                Nga 1.200 € deri në 4.900 € në muaj. Pa kontratë afatgjatë — mund të ndryshoni paketë kur dëshironi. Buxheti i reklamave paguhet drejtpërdrejt platformave (Meta, Google, TikTok) dhe nuk përfshihet; për projekte rezidenciale rekomandojmë 1.200 € – 3.000 € në muaj. Çmimet pa TVSH, sipas rastit.
               </p>
             </div>
           </FadeIn>
@@ -387,7 +429,7 @@ export default function RezidencaLandingPage() {
                       </div>
 
                       <div className="mt-4 p-3 rounded-lg bg-gray-50">
-                        <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Për:</p>
+                        <p className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide mb-2">Ideal për:</p>
                         <ul className="space-y-1">
                           {pkg.audience.map((a, ai) => (
                             <li key={ai} className="text-xs text-gray-600 flex items-start gap-1.5">
@@ -456,8 +498,8 @@ export default function RezidencaLandingPage() {
                 <thead>
                   <tr className="bg-gray-50 text-left">
                     <th className="px-5 py-4 font-semibold text-gray-500 uppercase tracking-wider text-xs">Elementi</th>
-                    {PACKAGES.slice(0, 3).map((pkg, i) => (
-                      <th key={pkg.id} className={`px-5 py-4 font-bold ${i === 1 ? 'text-emerald-700 bg-emerald-50/60' : 'text-gray-900'}`}>
+                    {PACKAGES.map((pkg, i) => (
+                      <th key={pkg.id} className={`px-5 py-4 font-bold ${i === 2 ? 'text-emerald-700 bg-emerald-50/60' : 'text-gray-900'}`}>
                         {pkg.name}
                         <span className="block text-xs font-medium text-gray-500 mt-0.5">{pkg.price} / muaj</span>
                       </th>
@@ -469,7 +511,7 @@ export default function RezidencaLandingPage() {
                     <tr key={row.label} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50/60'}>
                       <td className="px-5 py-3.5 font-medium text-gray-700">{row.label}</td>
                       {row.values.map((v, vi) => (
-                        <td key={vi} className={`px-5 py-3.5 ${vi === 1 ? 'bg-emerald-50/40 font-medium text-gray-900' : 'text-gray-600'}`}>
+                        <td key={vi} className={`px-5 py-3.5 ${vi === 2 ? 'bg-emerald-50/40 font-medium text-gray-900' : 'text-gray-600'}`}>
                           {v === '—' ? <span className="text-gray-300">—</span> : v}
                         </td>
                       ))}
