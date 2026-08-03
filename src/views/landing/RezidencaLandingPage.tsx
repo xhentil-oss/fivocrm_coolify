@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { Link } from 'react-router-dom';
 import {
   Building2, CheckCircle2, X, ArrowRight, Clock, Shield, Target,
-  Phone, ArrowUpRight, BarChart3, Search, MessageSquare, Plus,
+  Phone, ArrowUpRight, BarChart3, Plus,
 } from 'lucide-react';
 import LandingMobileMenu from './LandingMobileMenu';
 import ClientLogos from './ClientLogos';
@@ -261,7 +261,6 @@ export default function RezidencaLandingPage() {
   };
 
   const navLinks = [
-    { href: '#problemi', label: 'Problemi' },
     { href: '#paketat', label: 'Paketat' },
     { href: '#krahasim', label: 'Krahasim' },
     { href: '#shtesa', label: 'Shtesa' },
@@ -354,50 +353,6 @@ export default function RezidencaLandingPage() {
               <span className="flex items-center gap-1.5"><Shield className="w-4 h-4 text-teal-500" /> Buxheti i reklamave gjithnjë i veçuar</span>
               <span className="flex items-center gap-1.5"><Clock className="w-4 h-4 text-cyan-500" /> Pa kontratë afatgjatë</span>
             </div>
-          </FadeIn>
-        </div>
-      </section>
-
-      {/* PROBLEMI */}
-      <section id="problemi" className="py-20 bg-gray-50">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <FadeIn>
-            <div className="text-center mb-16">
-              <p className="text-sm font-semibold uppercase tracking-widest text-red-500 mb-3">Ku humbasin shitjet</p>
-              <h2 className="text-3xl sm:text-4xl font-bold">Tri boshllëqe që i shohim thuajse në çdo projekt</h2>
-            </div>
-          </FadeIn>
-          <div className="grid md:grid-cols-3 gap-8">
-            {[
-              {
-                icon: BarChart3,
-                title: 'Asgjë nuk matet',
-                desc: 'Pa Meta Pixel dhe pa Google Analytics 4 të instaluar, nuk dihet nga vjen kërkesa, sa kushton dhe cila reklamë e prodhoi. Buxheti shpenzohet me hamendje, jo me të dhëna.',
-              },
-              {
-                icon: Search,
-                title: 'Blerësi kërkon, ju nuk dukeni',
-                desc: 'Prania vetëm në Instagram kap atë që shfleton për kënaqësi. Ai që shkruan në Google “apartament me pamje nga deti” është blerësi që ka vendosur të blejë — dhe atje takohet me konkurrentin.',
-              },
-              {
-                icon: MessageSquare,
-                title: 'Lead-i ftohet para se t’i përgjigjeni',
-                desc: 'Kërkesat mbërrijnë në mesazhet e drejtpërdrejta, në telefon dhe në email, pa u regjistruar gjëkund. Kur ekipi i shitjeve kthen përgjigje pas dy ditësh, blerësi ka folur me tre projekte të tjera.',
-              },
-            ].map((p, i) => (
-              <FadeIn key={i} delay={i * 150}>
-                <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 hover:shadow-lg hover:border-red-100 transition-all h-full">
-                  <div className="w-14 h-14 rounded-xl bg-red-50 flex items-center justify-center mb-6"><p.icon className="w-7 h-7 text-red-500" /></div>
-                  <h3 className="text-xl font-bold mb-3">{p.title}</h3>
-                  <p className="text-gray-600 leading-relaxed">{p.desc}</p>
-                </div>
-              </FadeIn>
-            ))}
-          </div>
-          <FadeIn delay={450}>
-            <p className="mt-12 text-center text-lg text-gray-700 font-medium">
-              Paketat më poshtë i mbyllin këto boshllëqe me radhë: së pari matja, pastaj kërkesa, pastaj rruga e lead-it drejt shitjes.
-            </p>
           </FadeIn>
         </div>
       </section>
