@@ -80,7 +80,7 @@ const PACKAGES: Pkg[] = [
       'Akses i plotë si administrator',
       '1 orë trajnim për menaxhimin e përmbajtjes',
       '2 cikle korrigjimesh',
-      '30 ditë garanci teknike pas publikimit',
+      '30 ditë mirëmbajtje pas publikimit',
     ],
     excluded: [
       'Fotografi ose video profesionale',
@@ -93,7 +93,7 @@ const PACKAGES: Pkg[] = [
   {
     id: 'b2b-growth',
     name: 'B2B Growth',
-    tagline: 'Platformë korporative B2B që paraqet produktet dhe sjell kërkesa konkrete për ofertë.',
+    tagline: 'Platformë B2B që paraqet produktet me specifikime dhe sjell kërkesa konkrete për ofertë.',
     price: 2490,
     deadline: '25–30 ditë pune',
     popular: true,
@@ -125,7 +125,7 @@ const PACKAGES: Pkg[] = [
       'Dorëzimi:',
       '3 cikle korrigjimesh',
       '2 orë trajnim dhe regjistrim video i trajnimit',
-      '60 ditë garanci teknike pas publikimit',
+      '60 ditë mirëmbajtje pas publikimit',
     ],
     excluded: [
       'Fotografi dhe video profesionale',
@@ -148,13 +148,13 @@ const PACKAGES: Pkg[] = [
       'Optimizim i konvertimeve',
       'Integrim i kërkesave me email ose CRM, kur integrimi teknik është i disponueshëm',
       'Fotografia:',
-      'Një ditë e plotë prodhimi në mjediset e kompanisë',
+      '1–2 ditë xhirim fotografik dhe video në mjediset e kompanisë',
       'Planifikim paraprak i fotografive dhe i videove',
       'Fotografim i produkteve, fabrikës, makinerive dhe procesit të prodhimit',
       'Fotografim i magazinimit, personelit, kontrollit të cilësisë dhe shtypjes së logos',
       '50–70 fotografi të përpunuara profesionalisht',
       'Video:',
-      '1 video korporative me kohëzgjatje 60–90 sekonda',
+      '1 video prezantuese e kompanisë, 60–90 sekonda',
       '5 video vertikale për Instagram, Facebook, TikTok dhe LinkedIn',
       'Versione të videos për faqen e internetit dhe për rrjetet sociale',
       'Krijim i skenarit dhe i strukturës së videos',
@@ -163,7 +163,7 @@ const PACKAGES: Pkg[] = [
       'Katalog ose profil i kompanisë në PDF, deri në 12 faqe',
       'Analizë e sjelljes së vizitorëve pas publikimit',
       'Raport pas publikimit me rekomandime për përmirësim',
-      '90 ditë mirëmbajtje teknike',
+      '90 ditë mirëmbajtje pas publikimit',
     ],
     excluded: [
       'Optimizim SEO mujor (ofrohet veçmas)',
@@ -180,11 +180,11 @@ const COMPARE: { label: string; values: [string, string, string] }[] = [
   { label: 'Shkrim profesional i teksteve', values: ['Korrigjim bazë', 'Deri në 15 faqe', 'Deri në 15 faqe'] },
   { label: 'Optimizim SEO', values: ['Bazë', 'I thelluar', 'I thelluar + faqe hyrëse'] },
   { label: 'Fotografi profesionale', values: ['—', '—', '50–70 fotografi'] },
-  { label: 'Video', values: ['—', '—', '1 korporative + 5 vertikale'] },
+  { label: 'Video', values: ['—', '—', '1 prezantuese + 5 vertikale'] },
   { label: 'Katalog PDF', values: ['—', '—', 'Deri në 12 faqe'] },
   { label: 'Trajnim', values: ['1 orë', '2 orë + video', '2 orë + video'] },
   { label: 'Cikle korrigjimesh', values: ['2', '3', '3'] },
-  { label: 'Mbështetje pas publikimit', values: ['30 ditë', '60 ditë', '90 ditë'] },
+  { label: 'Mirëmbajtje pas publikimit', values: ['30 ditë', '60 ditë', '90 ditë'] },
   { label: 'Afati i realizimit', values: ['18–22 ditë pune', '25–30 ditë pune', '35–45 ditë pune'] },
 ];
 
@@ -281,7 +281,7 @@ export default function RindertimWebsiteLandingPage() {
             </FadeIn>
             <FadeIn delay={100}>
               <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.12]">
-                Rindërtimi i faqes korporative të internetit dhe i{' '}
+                Rindërtimi i faqes së internetit të kompanisë dhe i{' '}
                 <span className="bg-gradient-to-r from-blue-600 via-indigo-600 to-violet-600 bg-clip-text text-transparent">katalogut dixhital të produkteve</span>
               </h1>
             </FadeIn>
