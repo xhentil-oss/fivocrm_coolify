@@ -318,13 +318,14 @@ export default function RezidencaLandingPage() {
             </FadeIn>
             <FadeIn delay={100}>
               <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.12]">
-                Ndjekësit nuk blejnë shtëpi.{' '}
-                <span className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 bg-clip-text text-transparent">Njerëzit blejnë.</span>
+                Cilësia që ndërtuat{' '}
+                <span className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 bg-clip-text text-transparent">duhet të shihet</span>{' '}
+                përpara se të flitet për çmim.
               </h1>
             </FadeIn>
             <FadeIn delay={200}>
               <p className="mt-8 text-lg sm:text-xl text-gray-600 max-w-2xl mx-auto leading-relaxed">
-                Në një projekt rezidencial, e ardhura e një njësie të vetme tejkalon buxhetin vjetor të marketingut. Ndaj puna nuk vlerësohet me dukshmëri, por me kërkesa që kalojnë në takime shitjeje: blerësi mbërrin me tipologjinë, buxhetin dhe afatin e përcaktuar, dhe çdo hap i tij është i matshëm.
+                Materialet e certifikuara, izolimi, fasadat, pamja nga deti — blerësi i vlerëson vetëm kur i paraqiten si duhet. Ne e paraqesim projektin me nivelin që ka dhe e çojmë përpara njerëzve që janë në kërkim aktiv.
               </p>
             </FadeIn>
             <FadeIn delay={300}>
