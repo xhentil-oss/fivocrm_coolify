@@ -324,7 +324,7 @@ export default function RezidencaLandingPage() {
             </FadeIn>
             <FadeIn delay={200}>
               <p className="mt-8 text-lg sm:text-xl text-gray-600 max-w-2xl mx-auto leading-relaxed">
-                Ju e dini më mirë se kushdo: një apartament i shitur paguan një vit të tërë marketing. Ndaj puna jonë nuk mbaron me një postim që merr pëlqime. Mbaron kur ekipi juaj i shitjeve ulet përballë një njeriu që e di çfarë kërkon, ka buxhetin në dorë dhe e ka vendosur kur do të blejë.
+                Në një projekt rezidencial, e ardhura e një njësie të vetme tejkalon buxhetin vjetor të marketingut. Ndaj puna nuk vlerësohet me dukshmëri, por me kërkesa që kalojnë në takime shitjeje: blerësi mbërrin me tipologjinë, buxhetin dhe afatin e përcaktuar, dhe çdo hap i tij është i matshëm.
               </p>
             </FadeIn>
             <FadeIn delay={300}>
