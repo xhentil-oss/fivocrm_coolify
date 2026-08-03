@@ -184,7 +184,7 @@ const COMPARE: { label: string; values: [string, string, string] }[] = [
   { label: 'Katalog PDF', values: ['—', '—', 'Deri në 12 faqe'] },
   { label: 'Trajnim', values: ['1 orë', '2 orë + video', '2 orë + video'] },
   { label: 'Cikle korrigjimesh', values: ['2', '3', '3'] },
-  { label: 'Mirëmbajtje pas publikimit', values: ['30 ditë', '60 ditë', '90 ditë'] },
+  { label: 'Support pas publikimit', values: ['30 ditë', '60 ditë', '90 ditë'] },
   { label: 'Afati i realizimit', values: ['18–22 ditë pune', '25–30 ditë pune', '35–45 ditë pune'] },
 ];
 
