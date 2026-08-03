@@ -194,13 +194,9 @@ const PKG_ACCENTS = [
   'from-violet-600 to-purple-600',
 ];
 
-/* Referencat — pamja kryesore eshte NJE foto e rrjetit te logove:
-   static/logot/klientet.png  ->  /logot/klientet.png
-   Nese ajo foto mungon, faqja bie ne logot individuale
-   (static/logot/<slug>.png) dhe, ne mungese te tyre, ne emrin si tekst.
-   Kjo e ben seksionin te sigurt: nuk shfaqet kurre bosh. */
-const CLIENTS_IMAGE = '/logot/klientet.png';
-
+/* Referencat — logot jane asete reale ne static/logot/<slug>.webp, te marra
+   nga bos.al. Nese nje skedar mungon, ClientLogo bie ne emrin si tekst, ndaj
+   rrjeti nuk shfaqet kurre bosh. */
 interface Client { name: string; slug: string }
 
 const CLIENTS: Client[] = [
@@ -226,6 +222,7 @@ const CLIENTS: Client[] = [
   { name: 'Koral', slug: 'koral' },
   { name: 'Smart Dent', slug: 'smart-dent' },
   { name: 'Magniflex', slug: 'magniflex' },
+  { name: 'Colin Design & AB Forniture', slug: 'colin-design-ab-forniture' },
   { name: 'Eliksir', slug: 'eliksir' },
 ];
 
@@ -235,14 +232,13 @@ function ClientLogo({ name, slug }: Client) {
     return <span className="text-[13px] font-semibold text-gray-400 text-center leading-tight">{name}</span>;
   }
   return (
-    <img src={`/logot/${slug}.png`} alt={name} loading="lazy" onError={() => setFailed(true)}
-      className="max-h-12 max-w-full object-contain grayscale opacity-70 hover:grayscale-0 hover:opacity-100 transition-all duration-300" />
+    <img src={`/logot/${slug}.webp`} alt={name} loading="lazy" onError={() => setFailed(true)}
+      className="max-h-14 max-w-full object-contain grayscale opacity-75 hover:grayscale-0 hover:opacity-100 transition-all duration-300" />
   );
 }
 
 export default function RindertimWebsiteLandingPage() {
   const [selected, setSelected] = useState<Pkg | null>(null);
-  const [imageFailed, setImageFailed] = useState(false);
   const [formData, setFormData] = useState({ name: '', email: '', phone: '', website: '', message: '' });
   const [formSent, setFormSent] = useState(false);
   const [formError, setFormError] = useState('');
@@ -483,27 +479,15 @@ export default function RindertimWebsiteLandingPage() {
               </p>
             </div>
           </FadeIn>
-          {imageFailed ? (
-            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px bg-gray-200 rounded-2xl overflow-hidden border border-gray-200">
-              {CLIENTS.map((c, i) => (
-                <FadeIn key={c.slug} className="bg-white" delay={Math.min(i * 40, 480)}>
-                  <div className="h-28 flex items-center justify-center p-5">
-                    <ClientLogo {...c} />
-                  </div>
-                </FadeIn>
-              ))}
-            </div>
-          ) : (
-            <FadeIn delay={150}>
-              {/* Foto e vetme e rrjetit te logove. Ne ekrane te vegjel rrjeti
-                  rreshqet horizontalisht, qe logot te mbeten te lexueshme. */}
-              <div className="overflow-x-auto rounded-2xl border border-gray-200 bg-white shadow-sm">
-                <img src={CLIENTS_IMAGE} alt="Logot e klientëve që kanë zgjedhur të punojnë me ne"
-                  loading="lazy" onError={() => setImageFailed(true)}
-                  className="w-full min-w-[680px] h-auto block" />
-              </div>
-            </FadeIn>
-          )}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px bg-gray-200 rounded-2xl overflow-hidden border border-gray-200">
+            {CLIENTS.map((c, i) => (
+              <FadeIn key={c.slug} className="bg-white" delay={Math.min(i * 40, 480)}>
+                <div className="h-28 flex items-center justify-center p-5">
+                  <ClientLogo {...c} />
+                </div>
+              </FadeIn>
+            ))}
+          </div>
         </div>
       </section>
 
