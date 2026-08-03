@@ -5,6 +5,7 @@ import {
   Phone, ArrowUpRight, Layers, Star,
 } from 'lucide-react';
 import LandingMobileMenu from './LandingMobileMenu';
+import ClientLogos from './ClientLogos';
 
 /* ─── scroll-in animation ─── */
 function useInView(threshold = 0.15) {
@@ -194,48 +195,6 @@ const PKG_ACCENTS = [
   'from-violet-600 to-purple-600',
 ];
 
-/* Referencat — logot jane asete reale ne static/logot/<slug>.webp, te marra
-   nga bos.al. Nese nje skedar mungon, ClientLogo bie ne emrin si tekst, ndaj
-   rrjeti nuk shfaqet kurre bosh. */
-interface Client { name: string; slug: string }
-
-const CLIENTS: Client[] = [
-  { name: 'Market AnnA', slug: 'market-anna' },
-  { name: 'Pierre Cardin Home', slug: 'pierre-cardin-home' },
-  { name: 'Sante Plus Hospitals Group', slug: 'sante-plus' },
-  { name: 'Avokati i Popullit', slug: 'avokati-i-popullit' },
-  { name: 'Albtours D', slug: 'albtours-d' },
-  { name: 'SOMEG Bakery & Pastry', slug: 'someg' },
-  { name: 'Salus', slug: 'salus' },
-  { name: 'Burger Ija Bio', slug: 'burger-ija-bio' },
-  { name: 'G&A — George & Alexander', slug: 'g-and-a' },
-  { name: 'Gift Card', slug: 'gift-card' },
-  { name: 'Restoration 416', slug: 'restoration-416' },
-  { name: 'Albania Vacaciones', slug: 'albania-vacaciones' },
-  { name: 'MaxiMarket', slug: 'maxi-market' },
-  { name: 'Derby Plus', slug: 'derby-plus' },
-  { name: 'Rimmed', slug: 'rimmed' },
-  { name: 'TIDI Group', slug: 'tidi-group' },
-  { name: 'Peti Bakery', slug: 'peti-bakery' },
-  { name: 'MeteoAlb', slug: 'meteoalb' },
-  { name: 'Edel Company', slug: 'edel-company' },
-  { name: 'Koral', slug: 'koral' },
-  { name: 'Smart Dent', slug: 'smart-dent' },
-  { name: 'Magniflex', slug: 'magniflex' },
-  { name: 'Colin Design & AB Forniture', slug: 'colin-design-ab-forniture' },
-  { name: 'Eliksir', slug: 'eliksir' },
-];
-
-function ClientLogo({ name, slug }: Client) {
-  const [failed, setFailed] = useState(false);
-  if (failed) {
-    return <span className="text-[13px] font-semibold text-gray-400 text-center leading-tight">{name}</span>;
-  }
-  return (
-    <img src={`/logot/${slug}.webp`} alt={name} loading="lazy" onError={() => setFailed(true)}
-      className="max-h-14 max-w-full object-contain grayscale opacity-75 hover:grayscale-0 hover:opacity-100 transition-all duration-300" />
-  );
-}
 
 export default function RindertimWebsiteLandingPage() {
   const [selected, setSelected] = useState<Pkg | null>(null);
@@ -468,28 +427,7 @@ export default function RindertimWebsiteLandingPage() {
       </section>
 
       {/* KLIENTËT */}
-      <section id="klientet" className="py-24 bg-gray-50 border-t border-gray-100">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <FadeIn>
-            <div className="text-center mb-14">
-              <p className="text-sm font-semibold uppercase tracking-widest text-blue-600 mb-3">Referencat</p>
-              <h2 className="text-3xl sm:text-4xl font-bold">Ja kush na ka besuar</h2>
-              <p className="mt-4 text-gray-600 max-w-2xl mx-auto">
-                Kompani nga prodhimi, tregtia, shëndetësia, turizmi dhe shërbimet, që kanë zgjedhur të punojnë me ne.
-              </p>
-            </div>
-          </FadeIn>
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-px bg-gray-200 rounded-2xl overflow-hidden border border-gray-200">
-            {CLIENTS.map((c, i) => (
-              <FadeIn key={c.slug} className="bg-white" delay={Math.min(i * 40, 480)}>
-                <div className="h-28 flex items-center justify-center p-5">
-                  <ClientLogo {...c} />
-                </div>
-              </FadeIn>
-            ))}
-          </div>
-        </div>
-      </section>
+      <ClientLogos accentClass="text-blue-600" />
 
       {/* KONTAKT */}
       <section id="kontakt" className="py-24 bg-gradient-to-br from-gray-900 via-blue-900 to-gray-900 text-white relative overflow-hidden">

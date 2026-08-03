@@ -138,6 +138,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     status: 'active',
   },
   {
+    id: 'rezidenca',
+    title: 'Rezidenca & Shitje Pronash',
+    description: 'Marketing për zhvillues rezidencash dhe vilash — lead-e të kualifikuar, jo rezervime. Prezencë Rezidenciale (1.200 €/muaj), Motor Lead-esh (1.900 €/muaj), Shitje 360 (3.200 €/muaj) + Sipas kërkesës.',
+    path: '/rezidenca',
+    category: 'Real Estate',
+    icon: Building2,
+    color: 'text-emerald-600',
+    gradient: 'from-emerald-600 to-teal-600',
+    status: 'active',
+  },
+  {
     id: 'rindertim-website',
     title: 'Rindërtim Faqe Interneti B2B',
     description: 'Paketat e rindërtimit për faqe interneti B2B dhe katalog produktesh — Corporate Rebuild (1.490 €), B2B Growth (2.490 €), Brand & Content 360 (4.190 €).',

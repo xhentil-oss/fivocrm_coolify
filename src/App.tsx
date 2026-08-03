@@ -106,6 +106,7 @@ const AgroturizemLandingPage = lazyRetry(() => import('./views/landing/Agroturiz
 const WebsiteLandingPage = lazyRetry(() => import('./views/landing/WebsiteLandingPage'));
 const WebsiteMaintenanceLandingPage = lazyRetry(() => import('./views/landing/WebsiteMaintenanceLandingPage'));
 const RindertimWebsiteLandingPage = lazyRetry(() => import('./views/landing/RindertimWebsiteLandingPage'));
+const RezidencaLandingPage = lazyRetry(() => import('./views/landing/RezidencaLandingPage'));
 const PergolaLandingPage = lazyRetry(() => import('./views/landing/PergolaLandingPage'));
 const FotoVideoLandingPage = lazyRetry(() => import('./views/landing/FotoVideoLandingPage'));
 const TransferLandingPage = lazyRetry(() => import('./views/landing/TransferLandingPage'));
@@ -260,6 +261,7 @@ function AppContent() {
       <Route path="/website" element={<Suspense fallback={<LazyFallback />}><WebsiteLandingPage /></Suspense>} />
       <Route path="/website-maintenance" element={<Suspense fallback={<LazyFallback />}><WebsiteMaintenanceLandingPage /></Suspense>} />
       <Route path="/rindertim-website" element={<Suspense fallback={<LazyFallback />}><RindertimWebsiteLandingPage /></Suspense>} />
+      <Route path="/rezidenca" element={<Suspense fallback={<LazyFallback />}><RezidencaLandingPage /></Suspense>} />
       <Route path="/pergola" element={<Suspense fallback={<LazyFallback />}><PergolaLandingPage /></Suspense>} />
       <Route path="/foto-video" element={<Suspense fallback={<LazyFallback />}><FotoVideoLandingPage /></Suspense>} />
       <Route path="/transfer" element={<Suspense fallback={<LazyFallback />}><TransferLandingPage /></Suspense>} />
