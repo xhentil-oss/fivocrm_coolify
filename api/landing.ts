@@ -34,6 +34,49 @@ function sanitize(val: unknown, maxLen = 500): string {
   return val.trim().slice(0, maxLen);
 }
 
+/**
+ * Resolve the tenant that owns landing-page submissions.
+ *
+ * `businessId` is THE isolation key: `leads`, `serviceInquiries` and `tasks` are
+ * in `businessIsolatedAlways` (useFirestore.ts), so every client query forces
+ * `where('businessId','==',active)`. A document written without it EXISTS in
+ * Firestore but is invisible in the CRM — the submission is silently lost.
+ *
+ * Prefer the explicitly configured tenant (DEFAULT_TEAM_ID); otherwise fall back
+ * to the first team. `businessId` is always read from the team document, never
+ * guessed, because a team can never exist outside a business.
+ */
+async function resolveLandingTenant(): Promise<{ teamId: string | null; businessId: string | null }> {
+  const envTeamId = (process.env.DEFAULT_TEAM_ID || process.env.VITE_DEFAULT_TEAM_ID || '').trim() || null;
+  const envBusinessId = (process.env.DEFAULT_BUSINESS_ID || process.env.VITE_DEFAULT_BUSINESS_ID || '').trim() || null;
+
+  let teamId: string | null = envTeamId;
+  let businessId: string | null = null;
+
+  try {
+    if (teamId) {
+      const teamDoc = await adminDb.collection('teams').doc(teamId).get();
+      if (teamDoc.exists) businessId = (teamDoc.data()?.businessId as string) || null;
+      else teamId = null; // configured team is gone — fall through to the first team
+    }
+    if (!teamId) {
+      const teamsSnap = await adminDb.collection('teams').limit(1).get();
+      if (!teamsSnap.empty) {
+        teamId = teamsSnap.docs[0].id;
+        businessId = (teamsSnap.docs[0].data()?.businessId as string) || null;
+      }
+    }
+  } catch (err) {
+    console.error('[landing] tenant resolution failed', err);
+  }
+
+  const resolved = businessId || envBusinessId;
+  if (!resolved) {
+    console.error('[landing] no businessId resolved — the lead will not appear in the CRM. Set DEFAULT_TEAM_ID or stamp businessId on teams/{id}.');
+  }
+  return { teamId, businessId: resolved };
+}
+
 // ── Handler ──────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
@@ -51,10 +94,17 @@ async function handleGetServices(_req: VercelRequest, res: VercelResponse) {
   const category = (_req.query.category as string) || 'SEO';
 
   try {
-    const snap = await adminDb
-      .collection('services')
-      .where('category', '==', category)
-      .get();
+    // Admin SDK bypasses the rules, so an unscoped read here would publish EVERY
+    // tenant's service catalogue on a public endpoint. Scope it to the landing
+    // tenant; if that tenant has no stamped services yet (legacy docs), fall back
+    // to the unscoped read so live landing pages keep working.
+    const { businessId } = await resolveLandingTenant();
+    const base = adminDb.collection('services').where('category', '==', category);
+    let snap = await (businessId ? base.where('businessId', '==', businessId) : base).get();
+    if (businessId && snap.empty) {
+      console.warn('[landing] no services stamped with businessId — falling back to unscoped read');
+      snap = await base.get();
+    }
 
     const services = snap.docs.map(doc => {
       const d = doc.data();
@@ -109,11 +159,12 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
   const sCategory = sanitize(category, 100) || 'SEO';
 
   try {
-    let teamId: string | null = null;
-    const teamsSnap = await adminDb.collection('teams').limit(1).get();
-    if (!teamsSnap.empty) {
-      teamId = teamsSnap.docs[0].id;
-    }
+    const { teamId, businessId } = await resolveLandingTenant();
+    // Stamped on every document below — without it the record is invisible in the CRM.
+    const tenantStamp = {
+      ...(businessId ? { businessId } : {}),
+      ...(teamId ? { teamId } : {}),
+    };
 
     const now = Timestamp.now();
 
@@ -138,7 +189,7 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
       status: 'New',
       isDraft: false,
       source: sSource,
-      ...(teamId ? { teamId } : {}),
+      ...tenantStamp,
       createdAt: now,
       updatedAt: now,
       createdByUserId: null,
@@ -167,7 +218,7 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
         sWebsite ? `Website: ${sWebsite}` : '',
       ].filter(Boolean).join('\n'),
       serviceInquiryId: inquiryRef.id,
-      ...(teamId ? { teamId } : {}),
+      ...tenantStamp,
       createdAt: now,
       updatedAt: now,
       createdByUserId: null,
@@ -191,7 +242,7 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
     let leadRef: FirebaseFirestore.DocumentReference | null = null;
     let existingCustomerId: string | null = null;
     try {
-      const lookup = { email: sEmail, phone: sPhone, teamId };
+      const lookup = { email: sEmail, phone: sPhone, teamId, businessId };
       const [existingLead, existingCustomer] = await Promise.all([
         findLeadForContact(adminDb, lookup),
         findCustomerForContact(adminDb, lookup),
@@ -279,7 +330,7 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
       endDate: tomorrow,
       dueDate: tomorrow,
       assignedToUserId: assigneeId,
-      ...(teamId ? { teamId } : {}),
+      ...tenantStamp,
       createdAt: now,
       updatedAt: now,
       createdByUserId: null,
@@ -287,10 +338,10 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
 
     // 5. Notifications to admin/sales
     if (teamId && teamMembersSnap) {
-      const adminDocs = teamMembersSnap.docs.filter(d => ['Admin', 'Owner'].includes(d.data().role));
+      const adminDocs = teamMembersSnap.docs.filter((d: any) => ['Admin', 'Owner'].includes(d.data().role));
 
       const batch = adminDb.batch();
-      adminDocs.forEach(m => {
+      adminDocs.forEach((m: any) => {
         const nRef = adminDb.collection('notifications').doc();
         batch.set(nRef, {
           userId: m.data().userId,
@@ -298,7 +349,7 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
           title: `Lead i Ri ${sCategory} — Landing Page`,
           message: `${sName} dorëzoi kërkesë nga faqja ${sSource}${sPackageName ? ` (${sPackageName})` : ''}`,
           isRead: false,
-          ...(teamId ? { teamId } : {}),
+          ...tenantStamp,
           createdAt: now,
           updatedAt: now,
         });
