@@ -53,7 +53,7 @@ const PACKAGES: Pkg[] = [
   {
     id: 'baza-rezidenciale',
     name: 'Baza Rezidenciale',
-    tagline: 'Baza e matjes dhe një prani që u përgjigjet cilësisë së projektit.',
+    tagline: 'Përmbajtje me standard të lartë, publikime të planifikuara dhe infrastruktura e matjes, e ndërtuar nga e para.',
     price: '1.200 €',
     priceNote: '/ muaj + buxheti i reklamave',
     audience: ['Projekte në fazë ndërtimi', 'Zhvillues pa matje të instaluar', 'Shitje që ecin me rekomandime'],
@@ -174,7 +174,7 @@ const PACKAGES: Pkg[] = [
   {
     id: 'custom',
     name: 'Sipas kërkesës',
-    tagline: 'Kur projekti ka nevojë për më shumë se një marrëveshje mujore.',
+    tagline: 'Fushata të veçanta për hedhjen në shitje, prodhim 3D, panaire dhe media, sipas nevojës së projektit.',
     price: 'Me preventiv',
     priceNote: '',
     audience: ['Hedhje në shitje e një faze të re', 'Disa projekte njëkohësisht', 'Panair, aktivitet ose fushatë televizive'],
