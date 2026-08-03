@@ -49,7 +49,7 @@ const PACKAGES: Pkg[] = [
   {
     id: 'corporate-rebuild',
     name: 'Corporate Rebuild',
-    tagline: 'Rindërtim profesional dhe i kontrolluar, duke përdorur kryesisht materialet ekzistuese.',
+    tagline: 'Baza e duhur: strukturë, dizajn dhe SEO të rindërtuara nga fillimi, me përmbajtjen aktuale të riorganizuar profesionalisht.',
     price: 1490,
     deadline: '18–22 ditë pune',
     included: [
