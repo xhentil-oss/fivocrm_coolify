@@ -415,7 +415,7 @@ export default function RezidencaLandingPage() {
               <p className="text-sm font-semibold uppercase tracking-widest text-emerald-600 mb-3">Paketat</p>
               <h2 className="text-3xl sm:text-4xl font-bold">Katër nivele, sipas fazës në të cilën ndodhet projekti</h2>
               <p className="mt-4 text-gray-600 max-w-2xl mx-auto">
-                Faturim mujor, pa kontratë afatgjatë. Buxheti i reklamave paguhet drejtpërdrejt platformave dhe nuk përfshihet — për projekte rezidenciale rekomandojmë 800 € – 3.000 € në muaj, sipas fazës. Çmimet pa TVSH, sipas rastit.
+                Faturim mujor, pa kontratë afatgjatë. Buxheti i reklamave paguhet drejtpërdrejt platformave dhe nuk përfshihet — për projekte rezidenciale rekomandojmë 1.200 € – 3.000 € në muaj, sipas fazës. Çmimet pa TVSH, sipas rastit.
               </p>
             </div>
           </FadeIn>
