@@ -51,9 +51,9 @@ interface Pkg {
    matësi është lead i kualifikuar → vizitë → shitje. */
 const PACKAGES: Pkg[] = [
   {
-    id: 'baza-komunikimit',
-    name: 'Baza e Komunikimit',
-    tagline: 'Përmbajtje me standard të lartë, publikime të planifikuara dhe infrastruktura e matjes, e ndërtuar nga e para.',
+    id: 'start',
+    name: 'Start',
+    tagline: 'Përmbajtje profesionale dhe matje nga e para.',
     price: '1.200 €',
     priceNote: '/ muaj + buxheti i reklamave',
     audience: ['Projekte në fazë ndërtimi', 'Zhvillues pa matje të instaluar', 'Shitje që ecin me rekomandime'],
@@ -90,16 +90,16 @@ const PACKAGES: Pkg[] = [
     excluded: ['Buxheti i reklamave', 'Google Search', 'Xhirim me dron', 'Faqe hyrëse sipas tipologjisë', 'Shëtitje video e tipologjive', 'Ndërlidhje me CRM'],
   },
   {
-    id: 'gjenerim-kerkesash',
-    name: 'Gjenerim Kërkesash',
-    tagline: 'Kërkesa të kualifikuara nga Meta dhe Google Search, të regjistruara në CRM dhe të matura nga klikimi i parë deri në takim.',
+    id: 'business',
+    name: 'Business',
+    tagline: 'Kërkesa të kualifikuara nga Meta dhe Google.',
     price: '1.900 €',
     priceNote: '/ muaj + buxheti i reklamave',
     popular: true,
     badge: 'E rekomanduar',
     audience: ['Projekte në shitje aktive', 'Shitje ndaj Shqipërisë, Kosovës dhe diasporës', 'Ekipe që duan të dinë sa kushton një lead'],
     groups: [
-      { title: 'Gjithçka nga Baza e Komunikimit, plus:', items: [] },
+      { title: 'Gjithçka nga Start, plus:', items: [] },
       {
         title: 'Përmbajtja',
         items: [
@@ -132,15 +132,15 @@ const PACKAGES: Pkg[] = [
     excluded: ['Buxheti i reklamave', 'Shëtitje video për tipologji', 'Sekuenca e email-eve', 'Prezantim për investitorin', 'Bashkëpunime me media'],
   },
   {
-    id: 'rritje-e-plote',
-    name: 'Rritje e Plotë',
-    tagline: 'Prodhim vizual i plotë, fushata në tregjet e diasporës dhe bashkëpunim i drejtpërdrejtë me ekipin e shitjeve.',
+    id: 'premium',
+    name: 'Premium',
+    tagline: 'Prodhim i plotë, diasporë dhe punë me shitjet.',
     price: '3.200 €',
     priceNote: '/ muaj + buxheti i reklamave',
     badge: 'Zgjidhja e plotë',
     audience: ['Hedhje në shitje e një faze të re', 'Shitje ndaj investitorëve', 'Objektiva mujore shitjeje'],
     groups: [
-      { title: 'Gjithçka nga Gjenerim Kërkesash, plus:', items: [] },
+      { title: 'Gjithçka nga Business, plus:', items: [] },
       {
         title: 'Prodhimi',
         items: [
@@ -174,7 +174,7 @@ const PACKAGES: Pkg[] = [
   {
     id: 'sipas-projektit',
     name: 'Sipas Projektit',
-    tagline: 'Fushata të veçanta për hedhjen në shitje, prodhim 3D, panaire dhe media, sipas nevojës së projektit.',
+    tagline: 'Fushata të veçanta, prodhim 3D dhe panaire.',
     price: 'Me preventiv',
     priceNote: '',
     audience: ['Hedhje në shitje e një faze të re', 'Disa projekte njëkohësisht', 'Panair, aktivitet ose fushatë televizive'],
