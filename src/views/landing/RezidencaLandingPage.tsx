@@ -308,47 +308,58 @@ export default function RezidencaLandingPage() {
       <section className="relative pt-32 pb-16 sm:pt-40 sm:pb-20 overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-b from-emerald-50/80 via-white to-white" />
         <div className="absolute top-20 left-1/2 -translate-x-1/2 w-[800px] h-[800px] bg-emerald-200/30 rounded-full blur-3xl" />
-        <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="max-w-4xl mx-auto text-center">
-            <FadeIn>
-              <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-50 border border-emerald-100 mb-8">
-                <Target className="w-4 h-4 text-emerald-600" />
-                <span className="text-sm font-medium text-emerald-700">Marketing për zhvillues rezidencash dhe vilash</span>
-              </div>
-            </FadeIn>
-            <FadeIn delay={100}>
-              <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.12]">
-                Cilësia që ndërtuat{' '}
-                <span className="bg-gradient-to-r from-emerald-600 via-teal-600 to-cyan-600 bg-clip-text text-transparent">duhet të shihet</span>{' '}
-                përpara se të flitet për çmim.
-              </h1>
-            </FadeIn>
-            <FadeIn delay={200}>
-              <p className="mt-8 text-lg sm:text-xl text-gray-600 max-w-2xl mx-auto leading-relaxed">
-                Materialet e certifikuara, izolimi, fasadat, pamja nga deti — blerësi i vlerëson vetëm kur i paraqiten si duhet. Ne e paraqesim projektin me nivelin që ka dhe e çojmë përpara njerëzve që janë në kërkim aktiv.
+        <div className="relative max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+          {/* Faqja hapet me propozimin. Titulli mbahet vetëm për strukturën e
+              dokumentit dhe për lexuesat e ekranit — pa reklamë në kokë. */}
+          <h1 className="sr-only">Propozim për marketing në rrjetet sociale — Green Coast Hills</h1>
+          <FadeIn>
+            <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-emerald-50 border border-emerald-100 mb-8">
+              <Target className="w-4 h-4 text-emerald-600" />
+              <span className="text-sm font-medium text-emerald-700">Propozim për Green Coast Hills</span>
+            </div>
+          </FadeIn>
+          <FadeIn delay={80}>
+            <p className="text-xl sm:text-2xl text-gray-900 leading-relaxed">
+              Në një treg ku vendimet e blerjes ndikohen gjithnjë e më shumë nga prezenca digjitale, rrjetet sociale janë një nga mjetet më të rëndësishme për të ndërtuar besueshmëri, për të rritur vlerën e markës dhe për të krijuar një lidhje të vazhdueshme me klientët potencialë.
+            </p>
+          </FadeIn>
+          <div className="mt-6 space-y-6 text-lg text-gray-600 leading-relaxed">
+            <FadeIn delay={160}>
+              <p>
+                Duke marrë në konsideratë pozicionimin premium të Green Coast Hills, kemi përgatitur këtë propozim me synimin për të zhvilluar një komunikim të kuruar, estetik dhe strategjik, i cili reflekton cilësinë, stilin e jetesës dhe ekskluzivitetin që projekti përfaqëson.
               </p>
             </FadeIn>
-            <FadeIn delay={300}>
-              <div className="mt-10 flex flex-col sm:flex-row items-center justify-center gap-4">
-                <button onClick={() => scrollTo('paketat')}
-                  className="group w-full sm:w-auto px-8 py-4 text-lg font-semibold text-white rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:shadow-xl hover:shadow-emerald-500/25 transition-all hover:-translate-y-1 flex items-center justify-center gap-2">
-                  Shikoni Paketat
-                  <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
-                </button>
-                <button onClick={() => scrollTo('kontakt')}
-                  className="w-full sm:w-auto px-8 py-4 text-lg font-semibold rounded-xl border-2 border-gray-200 hover:border-emerald-300 hover:bg-emerald-50 transition-all flex items-center justify-center gap-2">
-                  <Phone className="w-5 h-5" />Konsultim Falas
-                </button>
-              </div>
+            <FadeIn delay={240}>
+              <p>
+                Qasja jonë fokusohet në krijimin e përmbajtjes me standard të lartë, planifikimin strategjik të publikimeve dhe ndërtimin e një identiteti të qëndrueshëm në platformat sociale, me qëllim rritjen e angazhimit, forcimin e imazhit të markës dhe gjenerimin e interesit nga audienca e synuar.
+              </p>
             </FadeIn>
-            <FadeIn delay={400}>
-              <div className="mt-14 flex flex-wrap items-center justify-center gap-x-8 gap-y-3 text-sm text-gray-400">
-                <span className="flex items-center gap-1.5"><BarChart3 className="w-4 h-4 text-emerald-500" /> Kosto për lead e matur, jo e supozuar</span>
-                <span className="flex items-center gap-1.5"><Shield className="w-4 h-4 text-teal-500" /> Buxheti i reklamave gjithnjë i veçuar</span>
-                <span className="flex items-center gap-1.5"><Clock className="w-4 h-4 text-cyan-500" /> Pa kontratë afatgjatë</span>
-              </div>
+            <FadeIn delay={320}>
+              <p className="font-medium text-gray-900">
+                Në vijim do të gjeni preventivin dhe përshkrimin e shërbimeve të propozuara, të ndërtuara për t'iu përshtatur objektivave dhe vizionit të Green Coast Hills.
+              </p>
             </FadeIn>
           </div>
+          <FadeIn delay={400}>
+            <div className="mt-10 flex flex-col sm:flex-row gap-4">
+              <button onClick={() => scrollTo('paketat')}
+                className="group w-full sm:w-auto px-8 py-4 text-lg font-semibold text-white rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:shadow-xl hover:shadow-emerald-500/25 transition-all hover:-translate-y-1 flex items-center justify-center gap-2">
+                Shikoni preventivin
+                <ArrowRight className="w-5 h-5 group-hover:translate-x-1 transition-transform" />
+              </button>
+              <button onClick={() => scrollTo('kontakt')}
+                className="w-full sm:w-auto px-8 py-4 text-lg font-semibold rounded-xl border-2 border-gray-200 hover:border-emerald-300 hover:bg-emerald-50 transition-all flex items-center justify-center gap-2">
+                <Phone className="w-5 h-5" />Bisedë njohjeje
+              </button>
+            </div>
+          </FadeIn>
+          <FadeIn delay={480}>
+            <div className="mt-12 flex flex-wrap items-center gap-x-8 gap-y-3 text-sm text-gray-400">
+              <span className="flex items-center gap-1.5"><BarChart3 className="w-4 h-4 text-emerald-500" /> Raportim me të dhëna të matshme</span>
+              <span className="flex items-center gap-1.5"><Shield className="w-4 h-4 text-teal-500" /> Buxheti i reklamave gjithnjë i veçuar</span>
+              <span className="flex items-center gap-1.5"><Clock className="w-4 h-4 text-cyan-500" /> Pa kontratë afatgjatë</span>
+            </div>
+          </FadeIn>
         </div>
       </section>
 
@@ -393,37 +404,6 @@ export default function RezidencaLandingPage() {
               Paketat më poshtë i mbyllin këto boshllëqe me radhë: së pari matja, pastaj kërkesa, pastaj rruga e lead-it drejt shitjes.
             </p>
           </FadeIn>
-        </div>
-      </section>
-
-      {/* PROPOZIMI — hyrja që lidh arsyetimin me preventivin */}
-      <section id="propozimi" className="py-24 bg-white">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
-          <FadeIn>
-            <p className="text-sm font-semibold uppercase tracking-widest text-emerald-600 mb-8">Propozimi</p>
-          </FadeIn>
-          <div className="space-y-6 text-gray-700 leading-relaxed border-l-2 border-emerald-100 pl-6 sm:pl-8">
-            <FadeIn delay={80}>
-              <p className="text-lg sm:text-xl text-gray-900">
-                Në një treg ku vendimet e blerjes ndikohen gjithnjë e më shumë nga prezenca digjitale, rrjetet sociale janë një nga mjetet më të rëndësishme për të ndërtuar besueshmëri, për të rritur vlerën e markës dhe për të krijuar një lidhje të vazhdueshme me klientët potencialë.
-              </p>
-            </FadeIn>
-            <FadeIn delay={160}>
-              <p>
-                Duke marrë në konsideratë pozicionimin premium të Green Coast Hills, kemi përgatitur këtë propozim me synimin për të zhvilluar një komunikim të kuruar, estetik dhe strategjik, i cili reflekton cilësinë, stilin e jetesës dhe ekskluzivitetin që projekti përfaqëson.
-              </p>
-            </FadeIn>
-            <FadeIn delay={240}>
-              <p>
-                Qasja jonë fokusohet në krijimin e përmbajtjes me standard të lartë, planifikimin strategjik të publikimeve dhe ndërtimin e një identiteti të qëndrueshëm në platformat sociale, me qëllim rritjen e angazhimit, forcimin e imazhit të markës dhe gjenerimin e interesit nga audienca e synuar.
-              </p>
-            </FadeIn>
-            <FadeIn delay={320}>
-              <p className="font-medium text-gray-900">
-                Në vijim do të gjeni preventivin dhe përshkrimin e shërbimeve të propozuara, të ndërtuara për t'iu përshtatur objektivave dhe vizionit të Green Coast Hills.
-              </p>
-            </FadeIn>
-          </div>
         </div>
       </section>
 
