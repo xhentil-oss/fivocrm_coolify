@@ -134,7 +134,7 @@ const PACKAGES: Pkg[] = [
   {
     id: 'shitje-360',
     name: 'Shitje 360',
-    tagline: 'Për hedhjen në shitje të një faze të re dhe për objektiva ambicioze, përfshirë investitorët dhe diasporën.',
+    tagline: 'Prodhim vizual i plotë, fushata në tregjet e diasporës dhe bashkëpunim i drejtpërdrejtë me ekipin e shitjeve.',
     price: '3.200 €',
     priceNote: '/ muaj + buxheti i reklamave',
     badge: 'Zgjidhja e plotë',
