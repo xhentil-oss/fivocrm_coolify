@@ -37,7 +37,6 @@ function FadeIn({ children, className = '', delay = 0 }: { children: React.React
 interface Pkg {
   id: string;
   name: string;
-  tagline: string;
   price: string;
   priceNote: string;
   audience: string[];
@@ -53,7 +52,6 @@ const PACKAGES: Pkg[] = [
   {
     id: 'start',
     name: 'Start',
-    tagline: 'Përmbajtje profesionale dhe matje nga e para.',
     price: '1.200 €',
     priceNote: '/ muaj + buxheti i reklamave',
     audience: ['Projekte në fazë ndërtimi', 'Zhvillues pa matje të instaluar', 'Shitje që ecin me rekomandime'],
@@ -87,12 +85,11 @@ const PACKAGES: Pkg[] = [
         ],
       },
     ],
-    excluded: ['Buxheti i reklamave', 'Google Search', 'Xhirim me dron', 'Faqe hyrëse sipas tipologjisë', 'Shëtitje video e tipologjive', 'Ndërlidhje me CRM'],
+    excluded: ['Buxheti i reklamave', 'Google Search', 'Xhirim me dron', 'Faqe hyrëse sipas tipologjisë', 'Video prezantuese e tipologjive', 'Ndërlidhje me CRM'],
   },
   {
     id: 'business',
     name: 'Business',
-    tagline: 'Kërkesa të kualifikuara nga Meta dhe Google.',
     price: '1.900 €',
     priceNote: '/ muaj + buxheti i reklamave',
     popular: true,
@@ -129,12 +126,11 @@ const PACKAGES: Pkg[] = [
         ],
       },
     ],
-    excluded: ['Buxheti i reklamave', 'Shëtitje video për tipologji', 'Sekuenca e email-eve', 'Prezantim për investitorin', 'Bashkëpunime me media'],
+    excluded: ['Buxheti i reklamave', 'Video prezantuese sipas tipologjisë', 'Sekuenca e email-eve', 'Prezantim për investitorin', 'Bashkëpunime me media'],
   },
   {
     id: 'premium',
     name: 'Premium',
-    tagline: 'Prodhim i plotë, diasporë dhe punë me shitjet.',
     price: '3.200 €',
     priceNote: '/ muaj + buxheti i reklamave',
     badge: 'Zgjidhja e plotë',
@@ -146,7 +142,7 @@ const PACKAGES: Pkg[] = [
         items: [
           '20 postime dhe 20 reels në muaj',
           '3 ditë xhirimi në muaj',
-          'Shëtitje video profesionale për secilën tipologji, 60–90 sekonda',
+          'Video prezantuese profesionale për secilën tipologji, 60–90 sekonda',
           'Xhirim mujor me dron, i projektit dhe i bregdetit',
           'Prezantim për investitorin në PDF dhe katalog i tipologjive',
         ],
@@ -174,7 +170,6 @@ const PACKAGES: Pkg[] = [
   {
     id: 'sipas-projektit',
     name: 'Sipas Projektit',
-    tagline: 'Fushata të veçanta, prodhim 3D dhe panaire.',
     price: 'Me preventiv',
     priceNote: '',
     audience: ['Hedhje në shitje e një faze të re', 'Disa projekte njëkohësisht', 'Panair, aktivitet ose fushatë televizive'],
@@ -203,7 +198,7 @@ const COMPARE: { label: string; values: [string, string, string] }[] = [
   { label: 'Meta Ads', values: ['Bazë', 'Të plota', 'Të plota'] },
   { label: 'Google Search', values: ['—', 'Po', 'Po'] },
   { label: 'Faqe hyrëse sipas tipologjisë', values: ['—', 'Po', 'Po'] },
-  { label: 'Shëtitje video për tipologji', values: ['—', '—', 'Po'] },
+  { label: 'Video prezantuese sipas tipologjisë', values: ['—', '—', 'Po'] },
   { label: 'Lead-i në WhatsApp dhe CRM', values: ['—', 'Po', 'Po'] },
   { label: 'Kualifikim i lead-it', values: ['Formular', 'I plotë', 'I plotë'] },
   { label: 'Sekuencë email-esh', values: ['—', '—', 'Po'] },
@@ -214,7 +209,7 @@ const COMPARE: { label: string; values: [string, string, string] }[] = [
 const ADDONS: { name: string; price: string }[] = [
   { name: 'Ditë shtesë xhirimi', price: '250 € – 400 €' },
   { name: 'Xhirim me dron, jashtë paketës', price: '120 € – 180 €' },
-  { name: 'Shëtitje video për një tipologji', price: '350 € – 600 €' },
+  { name: 'Video prezantuese për një tipologji', price: '350 € – 600 €' },
   { name: 'Katalog tipologjish ose prezantim për investitorin (PDF)', price: '400 € – 700 €' },
   { name: 'Bashkëpunim me krijues përmbajtjeje', price: '300 € – 800 €' },
   { name: 'Gjuhë shtesë e përmbajtjes', price: '150 € / muaj' },
@@ -431,7 +426,6 @@ export default function RezidencaLandingPage() {
                     )}
                     <div className="p-6">
                       <h3 className="text-xl font-bold">{pkg.name}</h3>
-                      <p className="text-xs text-gray-500 mt-1.5 min-h-[3.5rem] leading-relaxed">{pkg.tagline}</p>
                       <div className="mt-4">
                         <span className={`text-4xl font-bold bg-gradient-to-r ${accent} bg-clip-text text-transparent`}>{pkg.price}</span>
                         {pkg.priceNote && <span className="block text-xs text-gray-500 mt-1">{pkg.priceNote}</span>}
