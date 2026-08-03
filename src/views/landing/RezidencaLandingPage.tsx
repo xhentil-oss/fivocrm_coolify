@@ -396,6 +396,37 @@ export default function RezidencaLandingPage() {
         </div>
       </section>
 
+      {/* PROPOZIMI — hyrja që lidh arsyetimin me preventivin */}
+      <section id="propozimi" className="py-24 bg-white">
+        <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
+          <FadeIn>
+            <p className="text-sm font-semibold uppercase tracking-widest text-emerald-600 mb-8">Propozimi</p>
+          </FadeIn>
+          <div className="space-y-6 text-gray-700 leading-relaxed border-l-2 border-emerald-100 pl-6 sm:pl-8">
+            <FadeIn delay={80}>
+              <p className="text-lg sm:text-xl text-gray-900">
+                Në një treg ku vendimet e blerjes ndikohen gjithnjë e më shumë nga prezenca digjitale, rrjetet sociale janë një nga mjetet më të rëndësishme për të ndërtuar besueshmëri, për të rritur vlerën e markës dhe për të krijuar një lidhje të vazhdueshme me klientët potencialë.
+              </p>
+            </FadeIn>
+            <FadeIn delay={160}>
+              <p>
+                Duke marrë në konsideratë pozicionimin premium të Green Coast Hills, kemi përgatitur këtë propozim me synimin për të zhvilluar një komunikim të kuruar, estetik dhe strategjik, i cili reflekton cilësinë, stilin e jetesës dhe ekskluzivitetin që projekti përfaqëson.
+              </p>
+            </FadeIn>
+            <FadeIn delay={240}>
+              <p>
+                Qasja jonë fokusohet në krijimin e përmbajtjes me standard të lartë, planifikimin strategjik të publikimeve dhe ndërtimin e një identiteti të qëndrueshëm në platformat sociale, me qëllim rritjen e angazhimit, forcimin e imazhit të markës dhe gjenerimin e interesit nga audienca e synuar.
+              </p>
+            </FadeIn>
+            <FadeIn delay={320}>
+              <p className="font-medium text-gray-900">
+                Në vijim do të gjeni preventivin dhe përshkrimin e shërbimeve të propozuara, të ndërtuara për t'iu përshtatur objektivave dhe vizionit të Green Coast Hills.
+              </p>
+            </FadeIn>
+          </div>
+        </div>
+      </section>
+
       {/* PAKETAT */}
       <section id="paketat" className="py-24 bg-gradient-to-b from-white to-gray-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
