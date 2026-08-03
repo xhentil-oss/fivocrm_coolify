@@ -140,7 +140,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
   {
     id: 'rezidenca',
     title: 'Rezidenca & Shitje Pronash',
-    description: 'Marketing për zhvillues rezidencash dhe vilash — lead-e të kualifikuar, jo rezervime. Baza Rezidenciale (1.200 €/muaj), Motor Lead-esh (1.900 €/muaj), Shitje 360 (3.200 €/muaj) + Sipas kërkesës.',
+    description: 'Marketing për zhvillues rezidencash dhe vilash — lead-e të kualifikuar, jo rezervime. Baza e Komunikimit (1.200 €/muaj), Gjenerim Kërkesash (1.900 €/muaj), Rritje e Plotë (3.200 €/muaj) + Sipas Projektit.',
     path: '/rezidenca',
     category: 'Real Estate',
     icon: Building2,

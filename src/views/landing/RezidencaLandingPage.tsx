@@ -51,8 +51,8 @@ interface Pkg {
    matësi është lead i kualifikuar → vizitë → shitje. */
 const PACKAGES: Pkg[] = [
   {
-    id: 'baza-rezidenciale',
-    name: 'Baza Rezidenciale',
+    id: 'baza-komunikimit',
+    name: 'Baza e Komunikimit',
     tagline: 'Përmbajtje me standard të lartë, publikime të planifikuara dhe infrastruktura e matjes, e ndërtuar nga e para.',
     price: '1.200 €',
     priceNote: '/ muaj + buxheti i reklamave',
@@ -90,8 +90,8 @@ const PACKAGES: Pkg[] = [
     excluded: ['Buxheti i reklamave', 'Google Search', 'Xhirim me dron', 'Faqe hyrëse sipas tipologjisë', 'Shëtitje video e tipologjive', 'Ndërlidhje me CRM'],
   },
   {
-    id: 'motor-leadesh',
-    name: 'Motor Lead-esh',
+    id: 'gjenerim-kerkesash',
+    name: 'Gjenerim Kërkesash',
     tagline: 'Kërkesa të kualifikuara nga Meta dhe Google Search, të regjistruara në CRM dhe të matura nga klikimi i parë deri në takim.',
     price: '1.900 €',
     priceNote: '/ muaj + buxheti i reklamave',
@@ -99,7 +99,7 @@ const PACKAGES: Pkg[] = [
     badge: 'E rekomanduar',
     audience: ['Projekte në shitje aktive', 'Shitje ndaj Shqipërisë, Kosovës dhe diasporës', 'Ekipe që duan të dinë sa kushton një lead'],
     groups: [
-      { title: 'Gjithçka nga Baza Rezidenciale, plus:', items: [] },
+      { title: 'Gjithçka nga Baza e Komunikimit, plus:', items: [] },
       {
         title: 'Përmbajtja',
         items: [
@@ -132,15 +132,15 @@ const PACKAGES: Pkg[] = [
     excluded: ['Buxheti i reklamave', 'Shëtitje video për tipologji', 'Sekuenca e email-eve', 'Prezantim për investitorin', 'Bashkëpunime me media'],
   },
   {
-    id: 'shitje-360',
-    name: 'Shitje 360',
+    id: 'rritje-e-plote',
+    name: 'Rritje e Plotë',
     tagline: 'Prodhim vizual i plotë, fushata në tregjet e diasporës dhe bashkëpunim i drejtpërdrejtë me ekipin e shitjeve.',
     price: '3.200 €',
     priceNote: '/ muaj + buxheti i reklamave',
     badge: 'Zgjidhja e plotë',
     audience: ['Hedhje në shitje e një faze të re', 'Shitje ndaj investitorëve', 'Objektiva mujore shitjeje'],
     groups: [
-      { title: 'Gjithçka nga Motor Lead-esh, plus:', items: [] },
+      { title: 'Gjithçka nga Gjenerim Kërkesash, plus:', items: [] },
       {
         title: 'Prodhimi',
         items: [
@@ -172,8 +172,8 @@ const PACKAGES: Pkg[] = [
     excluded: ['Buxheti i reklamave', 'Kostoja e blerjes së medias', 'Prodhim 3D dhe renderime arkitekturore'],
   },
   {
-    id: 'custom',
-    name: 'Sipas kërkesës',
+    id: 'sipas-projektit',
+    name: 'Sipas Projektit',
     tagline: 'Fushata të veçanta për hedhjen në shitje, prodhim 3D, panaire dhe media, sipas nevojës së projektit.',
     price: 'Me preventiv',
     priceNote: '',
