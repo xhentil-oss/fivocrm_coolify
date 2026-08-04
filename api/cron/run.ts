@@ -60,6 +60,18 @@ async function authorizeManual(req: VercelRequest): Promise<string | null> {
 // Verify the caller holds the server-trustworthy super-admin custom claim.
 // Used to gate destructive cross-tenant jobs (e.g. the member-key re-key migration)
 // so a mere team Admin can't trigger them.
+/** The uid behind a manual trigger, or null for the scheduled cron. */
+async function callerUid(req: VercelRequest): Promise<string | null> {
+  const authHeader = req.headers.authorization as string | undefined;
+  if (!authHeader?.startsWith('Bearer ')) return null;
+  try {
+    const decoded = await adminAuth.verifyIdToken(authHeader.slice(7));
+    return decoded.uid;
+  } catch {
+    return null;
+  }
+}
+
 async function callerIsSuperAdmin(req: VercelRequest): Promise<boolean> {
   const authHeader = req.headers.authorization as string;
   if (!authHeader?.startsWith('Bearer ')) return false;
@@ -2227,6 +2239,200 @@ async function runBackfillMemberKeys(opts?: { dryRun?: boolean }) {
   return { total: snap.size, alreadyKeyed, reKeyed, dedupedDuplicates, skippedIncomplete, errors, dryRun: !!opts?.dryRun };
 }
 
+// ── JOB: tenant-usage-rollup (platform console: is this tenant alive?) ───────
+// Writes `businesses.usage` so the console can tell an engaged trial from a dead one,
+// and see which tenant's volume drives platform cost — WITHOUT the operator's browser
+// reading tenant data.
+//
+// Cost discipline: document counts use Firestore `count()` aggregations (billed per
+// ~1000 index entries, not per document), and "last activity" is one
+// `orderBy(updatedAt desc).limit(1)` per signal collection. That is a handful of reads
+// per tenant regardless of how much data the tenant holds.
+const USAGE_COUNT_COLLECTIONS = ['customers', 'leads', 'projects', 'tasks', 'invoices'];
+const USAGE_SIGNAL_COLLECTIONS = ['tasks', 'invoices', 'activities', 'messages', 'projects'];
+
+async function runTenantUsageRollup(opts?: { dryRun?: boolean }) {
+  const now = admin.firestore.Timestamp.now();
+  const sevenDaysAgo = admin.firestore.Timestamp.fromMillis(Date.now() - 7 * 86_400_000);
+  const bizSnap = await db.collection('businesses').get();
+
+  let updated = 0;
+  const errors: string[] = [];
+  const summary: Array<{ businessId: string; docs: number; activeUsers7d: number; lastActivityAt: string | null }> = [];
+
+  for (const bizDoc of bizSnap.docs) {
+    const businessId = bizDoc.id;
+    try {
+      // 1. Volume — count() aggregations, one per collection.
+      const docCounts: Record<string, number> = {};
+      await Promise.all(USAGE_COUNT_COLLECTIONS.map(async (coll) => {
+        try {
+          const agg = await db.collection(coll).where('businessId', '==', businessId).count().get();
+          docCounts[coll] = agg.data().count;
+        } catch {
+          docCounts[coll] = -1; // missing index / permission — reported, never fatal
+        }
+      }));
+      const docsTotal = Object.values(docCounts).reduce((n, v) => n + Math.max(0, v), 0);
+
+      // 2. Freshness — newest write across the signal collections.
+      let lastMs = 0;
+      await Promise.all(USAGE_SIGNAL_COLLECTIONS.map(async (coll) => {
+        try {
+          const snap = await db.collection(coll)
+            .where('businessId', '==', businessId)
+            .orderBy('updatedAt', 'desc').limit(1).get();
+          const v = snap.empty ? null : (snap.docs[0].data() as any)?.updatedAt;
+          const ms = v?.toDate ? v.toDate().getTime() : 0;
+          if (ms > lastMs) lastMs = ms;
+        } catch { /* collection may lack the composite index — skip that signal */ }
+      }));
+
+      // 3. Engagement — distinct staff who wrote something in the last 7 days.
+      const actors = new Set<string>();
+      try {
+        const recent = await db.collection('activities')
+          .where('businessId', '==', businessId)
+          .where('createdAt', '>=', sevenDaysAgo)
+          .limit(500).get();
+        for (const d of recent.docs) {
+          const uid = (d.data() as any)?.createdByUserId;
+          if (uid) actors.add(String(uid));
+        }
+      } catch { /* index missing → leave at 0 rather than guessing */ }
+
+      const usage = {
+        lastActivityAt: lastMs ? admin.firestore.Timestamp.fromMillis(lastMs) : null,
+        activeUsers7d: actors.size,
+        docCounts,
+        docsTotal,
+        computedAt: now,
+      };
+
+      // Denormalised structure counts. The console used to read EVERY tenant's
+      // teamMembers and teams on each page view (and pulled salary fields into the
+      // operator's browser) just to show a member count and find a team to enter.
+      // count() keeps this cheap, and `defaultTeamId` removes the teams read entirely.
+      let memberCount = 0;
+      let teamCount = 0;
+      let defaultTeamId: string | null = null;
+      try {
+        const [memberAgg, teamsSnap] = await Promise.all([
+          db.collection('teamMembers')
+            .where('businessId', '==', businessId).where('status', '==', 'Active').count().get(),
+          db.collection('teams').where('businessId', '==', businessId).limit(50).get(),
+        ]);
+        memberCount = memberAgg.data().count;
+        teamCount = teamsSnap.size;
+        defaultTeamId = teamsSnap.docs[0]?.id || null;
+      } catch { /* leave at 0 — the console falls back to a dash, never a wrong number */ }
+
+      if (!opts?.dryRun) {
+        await bizDoc.ref.set({
+          usage, memberCount, teamCount, defaultTeamId, updatedAt: now,
+        }, { merge: true });
+      }
+      updated++;
+      summary.push({
+        businessId,
+        docs: docsTotal,
+        activeUsers7d: actors.size,
+        lastActivityAt: lastMs ? new Date(lastMs).toISOString() : null,
+      });
+    } catch (err: any) {
+      errors.push(`${businessId}: ${String(err?.message || err).slice(0, 160)}`);
+    }
+  }
+
+  return { tenants: bizSnap.size, updated, errors, summary, dryRun: !!opts?.dryRun };
+}
+
+// ── JOB: platform-metrics-rollup (platform console: are we growing?) ─────────
+// One document per month at `platformMetrics/{YYYY-MM}`: signups, trial→paid
+// conversions, churn, MRR. The tenant list can only ever show "now"; this is the
+// history that says whether the business is growing.
+//
+// Idempotent: the current month is recomputed on every run, closed months keep the
+// value they had when the month ended (they are only rewritten if explicitly asked).
+async function runPlatformMetricsRollup(opts?: { dryRun?: boolean; month?: string; backfill?: boolean }) {
+  const now = new Date();
+  const nowTs = admin.firestore.Timestamp.now();
+  const key = (d: Date) => `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+  const target = opts?.month && /^\d{4}-\d{2}$/.test(opts.month) ? opts.month : key(now);
+
+  const bizSnap = await db.collection('businesses').get();
+  const toDate = (v: any): Date | null => (v?.toDate ? v.toDate() : (v ? new Date(v) : null));
+
+  // Fallback price list for tenants with no `mrrCents` yet (mirrors tenantMrr in
+  // src/lib/platformAdmin.ts, which prefers the real Stripe amount too).
+  const MONTHLY_EUR: Record<string, number> = { starter: 29, pro: 79, business: 149, enterprise: 0 };
+
+  const monthsToWrite = new Set<string>([target]);
+  if (opts?.backfill) {
+    // Rebuild history from the signup/activation/cancel stamps we already store.
+    for (const d of bizSnap.docs) {
+      const b = d.data() as any;
+      for (const stamp of [b.createdAt, b.activatedAt, b.canceledAt, b.suspendedAt]) {
+        const dt = toDate(stamp);
+        if (dt) monthsToWrite.add(key(dt));
+      }
+    }
+  }
+
+  const written: string[] = [];
+  for (const month of Array.from(monthsToWrite).sort()) {
+    const [y, m] = month.split('-').map(Number);
+    const monthStart = new Date(Date.UTC(y, m - 1, 1));
+    const monthEnd = new Date(Date.UTC(y, m, 1));
+    const inMonth = (v: any) => {
+      const dt = toDate(v);
+      return !!dt && dt >= monthStart && dt < monthEnd;
+    };
+
+    const doc: Record<string, any> = {
+      month,
+      tenantsTotal: 0, tenantsActive: 0, tenantsTrialing: 0,
+      tenantsPastDue: 0, tenantsSuspended: 0, tenantsCanceled: 0,
+      signups: 0, activated: 0, churned: 0, mrr: 0, arr: 0,
+    };
+
+    for (const d of bizSnap.docs) {
+      const b = d.data() as any;
+      const created = toDate(b.createdAt);
+      // A tenant only counts towards a month's totals if it existed by then.
+      if (created && created >= monthEnd) continue;
+      doc.tenantsTotal++;
+      switch (b.status) {
+        case 'active': doc.tenantsActive++; break;
+        case 'trialing': doc.tenantsTrialing++; break;
+        case 'past_due': doc.tenantsPastDue++; break;
+        case 'suspended': doc.tenantsSuspended++; break;
+        case 'canceled': doc.tenantsCanceled++; break;
+        default: break;
+      }
+      if (inMonth(b.createdAt)) doc.signups++;
+      if (inMonth(b.activatedAt)) doc.activated++;
+      if (inMonth(b.canceledAt) || inMonth(b.suspendedAt)) doc.churned++;
+      // Prefer the real billed amount (webhook-maintained); fall back to list price.
+      if (b.status === 'active') {
+        doc.mrr += typeof b.mrrCents === 'number' && b.mrrCents > 0
+          ? b.mrrCents / 100
+          : (MONTHLY_EUR[b.plan || ''] ?? 0);
+      }
+    }
+    doc.arr = doc.mrr * 12;
+    doc.computedAt = nowTs;
+    doc.updatedAt = nowTs;
+
+    if (!opts?.dryRun) {
+      await db.collection('platformMetrics').doc(month).set(doc, { merge: true });
+    }
+    written.push(month);
+  }
+
+  return { months: written, tenants: bizSnap.size, dryRun: !!opts?.dryRun };
+}
+
 // ── Tenant data lifecycle (GDPR / DPA) ───────────────────────────────────────
 // Every collection that can hold a tenant's data, so "give me everything you have"
 // and "delete everything you have" are answerable — a hard requirement in any
@@ -3227,6 +3433,47 @@ async function runSocialMonthlySync(period?: string, opts?: { email?: boolean })
   return { period: p, accounts: results.length, synced: ok, failed: failed.length, email };
 }
 
+/**
+ * Persist one job execution to `platformJobRuns` (super-admin readable, client-write
+ * denied). Before this, a manual run reported into a toast that vanished: there was no
+ * way to answer "did the migration run, when, and what did it change?".
+ *
+ * Kept small and best-effort — recording must never fail the job it records.
+ */
+async function recordJobRun(entry: {
+  job: string;
+  ok: boolean;
+  ms: number;
+  actorUid: string | null;
+  manual: boolean;
+  dryRun: boolean;
+  summary?: Record<string, unknown>;
+  error?: string;
+}) {
+  try {
+    // Keep only scalar/short fields — a full result blob could be megabytes.
+    const compact: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(entry.summary || {})) {
+      if (typeof v === 'number' || typeof v === 'boolean' || typeof v === 'string') {
+        compact[k] = typeof v === 'string' ? v.slice(0, 200) : v;
+      } else if (Array.isArray(v)) {
+        compact[k] = v.length;
+      }
+    }
+    await db.collection('platformJobRuns').add({
+      job: entry.job,
+      ok: entry.ok,
+      durationMs: entry.ms,
+      actorUid: entry.actorUid,
+      manual: entry.manual,
+      dryRun: entry.dryRun,
+      summary: compact,
+      ...(entry.error ? { error: entry.error.slice(0, 500) } : {}),
+      createdAt: admin.firestore.Timestamp.now(),
+    });
+  } catch { /* history is a convenience, never a dependency */ }
+}
+
 // ── Main handler ──────────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   const isManual = req.query.manual === '1';
@@ -3238,6 +3485,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   const job = req.query.job as string;
+  const startedAt = Date.now();
+  const actorUid = await callerUid(req);
 
   try {
     let result: Record<string, unknown>;
@@ -3282,6 +3531,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'subscription-lifecycle':
         result = await runSubscriptionLifecycle({ dryRun: req.query.dryRun === '1' });
         break;
+      // ── Platform console analytics (super-admin only: they read across tenants) ──
+      case 'tenant-usage-rollup': {
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runTenantUsageRollup({ dryRun: req.query.dryRun === '1' });
+        break;
+      }
+      case 'platform-metrics-rollup': {
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runPlatformMetricsRollup({
+          dryRun: req.query.dryRun === '1',
+          month: typeof req.query.month === 'string' ? req.query.month : undefined,
+          backfill: req.query.backfill === '1',
+        });
+        break;
+      }
       // ── GDPR/DPA: export or erase one tenant. Super-admin only; delete also
       // requires confirm=<businessId> so it can never fire by accident. ──
       case 'tenant-export': {
@@ -3414,7 +3682,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, campaignSteps, whmcs, inquiryReminders, projectRollup, leadCadence, subscriptions, reportSchedules, reportReminders] = await Promise.allSettled([
+        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, campaignSteps, whmcs, inquiryReminders, projectRollup, leadCadence, subscriptions, reportSchedules, reportReminders, tenantUsage, platformMetricsRun] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
           runOverdueReminders(),
@@ -3440,6 +3708,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           runSubscriptionLifecycle(),
           runReportSchedules(),
           runReportReminders(),
+          runTenantUsageRollup(),
+          runPlatformMetricsRollup(),
         ]);
         const settled = (r: PromiseSettledResult<any>) =>
           r.status === 'fulfilled' ? r.value : { error: (r.reason as Error)?.message || 'failed' };
@@ -3467,6 +3737,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           projectSpendRollup: settled(projectRollup),
           leadCadenceSteps: settled(leadCadence),
           subscriptions: settled(subscriptions),
+          tenantUsage: settled(tenantUsage),
+          platformMetrics: settled(platformMetricsRun),
           reportSchedules: settled(reportSchedules),
           reportReminders: settled(reportReminders),
         };
@@ -3476,10 +3748,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social` });
     }
 
+    await recordJobRun({
+      job, ok: true, ms: Date.now() - startedAt, actorUid, manual: isManual,
+      dryRun: req.query.dryRun === '1', summary: result as Record<string, unknown>,
+    });
     return res.status(200).json({ success: true, job, ...result, timestamp: new Date().toISOString() });
   } catch (err: unknown) {
     const msg = err instanceof Error ? err.message : 'Gabim i panjohur';
     console.error(`[CRON] Gabim në job "${job}":`, err);
+    await recordJobRun({
+      job, ok: false, ms: Date.now() - startedAt, actorUid, manual: isManual,
+      dryRun: req.query.dryRun === '1', error: msg,
+    });
     return res.status(500).json({ error: msg, job });
   }
 }

@@ -2,7 +2,8 @@ import React, { useMemo, useState } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, Building2, Loader2, LogIn, Save, Users, CreditCard, SlidersHorizontal,
-  Globe, AlertTriangle, Download, Trash2, ShieldAlert,
+  Globe, AlertTriangle, Download, Trash2, ShieldAlert, Activity,
+  CalendarPlus, PauseCircle, PlayCircle, Mail, Bug,
 } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
@@ -15,7 +16,9 @@ import { useToast } from '../../hooks/use-toast';
 import { doc, setDoc, updateDoc, deleteDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
 import { MODULES, PLAN_LABELS, planIncludes } from '../../lib/modules';
-import { updateTenantPlan, setTenantModules, tenantMrr, daysUntil } from '../../lib/platformAdmin';
+import {
+  updateTenantPlan, setTenantModules, tenantMrr, daysUntil, tenantHealth, lastSeenLabel, HEALTH_META,
+} from '../../lib/platformAdmin';
 import { syncTenantClaims } from '../../lib/tenantClaims';
 import { setTenantOverride } from '../../lib/platformContext';
 import { STATUS_META, PLAN_LABEL, PLAN_SEATS, fmtDate, toDateInput } from './tenantMeta';
@@ -83,6 +86,7 @@ const TenantDetailView: React.FC = () => {
   const trialLeft = daysUntil(biz.trialEndsAt);
   const effectiveSeats = biz.limits?.seats ?? PLAN_SEATS[biz.plan || 'trial'] ?? 5;
   const disabled = new Set(biz.disabledModules || []);
+  const health = tenantHealth(biz);
 
   const savePlan = async () => {
     if (saving) return;
@@ -142,6 +146,58 @@ const TenantDetailView: React.FC = () => {
       toast({ title: 'Dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
     }
   };
+
+  /**
+   * Quick actions — the operations an operator repeats all day. Each one previously
+   * meant editing a field and pressing Ruaj (or leaving the app to find the customer in
+   * Stripe), which is how mistakes happen on the wrong tenant.
+   *
+   * They go through the SAME audited endpoint as the form, so nothing here is a
+   * shortcut around validation or the audit trail.
+   */
+  const quickAction = async (
+    key: string,
+    update: Parameters<typeof updateTenantPlan>[1],
+    successTitle: string,
+  ) => {
+    if (busy) return;
+    setBusy(key);
+    try {
+      await updateTenantPlan(businessId, update);
+      toast({ title: successTitle, description: 'Ndryshimi u regjistrua në audit.' });
+    } catch (err: any) {
+      toast({ title: 'Dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const extendTrial = (days: number) => {
+    // Extend from the CURRENT end date when it is still in the future, otherwise from
+    // today — extending an expired trial by 7 days must mean "7 days from now".
+    const current = biz.trialEndsAt instanceof Date ? biz.trialEndsAt : null;
+    const base = current && current.getTime() > Date.now() ? current : new Date();
+    const next = new Date(base.getTime() + days * 86_400_000);
+    return quickAction(`trial-${days}`, {
+      plan: biz.plan || 'trial',
+      status: 'trialing',
+      trialEndsAt: next.toISOString(),
+      note: `+${days} ditë provë nga konsola`,
+    }, `Provja u zgjat me ${days} ditë`);
+  };
+
+  /** Stripe dashboard link — test vs live decided by what the webhook recorded. */
+  const stripeUrl = biz.stripeCustomerId
+    ? `https://dashboard.stripe.com/${biz.stripeLivemode === false ? 'test/' : ''}customers/${biz.stripeCustomerId}`
+    : null;
+
+  // Sentry issues for THIS tenant only — possible because errors are tagged with the
+  // businessId. Hidden unless the org/project are configured.
+  const sentryOrg = import.meta.env.VITE_SENTRY_ORG as string | undefined;
+  const sentryProject = import.meta.env.VITE_SENTRY_PROJECT as string | undefined;
+  const sentryUrl = sentryOrg && sentryProject
+    ? `https://${sentryOrg}.sentry.io/issues/?query=${encodeURIComponent(`tenant:${businessId}`)}&statsPeriod=14d`
+    : null;
 
   const enterTenant = async () => {
     if (busy) return;
@@ -248,6 +304,66 @@ const TenantDetailView: React.FC = () => {
         </Button>
       </Card>
 
+      {/* Quick actions — one click each, all audited server-side. */}
+      <Card className="p-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] text-muted-foreground mr-1">Veprime të shpejta:</span>
+
+          {(biz.status === 'trialing' || biz.status === 'past_due' || !biz.status) && (
+            <Button size="sm" variant="outline" onClick={() => extendTrial(7)} disabled={!!busy}>
+              {busy === 'trial-7' ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />}
+              +7 ditë provë
+            </Button>
+          )}
+
+          {biz.status === 'suspended' ? (
+            <Button
+              size="sm" variant="outline" disabled={!!busy}
+              onClick={() => quickAction('reactivate', { plan: biz.plan || 'trial', status: 'active', note: 'Riaktivizim nga konsola' }, 'Tenanti u riaktivizua')}
+            >
+              {busy === 'reactivate' ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <PlayCircle className="h-3.5 w-3.5 mr-1.5" />}
+              Riaktivizo
+            </Button>
+          ) : (
+            <Button
+              size="sm" variant="outline" disabled={!!busy}
+              onClick={() => {
+                if (!window.confirm(`Pezullimi bllokon SHKRIMET për "${biz.name}" (rregullat e Firestore). Vazhdon?`)) return;
+                void quickAction('suspend', { plan: biz.plan || 'trial', status: 'suspended', note: 'Pezullim nga konsola' }, 'Tenanti u pezullua');
+              }}
+            >
+              {busy === 'suspend' ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1.5" /> : <PauseCircle className="h-3.5 w-3.5 mr-1.5" />}
+              Pezullo
+            </Button>
+          )}
+
+          {stripeUrl && (
+            <Button size="sm" variant="outline" asChild>
+              <a href={stripeUrl} target="_blank" rel="noopener noreferrer">
+                <CreditCard className="h-3.5 w-3.5 mr-1.5" />
+                Stripe{biz.stripeLivemode === false ? ' (test)' : ''}
+              </a>
+            </Button>
+          )}
+
+          {biz.ownerEmail && (
+            <Button size="sm" variant="outline" asChild>
+              <a href={`mailto:${biz.ownerEmail}?subject=${encodeURIComponent(`FivoCRM — ${biz.name || 'hapësira juaj'}`)}`}>
+                <Mail className="h-3.5 w-3.5 mr-1.5" /> Email pronarit
+              </a>
+            </Button>
+          )}
+
+          {sentryUrl && (
+            <Button size="sm" variant="outline" asChild>
+              <a href={sentryUrl} target="_blank" rel="noopener noreferrer">
+                <Bug className="h-3.5 w-3.5 mr-1.5" /> Gabimet (Sentry)
+              </a>
+            </Button>
+          )}
+        </div>
+      </Card>
+
       {/* Plan & lifecycle */}
       <Card className="p-4">
         <div className="flex items-center gap-2 mb-3">
@@ -346,6 +462,58 @@ const TenantDetailView: React.FC = () => {
             );
           })}
         </div>
+      </Card>
+
+      {/* Engagement — written by the tenant-usage-rollup cron, so the console never
+          has to read the tenant's own data to answer "are they using it?". */}
+      <Card className="p-4">
+        <div className="flex items-center gap-2 mb-3">
+          <Activity className="h-4 w-4 text-primary" />
+          <h2 className="font-semibold text-sm">Aktiviteti &amp; volumi</h2>
+          <span className={`ml-1 inline-flex items-center gap-1.5 text-[11px] ${HEALTH_META[health].cls}`}>
+            <span className={`h-1.5 w-1.5 rounded-full ${HEALTH_META[health].dot}`} />
+            {HEALTH_META[health].label}
+          </span>
+          {biz.usage?.computedAt && (
+            <span className="ml-auto text-[11px] text-muted-foreground">
+              matur {lastSeenLabel(biz.usage.computedAt)}
+            </span>
+          )}
+        </div>
+
+        {!biz.usage ? (
+          <p className="text-xs text-muted-foreground">
+            Nuk është matur ende. Ekzekuto punën <span className="font-mono">tenant-usage-rollup</span> (Punët → Analitika).
+          </p>
+        ) : (
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div>
+              <p className="text-[11px] text-muted-foreground">Aktiviteti i fundit</p>
+              <p className="text-sm font-medium">{lastSeenLabel(biz.usage.lastActivityAt)}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-muted-foreground">Përdorues aktivë (7d)</p>
+              <p className="text-sm font-medium">{biz.usage.activeUsers7d ?? 0}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-muted-foreground">Dokumente gjithsej</p>
+              <p className="text-sm font-medium tabular-nums">{(biz.usage.docsTotal ?? 0).toLocaleString('sq-AL')}</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-muted-foreground">Vendet</p>
+              <p className="text-sm font-medium">{activeMembers}/{effectiveSeats}</p>
+            </div>
+            {biz.usage.docCounts && (
+              <div className="col-span-2 sm:col-span-4 flex flex-wrap gap-1.5 pt-1">
+                {Object.entries(biz.usage.docCounts).map(([coll, n]) => (
+                  <Badge key={coll} variant="outline" className="text-[10px] font-normal">
+                    {coll}: {n < 0 ? '—' : n.toLocaleString('sq-AL')}
+                  </Badge>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
       </Card>
 
       {/* People + portal */}

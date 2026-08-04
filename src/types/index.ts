@@ -386,6 +386,23 @@ export interface Business {
   cancelAtPeriodEnd?: boolean;
   /** Seats included by the plan (see api/_billingPlans.ts PLAN_SEATS). */
   seats?: number;
+  /**
+   * What Stripe ACTUALLY bills, normalised to one month, in cents — written by the
+   * webhook from the subscription (yearly ÷ 12, quantity, coupons all applied). The
+   * console prefers this over the price-list estimate. 0 once the tenant stops paying.
+   */
+  mrrCents?: number;
+  billingCurrency?: string;
+  /** 'month' | 'year' | '3month' … as billed. */
+  billingInterval?: string;
+  billingQuantity?: number;
+  /** Stripe test vs live — decides which Stripe dashboard URL the console links to. */
+  stripeLivemode?: boolean;
+  /** Denormalised counts so the console never reads every tenant's members/teams. */
+  memberCount?: number;
+  teamCount?: number;
+  /** A team of this business, used when entering the workspace from the console. */
+  defaultTeamId?: string | null;
   /** Optional per-tenant overrides negotiated on an Enterprise contract. */
   limits?: {
     seats?: number;
@@ -394,6 +411,26 @@ export interface Business {
     storageMb?: number;
   };
   billingEmail?: string;
+  /** First time this tenant ever became `active` — the trial→paid conversion moment. */
+  activatedAt?: Date;
+  /** When the subscription was canceled (used for churn cohorts). */
+  canceledAt?: Date;
+  /**
+   * Engagement snapshot, written by the `tenant-usage-rollup` cron (never by the
+   * tenant). Without it the console cannot tell a live trial from a dead one, nor
+   * spot the tenant whose volume is driving platform cost.
+   */
+  usage?: {
+    /** Most recent write seen across the tenant's signal collections. */
+    lastActivityAt?: Date;
+    /** Distinct staff users who did something in the last 7 days. */
+    activeUsers7d?: number;
+    /** Cheap `count()` aggregations per collection — volume, not content. */
+    docCounts?: Record<string, number>;
+    /** Sum of the counts above — the single number to sort/alert on. */
+    docsTotal?: number;
+    computedAt?: Date;
+  };
   /** Nav paths disabled for this tenant (super-admin toggles per business). */
   disabledModules?: string[];
   /** Portal subdomain for this tenant: `<portalSubdomain>.fivocrm.com/portal`.
@@ -401,6 +438,35 @@ export interface Business {
   portalSubdomain?: string;
   createdAt: Date;
   updatedAt: Date;
+}
+
+/**
+ * One month of platform-level history (`platformMetrics/{YYYY-MM}`), written by the
+ * `platform-metrics-rollup` cron and readable only by a platform super-admin.
+ *
+ * The tenant list answers "what is true now"; this answers "are we growing" —
+ * signups, trial→paid conversion, churn and MRR over time.
+ */
+export interface PlatformMetrics {
+  id: string;              // 'YYYY-MM'
+  month: string;           // same as id, stored for queries
+  tenantsTotal: number;
+  tenantsActive: number;
+  tenantsTrialing: number;
+  tenantsPastDue: number;
+  tenantsSuspended: number;
+  tenantsCanceled: number;
+  /** Businesses created during the month. */
+  signups: number;
+  /** Tenants whose FIRST activation happened during the month (converted). */
+  activated: number;
+  /** Tenants canceled or suspended during the month. */
+  churned: number;
+  /** MRR in EUR at the time of the rollup (end of month once the month is over). */
+  mrr: number;
+  arr: number;
+  computedAt?: Date;
+  updatedAt?: Date;
 }
 
 export interface Team {

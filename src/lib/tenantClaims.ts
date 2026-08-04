@@ -48,7 +48,12 @@ export async function readTenantClaims(forceRefresh = false): Promise<TenantClai
 }
 
 /** Ask the server to (re)mint tenant claims, then refresh the local ID token. */
-export async function syncTenantClaims(opts?: { teamId?: string | null; businessId?: string | null }): Promise<TenantClaimValues | null> {
+export async function syncTenantClaims(opts?: {
+  teamId?: string | null;
+  businessId?: string | null;
+  /** Set when leaving another tenant's workspace, so the exit is audited too. */
+  endImpersonation?: boolean;
+}): Promise<TenantClaimValues | null> {
   const user = auth.currentUser;
   if (!user) return null;
   try {
@@ -59,6 +64,7 @@ export async function syncTenantClaims(opts?: { teamId?: string | null; business
       body: JSON.stringify({
         ...(opts?.teamId ? { teamId: opts.teamId } : {}),
         ...(opts?.businessId ? { businessId: opts.businessId } : {}),
+        ...(opts?.endImpersonation ? { endImpersonation: true } : {}),
       }),
     });
     if (!res.ok) return null;

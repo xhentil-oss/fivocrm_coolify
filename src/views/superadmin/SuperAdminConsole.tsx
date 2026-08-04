@@ -1,9 +1,10 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Routes, Route, NavLink, Navigate, Link } from 'react-router-dom';
-import { ShieldX, Building2, ScrollText, ArrowLeft, Loader2, Wrench } from 'lucide-react';
+import { ShieldX, Building2, ScrollText, ArrowLeft, Loader2, Wrench, KeyRound, RefreshCw } from 'lucide-react';
 import { usePermissions } from '../../contexts/PermissionsContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { useTenantOverride } from '../../lib/platformContext';
+import { readTenantClaims } from '../../lib/tenantClaims';
 import AuditLogPanel from '../../components/AuditLogPanel';
 import PlatformDashboard from './PlatformDashboard';
 import TenantDetailView from './TenantDetailView';
@@ -26,6 +27,54 @@ const NAV = [
   { to: '/superadmin/jobs', end: false, label: 'Punët', Icon: Wrench },
   { to: '/superadmin/audit', end: false, label: 'Audit', Icon: ScrollText },
 ];
+
+/**
+ * The console renders from `permissions.isSuperAdmin`, which comes from the build-time
+ * `VITE_SUPER_ADMIN_EMAILS` list — but every cross-tenant READ is authorized by the
+ * server-minted `superAdmin` custom claim. When the claim is missing or the ID token
+ * predates it, the console used to render normally and every list came back EMPTY with
+ * no explanation. This detects that mismatch and says what to do about it.
+ */
+const ClaimGuard: React.FC = () => {
+  const [state, setState] = useState<'checking' | 'ok' | 'missing'>('checking');
+  const [refreshing, setRefreshing] = useState(false);
+
+  const check = React.useCallback(async (force = false) => {
+    const claims = await readTenantClaims(force);
+    setState(claims?.superAdmin ? 'ok' : 'missing');
+  }, []);
+
+  useEffect(() => { void check(false); }, [check]);
+
+  if (state !== 'missing') return null;
+
+  return (
+    <div className="mx-4 sm:mx-6 mt-4 rounded-lg border border-amber-400/60 bg-amber-50 dark:border-amber-800 dark:bg-amber-950/40 p-3">
+      <div className="flex items-start gap-2">
+        <KeyRound className="h-4 w-4 text-amber-600 flex-shrink-0 mt-0.5" />
+        <div className="min-w-0 flex-1 space-y-1">
+          <p className="text-sm font-medium text-amber-900 dark:text-amber-200">
+            Token-i nuk mban claim-in <span className="font-mono">superAdmin</span>
+          </p>
+          <p className="text-[11px] text-amber-900/80 dark:text-amber-200/80">
+            Emaili i yt është në listën e super-adminëve, por autoriteti real vjen nga claim-i i
+            firmosur nga serveri. Pa të, leximet ndër-tenant kthejnë <strong>bosh</strong> — jo gabim.
+            Provo së pari rifreskimin e token-it; nëse mbetet, ekzekuto punën
+            <span className="font-mono"> set-superadmin-claim</span> dhe dil-hyr sërish.
+          </p>
+        </div>
+        <button
+          onClick={async () => { setRefreshing(true); await check(true); setRefreshing(false); }}
+          disabled={refreshing}
+          className="flex items-center gap-1.5 text-[11px] font-medium px-2.5 py-1.5 rounded-md border border-amber-400/70 text-amber-900 dark:text-amber-200 hover:bg-amber-100 dark:hover:bg-amber-900/40 flex-shrink-0 disabled:opacity-50"
+        >
+          {refreshing ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+          Rifresko token-in
+        </button>
+      </div>
+    </div>
+  );
+};
 
 const SuperAdminConsole: React.FC = () => {
   const permissions = usePermissions();
@@ -99,6 +148,9 @@ const SuperAdminConsole: React.FC = () => {
           ))}
         </nav>
       </header>
+
+      {/* Silent-failure guard: env says super-admin, the token may disagree. */}
+      <ClaimGuard />
 
       <main className="flex-1 min-h-0 overflow-y-auto">
         <Routes>

@@ -1,17 +1,23 @@
 import React, { useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Building2, Search, Users, LogIn, Loader2, ArrowUpDown, AlertTriangle, TrendingUp, Clock } from 'lucide-react';
+import { Building2, Search, Users, LogIn, Loader2, ArrowUpDown, AlertTriangle, TrendingUp, Clock, Plus } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Input } from '../../components/ui/input';
+import { Button } from '../../components/ui/button';
 import { useCollection } from '../../hooks/useFirestore';
 import { useToast } from '../../hooks/use-toast';
 import { getTimestampMs } from '../../lib/utils';
-import { platformStats, tenantMrr, daysUntil } from '../../lib/platformAdmin';
+import {
+  platformStats, tenantMrr, daysUntil, tenantHealth, lastSeenLabel, attentionList, HEALTH_META,
+} from '../../lib/platformAdmin';
+import PlatformTrend from './PlatformTrend';
+import TenantAttentionList from './TenantAttentionList';
+import CreateTenantDialog from './CreateTenantDialog';
 import { syncTenantClaims } from '../../lib/tenantClaims';
 import { setTenantOverride } from '../../lib/platformContext';
 import { STATUS_META, PLAN_LABEL, fmtDate } from './tenantMeta';
-import type { Team, TeamMember, Business } from '../../types';
+import type { Business } from '../../types';
 
 /**
  * Platform overview — every FivoCRM tenant, the money they represent, and the ones
@@ -22,31 +28,25 @@ import type { Team, TeamMember, Business } from '../../types';
  * the console, the only surface allowed to look outside the active business.
  */
 
-type SortKey = 'created' | 'name' | 'mrr' | 'members';
+type SortKey = 'created' | 'name' | 'mrr' | 'members' | 'activity';
 
 const PlatformDashboard: React.FC = () => {
   const { toast } = useToast();
   const navigate = useNavigate();
+  // ONE cross-tenant read. This used to also pull every tenant's `teamMembers` and
+  // `teams` on each page view — thousands of documents at scale, including staff salary
+  // fields — purely to show a member count and find a team to enter. Both now come
+  // denormalised on the business (maintained by tenant-usage-rollup + accept-invite).
   const { data: businesses, loading } = useCollection<Business>('businesses', { skipTeamFilter: true });
-  const { data: members } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true, skipBusinessFilter: true });
-  const { data: teams } = useCollection<Team>('teams', { skipTeamFilter: true, skipBusinessFilter: true });
 
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState<string>('all');
   const [sortKey, setSortKey] = useState<SortKey>('created');
   const [entering, setEntering] = useState<string | null>(null);
+  const [creating, setCreating] = useState(false);
 
   const stats = useMemo(() => platformStats(businesses || []), [businesses]);
-
-  // Active members per business (members carry businessId after the Phase 2 backfill).
-  const memberCount = useMemo(() => {
-    const m = new Map<string, number>();
-    (members || []).forEach(x => {
-      const bid = (x as any).businessId;
-      if (bid && x.status === 'Active') m.set(bid, (m.get(bid) || 0) + 1);
-    });
-    return m;
-  }, [members]);
+  const attention = useMemo(() => attentionList((businesses || []) as any), [businesses]);
 
   const rows = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -59,10 +59,12 @@ const PlatformDashboard: React.FC = () => {
       created: (a, b) => getTimestampMs(b.createdAt) - getTimestampMs(a.createdAt),
       name: (a, b) => (a.name || '').localeCompare(b.name || '', 'sq'),
       mrr: (a, b) => tenantMrr(b) - tenantMrr(a),
-      members: (a, b) => (memberCount.get(b.id) || 0) - (memberCount.get(a.id) || 0),
+      members: (a, b) => (b.memberCount || 0) - (a.memberCount || 0),
+      // Stalest first: the tenants most likely to churn are the ones to look at.
+      activity: (a, b) => getTimestampMs(a.usage?.lastActivityAt) - getTimestampMs(b.usage?.lastActivityAt),
     };
     return [...list].sort(by[sortKey]);
-  }, [businesses, search, statusFilter, sortKey, memberCount]);
+  }, [businesses, search, statusFilter, sortKey]);
 
   /**
    * Enter a tenant's workspace ("view as tenant").
@@ -76,7 +78,9 @@ const PlatformDashboard: React.FC = () => {
     if (entering) return;
     setEntering(biz.id);
     try {
-      const teamId = teams?.find((t: any) => t.businessId === biz.id)?.id || null;
+      // `defaultTeamId` is maintained by the rollup; without it the console would have
+      // to read every tenant's teams just to enter one.
+      const teamId = biz.defaultTeamId || null;
       const claims = await syncTenantClaims({ teamId, businessId: biz.id });
       if (!claims || claims.bid !== biz.id) {
         throw new Error('Serveri nuk e ndryshoi kontekstin. Dil dhe hyr sërish, pastaj provo përsëri.');
@@ -99,8 +103,18 @@ const PlatformDashboard: React.FC = () => {
 
   return (
     <div className="p-4 sm:p-6 max-w-6xl mx-auto">
-      <h1 className="text-xl font-bold mb-1">Tenantët</h1>
-      <p className="text-sm text-muted-foreground mb-5">Klientët e FivoCRM dhe gjendja e tyre komerciale.</p>
+      <div className="flex items-start justify-between gap-3 mb-5">
+        <div>
+          <h1 className="text-xl font-bold mb-1">Tenantët</h1>
+          <p className="text-sm text-muted-foreground">Klientët e FivoCRM dhe gjendja e tyre komerciale.</p>
+        </div>
+        {/* Sales-assisted onboarding — a tenant no longer has to come through /signup. */}
+        <Button size="sm" onClick={() => setCreating(true)} className="flex-shrink-0">
+          <Plus className="h-3.5 w-3.5 mr-1.5" /> Krijo tenant
+        </Button>
+      </div>
+
+      <CreateTenantDialog open={creating} onOpenChange={setCreating} />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
         {tiles.map(({ label, value, sub, Icon }) => (
@@ -114,6 +128,12 @@ const PlatformDashboard: React.FC = () => {
           </Card>
         ))}
       </div>
+
+      {/* Growth over time (platformMetrics) — the question the tiles above cannot answer. */}
+      <PlatformTrend />
+
+      {/* Who to act on today: commercial state crossed with real engagement. */}
+      <TenantAttentionList items={attention} />
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <div className="relative flex-1 min-w-[200px] max-w-sm">
@@ -130,11 +150,11 @@ const PlatformDashboard: React.FC = () => {
           {Object.entries(STATUS_META).map(([key, m]) => <option key={key} value={key}>{m.label}</option>)}
         </select>
         <button
-          onClick={() => setSortKey(k => (k === 'created' ? 'mrr' : k === 'mrr' ? 'members' : k === 'members' ? 'name' : 'created'))}
+          onClick={() => setSortKey(k => (k === 'created' ? 'mrr' : k === 'mrr' ? 'members' : k === 'members' ? 'activity' : k === 'activity' ? 'name' : 'created'))}
           className="h-9 px-3 flex items-center gap-1.5 rounded-md border border-border text-sm hover:bg-accent"
         >
           <ArrowUpDown className="h-3.5 w-3.5" />
-          {{ created: 'Më të rinjtë', mrr: 'MRR', members: 'Anëtarë', name: 'Emri' }[sortKey]}
+          {{ created: 'Më të rinjtë', mrr: 'MRR', members: 'Anëtarë', activity: 'Më të qetët', name: 'Emri' }[sortKey]}
         </button>
       </div>
 
@@ -145,6 +165,7 @@ const PlatformDashboard: React.FC = () => {
           const meta = STATUS_META[b.status || ''] || { label: b.status || '—', cls: 'bg-muted text-muted-foreground' };
           const trialLeft = b.status === 'trialing' ? daysUntil(b.trialEndsAt) : null;
           const mrr = tenantMrr(b);
+          const health = tenantHealth(b);
           return (
             <div key={b.id} className="flex items-center gap-3 p-4 hover:bg-accent/40 transition-colors">
               <Link to={`/superadmin/tenants/${b.id}`} className="flex items-center gap-3 min-w-0 flex-1">
@@ -152,17 +173,27 @@ const PlatformDashboard: React.FC = () => {
                   <Building2 className="h-4 w-4 text-muted-foreground" />
                 </div>
                 <div className="min-w-0 flex-1">
-                  <p className="font-medium text-sm truncate">{b.name || 'Pa emër'}</p>
+                  <p className="font-medium text-sm truncate flex items-center gap-1.5">
+                    {/* Engagement at a glance: paying and silent is the expensive case. */}
+                    <span
+                      className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${HEALTH_META[health].dot}`}
+                      title={`${HEALTH_META[health].label} · aktiviteti i fundit: ${lastSeenLabel(b.usage?.lastActivityAt)}`}
+                    />
+                    <span className="truncate">{b.name || 'Pa emër'}</span>
+                  </p>
                   <p className="text-xs text-muted-foreground truncate">{b.ownerEmail || '—'}</p>
                 </div>
-                <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground w-14">
-                  <Users className="h-3.5 w-3.5" /> {memberCount.get(b.id) || 0}
+                <div className="hidden sm:flex items-center gap-1.5 text-xs text-muted-foreground w-14" title="Anëtarë aktivë">
+                  <Users className="h-3.5 w-3.5" /> {b.memberCount ?? '—'}
                 </div>
                 <div className="hidden md:block text-xs w-20">{PLAN_LABEL[b.plan || 'trial'] || b.plan}</div>
                 <div className="hidden md:block text-xs text-muted-foreground w-16 tabular-nums">
                   {mrr ? `€${mrr}` : '—'}
                 </div>
-                <div className="hidden lg:block text-xs text-muted-foreground w-24">{fmtDate(b.createdAt)}</div>
+                <div className={`hidden lg:block text-xs w-28 ${HEALTH_META[health].cls}`} title="Aktiviteti i fundit">
+                  {lastSeenLabel(b.usage?.lastActivityAt)}
+                </div>
+                <div className="hidden xl:block text-xs text-muted-foreground w-24">{fmtDate(b.createdAt)}</div>
                 <div className="flex flex-col items-end gap-0.5 flex-shrink-0">
                   <Badge className={`${meta.cls} border-0 text-[10px]`}>{meta.label}</Badge>
                   {trialLeft !== null && (

@@ -194,6 +194,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
+  // Keep the console's denormalised member count fresh without waiting for the daily
+  // rollup (it is recomputed there, so an increment can never drift permanently).
+  try {
+    await db.collection('businesses').doc(businessId).set({
+      memberCount: admin.firestore.FieldValue.increment(1),
+      updatedAt: now,
+    }, { merge: true });
+  } catch { /* non-critical: the rollup reconciles it */ }
+
   // Mark the invite accepted (idempotent).
   await inviteDoc.ref.update({
     status: 'Accepted',

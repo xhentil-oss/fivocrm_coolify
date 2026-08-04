@@ -1,7 +1,8 @@
 import React, { useMemo, useState } from 'react';
-import { Layers, Loader2, ShieldX } from 'lucide-react';
+import { Layers, Loader2, ShieldX, BarChart3, History } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Button } from '../../components/ui/button';
+import { Badge } from '../../components/ui/badge';
 import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 import { useCollection } from '../../hooks/useFirestore';
@@ -30,6 +31,13 @@ const PlatformJobsView: React.FC = () => {
   const [cidBackfilling, setCidBackfilling] = useState(false);
   const [cidProgress, setCidProgress] = useState('');
   const [hardeningJob, setHardeningJob] = useState<string | null>(null);
+  const [analyticsJob, setAnalyticsJob] = useState<string | null>(null);
+  /**
+   * Every hardening/analytics job accepts `dryRun=1` server-side (it reports what it
+   * WOULD change and writes nothing) — but until now the UI had no way to send it, so
+   * the safe option existed and was unreachable.
+   */
+  const [dryRun, setDryRun] = useState(false);
 
   const linkedTeams = useMemo(() => (teams || []).filter(t => (t as any).businessId).length, [teams]);
 
@@ -39,12 +47,15 @@ const PlatformJobsView: React.FC = () => {
     if (!user) return;
     try {
       const token = await user.getIdToken(true);
-      const res = await fetch(`/api/cron/run?job=${job}&manual=1`, {
+      const res = await fetch(`/api/cron/run?job=${job}&manual=1${dryRun ? '&dryRun=1' : ''}`, {
         method: 'GET', headers: { Authorization: `Bearer ${token}` },
       });
       const data = await res.json();
       if (!res.ok || data.error) throw new Error(data.error || `Gabim serveri (${res.status})`);
-      toast({ title: `${label} u krye`, description: describe(data) || 'Pa ndryshime.' });
+      toast({
+        title: dryRun ? `${label} — provë (pa shkrime)` : `${label} u krye`,
+        description: describe(data) || 'Pa ndryshime.',
+      });
     } catch (err: any) {
       toast({ title: `${label} dështoi`, description: err?.message || 'Provo përsëri.', variant: 'destructive' });
     }
@@ -69,6 +80,14 @@ const PlatformJobsView: React.FC = () => {
       ].filter(Boolean).join(' · ');
     });
     setHardeningJob(null);
+  };
+
+  /** Console analytics jobs (improvements #2 and #3) — read-only rollups, safe to re-run. */
+  const runAnalyticsJob = async (job: string, label: string, describe: (r: any) => string) => {
+    if (analyticsJob) return;
+    setAnalyticsJob(job);
+    await runJob(job, label, (data) => describe(data.result || data));
+    setAnalyticsJob(null);
   };
 
   /**
@@ -166,9 +185,20 @@ const PlatformJobsView: React.FC = () => {
   return (
     <div className="p-4 sm:p-6 max-w-6xl mx-auto">
       <h1 className="text-xl font-bold mb-1">Punët e platformës</h1>
-      <p className="text-sm text-muted-foreground mb-5">
-        Migrime dhe backfill-e mbi të gjithë platformën. Të gjitha janë idempotente — ri-ekzekutimi është i sigurt.
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-5">
+        <p className="text-sm text-muted-foreground max-w-xl">
+          Migrime dhe backfill-e mbi të gjithë platformën. Të gjitha janë idempotente — ri-ekzekutimi është i sigurt.
+        </p>
+        <label
+          className={`flex items-center gap-2 text-xs px-3 py-1.5 rounded-md border cursor-pointer select-none transition-colors ${
+            dryRun ? 'border-amber-400 bg-amber-50 dark:bg-amber-950/40 text-amber-900 dark:text-amber-200' : 'border-border text-muted-foreground hover:text-foreground'
+          }`}
+          title="Ekzekuto pa shkruar asgjë — raporton vetëm çfarë do të ndryshonte"
+        >
+          <input type="checkbox" checked={dryRun} onChange={e => setDryRun(e.target.checked)} className="h-3.5 w-3.5" />
+          Provë (dryRun)
+        </label>
+      </div>
 
       <Card className="p-4">
         <Row
@@ -274,8 +304,105 @@ const PlatformJobsView: React.FC = () => {
           4) <strong>Claims</strong>: bid/tid/roles në token-in e çdo anëtari (pas kësaj: <strong>dil dhe hyr sërish</strong>).
           Pastaj deploy-o rregullat — hapat në workspace/TENANT_ISOLATION_ENTERPRISE.md.
         </Row>
+
+        <Row
+          icon={<BarChart3 className="h-4 w-4 text-primary" />}
+          title="Analitika e platformës"
+          actions={
+            <>
+              <Button
+                size="sm" variant="outline" disabled={!!analyticsJob}
+                onClick={() => runAnalyticsJob('tenant-usage-rollup', 'Aktiviteti', (r) =>
+                  `${r.updated}/${r.tenants} tenantë u matën`)}
+              >
+                {analyticsJob === 'tenant-usage-rollup' ? <>{spin} …</> : 'Mat aktivitetin'}
+              </Button>
+              <Button
+                size="sm" variant="outline" disabled={!!analyticsJob}
+                onClick={() => runAnalyticsJob('platform-metrics-rollup', 'Metrikat', (r) =>
+                  `${(r.months || []).length} muaj u shkruan`)}
+              >
+                {analyticsJob === 'platform-metrics-rollup' ? <>{spin} …</> : 'Rifresko trendin'}
+              </Button>
+              <Button
+                size="sm" variant="outline" disabled={!!analyticsJob}
+                onClick={() => runAnalyticsJob('platform-metrics-rollup&backfill=1', 'Historiku', (r) =>
+                  `${(r.months || []).length} muaj u rindërtuan`)}
+              >
+                {analyticsJob === 'platform-metrics-rollup&backfill=1' ? <>{spin} …</> : 'Rindërto historikun'}
+              </Button>
+            </>
+          }
+        >
+          <strong>Mat aktivitetin</strong>: shkruan `businesses.usage` (aktiviteti i fundit, përdorues
+          aktivë 7d, numërime dokumentesh me `count()`), që lista e tenantëve të tregojë shëndetin.
+          <strong> Rifresko trendin</strong>: rillogarit muajin aktual në `platformMetrics`.
+          <strong> Rindërto historikun</strong>: rikthen të gjithë muajt nga datat e regjistrimit/
+          aktivizimit/anulimit — ekzekutohu një herë pas instalimit. Të dyja punët ekzekutohen
+          automatikisht çdo ditë brenda `run-all`.
+        </Row>
       </Card>
+
+      <JobRunHistory />
     </div>
+  );
+};
+
+/**
+ * The last runs, from `platformJobRuns` (append-only, super-admin readable).
+ * A toast answers "did it work?" for five seconds; this answers "when did the migration
+ * run, who ran it, and what did it change?" — which is the question you actually have.
+ */
+const JobRunHistory: React.FC = () => {
+  const { data: runs, loading, error } = useCollection<any>('platformJobRuns', {
+    skipTeamFilter: true,
+    skipBusinessFilter: true,
+  });
+
+  const rows = useMemo(() => {
+    return [...(runs || [])]
+      .sort((a, b) => (b.createdAt?.getTime?.() || 0) - (a.createdAt?.getTime?.() || 0))
+      .slice(0, 25);
+  }, [runs]);
+
+  if (loading || error) return null;
+
+  return (
+    <Card className="p-4 mt-4">
+      <div className="flex items-center gap-2 mb-3">
+        <History className="h-4 w-4 text-primary" />
+        <h2 className="font-semibold text-sm">Historiku i ekzekutimeve</h2>
+        <span className="text-xs text-muted-foreground">{rows.length ? `${rows.length} të fundit` : ''}</span>
+      </div>
+
+      {rows.length === 0 ? (
+        <p className="text-xs text-muted-foreground">
+          Asnjë ekzekutim i regjistruar ende. Çdo punë (manuale ose cron) shkruan një zë këtu.
+        </p>
+      ) : (
+        <div className="divide-y divide-border/60">
+          {rows.map(r => (
+            <div key={r.id} className="py-2 flex items-center gap-2 text-xs">
+              <span className={`h-1.5 w-1.5 rounded-full flex-shrink-0 ${r.ok ? 'bg-green-500' : 'bg-red-500'}`} />
+              <span className="font-mono truncate max-w-[38%]">{r.job}</span>
+              {r.dryRun && <Badge variant="outline" className="text-[10px]">provë</Badge>}
+              {!r.manual && <Badge variant="outline" className="text-[10px]">cron</Badge>}
+              <span className="text-muted-foreground truncate flex-1">
+                {r.ok
+                  ? Object.entries(r.summary || {}).slice(0, 4).map(([k, v]) => `${k}: ${v}`).join(' · ')
+                  : (r.error || 'dështoi')}
+              </span>
+              <span className="text-muted-foreground tabular-nums flex-shrink-0">
+                {Math.round((r.durationMs || 0) / 100) / 10}s
+              </span>
+              <span className="text-muted-foreground flex-shrink-0 hidden sm:inline">
+                {r.createdAt instanceof Date ? r.createdAt.toLocaleString('sq-AL') : ''}
+              </span>
+            </div>
+          ))}
+        </div>
+      )}
+    </Card>
   );
 };
 

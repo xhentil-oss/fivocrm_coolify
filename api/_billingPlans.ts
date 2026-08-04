@@ -51,6 +51,60 @@ export function seatsForPlan(plan: string | undefined): number {
   return PLAN_SEATS[plan || 'trial'] ?? PLAN_SEATS.trial;
 }
 
+/**
+ * Normalised monthly revenue for a Stripe subscription, in cents.
+ *
+ * The console's MRR used to be derived from our own price catalogue
+ * (`PLANS[plan].monthlyEur`), which silently ignores everything that makes a real
+ * invoice differ from the list price:
+ *   - yearly billing (10 months charged → MRR is annual ÷ 12, not the monthly price),
+ *   - `interval_count` (quarterly / every-6-months plans),
+ *   - quantity (per-seat subscriptions),
+ *   - coupons (`percent_off` / `amount_off`).
+ *
+ * Everything here comes from the subscription object itself, so what the console shows
+ * is what Stripe bills. Returns null when the amount cannot be determined (metered
+ * prices with no unit_amount), so callers can fall back to the catalogue estimate.
+ */
+export function monthlyAmountCents(sub: {
+  items?: { data?: Array<any> };
+  discount?: any;
+  currency?: string;
+}): { mrrCents: number; currency: string; interval: string; quantity: number } | null {
+  const item = sub?.items?.data?.[0];
+  const price = item?.price;
+  const unit = typeof price?.unit_amount === 'number' ? price.unit_amount : null;
+  if (unit === null) return null;
+
+  const quantity = typeof item?.quantity === 'number' && item.quantity > 0 ? item.quantity : 1;
+  const interval: string = price?.recurring?.interval || 'month';
+  const intervalCount: number = price?.recurring?.interval_count || 1;
+
+  // Months covered by one charge → the divisor that turns it into a monthly figure.
+  const monthsPerCharge =
+    (interval === 'year' ? 12 : interval === 'week' ? 1 / 4.345 : interval === 'day' ? 1 / 30 : 1) * intervalCount;
+
+  let gross = unit * quantity;
+
+  // Coupons are part of what the tenant actually pays.
+  const coupon = sub?.discount?.coupon;
+  if (coupon) {
+    if (typeof coupon.percent_off === 'number' && coupon.percent_off > 0) {
+      gross = gross * (1 - coupon.percent_off / 100);
+    } else if (typeof coupon.amount_off === 'number' && coupon.amount_off > 0) {
+      gross = Math.max(0, gross - coupon.amount_off);
+    }
+  }
+
+  const mrrCents = Math.round(gross / (monthsPerCharge || 1));
+  return {
+    mrrCents,
+    currency: (price?.currency || sub?.currency || 'eur').toLowerCase(),
+    interval: intervalCount > 1 ? `${intervalCount}${interval}` : interval,
+    quantity,
+  };
+}
+
 /** Map a Stripe subscription status onto the tenant lifecycle status. */
 export function tenantStatusFromStripe(stripeStatus: string): 'active' | 'trialing' | 'past_due' | 'canceled' {
   switch (stripeStatus) {

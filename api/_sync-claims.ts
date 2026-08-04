@@ -33,7 +33,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(401).json({ error: 'Invalid token' });
   }
 
-  const body = (req.body || {}) as { teamId?: unknown; businessId?: unknown };
+  const body = (req.body || {}) as { teamId?: unknown; businessId?: unknown; endImpersonation?: unknown };
   const preferTeamId = typeof body.teamId === 'string' && body.teamId ? body.teamId : null;
   const wantedBusinessId = typeof body.businessId === 'string' && body.businessId ? body.businessId : null;
 
@@ -44,8 +44,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(403).json({ error: 'Only a platform super-admin may switch business context.' });
   }
 
+  // Leaving a tenant is as interesting as entering one: without this the audit trail
+  // shows an operator walking into a customer's workspace and never coming out.
+  const endingImpersonation = body.endImpersonation === true;
+
   try {
     const claims = await syncTenantClaims(decoded.uid, decoded.email, { preferTeamId, preferBusinessId });
+
+    if (endingImpersonation) {
+      await writeAudit({
+        // The business being LEFT is what matters for that tenant's trail.
+        businessId: (typeof body.businessId === 'string' && body.businessId) || null,
+        actorUid: decoded.uid,
+        actorEmail: decoded.email || null,
+        action: 'claims.impersonate_end',
+        target: 'business:left',
+        meta: { backTo: claims.bid || null },
+      });
+    }
 
     if (preferBusinessId) {
       await writeAudit({

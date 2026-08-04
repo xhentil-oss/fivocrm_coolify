@@ -82,6 +82,14 @@ before(async () => {
     await setDoc(doc(db, 'counters', `invoices_${VICTIM_TEAM}`), { last: 42 });
     await setDoc(doc(db, 'auditLogs', 'auditVictim'), { businessId: VICTIM_BIZ, action: 'invite.accept', actorUid: 'vstaff' });
     await setDoc(doc(db, 'publicTenants', 'victim'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, name: 'Victim' });
+    // Operator job history (console improvement #11) — read-only, append-only.
+    await setDoc(doc(db, 'platformJobRuns', 'run1'), {
+      job: 'tenant-usage-rollup', ok: true, durationMs: 1200, manual: true, dryRun: false,
+    });
+    // Platform-wide monthly metrics (console improvement #2) — operator-only data.
+    await setDoc(doc(db, 'platformMetrics', '2026-07'), {
+      month: '2026-07', tenantsTotal: 12, tenantsActive: 5, signups: 6, activated: 2, churned: 1, mrr: 300, arr: 3600,
+    });
     await setDoc(doc(db, 'teamInvites', 'invVictim'), {
       teamId: VICTIM_TEAM, businessId: VICTIM_BIZ, email: 'someone@victim.com', role: 'Admin',
       status: 'Pending', token: 'tok-victim', invitedByUserId: 'victimOwner',
@@ -516,4 +524,48 @@ test('29d. portal client reads their own order but not another tenant order', as
 test('29e. cross-tenant staff cannot read another tenant orders', async () => {
   const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
   await assertFails(getDoc(doc(alice, 'shopOrders', 'orderVictim')));
+});
+
+// ── platformMetrics: platform history is operator-only (console improvement #2) ──
+test('30a. a tenant cannot read platform-wide metrics', async () => {
+  // It would expose the size and shape of the whole customer base to one customer.
+  const alice = testEnv.authenticatedContext('alice', { email: 'alice@mine.com', bid: MY_BIZ, tid: MY_TEAM, roles: ['admin'] }).firestore();
+  await assertFails(getDoc(doc(alice, 'platformMetrics', '2026-07')));
+});
+
+test('30b. a super-admin reads platform metrics', async () => {
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  await assertSucceeds(getDoc(doc(sa, 'platformMetrics', '2026-07')));
+});
+
+test('30c. nobody writes platform metrics from a client — not even a super-admin', async () => {
+  // The rollup cron owns this collection through the Admin SDK; a client write would
+  // let someone fake the growth numbers the business is steered by.
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  await assertFails(setDoc(doc(sa, 'platformMetrics', '2026-07'), { mrr: 999999 }, { merge: true }));
+  const alice = testEnv.authenticatedContext('alice', { email: 'alice@mine.com', bid: MY_BIZ }).firestore();
+  await assertFails(setDoc(doc(alice, 'platformMetrics', '2026-08'), { mrr: 1 }));
+});
+
+test('31. usage rollup data rides on the business doc, so tenant isolation still applies', async () => {
+  // `businesses.usage` is written by the cron; a cross-tenant read of it must fail for
+  // the same reason any other cross-tenant business read does.
+  const alice = testEnv.authenticatedContext('alice', { email: 'alice@mine.com', bid: MY_BIZ, tid: MY_TEAM }).firestore();
+  await assertFails(getDoc(doc(alice, 'businesses', VICTIM_BIZ)));
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  await assertSucceeds(getDoc(doc(sa, 'businesses', VICTIM_BIZ)));
+});
+
+// ── platformJobRuns: the operations log must be unforgeable (improvement #11) ──
+test('32a. a tenant cannot read the platform job history', async () => {
+  const alice = testEnv.authenticatedContext('alice', { email: 'alice@mine.com', bid: MY_BIZ, tid: MY_TEAM, roles: ['admin'] }).firestore();
+  await assertFails(getDoc(doc(alice, 'platformJobRuns', 'run1')));
+});
+
+test('32b. a super-admin reads it but cannot write or rewrite it', async () => {
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  await assertSucceeds(getDoc(doc(sa, 'platformJobRuns', 'run1')));
+  // An operations log you can edit is worthless when reconstructing what a migration did.
+  await assertFails(setDoc(doc(sa, 'platformJobRuns', 'run1'), { ok: false }, { merge: true }));
+  await assertFails(setDoc(doc(sa, 'platformJobRuns', 'forged'), { job: 'never-ran', ok: true }));
 });

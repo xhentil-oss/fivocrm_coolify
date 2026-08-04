@@ -153,6 +153,113 @@ Delete requires `confirm=<businessId>`, is resumable, removes `teamSecrets`, the
 
 ---
 
+---
+
+## Part C - platform console analytics (improvements #2 and #3)
+
+Two daily rollups feed `/superadmin`. Both are super-admin gated, idempotent and safe
+to re-run; both are inside `run-all`, and both have a button in **Punët -> Analitika**.
+
+### C1. Tenant health (`tenant-usage-rollup`)
+
+Writes `businesses.usage` = `{ lastActivityAt, activeUsers7d, docCounts, docsTotal,
+computedAt }`. The console can now tell an engaged trial from a dead one, and see whose
+volume drives platform cost - without the operator's browser reading tenant data.
+
+Cost discipline: document counts use Firestore `count()` aggregations (billed per ~1000
+index entries, not per document) and freshness is one
+`orderBy(updatedAt desc).limit(1)` per signal collection. A handful of reads per tenant,
+regardless of tenant size.
+
+```bash
+curl -X POST "$APP/api/cron/run?job=tenant-usage-rollup&manual=1&dryRun=1" -H "Authorization: Bearer $ID_TOKEN"
+curl -X POST "$APP/api/cron/run?job=tenant-usage-rollup&manual=1"          -H "Authorization: Bearer $ID_TOKEN"
+```
+
+Health thresholds (days since the last write anywhere in the tenant), in
+`src/lib/platformAdmin.ts`: engaged <=3 - quiet <=14 - idle <=45 - dormant beyond that.
+A tenant younger than 2 days with no rollup reads as "unknown", never "abandoned".
+
+### C2. Platform trend (`platform-metrics-rollup`)
+
+Writes one document per month at `platformMetrics/{YYYY-MM}`: tenants by status,
+signups, `activated` (trial->paid conversions), `churned`, MRR/ARR. Rules:
+`read: if isSuperAdmin(); write: if false` - the cron owns it, so nobody can fake the
+numbers the business is steered by, and no tenant can read the shape of the customer base.
+
+Conversion and churn are counted from stamps the Stripe webhook now maintains:
+`activatedAt` (first ever activation, never overwritten) and `canceledAt`.
+
+**Run once after deploying** to rebuild history from existing signup/activation dates:
+
+```bash
+curl -X POST "$APP/api/cron/run?job=platform-metrics-rollup&manual=1&backfill=1" -H "Authorization: Bearer $ID_TOKEN"
+```
+
+Without the backfill the trend card shows "not computed yet" and tells the operator
+exactly which job to run.
+
+### C3. What the console shows now
+
+- **Trend row** - MRR with month-over-month delta + inline sparkline (no chart library),
+  signups this month, trial->paid conversion over 12 months, churn.
+- **"Kërkojnë veprim"** - a ranked work queue. A tenant that *still pays but stopped
+  using the product* outranks a trial that never started, because that is the revenue
+  actually at risk.
+- **Tenant list** - a health dot next to each name, a "last activity" column, and a new
+  "Më të qetët" sort (stalest first).
+- **Tenant detail** - an activity/volume card with per-collection counts.
+
+All eleven items from the console review are now implemented (see C4 below).
+
+### C4. Console operator upgrades (improvements #1, #6-#11)
+
+**#1 Real MRR.** `monthlyAmountCents()` (api/_billingPlans.ts) derives the monthly figure
+from the subscription Stripe actually bills: yearly / 12, `interval_count`, quantity and
+coupons (`percent_off` / `amount_off`) all applied. The webhook stores it as
+`businesses.mrrCents` (+ `billingCurrency`, `billingInterval`, `billingQuantity`,
+`stripeLivemode`); `tenantMrr()` prefers it and falls back to the price list for tenants
+that predate the field, so no tenant ever shows a blank. Cancellation sets it to 0.
+
+**#6 Quick actions** on the tenant page: `+7 ditë provë` (extends from the current end
+date, or from today when the trial already lapsed), `Pezullo` / `Riaktivizo` (with a
+confirm, because suspension freezes writes at the rules layer), `Stripe` (test vs live
+chosen from `stripeLivemode`), `Email pronarit`, and `Gabimet (Sentry)` filtered by
+`tenant:<businessId>` - possible because errors are tagged with the tenant. Everything
+goes through the same audited `/api/platform-admin` endpoint as the form.
+
+Set `VITE_SENTRY_ORG` + `VITE_SENTRY_PROJECT` to enable the Sentry button; without them
+it stays hidden rather than linking somewhere useless.
+
+**#7 Time-boxed impersonation.** Entering a tenant now lasts 60 minutes
+(`IMPERSONATION_MINUTES`), shows a countdown in the banner, can be extended by 30
+minutes, and expires on its own - a tab left open overnight is no longer sitting inside a
+customer's workspace. Leaving re-mints the operator's own claims and records
+`claims.impersonate_end`, so the audit trail has both halves of the visit.
+
+**#8 Missing-claim guard.** The console renders from the build-time
+`VITE_SUPER_ADMIN_EMAILS` list, but every cross-tenant read is authorised by the signed
+`superAdmin` claim. When they disagree the console used to render normally with empty
+lists; it now says so and offers a token refresh.
+
+**#9 Create tenant from the console.** Business + default team + settings + an Admin
+invite for the owner (no pre-created account, no password in a support thread). Refuses a
+duplicate for an owner email that already has a business unless confirmed. The membership
+is still created only by `/api/accept-invite`, so there remains ONE server-validated path
+into a tenant.
+
+**#10 Console read cost.** The dashboard read every tenant's `businesses` + `teamMembers`
++ `teams` on each page view - thousands of documents at scale, including staff salary
+fields - to show a member count and find a team to enter. `memberCount`, `teamCount` and
+`defaultTeamId` are now denormalised on the business (recomputed by the usage rollup,
+incremented on invite acceptance), so the console reads ONE collection.
+
+**#11 Job history + dryRun.** Every execution (manual or cron) appends to
+`platformJobRuns` - job, actor, duration, ok/error, a compacted summary - readable by the
+console and immutable (`write: if false`). The Jobs view gained a **Provë (dryRun)**
+switch: every hardening/analytics job already accepted `dryRun=1` server-side, but the UI
+had no way to send it, so the safe option existed and was unreachable.
+
 ## Still open (deliberately)
 
 - **Cursor pagination adoption** — `useCursorCollection` + the composite indexes are in,

@@ -2,7 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import Stripe from 'stripe';
 import admin, { adminDb as db } from './_firebaseAdmin.js';
 import { whmcsConfigured, pushInvoicePayment } from './_whmcs.js';
-import { planForPriceId, seatsForPlan, tenantStatusFromStripe } from './_billingPlans.js';
+import { planForPriceId, seatsForPlan, tenantStatusFromStripe, monthlyAmountCents } from './_billingPlans.js';
 import { writeAudit } from './_audit.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
@@ -193,16 +193,37 @@ async function handleSubscriptionEvent(event: Stripe.Event): Promise<void> {
     let plan: string | null = null;
     let periodEnd: number | null = null;
     let stripeStatus = 'active';
+    let money: ReturnType<typeof monthlyAmountCents> = null;
+    let livemode: boolean | null = null;
     if (subscriptionId) {
       const sub = await stripe.subscriptions.retrieve(subscriptionId);
       plan = planForPriceId(sub.items.data[0]?.price?.id) || (session.metadata?.plan as string) || null;
       periodEnd = ((sub as any).current_period_end as number) || null;
       stripeStatus = sub.status;
+      // What Stripe actually bills, normalised to a month — the console's MRR.
+      money = monthlyAmountCents(sub as any);
+      livemode = (sub as any).livemode ?? null;
     }
+    // `activatedAt` marks the trial→paid conversion, ONCE. The platform-metrics
+    // rollup counts conversions by this stamp, so it must never be overwritten by a
+    // later renewal (hence the read before the write).
+    const bizBefore = await db.collection('businesses').doc(businessId).get();
+    const alreadyActivated = !!(bizBefore.data() as any)?.activatedAt;
+    const nextStatus = tenantStatusFromStripe(stripeStatus);
+
     await db.collection('businesses').doc(businessId).set({
       stripeCustomerId: typeof session.customer === 'string' ? session.customer : null,
       stripeSubscriptionId: subscriptionId,
+      ...(!alreadyActivated && nextStatus === 'active' ? { activatedAt: now } : {}),
+      canceledAt: admin.firestore.FieldValue.delete(),
       ...(plan ? { plan, seats: seatsForPlan(plan) } : {}),
+      ...(money ? {
+        mrrCents: money.mrrCents,
+        billingCurrency: money.currency,
+        billingInterval: money.interval,
+        billingQuantity: money.quantity,
+      } : {}),
+      ...(livemode === null ? {} : { stripeLivemode: livemode }),
       status: tenantStatusFromStripe(stripeStatus),
       ...(periodEnd ? { currentPeriodEnd: admin.firestore.Timestamp.fromMillis(periodEnd * 1000) } : {}),
       pastDueSince: admin.firestore.FieldValue.delete(),
@@ -241,14 +262,36 @@ async function handleSubscriptionEvent(event: Stripe.Event): Promise<void> {
     // The tier is kept on cancellation so the owner still sees what they had; access
     // is governed by `status`, not `plan`.
     if (plan && !deleted) { patch.plan = plan; patch.seats = seatsForPlan(plan); }
+    // MRR follows the subscription: a plan change, a seat change, a coupon or a switch
+    // to yearly all land here. Cancellation zeroes it — the tenant stopped paying.
+    if (deleted) {
+      patch.mrrCents = 0;
+    } else {
+      const money = monthlyAmountCents(sub as any);
+      if (money) {
+        patch.mrrCents = money.mrrCents;
+        patch.billingCurrency = money.currency;
+        patch.billingInterval = money.interval;
+        patch.billingQuantity = money.quantity;
+      }
+      if ((sub as any).livemode !== undefined) patch.stripeLivemode = (sub as any).livemode;
+    }
     if (periodEnd) patch.currentPeriodEnd = admin.firestore.Timestamp.fromMillis(periodEnd * 1000);
+    const snap = await db.collection('businesses').doc(businessId).get();
+    const before = (snap.data() as any) || {};
     if (status === 'past_due') {
       // Start the grace clock only once (the cron suspends when it runs out).
-      const snap = await db.collection('businesses').doc(businessId).get();
-      if (!(snap.data() as any)?.pastDueSince) patch.pastDueSince = now;
+      if (!before.pastDueSince) patch.pastDueSince = now;
     } else if (status === 'active') {
       patch.pastDueSince = admin.firestore.FieldValue.delete();
       patch.suspendedAt = admin.firestore.FieldValue.delete();
+      patch.canceledAt = admin.firestore.FieldValue.delete();
+      // First ever activation → the conversion moment the platform metrics count.
+      if (!before.activatedAt) patch.activatedAt = now;
+    } else if (status === 'canceled' && !before.canceledAt) {
+      // Churn cohort stamp (kept even if the tenant later resubscribes: a new
+      // activation clears it, so a month's churn count stays historically true).
+      patch.canceledAt = now;
     }
 
     await db.collection('businesses').doc(businessId).set(patch, { merge: true });
@@ -273,10 +316,14 @@ async function handleSubscriptionEvent(event: Stripe.Event): Promise<void> {
     if (!businessId) return;
 
     if (event.type === 'invoice.paid') {
+      const paidSnap = await db.collection('businesses').doc(businessId).get();
+      const paidBefore = (paidSnap.data() as any) || {};
       await db.collection('businesses').doc(businessId).set({
         status: 'active',
         pastDueSince: admin.firestore.FieldValue.delete(),
         suspendedAt: admin.firestore.FieldValue.delete(),
+        canceledAt: admin.firestore.FieldValue.delete(),
+        ...(paidBefore.activatedAt ? {} : { activatedAt: now }),
         lastPaymentAt: now,
         updatedAt: now,
       }, { merge: true });

@@ -50,6 +50,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const body = (req.body || {}) as Record<string, any>;
   const action = typeof body.action === 'string' ? body.action : '';
+
+  // `create-tenant` is the one action with no existing business to load.
+  if (action === 'create-tenant') {
+    try {
+      return await createTenantAction(res, body, decoded);
+    } catch (err: any) {
+      console.error('[platform-admin] create-tenant failed:', err?.message || err);
+      return res.status(500).json({ error: err?.message || 'Krijimi dështoi.' });
+    }
+  }
+
   const businessId = typeof body.businessId === 'string' ? body.businessId.trim() : '';
   if (!businessId) return res.status(400).json({ error: 'businessId mungon.' });
 
@@ -176,4 +187,134 @@ async function setModules(res: VercelResponse, ctx: Ctx) {
   });
 
   return res.status(200).json({ success: true });
+}
+
+/**
+ * Sales-assisted onboarding: create a tenant for someone who is not going to find the
+ * self-serve signup page.
+ *
+ * Until now a tenant could only be born from `/signup`, so onboarding a customer over
+ * the phone was impossible. This builds the same structure `src/lib/createTenant.ts`
+ * builds — business → default team → settings — and then invites the owner instead of
+ * pre-creating an account for them: the invite flow already proves the email belongs to
+ * them, and it never leaves a password lying around in a support conversation.
+ *
+ * The owner's membership is NOT created here; `/api/accept-invite` does that when they
+ * accept, which keeps ONE server-validated path to membership.
+ */
+async function createTenantAction(
+  res: VercelResponse,
+  body: Record<string, any>,
+  decoded: admin.auth.DecodedIdToken,
+) {
+  const name = typeof body.name === 'string' ? body.name.trim() : '';
+  const ownerEmail = typeof body.ownerEmail === 'string' ? body.ownerEmail.trim().toLowerCase() : '';
+  const plan = isPlan(body.plan) ? body.plan : 'trial';
+  const trialDays = Number.isInteger(Number(body.trialDays)) ? Math.min(180, Math.max(0, Number(body.trialDays))) : 14;
+
+  if (name.length < 2) return res.status(400).json({ error: 'Emri i biznesit është shumë i shkurtër.' });
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ownerEmail)) {
+    return res.status(400).json({ error: 'Email-i i pronarit është i pavlefshëm.' });
+  }
+
+  // Refuse a second tenant for the same owner email unless explicitly forced — the
+  // common mistake is creating a duplicate for a customer who already signed up.
+  if (body.force !== true) {
+    const existing = await db.collection('businesses').where('ownerEmail', '==', ownerEmail).limit(1).get();
+    if (!existing.empty) {
+      return res.status(409).json({
+        error: `Ky email ka tashmë një biznes ("${(existing.docs[0].data() as any).name || existing.docs[0].id}"). Dërgo force:true për ta krijuar gjithsesi.`,
+        existingBusinessId: existing.docs[0].id,
+      });
+    }
+  }
+
+  const now = admin.firestore.Timestamp.now();
+  const bizRef = db.collection('businesses').doc();
+  const teamRef = db.collection('teams').doc();
+
+  await bizRef.set({
+    name,
+    ownerEmail,
+    // No ownerId yet: it is set when the invited owner accepts. Until then the tenant
+    // has no owner uid, which is exactly the truth.
+    ownerId: null,
+    plan,
+    status: trialDays > 0 ? 'trialing' : 'active',
+    ...(trialDays > 0
+      ? { trialEndsAt: admin.firestore.Timestamp.fromMillis(Date.now() + trialDays * 86_400_000) }
+      : {}),
+    seats: seatsForPlan(plan),
+    memberCount: 0,
+    teamCount: 1,
+    defaultTeamId: teamRef.id,
+    createdAt: now,
+    updatedAt: now,
+    createdByUserId: decoded.uid,
+    createdBy: 'platform-console',
+  });
+
+  await teamRef.set({
+    name: 'Përgjithshëm',
+    businessId: bizRef.id,
+    // The operator owns the team until the invited admin accepts, otherwise nobody
+    // could issue the first invite (teamInvites requires team authority).
+    createdByUserId: decoded.uid,
+    ownerEmail,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await db.collection('teamSettings').doc(teamRef.id).set({
+    companyName: name,
+    companyEmail: ownerEmail,
+    eurAllRate: '100',
+    whatsappEnabled: false,
+    metaEnabled: false,
+    createdAt: now,
+    updatedAt: now,
+  }, { merge: true });
+
+  // Admin invite for the owner. `/api/accept-invite` verifies the email, applies the
+  // seat cap and mints the membership + claims.
+  const token = `pc-${bizRef.id}-${Math.random().toString(36).slice(2, 10)}`;
+  const inviteRef = db.collection('teamInvites').doc();
+  await inviteRef.set({
+    email: ownerEmail,
+    teamId: teamRef.id,
+    businessId: bizRef.id,
+    teamName: name,
+    role: 'Admin',
+    status: 'Pending',
+    token,
+    invitedByUserId: decoded.uid,
+    createdByUserId: decoded.uid,
+    expiresAt: admin.firestore.Timestamp.fromMillis(Date.now() + 14 * 86_400_000),
+    canAccessProjects: true, canAccessTasks: true, canAccessCRM: true,
+    canAccessInvoices: true, canAccessReports: true, canAccessSettings: true,
+    canAccessGoals: true, canAccessTeams: true, canAccessChat: true,
+    canAccessCustomers: true, canAccessServices: true, canAccessExpenses: true,
+    canAccessProfile: true,
+    createdAt: now,
+    updatedAt: now,
+  });
+
+  await writeAudit({
+    businessId: bizRef.id,
+    actorUid: decoded.uid,
+    actorEmail: decoded.email || null,
+    action: 'platform.tenant_created',
+    target: `business:${bizRef.id}`,
+    meta: { name, ownerEmail, plan, trialDays },
+  });
+
+  return res.status(200).json({
+    success: true,
+    businessId: bizRef.id,
+    teamId: teamRef.id,
+    inviteToken: token,
+    // The console shows this so the operator can send it by any channel; the email is
+    // sent separately by the client through /api/send-invite.
+    inviteUrl: `/join/${token}`,
+  });
 }
