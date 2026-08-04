@@ -56,7 +56,7 @@ const PACKAGES: Pkg[] = [
     name: 'Starter',
     price: '1.200 €',
     priceNote: '/ muaj + buxheti i reklamave',
-    audience: ['Projekte në fazë ndërtimi', 'Zhvillues pa matje të instaluar', 'Shitje që ecin me rekomandime'],
+    audience: ['Projekte në fazë ndërtimi', 'Profile pa aktivitet të rregullt', 'Shitje që ecin me rekomandime'],
     groups: [
       {
         title: 'Platformat dhe përmbajtja',
@@ -96,7 +96,7 @@ const PACKAGES: Pkg[] = [
     price: '1.900 €',
     priceNote: '/ muaj + buxheti i reklamave',
     badge: 'Popullor',
-    audience: ['Projekte në shitje aktive', 'Shitje ndaj Shqipërisë, Kosovës dhe diasporës', 'Ekipe që duan të dinë sa kushton një lead'],
+    audience: ['Projekte në shitje aktive', 'Shitje ndaj Shqipërisë, Kosovës dhe diasporës', 'Ekipe shitjeje që kërkojnë kontakte të vazhdueshme'],
     groups: [
       {
         title: 'Platformat dhe përmbajtja',
@@ -127,7 +127,7 @@ const PACKAGES: Pkg[] = [
         items: [
           'Lead-i mbërrin menjëherë në WhatsApp dhe në email',
           'Regjistrim automatik në CRM, me burimin dhe fushatën',
-          'Faqe hyrëse sipas tipologjisë, me formular dhe WhatsApp',
+          'LandingPage sipas tipologjisë, me formular dhe WhatsApp',
           'Menaxhim bazë i komenteve dhe i mesazheve',
           'Raport dyjavor: lead-e, kosto për lead, cilësia sipas burimit',
         ],
@@ -204,7 +204,7 @@ const PACKAGES: Pkg[] = [
         ],
       },
       {
-        title: 'Reklama në të gjithë rrugën e blerësit',
+        title: 'Reklamat në të gjitha platformat',
         items: [
           'Meta Ads, Google Ads dhe TikTok Ads',
           'YouTube Ads',
@@ -404,8 +404,8 @@ export default function RezidencaLandingPage() {
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <FadeIn>
             <div className="text-center mb-16">
-              <p className="text-sm font-semibold uppercase tracking-widest text-emerald-600 mb-3">Paketat</p>
-              <h2 className="text-3xl sm:text-4xl font-bold">Katër paketa — një zgjidhje për fazën e projektit tuaj</h2>
+              <p className="text-sm font-semibold uppercase tracking-widest text-emerald-600 mb-3">Çmimet</p>
+              <h2 className="text-3xl sm:text-4xl font-bold">Paketat dhe çmimet</h2>
               <p className="mt-4 text-gray-600 max-w-2xl mx-auto">
                 Nga 1.200 € deri në 4.900 € në muaj. Pa kontratë afatgjatë — mund të ndryshoni paketë kur dëshironi. Buxheti i reklamave paguhet drejtpërdrejt platformave (Meta, Google, TikTok) dhe nuk përfshihet; për projekte rezidenciale rekomandojmë 1.200 € – 3.000 € në muaj. Çmimet pa TVSH, sipas rastit.
               </p>
