@@ -26,13 +26,14 @@ interface QueryOptions {
   skipTeamFilter?: boolean; // For portal views and hooks that handle their own scoping
   limit?: number; // Server-side limit for non-team-scoped collections (ignored for team-scoped)
   skip?: boolean; // Skip the query entirely (e.g. when required params are not yet available)
-  // Opt-in: for a TEAM-SCOPED collection, push the `where` constraints to the
-  // server ALONGSIDE the teamId filter (default behaviour pushes only teamId and
-  // filters `where` client-side). Lets a query stay teamId-constrained — so it
-  // satisfies an `isTeamMember(resource.data.teamId)` read rule — while also
-  // narrowing reads (e.g. teamId + customerId). REQUIRES a matching composite
-  // index in firestore.indexes.json; deploy indexes BEFORE shipping a caller
-  // that sets this. See workspace/SECURITY_RULES_MIGRATION.md.
+  // Opt-in: for a TEAM-SCOPED collection, push `where` — AND `orderBy`/`limit` — to
+  // the server alongside the tenant filter (default behaviour pushes only the tenant
+  // key and shapes the rest client-side). Lets a query stay tenant-constrained — so it
+  // satisfies the read rule — while genuinely narrowing what is fetched, which is the
+  // only way to bound a read on a collection that grows forever (an audit stream) or
+  // to honour a `limit` at all. REQUIRES a matching composite index in
+  // firestore.indexes.json; deploy indexes BEFORE shipping a caller that sets this.
+  // See workspace/SECURITY_RULES_MIGRATION.md.
   teamScopedWhere?: boolean;
   // Opt OUT of the forced businessId isolation (businessIsolatedAlways). Used by
   // usePermissions' identity queries (teamMembers by userId/email) which must read
@@ -339,10 +340,18 @@ export function useCollection<T = DocumentData>(
       const constraints: QueryConstraint[] = [];
       if (isTeamScoped && scopeId) {
         // Server-side businessId filter — scopes reads to the active tenant's docs.
-        // Additional where/orderBy/limit are applied client-side to avoid composite index requirements.
+        // By default the additional where/orderBy/limit are applied client-side, to
+        // avoid requiring a composite index for every caller.
         constraints.push(where('businessId', '==', scopeId));
-        if (options?.teamScopedWhere && options?.where) {
-          options.where.forEach(w => constraints.push(where(w.field, w.operator as any, w.value)));
+        if (options?.teamScopedWhere) {
+          // The caller has opted in and promised a matching composite index, so the
+          // whole query goes to the server. `orderBy` + `limit` are pushed as well —
+          // without them a "300 newest" read is impossible on a business-scoped
+          // collection, because a client-side slice still downloads everything first.
+          // Append-only collections (reportEvents) make that unbounded over time.
+          (options.where || []).forEach(w => constraints.push(where(w.field, w.operator as any, w.value)));
+          if (options.orderBy) constraints.push(orderBy(options.orderBy.field, options.orderBy.direction || 'asc'));
+          if (options.limit && options.limit > 0) constraints.push(firestoreLimit(options.limit));
         }
       } else {
         if (options?.where) options.where.forEach(w => constraints.push(where(w.field, w.operator as any, w.value)));

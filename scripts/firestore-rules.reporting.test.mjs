@@ -42,6 +42,14 @@ const staffOf = (uid, bid, tid, roles = ['member'], email = `${uid}@x.com`) =>
 const portalOf = (uid, cid, email, pbid = MY_BIZ) =>
   testEnv.authenticatedContext(uid, { email, cid, pbid }).firestore();
 
+/**
+ * A plain MEMBER of our own tenant. The write rules used to accept anyone who was
+ * merely a member (`canCreateBusinessDoc` / `canManageBusinessDoc`), so this is the
+ * actor that could rewrite colleagues' reports and their own accountability score.
+ */
+const memberOf = (uid, bid, tid) =>
+  testEnv.authenticatedContext(uid, { email: `${uid}@x.com`, bid, tid, roles: ['member'] }).firestore();
+
 /** An admin of ANOTHER tenant — the cross-tenant attacker. */
 const outsider = () =>
   testEnv.authenticatedContext('mallory', {
@@ -172,6 +180,32 @@ before(async () => {
     await setDoc(doc(db, 'employeeReportScores', 'ersMine'), {
       businessId: MY_BIZ, userId: 'alice', periodKey: '2026-07', metrics: {},
       managerFeedback: 'Duhet te permiresoje raportimin',
+    });
+
+    // ── write-integrity seed (R12) ──
+    // `bob` is a plain Member of our tenant.
+    await setDoc(doc(db, 'teamMembers', `${MY_TEAM}_bob`), {
+      userId: 'bob', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active',
+    });
+    await setDoc(doc(db, 'users', 'bob'), { teamId: MY_TEAM, businessId: MY_BIZ });
+    // A draft authored by alice — bob is not involved in it in any role.
+    await setDoc(doc(db, 'reports', 'repAliceDraft'), {
+      businessId: MY_BIZ, kind: 'weekly-staff', status: 'draft',
+      title: 'Javori i Alices', authorUserId: 'alice', version: 1, deletedAt: null,
+    });
+    // A draft where bob IS the reviewer — he may edit that one.
+    await setDoc(doc(db, 'reports', 'repBobReviews'), {
+      businessId: MY_BIZ, kind: 'weekly-staff', status: 'draft',
+      title: 'Per shqyrtim nga bob', authorUserId: 'alice', reviewerUserId: 'bob',
+      version: 1, deletedAt: null,
+    });
+    await setDoc(doc(db, 'clientHealthScores', 'chsMine'), {
+      businessId: MY_BIZ, customerId: 'cust1', periodKey: '2026-07',
+      score: 80, category: 'healthy', factors: [],
+    });
+    await setDoc(doc(db, 'reportMetrics', 'metMine'), {
+      businessId: MY_BIZ, customerId: 'cust1', periodKey: '2026-07',
+      periodStart: '2026-07-01', periodEnd: '2026-07-31', values: { social_reach: 1000 },
     });
   });
 });
@@ -360,4 +394,89 @@ test('R11. a suspended tenant cannot create reports', async () => {
     businessId: 'bizSuspended', kind: 'client-monthly', status: 'draft',
     title: 'X', authorUserId: 'late', version: 1, deletedAt: null,
   }));
+});
+
+// ── R12. Write integrity: being a MEMBER is not authority ────────────────────
+// Reads were always scoped correctly; writes were not. `canCreateBusinessDoc()` and
+// `canManageBusinessDoc()` only ask "are you in this business", so a plain Member
+// could rewrite a colleague's report and author their own accountability score.
+
+test('R12a. a member cannot edit a colleague report they are not involved in', async () => {
+  const bob = memberOf('bob', MY_BIZ, MY_TEAM);
+  await assertFails(setDoc(doc(bob, 'reports', 'repAliceDraft'),
+    { title: 'Rishkruar nga bob' }, { merge: true }));
+});
+
+test('R12b. a member CAN edit a report where they are the reviewer', async () => {
+  const bob = memberOf('bob', MY_BIZ, MY_TEAM);
+  await assertSucceeds(setDoc(doc(bob, 'reports', 'repBobReviews'),
+    { title: 'Shqyrtuar' }, { merge: true }));
+});
+
+test('R12c. the author can still edit their own report', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(setDoc(doc(alice, 'reports', 'repAliceDraft'),
+    { title: 'Vazhdim' }, { merge: true }));
+});
+
+test('R12d. a member cannot create a report authored by someone else', async () => {
+  const bob = memberOf('bob', MY_BIZ, MY_TEAM);
+  await assertFails(setDoc(doc(bob, 'reports', 'repForgedAuthor'), {
+    businessId: MY_BIZ, kind: 'weekly-staff', status: 'draft',
+    title: 'Ne emer te Alices', authorUserId: 'alice', version: 1, deletedAt: null,
+    createdByUserId: 'bob',
+  }));
+});
+
+test('R12e. a member CAN create a report authored by themselves', async () => {
+  const bob = memberOf('bob', MY_BIZ, MY_TEAM);
+  await assertSucceeds(setDoc(doc(bob, 'reports', 'repBobOwn'), {
+    businessId: MY_BIZ, kind: 'weekly-staff', status: 'draft',
+    title: 'Javori i bobit', authorUserId: 'bob', version: 1, deletedAt: null,
+    createdByUserId: 'bob',
+  }));
+});
+
+// The one that matters most: a person must not be able to write their own score.
+test('R12f. a member cannot write their OWN accountability score', async () => {
+  const bob = memberOf('bob', MY_BIZ, MY_TEAM);
+  await assertFails(setDoc(doc(bob, 'employeeReportScores', `${MY_BIZ}_bob_2026-07`), {
+    businessId: MY_BIZ, userId: 'bob', periodKey: '2026-07',
+    metrics: {}, compositeScore: 100,
+  }));
+});
+
+test('R12g. a member cannot overwrite an existing accountability score', async () => {
+  const bob = memberOf('bob', MY_BIZ, MY_TEAM);
+  await assertFails(setDoc(doc(bob, 'employeeReportScores', 'ersMine'),
+    { compositeScore: 100, managerFeedback: 'Shkelqyer' }, { merge: true }));
+});
+
+test('R12h. a member cannot redraw a client health score', async () => {
+  const bob = memberOf('bob', MY_BIZ, MY_TEAM);
+  await assertFails(setDoc(doc(bob, 'clientHealthScores', 'chsMine'),
+    { score: 100, category: 'excellent' }, { merge: true }));
+});
+
+test('R12i. a member cannot hand-edit the metrics a client report is built from', async () => {
+  const bob = memberOf('bob', MY_BIZ, MY_TEAM);
+  await assertFails(setDoc(doc(bob, 'reportMetrics', 'metMine'),
+    { values: { social_reach: 999999 } }, { merge: true }));
+});
+
+test('R12j. an admin may still write all three (manual correction stays possible)', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(setDoc(doc(alice, 'employeeReportScores', 'ersMine'),
+    { managerFeedback: 'Sipas bisedes' }, { merge: true }));
+  await assertSucceeds(setDoc(doc(alice, 'clientHealthScores', 'chsMine'),
+    { score: 82 }, { merge: true }));
+  await assertSucceeds(setDoc(doc(alice, 'reportMetrics', 'metMine'),
+    { values: { social_reach: 1200 } }, { merge: true }));
+});
+
+test('R12k. tightening writes did not break the READ side', async () => {
+  const bob = memberOf('bob', MY_BIZ, MY_TEAM);
+  await assertSucceeds(getDoc(doc(bob, 'clientHealthScores', 'chsMine')));
+  await assertSucceeds(getDoc(doc(bob, 'reportMetrics', 'metMine')));
+  await assertSucceeds(getDoc(doc(bob, 'reports', 'repAliceDraft')));
 });

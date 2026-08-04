@@ -71,7 +71,6 @@ const AccountabilityView: React.FC = () => {
   );
 
   const rows = useMemo(() => members.map(m => {
-    const mine = (list: any[]) => list.filter(x => x.userId === m.userId || x.assignedToUserId === m.userId);
     const input = {
       userId: m.userId,
       dailyReports: dailyReports || [],
@@ -80,7 +79,6 @@ const AccountabilityView: React.FC = () => {
       timeEntries: (timeEntries || []).filter(t => t.userId === m.userId),
       now: weekOffset < 0 ? new Date(`${period.end}T23:59:59Z`) : now,
     };
-    void mine;
     return {
       member: m,
       metrics: computeEmployeeMetrics({ ...input, period }),

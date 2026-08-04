@@ -517,15 +517,40 @@ service cloud.firestore {
         && resource.data.get('deletedAt', null) == null;
     }
 
+    // May the caller edit THIS report? `canManageBusinessDoc()` alone was too broad:
+    // it grants any member of the tenant, so a Member could rewrite a colleague's
+    // weekly report — or an approved client report — with a direct SDK call. The UI's
+    // `canEditContent()` never protected that, it only hid the button.
+    //
+    // Involvement is read from the EXISTING document, so a writer cannot grant
+    // themselves access by putting their own uid into the update payload.
+    function involvedInReport() {
+      return isAuth() && (
+        resource.data.get('authorUserId', '') == request.auth.uid
+        || resource.data.get('reviewerUserId', '') == request.auth.uid
+        || resource.data.get('approverUserId', '') == request.auth.uid
+        || resource.data.get('accountManagerUserId', '') == request.auth.uid
+        || resource.data.get('projectManagerUserId', '') == request.auth.uid
+      );
+    }
+
     match /reports/{docId} {
       allow read: if isBusinessMember(resource.data.businessId)
         || portalMayReadReport()
         || isSuperAdmin();
-      allow create: if canCreateBusinessDoc();
-      // Staff edit within their tenant; the tenant key is immutable so an update can
-      // never move a report to another business. Client-driven fields are written by
-      // the server (admin SDK), which bypasses these rules by design.
-      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      // A report is created AS yourself. An admin may author on someone's behalf
+      // (e.g. filing for a member who is away); a plain member may not.
+      allow create: if canCreateBusinessDoc()
+        && (request.resource.data.get('authorUserId', '') == request.auth.uid
+            || isBusinessAdmin(request.resource.data.businessId)
+            || isSuperAdmin());
+      // Tenant key stays immutable, so an update can never move a report to another
+      // business. Client-driven fields are written by the server (admin SDK), which
+      // bypasses these rules by design.
+      allow update: if canManageBusinessDoc() && keepsBusinessId()
+        && (involvedInReport()
+            || isBusinessAdmin(resource.data.businessId)
+            || isSuperAdmin());
       // No hard delete from a client: the module soft-deletes (`deletedAt`) so that
       // reports tied to financial/legal records survive. Super-admin only, for GDPR
       // erasure via the tenant-delete job.
@@ -627,27 +652,42 @@ service cloud.firestore {
 
     // Raw metric values, including internal-only ones (margin, hours). Staff only —
     // the client sees metrics through a published report's redacted snapshot.
+    //
+    // WRITES are admin-only: these rows are produced by the integration jobs
+    // (`report-metrics-social`, and the GA4/Ads adapters to come) through the Admin
+    // SDK, which bypasses rules entirely. Nothing in the app writes them from a
+    // browser, so restricting this costs no functionality and stops a member from
+    // hand-editing the numbers a client report is built from.
     match /reportMetrics/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateBusinessDoc();
-      allow update: if canManageBusinessDoc() && keepsBusinessId();
-      allow delete: if canManageBusinessDoc();
+      allow create: if isBusinessAdmin(request.resource.data.businessId) || isSuperAdmin();
+      allow update: if (isBusinessAdmin(resource.data.businessId) || isSuperAdmin()) && keepsBusinessId();
+      allow delete: if isBusinessAdmin(resource.data.businessId) || isSuperAdmin();
     }
 
+    // Produced by the `client-health-rollup` job (Admin SDK). The app only READS it,
+    // so client-side writes are admin-only — a member must not be able to redraw a
+    // client's health score.
     match /clientHealthScores/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateBusinessDoc();
-      allow update: if canManageBusinessDoc() && keepsBusinessId();
-      allow delete: if canManageBusinessDoc();
+      allow create: if isBusinessAdmin(request.resource.data.businessId) || isSuperAdmin();
+      allow update: if (isBusinessAdmin(resource.data.businessId) || isSuperAdmin()) && keepsBusinessId();
+      allow delete: if isBusinessAdmin(resource.data.businessId) || isSuperAdmin();
     }
 
     // Employee accountability data is CONFIDENTIAL EMPLOYEE INFORMATION (§2): a
     // client must never reach it, and it is read within the tenant only.
+    //
+    // WRITES are admin-only, and this is the case where it matters most: with
+    // `canCreateBusinessDoc()` a Member could create or overwrite their OWN
+    // accountability score — or a colleague's — from the browser. The rows are
+    // produced by the rollup job via the Admin SDK; nothing in the app writes them.
+    // Manager feedback, when it gains a UI, must go through an admin-gated path.
     match /employeeReportScores/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateBusinessDoc();
-      allow update: if canManageBusinessDoc() && keepsBusinessId();
-      allow delete: if canManageBusinessDoc();
+      allow create: if isBusinessAdmin(request.resource.data.businessId) || isSuperAdmin();
+      allow update: if (isBusinessAdmin(resource.data.businessId) || isSuperAdmin()) && keepsBusinessId();
+      allow delete: if isBusinessAdmin(resource.data.businessId) || isSuperAdmin();
     }
 
     // ── Phase 4.3a: staff-only collections (never read by the client portal,
@@ -990,6 +1030,25 @@ service cloud.firestore {
     match /publicTenants/{subdomain} {
       allow read: if true;
       allow write: if isSuperAdmin();
+    }
+
+    // ── platformMetrics: one document per month of PLATFORM history ─────────────
+    // Signups, trial→paid conversions, churn and MRR across every tenant — a
+    // platform-operator artefact, not tenant data. No tenant may read it (it would
+    // expose the shape of the whole customer base), and nobody may write it from a
+    // client: the `platform-metrics-rollup` cron owns it via the Admin SDK.
+    match /platformMetrics/{month} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
+    }
+
+    // ── platformJobRuns: the operator's job history ─────────────────────────────
+    // Written by api/cron/run.ts (Admin SDK) after every execution. Read-only for the
+    // console and immutable: an operations log that can be edited is worthless when
+    // you are trying to reconstruct what a migration actually did.
+    match /platformJobRuns/{runId} {
+      allow read: if isSuperAdmin();
+      allow write: if false;
     }
 
     // ── auditLogs: append-only, per-tenant ─────────────────────────────────────

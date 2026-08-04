@@ -173,7 +173,10 @@ export function canTransition(
     if (!report.customerId || report.customerId !== actor.customerId) {
       return DENY('Raporti nuk i përket këtij klienti.');
     }
-    if ((to === 'client_rejected' || to === 'client_approved') && to === 'client_rejected' && !ctx.reason?.trim()) {
+    // Only a rejection needs a reason — an approval may be silent. (This used to test
+    // `to === 'client_rejected'` twice, once inside a wider disjunction that the second
+    // test made meaningless.)
+    if (to === 'client_rejected' && !ctx.reason?.trim()) {
       return DENY('Shkruani arsyen e refuzimit.');
     }
     return ALLOW;
@@ -397,8 +400,10 @@ export function transitionPatch(
     case 'published':
       patch.publishedAt = now;
       patch.hasUnpublishedChanges = false;
-      // A publish always pins a version — client sign-off references it (rule 9).
-      patch.version = (report.version || 1);
+      // The version is deliberately NOT touched here. It already holds the value the
+      // client's sign-off will reference (rule 9); it is bumped when a published report
+      // is REOPENED for editing, not on publish. This used to assign `report.version`
+      // back onto itself, which read as though publishing changed something.
       break;
     case 'sent':
       patch.sentAt = now;

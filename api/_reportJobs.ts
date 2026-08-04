@@ -317,6 +317,19 @@ export async function runReportSchedules(): Promise<{ created: number; skipped: 
           scheduleId: sched.id,
           generationKey: key,
           deletedAt: null,
+          // The ladders are COPIED onto the report, not looked up from the schedule
+          // at reminder time. Two reasons: `runReportReminders` sweeps reports by
+          // status+dueAt and would otherwise need a schedule read per report, and a
+          // schedule edited mid-period must not retroactively change how an
+          // already-generated report escalates.
+          //
+          // Before this, neither field was written at all, so `runReportReminders`
+          // always fell back to its defaults and every ladder a tenant configured was
+          // silently ignored.
+          ...(Array.isArray(sched.reminderOffsetsDays) && sched.reminderOffsetsDays.length
+            ? { reminderOffsetsDays: sched.reminderOffsetsDays } : {}),
+          ...(Array.isArray(sched.escalation) && sched.escalation.length
+            ? { escalation: sched.escalation } : {}),
           remindersSent: [],
           escalationsSent: [],
           createdAt: now2,

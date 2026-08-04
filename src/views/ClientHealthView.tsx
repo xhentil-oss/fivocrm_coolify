@@ -58,14 +58,20 @@ const ClientHealthView: React.FC = () => {
 
     // Worst project RAG among active projects, using the same suggestion engine the
     // project-status report uses — one definition of "at risk" across the product.
+    // `Project.status` is capitalised ('Completed', 'Archived', …). The filter here
+    // used to compare against lowercase 'completed', so it excluded nothing and
+    // finished work was still weighed as an open project.
+    const CLOSED_PROJECT_STATUSES = ['Completed', 'Archived', 'Cancelled'];
     const projectHealths = custProjects
-      .filter(p => (p.status || 'active') !== 'completed')
+      .filter(p => !CLOSED_PROJECT_STATUSES.includes(p.status))
       .map(p => suggestProjectHealth({
-        projectStatus: (p.status as any) === 'Completed' ? 'completed' : 'active',
+        projectStatus: 'active',
         daysToDeadline: p.endDate
           ? Math.round((p.endDate.getTime() - now.getTime()) / 86_400_000)
           : undefined,
-        budgetConsumed: p.budget && (p as any).spent ? (p as any).spent / p.budget : undefined,
+        // `spent` is a real field on Project — the previous `as any` cast hid that and
+        // made this look like a guess.
+        budgetConsumed: p.budget && p.spent ? p.spent / p.budget : undefined,
       }).health);
     const worst = projectHealths.includes('red') ? 'red'
       : projectHealths.includes('yellow') ? 'yellow'

@@ -27,7 +27,7 @@ import { toast } from '../hooks/use-toast';
 import { useAuth } from '../contexts/AuthContext';
 import { useCollection } from '../hooks/useFirestore';
 import { useUserNames } from '../hooks/useUserNames';
-import { useReports } from '../hooks/useReports';
+import { useReports, REPORT_LIST_LIMIT } from '../hooks/useReports';
 import {
   EDITABLE_STATUSES, PUBLISHED_STATUSES, REVIEW_STATUSES, SIDE_META, STATUS_LABELS,
   STATUS_TONE, sideOfKind, type ReportSide,
@@ -63,7 +63,7 @@ const ReportsView: React.FC = () => {
   const navigate = useNavigate();
   const { user } = useAuth();
   const {
-    reports, templates, loading, viewer, createFromTemplate,
+    reports, templates, loading, viewer, createFromTemplate, listTruncated,
   } = useReports();
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
   const { data: customers } = useCollection<Customer>('customers');
@@ -270,6 +270,15 @@ const ReportsView: React.FC = () => {
             </Button>
           )}
         </Card>
+      )}
+
+      {/* A cap that isn't stated reads as "there is nothing older". */}
+      {listTruncated && (
+        <p className="text-xs text-muted-foreground flex items-center gap-1.5">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          Shfaqen {REPORT_LIST_LIMIT} raportet më të fundit. Filtrat punojnë brenda tyre —
+          për raporte më të vjetra ngushtoni periudhën ose kërkoni sipas klientit.
+        </p>
       )}
 
       {/* Tabs */}

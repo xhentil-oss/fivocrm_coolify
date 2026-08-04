@@ -43,7 +43,7 @@ import {
 } from '../lib/reporting/permissions';
 import { checkReportQuality } from '../lib/reporting/quality';
 import { instantiateTemplate, pickTemplate } from '../lib/reporting/templates';
-import { buildPeriod } from '../lib/reporting/period';
+import { buildPeriod, parsePeriodKey, previousPeriod } from '../lib/reporting/period';
 import { buildKpiValues } from '../lib/reporting/kpi';
 import { reportDeepLink } from '../lib/deepLinks';
 import type {
@@ -92,6 +92,13 @@ const STAGE_FOR_STATUS: Partial<Record<ReportStatus, ReportApprovalStage>> = {
   client_rejected: 'client',
 };
 
+/**
+ * How many reports the hub loads at once. Filters and tabs operate WITHIN this window,
+ * so the number has to be comfortably above a working set — a year of weekly reports
+ * for a 10-person team plus monthly client reports is a few hundred.
+ */
+export const REPORT_LIST_LIMIT = 300;
+
 export interface UseReportsOptions {
   /**
    * Skip the reports LIST subscription. A detail view already holds its document
@@ -123,7 +130,13 @@ export function useReports(options: UseReportsOptions = {}) {
 
   const { data: rawReports, loading, error } = useCollection<Report>('reports', {
     skip: options.skipList,
+    // Bounded on the SERVER (see teamScopedWhere): the list used to read every report
+    // the tenant had ever produced, every time the hub opened. `REPORT_LIST_LIMIT` is
+    // surfaced in the UI when it is reached — a silent cap would read as "you have no
+    // older reports". Needs the (businessId, updatedAt desc) composite index.
+    teamScopedWhere: true,
     orderBy: { field: 'updatedAt', direction: 'desc' },
+    limit: REPORT_LIST_LIMIT,
   });
   // Reference data, always loaded — see UseReportsOptions.skipList for why.
   const { data: templates } = useCollection<ReportTemplate>('reportTemplates');
@@ -557,6 +570,8 @@ export function useReports(options: UseReportsOptions = {}) {
 
   return {
     reports,
+    /** True when the server window is full, i.e. older reports exist beyond it. */
+    listTruncated: (rawReports || []).length >= REPORT_LIST_LIMIT,
     templates: templates || [],
     kpis: kpis || [],
     schedules: schedules || [],
@@ -642,24 +657,21 @@ export function useReport(reportId: string | undefined) {
 const tms = (d: Date | undefined) => (d instanceof Date ? d.getTime() : 0);
 
 /**
- * Previous period key, by string arithmetic on the canonical form. Kept local rather
- * than importing `previousPeriod`, because that needs a full ReportPeriod and here
- * only the key is known.
+ * Previous period key for any canonical form.
+ *
+ * This was hand-rolled string arithmetic that only understood `YYYY-MM` and
+ * `YYYY-Qn`, so a WEEKLY report silently got no comparison period and its KPI cards
+ * showed no delta — the numbers looked collected but uncomparable. `parsePeriodKey`
+ * + `previousPeriod` already handle every cadence (including the ISO week-year edge
+ * cases) and are covered by the period tests, so this defers to them.
  */
 function previousPeriodKey(key: string): string | null {
-  const month = /^(\d{4})-(\d{2})$/.exec(key);
-  if (month) {
-    const y = Number(month[1]);
-    const m = Number(month[2]);
-    return m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+  try {
+    return previousPeriod(parsePeriodKey(key)).key;
+  } catch {
+    // Ad-hoc periods have no canonical predecessor.
+    return null;
   }
-  const quarter = /^(\d{4})-Q([1-4])$/.exec(key);
-  if (quarter) {
-    const y = Number(quarter[1]);
-    const q = Number(quarter[2]);
-    return q === 1 ? `${y - 1}-Q4` : `${y}-Q${q - 1}`;
-  }
-  return null;
 }
 
 export default useReports;
