@@ -103,7 +103,7 @@ const SQ: Copy = {
     items: [
       { title: 'Followers, por jo klientë', body: 'Keni ndjekës në Instagram, por nuk kthehen në blerës. Kontent pa strategji nuk sjell shitje — strategji pa ekzekutim nuk funksionon.' },
       { title: 'Nuk keni kohë', body: 'Postimet bëhen rastësisht ose fare nuk bëhen. Algoritmi i ndëshkon ata që nuk janë të rregullt — ju humbisni reach çdo ditë.' },
-      { title: 'Reklamat hangrën buxhetin', body: 'Keni investuar në Meta Ads por rezultatet ishin zhgënjyese. Reklamat pa strategji të saktë janë para të hedhura.' },
+      { title: 'Reklamat po konsumojnë buxhetin tuaj?', body: 'Keni investuar në Meta Ads, por rezultatet nuk kanë përmbushur pritshmëritë? Pa një strategji të mirëfilltë, optimizim të vazhdueshëm dhe targetim të saktë, reklamat mund të shpenzojnë buxhetin pa sjellë rezultatet e dëshiruara. Investoni me strategji, jo thjesht me buxhet.' },
       { title: 'Konkurrenti është kudo', body: 'Kompetitorët tuaj janë aktiv, postojnë çdo ditë dhe marrin klientët tuaj potencialë. Çdo ditë pa prezencë është mundësi e humbur.' },
     ] },
   packages: { kicker: 'Çmimet', title: '4 paketa — 1 zgjidhje e duhur për ju', sub: 'Nga 500€/muaj deri në 2,800€/muaj. Pa kontratë — ndryshoni kur dëshironi.', idealFor: 'Ideal për', notIncluded: 'Nuk përfshihet', note: '* Buxheti i reklamave paguhet direkt te platformat (Meta/Google/TikTok) — nuk përfshihet në çmim.', compareChoose: 'Zgjidh',
@@ -167,7 +167,7 @@ const EN: Copy = {
     items: [
       { title: 'Followers, but not clients', body: 'You have Instagram followers, but they don\'t turn into buyers. Content without strategy doesn\'t sell — strategy without execution doesn\'t work.' },
       { title: 'You have no time', body: 'Posts happen randomly or not at all. The algorithm punishes those who aren\'t consistent — you lose reach every day.' },
-      { title: 'Ads ate the budget', body: 'You invested in Meta Ads but the results disappointed. Ads without a precise strategy are money thrown away.' },
+      { title: 'Are ads consuming your budget?', body: 'You invested in Meta Ads, but the results fell short of expectations? Without a sound strategy, continuous optimisation and precise targeting, ads can spend the budget without delivering the results you want. Invest with strategy, not with budget alone.' },
       { title: 'Competitors are everywhere', body: 'Your competitors are active, posting daily and taking your potential clients. Every day without presence is a lost opportunity.' },
     ] },
   packages: { kicker: 'Pricing', title: '4 packages — 1 right solution for you', sub: 'From €500/month up to €2,800/month. No contract — change whenever you want.', idealFor: 'Ideal for', notIncluded: 'Not included', note: '* Ad budget is paid directly to the platforms (Meta/Google/TikTok) — not included in the price.', compareChoose: 'Choose',
@@ -231,7 +231,7 @@ const IT: Copy = {
     items: [
       { title: 'Follower, ma non clienti', body: 'Hai follower su Instagram, ma non si trasformano in acquirenti. Contenuti senza strategia non vendono — la strategia senza esecuzione non funziona.' },
       { title: 'Non hai tempo', body: 'I post escono a caso o non escono affatto. L\'algoritmo punisce chi non è costante — perdi reach ogni giorno.' },
-      { title: 'Le ads hanno divorato il budget', body: 'Hai investito in Meta Ads ma i risultati hanno deluso. Le ads senza una strategia precisa sono soldi buttati.' },
+      { title: 'Le ads stanno consumando il tuo budget?', body: 'Hai investito in Meta Ads, ma i risultati non hanno soddisfatto le aspettative? Senza una strategia solida, ottimizzazione continua e targeting preciso, le ads possono spendere il budget senza portare i risultati desiderati. Investi con strategia, non solo con budget.' },
       { title: 'I concorrenti sono ovunque', body: 'I tuoi concorrenti sono attivi, pubblicano ogni giorno e si prendono i tuoi clienti potenziali. Ogni giorno senza presenza è un\'opportunità persa.' },
     ] },
   packages: { kicker: 'Prezzi', title: '4 pacchetti — 1 soluzione giusta per te', sub: 'Da 500€/mese fino a 2.800€/mese. Nessun contratto — cambia quando vuoi.', idealFor: 'Ideale per', notIncluded: 'Non incluso', note: '* Il budget pubblicitario si paga direttamente alle piattaforme (Meta/Google/TikTok) — non incluso nel prezzo.', compareChoose: 'Scegli',
