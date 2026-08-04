@@ -1495,6 +1495,48 @@
           "order": "DESCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "reportComments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "businessId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "reportId",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "reportApprovals",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "businessId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "reportId",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "collectionGroup": "reportEvents",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "businessId",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "reportId",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []

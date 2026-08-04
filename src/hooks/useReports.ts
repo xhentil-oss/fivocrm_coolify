@@ -93,8 +93,18 @@ const STAGE_FOR_STATUS: Partial<Record<ReportStatus, ReportApprovalStage>> = {
 };
 
 export interface UseReportsOptions {
-  /** Skip the collection subscription (detail views that already have the doc). */
-  skip?: boolean;
+  /**
+   * Skip the reports LIST subscription. A detail view already holds its document
+   * via `useDocument`, so re-subscribing to every report is pure waste.
+   *
+   * It does NOT skip the reference data (templates, KPIs, schedules). It used to —
+   * a single `skip` flag gated all four queries — and the result was that the report
+   * editor received `kpis: []`, so the KPI picker permanently claimed "Nuk ka KPI
+   * aktive" even with the full 121-KPI catalog installed, and `pullMetrics` could
+   * never match a referenced id and always threw. The editor cannot function without
+   * that catalog, so it is always loaded.
+   */
+  skipList?: boolean;
 }
 
 export function useReports(options: UseReportsOptions = {}) {
@@ -112,12 +122,13 @@ export function useReports(options: UseReportsOptions = {}) {
   const notificationsApi = useMutation<any>('notifications');
 
   const { data: rawReports, loading, error } = useCollection<Report>('reports', {
-    skip: options.skip,
+    skip: options.skipList,
     orderBy: { field: 'updatedAt', direction: 'desc' },
   });
-  const { data: templates } = useCollection<ReportTemplate>('reportTemplates', { skip: options.skip });
-  const { data: kpis } = useCollection<ReportKpi>('reportKpis', { skip: options.skip });
-  const { data: schedules } = useCollection<ReportSchedule>('reportSchedules', { skip: options.skip });
+  // Reference data, always loaded — see UseReportsOptions.skipList for why.
+  const { data: templates } = useCollection<ReportTemplate>('reportTemplates');
+  const { data: kpis } = useCollection<ReportKpi>('reportKpis');
+  const { data: schedules } = useCollection<ReportSchedule>('reportSchedules');
 
   /** The current user, as the reporting layer sees them. */
   const viewer: ReportViewer = useMemo(() => ({
@@ -568,23 +579,46 @@ export function useReports(options: UseReportsOptions = {}) {
   };
 }
 
-/** One report + its thread, versions, approvals and audit trail. */
+/**
+ * One report + its thread, versions, approvals and audit trail.
+ *
+ * Every query sets `teamScopedWhere: true`, which is load-bearing rather than an
+ * optimisation. These four collections are in `businessIsolatedAlways`, so by default
+ * `useCollection` sends ONLY `businessId ==` to Firestore and filters `reportId`
+ * client-side — meaning opening one report downloaded the tenant's ENTIRE
+ * `reportComments`, `reportVersions`, `reportApprovals` and `reportEvents`. The last
+ * of those is an append-only audit stream that grows forever, so the cost grew with
+ * the tenant's whole history rather than with the report being read.
+ *
+ * With the flag, `businessId + reportId` both go to the server. That REQUIRES the
+ * composite indexes `(businessId, reportId)` on each collection — deploy
+ * firestore.indexes.json before this code, or the queries fail with
+ * FAILED_PRECONDITION.
+ */
 export function useReport(reportId: string | undefined) {
+  const byReport = reportId
+    ? [{ field: 'reportId', operator: '==', value: reportId }]
+    : undefined;
+
   const { data: comments, loading: commentsLoading } = useCollection<ReportComment>('reportComments', {
     skip: !reportId,
-    where: reportId ? [{ field: 'reportId', operator: '==', value: reportId }] : undefined,
+    where: byReport,
+    teamScopedWhere: true,
   });
   const { data: versions } = useCollection<ReportVersion>('reportVersions', {
     skip: !reportId,
-    where: reportId ? [{ field: 'reportId', operator: '==', value: reportId }] : undefined,
+    where: byReport,
+    teamScopedWhere: true,
   });
   const { data: approvals } = useCollection<ReportApproval>('reportApprovals', {
     skip: !reportId,
-    where: reportId ? [{ field: 'reportId', operator: '==', value: reportId }] : undefined,
+    where: byReport,
+    teamScopedWhere: true,
   });
   const { data: events } = useCollection<ReportEvent>('reportEvents', {
     skip: !reportId,
-    where: reportId ? [{ field: 'reportId', operator: '==', value: reportId }] : undefined,
+    where: byReport,
+    teamScopedWhere: true,
   });
 
   return {

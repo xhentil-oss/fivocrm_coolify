@@ -78,7 +78,9 @@ const ReportDetailView: React.FC = () => {
   const {
     kpis, viewer, actorFor, audienceFor, saveContent, setHealth, transition,
     addComment, resolveComment, softDelete, logEvent, pullMetrics,
-  } = useReports({ skip: true });
+    // The list is skipped (this view has its document); the KPI catalog is NOT —
+    // the builder's KPI picker and "Merr metrikat" both depend on it.
+  } = useReports({ skipList: true });
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
   const { getName } = useUserNames(teamMembers);
 
