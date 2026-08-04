@@ -7,6 +7,7 @@ import {
   Shield, Award, Camera, Globe, Megaphone,
 } from 'lucide-react';
 import { LangSwitcher, type Lang } from './LangSwitcher';
+import ClientLogos from './ClientLogos';
 import LandingMobileMenu from './LandingMobileMenu';
 
 /* ─── Intersection Observer ─── */
@@ -89,6 +90,7 @@ interface Copy {
   packages: { kicker: string; title: string; sub: string; idealFor: string; notIncluded: string; note: string; pkgs: Pkg[]; compareChoose: string };
   process: { kicker: string; title: string; sub: string; steps: { n: string; title: string; body: string }[] };
   addons: { kicker: string; title: string; sub: string; items: { title: string; desc: string }[] };
+  clients: { kicker: string; title: string; sub: string };
   testimonials: { kicker: string; title: string; sub: string; items: { name: string; role: string; text: string; avatar: string }[] };
   faq: { kicker: string; title: string; items: { q: string; a: string }[] };
   contact: { kicker: string; titleA: string; titleB: string; sub: string; perks: string[]; formTitle: string; pkgLabel: string; name: string; namePh: string; phone: string; phonePh: string; email: string; emailPh: string; business: string; businessPh: string; message: string; messagePh: string; submit: string; submitting: string; note: string; successTitle: string; successBody: string; error: string };
@@ -138,6 +140,7 @@ const SQ: Copy = {
       { title: 'Foto Profesionale', desc: 'Sesion fotografimi produktesh, shërbimesh ose brand lifestyle.' },
       { title: 'Reputacion Online', desc: 'Menaxhim recensionesh, komentesh negative dhe ndërtim imazhi pozitiv.' },
     ] },
+  clients: { kicker: 'Referencat', title: 'Ja kush na ka besuar', sub: 'Kompani nga tregtia, shëndetësia, turizmi, prodhimi dhe shërbimet, që kanë zgjedhur të punojnë me ne.' },
   testimonials: { kicker: 'Rezultate Reale', title: 'Çfarë thonë klientët tanë', sub: 'Biznese reale — numra realë.',
     items: [
       { name: 'Elona Marku', role: 'CEO, Dyqan Mode "Lira Fashion"', text: 'Pas 2 muajsh me paketën Pro, shitjet online u rritën 340%. Reklamat e tyre janë të ndryshme — jo vetëm "boost post".', avatar: 'EM' },
@@ -202,6 +205,7 @@ const EN: Copy = {
       { title: 'Professional Photos', desc: 'Photo session of products, services or brand lifestyle.' },
       { title: 'Online Reputation', desc: 'Managing reviews, negative comments and building a positive image.' },
     ] },
+  clients: { kicker: 'References', title: 'The brands that trusted us', sub: 'Companies in retail, healthcare, tourism, manufacturing and services that chose to work with us.' },
   testimonials: { kicker: 'Real Results', title: 'What our clients say', sub: 'Real businesses — real numbers.',
     items: [
       { name: 'Elona Marku', role: 'CEO, Fashion Store "Lira Fashion"', text: 'After 2 months on the Pro package, online sales grew 340%. Their ads are different — not just "boost post".', avatar: 'EM' },
@@ -266,6 +270,7 @@ const IT: Copy = {
       { title: 'Foto Professionali', desc: 'Servizio fotografico di prodotti, servizi o brand lifestyle.' },
       { title: 'Reputazione Online', desc: 'Gestione recensioni, commenti negativi e costruzione di un\'immagine positiva.' },
     ] },
+  clients: { kicker: 'Referenze', title: 'Chi ci ha dato fiducia', sub: 'Aziende del commercio, della sanità, del turismo, della produzione e dei servizi che hanno scelto di lavorare con noi.' },
   testimonials: { kicker: 'Risultati Reali', title: 'Cosa dicono i nostri clienti', sub: 'Attività reali — numeri reali.',
     items: [
       { name: 'Elona Marku', role: 'CEO, Negozio Moda "Lira Fashion"', text: 'Dopo 2 mesi col pacchetto Pro, le vendite online sono cresciute del 340%. Le loro ads sono diverse — non solo "boost post".', avatar: 'EM' },
@@ -560,6 +565,9 @@ const SocialMediaLandingPage: React.FC = () => {
           )}
         </div>
       </section>
+
+      {/* ═══ CLIENT LOGOS ═══ */}
+      <ClientLogos accentClass="text-purple-600" kicker={t.clients.kicker} title={t.clients.title} sub={t.clients.sub} />
 
       {/* ═══ TESTIMONIALS ═══ */}
       <section className="py-24 bg-white">
