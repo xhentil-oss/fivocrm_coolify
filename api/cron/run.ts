@@ -683,6 +683,12 @@ async function runRecurringInvoices() {
       bankAccountHolder: invoice.bankAccountHolder || null,
       bankCountry: invoice.bankCountry || null,
       notes: invoice.notes || null,
+      // Carry the products/services. invoiceItems (collection) are copied below,
+      // but WHMCS/shop-origin invoices keep their products inline in the
+      // `lineItems` array + `productSummary` — copy those too so the child isn't
+      // left with no products.
+      lineItems: invoice.lineItems || null,
+      productSummary: invoice.productSummary || null,
       status: 'Pending',
       invoiceDate: admin.firestore.Timestamp.fromDate(nextDate),
       dueDate: admin.firestore.Timestamp.fromDate(newDueDate),
