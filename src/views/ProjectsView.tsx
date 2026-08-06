@@ -201,6 +201,7 @@ const ProjectsView: React.FC = () => {
     const billingType = formData.get('billingType') === 'monthly' ? 'monthly' : 'one-time';
     const startDateStr = formData.get('startDate') as string;
     const startDate = startDateStr ? new Date(startDateStr + 'T12:00:00') : undefined;
+    const department = (formData.get('department') as string) || undefined;
     const memberUserIdsStr = formData.get('memberUserIds') as string;
     let memberUserIds: string[] | undefined;
     if (memberUserIdsStr) {
@@ -242,6 +243,7 @@ const ProjectsView: React.FC = () => {
       currency,
       billingType,
       startDate,
+      department,
       spent: 0,
       customerId: resolvedCustomerId,
       responsibleUserId: resolvedResponsible,
@@ -426,6 +428,7 @@ const ProjectsView: React.FC = () => {
     const billingType = formData.get('billingType') === 'monthly' ? 'monthly' : 'one-time';
     const startDateStr = formData.get('startDate') as string;
     const startDate = startDateStr ? new Date(startDateStr + 'T12:00:00') : undefined;
+    const department = (formData.get('department') as string) || undefined;
     const memberUserIdsStr = formData.get('memberUserIds') as string;
     let memberUserIds: string[] | undefined;
     if (memberUserIdsStr) {
@@ -467,6 +470,7 @@ const ProjectsView: React.FC = () => {
       currency,
       billingType,
       startDate,
+      department,
       customerId: custId && custId !== '__none__' ? custId : undefined,
       responsibleUserId: resolvedResponsible,
       isRecurring: isRecurring || undefined,
@@ -959,6 +963,7 @@ const ProjectForm: React.FC<{
     const d = initialData?.startDate ? new Date(initialData.startDate as any) : null;
     return d && !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : '';
   });
+  const [department, setDepartment] = useState<string>(initialData?.department || '__none__');
   const [serviceCategory, setServiceCategory] = useState<string>('__all__');
   // Manual revenue split among participants. Off → 100% to responsible (default).
   const [customSplit, setCustomSplit] = useState<boolean>(!!(initialData as any)?.profitSplit?.length);
@@ -1018,6 +1023,7 @@ const ProjectForm: React.FC<{
     if (isRecurring) formData.set('recurringFrequency', recurringFrequency);
     formData.set('billingType', billingType);
     if (startDateInput) formData.set('startDate', startDateInput);
+    if (department && department !== '__none__') formData.set('department', department);
     formData.set('memberUserIds', JSON.stringify(memberUserIds));
     formData.set('selectedServiceIds', JSON.stringify(selectedServiceIds));
     // Only persist a manual split when the toggle is on; otherwise leave it empty
@@ -1243,6 +1249,25 @@ const ProjectForm: React.FC<{
           {billingType === 'one-time'
             ? 'Nëse projekti fillon muajin që vjen, buxheti hyn te "Fitimi i parashikuar".'
             : 'Opsionale — kur nisi/do nisë projekti.'}
+        </p>
+      </div>
+
+      {/* Department / service line — groups profit in the Department P&L */}
+      <div>
+        <Label htmlFor="department">Departamenti (service line)</Label>
+        <Select value={department} onValueChange={setDepartment}>
+          <SelectTrigger id="department">
+            <SelectValue placeholder="Zgjidh departamentin" />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="__none__">Pa departament</SelectItem>
+            {serviceCategories.map((c: string) => (
+              <SelectItem key={c} value={c}>{c}</SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <p className="text-xs text-muted-foreground mt-1">
+          P.sh. Social, SEO, Web — përdoret te "Fitimi sipas departamentit" për të parë sa fiton nga secili.
         </p>
       </div>
 

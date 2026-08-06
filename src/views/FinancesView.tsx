@@ -5,7 +5,7 @@ import { Card } from '../components/ui/card';
 import { formatALL, toAll } from '../lib/utils';
 import {
   TrendingUp, TrendingDown, AlertTriangle, Wallet, Clock,
-  ArrowDownRight, ArrowUpRight, Users, CheckCircle2, Repeat, XCircle, Briefcase,
+  ArrowDownRight, ArrowUpRight, Users, CheckCircle2, Repeat, XCircle, Briefcase, Layers,
 } from 'lucide-react';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -23,6 +23,7 @@ import { computeProjectPnl, type ProjectPnlOptions } from '../lib/finance/projec
 import { totalSalaryForMonth } from '../lib/finance/salaryHistory';
 import { computeCashflowHealth } from '../lib/finance/cashflowAlarms';
 import { forecastNextMonth } from '../lib/finance/forecast';
+import { computeDepartmentPnl } from '../lib/finance/departmentPnl';
 
 // ── Single-page, plain-language finance overview for the owner ──
 // Answers one question: "Am I making money this month, where, and why?"
@@ -229,6 +230,17 @@ const FinancesView: React.FC = () => {
       opts = { allTime: true, mode: 'all', now };
     }
     return computeProjectPnl(projects, teamMembers, expenses, opts);
+  }, [projects, teamMembers, expenses, pnlPeriod, now]);
+
+  // ── Department (service-line) P&L — real profit per Social/SEO/Web… ──
+  const [expandedDept, setExpandedDept] = useState<string | null>(null);
+  const departmentPnl = useMemo(() => {
+    const opts = pnlPeriod === 'month'
+      ? (() => { const w = monthWindow(now, 0); return { range: { start: w.start, end: w.end }, mode: 'all' as const, now }; })()
+      : pnlPeriod === 'year'
+      ? { year: now.getFullYear(), mode: 'all' as const, now }
+      : { allTime: true, mode: 'all' as const, now };
+    return computeDepartmentPnl(projects, teamMembers, expenses, opts);
   }, [projects, teamMembers, expenses, pnlPeriod, now]);
 
   const customerNameById = useMemo(
@@ -512,6 +524,90 @@ const FinancesView: React.FC = () => {
         </p>
 
         <ProjectPnlBlock pnl={projectPnl} customerNameById={customerNameById} />
+      </Card>
+
+      {/* 4b2 — Department (service-line) P&L */}
+      <Card className="p-5">
+        <div className="flex items-center gap-2 mb-1">
+          <Layers className="w-4 h-4 text-sky-600" />
+          <h2 className="text-sm font-semibold">Fitimi sipas departamentit</h2>
+        </div>
+        <p className="text-xs text-muted-foreground mb-3">
+          Sa fiton realisht nga çdo departament (Social, SEO, Web…) — të ardhura − kosto e njerëzve që punojnë aty − shpenzime − overhead. Sipas periudhës së zgjedhur lart. Kliko për projektet dhe stafin.
+        </p>
+        {departmentPnl.rows.length === 0 ? (
+          <p className="text-sm text-muted-foreground">
+            Ende pa projekte me departament. Cakto "Departamentin" te projektet për ta parë këtë ndarje.
+          </p>
+        ) : (
+          <ul className="space-y-1.5">
+            {departmentPnl.rows.map(d => {
+              const maxAbs = Math.max(...departmentPnl.rows.map(r => Math.abs(r.profit)), 1);
+              const pct = Math.round((Math.abs(d.profit) / maxAbs) * 100);
+              const open = expandedDept === d.department;
+              return (
+                <li key={d.department} className="rounded-lg border border-border/60">
+                  <button
+                    type="button"
+                    onClick={() => setExpandedDept(open ? null : d.department)}
+                    className="w-full text-left p-2.5 hover:bg-muted/30 rounded-lg transition-colors"
+                    aria-expanded={open}
+                  >
+                    <div className="flex items-center justify-between gap-2 mb-1">
+                      <span className="text-sm text-foreground truncate flex-1 min-w-0 flex items-center gap-1.5 font-medium">
+                        <span className={`text-muted-foreground transition-transform ${open ? 'rotate-90' : ''}`}>›</span>
+                        {d.department}
+                        <span className="text-xs text-muted-foreground font-normal">· {d.projects.length} {d.projects.length === 1 ? 'projekt' : 'projekte'}</span>
+                      </span>
+                      <span className={`text-sm font-semibold tabular-nums shrink-0 ${d.profit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                        {formatALL(d.profit)}
+                        {d.margin != null && <span className="text-xs text-muted-foreground ml-1">({Math.round(d.margin * 100)}%)</span>}
+                      </span>
+                    </div>
+                    <div className="h-1.5 rounded-full bg-muted overflow-hidden">
+                      <div className={`h-full rounded-full ${d.profit >= 0 ? 'bg-emerald-500/70' : 'bg-red-500/70'}`} style={{ width: `${Math.max(2, pct)}%` }} />
+                    </div>
+                    <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
+                      <span>Të ardhura {formatALL(d.revenue)}</span>
+                      <span>· Staf {formatALL(d.labor)}</span>
+                      <span>· Shpenzime {formatALL(d.directCost)}</span>
+                      <span>· Overhead {formatALL(d.overhead)}</span>
+                    </div>
+                  </button>
+                  {open && (
+                    <div className="px-3 pb-2.5 pt-0.5 space-y-2 border-t border-border/40">
+                      {d.projects.map(p => (
+                        <div key={p.id} className="pt-1.5">
+                          <div className="flex items-center justify-between gap-2 text-xs">
+                            <span className="text-foreground truncate flex-1 min-w-0">{p.name}</span>
+                            <span className={`tabular-nums shrink-0 ${p.profit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>{formatALL(p.profit)}</span>
+                          </div>
+                          <div className="text-[10px] text-muted-foreground">
+                            Të ardhura {formatALL(p.revenue)} − staf {formatALL(p.labor)} − shpenzime {formatALL(p.directCost)} − overhead {formatALL(p.overhead)}
+                          </div>
+                          {p.participants.length > 0 && (
+                            <div className="mt-0.5 flex flex-wrap gap-1">
+                              {p.participants.map(pt => (
+                                <span key={pt.userId} className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground">
+                                  {pt.name}: {formatALL(pt.cost)}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+        {departmentPnl.unallocatedLabor.total > 0 && (
+          <p className="text-[11px] text-amber-600 mt-2">
+            {formatALL(departmentPnl.unallocatedLabor.total)} rroga të stafit që s'punoi në asnjë projekt këtë periudhë (kosto e paalokuar te departamentet).
+          </p>
+        )}
       </Card>
 
       {/* 4c — Revenue per project responsible (own month filter + drill-down) */}
