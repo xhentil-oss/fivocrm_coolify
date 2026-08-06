@@ -1061,6 +1061,16 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // ── contactMerges: the undo trail for a duplicate merge ────────────────────
+    // Holds the FULL document of the absorbed lead/customer plus the counts of what
+    // was reassigned, written by /api/merge-contacts (Admin SDK) before anything is
+    // touched. It is the only remaining copy of a merged-away record, so a client may
+    // read it inside its own tenant and nobody may ever write or erase it.
+    match /contactMerges/{docId} {
+      allow read: if isBusinessAdmin(resource.data.businessId) || isSuperAdmin();
+      allow write: if false;
+    }
+
     // ── teamSecrets: the tenant credential vault ───────────────────────────────
     // SMTP passwords, ESP/AI API keys, WhatsApp VPS secret, Meta page tokens. NO
     // client may read or write these: the app writes them through

@@ -8,6 +8,7 @@ import marketingWebhookHandler from './_marketing-webhook.js';
 import acceptInviteHandler from './_accept-invite.js';
 import socialHandler from './_social-api.js';
 import linkContactHandler from './_link-contact.js';
+import mergeContactsHandler from './_merge-contacts.js';
 import syncClaimsHandler from './_sync-claims.js';
 import notifyStaffHandler from './_notify-staff.js';
 import tenantSecretsHandler from './_tenant-secrets.js';
@@ -27,6 +28,7 @@ import platformAdminHandler from './_platformAdmin.js';
  *   /api/accept-invite            -> ?type=accept-invite
  *   /api/social                   -> ?type=social  (sub-dispatches on ?action=)
  *   /api/link-contact             -> ?type=link-contact
+ *   /api/merge-contacts           -> ?type=merge-contacts  (manual duplicate merge)
  *   /api/sync-claims              -> ?type=sync-claims     (tenant custom claims)
  *   /api/notify-staff             -> ?type=notify-staff    (portal → own tenant's staff)
  *   /api/tenant-secrets           -> ?type=tenant-secrets  (write-only credential vault)
@@ -50,6 +52,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.url.includes('marketing-webhook')) type = 'marketing-webhook';
     else if (req.url.includes('accept-invite')) type = 'accept-invite';
     else if (req.url.includes('/api/social')) type = 'social';
+    else if (req.url.includes('merge-contacts')) type = 'merge-contacts';
     else if (req.url.includes('link-contact')) type = 'link-contact';
     else if (req.url.includes('sync-claims')) type = 'sync-claims';
     else if (req.url.includes('notify-staff')) type = 'notify-staff';
@@ -84,6 +87,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     case 'link-contact':
       // Pairs a customer with the CRM lead for the same person (portal bootstrap).
       return linkContactHandler(req, res);
+    case 'merge-contacts':
+      // Manual duplicate merge: moves invoices/projects/quotes/chat/... onto the
+      // surviving record. Admin/Manager of the tenant only, archived + audited.
+      return mergeContactsHandler(req, res);
     case 'social':
       // Social Media module — sub-dispatches on ?action= (oauth/list/sync/...).
       return socialHandler(req, res);

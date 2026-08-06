@@ -81,6 +81,12 @@ before(async () => {
     });
     await setDoc(doc(db, 'counters', `invoices_${VICTIM_TEAM}`), { last: 42 });
     await setDoc(doc(db, 'auditLogs', 'auditVictim'), { businessId: VICTIM_BIZ, action: 'invite.accept', actorUid: 'vstaff' });
+    // Duplicate-merge undo trail — holds the FULL absorbed contact, so a cross-tenant
+    // read would hand over another tenant's customer record verbatim.
+    await setDoc(doc(db, 'contactMerges', 'mergeVictim'), {
+      businessId: VICTIM_BIZ, kind: 'customer', primaryId: 'custVictim', duplicateId: 'custVictimDup',
+      duplicateSnapshot: { name: 'Victim Dup', email: 'dup@victim.com' },
+    });
     await setDoc(doc(db, 'publicTenants', 'victim'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, name: 'Victim' });
     // Operator job history (console improvement #11) — read-only, append-only.
     await setDoc(doc(db, 'platformJobRuns', 'run1'), {
@@ -290,6 +296,7 @@ test('14. cross-tenant reads are denied across the board', async () => {
     ['clientPortalAccess', 'paVictim'],
     ['counters', `invoices_${VICTIM_TEAM}`],
     ['auditLogs', 'auditVictim'],
+    ['contactMerges', 'mergeVictim'],
     ['teams', VICTIM_TEAM],
     ['businesses', VICTIM_BIZ],
     ['userProfiles', 'profVictim'],
@@ -568,4 +575,21 @@ test('32b. a super-admin reads it but cannot write or rewrite it', async () => {
   // An operations log you can edit is worthless when reconstructing what a migration did.
   await assertFails(setDoc(doc(sa, 'platformJobRuns', 'run1'), { ok: false }, { merge: true }));
   await assertFails(setDoc(doc(sa, 'platformJobRuns', 'forged'), { job: 'never-ran', ok: true }));
+});
+
+// ── contactMerges: the only copy of a merged-away contact ──────────────────────
+test('33a. the merge undo trail is readable by its own tenant admin, nobody else', async () => {
+  const victimAdmin = staffOf('vadmin', VICTIM_BIZ, VICTIM_TEAM, ['admin']);
+  await assertSucceeds(getDoc(doc(victimAdmin, 'contactMerges', 'mergeVictim')));
+  // A member of the same tenant is not an admin — the archive holds full contact data.
+  const victimMember = staffOf('vmember', VICTIM_BIZ, VICTIM_TEAM, ['member']);
+  await assertFails(getDoc(doc(victimMember, 'contactMerges', 'mergeVictim')));
+});
+
+test('33b. no client may write the merge trail — it is the undo source of truth', async () => {
+  const victimAdmin = staffOf('vadmin', VICTIM_BIZ, VICTIM_TEAM, ['admin']);
+  await assertFails(setDoc(doc(victimAdmin, 'contactMerges', 'mergeVictim'), { duplicateSnapshot: {} }, { merge: true }));
+  await assertFails(setDoc(doc(victimAdmin, 'contactMerges', 'forged'), { businessId: VICTIM_BIZ, kind: 'customer' }));
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  await assertFails(setDoc(doc(sa, 'contactMerges', 'mergeVictim'), { kind: 'lead' }, { merge: true }));
 });

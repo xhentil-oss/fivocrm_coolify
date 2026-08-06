@@ -206,6 +206,9 @@ const businessIsolatedAlways = new Set<string>([
   // client's own businessId) — see useClientPortal and the portal views.
   'teams', 'userProfiles', 'channels', 'clientPortalAccess',
   'auditLogs',
+  // Duplicate-merge archive: holds the FULL absorbed lead/customer, so it is as
+  // tenant-sensitive as `customers` itself (written only by /api/merge-contacts).
+  'contactMerges',
 ]);
 
 // "Reference" collections that change rarely but are subscribed on almost every

@@ -20,6 +20,12 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 <changelog>
 <!-- NEXT_ENTRY_HERE -->
 
+### [2026-08-06] — Manual duplicate merge for customers & leads
+- `src/lib/contactMerge.ts` (+22 tests): duplicate grouping (email/phone/name, union-find, name match refused when emails contradict), field-by-field plan with data-preserving defaults (tags unioned, notes concatenated), allow-listed field resolution
+- `api/_merge-contacts.ts` (routed `?type=merge-contacts` + vercel.json rewrite, `api/email.ts` maxDuration 60): reassigns ~45 collection/field pairs (invoices, invoiceItems, payments, projects, tasks, quotes, contracts, deals, reports, portal access, `dailyReports.customerIds`, portal chat channel rename) onto the survivor; Admin/Manager + same-business only; archives the absorbed doc to `contactMerges` BEFORE writing; duplicate deleted last and never when truncated; cascades to the linked lead↔customer pair
+- UI: `MergeContactsDialog` (survivor picker, swap, per-field choice, server dry-run preview) + `DuplicateContactsPanel`; wired into CustomersView (tab "Dublikatë" + 2-selected bulk action) and CRMView (view toggle "Dublikatë" + bulk action)
+- `firestore.rules`: `contactMerges` = tenant-admin read, `write: if false` (+2 negative tests in `scripts/firestore-rules.test.mjs`, NOT run locally — firebase-tools needs JDK 21, this machine has 17)
+
 ### [2026-03-25] — Full Security & Bug Fix Pass (33 issues fixed)
 - **Firestore Rules**: `allow read` now uses `canReadTeamDoc()` (team-member check) instead of just `isAuth()` — prevents data leaks across teams
 - **API Auth**: `create-checkout-session.ts` now requires Firebase Bearer token + validates redirect URLs
