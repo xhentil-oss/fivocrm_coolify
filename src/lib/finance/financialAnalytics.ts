@@ -189,29 +189,12 @@ export function buildRevenueByMonth(invoices: Invoice[] | undefined, year: numbe
       return cd.getMonth() === i && cd.getFullYear() === year;
     });
 
-    const partialForMonth = invoices
-      .filter(inv => inv.status === 'Partial')
-      .reduce((s, inv) => {
-        // Prefer individual payment records (time-accurate)
-        if (inv.partialPayments?.length) {
-          const monthPartials = inv.partialPayments.filter(p => {
-            const pd = parseDate(p.paidAt);
-            if (!pd) return false;
-            return pd.getMonth() === i && pd.getFullYear() === year;
-          });
-          return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, inv.currency), 0);
-        }
-        // Fallback: no payment records, but paidAmount is set — assign to updatedAt/createdAt month
-        if (inv.paidAmount && inv.paidAmount > 0) {
-          const pd = getInvoicePaidDate(inv);
-          if (pd && pd.getMonth() === i && pd.getFullYear() === year) {
-            return s + toAll(inv.paidAmount, inv.currency);
-          }
-        }
-        return s;
-      }, 0);
-
-    const paid = paidInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, inv.currency), 0) + partialForMonth;
+    // Cash collected in this month — status-robust via the canonical helper, so a
+    // partial payment counts even after the invoice later flips to Overdue/Pending
+    // (matches getInvoiceCollectedAll and the InvoicesView "collected" hero).
+    const mStart = new Date(year, i, 1, 0, 0, 0, 0);
+    const mEnd = new Date(year, i + 1, 0, 23, 59, 59, 999);
+    const paid = invoices.reduce((s, inv) => s + getInvoiceCollectedBetween(inv, mStart, mEnd), 0);
     const pending = pendingInvs.reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, inv.currency), 0);
     return { label, value: paid, paid, pending, count: paidInvs.length };
   });

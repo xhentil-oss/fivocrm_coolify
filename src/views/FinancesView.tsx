@@ -78,30 +78,46 @@ const FinancesView: React.FC = () => {
   // The CURRENT month is month-to-date, so its salary is prorated to elapsed
   // days — otherwise a full month's payroll vs a few days of collections would
   // show a false loss early each month.
-  const { thisMonth, lastMonth } = useMemo(() => {
+  const { thisMonth, lastMonth, lastMonthToDate } = useMemo(() => {
     const inv = invoices || [];
     const exp = expenses || [];
     const cur = monthWindow(now, 0);
     const prev = monthWindow(now, -1);
     const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const elapsedFraction = Math.min(1, now.getDate() / daysInMonth);
+    const elapsedDay = now.getDate();
+    const elapsedFraction = Math.min(1, elapsedDay / daysInMonth);
     const curSalary = totalSalaryForMonth(teamMembers, cur.end) * elapsedFraction;
+
+    // Last month up to the SAME day-of-month + salary prorated the same way — a
+    // like-for-like "pace" baseline for the current (month-to-date) hero number.
+    const prevDays = new Date(now.getFullYear(), now.getMonth(), 0).getDate();
+    const prevDay = Math.min(elapsedDay, prevDays);
+    const prevToDateEnd = new Date(prev.start.getFullYear(), prev.start.getMonth(), prevDay, 23, 59, 59, 999);
+    const prevSalaryToDate = totalSalaryForMonth(teamMembers, prev.end) * Math.min(1, prevDay / prevDays);
+
     return {
       thisMonth: monthProfit(inv, exp, curSalary, cur.start, cur.end),
       lastMonth: monthProfit(inv, exp, totalSalaryForMonth(teamMembers, prev.end), prev.start, prev.end),
+      lastMonthToDate: monthProfit(inv, exp, prevSalaryToDate, prev.start, prevToDateEnd),
     };
   }, [invoices, expenses, teamMembers, now]);
 
-  const profitDelta = thisMonth.profit - lastMonth.profit;
+  // Compare month-to-date against last month AT THE SAME POINT (not a full month).
+  const profitDelta = thisMonth.profit - lastMonthToDate.profit;
 
   // ── 6-month profit trend ──
   const trend = useMemo(() => {
     const inv = invoices || [];
     const exp = expenses || [];
+    const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const elapsedFraction = Math.min(1, now.getDate() / daysInMonth);
     const out: { label: string; profit: number }[] = [];
     for (let i = 5; i >= 0; i--) {
       const w = monthWindow(now, -i);
-      const p = monthProfit(inv, exp, totalSalaryForMonth(teamMembers, w.end), w.start, w.end);
+      // The current month (i===0) is month-to-date → prorate its salary just like
+      // the hero, so the last trend point equals the headline number.
+      const salary = totalSalaryForMonth(teamMembers, w.end) * (i === 0 ? elapsedFraction : 1);
+      const p = monthProfit(inv, exp, salary, w.start, w.end);
       out.push({ label: MONTH_LABELS_SQ[w.monthIndex], profit: Math.round(p.profit) });
     }
     return out;
@@ -274,8 +290,8 @@ const FinancesView: React.FC = () => {
 
   // ── Forward-looking cashflow health (recurring inflow vs fixed outflow) ──
   const cashflow = useMemo(
-    () => computeCashflowHealth(invoices, expenses, teamMembers, now),
-    [invoices, expenses, teamMembers, now],
+    () => computeCashflowHealth(invoices, expenses, teamMembers, projects, now),
+    [invoices, expenses, teamMembers, projects, now],
   );
 
   // ── Next-month profit forecast (project pipeline + recurring invoices) ──
@@ -379,8 +395,8 @@ const FinancesView: React.FC = () => {
               Të ardhurat nga projektet mujore që përsëriten + projektet një-herëshe që fillojnë atë muaj. Shpenzimet: mesatarja e {forecast.basisMonths} muajve.
             </p>
           </div>
-          <div className={`rounded-lg px-3 py-2 text-xs font-medium ${forecast.predictedProfit >= thisMonth.profit ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'}`}>
-            {forecast.predictedProfit >= thisMonth.profit ? '↑' : '↓'} vs muaji aktual ({formatALL(forecast.predictedProfit - thisMonth.profit)})
+          <div className={`rounded-lg px-3 py-2 text-xs font-medium ${forecast.predictedProfit >= lastMonth.profit ? 'bg-emerald-500/10 text-emerald-600' : 'bg-amber-500/10 text-amber-600'}`}>
+            {forecast.predictedProfit >= lastMonth.profit ? '↑' : '↓'} vs muaji i shkuar ({formatALL(forecast.predictedProfit - lastMonth.profit)})
           </div>
         </div>
       </Card>
