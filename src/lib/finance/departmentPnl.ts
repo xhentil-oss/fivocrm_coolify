@@ -13,7 +13,7 @@
 
 import type { Project, TeamMember, Expense } from '../../types';
 import { toAll } from '../utils';
-import { parseDate, monthsElapsedInYear } from './financialAnalytics';
+import { parseDate, monthsElapsedInYear, MONTH_LABELS_SQ } from './financialAnalytics';
 import { memberSalaryForMonth } from './salaryHistory';
 
 export interface DepartmentPnlOptions {
@@ -98,6 +98,14 @@ export function computeDepartmentPnl(
   const mode = opts.mode ?? 'all';
   const periodProjects = projects.filter(p => {
     if (mode === 'completed' && !isCompleted(p)) return false;
+    // Monthly retainers earn in EVERY month their active span overlaps the
+    // period (not only the month of their last update) — essential for a
+    // per-month trend. One-time projects count in the period of their date.
+    if (billingTypeOf(p) === 'monthly') {
+      const start = parseDate(p.createdAt) ?? periodStart;
+      const end = parseDate((p as any).lastCompletedAt) ?? periodEnd; // ongoing → now
+      return start <= periodEnd && end >= periodStart;
+    }
     return inPeriod(projectDate(p));
   });
 
@@ -226,4 +234,50 @@ export function computeDepartmentPnl(
     otherFixedPool,
     totals,
   };
+}
+
+export interface DepartmentTrend {
+  /** Recharts-ready rows: { label, <dept>: profit, … } — one per month, oldest first. */
+  data: Array<Record<string, number | string>>;
+  /** Departments ordered by total profit over the window (biggest first). */
+  departments: string[];
+  /** Per department: profit last month vs the month before (for the ↑/↓ badge). */
+  deltas: Record<string, { last: number; prev: number; delta: number }>;
+}
+
+/** Monthly profit per department over the last `months` months (default 6). */
+export function buildDepartmentProfitTrend(
+  projects: Project[] | undefined | null,
+  teamMembers: TeamMember[] | undefined | null,
+  expenses: Expense[] | undefined | null,
+  now: Date = new Date(),
+  months = 6,
+): DepartmentTrend {
+  const monthly: { label: string; byDept: Map<string, number> }[] = [];
+  const totals = new Map<string, number>();
+  for (let i = months - 1; i >= 0; i--) {
+    const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+    const start = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
+    const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
+    const res = computeDepartmentPnl(projects, teamMembers, expenses, { range: { start, end }, mode: 'all', now });
+    const byDept = new Map<string, number>();
+    for (const row of res.rows) {
+      byDept.set(row.department, row.profit);
+      totals.set(row.department, (totals.get(row.department) || 0) + row.profit);
+    }
+    monthly.push({ label: MONTH_LABELS_SQ[d.getMonth()], byDept });
+  }
+  const departments = Array.from(totals.keys()).sort((a, b) => (totals.get(b) || 0) - (totals.get(a) || 0));
+  const data = monthly.map(m => {
+    const row: Record<string, number | string> = { label: m.label };
+    for (const dept of departments) row[dept] = Math.round(m.byDept.get(dept) || 0);
+    return row;
+  });
+  const deltas: Record<string, { last: number; prev: number; delta: number }> = {};
+  for (const dept of departments) {
+    const last = (monthly[monthly.length - 1]?.byDept.get(dept)) || 0;
+    const prev = (monthly[monthly.length - 2]?.byDept.get(dept)) || 0;
+    deltas[dept] = { last, prev, delta: last - prev };
+  }
+  return { data, departments, deltas };
 }

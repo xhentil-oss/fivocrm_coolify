@@ -23,7 +23,7 @@ import { computeProjectPnl, type ProjectPnlOptions } from '../lib/finance/projec
 import { totalSalaryForMonth } from '../lib/finance/salaryHistory';
 import { computeCashflowHealth } from '../lib/finance/cashflowAlarms';
 import { forecastNextMonth } from '../lib/finance/forecast';
-import { computeDepartmentPnl } from '../lib/finance/departmentPnl';
+import { computeDepartmentPnl, buildDepartmentProfitTrend } from '../lib/finance/departmentPnl';
 
 // ── Single-page, plain-language finance overview for the owner ──
 // Answers one question: "Am I making money this month, where, and why?"
@@ -242,6 +242,12 @@ const FinancesView: React.FC = () => {
       : { allTime: true, mode: 'all' as const, now };
     return computeDepartmentPnl(projects, teamMembers, expenses, opts);
   }, [projects, teamMembers, expenses, pnlPeriod, now]);
+
+  // Monthly profit trend per department (last 6 months) — is Social growing or not?
+  const departmentTrend = useMemo(
+    () => buildDepartmentProfitTrend(projects, teamMembers, expenses, now, 6),
+    [projects, teamMembers, expenses, now],
+  );
 
   const customerNameById = useMemo(
     () => new Map((customers || []).map(c => [c.id, c.name || 'Pa klient'])),
@@ -609,6 +615,59 @@ const FinancesView: React.FC = () => {
           </p>
         )}
       </Card>
+
+      {/* 4b3 — Department profit trend (6 months) */}
+      {departmentTrend.departments.length > 0 && (
+        <Card className="p-5">
+          <div className="flex items-center gap-2 mb-1">
+            <TrendingUp className="w-4 h-4 text-sky-600" />
+            <h2 className="text-sm font-semibold">Trendi i fitimit sipas departamentit (6 muaj)</h2>
+          </div>
+          <p className="text-xs text-muted-foreground mb-3">
+            A po rritet apo po bie secili departament muaj pas muaji. (Muaji aktual është deri sot.)
+          </p>
+          {(() => {
+            const PALETTE = ['#0EA5E9', '#10B981', '#F59E0B', '#8B5CF6', '#EF4444', '#14B8A6'];
+            const shown = departmentTrend.departments.slice(0, 6);
+            return (
+              <>
+                <ResponsiveContainer width="100%" height={220}>
+                  <LineChart data={departmentTrend.data} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" vertical={false} />
+                    <XAxis dataKey="label" tick={{ fontSize: 12 }} />
+                    <YAxis tick={{ fontSize: 11 }} width={48} tickFormatter={(v) => `${Math.round(v / 1000)}k`} />
+                    <Tooltip formatter={(v: number) => formatALL(v)} />
+                    {shown.map((dept, i) => (
+                      <Line key={dept} type="monotone" dataKey={dept} stroke={PALETTE[i % PALETTE.length]} strokeWidth={2} dot={{ r: 2 }} />
+                    ))}
+                  </LineChart>
+                </ResponsiveContainer>
+                <ul className="mt-3 grid grid-cols-1 sm:grid-cols-2 gap-x-4 gap-y-1.5">
+                  {shown.map((dept, i) => {
+                    const d = departmentTrend.deltas[dept];
+                    const up = d.delta >= 0;
+                    return (
+                      <li key={dept} className="flex items-center gap-2 text-sm">
+                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: PALETTE[i % PALETTE.length] }} />
+                        <span className="text-foreground truncate flex-1 min-w-0">{dept}</span>
+                        <span className={`text-xs font-medium tabular-nums shrink-0 flex items-center gap-0.5 ${up ? 'text-emerald-600' : 'text-red-600'}`}>
+                          {up ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+                          {up ? '+' : ''}{formatALL(d.delta)}
+                        </span>
+                      </li>
+                    );
+                  })}
+                </ul>
+                {departmentTrend.departments.length > shown.length && (
+                  <p className="text-[11px] text-muted-foreground mt-2">
+                    Duke shfaqur 6 departamentet kryesorë nga {departmentTrend.departments.length}.
+                  </p>
+                )}
+              </>
+            );
+          })()}
+        </Card>
+      )}
 
       {/* 4c — Revenue per project responsible (own month filter + drill-down) */}
       <Card className="p-5">
