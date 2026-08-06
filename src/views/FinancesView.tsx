@@ -465,20 +465,22 @@ const FinancesView: React.FC = () => {
         </Card>
       </div>
 
-      {/* 4 — Where you win / lose */}
+      {/* 4 — Where you win / lose (per client, invoiced vs actual project cost) */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <Card className="p-5">
-          <div className="flex items-center gap-2 mb-3">
+          <div className="flex items-center gap-2 mb-0.5">
             <CheckCircle2 className="w-4 h-4 text-emerald-600" />
             <h2 className="text-sm font-semibold">Ku fiton më shumë</h2>
           </div>
+          <p className="text-[11px] text-muted-foreground mb-3">Bazë: fatura reale − kosto e projektit (punë + shpenzime). Ndryshe nga "Fitimi sipas projekti" (buxhet − overhead).</p>
           <ClientList rows={clientPnl.winners} emptyText="Ende pa të dhëna klientësh." />
         </Card>
         <Card className="p-5">
-          <div className="flex items-center gap-2 mb-3">
+          <div className="flex items-center gap-2 mb-0.5">
             <AlertTriangle className="w-4 h-4 text-red-600" />
             <h2 className="text-sm font-semibold">Ku humb para</h2>
           </div>
+          <p className="text-[11px] text-muted-foreground mb-3">Bazë: fatura reale − kosto e projektit (punë + shpenzime).</p>
           <ClientList rows={clientPnl.losers} emptyText="Asnjë klient në humbje. 👍" />
         </Card>
       </div>
