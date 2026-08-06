@@ -219,6 +219,8 @@ const FinancesView: React.FC = () => {
   // Full-absorption: the fixed pool (salaries + non-project expenses) is spread
   // across projects by revenue weight. See lib/finance/projectPnl.ts.
   const [pnlPeriod, setPnlPeriod] = useState<'month' | 'year' | 'all'>('year');
+  // Revenue basis for the project/department/responsible profit cards.
+  const [revenueBasis, setRevenueBasis] = useState<'budget' | 'invoiced'>('budget');
   const projectPnl = useMemo(() => {
     let opts: ProjectPnlOptions;
     if (pnlPeriod === 'month') {
@@ -229,8 +231,10 @@ const FinancesView: React.FC = () => {
     } else {
       opts = { allTime: true, mode: 'all', now };
     }
+    opts.revenueBasis = revenueBasis;
+    opts.invoices = invoices;
     return computeProjectPnl(projects, teamMembers, expenses, opts);
-  }, [projects, teamMembers, expenses, pnlPeriod, now]);
+  }, [projects, teamMembers, expenses, invoices, pnlPeriod, revenueBasis, now]);
 
   // ── Department (service-line) P&L — real profit per Social/SEO/Web… ──
   const [expandedDept, setExpandedDept] = useState<string | null>(null);
@@ -240,13 +244,13 @@ const FinancesView: React.FC = () => {
       : pnlPeriod === 'year'
       ? { year: now.getFullYear(), mode: 'all' as const, now }
       : { allTime: true, mode: 'all' as const, now };
-    return computeDepartmentPnl(projects, teamMembers, expenses, opts);
-  }, [projects, teamMembers, expenses, pnlPeriod, now]);
+    return computeDepartmentPnl(projects, teamMembers, expenses, { ...opts, revenueBasis, invoices });
+  }, [projects, teamMembers, expenses, invoices, pnlPeriod, revenueBasis, now]);
 
   // Monthly profit trend per department (last 6 months) — is Social growing or not?
   const departmentTrend = useMemo(
-    () => buildDepartmentProfitTrend(projects, teamMembers, expenses, now, 6),
-    [projects, teamMembers, expenses, now],
+    () => buildDepartmentProfitTrend(projects, teamMembers, expenses, now, 6, { revenueBasis, invoices }),
+    [projects, teamMembers, expenses, invoices, revenueBasis, now],
   );
 
   const customerNameById = useMemo(
@@ -289,6 +293,8 @@ const FinancesView: React.FC = () => {
       const end = new Date(y, m + 1, 0, 23, 59, 59, 999);
       opts = { range: { start, end }, mode: 'all', months: 1, now };
     }
+    opts.revenueBasis = revenueBasis;
+    opts.invoices = invoices;
     const pnl = computeProjectPnl(projects, teamMembers, expenses, opts);
     const map = new Map<string, { userId: string; name: string; revenue: number; projects: { id: string; name: string; revenue: number }[] }>();
     let unattributed = 0;
@@ -304,7 +310,7 @@ const FinancesView: React.FC = () => {
       .map(r => ({ ...r, projects: r.projects.sort((a, b) => b.revenue - a.revenue) }))
       .sort((a, b) => b.revenue - a.revenue);
     return { rows, unattributed };
-  }, [projects, teamMembers, expenses, staffMonth, memberNameById, now]);
+  }, [projects, teamMembers, expenses, invoices, staffMonth, revenueBasis, memberNameById, now]);
 
   // ── Forward-looking cashflow health (recurring inflow vs fixed outflow) ──
   const cashflow = useMemo(
@@ -503,6 +509,8 @@ const FinancesView: React.FC = () => {
         </Card>
       </div>
 
+      {/* Shared controls note: period + revenue-basis apply to the project,
+          department, trend and responsible cards below. */}
       {/* 4b — Profit per project (full-absorption) */}
       <Card className="p-5">
         <div className="flex items-center justify-between gap-3 flex-wrap mb-1">
@@ -510,20 +518,42 @@ const FinancesView: React.FC = () => {
             <Briefcase className="w-4 h-4 text-sky-600" />
             <h2 className="text-sm font-semibold">Fitimi sipas projekti</h2>
           </div>
-          <div className="flex items-center gap-1 rounded-lg bg-muted/50 p-0.5">
-            {([['month', 'Muaji'], ['year', 'Viti'], ['all', 'Gjithë']] as const).map(([key, label]) => (
-              <button
-                key={key}
-                onClick={() => setPnlPeriod(key)}
-                className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
-                  pnlPeriod === key ? 'bg-background shadow-sm font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
+          <div className="flex items-center gap-2 flex-wrap">
+            {/* Revenue basis: budget vs actual invoiced */}
+            <div className="flex items-center gap-1 rounded-lg bg-muted/50 p-0.5">
+              {([['budget', 'Buxhet'], ['invoiced', 'Faturuar']] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setRevenueBasis(key)}
+                  className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                    revenueBasis === key ? 'bg-background shadow-sm font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="flex items-center gap-1 rounded-lg bg-muted/50 p-0.5">
+              {([['month', 'Muaji'], ['year', 'Viti'], ['all', 'Gjithë']] as const).map(([key, label]) => (
+                <button
+                  key={key}
+                  onClick={() => setPnlPeriod(key)}
+                  className={`px-2.5 py-1 text-xs rounded-md transition-colors ${
+                    pnlPeriod === key ? 'bg-background shadow-sm font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
           </div>
         </div>
+        <p className="text-xs text-muted-foreground mb-1">
+          {revenueBasis === 'invoiced'
+            ? 'Të ardhurat = faturat reale të lidhura me projektin. '
+            : 'Të ardhurat = buxheti i projektit. '}
+          Toggle "Buxhet/Faturuar" zbatohet edhe te departamenti, trendi dhe përgjegjësit.
+        </p>
         <p className="text-xs text-muted-foreground mb-3">
           Të ardhurat (buxheti) − kostot direkte (shpenzime të projektit) − pjesa e kostove fikse
           (rroga + qira + të tjera), e ndarë sipas peshës së të ardhurave.

@@ -22,9 +22,9 @@
 // (salary sourced from monthlySalary, Salary-category expenses excluded) and is
 // the single source of truth for per-project profitability.
 
-import type { Project, TeamMember, Expense } from '../../types';
+import type { Project, TeamMember, Expense, Invoice } from '../../types';
 import { toAll } from '../utils';
-import { parseDate, monthsElapsedInYear } from './financialAnalytics';
+import { parseDate, monthsElapsedInYear, getInvoiceBilledBetween } from './financialAnalytics';
 import { totalSalaryForMonth } from './salaryHistory';
 
 export interface ProjectPnlOptions {
@@ -39,6 +39,11 @@ export interface ProjectPnlOptions {
   months?: number;
   /** Override "now" for deterministic tests. */
   now?: Date;
+  /** Revenue basis: 'budget' (plan, default) or 'invoiced' (actual billed
+   *  invoices linked to the project). 'invoiced' requires `invoices`. */
+  revenueBasis?: 'budget' | 'invoiced';
+  /** Invoices, needed when revenueBasis === 'invoiced'. */
+  invoices?: Invoice[] | null;
 }
 
 export interface ProjectPnlRow {
@@ -109,6 +114,24 @@ export function computeProjectPnl(
   };
   if (!projects) return empty;
 
+  // ── Revenue basis: actual billed invoices per project (independent of the
+  // all-time window, so no circular dependency with periodProjects). ──
+  const useInvoiced = opts.revenueBasis === 'invoiced';
+  const invWindow = opts.range
+    ? opts.range
+    : (opts.year != null && !opts.allTime)
+      ? { start: new Date(opts.year, 0, 1), end: opts.year === now.getFullYear() ? now : new Date(opts.year, 11, 31, 23, 59, 59, 999) }
+      : { start: new Date(0), end: now };
+  const invoicedByProject = new Map<string, number>();
+  if (useInvoiced) {
+    for (const inv of opts.invoices || []) {
+      const pid = inv.projectId;
+      if (!pid) continue;
+      const amt = getInvoiceBilledBetween(inv, invWindow.start, invWindow.end);
+      if (amt) invoicedByProject.set(pid, (invoicedByProject.get(pid) || 0) + amt);
+    }
+  }
+
   // ── Period filter — explicit range wins, then calendar year, then all-time.
   const inPeriod = (d: Date | null): boolean => {
     if (opts.range) return !!d && d >= opts.range.start && d <= opts.range.end;
@@ -125,6 +148,8 @@ export function computeProjectPnl(
       : null;
   const periodProjects = projects.filter(p => {
     if (mode === 'completed' && !isCompleted(p)) return false;
+    // On invoiced basis, any project billed in the period belongs to it.
+    if (useInvoiced && (invoicedByProject.get(p.id) || 0) !== 0) return true;
     if (!membershipWindow) return true; // all-time
     // Monthly retainers earn in every month their active span overlaps (not only
     // the month of their last update) so a single-month view still counts them.
@@ -208,9 +233,12 @@ export function computeProjectPnl(
 
   const poolTotal = salaries + otherFixed;
 
-  // ── Recognised revenue per project (one-time = budget; monthly = fee × active months).
+  // ── Recognised revenue per project.
   const revenueOf = (p: Project): { revenue: number; billingType: 'one-time' | 'monthly'; activeMonths: number } => {
     const bt = billingTypeOf(p);
+    // Invoiced basis: actual billed invoices linked to this project.
+    if (useInvoiced) return { revenue: invoicedByProject.get(p.id) || 0, billingType: bt, activeMonths: 1 };
+    // Budget basis: one-time = budget; monthly = fee × active months.
     // Normalizo në ALL (kostot/pagat janë në ALL) që marzhi të jetë i saktë për EUR.
     const fee = toAll(p.budget || 0, p.currency);
     if (bt === 'one-time') return { revenue: fee, billingType: bt, activeMonths: 1 };

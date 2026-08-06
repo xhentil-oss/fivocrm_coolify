@@ -11,9 +11,9 @@
 // Salaries of people not on any project this period are reported separately as
 // "unallocated labor" so the totals still reconcile with the company P&L.
 
-import type { Project, TeamMember, Expense } from '../../types';
+import type { Project, TeamMember, Expense, Invoice } from '../../types';
 import { toAll } from '../utils';
-import { parseDate, monthsElapsedInYear, MONTH_LABELS_SQ } from './financialAnalytics';
+import { parseDate, monthsElapsedInYear, MONTH_LABELS_SQ, getInvoiceBilledBetween } from './financialAnalytics';
 import { memberSalaryForMonth } from './salaryHistory';
 
 export interface DepartmentPnlOptions {
@@ -22,6 +22,9 @@ export interface DepartmentPnlOptions {
   year?: number;
   allTime?: boolean;
   now?: Date;
+  /** 'budget' (default) or 'invoiced' (actual billed invoices per project). */
+  revenueBasis?: 'budget' | 'invoiced';
+  invoices?: Invoice[] | null;
 }
 
 export interface DeptParticipant { userId: string; name: string; cost: number }
@@ -90,6 +93,19 @@ export function computeDepartmentPnl(
     ? monthsElapsedInYear(opts.year, now)
     : monthsBetween(periodStart, periodEnd);
 
+  // Invoiced-basis revenue per project (billed invoices linked to the project).
+  const useInvoiced = opts.revenueBasis === 'invoiced';
+  const invWindow = opts.allTime ? { start: new Date(0), end: now } : { start: periodStart, end: periodEnd };
+  const invoicedByProject = new Map<string, number>();
+  if (useInvoiced) {
+    for (const inv of opts.invoices || []) {
+      const pid = inv.projectId;
+      if (!pid) continue;
+      const amt = getInvoiceBilledBetween(inv, invWindow.start, invWindow.end);
+      if (amt) invoicedByProject.set(pid, (invoicedByProject.get(pid) || 0) + amt);
+    }
+  }
+
   const inPeriod = (d: Date | null) => {
     if (opts.range) return !!d && d >= opts.range.start && d <= opts.range.end;
     if (opts.allTime || opts.year == null) return true;
@@ -98,6 +114,7 @@ export function computeDepartmentPnl(
   const mode = opts.mode ?? 'all';
   const periodProjects = projects.filter(p => {
     if (mode === 'completed' && !isCompleted(p)) return false;
+    if (useInvoiced && (invoicedByProject.get(p.id) || 0) !== 0) return true;
     // Monthly retainers earn in EVERY month their active span overlaps the
     // period (not only the month of their last update) — essential for a
     // per-month trend. One-time projects count in the period of their date.
@@ -159,6 +176,7 @@ export function computeDepartmentPnl(
 
   // ── Revenue per project ──
   const revenueOf = (p: Project): number => {
+    if (useInvoiced) return invoicedByProject.get(p.id) || 0;
     const fee = toAll(p.budget || 0, (p as any).currency);
     if (fee <= 0) return 0;
     if (billingTypeOf(p) === 'one-time') return fee;
@@ -252,6 +270,7 @@ export function buildDepartmentProfitTrend(
   expenses: Expense[] | undefined | null,
   now: Date = new Date(),
   months = 6,
+  extra: { revenueBasis?: 'budget' | 'invoiced'; invoices?: Invoice[] | null } = {},
 ): DepartmentTrend {
   const monthly: { label: string; byDept: Map<string, number> }[] = [];
   const totals = new Map<string, number>();
@@ -259,7 +278,7 @@ export function buildDepartmentProfitTrend(
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const start = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
     const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
-    const res = computeDepartmentPnl(projects, teamMembers, expenses, { range: { start, end }, mode: 'all', now });
+    const res = computeDepartmentPnl(projects, teamMembers, expenses, { range: { start, end }, mode: 'all', now, revenueBasis: extra.revenueBasis, invoices: extra.invoices });
     const byDept = new Map<string, number>();
     for (const row of res.rows) {
       byDept.set(row.department, row.profit);

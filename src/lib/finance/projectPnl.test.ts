@@ -157,6 +157,17 @@ describe('computeProjectPnl', () => {
     expect(res.totals.profit).toBeCloseTo(0, 3);
   });
 
+  it('uses actual billed invoices when revenueBasis is "invoiced"', () => {
+    const projects = [mkProject({ id: 'a', name: 'A', budget: 100_000, billingType: 'one-time', createdAt: new Date('2026-03-01'), updatedAt: new Date('2026-03-01') })];
+    const invoices = [
+      { id: 'i1', projectId: 'a', total: 250_000, status: 'Pending', invoiceDate: new Date('2026-03-10'), createdAt: new Date('2026-03-10') },
+      { id: 'draft', projectId: 'a', total: 999_000, status: 'Draft', invoiceDate: new Date('2026-03-10'), createdAt: new Date('2026-03-10') },
+    ] as any;
+    const res = computeProjectPnl(projects, [], [], { year: 2026, now: new Date('2026-07-23'), revenueBasis: 'invoiced', invoices });
+    // Billed (Draft excluded), not the 100k budget.
+    expect(res.rows[0].revenue).toBe(250_000);
+  });
+
   it('returns null margin for zero-revenue projects', () => {
     const projects = [mkProject({ id: 'a', name: 'A', budget: 0 })];
     const res = computeProjectPnl(projects, [], [], { months: 1 });
