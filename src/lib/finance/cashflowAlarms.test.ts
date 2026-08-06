@@ -28,17 +28,29 @@ describe('computeCashflowHealth', () => {
       mkInvoice({ id: 'y', total: 120_000, status: 'Pending', isRecurring: true, recurringFrequency: 'yearly' }), // → 10k/mo
     ];
     const members = [mkMember({ monthlySalary: 40_000 })];
-    const res = computeCashflowHealth(invoices, [], members, NOW);
+    const res = computeCashflowHealth(invoices, [], members, [], NOW);
     expect(res.monthlyInflow).toBe(60_000); // 50k + 10k
     expect(res.monthlyOutflow).toBe(40_000);
     expect(res.gap).toBe(20_000);
     expect(res.alarms.find(a => a.id === 'cashflow-gap')).toBeUndefined();
   });
 
+  it('counts monthly-billing projects as recurring inflow (no false gap alarm)', () => {
+    // Retainer modelled as a monthly PROJECT (no recurring invoice).
+    const projects = [
+      { id: 'p1', name: 'Retainer', status: 'Active', budget: 120_000, billingType: 'monthly' } as any,
+    ];
+    const members = [mkMember({ monthlySalary: 80_000 })];
+    const res = computeCashflowHealth([], [], members, projects, NOW);
+    expect(res.monthlyInflow).toBe(120_000);
+    expect(res.gap).toBe(40_000);
+    expect(res.alarms.find(a => a.id === 'cashflow-gap')).toBeUndefined();
+  });
+
   it('raises a red alarm when fixed costs exceed recurring income', () => {
     const invoices = [mkInvoice({ id: 'r', total: 30_000, status: 'Pending', isRecurring: true, recurringFrequency: 'monthly' })];
     const members = [mkMember({ monthlySalary: 100_000 })];
-    const res = computeCashflowHealth(invoices, [], members, NOW);
+    const res = computeCashflowHealth(invoices, [], members, [], NOW);
     expect(res.gap).toBe(-70_000);
     const alarm = res.alarms.find(a => a.id === 'cashflow-gap');
     expect(alarm?.severity).toBe('red');
@@ -53,7 +65,7 @@ describe('computeCashflowHealth', () => {
     const expenses = [
       mkExpense({ id: 's', amount: 99_000, category: 'Salary', isRecurring: true, recurringFrequency: 'monthly' }),
     ];
-    const res = computeCashflowHealth(invoices, expenses, [], NOW);
+    const res = computeCashflowHealth(invoices, expenses, [], [], NOW);
     expect(res.monthlyInflow).toBe(0);
     expect(res.recurringExpenses).toBe(0);
   });
@@ -62,7 +74,7 @@ describe('computeCashflowHealth', () => {
     const invoices = [
       mkInvoice({ id: 'old', total: 80_000, status: 'Pending', dueDate: new Date('2026-04-01') }), // ~105d overdue
     ];
-    const res = computeCashflowHealth(invoices, [], [], NOW);
+    const res = computeCashflowHealth(invoices, [], [], [], NOW);
     expect(res.overdue60Plus).toBe(80_000);
     expect(res.alarms.find(a => a.id === 'overdue-60')?.severity).toBe('red');
   });
@@ -72,7 +84,7 @@ describe('computeCashflowHealth', () => {
       mkInvoice({ id: 'a', total: 90_000, status: 'Paid', customerId: 'big', paidAt: new Date('2026-06-01') }),
       mkInvoice({ id: 'b', total: 10_000, status: 'Paid', customerId: 'small', paidAt: new Date('2026-06-01') }),
     ];
-    const res = computeCashflowHealth(invoices, [], [], NOW);
+    const res = computeCashflowHealth(invoices, [], [], [], NOW);
     const c = res.alarms.find(a => a.id === 'concentration');
     expect(c?.customerId).toBe('big');
   });

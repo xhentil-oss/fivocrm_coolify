@@ -9,16 +9,16 @@
 // Alarms: negative gap, receivables aged >60d, revenue decline vs 3-month
 // average, expense spike, single-client concentration.
 
-import type { Invoice, Expense, TeamMember } from '../../types';
+import type { Invoice, Expense, TeamMember, Project } from '../../types';
 import { toAll } from '../utils';
 import {
   parseDate,
-  getInvoiceTotalAll,
   getInvoiceOutstandingAll,
   getInvoiceCollectedBetween,
   buildARAging,
 } from './financialAnalytics';
 import { totalSalaryForMonth } from './salaryHistory';
+import { monthlyRecurringRevenue } from './forecast';
 
 export interface CashflowAlarm {
   id: string;
@@ -63,16 +63,16 @@ export function computeCashflowHealth(
   invoices: Invoice[] | undefined | null,
   expenses: Expense[] | undefined | null,
   teamMembers: TeamMember[] | undefined | null,
+  projects: Project[] | undefined | null,
   now: Date = new Date(),
 ): CashflowHealth {
   const inv = invoices || [];
   const exp = expenses || [];
 
-  // ── Monthly recurring inflow: active recurring invoices, normalised to /month.
-  // Exclude Draft (not issued) and Cancelled — only committed recurring revenue.
-  const monthlyInflow = inv
-    .filter(i => isActiveRecurringParent(i) && i.status !== 'Cancelled' && i.status !== 'Draft')
-    .reduce((s, i) => s + getInvoiceTotalAll(i) * (FREQ_TO_MONTHLY[i.recurringFrequency || 'monthly'] ?? 1), 0);
+  // ── Monthly recurring inflow — SAME definition as the forecast card (monthly
+  // projects + active recurring invoices, deduped) so the two cards agree and a
+  // retainer modelled as a monthly project doesn't trigger a false gap alarm.
+  const monthlyInflow = monthlyRecurringRevenue(projects, invoices);
 
   // ── Monthly fixed outflow: salaries (history-aware) + recurring expenses.
   const salaries = totalSalaryForMonth(teamMembers, monthEnd(now, 1)); // next month
