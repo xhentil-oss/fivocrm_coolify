@@ -117,8 +117,22 @@ export function computeProjectPnl(
   };
 
   const mode = opts.mode ?? 'all';
+  // Membership window for finite periods (range/year); null = all-time.
+  const membershipWindow = opts.range
+    ? { start: opts.range.start, end: opts.range.end }
+    : (opts.year != null && !opts.allTime)
+      ? { start: new Date(opts.year, 0, 1), end: opts.year === now.getFullYear() ? now : new Date(opts.year, 11, 31, 23, 59, 59, 999) }
+      : null;
   const periodProjects = projects.filter(p => {
     if (mode === 'completed' && !isCompleted(p)) return false;
+    if (!membershipWindow) return true; // all-time
+    // Monthly retainers earn in every month their active span overlaps (not only
+    // the month of their last update) so a single-month view still counts them.
+    if (billingTypeOf(p) === 'monthly') {
+      const start = parseDate(p.createdAt) ?? membershipWindow.start;
+      const end = parseDate((p as any).lastCompletedAt) ?? membershipWindow.end;
+      return start <= membershipWindow.end && end >= membershipWindow.start;
+    }
     return inPeriod(projectDate(p));
   });
 

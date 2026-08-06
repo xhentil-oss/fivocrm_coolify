@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Project, TeamMember, Expense } from '../../types';
-import { computeDepartmentPnl } from './departmentPnl';
+import { computeDepartmentPnl, buildDepartmentProfitTrend } from './departmentPnl';
 
 function mkP(p: Partial<Project>): Project {
   return {
@@ -76,5 +76,23 @@ describe('computeDepartmentPnl', () => {
     const projects = [mkP({ id: 'a', budget: 50_000, responsibleUserId: 'u1' })];
     const res = computeDepartmentPnl(projects, [mkM('u1', 0)], [], OPTS);
     expect(res.rows[0].department).toBe('Pa departament');
+  });
+});
+
+describe('buildDepartmentProfitTrend', () => {
+  it('returns monthly profit per department with growth deltas', () => {
+    const now = new Date('2026-03-15T12:00:00');
+    // A monthly Social project active since January → profit each month.
+    const projects = [
+      mkP({ id: 's', department: 'Social', budget: 100_000, billingType: 'monthly',
+        responsibleUserId: 'u1', createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-03-01') }),
+    ];
+    const members = [mkM('u1', 20_000)];
+    const t = buildDepartmentProfitTrend(projects, members, [], now, 3);
+    expect(t.data).toHaveLength(3);                 // Jan, Feb, Mar
+    expect(t.departments).toContain('Social');
+    // Each month: 100k revenue − 20k labor = 80k profit.
+    expect(t.data[0].Social).toBe(80_000);
+    expect(t.deltas.Social.last).toBe(80_000);
   });
 });
