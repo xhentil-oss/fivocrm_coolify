@@ -2,6 +2,9 @@
   "functions": {
     "api/cron/run.ts": {
       "maxDuration": 60
+    },
+    "api/email.ts": {
+      "maxDuration": 60
     }
   },
   "rewrites": [
@@ -36,6 +39,10 @@
     {
       "source": "/api/link-contact",
       "destination": "/api/email?type=link-contact"
+    },
+    {
+      "source": "/api/merge-contacts",
+      "destination": "/api/email?type=merge-contacts"
     },
     {
       "source": "/api/sync-claims",

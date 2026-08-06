@@ -42,6 +42,9 @@ import { TEMP_META } from '../lib/leadIntel';
 import { LEAD_STAGES, SELECTABLE_STATUSES, leadStageLabel } from '../lib/leadStages';
 import { calculateLeadScore } from '../lib/leadScore';
 import { findContactMatch, matchFieldLabel, type MatchField } from '../lib/contactIdentity';
+import { findDuplicateGroups } from '../lib/contactMerge';
+import MergeContactsDialog from '../components/MergeContactsDialog';
+import DuplicateContactsPanel from '../components/DuplicateContactsPanel';
 import { useLeadIntel } from '../hooks/useLeadIntel';
 import { useSavedSegments, type LeadSegment } from '../hooks/useSavedSegments';
 import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember, Quote, Deal } from '../types';
@@ -86,10 +89,13 @@ const CRMView: React.FC = () => {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false);
   const [importOpen, setImportOpen] = useState(false);
-  // View mode (table | pipeline) — persisted
-  const [viewMode, setViewMode] = useState<'table' | 'pipeline' | 'analytics'>(() => {
+  // Manual duplicate merge (Admin/Manager/Owner; the endpoint re-checks the role).
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [mergePair, setMergePair] = useState<{ primaryId?: string; duplicateId?: string }>({});
+  // View mode (table | pipeline | analytics | duplicates) — persisted
+  const [viewMode, setViewMode] = useState<'table' | 'pipeline' | 'analytics' | 'duplicates'>(() => {
     if (typeof window === 'undefined') return 'table';
-    return (window.localStorage.getItem('crm_view_mode') as 'table' | 'pipeline' | 'analytics') || 'table';
+    return (window.localStorage.getItem('crm_view_mode') as 'table' | 'pipeline' | 'analytics' | 'duplicates') || 'table';
   });
   useEffect(() => {
     if (typeof window !== 'undefined') window.localStorage.setItem('crm_view_mode', viewMode);
@@ -146,6 +152,20 @@ const CRMView: React.FC = () => {
     () => (customers || []).filter((c: any) => !activeBusinessId || !c.businessId || c.businessId === activeBusinessId),
     [customers, activeBusinessId]
   );
+  // Same scoping for the lead side — the duplicate finder and the merge dialog work
+  // on the whole tenant (not the role-filtered `leads`), because a duplicate pair is
+  // a tenant-level problem and half a pair can belong to a colleague.
+  const scopedLeads = useMemo(
+    () => (rawLeads || []).filter((l: any) => !activeBusinessId || !l.businessId || l.businessId === activeBusinessId),
+    [rawLeads, activeBusinessId]
+  );
+  const duplicateLeadGroups = useMemo(() => findDuplicateGroups(scopedLeads as any), [scopedLeads]);
+  // Merging rewrites quotes/contracts/deals/activities across the tenant.
+  const canMerge = permissions.isAdmin || permissions.isManager || permissions.isOwner;
+  const openMerge = (primaryId?: string, duplicateId?: string) => {
+    setMergePair({ primaryId, duplicateId });
+    setMergeOpen(true);
+  };
   const waTeamId = useGlobalTeamId();
   const waEnabled = useWhatsappEnabled();
   const waQuery = useMemo(() => ({
@@ -1191,6 +1211,16 @@ const CRMView: React.FC = () => {
             >
               Analitikë
             </button>
+            {canMerge && (
+              <button
+                type="button"
+                onClick={() => setViewMode('duplicates')}
+                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${viewMode === 'duplicates' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                aria-pressed={viewMode === 'duplicates'}
+              >
+                Dublikatë{duplicateLeadGroups.length > 0 ? ` (${duplicateLeadGroups.length})` : ''}
+              </button>
+            )}
           </div>
           <div className="hidden sm:block">
             <ExportButton
@@ -1404,7 +1434,18 @@ const CRMView: React.FC = () => {
         </Card>
       </div>
 
-      {viewMode === 'analytics' ? (
+      {viewMode === 'duplicates' && canMerge ? (
+        <DuplicateContactsPanel
+          kind="lead"
+          records={scopedLeads as any}
+          onMerge={(primaryId, duplicateId) => openMerge(primaryId, duplicateId)}
+          action={
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={() => openMerge()}>
+              Bashko dy lead manualisht
+            </Button>
+          }
+        />
+      ) : viewMode === 'analytics' ? (
         <LeadAnalytics leads={leads || []} teamMembers={teamMembers || []} getName={getName} />
       ) : viewMode === 'pipeline' ? (
         <PipelineBoard
@@ -1710,6 +1751,21 @@ const CRMView: React.FC = () => {
                       ))}
                     </DropdownMenuContent>
                   </DropdownMenu>
+
+                  {/* Exactly two selected rows = "these are the same person". */}
+                  {canMerge && selectedIds.size === 2 && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        const [a, b] = Array.from(selectedIds);
+                        openMerge(a, b);
+                      }}
+                      title="Bashko dy lead dublikatë"
+                    >
+                      Bashko dublikatat
+                    </Button>
+                  )}
 
                   <Button
                     variant="outline"
@@ -2411,6 +2467,19 @@ const CRMView: React.FC = () => {
 
       {/* CSV import */}
       <LeadImportDialog open={importOpen} onClose={() => setImportOpen(false)} onImport={handleImportLeads} />
+
+      {/* Manual merge of two duplicate leads (moves quotes, deals, activities, …) */}
+      {canMerge && (
+        <MergeContactsDialog
+          kind="lead"
+          open={mergeOpen}
+          onOpenChange={(open) => { setMergeOpen(open); if (!open) setMergePair({}); }}
+          records={scopedLeads as any}
+          initialPrimaryId={mergePair.primaryId}
+          initialDuplicateId={mergePair.duplicateId}
+          onMerged={() => setSelectedIds(new Set())}
+        />
+      )}
 
       {/* Bulk delete confirm */}
       <Dialog open={bulkDeleteOpen} onOpenChange={setBulkDeleteOpen}>

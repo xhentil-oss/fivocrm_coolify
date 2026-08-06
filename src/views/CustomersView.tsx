@@ -13,7 +13,7 @@ import {
   Building2, Plus, Mail, Phone, Search, Filter, X,
   CheckCircle2, XCircle, AlertCircle, Star, Users,
   ShieldCheck, ClipboardList, UserPlus, Ban, Clock,
-  ExternalLink, Globe, Trash2, MoreVertical, PlusCircle, UserCheck, Download,
+  ExternalLink, Globe, Trash2, MoreVertical, PlusCircle, UserCheck, Download, Merge, Copy,
 } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { SkeletonLoader } from '../components/PageSkeleton';
@@ -22,6 +22,9 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import ContactTagsField, { parseTags } from '../components/ContactTagsField';
+import MergeContactsDialog from '../components/MergeContactsDialog';
+import DuplicateContactsPanel from '../components/DuplicateContactsPanel';
+import { findDuplicateGroups } from '../lib/contactMerge';
 import { TaskLabels } from '../components/TaskLabels';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../components/ui/alert-dialog';
@@ -69,6 +72,9 @@ const CustomersView: React.FC = () => {
   const [sortBy, setSortBy] = useState<'recent' | 'name'>('recent');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  // Manual duplicate merge (Admin/Manager only — the server re-checks the role).
+  const [mergeOpen, setMergeOpen] = useState(false);
+  const [mergePair, setMergePair] = useState<{ primaryId?: string; duplicateId?: string }>({});
 
   // Portal State
   const [portalSearchQuery, setPortalSearchQuery] = useState('');
@@ -109,6 +115,18 @@ const CustomersView: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [rawCustomers, activeBusinessId]
   );
+  // Duplicate detection deliberately runs over the whole tenant (`scopedCustomers`),
+  // not the role-filtered `customers`: two records for one person are a tenant-level
+  // problem, and a Member/Viewer would otherwise only see half of a pair.
+  const duplicateGroups = useMemo(() => findDuplicateGroups(scopedCustomers as any), [scopedCustomers]);
+  // Merging rewrites invoices/projects across the tenant → Admin/Manager/Owner only
+  // (the endpoint re-checks this server-side; this just hides a button that would fail).
+  const canMerge = permissions.isAdmin || permissions.isManager || permissions.isOwner;
+  const openMerge = (primaryId?: string, duplicateId?: string) => {
+    setMergePair({ primaryId, duplicateId });
+    setMergeOpen(true);
+  };
+
   // Existing tags across customers + leads → feed the tag picker so users reuse
   // tags instead of creating near-duplicates.
   const tagSuggestions = useMemo(() => {
@@ -670,6 +688,17 @@ const CustomersView: React.FC = () => {
               <span className="hidden sm:inline">Klientet</span>
               <span className="sm:hidden">Kliente</span>
             </TabsTrigger>
+            {canMerge && (
+              <TabsTrigger value="duplicates" className="gap-1 sm:gap-2 text-xs sm:text-sm">
+                <Copy className="h-4 w-4" />
+                <span>Dublikatë</span>
+                {duplicateGroups.length > 0 && (
+                  <Badge variant="secondary" className="ml-1 h-5 px-1.5 text-[10px]">
+                    {duplicateGroups.length}
+                  </Badge>
+                )}
+              </TabsTrigger>
+            )}
           </TabsList>
         </div>
 
@@ -809,6 +838,18 @@ const CustomersView: React.FC = () => {
                   {STATUS_OPTIONS.map(s => <SelectItem key={s.value} value={s.value}>{s.label}</SelectItem>)}
                 </SelectContent>
               </Select>
+              {/* Two selected rows are the natural "these are the same person" gesture. */}
+              {canMerge && selectedIds.size === 2 && (
+                <Button
+                  size="sm" variant="outline" className="h-8 text-xs gap-1"
+                  onClick={() => {
+                    const [a, b] = Array.from(selectedIds);
+                    openMerge(a, b);
+                  }}
+                >
+                  <Merge className="w-3.5 h-3.5" /> Bashko
+                </Button>
+              )}
               <Button size="sm" variant="destructive" className="h-8 text-xs gap-1" onClick={() => { if (confirm(`Fshi ${selectedIds.size} klientë dhe të dhënat e tyre?`)) bulkDelete(); }}>
                 <Trash2 className="w-3.5 h-3.5" /> Fshi
               </Button>
@@ -1054,6 +1095,22 @@ const CustomersView: React.FC = () => {
             </Dialog>
           )}
         </TabsContent>
+
+        {/* TAB: Dublikatë — zbulimi automatik, bashkimi manual */}
+        {canMerge && (
+          <TabsContent value="duplicates" className="space-y-4">
+            <DuplicateContactsPanel
+              kind="customer"
+              records={scopedCustomers as any}
+              onMerge={(primaryId, duplicateId) => openMerge(primaryId, duplicateId)}
+              action={
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => openMerge()}>
+                  <Merge className="w-3.5 h-3.5" /> Bashko dy klientë manualisht
+                </Button>
+              }
+            />
+          </TabsContent>
+        )}
 
         {/* TAB: Aksesi Portalit */}
         <TabsContent value="portal" className="space-y-4">
@@ -1382,6 +1439,19 @@ const CustomersView: React.FC = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Manual merge of two duplicate clients (moves invoices, projects, quotes, …) */}
+      {canMerge && (
+        <MergeContactsDialog
+          kind="customer"
+          open={mergeOpen}
+          onOpenChange={(open) => { setMergeOpen(open); if (!open) setMergePair({}); }}
+          records={scopedCustomers as any}
+          initialPrimaryId={mergePair.primaryId}
+          initialDuplicateId={mergePair.duplicateId}
+          onMerged={() => setSelectedIds(new Set())}
+        />
+      )}
     </div>
   );
 };

@@ -80,6 +80,7 @@
 | `reports` | Enterprise reports (blocks, workflow, approvals) |
 | `reportVersions` / `reportApprovals` / `reportEvents` | Append-only history, sign-off, audit |
 | `reportComments` | Report discussion (`internal` = the client boundary) |
+| `contactMerges` | Duplicate-merge archive (full snapshot of the absorbed contact; read-only) |
 | `reportTemplates` / `reportSchedules` / `reportKpis` / `reportMetrics` | Reporting config + metric values |
 | `clientHealthScores` / `employeeReportScores` | Health + accountability rollups |
 
@@ -117,6 +118,31 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   using `isBusinessMember(resource.data.businessId)` + a negative cross-tenant test in
   `scripts/firestore-rules.test.mjs` (35 tests; run them in the emulator before any
   `firebase deploy --only firestore:rules`).
+
+### Contact identity & duplicate merge
+
+- **One person, one pair of records.** A contact may legitimately be BOTH a lead and a
+  customer; what must never exist is two records for the same person that don't know
+  about each other. Matching lives in `src/lib/contactIdentity.ts` + the server mirror
+  `api/_contactIdentity.ts`; every write path (CRM, landing form, portal, WHMCS) resolves
+  identity through them and cross-links. Portal writes go via `POST /api/link-contact`.
+- **Merging duplicates is the repair path** for records that slipped through: pure logic
+  (grouping + field resolution) in `src/lib/contactMerge.ts`, execution in
+  `api/_merge-contacts.ts` (`POST /api/merge-contacts`, `?type=merge-contacts`).
+  UI: `MergeContactsDialog` + `DuplicateContactsPanel`, mounted in CustomersView
+  (tab **Dublikatë**) and CRMView (view toggle **Dublikatë**), plus a bulk action when
+  exactly two rows are selected.
+- Detection **never merges on its own** — it only suggests. A name-only match is refused
+  when both records state different emails/phones.
+- **The merge is server-side because it spans ~45 collection/field pairs** the acting user
+  often cannot read (reports, portal access, conversations). Rules for it: reassign, never
+  copy; the absorbed doc is archived to `contactMerges` BEFORE the first write; the
+  duplicate is deleted LAST and never when the run was truncated (re-run finishes it);
+  portal chat is renamed (`client-<id>` is embedded in the channelId, so it can't be
+  re-pointed); a linked lead↔customer pair cascades one level.
+- Adding a collection that references `customerId`/`leadId`? → add it to `CUSTOMER_REFS` /
+  `LEAD_REFS` in `api/_merge-contacts.ts` and give it a label in
+  `MERGE_COLLECTION_LABELS`, or a merge will silently orphan its rows.
 
 ### Import Paths
 - Use **relative paths** for all local imports (e.g., `'../components/ui/card'`).
@@ -312,6 +338,8 @@ Each package includes:
 | `migrate-emails.ts` | `POST /api/migrate-emails` | Data migration utility |
 | `_reports.ts` | `POST /api/reports` | Client report actions (view/ack/approve/reject/comment) + staff email send |
 | `_platformAdmin.ts` | `POST /api/platform-admin` | Platform console writes: tenant plan/status/trial/seats + module toggles (super-admin only, audited) |
+| `_link-contact.ts` | `POST /api/link-contact` | Pairs a customer with the lead for the same person (portal bootstrap) |
+| `_merge-contacts.ts` | `POST /api/merge-contacts` | Manual duplicate merge: moves invoices/projects/quotes/chat onto the surviving contact (Admin/Manager, archived + audited) |
 | `_reportJobs.ts` | Cron | report-schedules, report-reminders, client-health-rollup |
 | `cron/run.ts` | Cron | Scheduled jobs (recurring invoices, etc.) |
 
