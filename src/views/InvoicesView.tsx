@@ -17,7 +17,7 @@ import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
 import { Calendar } from '../components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Command, CommandEmpty, CommandGroup, CommandInput, CommandItem, CommandList } from '../components/ui/command';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '../components/ui/alert-dialog';
@@ -53,6 +53,12 @@ const InvoicesView: React.FC = () => {
   const [editingField, setEditingField] = useState<string | null>(null);
   const [editValue, setEditValue] = useState<string>('');
   const [invoiceToDelete, setInvoiceToDelete] = useState<string | null>(null);
+  // Quick project link straight from the list — the companion to the "Pa projekt"
+  // filter, so fixing a batch of unlinked invoices doesn't mean opening the full
+  // edit form (and re-saving every other field) once per invoice.
+  const [linkProjectInvoice, setLinkProjectInvoice] = useState<Invoice | null>(null);
+  const [linkProjectSearch, setLinkProjectSearch] = useState('');
+  const [linkProjectSaving, setLinkProjectSaving] = useState(false);
   const [statusFilter, setStatusFilter] = useState<string>('__all__');
   // '__all__' | '__none__' (invoices with no project — the ones that fall out of the
   // per-project P&L) | a concrete projectId.
@@ -151,6 +157,30 @@ const InvoicesView: React.FC = () => {
   const handleToggleInvoicePause = async (invoice: Invoice) => {
     await invoiceMutation.update(invoice.id, { isRecurringPaused: !(invoice as any).isRecurringPaused } as any);
     toast({ title: (invoice as any).isRecurringPaused ? 'Përsëritja u rifillua' : 'Përsëritja u pauzua' });
+  };
+
+  // Link (or unlink) an invoice to a project without touching any other field.
+  const handleLinkProject = async (invoice: Invoice, projectId: string) => {
+    setLinkProjectSaving(true);
+    try {
+      await invoiceMutation.update(invoice.id, { projectId } as any);
+      const projectName = projectId ? projectById.get(projectId)?.name : undefined;
+      logActivity(
+        'invoice_updated',
+        projectId
+          ? `Fatura ${invoice.invoiceNumber || invoice.id.slice(0, 8)} u lidh me projektin "${projectName || projectId}"`
+          : `Fatura ${invoice.invoiceNumber || invoice.id.slice(0, 8)} u shkëput nga projekti`,
+        { entityType: 'invoice', entityId: invoice.id },
+      );
+      toast({ title: projectId ? `U lidh me "${projectName || 'projektin'}"` : 'Lidhja me projektin u hoq' });
+      setLinkProjectInvoice(null);
+      setLinkProjectSearch('');
+    } catch (err) {
+      console.error('[InvoicesView] lidhja me projektin dështoi:', err);
+      toast({ title: 'Lidhja me projektin dështoi', variant: 'destructive' });
+    } finally {
+      setLinkProjectSaving(false);
+    }
   };
 
   // Stop recurrence for good: keep this invoice + all past ones, never generate again.
@@ -1019,6 +1049,11 @@ const InvoicesView: React.FC = () => {
                         <Edit2 className="w-4 h-4 mr-2" /> Ndrysho
                       </DropdownMenuItem>
                     )}
+                    {permissions.canEdit && (
+                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setLinkProjectInvoice(invoice); }}>
+                        <Folder className="w-4 h-4 mr-2" /> {invoice.projectId ? 'Ndrysho projektin' : 'Lidh me projekt'}
+                      </DropdownMenuItem>
+                    )}
                     {permissions.canEdit && !invoice.emailSent && (
                       <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleSendEmail(invoice.id); }}>
                         <Mail className="w-4 h-4 mr-2" /> Shëno si Dërguar
@@ -1126,6 +1161,18 @@ const InvoicesView: React.FC = () => {
                         // render a blank cell that looks like "not linked".
                         if (invoice.projectId) {
                           return <span className="text-[11px] text-amber-600" title="Projekti nuk ekziston më">projekt i fshirë</span>;
+                        }
+                        // Unlinked: one click to fix it, right where the gap is visible.
+                        if (permissions.canEdit) {
+                          return (
+                            <button
+                              onClick={(e) => { e.stopPropagation(); setLinkProjectInvoice(invoice); }}
+                              className="text-[11px] text-muted-foreground/70 hover:text-primary hover:underline"
+                              title="Lidh me projekt"
+                            >
+                              + lidh
+                            </button>
+                          );
                         }
                         return <span className="text-[11px] text-muted-foreground/60">—</span>;
                       })()}
@@ -1420,6 +1467,105 @@ const InvoicesView: React.FC = () => {
           </DialogContent>
         </Dialog>
       )}
+
+      {/* Quick "link to project" — updates ONLY projectId, so it is safe to use on an
+          issued invoice without re-saving amounts, dates or bank details. */}
+      <Dialog
+        open={!!linkProjectInvoice}
+        onOpenChange={(open) => { if (!open) { setLinkProjectInvoice(null); setLinkProjectSearch(''); } }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>
+              Lidh faturën me projekt
+              {linkProjectInvoice && (
+                <span className="block text-xs font-normal text-muted-foreground mt-0.5 font-mono">
+                  {linkProjectInvoice.invoiceNumber || linkProjectInvoice.id.slice(0, 8)}
+                </span>
+              )}
+            </DialogTitle>
+          </DialogHeader>
+          {linkProjectInvoice && (() => {
+            const inv = linkProjectInvoice;
+            const q = linkProjectSearch.trim().toLowerCase();
+            const all = (allProjects || []).filter(p => !q || (p.name || '').toLowerCase().includes(q));
+            // The customer's own projects first — that is the link the user almost
+            // always wants — but every other project stays reachable below.
+            const ofCustomer = inv.customerId ? all.filter(p => p.customerId === inv.customerId) : [];
+            const others = all.filter(p => !inv.customerId || p.customerId !== inv.customerId);
+            const current = inv.projectId ? projectById.get(inv.projectId) : undefined;
+
+            const row = (p: Project) => (
+              <button
+                key={p.id}
+                disabled={linkProjectSaving}
+                onClick={() => handleLinkProject(inv, p.id)}
+                className={`w-full flex items-center justify-between gap-2 px-2 py-1.5 rounded-md text-left text-sm hover:bg-muted disabled:opacity-50 ${
+                  p.id === inv.projectId ? 'bg-muted' : ''
+                }`}
+              >
+                <span className="flex items-center gap-2 min-w-0">
+                  <Folder className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                  <span className="truncate">{p.name}</span>
+                </span>
+                <span className="flex items-center gap-2 shrink-0">
+                  {p.id === inv.projectId && <Check className="w-3.5 h-3.5 text-success" />}
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">{p.status}</Badge>
+                </span>
+              </button>
+            );
+
+            return (
+              <div className="space-y-2">
+                <p className="text-xs text-muted-foreground">
+                  Klienti: <strong>{customers?.find(c => c.id === inv.customerId)?.name || 'pa klient'}</strong>
+                  {current ? <> · aktualisht: <strong>{current.name}</strong></> : null}
+                  {inv.projectId && !current ? <> · <span className="text-amber-600">projekt i fshirë</span></> : null}
+                </p>
+                <Input
+                  autoFocus
+                  placeholder="Kërko projekt..."
+                  value={linkProjectSearch}
+                  onChange={e => setLinkProjectSearch(e.target.value)}
+                  className="h-8 text-sm"
+                />
+                <div className="max-h-[46vh] overflow-y-auto space-y-1 -mx-1 px-1">
+                  {ofCustomer.length > 0 && (
+                    <>
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground px-2 pt-1">Projektet e klientit</p>
+                      {ofCustomer.map(row)}
+                    </>
+                  )}
+                  {others.length > 0 && (
+                    <>
+                      <p className="text-[10px] uppercase tracking-wide text-muted-foreground px-2 pt-1">
+                        {inv.customerId ? 'Projekte të tjera' : 'Të gjitha projektet'}
+                      </p>
+                      {others.map(row)}
+                    </>
+                  )}
+                  {all.length === 0 && (
+                    <p className="text-sm text-muted-foreground text-center py-4">Nuk u gjet projekt.</p>
+                  )}
+                </div>
+                <div className="flex justify-between gap-2 pt-1 border-t">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    disabled={!inv.projectId || linkProjectSaving}
+                    onClick={() => handleLinkProject(inv, '')}
+                  >
+                    Hiq lidhjen
+                  </Button>
+                  <Button variant="outline" size="sm" onClick={() => { setLinkProjectInvoice(null); setLinkProjectSearch(''); }}>
+                    Mbyll
+                  </Button>
+                </div>
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
 
       {/* Delete Invoice Confirmation */}
       <Dialog open={!!invoiceToDelete} onOpenChange={(open) => { if (!open) setInvoiceToDelete(null); }}>
@@ -1931,8 +2077,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
                           key={customer.id}
                           value={customer.id}
                           onSelect={() => {
+                            // Only drop the project link when the customer actually
+                            // CHANGES — re-picking the same one must not silently
+                            // unlink the project of an invoice being edited.
+                            if (customer.id !== selectedCustomerId) setSelectedProjectId('');
                             setSelectedCustomerId(customer.id);
-                            setSelectedProjectId('');
                             setCustomerSearch('');
                             setCustomerSearchOpen(false);
                             onDirtyChange?.(true);
@@ -1950,26 +2099,74 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         </div>
       </div>
 
-      {/* Project Selector - shows projects linked to selected customer */}
-      {selectedCustomerId && (() => {
-        const customerProjects = projects?.filter(p => p.customerId === selectedCustomerId) || [];
-        return customerProjects.length > 0 ? (
+      {/* Project link. Always rendered — the old version only appeared when a customer
+          was selected AND that customer already had projects, so an invoice with no
+          customer (or one linked to a project belonging to someone else) could never be
+          re-linked or UNLINKED, and the link stayed invisible. */}
+      {(() => {
+        const all = projects || [];
+        const linked = selectedProjectId ? all.find(p => p.id === selectedProjectId) : undefined;
+        const customerProjects = selectedCustomerId ? all.filter(p => p.customerId === selectedCustomerId) : [];
+        // Projects of other customers (or with none) stay reachable under a separate
+        // group instead of being silently unavailable.
+        const otherProjects = all
+          .filter(p => !selectedCustomerId || p.customerId !== selectedCustomerId)
+          .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+        const mismatch = !!linked && !!selectedCustomerId && !!linked.customerId && linked.customerId !== selectedCustomerId;
+
+        return (
           <div>
             <Label>Projekti (lidh faturën me projektin)</Label>
-            <Select value={selectedProjectId} onValueChange={setSelectedProjectId}>
+            <Select
+              value={selectedProjectId || '__none__'}
+              onValueChange={v => { setSelectedProjectId(v === '__none__' ? '' : v); onDirtyChange?.(true); }}
+            >
               <SelectTrigger>
-                <SelectValue placeholder="Zgjidh projektin (opsionale)" />
+                <SelectValue placeholder="Pa projekt (opsionale)" />
               </SelectTrigger>
               <SelectContent>
-                {customerProjects.map(proj => (
-                  <SelectItem key={proj.id} value={proj.id}>
-                    {proj.name} — {proj.status}
-                  </SelectItem>
-                ))}
+                {/* An explicit "no project" entry — clearing the link was impossible before. */}
+                <SelectItem value="__none__">Pa projekt</SelectItem>
+                {customerProjects.length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel>Projektet e klientit</SelectLabel>
+                    {customerProjects.map(proj => (
+                      <SelectItem key={proj.id} value={proj.id}>
+                        {proj.name} — {proj.status}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                )}
+                {otherProjects.length > 0 && (
+                  <SelectGroup>
+                    <SelectLabel>{selectedCustomerId ? 'Projekte të tjera' : 'Të gjitha projektet'}</SelectLabel>
+                    {otherProjects.map(proj => (
+                      <SelectItem key={proj.id} value={proj.id}>
+                        {proj.name} — {proj.status}
+                      </SelectItem>
+                    ))}
+                  </SelectGroup>
+                )}
               </SelectContent>
             </Select>
+            {/* A projectId whose project is gone must not read as "not linked". */}
+            {selectedProjectId && !linked && (
+              <p className="text-xs text-amber-600 mt-1">
+                ⚠ Projekti i lidhur nuk ekziston më. Zgjidh një projekt tjetër ose “Pa projekt”.
+              </p>
+            )}
+            {mismatch && (
+              <p className="text-xs text-amber-600 mt-1">
+                ⚠ Ky projekt i përket një klienti tjetër ({customers?.find(c => c.id === linked!.customerId)?.name || 'i panjohur'}).
+              </p>
+            )}
+            {!selectedProjectId && (
+              <p className="text-xs text-muted-foreground mt-1">
+                Pa projekt, fatura nuk numërohet te “Fitimi sipas projekti” me bazën “Faturuar”.
+              </p>
+            )}
           </div>
-        ) : null;
+        );
       })()}
 
       <div>
