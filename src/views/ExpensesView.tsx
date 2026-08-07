@@ -1,10 +1,10 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { toAll } from '../lib/utils';
 import { MONTH_LABELS_SQ, getExpenseDate } from '../lib/finance/financialAnalytics';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil, Search, Check, X, ThumbsUp, ThumbsDown, Clock, Pause, Play, CircleStop, AlertTriangle } from 'lucide-react';
+import { DollarSign, Plus, Calendar as CalendarIcon, Building2, Repeat, Trash2, Pencil, Search, Check, X, ThumbsUp, ThumbsDown, Clock, Pause, Play, CircleStop, AlertTriangle, Filter, RotateCcw, Download } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -236,15 +236,201 @@ const ExpensesView: React.FC = () => {
     }
   };
 
+  const getCategoryLabel = (category: string) => {
+    switch (category) {
+      case 'Salary': return 'Paga';
+      case 'Rent': return 'Qira';
+      case 'Utilities': return 'Shërbime (Ujë, Dritë)';
+      case 'Office': return 'Zyrë';
+      case 'Hosting': return 'Hosting & Software';
+      case 'Marketing': return 'Marketing';
+      case 'Travel': return 'Udhëtim';
+      case 'Other': return 'Tjetër';
+      default: return category;
+    }
+  };
+
   // Rejected expenses are shown in the list but must not hit any total.
   const countable = (exp: any) => exp.approvalStatus !== 'Rejected';
-  const totalExpenses = expenses?.reduce((sum, exp) => countable(exp) ? sum + toAll(exp.amount ?? 0, (exp as any).currency) : sum, 0) || 0;
-  const activeExpenses = expenses?.filter(e => e.status === 'Active').length || 0;
-  const recurringExpenses = expenses?.filter(e => e.isRecurring).length || 0;
 
   // ── Shpenzime sipas muajve (për vitin e zgjedhur) ──
   const currentYr = new Date().getFullYear();
   const [byMonthYear, setByMonthYear] = useState(currentYr);
+
+  // ── Filtrat e listës ──────────────────────────────────────────────────────
+  // Everything below the chart (KPI cards, mobile cards, desktop table) renders
+  // `filteredExpenses`, so a filter narrows the numbers AND the rows together —
+  // otherwise a filtered table under an unfiltered total reads as a bug.
+  const [searchQuery, setSearchQuery] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState('__all__');
+  const [statusFilter, setStatusFilter] = useState('__all__');
+  const [approvalFilter, setApprovalFilter] = useState('__all__');
+  const [recurringFilter, setRecurringFilter] = useState('__all__');
+  const [departmentFilter, setDepartmentFilter] = useState('__all__');
+  const [projectFilter, setProjectFilter] = useState('__all__');
+  const [monthFilter, setMonthFilter] = useState('__all__');
+  const [yearFilter, setYearFilter] = useState('__all__');
+  const [minAmount, setMinAmount] = useState('');
+  const [maxAmount, setMaxAmount] = useState('');
+  const [sortBy, setSortBy] = useState('date_desc');
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  const projectById = useMemo(
+    () => new Map((projects || []).map(p => [p.id, p])),
+    [projects]
+  );
+
+  // Categories come from the data (custom ones live in `expenseCategories`), so the
+  // dropdown never offers a category with zero rows behind it.
+  const categoryOptions = useMemo(() => {
+    const counts = new Map<string, number>();
+    (expenses || []).forEach(e => {
+      if (e.category) counts.set(e.category, (counts.get(e.category) || 0) + 1);
+    });
+    return Array.from(counts.entries())
+      .map(([value, count]) => ({ value, count, label: getCategoryLabel(value) }))
+      .sort((a, b) => a.label.localeCompare(b.label, 'sq'));
+  }, [expenses]);
+
+  const activeFilterCount = [
+    searchQuery.trim() !== '',
+    categoryFilter !== '__all__',
+    statusFilter !== '__all__',
+    approvalFilter !== '__all__',
+    recurringFilter !== '__all__',
+    departmentFilter !== '__all__',
+    projectFilter !== '__all__',
+    monthFilter !== '__all__',
+    yearFilter !== '__all__',
+    minAmount !== '',
+    maxAmount !== '',
+  ].filter(Boolean).length;
+
+  const resetFilters = () => {
+    setSearchQuery('');
+    setCategoryFilter('__all__');
+    setStatusFilter('__all__');
+    setApprovalFilter('__all__');
+    setRecurringFilter('__all__');
+    setDepartmentFilter('__all__');
+    setProjectFilter('__all__');
+    setMonthFilter('__all__');
+    setYearFilter('__all__');
+    setMinAmount('');
+    setMaxAmount('');
+  };
+
+  const filteredExpenses = useMemo(() => {
+    let list = expenses ? [...expenses] : [];
+
+    const q = searchQuery.trim().toLowerCase();
+    if (q) {
+      list = list.filter(e => {
+        const proj = (e as any).projectId ? projectById.get((e as any).projectId) : undefined;
+        return (
+          (e.title || '').toLowerCase().includes(q) ||
+          (e.description || '').toLowerCase().includes(q) ||
+          getCategoryLabel(e.category || '').toLowerCase().includes(q) ||
+          (proj?.name || '').toLowerCase().includes(q)
+        );
+      });
+    }
+    if (categoryFilter !== '__all__') list = list.filter(e => e.category === categoryFilter);
+    if (statusFilter !== '__all__') list = list.filter(e => e.status === statusFilter);
+    if (approvalFilter !== '__all__') {
+      list = list.filter(e => ((e as any).approvalStatus || 'Approved') === approvalFilter);
+    }
+    if (recurringFilter === 'recurring') list = list.filter(e => !!e.isRecurring);
+    else if (recurringFilter === 'paused') list = list.filter(e => !!e.isRecurring && !!(e as any).isRecurringPaused);
+    else if (recurringFilter === 'auto') list = list.filter(e => !!(e as any).autoGenerated);
+    else if (recurringFilter === 'onetime') list = list.filter(e => !e.isRecurring && !(e as any).autoGenerated);
+
+    if (departmentFilter === '__none__') list = list.filter(e => !e.departmentId);
+    else if (departmentFilter !== '__all__') list = list.filter(e => e.departmentId === departmentFilter);
+
+    if (projectFilter === '__none__') list = list.filter(e => !(e as any).projectId);
+    else if (projectFilter !== '__all__') list = list.filter(e => (e as any).projectId === projectFilter);
+
+    if (monthFilter !== '__all__' || yearFilter !== '__all__') {
+      list = list.filter(e => {
+        const d = getExpenseDate(e);
+        if (!d) return false;
+        if (monthFilter !== '__all__' && d.getMonth() !== Number(monthFilter)) return false;
+        if (yearFilter !== '__all__' && d.getFullYear() !== Number(yearFilter)) return false;
+        return true;
+      });
+    }
+
+    // Amount bounds are compared in ALL so a EUR row is judged on the same scale
+    // as the totals above it.
+    const min = minAmount.trim() === '' ? null : Number(minAmount);
+    const max = maxAmount.trim() === '' ? null : Number(maxAmount);
+    if (min !== null && !isNaN(min)) list = list.filter(e => toAll(e.amount ?? 0, (e as any).currency) >= min);
+    if (max !== null && !isNaN(max)) list = list.filter(e => toAll(e.amount ?? 0, (e as any).currency) <= max);
+
+    const dateMs = (e: Expense) => getExpenseDate(e)?.getTime() ?? 0;
+    list.sort((a, b) => {
+      if (sortBy === 'date_asc') return dateMs(a) - dateMs(b);
+      if (sortBy === 'amount_desc') return toAll(b.amount ?? 0, (b as any).currency) - toAll(a.amount ?? 0, (a as any).currency);
+      if (sortBy === 'amount_asc') return toAll(a.amount ?? 0, (a as any).currency) - toAll(b.amount ?? 0, (b as any).currency);
+      if (sortBy === 'title_asc') return (a.title || '').localeCompare(b.title || '', 'sq');
+      return dateMs(b) - dateMs(a);
+    });
+    return list;
+  }, [expenses, searchQuery, categoryFilter, statusFilter, approvalFilter, recurringFilter,
+      departmentFilter, projectFilter, monthFilter, yearFilter, minAmount, maxAmount, sortBy, projectById]);
+
+  // Cap rendered rows — an unfiltered tenant can carry hundreds of generated occurrences.
+  const [visibleCount, setVisibleCount] = useState(50);
+  useEffect(() => { setVisibleCount(50); }, [searchQuery, categoryFilter, statusFilter, approvalFilter,
+    recurringFilter, departmentFilter, projectFilter, monthFilter, yearFilter, minAmount, maxAmount, sortBy]);
+  const visibleExpenses = useMemo(() => filteredExpenses.slice(0, visibleCount), [filteredExpenses, visibleCount]);
+
+  const totalExpenses = filteredExpenses.reduce((sum, exp) => countable(exp) ? sum + toAll(exp.amount ?? 0, (exp as any).currency) : sum, 0);
+  const activeExpenses = filteredExpenses.filter(e => e.status === 'Active').length;
+  const recurringExpenses = filteredExpenses.filter(e => e.isRecurring).length;
+
+  // Breakdown of the current selection — the answer to "ku po shkojnë paratë".
+  const categoryBreakdown = useMemo(() => {
+    const totals = new Map<string, number>();
+    filteredExpenses.forEach(exp => {
+      if (!countable(exp)) return;
+      const key = exp.category || 'Other';
+      totals.set(key, (totals.get(key) || 0) + toAll(exp.amount ?? 0, (exp as any).currency));
+    });
+    return Array.from(totals.entries())
+      .map(([category, value]) => ({ category, value }))
+      .sort((a, b) => b.value - a.value);
+  }, [filteredExpenses]);
+
+  const exportCsv = () => {
+    const rows = [
+      ['Titulli', 'Kategoria', 'Shuma', 'Monedha', 'Shuma (ALL)', 'Departamenti', 'Projekti', 'Data', 'Periodike', 'Statusi', 'Miratimi'],
+      ...filteredExpenses.map(e => {
+        const d = getExpenseDate(e);
+        return [
+          e.title || '',
+          getCategoryLabel(e.category || ''),
+          String(e.amount ?? 0),
+          (e as any).currency || 'ALL',
+          String(Math.round(toAll(e.amount ?? 0, (e as any).currency))),
+          teams?.find(t => t.id === e.departmentId)?.name || '',
+          ((e as any).projectId ? projectById.get((e as any).projectId)?.name : '') || '',
+          d ? d.toLocaleDateString('sq-AL') : '',
+          e.isRecurring ? getFreqLabel(e.recurringFrequency) : ((e as any).autoGenerated ? 'Auto' : 'Njëherësh'),
+          e.status || '',
+          (e as any).approvalStatus || '',
+        ];
+      }),
+    ];
+    const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `shpenzime-${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
   const monthlyExpenses = useMemo(() => {
     const totals = new Array(12).fill(0) as number[];
     (expenses || []).forEach(exp => {
@@ -265,20 +451,6 @@ const ExpensesView: React.FC = () => {
   const pendingApprovalCount = expenses?.filter(e => (e as any).approvalStatus === 'Submitted').length || 0;
   const isAdminOrManager = permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin;
 
-  const getCategoryLabel = (category: string) => {
-    switch (category) {
-      case 'Salary': return 'Paga';
-      case 'Rent': return 'Qira';
-      case 'Utilities': return 'Shërbime (Ujë, Dritë)';
-      case 'Office': return 'Zyrë';
-      case 'Hosting': return 'Hosting & Software';
-      case 'Marketing': return 'Marketing';
-      case 'Travel': return 'Udhëtim';
-      case 'Other': return 'Tjetër';
-      default: return category;
-    }
-  };
-
   if (expensesLoading) {
     return <div className="flex items-center justify-center h-96">Duke ngarkuar shpenzimet...</div>;
   }
@@ -289,7 +461,11 @@ const ExpensesView: React.FC = () => {
         <div>
           <h1 className="text-h2 text-foreground">Shpenzimet</h1>
           <p className="text-body text-muted-foreground mt-1">
-            {expenses?.length || 0} shpenzime totale · {activeExpenses} aktive · {recurringExpenses} periodike
+            {activeFilterCount > 0 ? (
+              <>Duke shfaqur <span className="font-medium text-foreground">{filteredExpenses.length}</span> nga {expenses?.length || 0} shpenzime</>
+            ) : (
+              <>{expenses?.length || 0} shpenzime totale · {activeExpenses} aktive · {recurringExpenses} periodike</>
+            )}
             {isAdminOrManager && pendingApprovalCount > 0 && (
               <span className="ml-2 inline-flex items-center gap-1 text-amber-600 font-medium">
                 <Clock className="w-3.5 h-3.5" />
@@ -316,10 +492,195 @@ const ExpensesView: React.FC = () => {
         )}
       </div>
 
+      {/* ── Filtrat ── everything below reacts to these */}
+      <Card className="p-3 sm:p-4 space-y-3">
+        <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
+          <div className="relative flex-1 min-w-0">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-muted-foreground pointer-events-none" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={e => setSearchQuery(e.target.value)}
+              placeholder="Kërko titull, përshkrim, kategori ose projekt..."
+              className="h-9 w-full rounded-md border border-input bg-background pl-8 pr-8 text-sm focus:outline-none focus:ring-2 focus:ring-ring"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery('')}
+                aria-label="Pastro kërkimin"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          <div className="flex gap-2 items-center">
+            <select
+              value={sortBy}
+              onChange={e => setSortBy(e.target.value)}
+              className="h-9 px-2 text-xs rounded-md border border-input bg-background text-muted-foreground focus:outline-none"
+              title="Renditja"
+            >
+              <option value="date_desc">Data ↓</option>
+              <option value="date_asc">Data ↑</option>
+              <option value="amount_desc">Shuma ↓</option>
+              <option value="amount_asc">Shuma ↑</option>
+              <option value="title_asc">Titulli A-Z</option>
+            </select>
+            <Button variant="outline" size="sm" className="h-9 gap-1.5" onClick={exportCsv} disabled={filteredExpenses.length === 0}>
+              <Download className="w-3.5 h-3.5" /> <span className="hidden sm:inline">CSV</span>
+            </Button>
+            {activeFilterCount > 0 && (
+              <Button variant="ghost" size="sm" className="h-9 gap-1.5 text-muted-foreground" onClick={resetFilters}>
+                <RotateCcw className="w-3.5 h-3.5" /> Pastro ({activeFilterCount})
+              </Button>
+            )}
+          </div>
+        </div>
+
+        <div className="flex gap-2 flex-wrap">
+          <select
+            value={categoryFilter}
+            onChange={e => setCategoryFilter(e.target.value)}
+            className="h-8 px-2 text-xs rounded-md border border-input bg-background text-muted-foreground focus:outline-none max-w-[190px]"
+            title="Filtro sipas kategorisë"
+          >
+            <option value="__all__">Çdo kategori</option>
+            {categoryOptions.map(c => (
+              <option key={c.value} value={c.value}>{c.label} ({c.count})</option>
+            ))}
+          </select>
+          <select
+            value={statusFilter}
+            onChange={e => setStatusFilter(e.target.value)}
+            className="h-8 px-2 text-xs rounded-md border border-input bg-background text-muted-foreground focus:outline-none"
+            title="Filtro sipas statusit"
+          >
+            <option value="__all__">Çdo status</option>
+            <option value="Active">Aktiv</option>
+            <option value="Inactive">Joaktiv</option>
+            <option value="Cancelled">Anuluar</option>
+          </select>
+          <select
+            value={recurringFilter}
+            onChange={e => setRecurringFilter(e.target.value)}
+            className="h-8 px-2 text-xs rounded-md border border-input bg-background text-muted-foreground focus:outline-none"
+            title="Filtro sipas llojit"
+          >
+            <option value="__all__">Çdo lloj</option>
+            <option value="recurring">Vetëm periodike</option>
+            <option value="paused">Periodike në pauzë</option>
+            <option value="auto">Gjeneruar automatikisht</option>
+            <option value="onetime">Vetëm njëherësh</option>
+          </select>
+          <select
+            value={monthFilter}
+            onChange={e => setMonthFilter(e.target.value)}
+            className="h-8 px-2 text-xs rounded-md border border-input bg-background text-muted-foreground focus:outline-none"
+            title="Filtro sipas muajit"
+          >
+            <option value="__all__">Çdo muaj</option>
+            {MONTH_NAMES_SQ.map((m, i) => <option key={m} value={i}>{m}</option>)}
+          </select>
+          <select
+            value={yearFilter}
+            onChange={e => setYearFilter(e.target.value)}
+            className="h-8 px-2 text-xs rounded-md border border-input bg-background text-muted-foreground focus:outline-none"
+            title="Filtro sipas vitit"
+          >
+            <option value="__all__">Çdo vit</option>
+            {expenseYears.map(y => <option key={y} value={y}>{y}</option>)}
+          </select>
+          <button
+            type="button"
+            onClick={() => setShowAdvanced(v => !v)}
+            className={`h-8 px-3 text-xs rounded-md border font-medium inline-flex items-center gap-1.5 transition-colors ${
+              showAdvanced ? 'bg-muted border-input text-foreground' : 'bg-background border-input text-muted-foreground hover:bg-muted'
+            }`}
+          >
+            <Filter className="w-3.5 h-3.5" /> Më shumë
+          </button>
+        </div>
+
+        {showAdvanced && (
+          <div className="flex gap-2 flex-wrap items-center pt-1 border-t border-border/40">
+            <select
+              value={departmentFilter}
+              onChange={e => setDepartmentFilter(e.target.value)}
+              className="h-8 px-2 text-xs rounded-md border border-input bg-background text-muted-foreground focus:outline-none max-w-[190px]"
+              title="Filtro sipas departamentit"
+            >
+              <option value="__all__">Çdo departament</option>
+              <option value="__none__">Pa departament</option>
+              {(teams || []).map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
+            </select>
+            <select
+              value={projectFilter}
+              onChange={e => setProjectFilter(e.target.value)}
+              className="h-8 px-2 text-xs rounded-md border border-input bg-background text-muted-foreground focus:outline-none max-w-[190px]"
+              title="Filtro sipas projektit"
+            >
+              <option value="__all__">Çdo projekt</option>
+              <option value="__none__">Pa projekt</option>
+              {(projects || [])
+                .slice()
+                .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+                .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            </select>
+            <div className="flex items-center gap-1.5">
+              <span className="text-xs text-muted-foreground">Shuma (ALL)</span>
+              <input
+                type="number"
+                min="0"
+                value={minAmount}
+                onChange={e => setMinAmount(e.target.value)}
+                placeholder="nga"
+                className="h-8 w-24 px-2 text-xs rounded-md border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+              <span className="text-xs text-muted-foreground">—</span>
+              <input
+                type="number"
+                min="0"
+                value={maxAmount}
+                onChange={e => setMaxAmount(e.target.value)}
+                placeholder="deri"
+                className="h-8 w-24 px-2 text-xs rounded-md border border-input bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+              />
+            </div>
+          </div>
+        )}
+
+        {/* Approval chips — the daily job for an Admin/Manager is "çfarë pret miratim" */}
+        <div className="flex gap-2 flex-wrap">
+          {(['__all__', 'Submitted', 'Approved', 'Rejected'] as const).map(s => {
+            const count = s === '__all__'
+              ? (expenses?.length || 0)
+              : (expenses || []).filter(e => ((e as any).approvalStatus || 'Approved') === s).length;
+            return (
+              <button
+                key={s}
+                onClick={() => setApprovalFilter(s)}
+                className={`h-8 px-3 text-xs rounded-full border font-medium transition-colors ${
+                  approvalFilter === s
+                    ? 'bg-primary text-primary-foreground border-primary'
+                    : 'bg-background border-input text-muted-foreground hover:bg-muted'
+                }`}
+              >
+                {s === '__all__' ? 'Të gjitha' : s === 'Submitted' ? 'Në pritje' : s === 'Approved' ? 'Aprovuar' : 'Refuzuar'}
+                <span className="ml-1 opacity-60">({count})</span>
+              </button>
+            );
+          })}
+        </div>
+      </Card>
+
       <div className="grid grid-cols-3 gap-3 sm:gap-6">
         <Card className="p-3 sm:p-6 space-y-1 sm:space-y-2">
           <div className="flex items-center justify-between">
-            <p className="text-xs sm:text-body-sm text-muted-foreground">Shpenzime Totale</p>
+            <p className="text-xs sm:text-body-sm text-muted-foreground">
+              {activeFilterCount > 0 ? 'Totali i filtruar' : 'Shpenzime Totale'}
+            </p>
             <DollarSign className="w-4 h-4 sm:w-5 sm:h-5 text-error" />
           </div>
           <p className="text-lg sm:text-h2 text-foreground font-medium">
@@ -348,12 +709,16 @@ const ExpensesView: React.FC = () => {
         </Card>
       </div>
 
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 sm:gap-6">
       {/* Shpenzime sipas muajve */}
       <Card className="p-4 sm:p-6 space-y-4">
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <CalendarIcon className="w-4 h-4 text-muted-foreground" />
-            <h3 className="text-body font-medium text-foreground">Shpenzime sipas Muajve</h3>
+            <div>
+              <h3 className="text-body font-medium text-foreground">Shpenzime sipas Muajve</h3>
+              <p className="text-[11px] text-muted-foreground">Kliko një muaj për ta filtruar listën</p>
+            </div>
           </div>
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => setByMonthYear(y => y - 1)} aria-label="Viti i mëparshëm">‹</Button>
@@ -370,16 +735,30 @@ const ExpensesView: React.FC = () => {
           {MONTH_LABELS_SQ.map((label, i) => {
             const val = monthlyExpenses[i];
             const pct = Math.round((val / monthlyMax) * 100);
+            // Selected = the list is currently narrowed to exactly this month+year.
+            const isSelected = monthFilter === String(i) && yearFilter === String(byMonthYear);
             return (
-              <div key={label} className="flex items-center gap-3">
-                <span className="text-xs text-muted-foreground w-8 shrink-0">{label}</span>
+              <button
+                key={label}
+                type="button"
+                aria-pressed={isSelected}
+                onClick={() => {
+                  if (isSelected) { setMonthFilter('__all__'); setYearFilter('__all__'); }
+                  else { setMonthFilter(String(i)); setYearFilter(String(byMonthYear)); }
+                }}
+                className={`w-full flex items-center gap-3 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-muted/50 ${
+                  isSelected ? 'bg-muted' : ''
+                }`}
+                title={`Filtro ${MONTH_NAMES_SQ[i]} ${byMonthYear}`}
+              >
+                <span className={`text-xs w-8 shrink-0 ${isSelected ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>{label}</span>
                 <div className="flex-1 h-5 bg-muted/40 rounded-md overflow-hidden">
-                  <div className="h-full bg-error/70 rounded-md transition-all" style={{ width: `${pct}%` }} />
+                  <div className={`h-full rounded-md transition-all ${isSelected ? 'bg-error' : 'bg-error/70'}`} style={{ width: `${pct}%` }} />
                 </div>
                 <span className="text-xs font-medium text-foreground w-28 text-right tabular-nums">
                   {val > 0 ? `${Math.round(val).toLocaleString()} ALL` : '—'}
                 </span>
-              </div>
+              </button>
             );
           })}
         </div>
@@ -389,10 +768,72 @@ const ExpensesView: React.FC = () => {
         </div>
       </Card>
 
+      {/* Shpenzime sipas kategorive — follows the active filters, and each row is
+          itself a filter shortcut. */}
+      <Card className="p-4 sm:p-6 space-y-4">
+        <div className="flex items-center gap-2">
+          <Filter className="w-4 h-4 text-muted-foreground" />
+          <div>
+            <h3 className="text-body font-medium text-foreground">Sipas Kategorive</h3>
+            <p className="text-[11px] text-muted-foreground">
+              {activeFilterCount > 0 ? 'Nga rezultatet e filtruara' : 'Të gjitha shpenzimet'} · kliko për të filtruar
+            </p>
+          </div>
+        </div>
+        {categoryBreakdown.length === 0 ? (
+          <p className="text-body-sm text-muted-foreground py-6 text-center">Asnjë shpenzim për këtë përzgjedhje.</p>
+        ) : (
+          <div className="space-y-2">
+            {categoryBreakdown.slice(0, 12).map(({ category, value }) => {
+              const max = categoryBreakdown[0].value || 1;
+              const pct = Math.round((value / max) * 100);
+              const share = totalExpenses > 0 ? Math.round((value / totalExpenses) * 100) : 0;
+              const isSelected = categoryFilter === category;
+              return (
+                <button
+                  key={category}
+                  type="button"
+                  aria-pressed={isSelected}
+                  onClick={() => setCategoryFilter(isSelected ? '__all__' : category)}
+                  className={`w-full flex items-center gap-3 rounded-md px-1 py-0.5 text-left transition-colors hover:bg-muted/50 ${
+                    isSelected ? 'bg-muted' : ''
+                  }`}
+                >
+                  <span className={`text-xs w-28 shrink-0 truncate ${isSelected ? 'text-foreground font-medium' : 'text-muted-foreground'}`}>
+                    {getCategoryLabel(category)}
+                  </span>
+                  <div className="flex-1 h-5 bg-muted/40 rounded-md overflow-hidden">
+                    <div className={`h-full rounded-md transition-all ${isSelected ? 'bg-primary' : 'bg-primary/60'}`} style={{ width: `${pct}%` }} />
+                  </div>
+                  <span className="text-xs font-medium text-foreground w-28 text-right tabular-nums">
+                    {Math.round(value).toLocaleString()} ALL
+                    <span className="text-muted-foreground font-normal ml-1">{share}%</span>
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </Card>
+      </div>
+
+      {filteredExpenses.length === 0 && (
+        <Card className="p-10 text-center space-y-3">
+          <p className="text-body text-muted-foreground">Nuk u gjet asnjë shpenzim me këto filtra.</p>
+          {activeFilterCount > 0 && (
+            <Button variant="outline" size="sm" className="gap-1.5" onClick={resetFilters}>
+              <RotateCcw className="w-3.5 h-3.5" /> Pastro filtrat
+            </Button>
+          )}
+        </Card>
+      )}
+
       {/* Mobile card layout */}
       <div className="sm:hidden space-y-3">
-        {expenses?.map((expense) => {
+        {visibleExpenses.map((expense) => {
           const team = teams?.find(t => t.id === expense.departmentId);
+          const project = (expense as any).projectId ? projectById.get((expense as any).projectId) : undefined;
+          const expDate = getExpenseDate(expense);
           return (
             <Card key={expense.id} className="p-4 space-y-3">
               <div className="flex items-start justify-between">
@@ -415,6 +856,12 @@ const ExpensesView: React.FC = () => {
                 </span>
                 {team && <span className="text-xs text-muted-foreground">· {team.name}</span>}
               </div>
+              {(expDate || project) && (
+                <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                  {expDate && <span className="inline-flex items-center gap-1"><CalendarIcon className="w-3 h-3" />{expDate.toLocaleDateString('sq-AL')}</span>}
+                  {project && <span className="truncate">· {project.name}</span>}
+                </div>
+              )}
               {expense.isRecurring && (
                 <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                   <Repeat className="w-3 h-3 text-tertiary" />
@@ -475,7 +922,7 @@ const ExpensesView: React.FC = () => {
       </div>
 
       {/* Desktop table */}
-      <Card className="overflow-hidden hidden sm:block">
+      <Card className={`overflow-hidden hidden ${filteredExpenses.length > 0 ? 'sm:block' : ''}`}>
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead className="bg-muted">
@@ -488,6 +935,9 @@ const ExpensesView: React.FC = () => {
                 </th>
                 <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
                   Shuma
+                </th>
+                <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
+                  Data
                 </th>
                 <th className="px-6 py-4 text-left text-body-sm font-medium text-foreground">
                   Departamenti
@@ -504,9 +954,11 @@ const ExpensesView: React.FC = () => {
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
-              {expenses?.map((expense) => {
+              {visibleExpenses.map((expense) => {
                 const team = teams?.find(t => t.id === expense.departmentId);
-                
+                const project = (expense as any).projectId ? projectById.get((expense as any).projectId) : undefined;
+                const expDate = getExpenseDate(expense);
+
                 return (
                   <tr
                     key={expense.id}
@@ -518,6 +970,11 @@ const ExpensesView: React.FC = () => {
                         {expense.description && (
                           <p className="text-body-sm text-muted-foreground line-clamp-1">
                             {expense.description}
+                          </p>
+                        )}
+                        {project && (
+                          <p className="text-[11px] text-muted-foreground truncate max-w-[240px]">
+                            Projekt: {project.name}
                           </p>
                         )}
                       </div>
@@ -536,6 +993,9 @@ const ExpensesView: React.FC = () => {
                           {expense.currency}
                         </span>
                       </div>
+                    </td>
+                    <td className="px-6 py-4 text-body-sm text-muted-foreground whitespace-nowrap">
+                      {expDate ? expDate.toLocaleDateString('sq-AL') : '-'}
                     </td>
                     <td className="px-6 py-4 text-body text-foreground">
                       {team ? team.name : '-'}
@@ -625,6 +1085,17 @@ const ExpensesView: React.FC = () => {
         </div>
       </Card>
 
+      {filteredExpenses.length > visibleExpenses.length && (
+        <div className="flex flex-col items-center gap-2">
+          <p className="text-body-sm text-muted-foreground">
+            {visibleExpenses.length} nga {filteredExpenses.length} shpenzime
+          </p>
+          <Button variant="outline" onClick={() => setVisibleCount(c => c + 50)}>
+            Shfaq më shumë
+          </Button>
+        </div>
+      )}
+
       {selectedExpense && (
         <Dialog open={isEditDialogOpen} onOpenChange={setIsEditDialogOpen}>
           <DialogContent className="max-w-2xl">
@@ -698,6 +1169,11 @@ const ExpensesView: React.FC = () => {
     </div>
   );
 };
+
+const MONTH_NAMES_SQ = [
+  'Janar', 'Shkurt', 'Mars', 'Prill', 'Maj', 'Qershor',
+  'Korrik', 'Gusht', 'Shtator', 'Tetor', 'Nëntor', 'Dhjetor',
+];
 
 const FREQ_LABELS: Record<string, string> = {
   weekly: 'Javore',
