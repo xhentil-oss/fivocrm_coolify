@@ -110,7 +110,10 @@ export async function whmcsCall(action: string, params: Record<string, string | 
 
 // ── Webhook signature (HMAC-SHA256) ───────────────────────────────────────────
 export function verifyWebhookSignature(rawBody: Buffer | string, signature: string | undefined): boolean {
-  const secret = process.env.WHMCS_WEBHOOK_SECRET;
+  // Trim the secret: a stray trailing newline/space when pasted into the Vercel
+  // env (or the PHP define) silently breaks every signature → 401. The PHP hook
+  // trims its side too, so both compute the HMAC over the same key bytes.
+  const secret = process.env.WHMCS_WEBHOOK_SECRET?.trim();
   if (!secret || !signature) return false;
   const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
   const a = Buffer.from(expected);
@@ -299,9 +302,26 @@ export function mapWhmcsClientFull(c: any): MappedClientFull {
 }
 
 // ── Fetch helpers ─────────────────────────────────────────────────────────────
-export async function fetchInvoice(invoiceId: string | number): Promise<MappedInvoice> {
-  const data = await whmcsCall('GetInvoice', { invoiceid: invoiceId });
-  return mapWhmcsInvoice(data);
+export async function fetchInvoice(invoiceId: string | number, clientId?: string | number): Promise<MappedInvoice> {
+  try {
+    const data = await whmcsCall('GetInvoice', { invoiceid: invoiceId });
+    return mapWhmcsInvoice(data);
+  } catch (err: any) {
+    // Many WHMCS API roles allow GetInvoices (list) but NOT GetInvoice (single).
+    // On a permission error, fall back to the permitted list endpoint, filtered
+    // by the client when the webhook told us who it is, and pick the id out.
+    if (!/not allowed|invalid permissions|permission/i.test(String(err?.message || ''))) throw err;
+    const baseParams: Record<string, string | number> = clientId ? { userid: clientId } : {};
+    for (let start = 0; ; start += 100) {
+      const data = await whmcsCall('GetInvoices', { ...baseParams, limitstart: start, limitnum: 100 });
+      const raw = data?.invoices?.invoice;
+      const list: any[] = Array.isArray(raw) ? raw : raw ? [raw] : [];
+      const found = list.find((i) => String(i.id ?? i.invoiceid) === String(invoiceId));
+      if (found) return mapWhmcsInvoice(found);
+      if (list.length < 100) break;
+    }
+    throw new Error(`Fatura ${invoiceId} nuk u gjet përmes GetInvoices (GetInvoice i palejuar)`);
+  }
 }
 
 export async function fetchClient(clientId: string | number): Promise<MappedClient> {

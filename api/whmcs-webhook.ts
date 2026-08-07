@@ -71,7 +71,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (CLIENT_EVENTS.has(event) && payload.clientId) {
       await syncClientById(payload.clientId);
     } else if (INVOICE_EVENTS.has(event) && payload.invoiceId) {
-      await syncInvoiceById(payload.invoiceId);
+      await syncInvoiceById(payload.invoiceId, payload.clientId);
     } else if (SERVICE_EVENTS.has(event) && payload.serviceId) {
       await syncSubscriptionById(payload.serviceId);
     } else {

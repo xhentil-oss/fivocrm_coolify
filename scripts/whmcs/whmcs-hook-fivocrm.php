@@ -40,7 +40,9 @@ function fivocrm_send_event($event, array $data)
 
     $payload = array_merge(array('event' => $event), $data);
     $body = json_encode($payload);
-    $signature = hash_hmac('sha256', $body, FIVOCRM_WEBHOOK_SECRET);
+    // trim(): a stray trailing newline/space in the secret (here or in the Vercel
+    // env) silently breaks the signature → 401. Both sides trim so the HMAC key matches.
+    $signature = hash_hmac('sha256', $body, trim(FIVOCRM_WEBHOOK_SECRET));
 
     $ch = curl_init(FIVOCRM_WEBHOOK_URL);
     curl_setopt_array($ch, array(

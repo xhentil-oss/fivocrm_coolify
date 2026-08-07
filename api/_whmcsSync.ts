@@ -330,9 +330,9 @@ async function upsertDomain(dom: MappedDomain, customerId: string | null, teamId
 }
 
 // ── By-id entrypoints (used by the real-time webhook) ─────────────────────────
-export async function syncInvoiceById(invoiceId: string | number): Promise<void> {
+export async function syncInvoiceById(invoiceId: string | number, clientId?: string | number): Promise<void> {
   const teamId = await resolveTeamId();
-  const inv = await fetchInvoice(invoiceId);
+  const inv = await fetchInvoice(invoiceId, clientId);
   let client: MappedClient | null = null;
   if (inv.whmcsClientId) {
     try { client = await fetchClient(inv.whmcsClientId); } catch { /* non-blocking */ }
