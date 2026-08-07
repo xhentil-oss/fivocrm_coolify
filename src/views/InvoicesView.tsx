@@ -511,8 +511,10 @@ const InvoicesView: React.FC = () => {
   const revenueByMonth = useMemo(() => {
     return buildRevenueByMonthByBasis(accountingBasis, invoices, selectedYear, MONTH_LABELS);
   }, [accountingBasis, invoices, selectedYear]);
-  const maxMonthRevenue = useMemo(() => Math.max(...revenueByMonth.map(m => m.paid), 1), [revenueByMonth]);
-  const yearTotalRevenue = useMemo(() => revenueByMonth.reduce((s, m) => s + m.paid, 0), [revenueByMonth]);
+  // Bar scales to collected + outstanding (a stacked bar); the year total uses
+  // `value` (billed for accrual, collected for cash) so it matches the basis.
+  const maxMonthRevenue = useMemo(() => Math.max(...revenueByMonth.map(m => m.paid + m.pending), 1), [revenueByMonth]);
+  const yearTotalRevenue = useMemo(() => revenueByMonth.reduce((s, m) => s + m.value, 0), [revenueByMonth]);
   const currentMonth = new Date().getMonth();
   const currentYear = new Date().getFullYear();
   const availableYears = [currentYear, currentYear - 1, currentYear - 2, currentYear - 3];
@@ -800,22 +802,25 @@ const InvoicesView: React.FC = () => {
         </div>
         <div className="grid grid-cols-3 sm:grid-cols-6 md:grid-cols-12 gap-1.5 sm:gap-2">
           {revenueByMonth.map((m, i) => {
-            const barHeight = maxMonthRevenue > 0 ? Math.max((m.paid / maxMonthRevenue) * 100, m.paid > 0 ? 4 : 0) : 0;
+            // Stacked bar: paid (green) below, pending/outstanding (amber) on top.
+            const paidPct = maxMonthRevenue > 0 ? (m.paid / maxMonthRevenue) * 100 : 0;
+            const pendingPct = maxMonthRevenue > 0 ? (m.pending / maxMonthRevenue) * 100 : 0;
             const isCurrentMonth = i === currentMonth && selectedYear === currentYear;
             const hasPending = m.pending > 0;
+            const nothing = m.paid === 0 && !hasPending;
             return (
               <div key={m.label} className="flex flex-col items-center gap-1 group relative">
                 <div className="w-full flex flex-col items-center justify-end" style={{ height: 64 }}>
+                  {hasPending && (
+                    <div className="w-full bg-amber-300/60" style={{ height: `${pendingPct}%`, minHeight: 3 }} />
+                  )}
                   {m.paid > 0 && (
                     <div
-                      className={`w-full rounded-t-sm transition-all duration-500 ${isCurrentMonth ? 'bg-green-500' : 'bg-green-400/70'}`}
-                      style={{ height: `${barHeight}%`, minHeight: m.paid > 0 ? 4 : 0 }}
+                      className={`w-full transition-all duration-500 ${hasPending ? '' : 'rounded-t-sm'} ${isCurrentMonth ? 'bg-green-500' : 'bg-green-400/70'}`}
+                      style={{ height: `${paidPct}%`, minHeight: 4 }}
                     />
                   )}
-                  {hasPending && m.paid === 0 && (
-                    <div className="w-full rounded-t-sm bg-amber-300/60" style={{ height: '8%', minHeight: 3 }} />
-                  )}
-                  {m.paid === 0 && !hasPending && (
+                  {nothing && (
                     <div className="w-full rounded-t-sm bg-muted" style={{ height: '4%', minHeight: 2 }} />
                   )}
                 </div>
