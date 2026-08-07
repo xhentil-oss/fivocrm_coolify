@@ -123,6 +123,20 @@ const FinancesView: React.FC = () => {
     return { whmcs, direct, total: whmcs + direct };
   }, [invoices, now]);
 
+  // Unpaid (outstanding) balance from WHMCS — not period-bound, it's the current
+  // sum of what's still owed on WHMCS invoices (Pending/Overdue/Partial).
+  const whmcsUnpaid = useMemo(() => {
+    let amount = 0, count = 0;
+    for (const inv of invoices || []) {
+      if ((inv as any).source !== 'whmcs') continue;
+      const out = getInvoiceOutstandingAll(inv);
+      if (out <= 0) continue;
+      amount += out;
+      count++;
+    }
+    return { amount, count };
+  }, [invoices]);
+
   // Same split, but per month for the last 6 months (WHMCS income over time).
   const incomeSourceByMonth = useMemo(() => {
     const inv = invoices || [];
@@ -524,6 +538,18 @@ const FinancesView: React.FC = () => {
               positive
             />
           </div>
+        </div>
+
+        {/* WHMCS unpaid (outstanding) balance */}
+        <div className="mt-4 flex items-center justify-between gap-3 rounded-lg bg-amber-500/10 border border-amber-500/30 px-3 py-2.5">
+          <div className="flex items-center gap-2 min-w-0">
+            <Clock className="w-4 h-4 text-amber-600 shrink-0" />
+            <div className="min-w-0">
+              <p className="text-sm font-medium text-foreground">Pa paguar nga WHMCS</p>
+              <p className="text-[11px] text-muted-foreground">{whmcsUnpaid.count} fatura ende të papaguara (Pending/Overdue)</p>
+            </div>
+          </div>
+          <p className="text-base font-bold tabular-nums text-amber-600 shrink-0">{formatALL(whmcsUnpaid.amount)}</p>
         </div>
 
         {/* WHMCS income by month (last 6 months) */}
