@@ -66,6 +66,9 @@ const InvoicesView: React.FC = () => {
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc'>('date_desc');
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
+  // Filter the list by a specific month ('__all__' = no month filter). Combined
+  // with selectedYear, so choosing a month narrows to that month of that year.
+  const [monthFilter, setMonthFilter] = useState<string>('__all__');
   // Accounting basis: Accrual (date of invoice) vs Cash (date of payment).
   // Default = Accrual (IFRS/GAAP standard for proper P&L reporting).
   const [accountingBasis, setAccountingBasis] = useState<AccountingBasis>('accrual');
@@ -587,6 +590,13 @@ const InvoicesView: React.FC = () => {
     if (statusFilter !== '__all__') list = list.filter(inv => inv.status === statusFilter);
     if (projectFilter === '__none__') list = list.filter(inv => !inv.projectId);
     else if (projectFilter !== '__all__') list = list.filter(inv => inv.projectId === projectFilter);
+    if (monthFilter !== '__all__') {
+      const m = Number(monthFilter);
+      list = list.filter(inv => {
+        const d = inv.invoiceDate ? new Date(inv.invoiceDate as any) : (inv.createdAt ? new Date(inv.createdAt as any) : null);
+        return d && !isNaN(d.getTime()) && d.getMonth() === m && d.getFullYear() === selectedYear;
+      });
+    }
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       list = list.filter(inv => {
@@ -607,7 +617,7 @@ const InvoicesView: React.FC = () => {
       return 0;
     });
     return list;
-  }, [invoices, statusFilter, projectFilter, searchQuery, sortBy, customers, projectById]);
+  }, [invoices, statusFilter, projectFilter, monthFilter, selectedYear, searchQuery, sortBy, customers, projectById]);
 
   // Deep link from a project's "Faturimi" panel: /app/invoices?project=<id>
   // (and ?project=none for the unlinked set).
@@ -627,7 +637,7 @@ const InvoicesView: React.FC = () => {
 
   // Cap rendered rows to avoid mounting hundreds of invoice rows at once on mobile.
   const [visibleCount, setVisibleCount] = useState(50);
-  useEffect(() => { setVisibleCount(50); }, [statusFilter, projectFilter, searchQuery, sortBy]);
+  useEffect(() => { setVisibleCount(50); }, [statusFilter, projectFilter, monthFilter, selectedYear, searchQuery, sortBy]);
   const visibleInvoices = useMemo(
     () => filteredInvoices.slice(0, visibleCount),
     [filteredInvoices, visibleCount]
@@ -936,6 +946,23 @@ const InvoicesView: React.FC = () => {
               .slice()
               .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
               .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+          <select
+            value={monthFilter}
+            onChange={e => setMonthFilter(e.target.value)}
+            className="h-8 px-2 text-xs rounded-md border border-input bg-background text-muted-foreground focus:outline-none"
+            title="Filtro sipas muajit"
+          >
+            <option value="__all__">Çdo muaj</option>
+            {MONTH_LABELS.map((m, i) => <option key={i} value={i}>{m}</option>)}
+          </select>
+          <select
+            value={selectedYear}
+            onChange={e => setSelectedYear(Number(e.target.value))}
+            className="h-8 px-2 text-xs rounded-md border border-input bg-background text-muted-foreground focus:outline-none"
+            title="Filtro sipas vitit"
+          >
+            {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
           {(['__all__', 'Draft', 'Pending', 'Partial', 'Paid', 'Overdue'] as const).map(s => (
             <button
