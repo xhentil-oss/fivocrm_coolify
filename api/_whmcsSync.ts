@@ -110,6 +110,21 @@ async function resolveBusinessId(teamId: string | null): Promise<string | null> 
   return cachedBusinessId;
 }
 
+// ── Default project for WHMCS invoices ────────────────────────────────────────
+// Every WHMCS invoice can be linked to one "catch-all" project (e.g. a "whmcs"
+// project) so hosting/domain revenue rolls up in one place. Configured via the
+// WHMCS_PROJECT_ID env or `integrations/whmcs.linkProjectId` (set from the UI /
+// backfill). Never overrides an invoice that's already linked to a project.
+let cachedLinkProjectId: string | null | undefined;
+async function resolveLinkProjectId(): Promise<string | null> {
+  if (cachedLinkProjectId !== undefined) return cachedLinkProjectId;
+  const envProj = process.env.WHMCS_PROJECT_ID;
+  if (envProj) { cachedLinkProjectId = envProj; return cachedLinkProjectId; }
+  const snap = await db.collection('integrations').doc('whmcs').get();
+  cachedLinkProjectId = snap.exists ? ((snap.data() as any)?.linkProjectId ?? null) : null;
+  return cachedLinkProjectId;
+}
+
 // ── Customer resolution (auto-match by email, create minimal if missing) ──────
 const customerCache = new Map<string, string>(); // email → customerId
 
@@ -219,6 +234,7 @@ async function upsertCustomer(c: MappedClientFull, teamId: string | null): Promi
 async function upsertInvoice(inv: MappedInvoice, customerId: string | null, teamId: string | null): Promise<'created' | 'updated'> {
   const now = Timestamp.now();
   const businessId = await resolveBusinessId(teamId);
+  const linkProjectId = await resolveLinkProjectId();
   const snap = await db.collection('invoices').where('whmcsInvoiceId', '==', inv.whmcsInvoiceId).limit(1).get();
 
   // Fields WHMCS owns; we never touch FivoCRM-side reminder flags on update.
@@ -248,6 +264,9 @@ async function upsertInvoice(inv: MappedInvoice, customerId: string | null, team
   if (snap.empty) {
     await db.collection('invoices').add({
       ...payload,
+      // Auto-link new WHMCS invoices to the catch-all project so hosting/domain
+      // revenue rolls up in one place.
+      ...(linkProjectId ? { projectId: linkProjectId } : {}),
       paymentMethod: 'WHMCS',
       emailSent: true,        // WHMCS already emails the client — suppress FivoCRM reminders
       reminderSent: true,
@@ -258,12 +277,16 @@ async function upsertInvoice(inv: MappedInvoice, customerId: string | null, team
     });
     return 'created';
   }
+  const existing = snap.docs[0].data() || {};
   // Preserve a local cancellation: if the user cancelled this mirrored invoice
   // in FivoCRM, don't let the sync revert its status (which would resurrect it
   // into revenue). All other fields still refresh from WHMCS.
-  if (snap.docs[0].data()?.locallyCancelled) {
+  if (existing.locallyCancelled) {
     delete payload.status;
   }
+  // Link to the catch-all project only if the invoice isn't already linked (never
+  // override a manual link the user set).
+  if (linkProjectId && !existing.projectId) payload.projectId = linkProjectId;
   await snap.docs[0].ref.update(payload);
   return 'updated';
 }
