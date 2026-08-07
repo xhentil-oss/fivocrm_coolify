@@ -18,6 +18,12 @@ import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popove
 import { Switch } from '../components/ui/switch';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
+import {
+  expensePeriodKey,
+  firstGenerationDate,
+  findDuplicateExpenseGroups,
+  totalDuplicateWaste,
+} from '../lib/finance/recurringExpenses';
 import type { Expense, Team, Project, TeamMember } from '../types';
 
 const ExpensesView: React.FC = () => {
@@ -66,6 +72,31 @@ const ExpensesView: React.FC = () => {
 
     const memberId = formData.get('memberId') as string;
 
+    // Same title + amount + currency already recorded this month? Almost always a
+    // double entry (the live data had 19 such groups, ~1.5M L counted twice), so
+    // ask before adding a second one instead of discovering it in the P&L.
+    const now = new Date();
+    const thisPeriod = expensePeriodKey('monthly', now);
+    const clash = (rawExpenses || []).find(e => {
+      if ((e as any).approvalStatus === 'Rejected') return false;
+      if ((e.title || '').trim().toLowerCase() !== title.trim().toLowerCase()) return false;
+      if (Number(e.amount) !== amount) return false;
+      if (((e as any).currency || 'ALL') !== (currency || 'ALL')) return false;
+      const d = getExpenseDate(e);
+      return !!d && expensePeriodKey('monthly', d) === thisPeriod;
+    });
+    if (clash && !confirm(
+      `"${title}" me ${amount} ${currency || 'ALL'} është regjistruar tashmë këtë muaj.\n\n` +
+      `Shtimi i një të dyti do ta numërojë shpenzimin dy herë. Vazhdo gjithsesi?`
+    )) return;
+
+    // A recurring PARENT is itself a real row that counts in its own month, so the
+    // first generated occurrence must land in the NEXT period — otherwise the cron
+    // adds a second row for a month that is already covered. The chosen day survives.
+    const freq = recurringFrequency || 'monthly';
+    const pickedNext = nextRecurringDate ? new Date(nextRecurringDate) : null;
+    const firstNext = isRecurring ? firstGenerationDate(now, freq, pickedNext) : null;
+
     const isAdminOrManager = permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin;
     await expenseMutation.create({
       title,
@@ -75,8 +106,12 @@ const ExpensesView: React.FC = () => {
       category,
       departmentId: departmentId || undefined,
       isRecurring,
-      recurringFrequency: isRecurring ? recurringFrequency : undefined,
-      nextRecurringDate: isRecurring && nextRecurringDate ? new Date(nextRecurringDate) : undefined,
+      recurringFrequency: isRecurring ? freq : undefined,
+      nextRecurringDate: firstNext || undefined,
+      recurringAnchorDay: firstNext ? firstNext.getDate() : undefined,
+      // This row IS the current period's expense — recording the key stops the cron
+      // from generating a second one for it.
+      lastGeneratedPeriodKey: isRecurring ? expensePeriodKey(freq, now) : undefined,
       recurringEndDate: isRecurring && recurringEndDate ? new Date(recurringEndDate) : undefined,
       status: status || 'Active',
       approvalStatus: isAdminOrManager ? 'Approved' : 'Submitted',
@@ -129,6 +164,17 @@ const ExpensesView: React.FC = () => {
 
     const memberId = formData.get('memberId') as string;
 
+    const freq = recurringFrequency || 'monthly';
+    const picked = nextRecurringDate ? new Date(nextRecurringDate) : null;
+    const wasRecurring = !!selectedExpense.isRecurring;
+    // Turning recurrence ON behaves like creating one: the series starts in the
+    // period AFTER the one this row already covers. An existing series keeps the
+    // date the user typed — they are editing the schedule deliberately.
+    const ownDate = getExpenseDate(selectedExpense) || new Date();
+    const nextDate = !isRecurring ? null
+      : wasRecurring ? picked
+      : firstGenerationDate(ownDate, freq, picked);
+
     await expenseMutation.update(selectedExpense.id, {
       title,
       description: description || undefined,
@@ -137,8 +183,12 @@ const ExpensesView: React.FC = () => {
       category,
       departmentId: departmentId || undefined,
       isRecurring,
-      recurringFrequency: isRecurring ? recurringFrequency : undefined,
-      nextRecurringDate: isRecurring && nextRecurringDate ? new Date(nextRecurringDate) : null,
+      recurringFrequency: isRecurring ? freq : undefined,
+      nextRecurringDate: nextDate,
+      recurringAnchorDay: nextDate ? nextDate.getDate() : null,
+      lastGeneratedPeriodKey: isRecurring
+        ? ((selectedExpense as any).lastGeneratedPeriodKey || expensePeriodKey(freq, ownDate))
+        : null,
       // Turning recurrence off clears the schedule fields so a stale end-date/pause
       // can't silently resurrect the series later.
       recurringEndDate: isRecurring ? (recurringEndDate ? new Date(recurringEndDate) : null) : null,
@@ -274,6 +324,23 @@ const ExpensesView: React.FC = () => {
   const [maxAmount, setMaxAmount] = useState('');
   const [sortBy, setSortBy] = useState('date_desc');
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [duplicatesOnly, setDuplicatesOnly] = useState(false);
+
+  // Same title + amount + currency inside one month — the failure mode that
+  // actually costs money, since every duplicate inflates the P&L and the cashflow
+  // alarms. Detection only suggests; nothing is removed automatically.
+  const duplicateGroups = useMemo(() => findDuplicateExpenseGroups(expenses), [expenses]);
+  const duplicateIds = useMemo(() => {
+    const ids = new Set<string>();
+    duplicateGroups.forEach(g => g.expenses.forEach(e => ids.add(e.id)));
+    return ids;
+  }, [duplicateGroups]);
+  const duplicateWaste = useMemo(() => totalDuplicateWaste(duplicateGroups), [duplicateGroups]);
+  const groupSizeById = useMemo(() => {
+    const m = new Map<string, number>();
+    duplicateGroups.forEach(g => g.expenses.forEach(e => m.set(e.id, g.expenses.length)));
+    return m;
+  }, [duplicateGroups]);
 
   const projectById = useMemo(
     () => new Map((projects || []).map(p => [p.id, p])),
@@ -304,9 +371,11 @@ const ExpensesView: React.FC = () => {
     yearFilter !== '__all__',
     minAmount !== '',
     maxAmount !== '',
+    duplicatesOnly,
   ].filter(Boolean).length;
 
   const resetFilters = () => {
+    setDuplicatesOnly(false);
     setSearchQuery('');
     setCategoryFilter('__all__');
     setStatusFilter('__all__');
@@ -322,6 +391,7 @@ const ExpensesView: React.FC = () => {
 
   const filteredExpenses = useMemo(() => {
     let list = expenses ? [...expenses] : [];
+    if (duplicatesOnly) list = list.filter(e => duplicateIds.has(e.id));
 
     const q = searchQuery.trim().toLowerCase();
     if (q) {
@@ -370,6 +440,12 @@ const ExpensesView: React.FC = () => {
 
     const dateMs = (e: Expense) => getExpenseDate(e)?.getTime() ?? 0;
     list.sort((a, b) => {
+      // In duplicate mode the rows only make sense next to each other.
+      if (duplicatesOnly) {
+        const byTitle = (a.title || '').localeCompare(b.title || '', 'sq');
+        if (byTitle !== 0) return byTitle;
+        return dateMs(a) - dateMs(b);
+      }
       if (sortBy === 'date_asc') return dateMs(a) - dateMs(b);
       if (sortBy === 'amount_desc') return toAll(b.amount ?? 0, (b as any).currency) - toAll(a.amount ?? 0, (a as any).currency);
       if (sortBy === 'amount_asc') return toAll(a.amount ?? 0, (a as any).currency) - toAll(b.amount ?? 0, (b as any).currency);
@@ -378,12 +454,13 @@ const ExpensesView: React.FC = () => {
     });
     return list;
   }, [expenses, searchQuery, categoryFilter, statusFilter, approvalFilter, recurringFilter,
-      departmentFilter, projectFilter, monthFilter, yearFilter, minAmount, maxAmount, sortBy, projectById]);
+      departmentFilter, projectFilter, monthFilter, yearFilter, minAmount, maxAmount, sortBy,
+      projectById, duplicatesOnly, duplicateIds]);
 
   // Cap rendered rows — an unfiltered tenant can carry hundreds of generated occurrences.
   const [visibleCount, setVisibleCount] = useState(50);
   useEffect(() => { setVisibleCount(50); }, [searchQuery, categoryFilter, statusFilter, approvalFilter,
-    recurringFilter, departmentFilter, projectFilter, monthFilter, yearFilter, minAmount, maxAmount, sortBy]);
+    recurringFilter, departmentFilter, projectFilter, monthFilter, yearFilter, minAmount, maxAmount, sortBy, duplicatesOnly]);
   const visibleExpenses = useMemo(() => filteredExpenses.slice(0, visibleCount), [filteredExpenses, visibleCount]);
 
   const totalExpenses = filteredExpenses.reduce((sum, exp) => countable(exp) ? sum + toAll(exp.amount ?? 0, (exp as any).currency) : sum, 0);
@@ -491,6 +568,28 @@ const ExpensesView: React.FC = () => {
           </Dialog>
         )}
       </div>
+
+      {/* A duplicate inside one month is money counted twice in the P&L, the
+          cashflow alarms and every "sa shpenzuam" number — surface it, never
+          delete it automatically. */}
+      {duplicateGroups.length > 0 && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-3 text-sm flex items-center justify-between gap-3 flex-wrap">
+          <span className="text-amber-900 dark:text-amber-200 flex items-start gap-2">
+            <AlertTriangle className="w-4 h-4 mt-0.5 shrink-0" />
+            <span>
+              <strong>{duplicateGroups.length} grupe me dublikatë</strong> brenda të njëjtit muaj
+              (i njëjti titull, shumë dhe monedhë) — rreth{' '}
+              <strong>{Math.round(duplicateWaste).toLocaleString()} ALL</strong> të numëruara dy herë.
+            </span>
+          </span>
+          <button
+            onClick={() => setDuplicatesOnly(v => !v)}
+            className="h-8 px-3 rounded-md border border-amber-400 bg-background text-amber-900 dark:text-amber-200 font-medium hover:bg-amber-100 dark:hover:bg-amber-900/30 shrink-0"
+          >
+            {duplicatesOnly ? 'Shfaq të gjitha' : 'Shiko dublikatat'}
+          </button>
+        </div>
+      )}
 
       {/* ── Filtrat ── everything below reacts to these */}
       <Card className="p-3 sm:p-4 space-y-3">
@@ -839,6 +938,12 @@ const ExpensesView: React.FC = () => {
               <div className="flex items-start justify-between">
                 <div className="flex-1 min-w-0">
                   <p className="font-medium text-foreground truncate">{expense.title}</p>
+                  {groupSizeById.has(expense.id) && (
+                    <Badge className="bg-amber-100 text-amber-800 text-[10px] py-0 mt-1">
+                      <AlertTriangle className="w-2.5 h-2.5 mr-0.5" />
+                      Dublikatë ×{groupSizeById.get(expense.id)}
+                    </Badge>
+                  )}
                   {expense.description && (
                     <p className="text-sm text-muted-foreground line-clamp-1 mt-0.5">{expense.description}</p>
                   )}
@@ -966,7 +1071,18 @@ const ExpensesView: React.FC = () => {
                   >
                     <td className="px-6 py-4">
                       <div className="space-y-1">
-                        <p className="text-body font-normal text-foreground">{expense.title}</p>
+                        <div className="flex items-center gap-2">
+                          <p className="text-body font-normal text-foreground">{expense.title}</p>
+                          {groupSizeById.has(expense.id) && (
+                            <Badge
+                              className="bg-amber-100 text-amber-800 text-[10px] py-0"
+                              title={`${groupSizeById.get(expense.id)} regjistrime identike në të njëjtin muaj`}
+                            >
+                              <AlertTriangle className="w-2.5 h-2.5 mr-0.5" />
+                              Dublikatë ×{groupSizeById.get(expense.id)}
+                            </Badge>
+                          )}
+                        </div>
                         {expense.description && (
                           <p className="text-body-sm text-muted-foreground line-clamp-1">
                             {expense.description}
@@ -1014,6 +1130,13 @@ const ExpensesView: React.FC = () => {
                           </div>
                           {(expense as any).recurringEndDate && (
                             <span className="text-[11px] text-muted-foreground">deri më {new Date((expense as any).recurringEndDate).toLocaleDateString()}</span>
+                          )}
+                          {/* No due date = the series has never generated anything.
+                              The cron seeds one on its next run; flag it until then. */}
+                          {!(expense as any).nextRecurringDate && !(expense as any).isRecurringPaused && (
+                            <span className="text-[11px] text-amber-600 inline-flex items-center gap-1">
+                              <AlertTriangle className="w-3 h-3" /> pa datë — nuk gjeneron
+                            </span>
                           )}
                         </div>
                       ) : (expense as any).autoGenerated ? (
@@ -1194,12 +1317,14 @@ const DEFAULT_CATEGORIES: { value: string; label: string }[] = [
 ];
 
 const ExpenseForm: React.FC<{
-  onSubmit: (data: FormData) => void;
+  onSubmit: (data: FormData) => void | Promise<void>;
   teams: Team[];
   projects?: Project[];
   initialData?: Expense;
 }> = ({ onSubmit, teams, projects, initialData }) => {
   const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
+  // Without this, a second click while the create is in flight writes the expense twice.
+  const [submitting, setSubmitting] = useState(false);
   const [projectSearch, setProjectSearch] = useState('');
   const [selectedMemberId, setSelectedMemberId] = useState<string>((initialData as any)?.memberId || '__none__');
   const { data: rawTeamMembersForm } = useCollection<TeamMember>('teamMembers', {
@@ -1242,8 +1367,9 @@ const ExpenseForm: React.FC<{
     initialData?.paidDate ? new Date(initialData.paidDate) : undefined
   );
 
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (submitting) return;
     const formData = new FormData(e.currentTarget);
     formData.set('isRecurring', isRecurring.toString());
     if (nextRecurringDate) {
@@ -1255,7 +1381,12 @@ const ExpenseForm: React.FC<{
     if (paidDate) {
       formData.set('paidDate', paidDate.toISOString());
     }
-    onSubmit(formData);
+    setSubmitting(true);
+    try {
+      await onSubmit(formData);
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
@@ -1454,6 +1585,12 @@ const ExpenseForm: React.FC<{
                 <Calendar mode="single" selected={nextRecurringDate} onSelect={setNextRecurringDate} />
               </PopoverContent>
             </Popover>
+            {!initialData && (
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Ky regjistrim vlen për periudhën aktuale. Gjenerimi automatik fillon nga
+                periudha pasardhëse — ndryshe muaji do të numërohej dy herë.
+              </p>
+            )}
           </div>
 
           <div>
@@ -1512,8 +1649,8 @@ const ExpenseForm: React.FC<{
         </div>
       </div>
 
-      <Button type="submit" className="w-full">
-        {initialData ? 'Përditëso Shpenzimin' : 'Krijo Shpenzimin'}
+      <Button type="submit" className="w-full" disabled={submitting}>
+        {submitting ? 'Duke ruajtur…' : initialData ? 'Përditëso Shpenzimin' : 'Krijo Shpenzimin'}
       </Button>
     </form>
   );
