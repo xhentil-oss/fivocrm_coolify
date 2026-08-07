@@ -227,12 +227,25 @@ describe('ERP-grade accounting helpers (accrual + AR)', () => {
     const apr = months[3];
     const may = months[4];
 
-    // Under accrual: paid = total billed for that month, pending = outstanding.
-    expect(apr.paid).toBe(1000); // April invoice billed (and fully collected)
+    // Under accrual: value = billed (recognised); paid/pending are a NON-overlapping
+    // split of it (collected vs outstanding) — an unpaid invoice is NOT counted as paid.
+    expect(apr.value).toBe(1000); // April invoice recognised
+    expect(apr.paid).toBe(1000); // fully collected
     expect(apr.pending).toBe(0);
     expect(may.paid).toBe(0); // payment month is irrelevant for accrual
-    expect(feb.paid).toBe(500); // Feb invoice billed at full value
+    expect(feb.value).toBe(500);   // Feb invoice recognised (billed) in Feb
+    expect(feb.paid).toBe(0);      // nothing collected → NOT shown as paid
     expect(feb.pending).toBe(500); // still outstanding
+  });
+
+  it('an Overdue (unpaid) invoice shows as pending only, never as paid (accrual)', () => {
+    const invoices: Invoice[] = [
+      mkInvoice({ id: 'ovd', status: 'Overdue', total: 40000, currency: 'ALL', invoiceDate: new Date('2026-08-01T10:00:00Z') }),
+    ];
+    const aug = buildRevenueByMonthAccrual(invoices, 2026, MONTH_LABELS_SQ)[7];
+    expect(aug.value).toBe(40000);   // recognised
+    expect(aug.paid).toBe(0);        // NOT counted as paid
+    expect(aug.pending).toBe(40000); // shown only as pending
   });
 
   it('dispatches buildRevenueByMonthByBasis correctly', () => {

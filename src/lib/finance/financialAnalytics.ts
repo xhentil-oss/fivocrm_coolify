@@ -355,7 +355,11 @@ export function buildRevenueByMonthAccrual(invoices: Invoice[] | undefined, year
     const collected = monthInvs.reduce((s, inv) => s + getInvoiceCollectedAll(inv), 0);
     const outstanding = Math.max(0, billed - collected);
 
-    return { label, value: billed, paid: billed, pending: outstanding, count: monthInvs.length };
+    // `value` = recognised (billed) revenue for the month. `paid`/`pending` are a
+    // NON-overlapping split of it (collected vs still-outstanding) — previously
+    // `paid` was set to `billed`, so an unpaid invoice showed up as BOTH paid AND
+    // pending (double counted in the chart/tooltip).
+    return { label, value: billed, paid: collected, pending: outstanding, count: monthInvs.length };
   });
 }
 
