@@ -77,6 +77,15 @@ describe('crafts (positions)', () => {
     expect(getReportTemplate('regjia')?.fields.some((f) => f.key === 'storyboards')).toBe(true);
   });
 
+  it('offers an honest option to people who deliver no client work', () => {
+    // Declaring a position is mandatory at login. Without this option an owner or
+    // accountant would have to claim a craft they don't practise — and would then be
+    // asked about backlinks forever.
+    expect(positionOptions().some((o) => o.key === 'management')).toBe(true);
+    expect(normalizeServiceLine('Menaxhim')).toBe('management');
+    expect(getReportTemplate('management')?.fields.some((f) => f.key === 'blockersRemoved')).toBe(true);
+  });
+
   it('positionOptions mirrors the template registry exactly', () => {
     // The two must not drift: a position with no template = a blank daily report.
     expect(positionOptions().map((o) => o.key)).toEqual(REPORT_TEMPLATES.map((t) => t.key));

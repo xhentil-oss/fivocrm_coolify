@@ -17,15 +17,30 @@ import { getReportTemplate, normalizeServiceLine } from '../lib/productivity/rep
  * so members who predate `position` keep the behaviour they had.
  */
 export function useMyServiceLine(): string | undefined {
+  const { member } = useMyTeamMember();
+  return member?.position || member?.serviceLine || member?.serviceLines?.[0];
+}
+
+/**
+ * The signed-in user's own membership row.
+ *
+ * Deliberately unscoped by team/business: this is identity bootstrap — it runs before
+ * (and independently of) any tenant switch, and the rules already allow reading your
+ * own row by `userId`. `loading` is distinguished from "no row" so callers can avoid
+ * acting on an answer that hasn't arrived yet.
+ */
+export function useMyTeamMember(): { member?: TeamMember; loading: boolean } {
   const { user } = useAuth();
-  const { data: members } = useCollection<TeamMember>('teamMembers', {
+  const { data: members, loading } = useCollection<TeamMember>('teamMembers', {
     skip: !user,
     where: user ? [{ field: 'userId', operator: '==', value: user.uid }] : undefined,
     skipTeamFilter: true,
     skipBusinessFilter: true,
   });
-  const me = members?.find((m) => m.userId === user?.uid);
-  return me?.position || me?.serviceLine || me?.serviceLines?.[0];
+  return {
+    member: members?.find((m) => m.userId === user?.uid),
+    loading: !user || loading,
+  };
 }
 
 /**

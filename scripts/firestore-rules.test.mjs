@@ -19,7 +19,7 @@ import {
   assertFails,
   assertSucceeds,
 } from '@firebase/rules-unit-testing';
-import { doc, setDoc, getDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
 
 const PROJECT_ID = 'fivocrm-rules-test';
 const VICTIM_BIZ = 'bizVictim';
@@ -592,4 +592,34 @@ test('33b. no client may write the merge trail — it is the undo source of trut
   await assertFails(setDoc(doc(victimAdmin, 'contactMerges', 'forged'), { businessId: VICTIM_BIZ, kind: 'customer' }));
   const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
   await assertFails(setDoc(doc(sa, 'contactMerges', 'mergeVictim'), { kind: 'lead' }, { merge: true }));
+});
+
+// ── teamMembers.position: mandatory at login, so it must be self-writable ──────
+// Declaring your own craft cannot be an admin-only field (nobody would be there at
+// 09:00 to unblock a new hire), but it must not open a hole next to role/salary.
+test('34a. a member may declare their own position', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  await assertSucceeds(updateDoc(doc(alice, 'teamMembers', `${MY_TEAM}_alice`), {
+    position: 'web', updatedAt: new Date(),
+  }));
+});
+
+test('34b. the position write is not a lever for role or pay', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
+  // Smuggled alongside a legitimate field.
+  await assertFails(updateDoc(doc(alice, 'teamMembers', `${MY_TEAM}_alice`), {
+    position: 'web', role: 'Admin',
+  }));
+  await assertFails(updateDoc(doc(alice, 'teamMembers', `${MY_TEAM}_alice`), {
+    position: 'web', monthlySalary: 999999,
+  }));
+  // serviceLines drives the P&L, not the daily report — still owner-only.
+  await assertFails(updateDoc(doc(alice, 'teamMembers', `${MY_TEAM}_alice`), {
+    position: 'web', serviceLines: ['seo'],
+  }));
+});
+
+test('34c. nobody sets another member position', async () => {
+  const mallory = testEnv.authenticatedContext('mallory', { email: 'm@evil.com', bid: VICTIM_BIZ, tid: VICTIM_TEAM, roles: ['admin'] }).firestore();
+  await assertFails(updateDoc(doc(mallory, 'teamMembers', `${MY_TEAM}_alice`), { position: 'web' }));
 });

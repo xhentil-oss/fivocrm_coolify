@@ -125,6 +125,20 @@ export const REPORT_TEMPLATES: ReportTemplate[] = [
       { key: 'directionNotes', label: 'Shënime regjie', type: 'textarea', placeholder: 'p.sh. u vendos ndryshimi i ritmit në skenën 3…' },
     ],
   },
+  // Not everyone who logs in delivers client work. Once declaring a position became
+  // mandatory, an owner/manager/accountant with no honest option would have had to
+  // claim a craft they don't practise — and would then be asked about backlinks for
+  // the rest of their life. Their day is coordination, so that is what it asks about.
+  {
+    key: 'management', label: 'Menaxhim / Administratë', emoji: '🧭',
+    fields: [
+      N('meetings', 'Takime'),
+      N('decisions', 'Vendime të marra'),
+      N('blockersRemoved', 'Pengesa të hequra ekipit'),
+      N('clientsContacted', 'Klientë të kontaktuar'),
+      { key: 'managementNotes', label: 'Shënime', type: 'textarea', placeholder: 'p.sh. u rishpërnda ngarkesa e javës…' },
+    ],
+  },
 ];
 
 /**
@@ -163,6 +177,8 @@ const SYNONYMS: Record<string, string> = {
   'photo-video': 'photo-video', photo: 'photo-video', video: 'photo-video', 'foto video': 'photo-video',
   'foto/video': 'photo-video', 'foto & video': 'photo-video', foto: 'photo-video', montazh: 'photo-video',
   regjia: 'regjia', regji: 'regjia', director: 'regjia', directing: 'regjia', 'film director': 'regjia',
+  management: 'management', menaxhim: 'management', menaxher: 'management', administrate: 'management',
+  administration: 'management', admin: 'management', 'project management': 'management',
   content: 'content', 'content writing': 'content', copywriting: 'content', permbajtje: 'content', përmbajtje: 'content',
   sales: 'sales', shitje: 'sales', 'sales agent': 'sales',
 };

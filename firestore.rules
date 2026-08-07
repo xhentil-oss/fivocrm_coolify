@@ -1101,11 +1101,15 @@ service cloud.firestore {
       allow create: if isTeamOwner(request.resource.data.teamId) || isSuperAdmin();
       // Prevent role self-escalation: users can update own record but only safe fields
       allow update: if isAuth() && (
-        // Self-update: only displayName/email/updatedAt, role must not change
+        // Self-update: only displayName/email/position/updatedAt, role must not change.
+        // `position` is the member's own CRAFT — it decides which questions their daily
+        // report asks, nothing more. It is NOT authorisation (`role`) and NOT the P&L
+        // allocation (`serviceLines`), both of which stay owner-only, so letting people
+        // declare their own job at first login cannot escalate anything.
         (resource.data.userId == request.auth.uid &&
          request.resource.data.role == resource.data.role &&
          request.resource.data.diff(resource.data).affectedKeys()
-           .hasOnly(['displayName', 'email', 'updatedAt'])) ||
+           .hasOnly(['displayName', 'email', 'position', 'updatedAt'])) ||
         // Managing another member (incl. role changes) requires being the team
         // owner — a server-trustworthy check (teams/{teamId}.createdByUserId).
         // Client-side admin gating alone was bypassable.

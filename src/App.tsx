@@ -13,6 +13,7 @@ import WorkspaceSignupView from './views/WorkspaceSignupView';
 import MobileBottomNav from './components/MobileBottomNav';
 import { AndroidBackButton } from './components/AndroidBackButton';
 import DailyReportPopup from './components/DailyReportPopup';
+import RequirePositionDialog from './components/RequirePositionDialog';
 import CommandPalette from './components/CommandPalette';
 import PermissionGate from './components/PermissionGate';
 import ModuleGate from './components/ModuleGate';
@@ -439,6 +440,9 @@ function AppContent() {
             </div>
 
             <MobileBottomNav />
+            {/* Asked once, before anything else: without a position the daily report
+                and every department rollup silently report nothing for this person. */}
+            <RequirePositionDialog />
             <DailyReportPopup />
             <CommandPalette 
               open={commandPaletteOpen} 
