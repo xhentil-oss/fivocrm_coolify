@@ -123,6 +123,23 @@ const FinancesView: React.FC = () => {
     return { whmcs, direct, total: whmcs + direct };
   }, [invoices, now]);
 
+  // Same split, but per month for the last 6 months (WHMCS income over time).
+  const incomeSourceByMonth = useMemo(() => {
+    const inv = invoices || [];
+    const out: { label: string; whmcs: number; direct: number }[] = [];
+    for (let i = 5; i >= 0; i--) {
+      const w = monthWindow(now, -i);
+      let whmcs = 0, direct = 0;
+      for (const x of inv) {
+        const c = getInvoiceCollectedBetween(x, w.start, w.end);
+        if (c <= 0) continue;
+        if ((x as any).source === 'whmcs') whmcs += c; else direct += c;
+      }
+      out.push({ label: MONTH_LABELS_SQ[w.monthIndex], whmcs, direct });
+    }
+    return out;
+  }, [invoices, now]);
+
   // ── 6-month profit trend ──
   const trend = useMemo(() => {
     const inv = invoices || [];
@@ -506,6 +523,31 @@ const FinancesView: React.FC = () => {
               bold
               positive
             />
+          </div>
+        </div>
+
+        {/* WHMCS income by month (last 6 months) */}
+        <div className="mt-5 pt-4 border-t">
+          <h3 className="text-xs font-semibold text-muted-foreground mb-2">Sipas muajve (6 muajt e fundit)</h3>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="text-[11px] text-muted-foreground border-b">
+                  <th className="text-left font-medium py-1.5 px-1">Muaji</th>
+                  <th className="text-right font-medium py-1.5 px-1 text-indigo-600">WHMCS</th>
+                  <th className="text-right font-medium py-1.5 px-1">Direkt</th>
+                </tr>
+              </thead>
+              <tbody>
+                {incomeSourceByMonth.map((m, i) => (
+                  <tr key={i} className="border-b border-border/50 last:border-0">
+                    <td className="py-1.5 px-1 text-muted-foreground">{m.label}</td>
+                    <td className="py-1.5 px-1 text-right tabular-nums font-semibold text-indigo-600">{formatALL(m.whmcs)}</td>
+                    <td className="py-1.5 px-1 text-right tabular-nums text-muted-foreground">{formatALL(m.direct)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
       </Card>
