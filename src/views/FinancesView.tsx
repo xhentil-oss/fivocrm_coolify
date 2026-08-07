@@ -29,6 +29,7 @@ import { totalSalaryForMonth } from '../lib/finance/salaryHistory';
 import { computeCashflowHealth } from '../lib/finance/cashflowAlarms';
 import { forecastNextMonth } from '../lib/finance/forecast';
 import { computeDepartmentPnl, buildDepartmentProfitTrend } from '../lib/finance/departmentPnl';
+import { attributeCollectedRevenue, resolveCollectionWindow } from '../lib/finance/revenueAttribution';
 
 // ── Single-page, plain-language finance overview for the owner ──
 // Answers one question: "Am I making money this month, where, and why?"
@@ -370,12 +371,54 @@ const FinancesView: React.FC = () => {
     [projects, teamMembers, expenses, invoices, periodOpts, revenueBasis],
   );
 
+  // ── Collected cash, attributed to a department and a person ──
+  // The accrual columns (budget/invoiced) say what was EARNED; this says what
+  // actually arrived, over the same window. See lib/finance/revenueAttribution.ts.
+  const collected = useMemo(
+    () => attributeCollectedRevenue(invoices, projects, resolveCollectionWindow(periodOpts)),
+    [invoices, projects, periodOpts],
+  );
+
   // ── Department (service-line) P&L — real profit per Social/SEO/Web… ──
   const [expandedDept, setExpandedDept] = useState<string | null>(null);
   const departmentPnl = useMemo(
     () => computeDepartmentPnl(projects, teamMembers, expenses, { ...periodOpts, revenueBasis, invoices }),
     [projects, teamMembers, expenses, invoices, periodOpts, revenueBasis],
   );
+
+  /**
+   * Department rows carrying BOTH bases side by side.
+   *
+   * A department can appear in one basis and not the other: cash may land in
+   * this window for work recognised earlier (so it has `collected` but no
+   * accrual row). Those are merged in rather than dropped, otherwise the column
+   * would not add up to the money actually collected.
+   */
+  const departmentRows = useMemo(() => {
+    type Row = (typeof departmentPnl.rows)[number] & { collected: number };
+    const byKey = new Map<string, Row>();
+    for (const d of departmentPnl.rows) {
+      byKey.set(d.department, { ...d, collected: collected.byDepartment.get(d.department) || 0 });
+    }
+    for (const [dept, amount] of collected.byDepartment) {
+      if (byKey.has(dept)) continue;
+      byKey.set(dept, {
+        department: dept, revenue: 0, directCost: 0, labor: 0, overhead: 0,
+        cost: 0, profit: 0, margin: null, projects: [], collected: amount,
+      } as Row);
+    }
+    // Sorted by revenue now that the panel leads with revenue, not profit.
+    const rows = [...byKey.values()].sort((a, b) => (b.revenue || b.collected) - (a.revenue || a.collected));
+    const totals = rows.reduce(
+      (t, r) => ({
+        revenue: t.revenue + r.revenue,
+        collected: t.collected + r.collected,
+        profit: t.profit + r.profit,
+      }),
+      { revenue: 0, collected: 0, profit: 0 },
+    );
+    return { rows, totals };
+  }, [departmentPnl, collected]);
 
   // Monthly profit trend per department (last 6 months) — is Social growing or not?
   const departmentTrend = useMemo(
@@ -423,27 +466,54 @@ const FinancesView: React.FC = () => {
     return m;
   }, [teamMembers]);
 
-  // ── Revenue generated per project responsible ──
-  // Shares the page period + revenue basis; keeps each responsible's per-project
-  // breakdown so a row can expand to show it.
+  // ── Revenue, cash and profit generated per project responsible ──
+  // Symmetric with the department panel: the same three measures on the same
+  // period and basis, so "who brought in what" reads the same either way you
+  // slice it. Keeps each responsible's per-project breakdown for the drill-down.
   const [expandedStaff, setExpandedStaff] = useState<string | null>(null);
   const staffRevenue = useMemo(() => {
+    type StaffRow = {
+      userId: string; name: string; revenue: number; collected: number; profit: number;
+      projects: { id: string; name: string; revenue: number; profit: number }[];
+    };
     const pnl = computeProjectPnl(projects, teamMembers, expenses, { ...periodOpts, revenueBasis, invoices });
-    const map = new Map<string, { userId: string; name: string; revenue: number; projects: { id: string; name: string; revenue: number }[] }>();
+    const map = new Map<string, StaffRow>();
     let unattributed = 0;
     for (const r of pnl.rows) {
       const uid = r.responsibleUserId;
       if (!uid) { unattributed += r.revenue; continue; }
-      const row = map.get(uid) || { userId: uid, name: memberNameById.get(uid) || 'I panjohur', revenue: 0, projects: [] };
+      const row = map.get(uid) || {
+        userId: uid, name: memberNameById.get(uid) || 'I panjohur',
+        revenue: 0, collected: 0, profit: 0, projects: [],
+      };
       row.revenue += r.revenue;
-      row.projects.push({ id: r.id, name: r.name, revenue: r.revenue });
+      row.profit += r.profit;
+      row.projects.push({ id: r.id, name: r.name, revenue: r.revenue, profit: r.profit });
       map.set(uid, row);
+    }
+    // Attach cash, and merge in anyone who only has cash in this window (their
+    // accrual sits outside it) — same reasoning as the department rows.
+    for (const [uid, amount] of collected.byUser) {
+      const row = map.get(uid);
+      if (row) { row.collected = amount; continue; }
+      map.set(uid, {
+        userId: uid, name: memberNameById.get(uid) || 'I panjohur',
+        revenue: 0, collected: amount, profit: 0, projects: [],
+      });
     }
     const rows = Array.from(map.values())
       .map(r => ({ ...r, projects: r.projects.sort((a, b) => b.revenue - a.revenue) }))
-      .sort((a, b) => b.revenue - a.revenue);
-    return { rows, unattributed };
-  }, [projects, teamMembers, expenses, invoices, periodOpts, revenueBasis, memberNameById]);
+      .sort((a, b) => (b.revenue || b.collected) - (a.revenue || a.collected));
+    const totals = rows.reduce(
+      (t, r) => ({
+        revenue: t.revenue + r.revenue,
+        collected: t.collected + r.collected,
+        profit: t.profit + r.profit,
+      }),
+      { revenue: 0, collected: 0, profit: 0 },
+    );
+    return { rows, totals, unattributed };
+  }, [projects, teamMembers, expenses, invoices, periodOpts, revenueBasis, memberNameById, collected]);
 
   // ── Forward-looking cashflow health (recurring inflow vs fixed outflow) ──
   const cashflow = useMemo(
@@ -885,19 +955,38 @@ const FinancesView: React.FC = () => {
           </Panel>
 
           <Panel
-            title="Fitimi sipas departamentit"
+            title="Të ardhurat dhe fitimi sipas departamentit"
             icon={<Layers className="h-4 w-4 text-sky-700" />}
-            hint="Sa fiton realisht nga Social, SEO, Web… Kliko një departament për projektet dhe stafin."
+            hint="Sa sjell dhe sa fiton realisht nga Social, SEO, Web… Kliko një departament për projektet dhe stafin."
           >
-            {departmentPnl.rows.length === 0 ? (
+            <MeasureTotals totals={departmentRows.totals} />
+            {collected.unlinked.amount > 0 && (
+              <Notice tone="neutral">
+                <strong>{formatALL(collected.unlinked.amount)}</strong> arkëtuar nga{' '}
+                <strong>{collected.unlinked.count}</strong> faturë pa projekt të lidhur — nuk i takon
+                asnjë departamenti apo personi më poshtë, ndaj kolona "Arkëtuar" nuk arrin totalin e
+                faqes.{' '}
+                {/* A distinct label from the project-P&L notice above: both lead
+                    to the same list, but two controls reading "Lidhi me
+                    projektet" in one tab is ambiguous for screen readers. */}
+                <button
+                  onClick={() => navigate('/app/invoices?project=none')}
+                  className="font-medium underline hover:no-underline"
+                >
+                  Shiko faturat pa projekt
+                </button>
+              </Notice>
+            )}
+            {departmentRows.rows.length === 0 ? (
               <EmptyState text='Ende pa projekte me departament. Cakto "Departamentin" te projektet për ta parë këtë ndarje.' />
             ) : (
               <ul className="space-y-1.5">
-                {departmentPnl.rows.map(d => {
-                  const maxAbs = Math.max(...departmentPnl.rows.map(r => Math.abs(r.profit)), 1);
-                  const pct = Math.round((Math.abs(d.profit) / maxAbs) * 100);
+                {departmentRows.rows.map(d => {
+                  // The meter compares REVENUE across departments, matching the
+                  // measure the panel now leads with.
+                  const max = Math.max(...departmentRows.rows.map(r => Math.max(r.revenue, r.collected)), 1);
+                  const pct = Math.round((Math.max(d.revenue, d.collected) / max) * 100);
                   const open = expandedDept === d.department;
-                  const pos = d.profit >= 0;
                   return (
                     <li key={d.department} className="rounded-lg border border-border">
                       <button
@@ -906,27 +995,21 @@ const FinancesView: React.FC = () => {
                         className="w-full rounded-lg p-2.5 text-left transition-colors hover:bg-muted/40"
                         aria-expanded={open}
                       >
-                        <div className="mb-1.5 flex items-center justify-between gap-2">
-                          <span className="flex min-w-0 flex-1 items-center gap-1 truncate text-sm font-medium text-foreground">
-                            <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
+                        <div className="mb-1.5 flex items-center gap-1">
+                          <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
+                          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
                             {d.department}
-                            <span className="text-xs font-normal text-muted-foreground">
+                            <span className="ml-1 text-xs font-normal text-muted-foreground">
                               · {d.projects.length} {d.projects.length === 1 ? 'projekt' : 'projekte'}
                             </span>
                           </span>
-                          <span className={cn('shrink-0 text-sm font-semibold tabular-nums', pos ? INK_POS : INK_NEG)}>
-                            {formatALL(d.profit)}
-                            {d.margin != null && (
-                              <span className="ml-1 text-xs font-normal text-muted-foreground">
-                                ({Math.round(d.margin * 100)}%)
-                              </span>
-                            )}
-                          </span>
                         </div>
-                        <Meter pct={pct} tone={pos ? 'pos' : 'neg'} />
+                        <MeasureRow revenue={d.revenue} collected={d.collected} profit={d.profit} margin={d.margin} />
+                        <div className="mt-1.5">
+                          <Meter pct={pct} tone="neutral" />
+                        </div>
                         <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
-                          <span>Të ardhura {formatALL(d.revenue)}</span>
-                          <span>· Staf {formatALL(d.labor)}</span>
+                          <span>Staf {formatALL(d.labor)}</span>
                           <span>· Shpenzime {formatALL(d.directCost)}</span>
                           <span>· Overhead {formatALL(d.overhead)}</span>
                         </div>
@@ -1019,17 +1102,18 @@ const FinancesView: React.FC = () => {
           )}
 
           <Panel
-            title="Të ardhurat sipas përgjegjësit"
+            title="Të ardhurat dhe fitimi sipas përgjegjësit"
             icon={<Users className="h-4 w-4 text-sky-700" />}
-            hint="Kliko një person për të parë projektet e tij me vlerën e secilit."
+            hint="Të njëjtat tre masa si te departamenti. Kliko një person për projektet e tij."
           >
+            <MeasureTotals totals={staffRevenue.totals} />
             {staffRevenue.rows.length === 0 ? (
               <EmptyState text="Ende pa projekte me përgjegjës për këtë periudhë." />
             ) : (
               <ul className="space-y-1.5">
                 {staffRevenue.rows.map(r => {
-                  const top = staffRevenue.rows[0].revenue;
-                  const pct = top > 0 ? Math.round((r.revenue / top) * 100) : 0;
+                  const max = Math.max(...staffRevenue.rows.map(x => Math.max(x.revenue, x.collected)), 1);
+                  const pct = Math.round((Math.max(r.revenue, r.collected) / max) * 100);
                   const open = expandedStaff === r.userId;
                   return (
                     <li key={r.userId} className="rounded-lg border border-border">
@@ -1039,19 +1123,24 @@ const FinancesView: React.FC = () => {
                         className="w-full rounded-lg p-2.5 text-left transition-colors hover:bg-muted/40"
                         aria-expanded={open}
                       >
-                        <div className="mb-1.5 flex items-center justify-between gap-2">
-                          <span className="flex min-w-0 flex-1 items-center gap-1 truncate text-sm text-foreground">
-                            <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
+                        <div className="mb-1.5 flex items-center gap-1">
+                          <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
+                          <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                             {r.name}
-                            <span className="text-xs text-muted-foreground">
+                            <span className="ml-1 text-xs text-muted-foreground">
                               · {r.projects.length} {r.projects.length === 1 ? 'projekt' : 'projekte'}
                             </span>
                           </span>
-                          <span className="shrink-0 text-sm font-semibold tabular-nums text-foreground">
-                            {formatALL(r.revenue)}
-                          </span>
                         </div>
-                        <Meter pct={pct} tone="neutral" />
+                        <MeasureRow
+                          revenue={r.revenue}
+                          collected={r.collected}
+                          profit={r.profit}
+                          margin={r.revenue > 0 ? r.profit / r.revenue : null}
+                        />
+                        <div className="mt-1.5">
+                          <Meter pct={pct} tone="neutral" />
+                        </div>
                       </button>
                       {open && (
                         <ul className="space-y-1 border-t border-border/60 px-3 pb-2.5 pt-1">
@@ -1059,6 +1148,9 @@ const FinancesView: React.FC = () => {
                             <li key={p.id} className="flex items-center justify-between gap-2 pt-1.5 text-xs">
                               <span className="min-w-0 flex-1 truncate text-muted-foreground">{p.name}</span>
                               <span className="shrink-0 tabular-nums text-foreground">{formatALL(p.revenue)}</span>
+                              <span className={cn('w-24 shrink-0 text-right tabular-nums', p.profit >= 0 ? INK_POS : INK_NEG)}>
+                                {formatALL(p.profit)}
+                              </span>
                             </li>
                           ))}
                         </ul>
@@ -1070,10 +1162,30 @@ const FinancesView: React.FC = () => {
             )}
             {staffRevenue.unattributed > 0 && (
               <p className={cn('mt-2 text-[11px]', INK_WARN)}>
-                {formatALL(staffRevenue.unattributed)} pa përgjegjës të caktuar — cakto një përgjegjës
-                te projektet për t'i atribuar.
+                {formatALL(staffRevenue.unattributed)} të ardhura pa përgjegjës të caktuar — cakto një
+                përgjegjës te projektet për t'i atribuar.
               </p>
             )}
+            {collected.withoutResponsible > 0 && (
+              <p className={cn('mt-1 text-[11px]', INK_WARN)}>
+                {formatALL(collected.withoutResponsible)} arkëtuar nga projekte pa përgjegjës — të
+                njohura si departament, por pa person.
+              </p>
+            )}
+            <Explain label="Pse 'Të ardhura' dhe 'Arkëtuar' nuk përputhen">
+              <p>
+                <strong>Të ardhura</strong> = {revenueBasis === 'invoiced' ? 'faturat e lëshuara' : 'buxheti i projektit'}
+                {' '}brenda periudhës — ajo që u <em>fitua</em> (accrual). Kjo kolonë ndjek toggle-in lart.
+              </p>
+              <p>
+                <strong>Arkëtuar</strong> = paraja që <em>hyri</em> realisht në të njëjtën periudhë
+                (cash), atribuar faturë → projekt → person/departament.
+              </p>
+              <p>
+                <strong>Pa mbledhur</strong> = diferenca. Negative kur në këtë periudhë u arkëtua
+                para për punë të faturuar më parë — nuk është gabim.
+              </p>
+            </Explain>
           </Panel>
         </TabsContent>
 
@@ -1406,6 +1518,79 @@ const StatTile: React.FC<{
     )}
     {hint && <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{hint}</p>}
   </Card>
+);
+
+/**
+ * The three measures a department row and a person row both carry, in one
+ * layout so the two panels read identically:
+ *   Të ardhura (accrual, per the page's basis) · Arkëtuar (cash) · Pa mbledhur · Fitim
+ *
+ * Four numbers is a table, not a sentence — hence the grid, which folds to 2×2
+ * on a phone instead of overflowing the row.
+ */
+const MeasureRow: React.FC<{
+  revenue: number;
+  collected: number;
+  profit: number;
+  margin: number | null;
+}> = ({ revenue, collected, profit, margin }) => {
+  const outstanding = revenue - collected;
+  return (
+    <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 sm:grid-cols-4">
+      <Cell label="Të ardhura" value={revenue} />
+      <Cell label="Arkëtuar" value={collected} accent={SERIES[0]} />
+      <Cell
+        label="Pa mbledhur"
+        value={outstanding}
+        // Only an unpaid gap is a warning; collecting ahead is not.
+        tone={outstanding > 0 ? 'warn' : 'muted'}
+      />
+      <Cell
+        label="Fitim"
+        value={profit}
+        tone={profit >= 0 ? 'pos' : 'neg'}
+        suffix={margin != null ? `${Math.round(margin * 100)}%` : undefined}
+      />
+    </div>
+  );
+};
+
+const Cell: React.FC<{
+  label: string;
+  value: number;
+  tone?: 'pos' | 'neg' | 'warn' | 'muted';
+  accent?: string;
+  suffix?: string;
+}> = ({ label, value, tone, accent, suffix }) => (
+  <div className="min-w-0">
+    <p className="flex items-center gap-1 truncate text-[10px] uppercase tracking-wide text-muted-foreground">
+      {accent && <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: accent }} />}
+      {label}
+    </p>
+    <p className={cn(
+      'truncate text-xs font-semibold tabular-nums',
+      tone === 'pos' && INK_POS,
+      tone === 'neg' && INK_NEG,
+      tone === 'warn' && INK_WARN,
+      tone === 'muted' && 'text-muted-foreground',
+      !tone && 'text-foreground',
+    )}>
+      {formatALL(value)}
+      {suffix && <span className="ml-1 font-normal text-muted-foreground">({suffix})</span>}
+    </p>
+  </div>
+);
+
+/** Column anchors for a MeasureRow list — the same four measures, summed. */
+const MeasureTotals: React.FC<{
+  totals: { revenue: number; collected: number; profit: number };
+}> = ({ totals }) => (
+  <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+    <PoolTile label="Të ardhura" value={totals.revenue} />
+    <PoolTile label="Arkëtuar" value={totals.collected} />
+    <PoolTile label="Pa mbledhur" value={totals.revenue - totals.collected} />
+    <PoolTile label="Fitim" value={totals.profit} tone={totals.profit >= 0 ? 'pos' : 'neg'} bold />
+  </div>
 );
 
 /** Magnitude meter. The track is a lighter step of the fill's own ramp. */

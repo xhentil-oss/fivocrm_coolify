@@ -56,11 +56,11 @@ function seed() {
   collections.invoices = [
     {
       id: 'i1', customerId: 'c1', status: 'Paid', total: 400_000, currency: 'ALL',
-      invoiceDate: iso(-6), paidDate: iso(-3), dueDate: iso(-10), source: 'whmcs',
+      invoiceDate: iso(-6), paidAt: iso(-3), dueDate: iso(-10), source: 'whmcs',
     },
     {
       id: 'i2', customerId: 'c2', status: 'Paid', total: 250_000, currency: 'ALL',
-      invoiceDate: iso(-5), paidDate: iso(-2), dueDate: iso(-5), projectId: 'p1',
+      invoiceDate: iso(-5), paidAt: iso(-2), dueDate: iso(-5), projectId: 'p1',
     },
     // Outstanding + past due → drives the "Të vonuara" tile and the alarm strip.
     { id: 'i3', customerId: 'c1', status: 'Pending', total: 120_000, currency: 'ALL', invoiceDate: iso(-25), dueDate: iso(-20) },
@@ -142,8 +142,8 @@ describe('FinancesView', () => {
     selectTab('Fitimi');
     expect(screen.getByText('Periudha')).toBeInTheDocument();
     expect(screen.getByText('Fitimi sipas projekti')).toBeInTheDocument();
-    expect(screen.getByText('Fitimi sipas departamentit')).toBeInTheDocument();
-    expect(screen.getByText('Të ardhurat sipas përgjegjësit')).toBeInTheDocument();
+    expect(screen.getByText('Të ardhurat dhe fitimi sipas departamentit')).toBeInTheDocument();
+    expect(screen.getByText('Të ardhurat dhe fitimi sipas përgjegjësit')).toBeInTheDocument();
 
     // Tab 3 — clients
     selectTab('Klientët');
@@ -175,6 +175,34 @@ describe('FinancesView', () => {
     const monthPicker = screen.getByLabelText('Zgjidh një muaj të caktuar') as HTMLSelectElement;
     fireEvent.change(monthPicker, { target: { value: monthPicker.options[1].value } });
     expect(screen.getByRole('button', { name: 'Viti', pressed: false })).toBeInTheDocument();
+  });
+
+  it('shows revenue, cash and profit symmetrically for department and person', () => {
+    render(<FinancesView />);
+    selectTab('Fitimi');
+
+    expect(screen.getByText('Të ardhurat dhe fitimi sipas departamentit')).toBeInTheDocument();
+    expect(screen.getByText('Të ardhurat dhe fitimi sipas përgjegjësit')).toBeInTheDocument();
+
+    // The same four measures appear in both panels: two totals strips plus one
+    // row each (Web department / Ana K.), so 4 of each label at minimum.
+    for (const label of ['Të ardhura', 'Arkëtuar', 'Pa mbledhur', 'Fitim']) {
+      expect(screen.getAllByText(label).length).toBeGreaterThanOrEqual(4);
+    }
+
+    // i2 (250 000, paid, projectId p1) is the only invoice attributable to a
+    // project — p1 is department "Web", responsible u1 ("Ana K.").
+    expect(screen.getAllByText('250 000 Lekë').length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('warns that collected cash with no project cannot reach either breakdown', () => {
+    render(<FinancesView />);
+    selectTab('Fitimi');
+    // i1 is paid (400 000) but carries no projectId, so it belongs to no
+    // department and no person — the panel must say so rather than silently
+    // showing columns that do not add up.
+    expect(screen.getByText(/nuk i takon\s+asnjë departamenti apo personi/)).toBeInTheDocument();
+    expect(screen.getAllByText(/400 000 Lekë/).length).toBeGreaterThanOrEqual(1);
   });
 
   it('links unlinked invoices to the invoices page', () => {
