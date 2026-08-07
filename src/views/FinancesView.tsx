@@ -7,6 +7,7 @@ import { formatALL, toAll } from '../lib/utils';
 import {
   TrendingUp, TrendingDown, AlertTriangle, Wallet, Clock,
   ArrowDownRight, ArrowUpRight, Users, CheckCircle2, Repeat, XCircle, Briefcase, Layers,
+  Server, Building2,
 } from 'lucide-react';
 import {
   ResponsiveContainer, LineChart, Line, XAxis, YAxis, Tooltip, CartesianGrid,
@@ -107,6 +108,20 @@ const FinancesView: React.FC = () => {
 
   // Compare month-to-date against last month AT THE SAME POINT (not a full month).
   const profitDelta = thisMonth.profit - lastMonthToDate.profit;
+
+  // ── Income split by source (WHMCS vs direct) for the current month ──
+  // WHMCS-synced invoices carry source:'whmcs'; everything else is billed
+  // directly inside FivoCRM. Same collected basis as the hero number.
+  const incomeBySource = useMemo(() => {
+    const cur = monthWindow(now, 0);
+    let whmcs = 0, direct = 0;
+    for (const inv of invoices || []) {
+      const c = getInvoiceCollectedBetween(inv, cur.start, cur.end);
+      if (c <= 0) continue;
+      if ((inv as any).source === 'whmcs') whmcs += c; else direct += c;
+    }
+    return { whmcs, direct, total: whmcs + direct };
+  }, [invoices, now]);
 
   // ── 6-month profit trend ──
   const trend = useMemo(() => {
@@ -458,6 +473,38 @@ const FinancesView: React.FC = () => {
               amount={thisMonth.profit}
               bold
               positive={profitPositive}
+            />
+          </div>
+        </div>
+      </Card>
+
+      {/* 2b — Income by source (WHMCS as its own category) */}
+      <Card className="p-5">
+        <h2 className="text-sm font-semibold mb-1">Të ardhurat sipas burimit</h2>
+        <p className="text-xs text-muted-foreground mb-4">Arkëtimet e këtij muaji, ndarë sipas origjinës.</p>
+        <div className="space-y-2.5">
+          <BreakdownRow
+            icon={<Server className="w-4 h-4 text-indigo-600" />}
+            label="WHMCS"
+            hint="Fatura të sinkronizuara nga WHMCS (hosting, domain, shërbime)"
+            amount={incomeBySource.whmcs}
+            positive
+          />
+          <BreakdownRow
+            icon={<Building2 className="w-4 h-4 text-sky-600" />}
+            label="Direkt (FivoCRM)"
+            hint="Fatura të krijuara drejtpërdrejt në FivoCRM"
+            amount={incomeBySource.direct}
+            positive
+          />
+          <div className="border-t pt-2.5">
+            <BreakdownRow
+              icon={<ArrowUpRight className="w-4 h-4 text-emerald-600" />}
+              label="= Gjithsej arkëtuar"
+              hint="Duhet të përputhet me 'Para që hyri' lart"
+              amount={incomeBySource.total}
+              bold
+              positive
             />
           </div>
         </div>
