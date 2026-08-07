@@ -221,6 +221,36 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   `projectPnl.projectDate()` falls back to `updatedAt`, so bumping it dragged
   un-completed one-time projects into the current month's P&L.
 
+### Recurring EXPENSES (same period-key law as project billing)
+
+- **The idempotency token is the period key, never a timestamp.**
+  `lastGeneratedPeriodKey` on the parent (`'2026-08'` monthly, `'W2026-08-03'`
+  weekly, `'Y2026'` yearly) + `periodKey` on each generated child. The old guard
+  (`lastChildCreatedAt >= nextRecurringDate`) killed a series permanently as soon
+  as it lagged one cycle: the catch-up child is created "now", which is newer
+  than every remaining due date, so the guard stayed true forever.
+- **A recurring PARENT is itself a real expense row that counts in its own
+  month.** Generation therefore starts in the period AFTER the parent's
+  (`firstGenerationDate`), and the UI stamps `lastGeneratedPeriodKey` at
+  creation. Without that, a retainer created on the 17th with a due date on the
+  30th booked the month twice.
+- All of it lives in `src/lib/finance/recurringExpenses.ts` (unit-tested) and is
+  **mirrored** in `runRecurringExpenses` / `expenseGenerationBlockReason` in
+  `api/cron/run.ts` — keep the two in sync. Blocks: `not-recurring`,
+  `auto-generated`, `paused`, `unsupported-frequency`, `no-next-date`,
+  `not-due`, `series-ended`, `already-generated`.
+- **Never `setMonth(+1)` on a date.** The 31st overflows into the month after
+  next, silently skipping a month; use `addMonthsClamped` with the anchor day.
+- **The cron self-heals a series with no `nextRecurringDate` FORWARD only.**
+  Backfilling the months it missed would rewrite closed books — that is the
+  owner's call, so the missing months are surfaced in the UI instead.
+- Duplicate detection (`findDuplicateExpenseGroups`) only ever SUGGESTS: same
+  normalised title + amount + currency + month, `Rejected` rows excluded.
+  ExpensesView shows a banner, a "Shiko dublikatat" filter and a per-row badge;
+  `scripts/dedupe-expenses.mjs` is the repair path (dry-run by default,
+  `--archive` snapshots into `expenseDeduped`, a recurring parent is never
+  deleted).
+
 ### Reporting & Accountability module (`id: 'reporting'`, `minPlan: 'pro'`)
 
 - Staff: `/app/reports` (+ `/reports/:id`), `/app/report-templates` (config: templates,
