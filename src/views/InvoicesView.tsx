@@ -6,7 +6,8 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useAuth } from '../contexts/AuthContext';
-import { DollarSign, Plus, Calendar as CalendarIcon, CreditCard, Mail, Send, Building2, ShoppingCart, Trash2, Eye, Edit2, Check, X, ExternalLink, Loader2, MoreVertical, Download, ChevronsUpDown, RefreshCw, Pause, Play, CircleStop, AlertTriangle } from 'lucide-react';
+import { Link } from 'react-router-dom';
+import { DollarSign, Plus, Calendar as CalendarIcon, CreditCard, Mail, Send, Building2, ShoppingCart, Trash2, Eye, Edit2, Check, X, ExternalLink, Loader2, MoreVertical, Download, ChevronsUpDown, RefreshCw, Pause, Play, CircleStop, AlertTriangle, Folder } from 'lucide-react';
 import ExportButton from '../components/ExportButton';
 import { loadStripe } from '@stripe/stripe-js';
 import { Card } from '../components/ui/card';
@@ -34,7 +35,7 @@ import {
 } from '../components/ui/dropdown-menu';
 import type { Invoice, Customer, Service, InvoiceItem, Project, ClientPortalAccess, Payment } from '../types';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
-import { toAll, getRateToAll, getTimestampMs } from '../lib/utils';
+import { toAll, getRateToAll, getTimestampMs, canSeeFinancials } from '../lib/utils';
 import { toast } from '../hooks/use-toast';
 import { getStatusColor, getInvoiceStatusLabel } from '../lib/statusColors';
 import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../lib/native';
@@ -53,6 +54,9 @@ const InvoicesView: React.FC = () => {
   const [editValue, setEditValue] = useState<string>('');
   const [invoiceToDelete, setInvoiceToDelete] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState<string>('__all__');
+  // '__all__' | '__none__' (invoices with no project — the ones that fall out of the
+  // per-project P&L) | a concrete projectId.
+  const [projectFilter, setProjectFilter] = useState<string>('__all__');
   const [searchQuery, setSearchQuery] = useState('');
   const [sortBy, setSortBy] = useState<'date_desc' | 'date_asc' | 'amount_desc' | 'amount_asc'>('date_desc');
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
@@ -108,6 +112,14 @@ const InvoicesView: React.FC = () => {
     }
   }, [rawInvoices]);
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
+  // Projects are needed in the LIST, not just the form: the invoice↔project link was
+  // write-only, so nobody could see (or fix) which invoices were unlinked — and an
+  // unlinked invoice silently drops out of the per-project P&L.
+  const { data: allProjects } = useCollection<Project>('projects', { skipTeamFilter: true });
+  const projectById = React.useMemo(
+    () => new Map((allProjects || []).map(p => [p.id, p] as const)),
+    [allProjects],
+  );
   const { data: allInvoiceItems } = useCollection<InvoiceItem>('invoiceItems', { skipTeamFilter: true });
   const invoiceMutation = useMutation<Invoice>('invoices');
   const invoiceItemMutationTop = useMutation<InvoiceItem>('invoiceItems');
@@ -543,6 +555,8 @@ const InvoicesView: React.FC = () => {
   const filteredInvoices = React.useMemo(() => {
     let list = invoices ? [...invoices] : [];
     if (statusFilter !== '__all__') list = list.filter(inv => inv.status === statusFilter);
+    if (projectFilter === '__none__') list = list.filter(inv => !inv.projectId);
+    else if (projectFilter !== '__all__') list = list.filter(inv => inv.projectId === projectFilter);
     if (searchQuery.trim()) {
       const q = searchQuery.toLowerCase();
       list = list.filter(inv => {
@@ -550,7 +564,8 @@ const InvoicesView: React.FC = () => {
         return (
           inv.invoiceNumber?.toLowerCase().includes(q) ||
           customer?.name?.toLowerCase().includes(q) ||
-          customer?.company?.toLowerCase().includes(q)
+          customer?.company?.toLowerCase().includes(q) ||
+          (inv.projectId ? projectById.get(inv.projectId)?.name?.toLowerCase().includes(q) : false)
         );
       });
     }
@@ -562,11 +577,27 @@ const InvoicesView: React.FC = () => {
       return 0;
     });
     return list;
-  }, [invoices, statusFilter, searchQuery, sortBy, customers]);
+  }, [invoices, statusFilter, projectFilter, searchQuery, sortBy, customers, projectById]);
+
+  // Deep link from a project's "Faturimi" panel: /app/invoices?project=<id>
+  // (and ?project=none for the unlinked set).
+  useEffect(() => {
+    const p = new URLSearchParams(window.location.search).get('project');
+    if (!p) return;
+    setProjectFilter(p === 'none' ? '__none__' : p);
+    window.history.replaceState({}, '', window.location.pathname);
+  }, []);
+
+  // How many issued invoices carry no project — the exact set that vanishes from the
+  // "Faturuar" basis of the per-project P&L while overhead is still allocated.
+  const unlinkedCount = React.useMemo(
+    () => (invoices || []).filter(i => !i.projectId && i.status !== 'Draft' && i.status !== 'Cancelled').length,
+    [invoices],
+  );
 
   // Cap rendered rows to avoid mounting hundreds of invoice rows at once on mobile.
   const [visibleCount, setVisibleCount] = useState(50);
-  useEffect(() => { setVisibleCount(50); }, [statusFilter, searchQuery, sortBy]);
+  useEffect(() => { setVisibleCount(50); }, [statusFilter, projectFilter, searchQuery, sortBy]);
   const visibleInvoices = useMemo(
     () => filteredInvoices.slice(0, visibleCount),
     [filteredInvoices, visibleCount]
@@ -857,12 +888,25 @@ const InvoicesView: React.FC = () => {
       <div className="flex flex-col sm:flex-row gap-2 sm:items-center">
         <input
           type="text"
-          placeholder="Kërko faturë ose klient..."
+          placeholder="Kërko faturë, klient ose projekt..."
           value={searchQuery}
           onChange={e => setSearchQuery(e.target.value)}
           className="h-9 rounded-md border border-input bg-background px-3 text-sm flex-1 min-w-0 focus:outline-none focus:ring-2 focus:ring-ring"
         />
         <div className="flex gap-2 flex-wrap">
+          <select
+            value={projectFilter}
+            onChange={e => setProjectFilter(e.target.value)}
+            className="h-8 px-2 text-xs rounded-md border border-input bg-background text-muted-foreground focus:outline-none max-w-[190px]"
+            title="Filtro sipas projektit"
+          >
+            <option value="__all__">Çdo projekt</option>
+            <option value="__none__">Pa projekt{unlinkedCount ? ` (${unlinkedCount})` : ''}</option>
+            {(allProjects || [])
+              .slice()
+              .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+              .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
           {(['__all__', 'Draft', 'Pending', 'Partial', 'Paid', 'Overdue'] as const).map(s => (
             <button
               key={s}
@@ -891,6 +935,22 @@ const InvoicesView: React.FC = () => {
           </select>
         </div>
       </div>
+      {/* Unlinked invoices are the single biggest source of wrong per-project profit:
+          they are excluded from the "Faturuar" revenue basis while the full overhead
+          pool is still spread over the projects. Make it visible and one click to fix. */}
+      {unlinkedCount > 0 && projectFilter !== '__none__' && canSeeFinancials(permissions) && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-2.5 text-xs flex items-center justify-between gap-3 flex-wrap">
+          <span className="text-amber-900 dark:text-amber-200">
+            <strong>{unlinkedCount} faturë</strong> pa projekt të lidhur — nuk numërohen te “Fitimi sipas projekti” me bazën “Faturuar”.
+          </span>
+          <button
+            onClick={() => setProjectFilter('__none__')}
+            className="h-7 px-2.5 rounded-md border border-amber-400 bg-background text-amber-900 dark:text-amber-200 font-medium hover:bg-amber-100 dark:hover:bg-amber-900/30"
+          >
+            Shfaqi
+          </button>
+        </div>
+      )}
       {filteredInvoices.length === 0 && !invoicesLoading && (
         <p className="text-sm text-muted-foreground text-center py-6">Nuk u gjetën fatura.</p>
       )}
@@ -916,6 +976,20 @@ const InvoicesView: React.FC = () => {
                     )}
                   </div>
                   <p className="text-xs text-muted-foreground truncate">{customer?.name || 'Unknown'}</p>
+                  {(() => {
+                    const proj = invoice.projectId ? projectById.get(invoice.projectId) : undefined;
+                    if (proj) {
+                      return (
+                        <p className="text-[11px] text-muted-foreground/80 truncate flex items-center gap-1">
+                          <Folder className="w-3 h-3 shrink-0" />{proj.name}
+                        </p>
+                      );
+                    }
+                    if (invoice.projectId) {
+                      return <p className="text-[11px] text-amber-600">projekt i fshirë</p>;
+                    }
+                    return null;
+                  })()}
                   {invoice.productSummary && (
                     <p className="text-[11px] text-muted-foreground/80 truncate" title={invoice.productSummary}>📦 {invoice.productSummary}</p>
                   )}
@@ -1003,6 +1077,7 @@ const InvoicesView: React.FC = () => {
               <tr>
                 <th className="px-4 py-3 text-left text-body-sm font-medium">Fatura #</th>
                 <th className="px-4 py-3 text-left text-body-sm font-medium hidden md:table-cell">Klienti</th>
+                <th className="px-4 py-3 text-left text-body-sm font-medium hidden lg:table-cell">Projekti</th>
                 <th className="px-4 py-3 text-left text-body-sm font-medium">Totali</th>
                 <th className="px-4 py-3 text-left text-body-sm font-medium">Statusi</th>
                 <th className="px-4 py-3 text-left text-body-sm font-medium hidden lg:table-cell">Data</th>
@@ -1034,6 +1109,26 @@ const InvoicesView: React.FC = () => {
                         <Building2 className="w-4 h-4 text-muted-foreground" />
                         <span className="truncate max-w-[150px]">{customer?.name || 'Unknown'}</span>
                       </div>
+                    </td>
+                    <td className="px-4 py-3 hidden lg:table-cell text-body-sm">
+                      {(() => {
+                        const proj = invoice.projectId ? projectById.get(invoice.projectId) : undefined;
+                        if (proj) {
+                          return (
+                            <Link to={`/app/projects/${proj.id}`} className="flex items-center gap-1.5 hover:underline">
+                              <Folder className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                              <span className="truncate max-w-[140px]">{proj.name}</span>
+                            </Link>
+                          );
+                        }
+                        // A projectId that resolves to nothing means the project was
+                        // deleted before the unlink cascade existed — say so, don't
+                        // render a blank cell that looks like "not linked".
+                        if (invoice.projectId) {
+                          return <span className="text-[11px] text-amber-600" title="Projekti nuk ekziston më">projekt i fshirë</span>;
+                        }
+                        return <span className="text-[11px] text-muted-foreground/60">—</span>;
+                      })()}
                     </td>
                     <td className="px-4 py-3 text-body font-medium">
                       {/* Total is read-only inline: editing it alone would desync it from

@@ -173,4 +173,62 @@ describe('computeProjectPnl', () => {
     const res = computeProjectPnl(projects, [], [], { months: 1 });
     expect(res.rows[0].margin).toBeNull();
   });
+
+  // The 'invoiced' basis silently dropped every invoice without a projectId while
+  // still allocating the FULL fixed pool across projects, so unlinked revenue read
+  // as pure loss with no indication why. These guard that it is now reported.
+  describe('unlinkedInvoices', () => {
+    const now = new Date('2026-07-23');
+    const projects = [mkProject({ id: 'a', name: 'A', budget: 100_000, billingType: 'one-time' })];
+
+    it('reports billed invoices that carry no projectId', () => {
+      const invoices = [
+        { id: 'i1', projectId: 'a', total: 250_000, status: 'Pending', invoiceDate: new Date('2026-03-10'), createdAt: new Date('2026-03-10') },
+        { id: 'i2', total: 80_000, status: 'Paid', invoiceDate: new Date('2026-04-10'), createdAt: new Date('2026-04-10') },
+        { id: 'i3', projectId: '', total: 20_000, status: 'Overdue', invoiceDate: new Date('2026-05-10'), createdAt: new Date('2026-05-10') },
+      ] as any;
+      const res = computeProjectPnl(projects, [], [], { year: 2026, now, revenueBasis: 'invoiced', invoices });
+      expect(res.unlinkedInvoices).toEqual({ count: 2, amount: 100_000 });
+      expect(res.rows[0].revenue).toBe(250_000); // unlinked value is NOT credited
+    });
+
+    it('ignores Draft and Cancelled invoices when counting unlinked ones', () => {
+      const invoices = [
+        { id: 'd', total: 500_000, status: 'Draft', invoiceDate: new Date('2026-03-10'), createdAt: new Date('2026-03-10') },
+        { id: 'c', total: 500_000, status: 'Cancelled', invoiceDate: new Date('2026-03-10'), createdAt: new Date('2026-03-10') },
+      ] as any;
+      const res = computeProjectPnl(projects, [], [], { year: 2026, now, revenueBasis: 'invoiced', invoices });
+      expect(res.unlinkedInvoices).toEqual({ count: 0, amount: 0 });
+    });
+
+    it('excludes unlinked invoices outside the period', () => {
+      const invoices = [
+        { id: 'old', total: 90_000, status: 'Paid', invoiceDate: new Date('2025-03-10'), createdAt: new Date('2025-03-10') },
+      ] as any;
+      const res = computeProjectPnl(projects, [], [], { year: 2026, now, revenueBasis: 'invoiced', invoices });
+      expect(res.unlinkedInvoices.count).toBe(0);
+    });
+
+    it('reports them on the budget basis too, so the toggle holds no surprise', () => {
+      const invoices = [
+        { id: 'i2', total: 80_000, status: 'Paid', invoiceDate: new Date('2026-04-10'), createdAt: new Date('2026-04-10') },
+      ] as any;
+      const res = computeProjectPnl(projects, [], [], { year: 2026, now, revenueBasis: 'budget', invoices });
+      expect(res.revenueBasis).toBe('budget');
+      expect(res.unlinkedInvoices).toEqual({ count: 1, amount: 80_000 });
+      expect(res.rows[0].revenue).toBe(100_000); // budget basis untouched
+    });
+
+    it('stays empty when no invoices are supplied', () => {
+      const res = computeProjectPnl(projects, [], [], { months: 1 });
+      expect(res.unlinkedInvoices).toEqual({ count: 0, amount: 0 });
+    });
+
+    it('labels the basis so a 0-revenue project can be explained correctly', () => {
+      const res = computeProjectPnl(projects, [], [], { year: 2026, now, revenueBasis: 'invoiced', invoices: [] });
+      expect(res.revenueBasis).toBe('invoiced');
+      expect(res.missingBudget.count).toBe(1); // has a budget, but nothing invoiced
+      expect(res.missingBudget.names).toEqual(['A']);
+    });
+  });
 });

@@ -109,6 +109,14 @@ export function toAll(amount: number, currency?: string): number {
   return (amount || 0) * getRateToAll(currency);
 }
 
+// Inverse of toAll: express an ALL amount in `currency`. Needed when a total is
+// aggregated in ALL but must be STORED in a document's own currency (e.g. summing
+// services priced in EUR onto an ALL-denominated invoice).
+export function fromAll(amountAll: number, currency?: string): number {
+  const rate = getRateToAll(currency);
+  return rate > 0 ? (amountAll || 0) / rate : (amountAll || 0);
+}
+
 /**
  * A lejohet ky përdorues të shohë të dhëna financiare (buxhet/çmim)?
  * Vetëm Manager, Admin dhe SuperAdmin. (`isAdmin` mbulon Admin + Owner + SuperAdmin.)

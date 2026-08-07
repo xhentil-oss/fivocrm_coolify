@@ -75,6 +75,17 @@ export interface ProjectPnlResult {
   };
   /** Projects credited with cost/revenue but missing a budget (revenue reads 0). */
   missingBudget: { count: number; names: string[] };
+  /** Which basis produced `revenue` — the UI needs it to label a 0-revenue project
+   *  correctly ("no budget" vs "no invoice linked"). */
+  revenueBasis: 'budget' | 'invoiced';
+  /**
+   * Invoices carrying NO `projectId`. They are excluded from revenue on the
+   * 'invoiced' basis while the full fixed pool is still allocated across projects,
+   * so an unlinked invoice shows up as pure loss. Surfacing the count + value is
+   * what makes that self-correctable instead of silently wrong.
+   * Only populated when `invoices` are supplied.
+   */
+  unlinkedInvoices: { count: number; amount: number };
 }
 
 function isCompleted(p: Project): boolean {
@@ -105,12 +116,15 @@ export function computeProjectPnl(
   opts: ProjectPnlOptions = {},
 ): ProjectPnlResult {
   const now = opts.now ?? new Date();
+  const resolvedBasis: 'budget' | 'invoiced' = opts.revenueBasis === 'invoiced' ? 'invoiced' : 'budget';
   const empty: ProjectPnlResult = {
     rows: [],
     fixedPool: { salaries: 0, otherFixed: 0, total: 0 },
     allocationBasis: 'revenue',
     totals: { revenue: 0, directCost: 0, overhead: 0, cost: 0, profit: 0 },
     missingBudget: { count: 0, names: [] },
+    revenueBasis: resolvedBasis,
+    unlinkedInvoices: { count: 0, amount: 0 },
   };
   if (!projects) return empty;
 
@@ -123,13 +137,18 @@ export function computeProjectPnl(
       ? { start: new Date(opts.year, 0, 1), end: opts.year === now.getFullYear() ? now : new Date(opts.year, 11, 31, 23, 59, 59, 999) }
       : { start: new Date(0), end: now };
   const invoicedByProject = new Map<string, number>();
-  if (useInvoiced) {
-    for (const inv of opts.invoices || []) {
-      const pid = inv.projectId;
-      if (!pid) continue;
-      const amt = getInvoiceBilledBetween(inv, invWindow.start, invWindow.end);
-      if (amt) invoicedByProject.set(pid, (invoicedByProject.get(pid) || 0) + amt);
+  // Tracked whenever invoices are supplied (not just on the invoiced basis) so the
+  // UI can warn BEFORE the user flips the toggle and sees phantom losses.
+  const unlinkedInvoices = { count: 0, amount: 0 };
+  for (const inv of opts.invoices || []) {
+    const amt = getInvoiceBilledBetween(inv, invWindow.start, invWindow.end);
+    const pid = inv.projectId;
+    if (!pid) {
+      // A billed invoice with no project: real revenue that no project can absorb.
+      if (amt) { unlinkedInvoices.count += 1; unlinkedInvoices.amount += amt; }
+      continue;
     }
+    if (useInvoiced && amt) invoicedByProject.set(pid, (invoicedByProject.get(pid) || 0) + amt);
   }
 
   // ── Period filter — explicit range wins, then calendar year, then all-time.
@@ -306,5 +325,7 @@ export function computeProjectPnl(
     allocationBasis,
     totals,
     missingBudget,
+    revenueBasis: resolvedBasis,
+    unlinkedInvoices,
   };
 }

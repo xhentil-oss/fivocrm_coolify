@@ -3,7 +3,7 @@ import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import { DndContext, DragOverlay, closestCorners, MouseSensor, TouchSensor, useSensor, useSensors, useDroppable, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { getStatusColor } from '../lib/statusColors';
+import { getStatusColor, getInvoiceStatusLabel } from '../lib/statusColors';
 import { useCollection, useMutation, useDocument } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -37,8 +37,9 @@ import { resolvePortalUserId } from '../lib/notifyClient';
 import { addFrequency, completeTask } from '../lib/recurringUtils';
 import { formatCurrency, toAll, canSeeFinancials } from '../lib/utils';
 import { computeProjectLabor } from '../lib/finance/laborCost';
-import { AlertTriangle } from 'lucide-react';
-import type { Task, Project, Team, TeamMember, TimeEntry, Expense } from '../types';
+import { getInvoiceTotalAll, getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
+import { AlertTriangle, Receipt } from 'lucide-react';
+import type { Task, Project, Team, TeamMember, TimeEntry, Expense, Invoice } from '../types';
 
 const ProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -115,6 +116,41 @@ const ProjectDetailView: React.FC = () => {
     skip: !projectId,
     skipTeamFilter: true,
   });
+
+  // Invoices for this project. The view previously showed ONLY the cost side (labor
+  // + expenses) — the revenue side was invisible here, so nothing ever surfaced that
+  // a project was billed for more or less than its agreed budget.
+  const { data: projectInvoices } = useCollection<Invoice>('invoices', {
+    where: projectId ? [{ field: 'projectId', operator: '==', value: projectId }] : undefined,
+    skip: !projectId,
+    skipTeamFilter: true,
+  });
+
+  const billingStats = React.useMemo(() => {
+    const list = projectInvoices || [];
+    const budget = toAll(Number(project?.budget) || 0, project?.currency);
+    // Drafts are not billed yet; cancelled invoices never were.
+    const issued = list.filter(i => i.status !== 'Draft' && i.status !== 'Cancelled');
+    const drafts = list.filter(i => i.status === 'Draft');
+    const billed = issued.reduce((s, i) => s + getInvoiceTotalAll(i), 0);
+    const collected = issued.reduce((s, i) => s + getInvoiceCollectedAll(i), 0);
+    const outstanding = issued.reduce((s, i) => s + getInvoiceOutstandingAll(i), 0);
+    const draftValue = drafts.reduce((s, i) => s + getInvoiceTotalAll(i), 0);
+    // Monthly retainers legitimately bill their fee many times over, so an
+    // over/under-billed comparison against a single fee is meaningless for them.
+    const billingType = project?.billingType || (project?.isRecurring ? 'monthly' : 'one-time');
+    const comparable = billingType === 'one-time' && budget > 0;
+    const diff = billed - budget;
+    return {
+      budget, billed, collected, outstanding, draftValue,
+      invoiceCount: list.length, issuedCount: issued.length, draftCount: drafts.length,
+      comparable,
+      pct: budget > 0 ? Math.round((billed / budget) * 100) : 0,
+      overBilled: comparable && diff > 0.5,
+      underBilled: comparable && diff < -0.5,
+      diff,
+    };
+  }, [projectInvoices, project?.budget, project?.currency, project?.billingType, project?.isRecurring]);
 
   // Budget burn-down: labor cost (logged hours × member cost-rate) + expenses,
   // compared to the project budget. Plus realization (billable value vs cost).
@@ -708,6 +744,109 @@ const ProjectDetailView: React.FC = () => {
               </div>
               {budgetStats.overBudget && (
                 <p className="text-[11px] text-red-600 mt-1.5">⚠ Projekti ka kaluar buxhetin me {formatCurrency(budgetStats.spent - budgetStats.budget, 'ALL')}.</p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Faturimi — the revenue side of the project. Shown whenever there is a fee
+            or at least one invoice, so an un-invoiced project is just as visible as
+            an over-invoiced one. */}
+        {canSeeFinancials(permissions) && (billingStats.budget > 0 || billingStats.invoiceCount > 0) && (
+          <div className="px-6 pb-4">
+            <div className={`rounded-lg border p-3 ${
+              billingStats.overBilled ? 'border-red-300 bg-red-50 dark:bg-red-950/20'
+              : billingStats.underBilled ? 'border-amber-300 bg-amber-50 dark:bg-amber-950/20'
+              : 'border-border bg-muted/20'
+            }`}>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <span className="text-xs font-medium text-muted-foreground flex items-center gap-1.5">
+                  <Receipt className="w-3.5 h-3.5" />
+                  Faturimi
+                  {billingStats.invoiceCount > 0 && (
+                    <span className="opacity-60">({billingStats.issuedCount} lëshuar{billingStats.draftCount ? ` · ${billingStats.draftCount} draft` : ''})</span>
+                  )}
+                </span>
+                <button
+                  onClick={() => navigate(`/app/invoices?project=${projectId}`)}
+                  className="text-xs text-primary hover:underline shrink-0"
+                >
+                  Hap faturat →
+                </button>
+              </div>
+
+              {billingStats.comparable && (
+                <>
+                  <div className="flex items-center justify-between gap-2 mb-1.5">
+                    <span className="text-[11px] text-muted-foreground">Faturuar ndaj tarifës</span>
+                    <span className={`text-xs font-semibold tabular-nums ${billingStats.overBilled ? 'text-red-600' : billingStats.underBilled ? 'text-amber-600' : 'text-emerald-600'}`}>
+                      {formatCurrency(billingStats.billed, 'ALL')} / {formatCurrency(billingStats.budget, 'ALL')} ({billingStats.pct}%)
+                    </span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                    <div
+                      className={`h-full transition-all ${billingStats.overBilled ? 'bg-red-500' : billingStats.pct >= 100 ? 'bg-emerald-500' : 'bg-primary'}`}
+                      style={{ width: `${Math.min(100, billingStats.pct)}%` }}
+                    />
+                  </div>
+                </>
+              )}
+
+              <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2 text-[11px] text-muted-foreground">
+                <span>Faturuar: <strong className="text-foreground tabular-nums">{formatCurrency(billingStats.billed, 'ALL')}</strong></span>
+                <span>Arkëtuar: <strong className="text-emerald-600 tabular-nums">{formatCurrency(billingStats.collected, 'ALL')}</strong></span>
+                {billingStats.outstanding > 0 && (
+                  <span>Pa arkëtuar: <strong className="text-amber-600 tabular-nums">{formatCurrency(billingStats.outstanding, 'ALL')}</strong></span>
+                )}
+                {billingStats.draftValue > 0 && (
+                  <span>Draft (pa lëshuar): <strong className="text-foreground tabular-nums">{formatCurrency(billingStats.draftValue, 'ALL')}</strong></span>
+                )}
+              </div>
+
+              {billingStats.overBilled && (
+                <p className="text-[11px] text-red-600 mt-1.5">
+                  ⚠ Klienti është faturuar {formatCurrency(billingStats.diff, 'ALL')} më shumë sesa tarifa e projektit.
+                </p>
+              )}
+              {billingStats.underBilled && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1.5">
+                  ⚠ Mbeten {formatCurrency(-billingStats.diff, 'ALL')} pa faturuar nga tarifa e projektit.
+                </p>
+              )}
+              {billingStats.budget > 0 && billingStats.invoiceCount === 0 && (
+                <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-1.5">
+                  ⚠ Projekti ka tarifë {formatCurrency(billingStats.budget, 'ALL')} por asnjë faturë të lidhur.
+                </p>
+              )}
+              {!billingStats.comparable && billingStats.budget > 0 && billingStats.invoiceCount > 0 && (
+                <p className="text-[11px] text-muted-foreground mt-1.5">
+                  Tarifë periodike ({formatCurrency(billingStats.budget, 'ALL')}/cikël) — totali i faturuar rritet me çdo cikël, ndaj nuk krahasohet me një vlerë të vetme.
+                </p>
+              )}
+
+              {billingStats.invoiceCount > 0 && (
+                <div className="mt-2.5 border-t pt-2 space-y-1">
+                  {(projectInvoices || [])
+                    .slice()
+                    .sort((a, b) => new Date(b.createdAt as any).getTime() - new Date(a.createdAt as any).getTime())
+                    .slice(0, 6)
+                    .map(inv => (
+                      <button
+                        key={inv.id}
+                        onClick={() => navigate(`/app/invoices?project=${projectId}`)}
+                        className="w-full flex items-center justify-between gap-2 text-[11px] hover:bg-muted/50 rounded px-1 py-0.5 text-left"
+                      >
+                        <span className="font-mono truncate">{inv.invoiceNumber || inv.id.slice(0, 8)}</span>
+                        <span className="flex items-center gap-2 shrink-0">
+                          <Badge className={`${getStatusColor(inv.status)} text-[10px] px-1.5 py-0`}>{getInvoiceStatusLabel(inv.status)}</Badge>
+                          <span className="tabular-nums">{formatCurrency(getInvoiceTotalAll(inv), 'ALL')}</span>
+                        </span>
+                      </button>
+                    ))}
+                  {billingStats.invoiceCount > 6 && (
+                    <p className="text-[10px] text-muted-foreground px-1">+{billingStats.invoiceCount - 6} të tjera</p>
+                  )}
+                </div>
               )}
             </div>
           </div>

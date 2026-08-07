@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   sanitizeHtml, cn, safeHref,
-  toAll, formatCurrency, formatEUR, formatALL, parseLocalDate,
+  toAll, fromAll, formatCurrency, formatEUR, formatALL, parseLocalDate,
   normalizeAlbanianPhone, validatePhone,
 } from './utils';
 
@@ -59,6 +59,25 @@ describe('toAll', () => {
   it('converts EUR to ALL using the configured rate', () => {
     // No localStorage value in jsdom defaults → DEFAULT_EUR_ALL_RATE (100)
     expect(toAll(5, 'EUR')).toBe(500);
+  });
+});
+
+describe('fromAll', () => {
+  it('leaves ALL/undefined amounts unchanged', () => {
+    expect(fromAll(500)).toBe(500);
+    expect(fromAll(500, 'ALL')).toBe(500);
+  });
+
+  it('expresses an ALL total in EUR', () => {
+    expect(fromAll(500, 'EUR')).toBe(5);
+  });
+
+  it('round-trips with toAll', () => {
+    expect(fromAll(toAll(37, 'EUR'), 'EUR')).toBeCloseTo(37, 6);
+  });
+
+  it('treats an unknown currency as ALL rather than dividing by zero', () => {
+    expect(fromAll(250, 'XYZ')).toBe(250);
   });
 });
 

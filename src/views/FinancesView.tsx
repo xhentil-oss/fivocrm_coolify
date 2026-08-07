@@ -1,4 +1,5 @@
 import React, { useMemo, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useCollection } from '../hooks/useFirestore';
 import { Card } from '../components/ui/card';
@@ -63,6 +64,7 @@ function monthProfit(
 }
 
 const FinancesView: React.FC = () => {
+  const navigate = useNavigate();
   const permissions = usePermissions();
   const allowed = permissions.isOwner || permissions.isAdmin || permissions.isSuperAdmin;
 
@@ -558,6 +560,45 @@ const FinancesView: React.FC = () => {
           Të ardhurat (buxheti) − kostot direkte (shpenzime të projektit) − pjesa e kostove fikse
           (rroga + qira + të tjera), e ndarë sipas peshës së të ardhurave.
         </p>
+
+        {/* Data-quality guards. Without these the numbers below look authoritative
+            while quietly excluding revenue: an invoice with no projectId is dropped
+            from the 'Faturuar' basis, yet the FULL overhead pool is still allocated
+            across the projects — so unlinked invoices read as pure loss. */}
+        {projectPnl.unlinkedInvoices.count > 0 && (
+          <div className={`mb-3 rounded-md border p-2.5 text-xs ${
+            revenueBasis === 'invoiced'
+              ? 'border-amber-300 bg-amber-50 dark:bg-amber-950/20'
+              : 'border-border bg-muted/30'
+          }`}>
+            <p className={revenueBasis === 'invoiced' ? 'text-amber-900 dark:text-amber-200' : 'text-muted-foreground'}>
+              <strong>{projectPnl.unlinkedInvoices.count} faturë</strong> pa projekt të lidhur
+              (<strong>{formatALL(projectPnl.unlinkedInvoices.amount)}</strong>).
+              {revenueBasis === 'invoiced'
+                ? ' Kjo vlerë NUK numërohet si e ardhur më poshtë, ndërsa kostot fikse ndahen plotësisht — ndaj fitimi duket më i vogël se realiteti.'
+                : ' Nuk prek llogaritjen mbi bazën "Buxhet", por do të mungojë nëse kalon te "Faturuar".'}
+              {' '}
+              <button
+                onClick={() => navigate('/app/invoices?project=none')}
+                className="underline font-medium hover:no-underline"
+              >
+                Lidhi me projektet
+              </button>
+            </p>
+          </div>
+        )}
+        {projectPnl.missingBudget.count > 0 && (
+          <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-2.5 text-xs">
+            <p className="text-amber-900 dark:text-amber-200">
+              <strong>{projectPnl.missingBudget.count} projekt</strong> me të ardhura 0 thithin overhead pa sjellë asnjë të ardhur —{' '}
+              {projectPnl.revenueBasis === 'invoiced'
+                ? 'nuk kanë faturë të lidhur në këtë periudhë.'
+                : 'nuk kanë buxhet të caktuar.'}
+              {' '}({projectPnl.missingBudget.names.slice(0, 4).join(', ')}
+              {projectPnl.missingBudget.names.length > 4 ? `, +${projectPnl.missingBudget.names.length - 4}` : ''})
+            </p>
+          </div>
+        )}
 
         <ProjectPnlBlock pnl={projectPnl} customerNameById={customerNameById} />
       </Card>
