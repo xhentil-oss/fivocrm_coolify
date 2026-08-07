@@ -92,7 +92,61 @@ export const REPORT_TEMPLATES: ReportTemplate[] = [
       N('dealsWon', 'Marrëveshje të fituara'),
     ],
   },
+  // Web DESIGN is its own craft, not a flavour of development. It used to fall through
+  // the `web → dev` synonym, so a designer was asked about bugs fixed and technical
+  // notes instead of screens, prototypes and revision rounds.
+  {
+    key: 'web', label: 'Web Design', emoji: '🖥️',
+    fields: [
+      N('pagesDesigned', 'Faqe/seksione të dizajnuara'),
+      N('prototypes', 'Prototipe/wireframe'),
+      N('revisions', 'Raunde rishikimi'),
+      N('handoffs', 'Dorëzime te zhvillimi'),
+      { key: 'webNotes', label: 'Shënime dizajni', type: 'textarea', placeholder: 'p.sh. u rishikua hero-ja sipas feedback-ut të klientit…' },
+    ],
+  },
+  {
+    key: 'photo-video', label: 'Foto & Video', emoji: '🎥',
+    fields: [
+      N('shoots', 'Seanca xhirimi/fotografimi'),
+      N('photosEdited', 'Foto të përpunuara'),
+      N('videosEdited', 'Video të montuara'),
+      N('footageMinutes', 'Minuta material të xhiruar', { unit: 'min' }),
+      { key: 'mediaNotes', label: 'Shënime prodhimi', type: 'textarea', placeholder: 'p.sh. lokacioni u ndryshua për shkak të motit…' },
+    ],
+  },
+  {
+    key: 'regjia', label: 'Regjia', emoji: '🎬',
+    fields: [
+      N('scripts', 'Skenarë/koncepte'),
+      N('storyboards', 'Storyboard-e'),
+      N('shootsDirected', 'Xhirime të drejtuara'),
+      N('castingSessions', 'Takime kastingu/lokacioni'),
+      { key: 'directionNotes', label: 'Shënime regjie', type: 'textarea', placeholder: 'p.sh. u vendos ndryshimi i ritmit në skenën 3…' },
+    ],
+  },
 ];
+
+/**
+ * The crafts a member can hold, in the order they appear in the picker.
+ *
+ * This IS the report-template registry — deliberately not a second list. A position
+ * and the daily-report questions that position is asked are the same decision, so a
+ * separate catalogue would drift the moment someone added a role here and forgot the
+ * template (which is exactly how Regjia and Foto&Video ended up with blank daily
+ * reports: they existed as job titles in people's heads but nowhere in the code).
+ */
+export function positionOptions(): Array<{ key: string; label: string; emoji: string }> {
+  return REPORT_TEMPLATES.map((t) => ({ key: t.key, label: t.label, emoji: t.emoji }));
+}
+
+/** Human label for a stored position key ('web' → 'Web Design'). */
+export function positionLabel(key?: string | null): string | null {
+  const norm = normalizeServiceLine(key);
+  if (!norm) return null;
+  const t = TEMPLATE_BY_KEY.get(norm);
+  return t ? `${t.emoji} ${t.label}` : null;
+}
 
 const TEMPLATE_BY_KEY = new Map(REPORT_TEMPLATES.map((t) => [t.key, t]));
 
@@ -102,7 +156,13 @@ const SYNONYMS: Record<string, string> = {
   ads: 'ads', ppc: 'ads', 'google ads': 'ads', 'meta ads': 'ads', reklama: 'ads', 'paid ads': 'ads',
   social: 'social', 'social media': 'social', smm: 'social', 'rrjete sociale': 'social', 'rrjetet sociale': 'social',
   design: 'design', graphic: 'design', 'graphic design': 'design', grafik: 'design', dizajn: 'design',
-  dev: 'dev', development: 'dev', web: 'dev', 'web development': 'dev', programim: 'dev', zhvillim: 'dev',
+  // `web` used to alias to `dev`. It is now its own craft (Web Design); development
+  // keeps the programming variants.
+  dev: 'dev', development: 'dev', 'web development': 'dev', programim: 'dev', zhvillim: 'dev',
+  web: 'web', 'web design': 'web', 'ux': 'web', 'ui': 'web', 'ui/ux': 'web', 'dizajn web': 'web',
+  'photo-video': 'photo-video', photo: 'photo-video', video: 'photo-video', 'foto video': 'photo-video',
+  'foto/video': 'photo-video', 'foto & video': 'photo-video', foto: 'photo-video', montazh: 'photo-video',
+  regjia: 'regjia', regji: 'regjia', director: 'regjia', directing: 'regjia', 'film director': 'regjia',
   content: 'content', 'content writing': 'content', copywriting: 'content', permbajtje: 'content', përmbajtje: 'content',
   sales: 'sales', shitje: 'sales', 'sales agent': 'sales',
 };

@@ -541,6 +541,20 @@ export interface TeamMember {
   /** Optional billing rate per hour (ALL) — what the client is charged for this
    *  member's time. Used for realization (billable value vs logged cost). */
   hourlyBillRate?: number;
+  /**
+   * The member's CRAFT — what they actually do: 'social', 'design', 'web',
+   * 'photo-video', 'regjia', 'seo', 'ads', 'dev', 'content', 'sales'.
+   *
+   * Deliberately separate from `role` (which is authorisation) and from
+   * `serviceLines` (which is P&L cost allocation, drawn from the tenant's own
+   * service categories). A Photo&Video person may have their salary charged to the
+   * "Social Media" service while their craft — and therefore the questions their
+   * daily report asks — is photo/video.
+   *
+   * Values are keys of REPORT_TEMPLATES (src/lib/productivity/reportTemplates.ts),
+   * so the position and the daily-report fields it drives cannot drift apart.
+   */
+  position?: string;
   /** Service line(s) this member's labor belongs to (match service categories).
    *  Their salary is charged as a direct cost of these services in the P&L,
    *  split equally across them. `serviceLine` (singular) kept for back-compat. */

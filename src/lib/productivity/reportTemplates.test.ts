@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { getReportTemplate, normalizeServiceLine, summableFields, REPORT_TEMPLATES } from './reportTemplates';
+import {
+  getReportTemplate,
+  normalizeServiceLine,
+  summableFields,
+  REPORT_TEMPLATES,
+  positionOptions,
+  positionLabel,
+} from './reportTemplates';
 
 describe('normalizeServiceLine', () => {
   it('maps direct keys and synonyms', () => {
@@ -45,5 +52,45 @@ describe('templates integrity', () => {
       expect(keys.has(t.key)).toBe(false);
       keys.add(t.key);
     }
+  });
+});
+
+describe('crafts (positions)', () => {
+  it('web design is its own craft, not development', () => {
+    // It used to alias to `dev`, so a Web Designer's daily report asked about bugs
+    // fixed. Programming synonyms must stay on `dev`.
+    expect(normalizeServiceLine('Web')).toBe('web');
+    expect(normalizeServiceLine('UI/UX')).toBe('web');
+    expect(normalizeServiceLine('Web Development')).toBe('dev');
+    expect(normalizeServiceLine('zhvillim')).toBe('dev');
+
+    const web = getReportTemplate('web')!;
+    const keys = web.fields.map((f) => f.key);
+    expect(keys).toContain('prototypes');
+    expect(keys).not.toContain('bugsFixed');
+  });
+
+  it('resolves photo/video and regjia, in Albanian too', () => {
+    expect(normalizeServiceLine('Foto & Video')).toBe('photo-video');
+    expect(normalizeServiceLine('montazh')).toBe('photo-video');
+    expect(normalizeServiceLine('Regji')).toBe('regjia');
+    expect(getReportTemplate('regjia')?.fields.some((f) => f.key === 'storyboards')).toBe(true);
+  });
+
+  it('positionOptions mirrors the template registry exactly', () => {
+    // The two must not drift: a position with no template = a blank daily report.
+    expect(positionOptions().map((o) => o.key)).toEqual(REPORT_TEMPLATES.map((t) => t.key));
+    for (const o of positionOptions()) {
+      expect(o.label).toBeTruthy();
+      expect(o.emoji).toBeTruthy();
+    }
+  });
+
+  it('positionLabel resolves keys and synonyms, and is null when unset', () => {
+    expect(positionLabel('web')).toContain('Web Design');
+    expect(positionLabel('Rrjetet Sociale')).toContain('Social Media');
+    expect(positionLabel(undefined)).toBeNull();
+    expect(positionLabel('')).toBeNull();
+    expect(positionLabel('accounting')).toBeNull();
   });
 });

@@ -250,7 +250,11 @@ export async function runReportSchedules(): Promise<{ created: number; skipped: 
           .get();
         for (const m of members.docs) {
           const data = m.data() as any;
-          if (data.serviceLine && data.serviceLine !== sched.department) continue;
+          // Match on the member's CRAFT first (`position`), falling back to the P&L
+          // service line for members who predate it — same precedence as the daily
+          // report, so "the Design department" means one thing across the product.
+          const craft = data.position || data.serviceLine;
+          if (craft && craft !== sched.department) continue;
           subjects.push({ userId: data.userId, name: data.displayName });
         }
       } else {

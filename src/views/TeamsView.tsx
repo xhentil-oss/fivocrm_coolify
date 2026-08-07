@@ -56,6 +56,7 @@ import {
 import ExportButton from '../components/ExportButton';
 import { useUserNames } from '../hooks/useUserNames';
 import type { Team, TeamMember, TeamInvite } from '../types';
+import { positionOptions, positionLabel } from '../lib/productivity/reportTemplates';
 
 const TeamsView: React.FC = () => {
   const { user } = useAuth();
@@ -847,6 +848,11 @@ const TeamsView: React.FC = () => {
                       <div className="flex items-center gap-3">
                         <Badge variant="secondary">{member.role}</Badge>
                         <span className="text-sm font-medium">{getName(member.userId)}</span>
+                        {positionLabel(member.position) && (
+                          <Badge variant="outline" className="text-xs font-normal">
+                            {positionLabel(member.position)}
+                          </Badge>
+                        )}
                         <Badge className={member.status === 'Active' ? 'bg-success' : 'bg-muted'}>
                           {member.status}
                         </Badge>
@@ -1242,6 +1248,9 @@ const EditMemberForm: React.FC<{
   const [salaryEffectiveFrom, setSalaryEffectiveFrom] = useState(new Date().toISOString().slice(0, 10));
   const [clearSalaryHistory, setClearSalaryHistory] = useState(false);
   const [hourlyCostRate, setHourlyCostRate] = useState(member.hourlyCostRate?.toString() || '');
+  // The member's CRAFT. Distinct from `role` (authorisation) and from `serviceLines`
+  // (P&L allocation) — see TeamMember.position.
+  const [position, setPosition] = useState<string>(member.position || '');
   const [serviceLines, setServiceLines] = useState<string[]>(
     Array.isArray(member.serviceLines) && member.serviceLines.length
       ? member.serviceLines
@@ -1291,6 +1300,7 @@ const EditMemberForm: React.FC<{
       email: email.trim() || undefined,
       monthlySalary: newSalary,
       hourlyCostRate: hourlyCostRate ? parseFloat(hourlyCostRate) : undefined,
+      position: position || undefined,
       serviceLines: serviceLines.length ? serviceLines : undefined,
       // Only include when we changed it, so unrelated edits don't clobber history.
       ...(salaryHistory !== member.salaryHistory ? { salaryHistory } : {}),
@@ -1534,6 +1544,34 @@ const EditMemberForm: React.FC<{
             className="mt-1 w-full h-9 px-3 rounded-md border border-input bg-background text-sm focus:outline-none focus:ring-2 focus:ring-ring"
           />
         </div>
+        {/* Craft first, money second. The two were conflated before: the daily report
+            read the P&L allocation as if it were the person's department, so a Web
+            Designer billed to "Development" was asked about bugs fixed. */}
+        <div className="pt-1">
+          <Label className="text-xs">Pozicioni</Label>
+          <p className="text-[11px] text-muted-foreground">
+            Zanati i personit. Përcakton pyetjet e raportit ditor dhe shfaqet te ekipi.
+          </p>
+          <div className="mt-1 flex flex-wrap gap-1.5">
+            {positionOptions().map(opt => {
+              const on = position === opt.key;
+              return (
+                <button
+                  key={opt.key}
+                  type="button"
+                  onClick={() => setPosition(on ? '' : opt.key)}
+                  className={`text-xs px-2.5 py-1.5 rounded-lg border transition-colors ${
+                    on
+                      ? 'bg-primary/10 text-primary border-primary/40 font-medium'
+                      : 'border-border text-muted-foreground hover:border-primary/40'}`}
+                >
+                  {opt.emoji} {opt.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
         <div className="pt-1">
           <Label className="text-xs text-amber-800 dark:text-amber-300">Shërbimet (për P&L)</Label>
           <p className="text-[11px] text-muted-foreground">Zgjidh një ose disa shërbime. Rroga ndahet baras mes tyre si kosto direkte. Asnjë = overhead i përbashkët.</p>

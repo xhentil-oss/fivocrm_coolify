@@ -19,6 +19,7 @@ import { Timestamp, doc, getDoc, getDocs, collection, query, where, limit, updat
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
+import { useMyServiceLine } from '../components/DepartmentReportFields';
 import {
   useCollection,
   useMutation,
@@ -143,15 +144,20 @@ export function useReports(options: UseReportsOptions = {}) {
   const { data: kpis } = useCollection<ReportKpi>('reportKpis');
   const { data: schedules } = useCollection<ReportSchedule>('reportSchedules');
 
+  // `permissions` never carried a serviceLine, so the viewer's department was always
+  // null. It resolves from the member's craft, through the same hook the daily report
+  // uses — one definition of "which department am I".
+  const myDepartment = useMyServiceLine();
+
   /** The current user, as the reporting layer sees them. */
   const viewer: ReportViewer = useMemo(() => ({
     userId: user?.uid || null,
     role: permissions.role,
     roles: permissions.role ? [permissions.role] : [],
-    department: (permissions as any).serviceLine ?? null,
+    department: myDepartment ?? null,
     isManagement: permissions.isAdmin || permissions.isOwner || permissions.isManager || permissions.isSuperAdmin,
     capabilities: reportingCapabilitiesFor(permissions.role, permissions as any),
-  }), [user?.uid, permissions]);
+  }), [user?.uid, permissions, myDepartment]);
 
   /**
    * Soft-deleted reports never reach a screen, and the per-report visibility rule is

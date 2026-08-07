@@ -8,8 +8,13 @@ import type { TeamMember } from '../types';
 import { getReportTemplate, normalizeServiceLine } from '../lib/productivity/reportTemplates';
 
 /**
- * Resolve the current user's serviceLine (department) from their TeamMember
- * record. Uses `serviceLine`, falling back to the first of `serviceLines`.
+ * Resolve which department template the current user's daily report should show.
+ *
+ * `position` (their craft) wins. `serviceLines` is a P&L allocation — the services
+ * their salary is charged to — and using it as the department meant a Web Designer
+ * billed to "Development" was asked about bugs fixed, and anyone whose services did
+ * not match a template key got no department fields at all. It stays as the fallback
+ * so members who predate `position` keep the behaviour they had.
  */
 export function useMyServiceLine(): string | undefined {
   const { user } = useAuth();
@@ -20,7 +25,7 @@ export function useMyServiceLine(): string | undefined {
     skipBusinessFilter: true,
   });
   const me = members?.find((m) => m.userId === user?.uid);
-  return me?.serviceLine || me?.serviceLines?.[0];
+  return me?.position || me?.serviceLine || me?.serviceLines?.[0];
 }
 
 /**
