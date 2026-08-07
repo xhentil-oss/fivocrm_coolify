@@ -1,6 +1,21 @@
 import '@testing-library/jest-dom';
 
 /**
+ * React picks its production build off `process.env.NODE_ENV` when it is first
+ * required — and the production build throws
+ * "act(...) is not supported in production builds of React" for every
+ * `@testing-library/react` render. A developer whose shell exports
+ * `NODE_ENV=production` (common when the same terminal also runs builds) would
+ * see the whole component suite fail for a reason that has nothing to do with
+ * their code. Setup files run before any test file imports React, so pinning it
+ * here fixes it once for the whole run. CI leaves NODE_ENV unset, so this is a
+ * no-op there.
+ */
+if (process.env.NODE_ENV !== 'test') {
+  process.env.NODE_ENV = 'test';
+}
+
+/**
  * Placeholder Firebase config for the test run.
  *
  * `src/lib/firebase.ts` builds its config from `import.meta.env` and calls
