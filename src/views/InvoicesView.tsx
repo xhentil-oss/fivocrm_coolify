@@ -31,6 +31,7 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '../components/ui/dropdown-menu';
 import type { Invoice, Customer, Service, InvoiceItem, Project, ClientPortalAccess, Payment } from '../types';
@@ -40,6 +41,38 @@ import { toast } from '../hooks/use-toast';
 import { getStatusColor, getInvoiceStatusLabel } from '../lib/statusColors';
 import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../lib/native';
 import { resolvePortalUserId } from '../lib/notifyClient';
+
+// Presentation-only status pill: a subtle tinted pill + a small coloured dot.
+// Reuses the existing semantic tokens (success/warning/error/muted + brand cyan)
+// and getInvoiceStatusLabel for the fallback label.
+type StatusPill = { dotClass: string; label: string; pillClass: string };
+const statusPill = (status: string | null | undefined): StatusPill => {
+  switch (status) {
+    case 'Paid':
+      return { dotClass: 'bg-success', label: 'Paguar', pillClass: 'bg-success/10 text-success' };
+    case 'Pending':
+      return { dotClass: 'bg-warning', label: 'Në pritje', pillClass: 'bg-warning/10 text-warning' };
+    case 'Overdue':
+      return { dotClass: 'bg-error', label: 'Vonuar', pillClass: 'bg-error/10 text-error' };
+    case 'Partial':
+      return { dotClass: 'bg-cyan-500', label: 'Pjesore', pillClass: 'bg-cyan-500/15 text-cyan-700 dark:text-cyan-400' };
+    case 'Draft':
+      return { dotClass: 'bg-muted-foreground/60', label: 'Draft', pillClass: 'bg-muted text-muted-foreground' };
+    case 'Cancelled':
+      return { dotClass: 'bg-muted-foreground/60', label: 'Anuluar', pillClass: 'bg-muted text-muted-foreground' };
+    default:
+      return { dotClass: 'bg-muted-foreground/60', label: getInvoiceStatusLabel(status), pillClass: 'bg-muted text-muted-foreground' };
+  }
+};
+
+// Initials for the client avatar (first + last word initial).
+const initialsOf = (name?: string | null): string => {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (parts.length === 0) return '?';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+};
 
 const InvoicesView: React.FC = () => {
   const permissions = usePermissions();
@@ -83,6 +116,15 @@ const InvoicesView: React.FC = () => {
   // Recurring-aware delete: a parent opens a choice (stop / delete one / series).
   const [deleteMode, setDeleteMode] = useState<'stop' | 'one' | 'series'>('stop');
   const [deleteBusy, setDeleteBusy] = useState(false);
+  // Right-side quick-edit drawer (presentation): row click opens it, seeded from the
+  // clicked invoice. Saves via the existing invoiceMutation.update — no new data path.
+  const [drawerInvoice, setDrawerInvoice] = useState<Invoice | null>(null);
+  const [drawerCustomer, setDrawerCustomer] = useState('');
+  const [drawerProject, setDrawerProject] = useState('');
+  const [drawerTotal, setDrawerTotal] = useState('');
+  const [drawerDue, setDrawerDue] = useState('');
+  const [drawerStatus, setDrawerStatus] = useState('');
+  const [drawerSaving, setDrawerSaving] = useState(false);
 
   const { data: rawInvoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', {
     orderBy: { field: 'createdAt', direction: 'desc' },
@@ -529,6 +571,47 @@ const InvoicesView: React.FC = () => {
     }
   };
 
+  // Seed the drawer's editable fields whenever a new invoice is opened.
+  useEffect(() => {
+    if (!drawerInvoice) return;
+    setDrawerCustomer(drawerInvoice.customerId || '');
+    setDrawerProject(drawerInvoice.projectId || '');
+    setDrawerTotal(String(drawerInvoice.total ?? drawerInvoice.amount ?? 0));
+    const raw = drawerInvoice.dueDate ? new Date(drawerInvoice.dueDate) : null;
+    setDrawerDue(raw && !isNaN(raw.getTime()) ? raw.toISOString().slice(0, 10) : '');
+    setDrawerStatus(drawerInvoice.status || 'Pending');
+  }, [drawerInvoice]);
+
+  // Close the drawer on Escape.
+  useEffect(() => {
+    if (!drawerInvoice) return;
+    const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setDrawerInvoice(null); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [drawerInvoice]);
+
+  // Save the drawer edits via the existing mutation (no new fields / no new path).
+  const handleSaveDrawer = async () => {
+    if (!drawerInvoice) return;
+    const parsedTotal = parseFloat(drawerTotal);
+    setDrawerSaving(true);
+    try {
+      await invoiceMutation.update(drawerInvoice.id, {
+        customerId: drawerCustomer,
+        projectId: drawerProject,
+        total: isNaN(parsedTotal) || parsedTotal < 0 ? (drawerInvoice.total ?? drawerInvoice.amount ?? 0) : parsedTotal,
+        dueDate: drawerDue ? new Date(drawerDue + 'T12:00:00') : null,
+        status: drawerStatus,
+      } as any);
+      toast({ title: 'Ndryshimet u ruajtën' });
+      setDrawerInvoice(null);
+    } catch {
+      toast({ title: 'Gabim gjatë ruajtjes', variant: 'destructive' });
+    } finally {
+      setDrawerSaving(false);
+    }
+  };
+
   const totalRevenue = invoices?.reduce((sum, inv) => {
     if (inv.status === 'Paid') return sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
     if (inv.status === 'Partial') return sum + toAll(inv.paidAmount ?? 0, (inv as any).currency);
@@ -964,22 +1047,6 @@ const InvoicesView: React.FC = () => {
           >
             {availableYears.map(y => <option key={y} value={y}>{y}</option>)}
           </select>
-          {(['__all__', 'Draft', 'Pending', 'Partial', 'Paid', 'Overdue'] as const).map(s => (
-            <button
-              key={s}
-              onClick={() => setStatusFilter(s)}
-              className={`h-8 px-3 text-xs rounded-full border font-medium transition-colors ${
-                statusFilter === s
-                  ? 'bg-primary text-primary-foreground border-primary'
-                  : 'bg-background border-input text-muted-foreground hover:bg-muted'
-              }`}
-            >
-              {s === '__all__' ? 'Të gjitha' : getInvoiceStatusLabel(s)}
-              {s !== '__all__' && invoices && (
-                <span className="ml-1 opacity-60">({invoices.filter(i => i.status === s).length})</span>
-              )}
-            </button>
-          ))}
           <select
             value={sortBy}
             onChange={e => setSortBy(e.target.value as any)}
@@ -1131,183 +1198,133 @@ const InvoicesView: React.FC = () => {
         )}
       </div>
 
+      {/* Status filter pills (client-side on the current list) */}
+      <div className="hidden sm:flex flex-wrap gap-2 mb-3">
+        {([
+          { value: '__all__', label: 'Të gjitha' },
+          { value: 'Pending', label: 'Në pritje' },
+          { value: 'Overdue', label: 'Vonuar' },
+          { value: 'Paid', label: 'Paguar' },
+          { value: 'Draft', label: 'Draft' },
+          { value: 'Cancelled', label: 'Anuluar' },
+        ] as { value: string; label: string }[]).map((p) => {
+          const count = p.value === '__all__' ? invoices.length : invoices.filter((i) => i.status === p.value).length;
+          const active = statusFilter === p.value;
+          return (
+            <button
+              key={p.value}
+              onClick={() => setStatusFilter(p.value)}
+              className={`inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium border transition-colors ${active ? 'bg-foreground text-background border-foreground' : 'bg-card text-muted-foreground border-border hover:bg-muted'}`}
+            >
+              {p.label}
+              <span className={active ? 'text-background/70' : 'text-muted-foreground/60'}>{count}</span>
+            </button>
+          );
+        })}
+      </div>
+
       {/* Desktop Table Layout */}
-      <Card className="overflow-hidden hidden sm:block">
+      <Card className="overflow-hidden hidden sm:block border border-border shadow-sm">
         <div className="overflow-x-auto">
-          <table className="w-full">
-            <thead className="bg-muted">
-              <tr>
-                <th className="px-4 py-3 text-left text-body-sm font-medium">Fatura #</th>
-                <th className="px-4 py-3 text-left text-body-sm font-medium hidden md:table-cell">Klienti</th>
-                <th className="px-4 py-3 text-left text-body-sm font-medium hidden lg:table-cell">Projekti</th>
-                <th className="px-4 py-3 text-left text-body-sm font-medium">Totali</th>
-                <th className="px-4 py-3 text-left text-body-sm font-medium">Statusi</th>
-                <th className="px-4 py-3 text-left text-body-sm font-medium hidden lg:table-cell">Data</th>
-                <th className="px-4 py-3 text-left text-body-sm font-medium hidden lg:table-cell">Afati</th>
-                <th className="px-4 py-3 text-left text-body-sm font-medium hidden md:table-cell">Pagesa</th>
-                <th className="px-4 py-3 text-left text-body-sm font-medium">Veprime</th>
+          <table className="w-full min-w-[940px]">
+            <thead>
+              <tr className="border-b border-border bg-muted/40">
+                <th className="px-4 py-3 text-left text-[11px] uppercase tracking-wide font-semibold text-muted-foreground">Fatura #</th>
+                <th className="px-4 py-3 text-left text-[11px] uppercase tracking-wide font-semibold text-muted-foreground">Klienti</th>
+                <th className="px-4 py-3 text-right text-[11px] uppercase tracking-wide font-semibold text-muted-foreground">Totali</th>
+                <th className="px-4 py-3 text-left text-[11px] uppercase tracking-wide font-semibold text-muted-foreground">Statusi</th>
+                <th className="px-4 py-3 text-left text-[11px] uppercase tracking-wide font-semibold text-muted-foreground">Afati</th>
+                <th className="px-4 py-3 text-right text-[11px] uppercase tracking-wide font-semibold text-muted-foreground">Veprime</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {visibleInvoices.map((invoice) => {
-                const customer = customers?.find(c => c.id === invoice.customerId);
+                const customer = customers?.find((c) => c.id === invoice.customerId);
+                const proj = invoice.projectId ? projectById.get(invoice.projectId) : undefined;
+                const pill = statusPill(invoice.status);
+                const total = invoice.total ?? invoice.amount ?? 0;
+                const cur = (invoice as any).currency === 'EUR' ? '€' : 'L';
+                const canPay = (invoice.status === 'Pending' || invoice.status === 'Overdue') && total > 0;
+                const due = invoice.dueDate ? new Date(invoice.dueDate) : null;
+                let dueCtx: { text: string; cls: string } | null = null;
+                if (invoice.status === 'Draft') {
+                  dueCtx = { text: 'pa dërguar', cls: 'text-muted-foreground' };
+                } else if (due && !isNaN(due.getTime()) && invoice.status !== 'Paid' && invoice.status !== 'Cancelled') {
+                  const days = Math.ceil((due.getTime() - Date.now()) / 86400000);
+                  if (days < 0) dueCtx = { text: `${Math.abs(days)} ditë vonesë`, cls: 'text-error' };
+                  else if (days === 0) dueCtx = { text: 'sot', cls: 'text-warning' };
+                  else dueCtx = { text: `edhe ${days} ditë`, cls: 'text-muted-foreground' };
+                }
                 return (
-                  <tr key={invoice.id} className="hover:bg-muted/50">
-                    <td className="px-4 py-3 text-body-sm font-mono">
+                  <tr
+                    key={invoice.id}
+                    onClick={() => setDrawerInvoice(invoice)}
+                    className="hover:bg-muted/40 cursor-pointer transition-colors"
+                  >
+                    {/* Fatura # */}
+                    <td className="px-4 py-4 align-top">
                       <div className="flex items-center gap-1.5 flex-wrap">
-                        <span>{invoice.invoiceNumber || invoice.id.slice(0, 8)}</span>
+                        <span className="font-mono text-body-sm">{invoice.invoiceNumber || invoice.id.slice(0, 8)}</span>
                         {(invoice as any).autoGenerated && (
-                          <Badge variant="outline" className="text-[10px] px-1 py-0 border-blue-300 text-blue-600">Auto</Badge>
+                          <span className="text-[9px] font-semibold tracking-wide px-1.5 py-0.5 rounded-full bg-primary/10 text-primary">AUTO</span>
                         )}
                         {(invoice as any).isRecurring && !(invoice as any).autoGenerated && (
-                          <Badge variant="outline" className={`text-[10px] px-1 py-0 ${(invoice as any).isRecurringPaused ? 'border-amber-300 text-amber-600' : 'border-green-300 text-green-600'}`}>
+                          <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${(invoice as any).isRecurringPaused ? 'bg-warning/10 text-warning' : 'bg-success/10 text-success'}`}>
                             {(invoice as any).isRecurringPaused ? '⏸' : '↻'}
-                          </Badge>
+                          </span>
                         )}
                       </div>
                     </td>
-                    <td className="px-4 py-3 hidden md:table-cell">
-                      <div className="flex items-center gap-2">
-                        <Building2 className="w-4 h-4 text-muted-foreground" />
-                        <span className="truncate max-w-[150px]">{customer?.name || 'Unknown'}</span>
-                      </div>
-                    </td>
-                    <td className="px-4 py-3 hidden lg:table-cell text-body-sm">
-                      {(() => {
-                        const proj = invoice.projectId ? projectById.get(invoice.projectId) : undefined;
-                        if (proj) {
-                          return (
-                            <Link to={`/app/projects/${proj.id}`} className="flex items-center gap-1.5 hover:underline">
-                              <Folder className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                              <span className="truncate max-w-[140px]">{proj.name}</span>
-                            </Link>
-                          );
-                        }
-                        // A projectId that resolves to nothing means the project was
-                        // deleted before the unlink cascade existed — say so, don't
-                        // render a blank cell that looks like "not linked".
-                        if (invoice.projectId) {
-                          return <span className="text-[11px] text-amber-600" title="Projekti nuk ekziston më">projekt i fshirë</span>;
-                        }
-                        // Unlinked: one click to fix it, right where the gap is visible.
-                        if (permissions.canEdit) {
-                          return (
+                    {/* Klienti + projekti */}
+                    <td className="px-4 py-4 align-top">
+                      <div className="flex items-center gap-2.5">
+                        <span className="flex-shrink-0 w-8 h-8 rounded-full bg-primary/10 text-primary flex items-center justify-center text-[11px] font-semibold">
+                          {initialsOf(customer?.name)}
+                        </span>
+                        <div className="min-w-0">
+                          <div className="truncate max-w-[190px] font-medium text-body-sm">{customer?.name || 'I panjohur'}</div>
+                          {proj ? (
+                            <div className="truncate max-w-[190px] text-xs text-muted-foreground">{proj.name}</div>
+                          ) : invoice.projectId ? (
+                            <div className="text-xs text-amber-600">projekt i fshirë</div>
+                          ) : permissions.canEdit ? (
                             <button
                               onClick={(e) => { e.stopPropagation(); setLinkProjectInvoice(invoice); }}
-                              className="text-[11px] text-muted-foreground/70 hover:text-primary hover:underline"
-                              title="Lidh me projekt"
+                              className="text-xs text-muted-foreground/70 hover:text-primary hover:underline"
                             >
-                              + lidh
+                              + lidh projekt
                             </button>
-                          );
-                        }
-                        return <span className="text-[11px] text-muted-foreground/60">—</span>;
-                      })()}
-                    </td>
-                    <td className="px-4 py-3 text-body font-medium">
-                      {/* Total is read-only inline: editing it alone would desync it from
-                          subtotal/discount/tax. Change the amount via the full invoice form. */}
-                      <div className="flex items-center gap-2 px-2 py-1">
-                        <div>
-                          <div>{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}</div>
-                          {invoice.status === 'Partial' && invoice.paidAmount != null && (
-                            <div className="text-[10px] text-cyan-600 font-medium">
-                              {invoice.paidAmount.toLocaleString()} / {(invoice.total ?? invoice.amount ?? 0).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}
-                            </div>
+                          ) : (
+                            <div className="text-xs text-muted-foreground/60">—</div>
                           )}
                         </div>
                       </div>
                     </td>
-                    <td className="px-4 py-3">
-                      {editingInvoiceId === invoice.id && editingField === 'status' ? (
-                        <div className="flex flex-col gap-1.5">
-                          <div className="flex items-center gap-2">
-                            <select
-                              value={editValue}
-                              onChange={(e) => setEditValue(e.target.value)}
-                              className="px-2 py-1 border rounded"
-                              autoFocus
-                            >
-                              <option value="Draft">{getInvoiceStatusLabel('Draft')}</option>
-                              <option value="Pending">{getInvoiceStatusLabel('Pending')}</option>
-                              <option value="Partial">{getInvoiceStatusLabel('Partial')}</option>
-                              <option value="Paid">{getInvoiceStatusLabel('Paid')}</option>
-                              <option value="Overdue">{getInvoiceStatusLabel('Overdue')}</option>
-                            </select>
-                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={() => saveEdit(invoice.id, 'status')}>
-                              <Check className="w-4 h-4 text-success" />
-                            </Button>
-                            <Button variant="ghost" size="icon" className="h-6 w-6" onClick={cancelEditing}>
-                              <X className="w-4 h-4 text-error" />
-                            </Button>
-                          </div>
-                          {editValue === 'Paid' && (
-                            <div className="flex items-center gap-1.5">
-                              <CalendarIcon className="w-3 h-3 text-muted-foreground flex-shrink-0" />
-                              <input
-                                type="date"
-                                value={paidAtDate}
-                                onChange={e => setPaidAtDate(e.target.value)}
-                                className="h-7 px-2 border rounded text-xs bg-background"
-                              />
-                            </div>
-                          )}
-                        </div>
-                      ) : (
-                        <div 
-                          className={`px-2 py-1 rounded inline-block ${permissions.canEdit ? 'cursor-pointer hover:bg-muted/50' : ''}`}
-                          onClick={() => startEditing(invoice.id, 'status', invoice.status)}
-                        >
-                          <Badge className={getStatusColor(invoice.status)}>{getInvoiceStatusLabel(invoice.status)}</Badge>
+                    {/* Totali */}
+                    <td className="px-4 py-4 align-top text-right">
+                      <div className="font-mono font-semibold text-body-sm">{total.toLocaleString()} {cur}</div>
+                      {invoice.status === 'Partial' && invoice.paidAmount != null && (
+                        <div className="text-[10px] text-cyan-600 font-medium">
+                          {invoice.paidAmount.toLocaleString()} / {total.toLocaleString()} {cur}
                         </div>
                       )}
                     </td>
-                    <td className="px-4 py-3 hidden lg:table-cell">{invoice.invoiceDate ? new Date(invoice.invoiceDate).toLocaleDateString() : new Date(invoice.createdAt).toLocaleDateString()}</td>
-                    <td className="px-4 py-3 hidden lg:table-cell">{invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : 'Pa afat'}</td>
-                    <td className="px-4 py-3 hidden md:table-cell">
-                      <Badge variant="outline" className="text-xs">
-                        {invoice.paymentMethod === 'Bank' ? 'Transfer' : invoice.paymentMethod === 'Cash' ? 'Kesh' : invoice.paymentMethod || 'Stripe'}
-                      </Badge>
+                    {/* Statusi */}
+                    <td className="px-4 py-4 align-top">
+                      <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${pill.pillClass}`}>
+                        <span className={`w-1.5 h-1.5 rounded-full ${pill.dotClass}`} />
+                        {pill.label}
+                      </span>
                     </td>
-                    <td className="px-4 py-3">
-                      <div className="flex gap-1.5 flex-wrap">
-                        <Button
-                          variant="outline"
-                          size="sm"
-                          onClick={() => setSelectedInvoice(invoice)}
-                          title="Shiko"
-                        >
-                          <Eye className="w-4 h-4" />
-                        </Button>
-                        {permissions.canEdit && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => setEditInvoice(invoice)}
-                            title="Ndrysho"
-                          >
-                            <Edit2 className="w-4 h-4" />
-                          </Button>
-                        )}
-                        {permissions.canEdit && !invoice.emailSent && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleSendEmail(invoice.id)}
-                          >
-                            <Mail className="w-4 h-4" />
-                          </Button>
-                        )}
-                        {permissions.canEdit && invoice.status === 'Pending' && !invoice.reminderSent && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleSendReminder(invoice.id)}
-                          >
-                            <Send className="w-4 h-4" />
-                          </Button>
-                        )}
-                        {invoice.status !== 'Paid' && invoice.status !== 'Draft' && (invoice.total ?? invoice.amount ?? 0) > 0 && (
+                    {/* Afati */}
+                    <td className="px-4 py-4 align-top">
+                      <div className="text-body-sm">{due && !isNaN(due.getTime()) ? due.toLocaleDateString() : 'Pa afat'}</div>
+                      {dueCtx && <div className={`text-[11px] ${dueCtx.cls}`}>{dueCtx.text}</div>}
+                    </td>
+                    {/* Veprime — clicks must not open the drawer */}
+                    <td className="px-4 py-4 align-top text-right" onClick={(e) => e.stopPropagation()}>
+                      <div className="flex items-center justify-end gap-1.5">
+                        {canPay && (
                           <Button
                             size="sm"
                             className="bg-[#635BFF] hover:bg-[#5851ea] text-white"
@@ -1317,40 +1334,45 @@ const InvoicesView: React.FC = () => {
                             Paguaj
                           </Button>
                         )}
-                        {permissions.canEdit && invoice.status !== 'Paid' && invoice.status !== 'Draft' && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-cyan-600 border-cyan-300 hover:bg-cyan-50 dark:hover:bg-cyan-950"
-                            title="Regjistro Pagesë Pjesore"
-                            onClick={() => { setPartialPaymentInvoice(invoice); setPartialAmount(''); setPartialNote(''); setPartialMethod('Cash'); }}
-                          >
-                            <DollarSign className="w-4 h-4 mr-1" />
-                            Pjesore
-                          </Button>
-                        )}
-                        {permissions.canEdit && (invoice as any).isRecurring && !(invoice as any).autoGenerated && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-amber-600 border-amber-300 hover:bg-amber-50 dark:hover:bg-amber-950"
-                            title={(invoice as any).isRecurringPaused ? 'Rifillo përsëritjen' : 'Pauzo përsëritjen'}
-                            onClick={() => handleToggleInvoicePause(invoice)}
-                          >
-                            {(invoice as any).isRecurringPaused ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
-                          </Button>
-                        )}
-                        {permissions.canEdit && (
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="text-destructive hover:text-destructive"
-                            onClick={() => setInvoiceToDelete(invoice.id)}
-                            title="Fshi"
-                          >
-                            <Trash2 className="w-4 h-4" />
-                          </Button>
-                        )}
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon" className="h-8 w-8" title="Më shumë veprime">
+                              <MoreVertical className="w-4 h-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => setDrawerInvoice(invoice)}>
+                              <Eye className="w-4 h-4 mr-2" /> Shiko / Ndrysho
+                            </DropdownMenuItem>
+                            {permissions.canEdit && (
+                              <DropdownMenuItem onClick={() => handleSendEmail(invoice.id)}>
+                                <Mail className="w-4 h-4 mr-2" /> Dërgo me email
+                              </DropdownMenuItem>
+                            )}
+                            {permissions.canEdit && invoice.status !== 'Paid' && invoice.status !== 'Draft' && (
+                              <DropdownMenuItem onClick={() => { setPartialPaymentInvoice(invoice); setPartialAmount(''); setPartialNote(''); setPartialMethod('Cash'); }}>
+                                <DollarSign className="w-4 h-4 mr-2" /> Pagesë e pjesshme
+                              </DropdownMenuItem>
+                            )}
+                            {permissions.canEdit && (invoice as any).isRecurring && !(invoice as any).autoGenerated && (
+                              <DropdownMenuItem onClick={() => handleToggleInvoicePause(invoice)}>
+                                {(invoice as any).isRecurringPaused ? <Play className="w-4 h-4 mr-2" /> : <Pause className="w-4 h-4 mr-2" />}
+                                {(invoice as any).isRecurringPaused ? 'Rifillo përsëritjen' : 'Pauzo përsëritjen'}
+                              </DropdownMenuItem>
+                            )}
+                            {permissions.canEdit && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem
+                                  onClick={() => setInvoiceToDelete(invoice.id)}
+                                  className="text-destructive focus:text-destructive"
+                                >
+                                  <Trash2 className="w-4 h-4 mr-2" /> Fshi
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </div>
                     </td>
                   </tr>
@@ -1359,14 +1381,94 @@ const InvoicesView: React.FC = () => {
             </tbody>
           </table>
         </div>
-        {filteredInvoices.length > visibleCount && (
-          <div className="p-3 border-t border-border">
-            <Button variant="outline" className="w-full" onClick={() => setVisibleCount((c) => c + 50)}>
+        {/* Footer: count + pagination */}
+        <div className="flex items-center justify-between gap-3 p-3 border-t border-border">
+          <span className="text-sm text-muted-foreground">{filteredInvoices.length} fatura</span>
+          {filteredInvoices.length > visibleCount && (
+            <Button variant="outline" size="sm" onClick={() => setVisibleCount((c) => c + 50)}>
               Shfaq më shumë ({filteredInvoices.length - visibleCount})
             </Button>
-          </div>
-        )}
+          )}
+        </div>
       </Card>
+
+      {/* Quick view/edit drawer (row click) */}
+      {drawerInvoice && (
+        <div className="fixed inset-0 z-50">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setDrawerInvoice(null)} />
+          <div className="absolute top-0 right-0 h-full w-[400px] max-w-[90vw] bg-card border-l border-border shadow-xl flex flex-col animate-in slide-in-from-right duration-200">
+            {/* Header */}
+            <div className="flex items-start justify-between gap-2 p-4 border-b border-border">
+              <div className="min-w-0">
+                <div className="font-mono text-body-sm font-semibold truncate">{drawerInvoice.invoiceNumber || drawerInvoice.id.slice(0, 8)}</div>
+                <div className="mt-1.5 flex items-center gap-2 flex-wrap">
+                  {(() => { const p = statusPill(drawerStatus); return (
+                    <span className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium ${p.pillClass}`}>
+                      <span className={`w-1.5 h-1.5 rounded-full ${p.dotClass}`} /> {p.label}
+                    </span>
+                  ); })()}
+                  <span className="font-mono text-sm font-semibold">
+                    {(drawerInvoice.total ?? drawerInvoice.amount ?? 0).toLocaleString()} {(drawerInvoice as any).currency === 'EUR' ? '€' : 'L'}
+                  </span>
+                </div>
+              </div>
+              <Button variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0" onClick={() => setDrawerInvoice(null)} title="Mbyll">
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            {/* Body */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Klienti</label>
+                <select value={drawerCustomer} onChange={(e) => setDrawerCustomer(e.target.value)} disabled={!permissions.canEdit} className="mt-1 w-full h-9 px-2 border border-border rounded-md bg-background text-sm">
+                  <option value="">— Zgjidh klientin —</option>
+                  {(customers || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Projekti</label>
+                <select value={drawerProject} onChange={(e) => setDrawerProject(e.target.value)} disabled={!permissions.canEdit} className="mt-1 w-full h-9 px-2 border border-border rounded-md bg-background text-sm">
+                  <option value="">Pa projekt</option>
+                  {Array.from(projectById.values()).map((p: any) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Totali</label>
+                <input type="number" value={drawerTotal} onChange={(e) => setDrawerTotal(e.target.value)} disabled={!permissions.canEdit} className="mt-1 w-full h-9 px-2 border border-border rounded-md bg-background text-sm font-mono" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Afati</label>
+                <input type="date" value={drawerDue} onChange={(e) => setDrawerDue(e.target.value)} disabled={!permissions.canEdit} className="mt-1 w-full h-9 px-2 border border-border rounded-md bg-background text-sm" />
+              </div>
+              <div>
+                <label className="text-xs font-medium text-muted-foreground">Statusi</label>
+                <select value={drawerStatus} onChange={(e) => setDrawerStatus(e.target.value)} disabled={!permissions.canEdit} className="mt-1 w-full h-9 px-2 border border-border rounded-md bg-background text-sm">
+                  {['Draft', 'Pending', 'Partial', 'Paid', 'Overdue', 'Cancelled'].map((s) => <option key={s} value={s}>{getInvoiceStatusLabel(s)}</option>)}
+                </select>
+              </div>
+              <div className="flex flex-wrap gap-2 pt-1">
+                <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+                  Mënyra e pagesës:&nbsp;<span className="font-medium text-foreground">{drawerInvoice.paymentMethod === 'Bank' ? 'Transfer' : drawerInvoice.paymentMethod === 'Cash' ? 'Kesh' : drawerInvoice.paymentMethod || 'Stripe'}</span>
+                </span>
+                <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
+                  Data e lëshimit:&nbsp;<span className="font-medium text-foreground">{drawerInvoice.invoiceDate ? new Date(drawerInvoice.invoiceDate).toLocaleDateString() : new Date(drawerInvoice.createdAt).toLocaleDateString()}</span>
+                </span>
+              </div>
+            </div>
+            {/* Footer */}
+            <div className="p-4 border-t border-border flex gap-2">
+              {permissions.canEdit && (
+                <Button className="flex-1" onClick={handleSaveDrawer} disabled={drawerSaving}>
+                  {drawerSaving ? 'Duke ruajtur…' : 'Ruaj ndryshimet'}
+                </Button>
+              )}
+              <Button variant="outline" className={permissions.canEdit ? '' : 'flex-1'} onClick={() => handleSendEmail(drawerInvoice.id)}>
+                <Mail className="w-4 h-4 mr-1" /> Dërgo
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {selectedInvoice && (
         <Dialog open={!!selectedInvoice} onOpenChange={() => setSelectedInvoice(null)}>
