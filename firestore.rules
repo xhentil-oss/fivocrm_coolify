@@ -1110,11 +1110,24 @@ service cloud.firestore {
          request.resource.data.role == resource.data.role &&
          request.resource.data.diff(resource.data).affectedKeys()
            .hasOnly(['displayName', 'email', 'position', 'updatedAt'])) ||
-        // Managing another member (incl. role changes) requires being the team
-        // owner — a server-trustworthy check (teams/{teamId}.createdByUserId).
-        // Client-side admin gating alone was bypassable.
-        (resource.data.userId != request.auth.uid &&
-         isTeamOwner(resource.data.teamId))
+        // Managing a member (incl. role changes) requires being the team owner — a
+        // server-trustworthy check (teams/{teamId}.createdByUserId). Client-side
+        // admin gating alone was bypassable.
+        //
+        // The owner's OWN row is included on purpose. This branch used to carry
+        // `resource.data.userId != request.auth.uid`, which combined with the
+        // narrow self-update allow-list above meant the owner could never save
+        // their own monthlySalary/salaryHistory/serviceLines/status — the edit
+        // failed silently and their payroll stayed missing from every P&L. Salary
+        // is a COST INPUT, not authorisation, and the owner may already set it for
+        // every other member, so self-editing it grants nothing new.
+        //
+        // `role` is still pinned when editing yourself, so this is not a
+        // self-escalation path and an owner cannot accidentally demote themselves
+        // out of their own tenant.
+        (isTeamOwner(resource.data.teamId) &&
+         (resource.data.userId != request.auth.uid
+          || request.resource.data.role == resource.data.role))
       );
       // Only allow deleting own membership or team owner removes a member
       allow delete: if isAuth() && (

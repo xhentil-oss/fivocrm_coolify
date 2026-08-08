@@ -623,3 +623,77 @@ test('34c. nobody sets another member position', async () => {
   const mallory = testEnv.authenticatedContext('mallory', { email: 'm@evil.com', bid: VICTIM_BIZ, tid: VICTIM_TEAM, roles: ['admin'] }).firestore();
   await assertFails(updateDoc(doc(mallory, 'teamMembers', `${MY_TEAM}_alice`), { position: 'web' }));
 });
+
+// ── 35. The owner's OWN membership row (reported bug: "nuk më ruhet rroga") ──
+// The owner branch of the update rule used to carry
+// `resource.data.userId != request.auth.uid`, so the owner's own row could only
+// ever be matched by the narrow SELF allow-list
+// (displayName/email/position/updatedAt). Setting their own monthlySalary was
+// therefore denied — silently, since the UI awaited the write and still showed a
+// success toast. Their payroll then stayed missing from every P&L that reads
+// teamMembers.monthlySalary (project overhead, department labour, cashflow).
+const OWNER_UID = 'aliceOwner';
+const ownerCtx = () => testEnv.authenticatedContext(OWNER_UID, {
+  email: 'owner@mine.com', bid: MY_BIZ, tid: MY_TEAM, roles: ['owner', 'admin'],
+}).firestore();
+
+async function seedOwnerMembership() {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'teamMembers', `${MY_TEAM}_${OWNER_UID}`), {
+      userId: OWNER_UID, teamId: MY_TEAM, businessId: MY_BIZ, role: 'Admin',
+      status: 'Active', email: 'owner@mine.com', displayName: 'Alice Owner',
+    });
+  });
+}
+
+test('35a. the team owner may set their OWN salary and salary history', async () => {
+  await seedOwnerMembership();
+  const owner = ownerCtx();
+  await assertSucceeds(updateDoc(doc(owner, 'teamMembers', `${MY_TEAM}_${OWNER_UID}`), {
+    monthlySalary: 90000,
+    salaryHistory: [{ monthlySalary: 90000, effectiveFrom: '2026-08-01' }],
+    updatedAt: new Date(),
+  }));
+});
+
+test('35b. the owner may set their own P&L allocation and status', async () => {
+  await seedOwnerMembership();
+  const owner = ownerCtx();
+  await assertSucceeds(updateDoc(doc(owner, 'teamMembers', `${MY_TEAM}_${OWNER_UID}`), {
+    serviceLines: ['seo'], hourlyCostRate: 12, status: 'Active',
+  }));
+});
+
+test('35c. but the owner still cannot change their OWN role', async () => {
+  await seedOwnerMembership();
+  const owner = ownerCtx();
+  // Pinning `role` on the self-edit keeps this from being a self-escalation path
+  // and stops an owner locking themselves out by accident.
+  await assertFails(updateDoc(doc(owner, 'teamMembers', `${MY_TEAM}_${OWNER_UID}`), {
+    role: 'Viewer',
+  }));
+  await assertFails(updateDoc(doc(owner, 'teamMembers', `${MY_TEAM}_${OWNER_UID}`), {
+    monthlySalary: 1, role: 'Member',
+  }));
+});
+
+test('35d. a NON-owner still cannot set their own pay (34b must not regress)', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin'], 'alice@mine.com');
+  // `alice` is a member of MY_TEAM but is NOT its createdByUserId — an admin
+  // ROLE claim must not buy what only team ownership grants.
+  await assertFails(updateDoc(doc(alice, 'teamMembers', `${MY_TEAM}_alice`), {
+    monthlySalary: 999999,
+  }));
+  await assertFails(updateDoc(doc(alice, 'teamMembers', `${MY_TEAM}_alice`), {
+    salaryHistory: [{ monthlySalary: 999999, effectiveFrom: '2026-01-01' }],
+  }));
+});
+
+test('35e. an owner of ANOTHER team cannot touch this team member', async () => {
+  const victimOwner = testEnv.authenticatedContext('victimOwner', {
+    email: 'vo@victim.com', bid: VICTIM_BIZ, tid: VICTIM_TEAM, roles: ['owner', 'admin'],
+  }).firestore();
+  await assertFails(updateDoc(doc(victimOwner, 'teamMembers', `${MY_TEAM}_alice`), {
+    monthlySalary: 1,
+  }));
+});

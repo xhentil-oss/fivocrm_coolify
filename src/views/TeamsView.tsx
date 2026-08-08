@@ -758,8 +758,31 @@ const TeamsView: React.FC = () => {
             <EditMemberForm 
               member={editingMember} 
               onSubmit={async (data) => {
-                await memberMutation.update(editingMember.id, data);
-                toast({ title: 'Lejet u përditësuan!', description: `Roli u ndryshua në ${data.role}.` });
+                // The success toast used to fire before anything could reject, so a
+                // rules denial (e.g. an owner editing their own row) looked like a
+                // save that simply did not stick. Report what actually happened.
+                try {
+                  await memberMutation.update(editingMember.id, data);
+                } catch (err) {
+                  const denied = (err as any)?.code === 'permission-denied';
+                  const isSelf = editingMember.userId === user?.uid;
+                  toast({
+                    title: 'Ruajtja dështoi',
+                    description: denied
+                      ? isSelf && data.role !== editingMember.role
+                        ? 'Rolin tënd nuk mund ta ndryshosh vetë — kërkoji një pronari tjetër të ekipit.'
+                        : 'Nuk ke leje për këtë ndryshim. Vetëm pronari i ekipit i menaxhon anëtarët.'
+                      : ((err as Error)?.message || 'Gabim i panjohur.'),
+                    variant: 'destructive',
+                  });
+                  return;
+                }
+                toast({
+                  title: 'Anëtari u përditësua',
+                  description: data.monthlySalary != null
+                    ? `Roli: ${data.role} · rroga: ${data.monthlySalary.toLocaleString()} L`
+                    : `Roli: ${data.role}`,
+                });
                 setIsEditMemberDialogOpen(false);
                 setEditingMember(null);
               }}
