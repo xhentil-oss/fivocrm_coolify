@@ -593,13 +593,14 @@ const InvoicesView: React.FC = () => {
   // Save the drawer edits via the existing mutation (no new fields / no new path).
   const handleSaveDrawer = async () => {
     if (!drawerInvoice) return;
-    const parsedTotal = parseFloat(drawerTotal);
     setDrawerSaving(true);
     try {
+      // Deliberately does NOT write `total`: the total is derived from the invoice's
+      // services/line items, so editing it here would desync the composition. Amounts
+      // and services are edited via the full invoice form (setEditInvoice).
       await invoiceMutation.update(drawerInvoice.id, {
         customerId: drawerCustomer,
         projectId: drawerProject,
-        total: isNaN(parsedTotal) || parsedTotal < 0 ? (drawerInvoice.total ?? drawerInvoice.amount ?? 0) : parsedTotal,
         dueDate: drawerDue ? new Date(drawerDue + 'T12:00:00') : null,
         status: drawerStatus,
       } as any);
@@ -1341,9 +1342,14 @@ const InvoicesView: React.FC = () => {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => setDrawerInvoice(invoice)}>
-                              <Eye className="w-4 h-4 mr-2" /> Shiko / Ndrysho
+                            <DropdownMenuItem onClick={() => setSelectedInvoice(invoice)}>
+                              <Eye className="w-4 h-4 mr-2" /> Shiko detajet (shërbimet)
                             </DropdownMenuItem>
+                            {permissions.canEdit && (
+                              <DropdownMenuItem onClick={() => setEditInvoice(invoice)}>
+                                <Edit2 className="w-4 h-4 mr-2" /> Ndrysho faturën (shërbimet)
+                              </DropdownMenuItem>
+                            )}
                             {permissions.canEdit && (
                               <DropdownMenuItem onClick={() => handleSendEmail(invoice.id)}>
                                 <Mail className="w-4 h-4 mr-2" /> Dërgo me email
@@ -1434,7 +1440,10 @@ const InvoicesView: React.FC = () => {
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Totali</label>
-                <input type="number" value={drawerTotal} onChange={(e) => setDrawerTotal(e.target.value)} disabled={!permissions.canEdit} className="mt-1 w-full h-9 px-2 border border-border rounded-md bg-background text-sm font-mono" />
+                <div className="mt-1 w-full h-9 px-2 flex items-center border border-border rounded-md bg-muted/40 text-sm font-mono font-semibold">
+                  {(drawerInvoice.total ?? drawerInvoice.amount ?? 0).toLocaleString()} {(drawerInvoice as any).currency === 'EUR' ? '€' : 'L'}
+                </div>
+                <p className="mt-1 text-[11px] text-muted-foreground">Totali vjen nga shërbimet e faturës. Për të ndryshuar shërbimet, hap faturën e plotë më poshtë.</p>
               </div>
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Afati</label>
@@ -1456,15 +1465,22 @@ const InvoicesView: React.FC = () => {
               </div>
             </div>
             {/* Footer */}
-            <div className="p-4 border-t border-border flex gap-2">
+            <div className="p-4 border-t border-border space-y-2">
               {permissions.canEdit && (
-                <Button className="flex-1" onClick={handleSaveDrawer} disabled={drawerSaving}>
-                  {drawerSaving ? 'Duke ruajtur…' : 'Ruaj ndryshimet'}
+                <Button variant="outline" className="w-full" onClick={() => { const inv = drawerInvoice; setDrawerInvoice(null); setEditInvoice(inv); }}>
+                  <Edit2 className="w-4 h-4 mr-1" /> Ndrysho faturën e plotë (shërbimet)
                 </Button>
               )}
-              <Button variant="outline" className={permissions.canEdit ? '' : 'flex-1'} onClick={() => handleSendEmail(drawerInvoice.id)}>
-                <Mail className="w-4 h-4 mr-1" /> Dërgo
-              </Button>
+              <div className="flex gap-2">
+                {permissions.canEdit && (
+                  <Button className="flex-1" onClick={handleSaveDrawer} disabled={drawerSaving}>
+                    {drawerSaving ? 'Duke ruajtur…' : 'Ruaj ndryshimet'}
+                  </Button>
+                )}
+                <Button variant="outline" className={permissions.canEdit ? '' : 'flex-1'} onClick={() => handleSendEmail(drawerInvoice.id)}>
+                  <Mail className="w-4 h-4 mr-1" /> Dërgo
+                </Button>
+              </div>
             </div>
           </div>
         </div>
