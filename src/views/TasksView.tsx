@@ -34,6 +34,8 @@ import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFiltered
 import { toast } from '../hooks/use-toast';
 import type { Task, TaskComment, Project, Notification, TaskCollaborator, UserProfile, TimeEntry, Customer, Invoice } from '../types';
 import TaskDetailPanel from '../components/TaskDetailPanel';
+import TaskDateConflictDialog from '../components/TaskDateConflictDialog';
+import { findSameDayTasks } from '../lib/taskConflicts';
 import SmartSuggestions from '../components/SmartSuggestions';
 import { TaskLabels, LabelEditor } from '../components/TaskLabels';
 import TaskTimeline from '../components/TaskTimeline';
@@ -84,6 +86,14 @@ const TasksView: React.FC = () => {
   // here. Tagged with its task so it never leaks onto another task you open next.
   const [focusComment, setFocusComment] = useState<{ taskId: string; commentId: string } | null>(null);
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
+  // Set when the assignee already has work on the day being scheduled — the form
+  // submission is parked here until the user confirms (or cancels).
+  const [dateConflict, setDateConflict] = useState<{
+    formData: FormData;
+    tasks: Task[];
+    assigneeName: string;
+    date: Date;
+  } | null>(null);
   const [panelExpanded, setPanelExpanded] = useState(false);
   const [deleteConfirmId, setDeleteConfirmId] = useState<string | null>(null);
   const [listOrder, setListOrder] = useState<string[]>(() => {
@@ -297,7 +307,7 @@ const TasksView: React.FC = () => {
 
 
 
-  const handleCreateTask = async (formData: FormData) => {
+  const handleCreateTask = async (formData: FormData, options?: { skipDateConflictCheck?: boolean }) => {
     const title = formData.get('title') as string;
     const description = formData.get('description') as string;
     // Dates are optional (only the title is required) — guard against Invalid Date.
@@ -309,6 +319,27 @@ const TasksView: React.FC = () => {
     const endDate = ed && !isNaN(ed.getTime()) ? ed : undefined;
     // Default to current user if not specified
     const assignedToUserId = (formData.get('assignedToUserId') as string) || user?.uid || '';
+
+    // Same-day check: if this person already has an open task on the scheduled day,
+    // ask before stacking another one on it. Detection runs on the raw (unfiltered)
+    // task list so the role filter can't hide a conflicting task from the check.
+    const scheduledDate = endDate || startDate;
+    if (!options?.skipDateConflictCheck && scheduledDate && assignedToUserId) {
+      const sameDay = findSameDayTasks(rawTasks || [], {
+        assigneeId: assignedToUserId,
+        date: scheduledDate,
+      });
+      if (sameDay.length > 0) {
+        setDateConflict({
+          formData,
+          tasks: sameDay,
+          assigneeName: assignedToUserId === user?.uid ? 'Ti' : getUserName(assignedToUserId),
+          date: scheduledDate,
+        });
+        return;
+      }
+    }
+
     const projectId = formData.get('projectId') as string;
     const priority = formData.get('priority') as string;
     const status = formData.get('status') as string;
@@ -448,8 +479,17 @@ const TasksView: React.FC = () => {
     }
     await Promise.all(notificationPromises);
 
+    setDateConflict(null);
     setIsCreateDialogOpen(false);
     setSelectedTask(newTask);
+  };
+
+  /** "Po, vazhdo" on the same-day warning — re-runs the parked submission. */
+  const handleConfirmDateConflict = async () => {
+    if (!dateConflict) return;
+    const { formData } = dateConflict;
+    setDateConflict(null);
+    await handleCreateTask(formData, { skipDateConflictCheck: true });
   };
 
   const handleAddComment = async (taskId: string, content: string) => {
@@ -994,7 +1034,7 @@ const TasksView: React.FC = () => {
               </p>
             </div>
             {permissions.canEdit && (
-              <Dialog open={isCreateDialogOpen} onOpenChange={setIsCreateDialogOpen}>
+              <Dialog open={isCreateDialogOpen} onOpenChange={(open) => { setIsCreateDialogOpen(open); if (!open) setDateConflict(null); }}>
                 <DialogTrigger asChild>
                   <Button size="sm" className="bg-primary text-primary-foreground shadow-sm gap-1.5 rounded-lg shrink-0">
                     <Plus className="w-4 h-4" />
@@ -1420,6 +1460,18 @@ const TasksView: React.FC = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Same-day warning: the assignee already has work on the chosen date */}
+      <TaskDateConflictDialog
+        open={!!dateConflict}
+        onOpenChange={(open) => { if (!open) setDateConflict(null); }}
+        assigneeName={dateConflict?.assigneeName || ''}
+        date={dateConflict?.date}
+        tasks={dateConflict?.tasks || []}
+        onConfirm={handleConfirmDateConflict}
+        confirmLabel="Po, hape gjithsesi"
+        loading={taskMutation.loading}
+      />
     </div>
   );
 };
