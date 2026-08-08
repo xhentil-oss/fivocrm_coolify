@@ -122,6 +122,51 @@ service cloud.firestore {
         && get(teamRef(teamId)).data.createdByUserId == request.auth.uid;
     }
 
+    // Who may manage the staff roster (add / edit / remove members, set pay).
+    //
+    // `isTeamOwner` alone was too narrow: it only recognises the person who
+    // CREATED the team (teams/{teamId}.createdByUserId). A business owner whose
+    // teams were created by someone else — or any Admin — was locked out of the
+    // roster entirely, including their own salary.
+    //
+    // The `owner`/`admin` claims are just as server-trustworthy as the
+    // createdByUserId lookup: api/_tenantClaims.ts mints `owner` ONLY for teams
+    // whose createdByUserId is this uid, and `admin` from the member's own
+    // teamMembers.role. This is NOT the "client-side admin gating" the old comment
+    // warned about — that was a UI check, this is a signed token.
+    //
+    // `manager` is deliberately EXCLUDED (isBusinessAdmin would have included it):
+    // roster writes carry monthlySalary and role, which is authority a department
+    // lead should not hold.
+    // Holds an owner/admin authority marker inside `businessId`.
+    function hasRosterAuthority(businessId) {
+      return isBusinessMember(businessId)
+        && ('owner' in claimRoles() || 'admin' in claimRoles());
+    }
+
+    // For an EXISTING row: the businessId/teamId come from the stored document, so
+    // they were written by a trusted path. Deliberately tolerant of legacy rows
+    // whose businessId drifted from their team's — being strict here would deny an
+    // owner the very edit this change exists to enable.
+    function canManageMembers(businessId, teamId) {
+      return isSuperAdmin()
+        || isTeamOwner(teamId)
+        || hasRosterAuthority(businessId);
+    }
+
+    // For a NEW row: businessId and teamId are attacker-controlled, and they are
+    // NOT interchangeable. `isTeamMember()` is satisfied merely by the existence of
+    // `teamMembers/{teamId}_{uid}`, and a dozen rules grant access on that alone —
+    // so if authority could be proved against a businessId while the row named a
+    // team from a DIFFERENT business, an admin of their own tenant would mint
+    // themselves into somebody else's team. The team's real business is therefore
+    // read from the team document and both must agree.
+    function canCreateMembership(businessId, teamId) {
+      return isSuperAdmin()
+        || isTeamOwner(teamId)
+        || (businessOfTeam(teamId) == businessId && hasRosterAuthority(businessId));
+    }
+
     // The business a team belongs to (a TEAM LIVES INSIDE A BUSINESS). Used by the
     // `teamSettings` and `counters` rules, whose document ids encode a teamId while
     // authorization is a BUSINESS-level question.
@@ -1095,10 +1140,13 @@ service cloud.firestore {
         || (isAuth() && request.auth.token.email != null
             && resource.data.get('email', '') == request.auth.token.email.lower())
         || isSuperAdmin();
-      // HARDENED: only the team owner may create memberships client-side. The one
-      // legitimate non-owner path — accepting an invite — goes through the Admin SDK
+      // Owner/Admin of the tenant may add members client-side. The one legitimate
+      // path for everyone else — accepting an invite — goes through the Admin SDK
       // (api/accept-invite), which validates the token + email and bypasses rules.
-      allow create: if isTeamOwner(request.resource.data.teamId) || isSuperAdmin();
+      // Still HARDENED against the original hole: a stranger cannot forge a
+      // membership into a team they have no server-minted authority over.
+      allow create: if canCreateMembership(
+        request.resource.data.businessId, request.resource.data.teamId);
       // Prevent role self-escalation: users can update own record but only safe fields
       allow update: if isAuth() && (
         // Self-update: only displayName/email/position/updatedAt, role must not change.
@@ -1110,29 +1158,29 @@ service cloud.firestore {
          request.resource.data.role == resource.data.role &&
          request.resource.data.diff(resource.data).affectedKeys()
            .hasOnly(['displayName', 'email', 'position', 'updatedAt'])) ||
-        // Managing a member (incl. role changes) requires being the team owner — a
-        // server-trustworthy check (teams/{teamId}.createdByUserId). Client-side
-        // admin gating alone was bypassable.
+        // Managing a member (incl. role changes) requires roster authority — see
+        // canManageMembers(): the team's creator, a server-minted owner/admin
+        // claim, or the platform operator.
         //
-        // The owner's OWN row is included on purpose. This branch used to carry
+        // The manager's OWN row is included on purpose. This branch used to carry
         // `resource.data.userId != request.auth.uid`, which combined with the
-        // narrow self-update allow-list above meant the owner could never save
-        // their own monthlySalary/salaryHistory/serviceLines/status — the edit
-        // failed silently and their payroll stayed missing from every P&L. Salary
-        // is a COST INPUT, not authorisation, and the owner may already set it for
-        // every other member, so self-editing it grants nothing new.
+        // narrow self-update allow-list above meant an owner/admin could never
+        // save their own monthlySalary/salaryHistory/serviceLines/status — the
+        // edit failed silently and their payroll stayed missing from every P&L.
+        // Salary is a COST INPUT, not authorisation, and they may already set it
+        // for every other member, so self-editing it grants nothing new.
         //
-        // `role` is still pinned when editing yourself, so this is not a
-        // self-escalation path and an owner cannot accidentally demote themselves
-        // out of their own tenant.
-        (isTeamOwner(resource.data.teamId) &&
+        // `role` is still pinned when editing yourself, so no one can promote
+        // themselves and an owner cannot accidentally demote themselves out of
+        // their own tenant.
+        (canManageMembers(resource.data.businessId, resource.data.teamId) &&
          (resource.data.userId != request.auth.uid
           || request.resource.data.role == resource.data.role))
       );
-      // Only allow deleting own membership or team owner removes a member
+      // Leaving yourself, or roster authority removing someone.
       allow delete: if isAuth() && (
         resource.data.userId == request.auth.uid ||
-        isTeamOwner(resource.data.teamId)
+        canManageMembers(resource.data.businessId, resource.data.teamId)
       );
     }
 

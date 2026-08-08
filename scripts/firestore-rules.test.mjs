@@ -19,7 +19,7 @@ import {
   assertFails,
   assertSucceeds,
 } from '@firebase/rules-unit-testing';
-import { doc, setDoc, getDoc, updateDoc } from 'firebase/firestore';
+import { doc, setDoc, getDoc, updateDoc, deleteDoc } from 'firebase/firestore';
 
 const PROJECT_ID = 'fivocrm-rules-test';
 const VICTIM_BIZ = 'bizVictim';
@@ -677,16 +677,77 @@ test('35c. but the owner still cannot change their OWN role', async () => {
   }));
 });
 
-test('35d. a NON-owner still cannot set their own pay (34b must not regress)', async () => {
-  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin'], 'alice@mine.com');
-  // `alice` is a member of MY_TEAM but is NOT its createdByUserId — an admin
-  // ROLE claim must not buy what only team ownership grants.
+test('35d. a plain MEMBER still cannot set their own pay', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member'], 'alice@mine.com');
   await assertFails(updateDoc(doc(alice, 'teamMembers', `${MY_TEAM}_alice`), {
     monthlySalary: 999999,
   }));
   await assertFails(updateDoc(doc(alice, 'teamMembers', `${MY_TEAM}_alice`), {
     salaryHistory: [{ monthlySalary: 999999, effectiveFrom: '2026-01-01' }],
   }));
+});
+
+test('35d2. a MANAGER has no roster authority either', async () => {
+  // canManageMembers() deliberately excludes `manager`, which isBusinessAdmin()
+  // would have included: roster writes carry salary and role, and a department
+  // lead should not hold that. If this ever needs to change, change it here.
+  const lead = staffOf('lead', MY_BIZ, MY_TEAM, ['manager'], 'lead@mine.com');
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'teamMembers', `${MY_TEAM}_lead`), {
+      userId: 'lead', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Manager',
+      status: 'Active', email: 'lead@mine.com',
+    });
+  });
+  await assertFails(updateDoc(doc(lead, 'teamMembers', `${MY_TEAM}_lead`), { monthlySalary: 5 }));
+  await assertFails(updateDoc(doc(lead, 'teamMembers', `${MY_TEAM}_alice`), { monthlySalary: 5 }));
+});
+
+// The requested policy: owner AND admin manage the roster. An admin is NOT
+// necessarily the team's creator, so isTeamOwner() alone locked them out — which
+// is how the business owner ended up unable to save their own salary when the
+// team had been created by somebody else.
+test('35f. an ADMIN who did not create the team manages the roster', async () => {
+  const admin = staffOf('boss', MY_BIZ, MY_TEAM, ['admin'], 'boss@mine.com');
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'teamMembers', `${MY_TEAM}_boss`), {
+      userId: 'boss', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Admin',
+      status: 'Active', email: 'boss@mine.com',
+    });
+  });
+  // Their own pay …
+  await assertSucceeds(updateDoc(doc(admin, 'teamMembers', `${MY_TEAM}_boss`), {
+    monthlySalary: 120000,
+    salaryHistory: [{ monthlySalary: 120000, effectiveFrom: '2026-08-01' }],
+  }));
+  // … and somebody else's, including their role.
+  await assertSucceeds(updateDoc(doc(admin, 'teamMembers', `${MY_TEAM}_alice`), {
+    monthlySalary: 45000, role: 'Manager',
+  }));
+  // But never their own role.
+  await assertFails(updateDoc(doc(admin, 'teamMembers', `${MY_TEAM}_boss`), { role: 'Owner' }));
+});
+
+test('35h. an admin cannot name ANOTHER business team on a new membership', async () => {
+  // The dangerous shape: prove authority with your OWN businessId while naming a
+  // team from someone else's. `isTeamMember()` is satisfied by the mere existence
+  // of `teamMembers/{teamId}_{uid}`, and many rules grant access on that alone, so
+  // this would be a self-service door into the victim team.
+  const admin = staffOf('boss', MY_BIZ, MY_TEAM, ['admin'], 'boss@mine.com');
+  await assertFails(setDoc(doc(admin, 'teamMembers', `${VICTIM_TEAM}_boss`), {
+    userId: 'boss', teamId: VICTIM_TEAM, businessId: MY_BIZ, role: 'Admin', status: 'Active',
+  }));
+  // Nor by naming the victim business outright — the claim does not cover it.
+  await assertFails(setDoc(doc(admin, 'teamMembers', `${VICTIM_TEAM}_boss2`), {
+    userId: 'boss', teamId: VICTIM_TEAM, businessId: VICTIM_BIZ, role: 'Admin', status: 'Active',
+  }));
+});
+
+test('35g. an admin may add and remove members', async () => {
+  const admin = staffOf('boss', MY_BIZ, MY_TEAM, ['admin'], 'boss@mine.com');
+  await assertSucceeds(setDoc(doc(admin, 'teamMembers', `${MY_TEAM}_newbie`), {
+    userId: 'newbie', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active',
+  }));
+  await assertSucceeds(deleteDoc(doc(admin, 'teamMembers', `${MY_TEAM}_newbie`)));
 });
 
 test('35e. an owner of ANOTHER team cannot touch this team member', async () => {

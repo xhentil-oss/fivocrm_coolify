@@ -770,8 +770,8 @@ const TeamsView: React.FC = () => {
                     title: 'Ruajtja dështoi',
                     description: denied
                       ? isSelf && data.role !== editingMember.role
-                        ? 'Rolin tënd nuk mund ta ndryshosh vetë — kërkoji një pronari tjetër të ekipit.'
-                        : 'Nuk ke leje për këtë ndryshim. Vetëm pronari i ekipit i menaxhon anëtarët.'
+                        ? 'Rolin tënd nuk mund ta ndryshosh vetë — kërkoji një pronari ose admini tjetër.'
+                        : 'Nuk ke leje për këtë ndryshim. Anëtarët menaxhohen nga pronari ose admini i biznesit. Nëse ky rol të takon, dil dhe hyr përsëri që të rifreskohen lejet.'
                       : ((err as Error)?.message || 'Gabim i panjohur.'),
                     variant: 'destructive',
                   });

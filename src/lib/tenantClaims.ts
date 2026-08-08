@@ -94,7 +94,14 @@ export async function ensureTenantClaims(expected: { teamId: string | null; busi
   const matches =
     !!current &&
     (!expected.businessId || current.bid === expected.businessId) &&
-    (!expected.teamId || current.tid === expected.teamId);
+    (!expected.teamId || current.tid === expected.teamId) &&
+    // A token with the right tenant but NO roles is still unusable for anything
+    // gated on authority rather than membership — `teamMembers` writes (the staff
+    // roster) check `'admin' in roles`, so an owner/admin holding a token minted
+    // before roles existed was denied with no way out but signing out. Treat an
+    // empty roles array as a reason to re-mint. Bounded: `_lastSyncedKey` is set
+    // after the sync either way, so this cannot loop even if roles stay empty.
+    current.roles.length > 0;
   if (matches) { _lastSyncedKey = key; return; }
 
   if (_inFlight) { await _inFlight; return; }
