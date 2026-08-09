@@ -164,6 +164,15 @@ const ProjectDetailView: React.FC = () => {
     const expensesTotal = (projectExpenses || []).reduce((s, e: any) => s + toAll(Number(e.amount) || 0, e.currency), 0);
     const spent = labor.cost + expensesTotal;
     const pct = budget > 0 ? Math.round((spent / budget) * 100) : 0;
+    // Optional per-task pricing: when tasks carry a `value`, their sum is an
+    // alternative read of what the project is worth (and what is already earned
+    // via Done tasks) next to the single project budget.
+    const valued = (allTasks || []).filter((t: any) => Number(t.value) > 0);
+    const taskValueTotal = valued.reduce((s: number, t: any) => s + toAll(Number(t.value) || 0, project?.currency), 0);
+    const taskValueDone = valued
+      .filter((t: any) => t.status === 'Done')
+      .reduce((s: number, t: any) => s + toAll(Number(t.value) || 0, project?.currency), 0);
+
     return {
       budget, laborCost: labor.cost, expensesTotal, spent, pct,
       overBudget: budget > 0 && spent > budget,
@@ -171,8 +180,9 @@ const ProjectDetailView: React.FC = () => {
       billableValue: labor.billableValue,
       billableHours: labor.billableHours,
       margin: budget > 0 ? budget - spent : labor.billableValue - spent,
+      taskValueTotal, taskValueDone, valuedTaskCount: valued.length,
     };
-  }, [project?.budget, project?.currency, teamMembers, timeEntries, projectExpenses]);
+  }, [project?.budget, project?.currency, teamMembers, timeEntries, projectExpenses, allTasks]);
 
   // Total hours logged for the project and per task
   const { totalHours, hoursByTask } = React.useMemo(() => {
@@ -741,6 +751,12 @@ const ProjectDetailView: React.FC = () => {
                 <span className={budgetStats.margin < 0 ? 'text-red-600' : 'text-emerald-600'}>
                   Marzh: <strong className="tabular-nums">{formatCurrency(budgetStats.margin, 'ALL')}</strong>
                 </span>
+                {budgetStats.valuedTaskCount > 0 && (
+                  <span title={`${budgetStats.valuedTaskCount} detyra me vlerë`}>
+                    Vlera e detyrave: <strong className="text-foreground tabular-nums">{formatCurrency(budgetStats.taskValueTotal, 'ALL')}</strong>
+                    {' '}(kryer <strong className="text-emerald-600 tabular-nums">{formatCurrency(budgetStats.taskValueDone, 'ALL')}</strong>)
+                  </span>
+                )}
               </div>
               {budgetStats.overBudget && (
                 <p className="text-[11px] text-red-600 mt-1.5">⚠ Projekti ka kaluar buxhetin me {formatCurrency(budgetStats.spent - budgetStats.budget, 'ALL')}.</p>

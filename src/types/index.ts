@@ -618,6 +618,10 @@ export interface Task {
   /** Optional section/phase within a project (Asana sections), free-text. */
   section?: string;
   estimatedHours?: number;
+  /** Optional billable value of this task, in the project's currency. Lets a
+   *  project be priced task-by-task instead of (or alongside) a single budget.
+   *  Purely informational unless the project is billed from task values. */
+  value?: number;
   isRecurring?: boolean;
   recurringFrequency?: 'daily' | 'weekly' | 'monthly' | 'yearly';
   recurringInterval?: number; // e.g. 2 = every 2 weeks/months
