@@ -279,10 +279,16 @@ const ProjectsView: React.FC = () => {
     const servicesTotal = fromAll(servicesTotalAll, currency);
     const billableTotal = budget && budget > 0 ? budget : servicesTotal;
 
-    // Compute seed from existing invoices so the Firebase counter starts correctly
+    // Invoice numbers are unique per BUSINESS (teams are departments inside it), so
+    // both the counter scope and this seed span the whole business — a per-team
+    // counter used to restart at FAT-001 in every department and collide.
+    const invoiceScopeId = activeBusinessId || resolvedTeamId;
     let maxInvNum = 0;
-    if (allInvoices && resolvedTeamId) {
-      for (const inv of allInvoices.filter(i => (i as any).teamId === resolvedTeamId)) {
+    if (allInvoices && invoiceScopeId) {
+      const scoped = activeBusinessId
+        ? allInvoices.filter(i => !(i as any).businessId || (i as any).businessId === activeBusinessId)
+        : allInvoices.filter(i => (i as any).teamId === resolvedTeamId);
+      for (const inv of scoped) {
         const m = inv.invoiceNumber?.match(/^FAT-(\d+)$/i);
         if (m) { const n = parseInt(m[1], 10); if (n > maxInvNum) maxInvNum = n; }
       }
@@ -296,8 +302,8 @@ const ProjectsView: React.FC = () => {
       const billingFrequency = recurringFrequency || 'monthly';
       const periodKey = projectBillingPeriodKey(billingFrequency, now);
       const periodEnd = projectBillingPeriodEnd(billingFrequency, now);
-      const invoiceLabel = resolvedTeamId
-        ? await getNextInvoiceNumber(resolvedTeamId, maxInvNum)
+      const invoiceLabel = invoiceScopeId
+        ? await getNextInvoiceNumber(invoiceScopeId, maxInvNum)
         : `AUTO-${periodKey}-${newProject.id.slice(0, 6).toUpperCase()}`;
       const newInvoice = await invoiceMutation.create({
         invoiceNumber: invoiceLabel,
@@ -363,8 +369,8 @@ const ProjectsView: React.FC = () => {
       }
     } else {
       // Non-recurring project: create a plain Draft invoice
-      const invoiceLabel = resolvedTeamId
-        ? await getNextInvoiceNumber(resolvedTeamId, maxInvNum)
+      const invoiceLabel = invoiceScopeId
+        ? await getNextInvoiceNumber(invoiceScopeId, maxInvNum)
         : `DRAFT-${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${newProject.id.slice(0, 6).toUpperCase()}`;
       const newInvoice = await invoiceMutation.create({
         invoiceNumber: invoiceLabel,
