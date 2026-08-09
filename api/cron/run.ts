@@ -654,6 +654,14 @@ function projectBillingBlockReason(project: any, now: Date): string | null {
     const last: Date = raw.toDate ? raw.toDate() : new Date(raw);
     if (!isNaN(last.getTime()) && projectBillingPeriodKey(frequency, last) === periodKey) return 'already-billed';
   }
+
+  // Chosen billing day (monthly only): hold until that day of the month arrives,
+  // clamped to the month's length. Transient — bills normally once reached.
+  if (frequency === 'monthly' && project.billingDayOfMonth) {
+    const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const day = Math.min(Math.max(1, Math.round(Number(project.billingDayOfMonth))), lastDay);
+    if (now.getDate() < day) return 'before-billing-day';
+  }
   return null;
 }
 
