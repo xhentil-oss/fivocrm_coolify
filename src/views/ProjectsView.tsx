@@ -204,6 +204,10 @@ const ProjectsView: React.FC = () => {
     const startDateStr = formData.get('startDate') as string;
     const startDate = startDateStr ? new Date(startDateStr + 'T12:00:00') : undefined;
     const department = (formData.get('department') as string) || undefined;
+    const billingDayRaw = formData.get('billingDayOfMonth') as string;
+    const billingDayNum = billingDayRaw ? parseInt(billingDayRaw, 10) : NaN;
+    const billingDayOfMonth = !isNaN(billingDayNum) && billingDayNum >= 1 && billingDayNum <= 31
+      ? billingDayNum : undefined;
     const memberUserIdsStr = formData.get('memberUserIds') as string;
     let memberUserIds: string[] | undefined;
     if (memberUserIdsStr) {
@@ -246,6 +250,7 @@ const ProjectsView: React.FC = () => {
       billingType,
       startDate,
       department,
+      billingDayOfMonth,
       spent: 0,
       customerId: resolvedCustomerId,
       responsibleUserId: resolvedResponsible,
@@ -495,6 +500,10 @@ const ProjectsView: React.FC = () => {
     const startDateStr = formData.get('startDate') as string;
     const startDate = startDateStr ? new Date(startDateStr + 'T12:00:00') : undefined;
     const department = (formData.get('department') as string) || undefined;
+    const billingDayRaw = formData.get('billingDayOfMonth') as string;
+    const billingDayNum = billingDayRaw ? parseInt(billingDayRaw, 10) : NaN;
+    const billingDayOfMonth = !isNaN(billingDayNum) && billingDayNum >= 1 && billingDayNum <= 31
+      ? billingDayNum : undefined;
     const memberUserIdsStr = formData.get('memberUserIds') as string;
     let memberUserIds: string[] | undefined;
     if (memberUserIdsStr) {
@@ -537,6 +546,7 @@ const ProjectsView: React.FC = () => {
       billingType,
       startDate,
       department,
+      billingDayOfMonth,
       customerId: custId && custId !== '__none__' ? custId : undefined,
       responsibleUserId: resolvedResponsible,
       isRecurring: isRecurring || undefined,
@@ -1070,6 +1080,9 @@ const ProjectForm: React.FC<{
     return d && !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : '';
   });
   const [department, setDepartment] = useState<string>(initialData?.department || '__none__');
+  const [billingDayOfMonth, setBillingDayOfMonth] = useState<string>(
+    initialData?.billingDayOfMonth ? String(initialData.billingDayOfMonth) : '',
+  );
   const [serviceCategory, setServiceCategory] = useState<string>('__all__');
   // Manual revenue split among participants. Off → 100% to responsible (default).
   const [customSplit, setCustomSplit] = useState<boolean>(!!(initialData as any)?.profitSplit?.length);
@@ -1130,6 +1143,7 @@ const ProjectForm: React.FC<{
     formData.set('billingType', billingType);
     if (startDateInput) formData.set('startDate', startDateInput);
     if (department && department !== '__none__') formData.set('department', department);
+    if (billingDayOfMonth) formData.set('billingDayOfMonth', billingDayOfMonth);
     formData.set('memberUserIds', JSON.stringify(memberUserIds));
     formData.set('selectedServiceIds', JSON.stringify(selectedServiceIds));
     // Only persist a manual split when the toggle is on; otherwise leave it empty
@@ -1376,6 +1390,27 @@ const ProjectForm: React.FC<{
           P.sh. Social, SEO, Web — përdoret te "Fitimi sipas departamentit" për të parë sa fiton nga secili.
         </p>
       </div>
+
+      {/* Billing day — only meaningful for a MONTHLY recurring retainer */}
+      {billingType === 'monthly' && (isRecurring || recurringFrequency === 'monthly') && (
+        <div>
+          <Label htmlFor="billingDayOfMonth">Dita e faturimit (çdo muaj)</Label>
+          <Input
+            id="billingDayOfMonth"
+            name="billingDayOfMonth"
+            type="number"
+            min="1"
+            max="31"
+            value={billingDayOfMonth}
+            onChange={(e) => setBillingDayOfMonth(e.target.value)}
+            placeholder="p.sh. 25"
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            Fatura mujore gjenerohet në këtë ditë (p.sh. 25). Bosh = në fillim të muajit.
+            Në muajt më të shkurtër zbret te dita e fundit (p.sh. 31 → 28 Shkurt).
+          </p>
+        </div>
+      )}
 
       {/* Responsible Person */}
       {teamMembers && teamMembers.length > 0 && (

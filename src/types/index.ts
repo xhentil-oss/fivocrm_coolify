@@ -342,6 +342,10 @@ export interface Project {
    *  "Web"). Groups per-project profit into department P&L. Matches the service
    *  categories used by TeamMember.serviceLines. */
   department?: string;
+  /** Day of month (1-31) a MONTHLY recurring project issues its invoice. Unset =
+   *  bill as soon as the period opens (day 1, the legacy behaviour). Clamped to
+   *  the last day in shorter months. Ignored for weekly/one-time projects. */
+  billingDayOfMonth?: number;
   /** Expected/actual start date. Used by the next-month forecast to count a
    *  one-time project's budget as revenue in the month it kicks off. */
   startDate?: Date;

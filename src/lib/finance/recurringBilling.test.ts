@@ -6,6 +6,7 @@ import {
   periodAlreadyBilledLegacy,
   projectBillingBlockReason,
   isPermanentBillingBlock,
+  billingDayForMonth,
 } from './recurringBilling';
 
 describe('startOfBillingWeek', () => {
@@ -166,6 +167,49 @@ describe('projectBillingBlockReason', () => {
 
   it('ignores an unparseable repeat-until date instead of blocking', () => {
     expect(projectBillingBlockReason({ ...base, recurringEndDate: 'not-a-date' }, now)).toBeNull();
+  });
+});
+
+describe('billingDayForMonth', () => {
+  it('clamps to the last day of a short month', () => {
+    expect(billingDayForMonth(25, new Date(2026, 7, 10))).toBe(25);   // August → 25
+    expect(billingDayForMonth(31, new Date(2026, 1, 10))).toBe(28);   // Feb 2026 → 28
+    expect(billingDayForMonth(31, new Date(2026, 3, 10))).toBe(30);   // April → 30
+    expect(billingDayForMonth(0, new Date(2026, 7, 10))).toBe(1);     // floor at 1
+  });
+});
+
+describe('billingDayOfMonth (bill on the 25th)', () => {
+  const monthly = { isRecurring: true, recurringFrequency: 'monthly', billingType: 'monthly' as const, billingDayOfMonth: 25 };
+
+  it('holds the invoice before the chosen day', () => {
+    expect(projectBillingBlockReason(monthly, new Date(2026, 7, 1))).toBe('before-billing-day');
+    expect(projectBillingBlockReason(monthly, new Date(2026, 7, 24))).toBe('before-billing-day');
+  });
+
+  it('bills on and after the chosen day', () => {
+    expect(projectBillingBlockReason(monthly, new Date(2026, 7, 25))).toBeNull();
+    expect(projectBillingBlockReason(monthly, new Date(2026, 7, 28))).toBeNull();
+  });
+
+  it('clamps in short months (31 → last day of February)', () => {
+    const p = { ...monthly, billingDayOfMonth: 31 };
+    expect(projectBillingBlockReason(p, new Date(2026, 1, 27))).toBe('before-billing-day');
+    expect(projectBillingBlockReason(p, new Date(2026, 1, 28))).toBeNull(); // Feb 28 = last day
+  });
+
+  it('does not apply to weekly projects', () => {
+    const weekly = { ...monthly, recurringFrequency: 'weekly' };
+    expect(projectBillingBlockReason(weekly, new Date(2026, 7, 3))).toBeNull();
+  });
+
+  it('never overrides already-billed for the same period', () => {
+    const p = { ...monthly, lastInvoicePeriodKey: '2026-08' };
+    expect(projectBillingBlockReason(p, new Date(2026, 7, 26))).toBe('already-billed');
+  });
+
+  it('is a transient block (must not clear isRecurring)', () => {
+    expect(isPermanentBillingBlock('before-billing-day')).toBe(false);
   });
 });
 

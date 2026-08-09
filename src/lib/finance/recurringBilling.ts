@@ -31,7 +31,9 @@ export type ProjectBillingBlock =
   | 'paused'
   | 'one-time'
   | 'series-ended'
-  | 'already-billed';
+  | 'already-billed'
+  /** Monthly retainer whose chosen billing day (e.g. the 25th) hasn't arrived yet. */
+  | 'before-billing-day';
 
 /** Reasons that permanently end the series (the caller should clear `isRecurring`). */
 export const PERMANENT_BILLING_BLOCKS: ReadonlyArray<ProjectBillingBlock> = ['terminal-status', 'series-ended'];
@@ -102,6 +104,16 @@ export function periodAlreadyBilledLegacy(frequency: string, lastGeneratedAt: Da
   return projectBillingPeriodKey(frequency, lastGeneratedAt) === projectBillingPeriodKey(frequency, at);
 }
 
+/**
+ * The calendar day a monthly retainer bills in the month `at` falls in, clamped
+ * to that month's length (a "31" setting bills on the 28th/30th in short months
+ * rather than slipping into the next one).
+ */
+export function billingDayForMonth(day: number, at: Date): number {
+  const lastDay = new Date(at.getFullYear(), at.getMonth() + 1, 0).getDate();
+  return Math.min(Math.max(1, Math.round(day)), lastDay);
+}
+
 export interface ProjectBillingCandidate {
   status?: Project['status'];
   isRecurring?: boolean;
@@ -111,6 +123,8 @@ export interface ProjectBillingCandidate {
   recurringEndDate?: unknown;
   lastInvoicePeriodKey?: string;
   lastInvoiceGeneratedAt?: unknown;
+  /** Day of month a monthly retainer issues its invoice (e.g. 25). */
+  billingDayOfMonth?: number;
 }
 
 /**
@@ -149,6 +163,13 @@ export function projectBillingBlockReason(
   } else {
     const last = toDate(project.lastInvoiceGeneratedAt);
     if (last && periodAlreadyBilledLegacy(frequency, last, now)) return 'already-billed';
+  }
+
+  // Chosen billing day (monthly only): hold the invoice until that day arrives,
+  // e.g. bill social-media retainers on the 25th instead of the 1st. Transient —
+  // the same period bills normally once the day is reached.
+  if (frequency === 'monthly' && project.billingDayOfMonth) {
+    if (now.getDate() < billingDayForMonth(project.billingDayOfMonth, now)) return 'before-billing-day';
   }
 
   return null;
