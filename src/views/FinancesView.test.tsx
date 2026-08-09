@@ -1,13 +1,13 @@
 import React from 'react';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 
 // ── Mocks ──
 // The view is a pure read-model over five collections, so the whole data layer
-// is stubbed. What this suite guards is the RENDER TREE: the layout was rebuilt
-// from one 12-card scroll into hero + tiles + four tabs, and a crash in any tab
-// (or a control that stops scoping its panels) would otherwise only show up in
-// production, since this view has no other coverage.
+// is stubbed. What this suite guards is the RENDER TREE: the layout is a navy
+// hero + four KPI cards + four tabs, and a crash in any tab (or a control that
+// stops scoping its panels) would otherwise only show up in production, since
+// this view has no other coverage.
 
 const permissions = { isOwner: true, isAdmin: false, isSuperAdmin: false };
 vi.mock('../contexts/PermissionsContext', () => ({
@@ -33,6 +33,13 @@ const DAY = 86_400_000;
 const now = new Date();
 const iso = (offsetDays: number) => new Date(now.getTime() + offsetDays * DAY).toISOString();
 
+const MONTHS = [
+  'Janar', 'Shkurt', 'Mars', 'Prill', 'Maj', 'Qershor',
+  'Korrik', 'Gusht', 'Shtator', 'Tetor', 'Nëntor', 'Dhjetor',
+];
+const CUR_MONTH = MONTHS[now.getMonth()];
+const PREV_MONTH = MONTHS[(now.getMonth() + 11) % 12];
+
 const collections: Record<string, any[]> = {};
 vi.mock('../hooks/useFirestore', () => ({
   useCollection: (name: string) => ({ data: collections[name] ?? [], loading: false }),
@@ -51,6 +58,15 @@ function selectTab(name: string | RegExp) {
   return trigger;
 }
 
+/**
+ * The hero defaults to the CLOSED month before the 15th, so any assertion about
+ * this month's figures has to pin the toggle first — otherwise the suite passes
+ * or fails depending on the day it runs.
+ */
+function showCurrentMonth() {
+  fireEvent.click(screen.getByRole('button', { name: `${CUR_MONTH} · deri sot` }));
+}
+
 /** A tenant with money in, money out, an overdue invoice and a stuck recurring. */
 function seed() {
   collections.invoices = [
@@ -62,7 +78,7 @@ function seed() {
       id: 'i2', customerId: 'c2', status: 'Paid', total: 250_000, currency: 'ALL',
       invoiceDate: iso(-5), paidAt: iso(-2), dueDate: iso(-5), projectId: 'p1',
     },
-    // Outstanding + past due → drives the "Të vonuara" tile and the alarm strip.
+    // Outstanding + past due → drives the "Të vonuara" tile and the alarms.
     { id: 'i3', customerId: 'c1', status: 'Pending', total: 120_000, currency: 'ALL', invoiceDate: iso(-25), dueDate: iso(-20) },
     // A recurring parent whose next cycle is long past and never spawned a child.
     {
@@ -110,23 +126,52 @@ describe('FinancesView', () => {
   it('leads with exactly one hero figure and its derivation', () => {
     render(<FinancesView />);
     expect(screen.getByRole('heading', { level: 1, name: 'Financat' })).toBeInTheDocument();
-    expect(screen.getByText(/^Fitimi neto ·/)).toBeInTheDocument();
-    // The "where does this number come from" waterfall is merged into the hero,
-    // so the headline is never shown unexplained.
-    expect(screen.getByText('Nga del ky numër')).toBeInTheDocument();
+    expect(screen.getByText('Fitimi neto')).toBeInTheDocument();
+    // The "where does this number come from" waterfall lives INSIDE the hero, so
+    // the headline is never shown unexplained.
     expect(screen.getByText('Para që hyri (arkëtuar)')).toBeInTheDocument();
+    expect(screen.getByText('− Rrogat')).toBeInTheDocument();
     expect(screen.getByText('= Fitimi neto')).toBeInTheDocument();
+    // Exactly four supporting measures — a fifth would compete with the hero.
+    expect(screen.getByText(/^Parashikim ·/)).toBeInTheDocument();
+    expect(screen.getByText('Marzhi i fitimit')).toBeInTheDocument();
+    expect(screen.getByText('Të pambledhura')).toBeInTheDocument();
+    expect(screen.getByText('Të vonuara')).toBeInTheDocument();
   });
 
-  it('surfaces alarms at the top and jumps to the risk tab', () => {
+  it('reads the closed month or month-to-date, and says which', () => {
     render(<FinancesView />);
-    // Overdue invoice + stuck recurring both fire, so the strip must be present
-    // ABOVE the tabs rather than at the bottom of a long scroll.
-    const seeAll = screen.getByRole('button', { name: /Shiko/ });
-    fireEvent.click(seeAll);
+    const prevBtn = screen.getByRole('button', { name: `${PREV_MONTH} (i mbyllur)` });
+    const curBtn = screen.getByRole('button', { name: `${CUR_MONTH} · deri sot` });
+
+    // Before the 15th a few days of collections against a whole month's payroll
+    // is noise, so the CLOSED month leads by default.
+    const autoPrev = now.getDate() < 15;
+    expect(prevBtn).toHaveAttribute('aria-pressed', String(autoPrev));
+    expect(curBtn).toHaveAttribute('aria-pressed', String(!autoPrev));
+
+    // The month pill in the hero follows the toggle, both ways.
+    fireEvent.click(curBtn);
+    expect(screen.getByText(`${CUR_MONTH} ${now.getFullYear()}`)).toBeInTheDocument();
+    fireEvent.click(prevBtn);
+    expect(screen.queryByText(`${CUR_MONTH} ${now.getFullYear()}`)).not.toBeInTheDocument();
+  });
+
+  it('counts risks on the tab badge and details them inside the tab', () => {
+    render(<FinancesView />);
+    showCurrentMonth();
+
+    // Overdue invoice + stuck recurring + misconfigured recurring all fire, so
+    // the badge carries a count rather than the page carrying an alarm banner.
+    const riskTab = screen.getByRole('tab', { name: /Rreziqet/ });
+    expect(within(riskTab).getByText(/^\d+$/)).toBeInTheDocument();
+
+    selectTab(/Rreziqet/);
     expect(screen.getByText('Çfarë kërkon vëmendje')).toBeInTheDocument();
-    expect(screen.getByText('Fatura recurring që nuk u përsëritën')).toBeInTheDocument();
-    // The misconfigured branch renders too (recurring with no frequency).
+    expect(screen.getByText('Faturat recurring')).toBeInTheDocument();
+    expect(screen.getByText('Shëndeti i rrjedhës së parasë')).toBeInTheDocument();
+    // Both broken-recurring branches render: overdue and never-will-generate.
+    expect(screen.getByText(/ditë vonesë/)).toBeInTheDocument();
     expect(screen.getByText(/Konfigurim i paplotë/)).toBeInTheDocument();
   });
 
@@ -134,25 +179,21 @@ describe('FinancesView', () => {
     render(<FinancesView />);
 
     // Tab 1 — overview
-    expect(screen.getByText('Trendi i fitimit dhe parashikimi')).toBeInTheDocument();
-    expect(screen.getByText('Të ardhurat sipas burimit')).toBeInTheDocument();
-    expect(screen.getByText('Pa paguar nga WHMCS')).toBeInTheDocument();
+    expect(screen.getByText('Trendi i fitimit')).toBeInTheDocument();
+    expect(screen.getByText('Arkëtimet sipas muajit')).toBeInTheDocument();
 
-    // Tab 2 — profit, plus the one filter row that scopes all four of its panels
+    // Tab 2 — profit, plus the one filter row that scopes its panels
     selectTab('Fitimi');
     expect(screen.getByText('Periudha')).toBeInTheDocument();
+    expect(screen.getByText('Fitimi sipas departamentit')).toBeInTheDocument();
+    expect(screen.getByText('Të ardhurat sipas përgjegjësit')).toBeInTheDocument();
+    // The deeper cuts stay reachable, just folded away.
     expect(screen.getByText('Fitimi sipas projekti')).toBeInTheDocument();
-    expect(screen.getByText('Të ardhurat dhe fitimi sipas departamentit')).toBeInTheDocument();
-    expect(screen.getByText('Të ardhurat dhe fitimi sipas përgjegjësit')).toBeInTheDocument();
 
     // Tab 3 — clients
     selectTab('Klientët');
-    expect(screen.getByText('Ku fiton më shumë')).toBeInTheDocument();
-    expect(screen.getByText('Ku humb para')).toBeInTheDocument();
-
-    // Tab 4 — cashflow
-    selectTab(/Rrjedha/);
-    expect(screen.getByText('Shëndeti i rrjedhës së parasë (mujore)')).toBeInTheDocument();
+    expect(screen.getByText('Klientët më fitimprurës')).toBeInTheDocument();
+    expect(screen.getByText('Klientët me humbje')).toBeInTheDocument();
   });
 
   it('scopes the profit panels with one shared period + basis control', () => {
@@ -166,9 +207,9 @@ describe('FinancesView', () => {
 
     // Switching the basis re-labels the summary line, proving the single control
     // reaches the panels (it used to live buried inside one card).
-    fireEvent.click(screen.getByRole('button', { name: 'Faturuar' }));
-    expect(screen.getByRole('button', { name: 'Faturuar', pressed: true })).toBeInTheDocument();
-    expect(screen.getByText(/fatura reale të lidhura/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Paguar' }));
+    expect(screen.getByRole('button', { name: 'Paguar', pressed: true })).toBeInTheDocument();
+    expect(screen.getByText(/vetëm faturat e paguara/)).toBeInTheDocument();
 
     // A specific month is reachable from the same row, replacing the second,
     // independent month dropdown the responsible card used to own.
@@ -181,18 +222,18 @@ describe('FinancesView', () => {
     render(<FinancesView />);
     selectTab('Fitimi');
 
-    expect(screen.getByText('Të ardhurat dhe fitimi sipas departamentit')).toBeInTheDocument();
-    expect(screen.getByText('Të ardhurat dhe fitimi sipas përgjegjësit')).toBeInTheDocument();
-
-    // The same four measures appear in both panels: two totals strips plus one
-    // row each (Web department / Ana K.), so 4 of each label at minimum.
-    for (const label of ['Të ardhura', 'Arkëtuar', 'Pa mbledhur', 'Fitim']) {
-      expect(screen.getAllByText(label).length).toBeGreaterThanOrEqual(4);
+    // Both tables carry the same column ruler, so "who brought in what" reads
+    // the same either way you slice it: 2 headers × 3 shared measures.
+    for (const label of ['Të ardhura', 'Arkëtuar', 'Fitimi']) {
+      expect(screen.getAllByText(label).length).toBeGreaterThanOrEqual(2);
     }
+    // …and both foot in a totals row rather than leaving the columns unanchored.
+    expect(screen.getAllByText('Gjithsej').length).toBeGreaterThanOrEqual(2);
 
     // i2 (250 000, paid, projectId p1) is the only invoice attributable to a
     // project — p1 is department "Web", responsible u1 ("Ana K.").
     expect(screen.getAllByText('250 000 Lekë').length).toBeGreaterThanOrEqual(2);
+    expect(screen.getByText(/Ana K\./)).toBeInTheDocument();
   });
 
   it('warns that collected cash with no project cannot reach either breakdown', () => {
@@ -210,6 +251,21 @@ describe('FinancesView', () => {
     selectTab('Fitimi');
     fireEvent.click(screen.getByRole('button', { name: 'Lidhi me projektet' }));
     expect(navigate).toHaveBeenCalledWith('/app/invoices?project=none');
+  });
+
+  it('expands a department row into its projects', () => {
+    render(<FinancesView />);
+    selectTab('Fitimi');
+
+    const row = screen.getByRole('button', { name: /^Social/ });
+    expect(row).toHaveAttribute('aria-expanded', 'false');
+    // The project name also appears in the folded project table, so what proves
+    // the drill-down opened is that it appears ONE MORE time than before.
+    const before = screen.queryAllByText('Retainer Social').length;
+
+    fireEvent.click(row);
+    expect(row).toHaveAttribute('aria-expanded', 'true');
+    expect(screen.queryAllByText('Retainer Social').length).toBeGreaterThan(before);
   });
 
   it('stays owner-only', () => {

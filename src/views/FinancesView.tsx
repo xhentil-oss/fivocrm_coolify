@@ -1,19 +1,17 @@
-import React, { useMemo, useState } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useCollection } from '../hooks/useFirestore';
-import { Card } from '../components/ui/card';
 import { Skeleton } from '../components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { cn, formatALL, toAll } from '../lib/utils';
 import {
-  TrendingUp, TrendingDown, AlertTriangle, Wallet, Clock,
-  ArrowDownRight, ArrowUpRight, Users, CheckCircle2, Repeat, XCircle, Briefcase, Layers,
-  Server, Building2, Info, ChevronDown, ChevronRight, Table2,
+  AlertTriangle, ChevronDown, ChevronRight, Clock, Download, Info, Landmark,
+  Percent, TrendingDown, TrendingUp, Wallet,
 } from 'lucide-react';
 import {
-  ResponsiveContainer, LineChart, Line, BarChart, Bar, XAxis, YAxis, Tooltip,
-  CartesianGrid, ReferenceLine,
+  ResponsiveContainer, ComposedChart, Area, Line, BarChart, Bar, XAxis, YAxis,
+  Tooltip, CartesianGrid, ReferenceLine, LabelList,
 } from 'recharts';
 import type { Invoice, Expense, Customer, Project, TeamMember } from '../types';
 import {
@@ -32,19 +30,52 @@ import { forecastNextMonth } from '../lib/finance/forecast';
 import { computeDepartmentPnl, buildDepartmentProfitTrend } from '../lib/finance/departmentPnl';
 import { attributeCollectedRevenue, resolveCollectionWindow } from '../lib/finance/revenueAttribution';
 
-// ── Single-page, plain-language finance overview for the owner ──
-// Answers one question: "Am I making money this month, where, and why?"
-// Reuses financialAnalytics + per-client P&L logic (mirrors Customer360View).
+// ── Financat — owner dashboard ────────────────────────────────────────────────
+// Rebuilt against the hifi design reference "Financat FivoCRM.dc.html".
 //
-// LAYOUT CONTRACT — the page had grown to 12 equal-weight cards in one ~4000px
-// scroll, so nothing read as more important than anything else. The rules that
-// keep it legible as more panels get added:
-//   · ONE hero figure (net profit). Everything else is a stat tile or a panel.
-//   · Alarms sit at the TOP, never below the fold.
-//   · Four tabs instead of one scroll — each tab answers one kind of question.
-//   · ONE filter row per scope, rendered ABOVE the panels it scopes. Never a
-//     control hidden inside a card that silently governs four cards below it.
-//   · Prose lives in <Explain> disclosures. Numbers get the visual weight.
+// LAYOUT CONTRACT — what keeps this page legible as panels get added:
+//   · ONE hero: the navy net-profit card, carrying its own P&L derivation.
+//     Nothing else on the page is allowed to compete with it visually.
+//   · Four KPI cards beside it, never more. A fifth measure becomes a panel.
+//   · Four tabs, one question each. Prose is folded into <Explain>; numbers
+//     get the weight.
+//   · ONE filter row per scope, rendered ABOVE the panels it scopes.
+//   · Money is ALWAYS mono + tabular-nums, right-aligned in tables — so
+//     columns of figures compare vertically without reading them.
+//   · Status ink (green/red/amber) means profit-vs-loss ONLY. The blue ramp
+//     carries series identity and never implies "good".
+//
+// Deviations from the reference, deliberate:
+//   · Typography uses the app's own DM Sans / IBM Plex Mono rather than
+//     Plus Jakarta Sans / JetBrains Mono — a second type system inside one app
+//     shell reads as a bug, not as polish.
+//   · Amounts keep `formatALL()` so this page agrees with Faturat/Shpenzimet.
+//   · The header tile carries a wallet glyph, not the "F" mark: the sidebar
+//     already brands the shell.
+
+// ── Design tokens (page-local, from the reference) ──
+const NAVY = '#08183A';
+const NAVY_MID = '#0d2a63';
+const BLUE = '#2f6fe0';        // primary series + action
+const BLUE_LIGHT = '#7fb2f4';  // secondary series (WHMCS)
+const GREEN = '#0f8a5f';
+const RED = '#d64545';
+const AXIS_INK = '#94a5bd';
+const GRID_INK = '#edf1f7';
+
+// Semantic ink, as Tailwind classes (arbitrary values keep them in one place).
+const INK_POS = 'text-[#0f8a5f]';
+const INK_NEG = 'text-[#d64545]';
+const INK_WARN = 'text-[#9a6b0a]';
+const INK_NAVY = 'text-[#08183A]';
+const INK_MUTED = 'text-[#7286a3]';
+
+/** White panel: the one card shape on this page. */
+const CARD = 'rounded-[20px] border border-[#e3e9f2] bg-white shadow-[0_1px_3px_rgba(8,24,58,.05)]';
+/** Every money figure on the page. */
+const NUM = 'font-mono tabular-nums';
+/** Shared column ruler — header, data rows and the totals row must agree. */
+const COLS = 'grid grid-cols-[1.6fr_112px_112px_112px_74px] gap-x-2';
 
 const FREQ_LABEL: Record<string, string> = {
   weekly: 'javore',
@@ -57,25 +88,6 @@ const MONTH_NAMES_FULL = [
   'Janar', 'Shkurt', 'Mars', 'Prill', 'Maj', 'Qershor',
   'Korrik', 'Gusht', 'Shtator', 'Tetor', 'Nëntor', 'Dhjetor',
 ];
-
-// ── Chart tokens ──
-// Status ink (green/red/amber) is reserved for profit-vs-loss MEANING on this
-// page, so the categorical series palette deliberately avoids those hues.
-// Validated across all pairs against the light card surface for the lightness
-// band, chroma floor, CVD separation, normal-vision separation and ≥3:1
-// contrast — do not swap a hue without re-validating the set.
-const SERIES = ['#0284C7', '#7C3AED', '#DB2777', '#EA580C'] as const;
-// The folded tail of a long category list. Neutral on purpose: "Të tjera" is an
-// aggregate, not an identity that deserves its own hue.
-const SERIES_REST = '#64748B';
-const AXIS_INK = '#6B7A93'; // = muted.foreground
-const GRID_INK = '#ECEFF4'; // = border
-
-// Profit/loss ink. A step darker than the emerald-600/amber-600 used before, so
-// small bold figures actually clear WCAG AA against the card surface.
-const INK_POS = 'text-emerald-700';
-const INK_NEG = 'text-red-600';
-const INK_WARN = 'text-amber-700';
 
 /** Short money for chart ticks/labels, where the full "1.234.567 L" never fits. */
 function compactALL(v: number): string {
@@ -106,9 +118,26 @@ function monthProfit(
   return { collected, otherExpenses, salary: monthlySalary, profit };
 }
 
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return '??';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[1][0]).toUpperCase();
+}
+
 /** `'month' | 'year' | 'all' | 'YYYY-M'` — one period for every P&L breakdown. */
 type Period = string;
 const isPickedMonth = (p: Period) => /^\d{4}-\d{1,2}$/.test(p);
+
+/**
+ * Which month the hero reads.
+ *
+ * Before the 15th the current month is a handful of days of collections against
+ * a whole month's payroll — a headline built on that is noise, so the CLOSED
+ * month leads by default. From the 15th on, month-to-date leads. Either way the
+ * owner can override, and the toggle says which one is showing.
+ */
+type MonthMode = 'auto' | 'prev' | 'cur';
 
 const FinancesView: React.FC = () => {
   const navigate = useNavigate();
@@ -123,55 +152,58 @@ const FinancesView: React.FC = () => {
 
   const now = useMemo(() => new Date(), []);
   const [tab, setTab] = useState('overview');
+  const [monthMode, setMonthMode] = useState<MonthMode>('auto');
+  const usePrev = monthMode === 'auto' ? now.getDate() < 15 : monthMode === 'prev';
 
-  // ── This month vs last month ── (salary is resolved per month via history,
-  // so past months use the salary that applied then, not today's.)
-  // The CURRENT month is month-to-date, so its salary is prorated to elapsed
-  // days — otherwise a full month's payroll vs a few days of collections would
-  // show a false loss early each month.
-  const { thisMonth, lastMonth, lastMonthToDate } = useMemo(() => {
+  // ── Month snapshots ──
+  // Salary is resolved per month via history, so past months use the salary that
+  // applied then. The CURRENT month is month-to-date, so its salary is prorated
+  // to elapsed days — otherwise a full month's payroll against a few days of
+  // collections shows a false loss early each month. `prevToDate` prorates the
+  // same way, giving the month-to-date hero a like-for-like baseline.
+  const snapshots = useMemo(() => {
     const inv = invoices || [];
     const exp = expenses || [];
     const cur = monthWindow(now, 0);
     const prev = monthWindow(now, -1);
+    const prev2 = monthWindow(now, -2);
+
     const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
     const elapsedDay = now.getDate();
     const elapsedFraction = Math.min(1, elapsedDay / daysInMonth);
     const curSalary = totalSalaryForMonth(teamMembers, cur.end) * elapsedFraction;
 
-    // Last month up to the SAME day-of-month + salary prorated the same way — a
-    // like-for-like "pace" baseline for the current (month-to-date) hero number.
     const prevDays = new Date(now.getFullYear(), now.getMonth(), 0).getDate();
     const prevDay = Math.min(elapsedDay, prevDays);
     const prevToDateEnd = new Date(prev.start.getFullYear(), prev.start.getMonth(), prevDay, 23, 59, 59, 999);
     const prevSalaryToDate = totalSalaryForMonth(teamMembers, prev.end) * Math.min(1, prevDay / prevDays);
 
     return {
-      thisMonth: monthProfit(inv, exp, curSalary, cur.start, cur.end),
-      lastMonth: monthProfit(inv, exp, totalSalaryForMonth(teamMembers, prev.end), prev.start, prev.end),
-      lastMonthToDate: monthProfit(inv, exp, prevSalaryToDate, prev.start, prevToDateEnd),
+      cur, prev, prev2,
+      current: monthProfit(inv, exp, curSalary, cur.start, cur.end),
+      prevFull: monthProfit(inv, exp, totalSalaryForMonth(teamMembers, prev.end), prev.start, prev.end),
+      prevToDate: monthProfit(inv, exp, prevSalaryToDate, prev.start, prevToDateEnd),
+      prev2Full: monthProfit(inv, exp, totalSalaryForMonth(teamMembers, prev2.end), prev2.start, prev2.end),
     };
   }, [invoices, expenses, teamMembers, now]);
 
-  // Compare month-to-date against last month AT THE SAME POINT (not a full month).
-  const profitDelta = thisMonth.profit - lastMonthToDate.profit;
+  const hero = useMemo(() => {
+    const { cur, prev, prev2, current, prevFull, prevToDate, prev2Full } = snapshots;
+    const data = usePrev ? prevFull : current;
+    const base = usePrev ? prev2Full : prevToDate;
+    const w = usePrev ? prev : cur;
+    return {
+      ...data,
+      delta: data.profit - base.profit,
+      title: `${MONTH_NAMES_FULL[w.monthIndex]} ${w.year}`,
+      deltaVs: usePrev ? MONTH_NAMES_FULL[prev2.monthIndex] : 'e njëjta datë muajin e kaluar',
+      marginPct: data.collected > 0 ? Math.round((data.profit / data.collected) * 100) : 0,
+      closed: usePrev,
+    };
+  }, [snapshots, usePrev]);
 
-  // ── Income split by source (WHMCS vs direct) for the current month ──
-  // WHMCS-synced invoices carry source:'whmcs'; everything else is billed
-  // directly inside FivoCRM. Same collected basis as the hero number.
-  const incomeBySource = useMemo(() => {
-    const cur = monthWindow(now, 0);
-    let whmcs = 0, direct = 0;
-    for (const inv of invoices || []) {
-      const c = getInvoiceCollectedBetween(inv, cur.start, cur.end);
-      if (c <= 0) continue;
-      if ((inv as any).source === 'whmcs') whmcs += c; else direct += c;
-    }
-    return { whmcs, direct, total: whmcs + direct };
-  }, [invoices, now]);
-
-  // Unpaid (outstanding) balance from WHMCS — not period-bound, it's the current
-  // sum of what's still owed on WHMCS invoices (Pending/Overdue/Partial).
+  // Unpaid (outstanding) balance from WHMCS — a stock, not a flow: the current
+  // sum still owed on WHMCS invoices, regardless of period.
   const whmcsUnpaid = useMemo(() => {
     let amount = 0, count = 0;
     for (const inv of invoices || []) {
@@ -184,10 +216,10 @@ const FinancesView: React.FC = () => {
     return { amount, count };
   }, [invoices]);
 
-  // Same split, but per month for the last 6 months (WHMCS income over time).
+  // ── Collections per month, split WHMCS vs direct (last 6 months) ──
   const incomeSourceByMonth = useMemo(() => {
     const inv = invoices || [];
-    const out: { label: string; whmcs: number; direct: number }[] = [];
+    const out: { label: string; whmcs: number; direct: number; total: number }[] = [];
     for (let i = 5; i >= 0; i--) {
       const w = monthWindow(now, -i);
       let whmcs = 0, direct = 0;
@@ -196,7 +228,7 @@ const FinancesView: React.FC = () => {
         if (c <= 0) continue;
         if ((x as any).source === 'whmcs') whmcs += c; else direct += c;
       }
-      out.push({ label: MONTH_LABELS_SQ[w.monthIndex], whmcs, direct });
+      out.push({ label: MONTH_LABELS_SQ[w.monthIndex], whmcs, direct, total: whmcs + direct });
     }
     return out;
   }, [invoices, now]);
@@ -237,7 +269,7 @@ const FinancesView: React.FC = () => {
     return { outstanding, overdueAmount, overdueCount };
   }, [invoices, now]);
 
-  // ── Per-client P&L (revenue billed − project cost) ──
+  // ── Per-client P&L (cash received − project cost) ──
   const clientPnl = useMemo(() => {
     const inv = invoices || [];
     const projs = projects || [];
@@ -313,12 +345,8 @@ const FinancesView: React.FC = () => {
   }, [invoices, customers, now]);
 
   // ── ONE period + ONE revenue basis for every P&L breakdown ──
-  // Previously the project card owned a hidden month/year/all toggle that also
-  // drove the department, trend and responsible cards, and the responsible card
-  // owned a SECOND, independent month dropdown. Both are now one control row,
-  // rendered above the panels it scopes. Dropping the responsible card's own
-  // `months: 1` override changes nothing: it only reads `revenue` and
-  // `responsibleUserId` off the rows, neither of which touches the salary pool.
+  // Rendered as one control row above the panels it scopes, never buried inside
+  // a card that silently governs the cards below it.
   const [period, setPeriod] = useState<Period>('year');
   const [revenueBasis, setRevenueBasis] = useState<'budget' | 'invoiced'>('budget');
 
@@ -420,7 +448,8 @@ const FinancesView: React.FC = () => {
       }),
       { revenue: 0, collected: 0, profit: 0 },
     );
-    return { rows, totals };
+    const max = Math.max(...rows.map(r => Math.max(r.revenue, r.collected)), 1);
+    return { rows, totals, max };
   }, [departmentPnl, collected]);
 
   // Monthly profit trend per department (last 6 months) — is Social growing or not?
@@ -428,32 +457,6 @@ const FinancesView: React.FC = () => {
     () => buildDepartmentProfitTrend(projects, teamMembers, expenses, now, 6, { revenueBasis, invoices }),
     [projects, teamMembers, expenses, invoices, revenueBasis, now],
   );
-
-  // Cap the trend at 4 named series and fold the tail into one "Të tjera" line.
-  // Past ~5 lines on a 6-point chart the hues stop separating and it reads as
-  // spaghetti — folding beats cycling the palette.
-  const deptTrendView = useMemo(() => {
-    const REST_KEY = 'Të tjera';
-    const shown = departmentTrend.departments.slice(0, 4);
-    const rest = departmentTrend.departments.slice(4);
-    const data = departmentTrend.data.map(row => {
-      const next: Record<string, number | string> = { label: row.label as string };
-      for (const d of shown) next[d] = Number(row[d] || 0);
-      if (rest.length) next[REST_KEY] = rest.reduce((s, d) => s + Number(row[d] || 0), 0);
-      return next;
-    });
-    const series = [
-      ...shown.map((d, i) => ({ key: d, color: SERIES[i], delta: departmentTrend.deltas[d]?.delta ?? 0 })),
-      ...(rest.length
-        ? [{
-            key: REST_KEY,
-            color: SERIES_REST,
-            delta: rest.reduce((s, d) => s + (departmentTrend.deltas[d]?.delta ?? 0), 0),
-          }]
-        : []),
-    ];
-    return { data, series, restCount: rest.length };
-  }, [departmentTrend]);
 
   const customerNameById = useMemo(
     () => new Map((customers || []).map(c => [c.id, c.name || 'Pa klient'])),
@@ -470,9 +473,8 @@ const FinancesView: React.FC = () => {
   }, [teamMembers]);
 
   // ── Revenue, cash and profit generated per project responsible ──
-  // Symmetric with the department panel: the same three measures on the same
-  // period and basis, so "who brought in what" reads the same either way you
-  // slice it. Keeps each responsible's per-project breakdown for the drill-down.
+  // Symmetric with the department panel: the same measures on the same period
+  // and basis, so "who brought in what" reads the same either way you slice it.
   const [expandedStaff, setExpandedStaff] = useState<string | null>(null);
   const staffRevenue = useMemo(() => {
     type StaffRow = {
@@ -545,37 +547,111 @@ const FinancesView: React.FC = () => {
     return rows;
   }, [trend, forecast]);
 
-  // ── Plain-language alarms ──
+  // ── Plain-language alarms, each tagged by kind ──
   const alarms = useMemo(() => {
-    const items: { text: string; tone: 'red' | 'amber' }[] = [];
+    const items: { tag: string; text: string; tone: 'red' | 'amber' }[] = [];
     if (receivables.overdueCount > 0) {
       items.push({
+        tag: 'Vonesë',
         tone: 'red',
         text: `${receivables.overdueCount} ${receivables.overdueCount === 1 ? 'faturë e vonuar' : 'fatura të vonuara'} = ${formatALL(receivables.overdueAmount)} pa mbledhur.`,
       });
     }
-    if (thisMonth.profit < 0) {
-      items.push({ tone: 'red', text: `Këtë muaj po humb para: ${formatALL(Math.abs(thisMonth.profit))}.` });
+    if (hero.profit < 0) {
+      items.push({
+        tag: 'Humbje',
+        tone: 'red',
+        text: `${hero.title}: po humb para, ${formatALL(Math.abs(hero.profit))}.`,
+      });
     }
-    const marginPct = thisMonth.collected > 0 ? (thisMonth.profit / thisMonth.collected) * 100 : 0;
-    if (thisMonth.profit >= 0 && thisMonth.collected > 0 && marginPct < 20) {
-      items.push({ tone: 'amber', text: `Marzhi këtë muaj është vetëm ${Math.round(marginPct)}% — nën 20%.` });
+    if (hero.profit >= 0 && hero.collected > 0 && hero.marginPct < 20) {
+      items.push({
+        tag: 'Marzh',
+        tone: 'amber',
+        text: `Marzhi i ${hero.title} është vetëm ${hero.marginPct}% — nën 20%.`,
+      });
     }
     if (recurringHealth.stuck.length > 0) {
       items.push({
+        tag: 'Recurring',
         tone: 'red',
         text: `${recurringHealth.stuck.length} ${recurringHealth.stuck.length === 1 ? 'faturë recurring nuk u gjenerua' : 'fatura recurring nuk u gjeneruan'} — automatizimi ngeci.`,
       });
     }
+    if (recurringHealth.misconfigured.length > 0) {
+      items.push({
+        tag: 'Config',
+        tone: 'amber',
+        text: `${recurringHealth.misconfigured.length} faturë recurring e konfiguruar keq — s'do gjenerohet kurrë.`,
+      });
+    }
     for (const l of clientPnl.losers) {
-      items.push({ tone: 'amber', text: `Klienti "${l.name}" po humb para: ${formatALL(l.margin)} marzh.` });
+      items.push({
+        tag: 'Marzh',
+        tone: 'amber',
+        text: `Klienti "${l.name}" po humb para: ${formatALL(l.margin)} marzh.`,
+      });
     }
     return items;
-  }, [receivables, thisMonth, clientPnl, recurringHealth]);
+  }, [receivables, hero, clientPnl, recurringHealth]);
 
-  // Badge on the "Rrjedha & rreziqe" tab — that tab holds everything broken.
-  const riskCount = alarms.length + cashflow.alarms.length
-    + recurringHealth.stuck.length + recurringHealth.misconfigured.length;
+  // Badge on the "Rreziqet" tab — that tab holds everything broken.
+  const riskCount = alarms.length + cashflow.alarms.length;
+
+  // One-line summary above the alarm list, so the card is readable folded.
+  const alarmSummary = useMemo(() => {
+    const bits: string[] = [];
+    if (receivables.overdueCount > 0) {
+      bits.push(`${receivables.overdueCount} fatura të vonuara (${formatALL(receivables.overdueAmount)})`);
+    }
+    if (recurringHealth.stuck.length > 0) bits.push(`${recurringHealth.stuck.length} recurring ngeci`);
+    if (clientPnl.losers.length > 0) bits.push(`${clientPnl.losers.length} klientë në humbje`);
+    if (cashflow.gap < 0) bits.push(`mungesë mujore ${formatALL(Math.abs(cashflow.gap))}`);
+    return bits.join(' · ');
+  }, [receivables, recurringHealth, clientPnl, cashflow]);
+
+  // ── CSV export of exactly what is on screen ──
+  const exportCsv = useCallback(() => {
+    const rows: (string | number)[][] = [
+      ['Financat', hero.title, hero.closed ? 'muaj i mbyllur' : 'deri sot'],
+      [],
+      ['Para që hyri (arkëtuar)', Math.round(hero.collected)],
+      ['Rrogat', -Math.round(hero.salary)],
+      ['Shpenzime të tjera', -Math.round(hero.otherExpenses)],
+      ['Fitimi neto', Math.round(hero.profit)],
+      ['Marzhi %', hero.marginPct],
+      ['Të pambledhura', Math.round(receivables.outstanding)],
+      ['Të vonuara', Math.round(receivables.overdueAmount), `${receivables.overdueCount} fatura`],
+      [],
+      [`Departamenti (${periodLabel})`, 'Të ardhura', 'Arkëtuar', 'Fitimi', 'Marzhi %'],
+      ...departmentRows.rows.map(d => [
+        d.department, Math.round(d.revenue), Math.round(d.collected), Math.round(d.profit),
+        d.margin == null ? '' : Math.round(d.margin * 100),
+      ]),
+      ['Gjithsej', Math.round(departmentRows.totals.revenue), Math.round(departmentRows.totals.collected), Math.round(departmentRows.totals.profit), ''],
+      [],
+      ['Përgjegjësi', 'Të ardhura', 'Arkëtuar', 'Fitimi'],
+      ...staffRevenue.rows.map(r => [r.name, Math.round(r.revenue), Math.round(r.collected), Math.round(r.profit)]),
+      [],
+      ['Klienti', 'Të ardhura', 'Kosto', 'Marzhi'],
+      ...[...clientPnl.winners, ...clientPnl.losers].map(c => [
+        c.name, Math.round(c.revenue), Math.round(c.cost), Math.round(c.margin),
+      ]),
+    ];
+    const csv = rows
+      .map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','))
+      .join('\r\n');
+    // BOM so Excel opens Albanian diacritics correctly.
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `financat-${hero.title.toLowerCase().replace(/\s+/g, '-')}.csv`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }, [hero, receivables, departmentRows, staffRevenue, clientPnl, periodLabel]);
 
   if (!allowed) {
     return (
@@ -587,810 +663,1018 @@ const FinancesView: React.FC = () => {
 
   if (lInv || lExp) return <FinancesSkeleton />;
 
-  const profitPositive = thisMonth.profit >= 0;
-  const monthLabel = `${MONTH_NAMES_FULL[now.getMonth()]} ${now.getFullYear()}`;
-
-  /** The one control row. Rendered inside the tab whose panels it scopes. */
-  const filterRow = (
-    <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-xl border border-border bg-card px-3 py-2.5">
-      <div className="flex items-center gap-2">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Periudha</span>
-        <Segmented
-          value={isPickedMonth(period) ? '' : period}
-          onChange={setPeriod}
-          options={[['month', 'Ky muaj'], ['year', 'Viti'], ['all', 'Gjithë']] as const}
-        />
-        <select
-          value={isPickedMonth(period) ? period : ''}
-          onChange={(e) => { if (e.target.value) setPeriod(e.target.value); }}
-          aria-label="Zgjidh një muaj të caktuar"
-          className={cn(
-            'h-7 rounded-md border px-2 text-xs focus:outline-none focus:ring-2 focus:ring-ring',
-            isPickedMonth(period)
-              ? 'border-primary bg-accent font-medium text-accent-foreground'
-              : 'border-input bg-background text-muted-foreground',
-          )}
-        >
-          <option value="">Muaj i caktuar…</option>
-          {monthOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-      </div>
-      <div className="flex items-center gap-2">
-        <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Të ardhurat</span>
-        <Segmented
-          value={revenueBasis}
-          onChange={setRevenueBasis}
-          options={[['budget', 'Buxhet'], ['invoiced', 'Paguar']] as const}
-        />
-      </div>
-      <p className="ml-auto text-[11px] text-muted-foreground">
-        {periodLabel} · {revenueBasis === 'invoiced' ? 'vetëm faturat e paguara' : 'buxheti i projekteve'}
-      </p>
-    </div>
-  );
+  const deltaPositive = hero.delta >= 0;
+  const prevMonthName = MONTH_NAMES_FULL[snapshots.prev.monthIndex];
+  const curMonthName = MONTH_NAMES_FULL[snapshots.cur.monthIndex];
 
   return (
-    <div className="mx-auto max-w-6xl px-4 pb-10 sm:px-6">
-      {/* Sticky page identity — the month never scrolls out of sight */}
-      <header className="sticky top-0 z-20 -mx-4 mb-4 border-b border-border bg-background/85 px-4 py-3 backdrop-blur sm:-mx-6 sm:px-6">
-        <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-          <h1 className="text-xl font-bold text-foreground sm:text-2xl">Financat</h1>
-          <p className="text-xs text-muted-foreground">{monthLabel} · a po fiton para, ku dhe pse</p>
+    /* The app shell already owns the ground colour and the page padding
+       (`p-3 sm:p-6 lg:p-8` in App.tsx) — repeating either here would paint an
+       inset panel of a near-identical grey with a visible seam. */
+    <div className="pb-6">
+      <div className="mx-auto max-w-[1140px]">
+
+        {/* ── Header ── */}
+        <div className="flex flex-wrap items-center justify-between gap-4">
+          <div className="flex items-center gap-3.5">
+            <div
+              className="flex h-10 w-10 items-center justify-center rounded-xl text-white shadow-[0_4px_12px_rgba(8,24,58,.25)]"
+              style={{ background: `linear-gradient(135deg, #0c2456, ${NAVY})` }}
+            >
+              <Landmark className="h-[18px] w-[18px]" />
+            </div>
+            <h1 className={cn('text-[18px] font-extrabold tracking-[-0.01em]', INK_NAVY)}>Financat</h1>
+          </div>
+
+          <div className="flex items-center gap-2.5">
+            {/* Which month the hero reads. Auto picks the closed month before the 15th. */}
+            <Segmented
+              value={usePrev ? 'prev' : 'cur'}
+              onChange={setMonthMode}
+              options={[
+                ['prev', `${prevMonthName} (i mbyllur)`],
+                ['cur', `${curMonthName} · deri sot`],
+              ] as const}
+            />
+            <button
+              type="button"
+              onClick={exportCsv}
+              className="inline-flex items-center gap-2 rounded-xl bg-[#2f6fe0] px-4 py-2.5 text-[13px] font-bold text-white shadow-[0_4px_12px_rgba(47,111,224,.3)] transition-all hover:-translate-y-px hover:bg-[#2258bb] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2f6fe0] focus-visible:ring-offset-2"
+            >
+              <Download className="h-4 w-4" />
+              Eksporto
+            </button>
+          </div>
         </div>
-      </header>
 
-      {/* Urgency first. This used to be the very last card on a ~4000px page. */}
-      {alarms.length > 0 && <AlarmStrip alarms={alarms} onSeeAll={() => setTab('risk')} />}
+        {/* ── Hero + KPI band ── */}
+        {/* Tablet gets hero-full-width + a 2×2 KPI block; desktop puts the KPIs
+            in two columns beside the hero, which then spans both rows. */}
+        <div className="mt-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-[1.15fr_1fr_1fr]">
 
-      {/* ── The one hero figure, with its own derivation beside it ── */}
-      <Card className="mt-4 overflow-hidden">
-        <div className="grid lg:grid-cols-[1.05fr_1fr]">
-          <div className="p-5 sm:p-6">
-            <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
-              Fitimi neto · {monthLabel}
-            </p>
+          {/* The one hero figure, carrying its own derivation. */}
+          <div
+            className="flex flex-col rounded-[20px] p-6 text-white shadow-[0_12px_32px_rgba(8,24,58,.28)] sm:col-span-2 sm:p-7 lg:col-span-1 lg:row-span-2"
+            style={{ background: `linear-gradient(150deg, ${NAVY_MID} 0%, ${NAVY} 65%)` }}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[11px] font-bold uppercase tracking-[.12em] text-[#93a9d1]">
+                Fitimi neto
+              </span>
+              <span className="shrink-0 rounded-full bg-white/[.08] px-3 py-1 text-[11.5px] font-bold text-[#93a9d1]">
+                {hero.title}
+              </span>
+            </div>
+
             {/* Proportional figures on purpose: tabular-nums makes a number this
                 large read loose, since every digit gets the width of a "0". */}
-            <p className={cn(
-              'mt-2 break-words text-[40px] font-bold leading-none sm:text-5xl',
-              profitPositive ? INK_POS : INK_NEG,
-            )}>
-              {formatALL(thisMonth.profit)}
+            <p className="mt-4 break-words text-[38px] font-extrabold leading-none tracking-[-0.02em] sm:text-[44px]">
+              {formatALL(hero.profit)}
             </p>
-            <div className={cn(
-              'mt-3 inline-flex items-center gap-1.5 rounded-lg px-2.5 py-1.5 text-xs font-medium',
-              profitDelta >= 0 ? 'bg-emerald-500/10 text-emerald-700' : 'bg-red-500/10 text-red-600',
-            )}>
-              {profitDelta >= 0 ? <TrendingUp className="h-3.5 w-3.5" /> : <TrendingDown className="h-3.5 w-3.5" />}
-              {profitDelta >= 0 ? '+' : ''}{formatALL(profitDelta)}
-              <span className="font-normal opacity-80">vs e njëjta datë muajin e kaluar</span>
-            </div>
-            <p className="mt-3 max-w-sm text-xs leading-relaxed text-muted-foreground">
-              {profitPositive
-                ? 'Kaq para të kanë mbetur këtë muaj pasi zbrite rrogat dhe shpenzimet nga paraja që hyri.'
-                : 'Këtë muaj shpenzimet dhe rrogat kaluan paranë që hyri — je në humbje.'}
-            </p>
-          </div>
 
-          {/* Money in − money out. Merged into the hero so the headline is never
-              unexplained — and one whole card left the page. */}
-          <div className="border-t border-border bg-muted/25 p-5 lg:border-l lg:border-t-0">
-            <p className="mb-3 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
-              Nga del ky numër
-            </p>
-            <div className="space-y-2">
-              <BreakdownRow
-                icon={<ArrowUpRight className="h-3.5 w-3.5 text-emerald-700" />}
-                label="Para që hyri (arkëtuar)"
-                hint="Fatura që klientët i paguan realisht"
-                amount={thisMonth.collected}
-                positive
-              />
-              <BreakdownRow
-                icon={<ArrowDownRight className="h-3.5 w-3.5 text-red-600" />}
-                label="− Rrogat"
-                hint="Ekipi aktiv, pjesa deri sot"
-                amount={-thisMonth.salary}
-              />
-              <BreakdownRow
-                icon={<ArrowDownRight className="h-3.5 w-3.5 text-red-600" />}
-                label="− Shpenzime të tjera"
-                hint="Qira, softuer, marketing…"
-                amount={-thisMonth.otherExpenses}
-              />
-              <div className="border-t border-border pt-2">
-                <BreakdownRow
-                  icon={profitPositive
-                    ? <TrendingUp className="h-3.5 w-3.5 text-emerald-700" />
-                    : <TrendingDown className="h-3.5 w-3.5 text-red-600" />}
-                  label="= Fitimi neto"
-                  hint="Çfarë të mbeti"
-                  amount={thisMonth.profit}
-                  bold
-                  positive={profitPositive}
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-      </Card>
-
-      {/* ── Supporting stat tiles ── */}
-      <div className="mt-3 grid grid-cols-1 gap-3 sm:grid-cols-3">
-        <StatTile
-          icon={forecast.predictedProfit >= 0
-            ? <TrendingUp className="h-4 w-4 text-sky-700" />
-            : <TrendingDown className="h-4 w-4 text-red-600" />}
-          label={`Parashikim · ${MONTH_NAMES_FULL[forecast.monthIndex]}`}
-          value={forecast.predictedProfit}
-          tone={forecast.predictedProfit >= 0 ? 'sky' : 'neg'}
-          delta={{ value: forecast.predictedProfit - lastMonth.profit, label: 'vs muaji i shkuar' }}
-        />
-        <StatTile
-          icon={<Wallet className="h-4 w-4 text-sky-700" />}
-          label="Të pambledhura"
-          value={receivables.outstanding}
-          hint="Para që klientët të kanë borxh."
-        />
-        <StatTile
-          icon={<Clock className={cn('h-4 w-4', receivables.overdueCount > 0 ? 'text-red-600' : 'text-muted-foreground')} />}
-          label="Të vonuara"
-          value={receivables.overdueAmount}
-          tone={receivables.overdueCount > 0 ? 'neg' : 'default'}
-          danger={receivables.overdueCount > 0}
-          hint={receivables.overdueCount > 0
-            ? `${receivables.overdueCount} fatura kaluan afatin — ndiqi për pagesë.`
-            : 'Asnjë faturë e vonuar. 👍'}
-        />
-      </div>
-
-      {/* ── Four questions, four tabs — instead of one endless scroll ── */}
-      <Tabs value={tab} onValueChange={setTab} className="mt-5">
-        <TabsList className="h-auto w-full justify-start gap-1 p-1 sm:w-auto">
-          <TabsTrigger value="overview" className="text-xs sm:text-sm">Përmbledhje</TabsTrigger>
-          <TabsTrigger value="profit" className="text-xs sm:text-sm">Fitimi</TabsTrigger>
-          <TabsTrigger value="clients" className="text-xs sm:text-sm">Klientët</TabsTrigger>
-          <TabsTrigger value="risk" className="gap-1.5 text-xs sm:text-sm">
-            Rrjedha & rreziqe
-            {riskCount > 0 && (
-              <span className="rounded-full bg-red-500/15 px-1.5 py-px text-[10px] font-semibold tabular-nums text-red-600">
-                {riskCount}
+            <div
+              className={cn(
+                'mt-3.5 inline-flex max-w-full items-center gap-1.5 self-start rounded-full px-3 py-1.5 text-[12.5px] font-bold',
+                deltaPositive ? 'bg-[#3ac48c]/[.16] text-[#5fd8a8]' : 'bg-[#e67070]/[.16] text-[#ef9f9f]',
+              )}
+            >
+              {deltaPositive
+                ? <TrendingUp className="h-3.5 w-3.5 shrink-0" />
+                : <TrendingDown className="h-3.5 w-3.5 shrink-0" />}
+              <span className="whitespace-nowrap">
+                {deltaPositive ? '+' : '−'}{formatALL(Math.abs(hero.delta))}
               </span>
-            )}
-          </TabsTrigger>
-        </TabsList>
+              <span className="min-w-0 truncate font-semibold opacity-70">vs {hero.deltaVs}</span>
+            </div>
 
-        {/* ── TAB 1 · Overview — the history, its projection, and where cash comes from ── */}
-        <TabsContent value="overview" className="mt-4 space-y-4">
-          <Panel
-            title="Trendi i fitimit dhe parashikimi"
-            icon={<TrendingUp className="h-4 w-4 text-sky-700" />}
-            hint="6 muajt e fundit + muaji i ardhshëm. Muaji aktual është deri sot."
-          >
-            {/* Two series → a legend is mandatory; identity never rests on color alone. */}
-            <ChartLegend items={[
-              { label: 'Realizuar', color: SERIES[0] },
-              { label: 'Parashikim', color: SERIES[0], dashed: true },
-            ]} />
-            <ResponsiveContainer width="100%" height={230}>
-              <LineChart data={trendWithForecast} margin={{ top: 12, right: 16, left: 0, bottom: 4 }}>
-                <CartesianGrid stroke={GRID_INK} vertical={false} />
-                <XAxis dataKey="label" tick={{ fontSize: 11, fill: AXIS_INK }} axisLine={{ stroke: GRID_INK }} tickLine={false} />
-                <YAxis tick={{ fontSize: 11, fill: AXIS_INK }} width={46} axisLine={false} tickLine={false} tickFormatter={compactALL} />
-                {/* A profit chart crosses zero — say where zero is. */}
-                <ReferenceLine y={0} stroke={AXIS_INK} strokeWidth={1} />
-                <Tooltip content={<ChartTip />} />
-                <Line
-                  name="Realizuar" type="monotone" dataKey="profit"
-                  stroke={SERIES[0]} strokeWidth={2} strokeLinecap="round"
-                  dot={{ r: 4, fill: SERIES[0], stroke: '#FFFFFF', strokeWidth: 2 }}
-                  activeDot={{ r: 6, stroke: '#FFFFFF', strokeWidth: 2 }}
-                  connectNulls={false}
-                />
-                <Line
-                  name="Parashikim" type="monotone" dataKey="forecast"
-                  stroke={SERIES[0]} strokeWidth={2} strokeDasharray="5 4" strokeLinecap="round"
-                  dot={{ r: 4, fill: '#FFFFFF', stroke: SERIES[0], strokeWidth: 2 }}
-                  activeDot={{ r: 6, stroke: '#FFFFFF', strokeWidth: 2 }}
-                  connectNulls={false}
-                />
-              </LineChart>
-            </ResponsiveContainer>
-            <Explain label="Si ndërtohet parashikimi">
-              <p>
-                Të ardhura {formatALL(forecast.predictedRevenue)} (mujore {formatALL(forecast.recurringRevenue)}
-                {forecast.newProjectRevenue > 0 ? ` + projekte të reja ${formatALL(forecast.newProjectRevenue)}` : ''})
-                {' '}− rroga {formatALL(forecast.predictedSalary)} − shpenzime {formatALL(forecast.predictedOtherExpenses)}.
-              </p>
-              <p>
-                Të ardhurat vijnë nga projektet mujore që përsëriten plus projektet një-herëshe që
-                fillojnë atë muaj. Shpenzimet: mesatarja e {forecast.basisMonths} muajve.
-              </p>
-              <p>Nëse vija bie vazhdimisht, diçka po të ha marzhin.</p>
-            </Explain>
-          </Panel>
+            <div className="mt-auto flex flex-col gap-2.5 pt-6">
+              <HeroRow label="Para që hyri (arkëtuar)" amount={hero.collected} tone="pos" />
+              <HeroRow label="− Rrogat" amount={-hero.salary} tone="neg" rule />
+              <HeroRow label="− Shpenzime të tjera" amount={-hero.otherExpenses} tone="neg" rule />
+              <HeroRow label="= Fitimi neto" amount={hero.profit} tone="total" rule strong />
+            </div>
+          </div>
 
-          <Panel
-            title="Të ardhurat sipas burimit"
-            icon={<Server className="h-4 w-4 text-sky-700" />}
-            hint={`Arkëtimet e ${monthLabel}, ndarë sipas origjinës.`}
-          >
-            <div className="grid gap-5 lg:grid-cols-[minmax(0,270px)_1fr]">
-              <div className="space-y-2.5">
-                <SourceRow
-                  color={SERIES[0]}
-                  icon={<Server className="h-3.5 w-3.5 shrink-0" style={{ color: SERIES[0] }} />}
-                  label="WHMCS"
-                  amount={incomeBySource.whmcs}
-                  total={incomeBySource.total}
-                />
-                <SourceRow
-                  color={SERIES[1]}
-                  icon={<Building2 className="h-3.5 w-3.5 shrink-0" style={{ color: SERIES[1] }} />}
-                  label="Direkt (FivoCRM)"
-                  amount={incomeBySource.direct}
-                  total={incomeBySource.total}
-                />
-                <div className="flex items-baseline justify-between gap-2 border-t border-border pt-2">
-                  <span className="text-xs font-semibold text-foreground">Gjithsej arkëtuar</span>
-                  <span className="text-sm font-bold text-foreground">{formatALL(incomeBySource.total)}</span>
-                </div>
+          <KpiCard
+            icon={<TrendingUp className="h-4 w-4" />}
+            iconBg="#e3ecfb"
+            iconInk="#2258bb"
+            label={`Parashikim · ${MONTH_NAMES_FULL[forecast.monthIndex]}`}
+            value={formatALL(forecast.predictedProfit)}
+            sub="faturat mujore + projektet"
+          />
+          <KpiCard
+            icon={<Percent className="h-4 w-4" />}
+            iconBg="#e7f6ef"
+            iconInk={GREEN}
+            label="Marzhi i fitimit"
+            value={`${hero.marginPct}%`}
+            sub="mbi paranë e arkëtuar"
+          />
+          <KpiCard
+            icon={<Wallet className="h-4 w-4" />}
+            iconBg="#fdf6e8"
+            iconInk="#9a6b0a"
+            label="Të pambledhura"
+            value={formatALL(receivables.outstanding)}
+            sub="para që klientët të kanë borxh"
+          />
+          <KpiCard
+            icon={<Clock className="h-4 w-4" />}
+            iconBg="#fdece9"
+            iconInk={RED}
+            label="Të vonuara"
+            value={formatALL(receivables.overdueAmount)}
+            sub={receivables.overdueCount > 0
+              ? `${receivables.overdueCount} fatura kaluan afatin — ndiqi`
+              : 'asnjë faturë e vonuar'}
+            danger={receivables.overdueCount > 0}
+          />
+        </div>
 
-                {/* Unpaid WHMCS balance — a stock, not a flow, so it is visually
-                    separated from the collected split above it. */}
-                <div className="flex items-center justify-between gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2">
-                  <div className="flex min-w-0 items-center gap-2">
-                    <Clock className="h-3.5 w-3.5 shrink-0 text-amber-600" />
-                    <div className="min-w-0">
-                      <p className="text-xs font-medium text-foreground">Pa paguar nga WHMCS</p>
-                      <p className="text-[10px] text-muted-foreground">
-                        {whmcsUnpaid.count} fatura ende të papaguara
-                      </p>
-                    </div>
-                  </div>
-                  <p className={cn('shrink-0 text-sm font-bold tabular-nums', INK_WARN)}>
-                    {formatALL(whmcsUnpaid.amount)}
+        {/* ── Four questions, four tabs ── */}
+        <Tabs value={tab} onValueChange={setTab} className="mt-6">
+          <TabsList className="h-auto w-full justify-start gap-1 overflow-x-auto rounded-[14px] bg-[#e6ebf3] p-1 sm:w-fit">
+            <PillTab value="overview">Përmbledhje</PillTab>
+            <PillTab value="profit">Fitimi</PillTab>
+            <PillTab value="clients">Klientët</PillTab>
+            <PillTab value="risk" badge={riskCount}>Rreziqet</PillTab>
+          </TabsList>
+
+          {/* ── TAB 1 · Overview — the history, its projection, and the cash mix ── */}
+          <TabsContent value="overview" className="mt-4 space-y-4">
+            <section className={cn(CARD, 'px-5 py-6 sm:px-7')}>
+              <div className="flex flex-wrap items-baseline justify-between gap-3">
+                <div>
+                  <h2 className={cn('text-base font-extrabold', INK_NAVY)}>Trendi i fitimit</h2>
+                  <p className={cn('mt-0.5 text-[12.5px]', INK_MUTED)}>
+                    6 muajt e fundit + parashikimi i muajit në vazhdim.
                   </p>
                 </div>
-              </div>
-
-              <div>
+                {/* Two series → a legend is mandatory; identity never rests on color alone. */}
                 <ChartLegend items={[
-                  { label: 'WHMCS', color: SERIES[0] },
-                  { label: 'Direkt', color: SERIES[1] },
+                  { label: 'Realizuar', color: BLUE },
+                  { label: 'Parashikim', color: NAVY, dashed: true },
                 ]} />
-                {/* Grouped, not stacked: the question is "which is bigger", and
-                    adjacent bars get the 2px surface gap natively via barGap. */}
-                <ResponsiveContainer width="100%" height={190}>
-                  <BarChart data={incomeSourceByMonth} margin={{ top: 8, right: 8, left: 0, bottom: 4 }} barGap={2}>
-                    <CartesianGrid stroke={GRID_INK} vertical={false} />
-                    <XAxis dataKey="label" tick={{ fontSize: 11, fill: AXIS_INK }} axisLine={{ stroke: GRID_INK }} tickLine={false} />
-                    <YAxis tick={{ fontSize: 11, fill: AXIS_INK }} width={46} axisLine={false} tickLine={false} tickFormatter={compactALL} />
-                    <Tooltip content={<ChartTip />} cursor={{ fill: 'rgba(12,27,51,0.04)' }} />
-                    <Bar name="WHMCS" dataKey="whmcs" fill={SERIES[0]} radius={[4, 4, 0, 0]} maxBarSize={18} />
-                    <Bar name="Direkt" dataKey="direct" fill={SERIES[1]} radius={[4, 4, 0, 0]} maxBarSize={18} />
-                  </BarChart>
-                </ResponsiveContainer>
               </div>
-            </div>
 
-            {/* The chart's table-view twin — every value readable without hover. */}
-            <Disclosure label="Shfaq tabelën (6 muajt e fundit)" icon={<Table2 className="h-3 w-3" />}>
-              <div className="overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b border-border text-[11px] text-muted-foreground">
-                      <th className="px-1 py-1.5 text-left font-medium">Muaji</th>
-                      <th className="px-1 py-1.5 text-right font-medium">WHMCS</th>
-                      <th className="px-1 py-1.5 text-right font-medium">Direkt</th>
-                      <th className="px-1 py-1.5 text-right font-medium">Gjithsej</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {incomeSourceByMonth.map((m, i) => (
-                      <tr key={i} className="border-b border-border/50 last:border-0">
-                        <td className="px-1 py-1.5 text-muted-foreground">{m.label}</td>
-                        <td className="px-1 py-1.5 text-right font-medium tabular-nums text-foreground">{formatALL(m.whmcs)}</td>
-                        <td className="px-1 py-1.5 text-right tabular-nums text-muted-foreground">{formatALL(m.direct)}</td>
-                        <td className="px-1 py-1.5 text-right font-semibold tabular-nums text-foreground">{formatALL(m.whmcs + m.direct)}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </Disclosure>
-          </Panel>
-        </TabsContent>
-
-        {/* ── TAB 2 · Profit by dimension — every panel scoped by the one filter row ── */}
-        <TabsContent value="profit" className="mt-4 space-y-4">
-          {filterRow}
-
-          <Panel
-            title="Fitimi sipas projekti"
-            icon={<Briefcase className="h-4 w-4 text-sky-700" />}
-            hint="Të ardhurat − kostot direkte − pjesa e kostove fikse, e ndarë sipas peshës së të ardhurave."
-          >
-            {/* Data-quality guards. Without these the numbers look authoritative
-                while quietly excluding revenue: an invoice with no projectId is
-                dropped from the 'Paguar' (collected) basis, yet the FULL overhead pool is
-                still allocated — so unlinked invoices read as pure loss. */}
-            {projectPnl.unlinkedInvoices.count > 0 && (
-              <Notice tone={revenueBasis === 'invoiced' ? 'warning' : 'neutral'}>
-                <strong>{projectPnl.unlinkedInvoices.count} faturë</strong> pa projekt të lidhur
-                (<strong>{formatALL(projectPnl.unlinkedInvoices.amount)}</strong>).
-                {revenueBasis === 'invoiced'
-                  ? ' Kjo vlerë NUK numërohet si e ardhur më poshtë, ndërsa kostot fikse ndahen plotësisht — ndaj fitimi duket më i vogël se realiteti.'
-                  : ' Nuk prek llogaritjen mbi bazën "Buxhet", por do të mungojë nëse kalon te "Paguar".'}
-                {' '}
-                <button
-                  onClick={() => navigate('/app/invoices?project=none')}
-                  className="font-medium underline hover:no-underline"
-                >
-                  Lidhi me projektet
-                </button>
-              </Notice>
-            )}
-            {projectPnl.missingBudget.count > 0 && (
-              <Notice tone="warning">
-                <strong>{projectPnl.missingBudget.count} projekt</strong> me të ardhura 0 thithin
-                overhead pa sjellë asnjë të ardhur —{' '}
-                {projectPnl.revenueBasis === 'invoiced'
-                  ? 'nuk kanë faturë të lidhur në këtë periudhë.'
-                  : 'nuk kanë buxhet të caktuar.'}
-                {' '}({projectPnl.missingBudget.names.slice(0, 4).join(', ')}
-                {projectPnl.missingBudget.names.length > 4 ? `, +${projectPnl.missingBudget.names.length - 4}` : ''})
-              </Notice>
-            )}
-
-            <ProjectPnlBlock pnl={projectPnl} customerNameById={customerNameById} />
-
-            <Explain>
-              <p>
-                "Fikse" = pjesa e rrogave dhe shpenzimeve të përgjithshme që i takon këtij projekti.
-                Kostot variabile shtoji si Shpenzim i lidhur me projektin te faqja Shpenzimet.
-              </p>
-              <p>
-                Ky panel është i ndryshëm nga tabi "Klientët" — atje baza është faturë reale − kosto
-                e projektit; këtu është buxhet/faturuar − overhead i alokuar.
-              </p>
-            </Explain>
-          </Panel>
-
-          <Panel
-            title="Të ardhurat dhe fitimi sipas departamentit"
-            icon={<Layers className="h-4 w-4 text-sky-700" />}
-            hint="Sa sjell dhe sa fiton realisht nga Social, SEO, Web… Kliko një departament për projektet dhe stafin."
-          >
-            <MeasureTotals totals={departmentRows.totals} />
-            {collected.unlinked.amount > 0 && (
-              <Notice tone="neutral">
-                <strong>{formatALL(collected.unlinked.amount)}</strong> arkëtuar nga{' '}
-                <strong>{collected.unlinked.count}</strong> faturë pa projekt të lidhur — nuk i takon
-                asnjë departamenti apo personi më poshtë, ndaj kolona "Arkëtuar" nuk arrin totalin e
-                faqes.{' '}
-                {/* A distinct label from the project-P&L notice above: both lead
-                    to the same list, but two controls reading "Lidhi me
-                    projektet" in one tab is ambiguous for screen readers. */}
-                <button
-                  onClick={() => navigate('/app/invoices?project=none')}
-                  className="font-medium underline hover:no-underline"
-                >
-                  Shiko faturat pa projekt
-                </button>
-              </Notice>
-            )}
-            {departmentRows.rows.length === 0 ? (
-              <EmptyState text='Ende pa projekte me departament. Cakto "Departamentin" te projektet për ta parë këtë ndarje.' />
-            ) : (
-              <ul className="space-y-1.5">
-                {departmentRows.rows.map(d => {
-                  // The meter compares REVENUE across departments, matching the
-                  // measure the panel now leads with.
-                  const max = Math.max(...departmentRows.rows.map(r => Math.max(r.revenue, r.collected)), 1);
-                  const pct = Math.round((Math.max(d.revenue, d.collected) / max) * 100);
-                  const open = expandedDept === d.department;
-                  return (
-                    <li key={d.department} className="rounded-lg border border-border">
-                      <button
-                        type="button"
-                        onClick={() => setExpandedDept(open ? null : d.department)}
-                        className="w-full rounded-lg p-2.5 text-left transition-colors hover:bg-muted/40"
-                        aria-expanded={open}
-                      >
-                        <div className="mb-1.5 flex items-center gap-1">
-                          <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
-                          <span className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                            {d.department}
-                            <span className="ml-1 text-xs font-normal text-muted-foreground">
-                              · {d.projects.length} {d.projects.length === 1 ? 'projekt' : 'projekte'}
-                            </span>
-                          </span>
-                        </div>
-                        <MeasureRow revenue={d.revenue} collected={d.collected} profit={d.profit} margin={d.margin} />
-                        <div className="mt-1.5">
-                          <Meter pct={pct} tone="neutral" />
-                        </div>
-                        <div className="mt-1.5 flex flex-wrap gap-x-3 gap-y-0.5 text-[11px] text-muted-foreground">
-                          <span>Staf {formatALL(d.labor)}</span>
-                          <span>· Shpenzime {formatALL(d.directCost)}</span>
-                          <span>· Overhead {formatALL(d.overhead)}</span>
-                        </div>
-                      </button>
-                      {open && (
-                        <div className="space-y-2 border-t border-border/60 px-3 pb-2.5 pt-1">
-                          {d.projects.map(p => (
-                            <div key={p.id} className="pt-1.5">
-                              <div className="flex items-center justify-between gap-2 text-xs">
-                                <span className="min-w-0 flex-1 truncate text-foreground">{p.name}</span>
-                                <span className={cn('shrink-0 tabular-nums', p.profit >= 0 ? INK_POS : INK_NEG)}>
-                                  {formatALL(p.profit)}
-                                </span>
-                              </div>
-                              <div className="text-[10px] text-muted-foreground">
-                                Të ardhura {formatALL(p.revenue)} − staf {formatALL(p.labor)} − shpenzime {formatALL(p.directCost)} − overhead {formatALL(p.overhead)}
-                              </div>
-                              {p.participants.length > 0 && (
-                                <div className="mt-1 flex flex-wrap gap-1">
-                                  {p.participants.map(pt => (
-                                    <span key={pt.userId} className="rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                                      {pt.name}: {formatALL(pt.cost)}
-                                    </span>
-                                  ))}
-                                </div>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-            {departmentPnl.unallocatedLabor.total > 0 && (
-              <p className={cn('mt-2 text-[11px]', INK_WARN)}>
-                {formatALL(departmentPnl.unallocatedLabor.total)} rroga të stafit që s'punoi në asnjë
-                projekt këtë periudhë (kosto e paalokuar te departamentet).
-              </p>
-            )}
-          </Panel>
-
-          {deptTrendView.series.length > 0 && (
-            <Panel
-              title="Trendi sipas departamentit"
-              icon={<TrendingUp className="h-4 w-4 text-sky-700" />}
-              hint="6 muajt e fundit — a po rritet apo po bie secili departament. (Muaji aktual është deri sot.)"
-            >
-              <ResponsiveContainer width="100%" height={230}>
-                <LineChart data={deptTrendView.data} margin={{ top: 12, right: 16, left: 0, bottom: 4 }}>
+              <ResponsiveContainer width="100%" height={244}>
+                <ComposedChart data={trendWithForecast} margin={{ top: 24, right: 16, left: 0, bottom: 4 }}>
+                  <defs>
+                    <linearGradient id="finArea" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={BLUE} stopOpacity={0.16} />
+                      <stop offset="100%" stopColor={BLUE} stopOpacity={0} />
+                    </linearGradient>
+                  </defs>
                   <CartesianGrid stroke={GRID_INK} vertical={false} />
-                  <XAxis dataKey="label" tick={{ fontSize: 11, fill: AXIS_INK }} axisLine={{ stroke: GRID_INK }} tickLine={false} />
-                  <YAxis tick={{ fontSize: 11, fill: AXIS_INK }} width={46} axisLine={false} tickLine={false} tickFormatter={compactALL} />
-                  <ReferenceLine y={0} stroke={AXIS_INK} strokeWidth={1} />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fontSize: 11, fill: AXIS_INK, fontWeight: 700 }}
+                    axisLine={{ stroke: '#d7dfeb' }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 10, fill: AXIS_INK }}
+                    width={46}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={compactALL}
+                  />
+                  {/* A profit chart crosses zero — say where zero is. */}
+                  <ReferenceLine y={0} stroke="#d7dfeb" strokeWidth={1.5} />
                   <Tooltip content={<ChartTip />} />
-                  {deptTrendView.series.map(s => (
-                    <Line
-                      key={s.key} name={s.key} type="monotone" dataKey={s.key}
-                      stroke={s.color} strokeWidth={2} strokeLinecap="round"
-                      dot={{ r: 3, fill: s.color, stroke: '#FFFFFF', strokeWidth: 2 }}
-                      activeDot={{ r: 6, stroke: '#FFFFFF', strokeWidth: 2 }}
+                  <Area
+                    name="Realizuar" type="monotone" dataKey="profit"
+                    stroke={BLUE} strokeWidth={2.5} fill="url(#finArea)"
+                    dot={{ r: 4.5, fill: BLUE, stroke: '#FFFFFF', strokeWidth: 2 }}
+                    activeDot={{ r: 6, stroke: '#FFFFFF', strokeWidth: 2 }}
+                    connectNulls={false}
+                  >
+                    <LabelList
+                      dataKey="profit" position="top" offset={12}
+                      className={NUM}
+                      fill={BLUE} fontSize={10.5} fontWeight={800}
+                      formatter={(v: number) => (v == null ? '' : compactALL(v))}
                     />
-                  ))}
-                </LineChart>
+                  </Area>
+                  <Line
+                    name="Parashikim" type="monotone" dataKey="forecast"
+                    stroke={NAVY} strokeWidth={2.5} strokeDasharray="6 5" strokeLinecap="round"
+                    dot={{ r: 4.5, fill: NAVY, stroke: '#FFFFFF', strokeWidth: 2 }}
+                    activeDot={{ r: 6, stroke: '#FFFFFF', strokeWidth: 2 }}
+                    connectNulls={false}
+                  >
+                    <LabelList
+                      dataKey="forecast" position="top" offset={12}
+                      className={NUM}
+                      fill={NAVY} fontSize={10.5} fontWeight={800}
+                      formatter={(v: number) => (v == null ? '' : compactALL(v))}
+                    />
+                  </Line>
+                </ComposedChart>
               </ResponsiveContainer>
 
-              {/* The legend doubles as the month-over-month delta list. */}
-              <ul className="mt-3 grid grid-cols-1 gap-x-5 gap-y-1.5 sm:grid-cols-2">
-                {deptTrendView.series.map(s => {
-                  const up = s.delta >= 0;
-                  return (
-                    <li key={s.key} className="flex items-center gap-2 text-sm">
-                      <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: s.color }} />
-                      <span className="min-w-0 flex-1 truncate text-foreground">{s.key}</span>
-                      <span className={cn('flex shrink-0 items-center gap-0.5 text-xs font-medium tabular-nums', up ? INK_POS : INK_NEG)}>
-                        {up ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-                        {up ? '+' : ''}{formatALL(s.delta)}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-              {deptTrendView.restCount > 0 && (
-                <p className="mt-2 text-[11px] text-muted-foreground">
-                  "Të tjera" përmbledh {deptTrendView.restCount} departamente të tjera më të vogla.
+              <Explain label="Si ndërtohet parashikimi">
+                <p>
+                  Të ardhura {formatALL(forecast.predictedRevenue)} (mujore {formatALL(forecast.recurringRevenue)}
+                  {forecast.newProjectRevenue > 0 ? ` + projekte të reja ${formatALL(forecast.newProjectRevenue)}` : ''})
+                  {' '}− rroga {formatALL(forecast.predictedSalary)} − shpenzime {formatALL(forecast.predictedOtherExpenses)}.
+                </p>
+                <p>
+                  Të ardhurat vijnë nga projektet mujore që përsëriten plus projektet një-herëshe që
+                  fillojnë atë muaj. Shpenzimet: mesatarja e {forecast.basisMonths} muajve.
+                </p>
+                <p>Nëse vija bie vazhdimisht, diçka po të ha marzhin.</p>
+              </Explain>
+            </section>
+
+            <section className={cn(CARD, 'px-5 py-6 sm:px-6')}>
+              <div className="flex flex-wrap items-baseline justify-between gap-2">
+                <h2 className={cn('text-[15px] font-extrabold', INK_NAVY)}>Arkëtimet sipas muajit</h2>
+                <ChartLegend items={[
+                  { label: 'Direkt', color: BLUE, square: true },
+                  { label: 'WHMCS', color: BLUE_LIGHT, square: true },
+                ]} />
+              </div>
+
+              {/* Stacked, not grouped: the question here is "how much came in",
+                  with the source mix as a second read inside the same column. */}
+              <ResponsiveContainer width="100%" height={220}>
+                <BarChart data={incomeSourceByMonth} margin={{ top: 26, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid stroke={GRID_INK} vertical={false} />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fontSize: 11.5, fill: '#7286a3', fontWeight: 700 }}
+                    axisLine={{ stroke: '#e3e9f2' }}
+                    tickLine={false}
+                  />
+                  <YAxis
+                    tick={{ fontSize: 10, fill: AXIS_INK }}
+                    width={46}
+                    axisLine={false}
+                    tickLine={false}
+                    tickFormatter={compactALL}
+                  />
+                  <Tooltip content={<ChartTip />} cursor={{ fill: 'rgba(47,111,224,0.05)' }} />
+                  <Bar name="Direkt" dataKey="direct" stackId="a" fill={BLUE} maxBarSize={46} />
+                  <Bar name="WHMCS" dataKey="whmcs" stackId="a" fill={BLUE_LIGHT} radius={[6, 6, 0, 0]} maxBarSize={46}>
+                    <LabelList
+                      dataKey="total" position="top" offset={10}
+                      className={NUM}
+                      fill="#5a6d8a" fontSize={11} fontWeight={800}
+                      formatter={(v: number) => compactALL(v)}
+                    />
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+
+              {whmcsUnpaid.count > 0 && (
+                <p className={cn('mt-3 border-t border-[#eef2f8] pt-3 text-xs', INK_MUTED)}>
+                  Pa paguar nga WHMCS:{' '}
+                  <strong className={cn(NUM, INK_WARN)}>{formatALL(whmcsUnpaid.amount)}</strong>
+                  {' '}— {whmcsUnpaid.count} fatura ende të papaguara (jo pjesë e arkëtimeve më sipër).
                 </p>
               )}
-            </Panel>
-          )}
+            </section>
+          </TabsContent>
 
-          <Panel
-            title="Të ardhurat dhe fitimi sipas përgjegjësit"
-            icon={<Users className="h-4 w-4 text-sky-700" />}
-            hint="Të njëjtat tre masa si te departamenti. Kliko një person për projektet e tij."
-          >
-            <MeasureTotals totals={staffRevenue.totals} />
-            {staffRevenue.rows.length === 0 ? (
-              <EmptyState text="Ende pa projekte me përgjegjës për këtë periudhë." />
-            ) : (
-              <ul className="space-y-1.5">
-                {staffRevenue.rows.map(r => {
-                  const max = Math.max(...staffRevenue.rows.map(x => Math.max(x.revenue, x.collected)), 1);
-                  const pct = Math.round((Math.max(r.revenue, r.collected) / max) * 100);
-                  const open = expandedStaff === r.userId;
-                  return (
-                    <li key={r.userId} className="rounded-lg border border-border">
-                      <button
-                        type="button"
-                        onClick={() => setExpandedStaff(open ? null : r.userId)}
-                        className="w-full rounded-lg p-2.5 text-left transition-colors hover:bg-muted/40"
-                        aria-expanded={open}
-                      >
-                        <div className="mb-1.5 flex items-center gap-1">
-                          <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform', open && 'rotate-90')} />
-                          <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-                            {r.name}
-                            <span className="ml-1 text-xs text-muted-foreground">
-                              · {r.projects.length} {r.projects.length === 1 ? 'projekt' : 'projekte'}
-                            </span>
-                          </span>
-                        </div>
-                        <MeasureRow
-                          revenue={r.revenue}
-                          collected={r.collected}
-                          profit={r.profit}
-                          margin={r.revenue > 0 ? r.profit / r.revenue : null}
-                        />
-                        <div className="mt-1.5">
-                          <Meter pct={pct} tone="neutral" />
-                        </div>
-                      </button>
-                      {open && (
-                        <ul className="space-y-1 border-t border-border/60 px-3 pb-2.5 pt-1">
-                          {r.projects.map(p => (
-                            <li key={p.id} className="flex items-center justify-between gap-2 pt-1.5 text-xs">
-                              <span className="min-w-0 flex-1 truncate text-muted-foreground">{p.name}</span>
-                              <span className="shrink-0 tabular-nums text-foreground">{formatALL(p.revenue)}</span>
-                              <span className={cn('w-24 shrink-0 text-right tabular-nums', p.profit >= 0 ? INK_POS : INK_NEG)}>
-                                {formatALL(p.profit)}
-                              </span>
-                            </li>
-                          ))}
-                        </ul>
-                      )}
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-            {staffRevenue.unattributed > 0 && (
-              <p className={cn('mt-2 text-[11px]', INK_WARN)}>
-                {formatALL(staffRevenue.unattributed)} të ardhura pa përgjegjës të caktuar — cakto një
-                përgjegjës te projektet për t'i atribuar.
-              </p>
-            )}
-            {collected.withoutResponsible > 0 && (
-              <p className={cn('mt-1 text-[11px]', INK_WARN)}>
-                {formatALL(collected.withoutResponsible)} arkëtuar nga projekte pa përgjegjës — të
-                njohura si departament, por pa person.
-              </p>
-            )}
-            <Explain label="Pse 'Të ardhura' dhe 'Arkëtuar' nuk përputhen">
-              <p>
-                <strong>Të ardhura</strong> = {revenueBasis === 'invoiced' ? 'faturat e paguara (arkëtuar)' : 'buxheti i projektit'}
-                {' '}brenda periudhës — ajo që u <em>fitua</em> (accrual). Kjo kolonë ndjek toggle-in lart.
-              </p>
-              <p>
-                <strong>Arkëtuar</strong> = paraja që <em>hyri</em> realisht në të njëjtën periudhë
-                (cash), atribuar faturë → projekt → person/departament.
-              </p>
-              <p>
-                <strong>Pa mbledhur</strong> = diferenca. Negative kur në këtë periudhë u arkëtua
-                para për punë të faturuar më parë — nuk është gabim.
-              </p>
-            </Explain>
-          </Panel>
-        </TabsContent>
+          {/* ── TAB 2 · Profit by dimension — every panel scoped by the one filter row ── */}
+          <TabsContent value="profit" className="mt-4 space-y-3.5">
 
-        {/* ── TAB 3 · Clients — a different revenue basis, so it gets its own tab ── */}
-        <TabsContent value="clients" className="mt-4 space-y-4">
-          <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
-            <Panel
-              title="Ku fiton më shumë"
-              icon={<CheckCircle2 className="h-4 w-4 text-emerald-700" />}
-              hint="Top 3 klientët sipas marzhit."
-            >
-              <ClientList rows={clientPnl.winners} emptyText="Ende pa të dhëna klientësh." />
-            </Panel>
-            <Panel
-              title="Ku humb para"
-              icon={<AlertTriangle className="h-4 w-4 text-red-600" />}
-              hint="Klientët me marzh negativ."
-              tone={clientPnl.losers.length > 0 ? 'danger' : 'default'}
-            >
-              <ClientList rows={clientPnl.losers} emptyText="Asnjë klient në humbje. 👍" />
-            </Panel>
-          </div>
-          <Card className="p-4">
-            <Explain label="Pse numrat këtu nuk përputhen me tabin 'Fitimi'">
-              <p>
-                Baza këtu: <strong>fatura reale − kosto e projektit</strong> (punë + shpenzime), për
-                gjithë historikun e klientit.
-              </p>
-              <p>
-                Baza te "Fitimi": <strong>buxhet ose faturuar − overhead i alokuar</strong>, brenda
-                periudhës që zgjodhe. Dy pyetje të ndryshme, dy përgjigje të ndryshme.
-              </p>
-            </Explain>
-          </Card>
-        </TabsContent>
-
-        {/* ── TAB 4 · Cashflow & everything that is broken ── */}
-        <TabsContent value="risk" className="mt-4 space-y-4">
-          {alarms.length > 0 && (
-            <Panel
-              title="Çfarë kërkon vëmendje"
-              icon={<AlertTriangle className="h-4 w-4 text-amber-600" />}
-              tone="warning"
-            >
-              <ul className="space-y-2">
-                {alarms.map((a, i) => (
-                  <li key={i} className="flex items-start gap-2.5 text-sm">
-                    <span className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', a.tone === 'red' ? 'bg-red-500' : 'bg-amber-500')} />
-                    <span className="text-foreground">{a.text}</span>
-                  </li>
-                ))}
-              </ul>
-            </Panel>
-          )}
-
-          <Panel
-            title="Shëndeti i rrjedhës së parasë (mujore)"
-            icon={<Wallet className={cn('h-4 w-4', cashflow.gap < 0 ? 'text-red-600' : 'text-emerald-700')} />}
-            hint="A i mbulojnë të ardhurat e rregullta (kontratat mujore) kostot fikse çdo muaj?"
-            tone={cashflow.gap < 0 ? 'danger' : 'default'}
-          >
-            <div className="mb-3 grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <PoolTile label="Të ardhura të rregullta" value={cashflow.monthlyInflow} tone="pos" />
-              <PoolTile
-                label="Kosto fikse"
-                value={cashflow.monthlyOutflow}
-                tone="neg"
-                hint={`rroga ${formatALL(cashflow.salaries)} + periodike ${formatALL(cashflow.recurringExpenses)}`}
+            {/* The one control row. */}
+            <div className="flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-[14px] border border-[#e3e9f2] bg-white px-4 py-2.5">
+              <span className={cn('text-[11px] font-extrabold uppercase tracking-[.1em]', INK_MUTED)}>
+                Periudha
+              </span>
+              <Segmented
+                value={isPickedMonth(period) ? '' : period}
+                onChange={setPeriod}
+                options={[['month', 'Ky muaj'], ['year', 'Viti'], ['all', 'Gjithë']] as const}
+                size="sm"
               />
-              <PoolTile
-                label={cashflow.gap >= 0 ? 'Tepricë mujore' : 'Mungesë mujore'}
-                value={cashflow.gap}
-                tone={cashflow.gap >= 0 ? 'pos' : 'neg'}
-                bold
+              <select
+                value={isPickedMonth(period) ? period : ''}
+                onChange={(e) => { if (e.target.value) setPeriod(e.target.value); }}
+                aria-label="Zgjidh një muaj të caktuar"
+                className={cn(
+                  'h-[30px] rounded-lg border px-2 text-xs font-semibold focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2f6fe0]',
+                  isPickedMonth(period)
+                    ? 'border-[#2f6fe0] bg-[#e3ecfb] text-[#2258bb]'
+                    : 'border-[#e3e9f2] bg-white text-[#7286a3]',
+                )}
+              >
+                <option value="">Muaj i caktuar…</option>
+                {monthOptions.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+
+              <span className="hidden h-5 w-px bg-[#e3e9f2] sm:block" />
+
+              <span className={cn('text-[11px] font-extrabold uppercase tracking-[.1em]', INK_MUTED)}>
+                Të ardhurat
+              </span>
+              <Segmented
+                value={revenueBasis}
+                onChange={setRevenueBasis}
+                options={[['budget', 'Buxhet'], ['invoiced', 'Paguar']] as const}
+                size="sm"
               />
+
+              <p className={cn('ml-auto text-xs font-semibold', INK_MUTED)}>
+                {periodLabel} · {revenueBasis === 'invoiced' ? 'vetëm faturat e paguara' : 'buxheti i projekteve'}
+              </p>
             </div>
-            {cashflow.alarms.length === 0 ? (
-              <AllClear text="Rrjedha e parasë duket e shëndetshme." />
-            ) : (
-              <ul className="space-y-2">
-                {cashflow.alarms.map(a => (
-                  <li key={a.id} className="flex items-start gap-2.5 text-sm">
-                    <span className={cn('mt-1.5 h-2 w-2 shrink-0 rounded-full', a.severity === 'red' ? 'bg-red-500' : 'bg-amber-500')} />
+
+            {/* ── Departments ── */}
+            <section className={cn(CARD, 'overflow-hidden')}>
+              <div className="px-5 pb-1 pt-5 sm:px-6">
+                <h2 className={cn('text-base font-extrabold', INK_NAVY)}>Fitimi sipas departamentit</h2>
+                <p className={cn('mt-0.5 text-[12.5px]', INK_MUTED)}>Kliko një rresht për projektet e tij.</p>
+              </div>
+
+              {departmentRows.rows.length === 0 ? (
+                <div className="px-5 pb-5 pt-3 sm:px-6">
+                  <EmptyState text='Ende pa projekte me departament. Cakto "Departamentin" te projektet për ta parë këtë ndarje.' />
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <div className="min-w-[660px]">
+                    <TableHead first="Departamenti" />
+                    {departmentRows.rows.map(d => {
+                      const open = expandedDept === d.department;
+                      const pct = Math.round((Math.max(d.revenue, d.collected) / departmentRows.max) * 100);
+                      return (
+                        <div key={d.department}>
+                          <button
+                            type="button"
+                            onClick={() => setExpandedDept(open ? null : d.department)}
+                            aria-expanded={open}
+                            className={cn(
+                              COLS,
+                              'w-full items-center border-b border-[#eef2f8] px-5 py-3.5 text-left transition-colors hover:bg-[#f6f9fd] sm:px-6',
+                              open && 'bg-[#f6f9fd]',
+                            )}
+                          >
+                            <div className="flex min-w-0 items-center gap-3">
+                              <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-[#94a5bd] transition-transform', open && 'rotate-90')} />
+                              <div className="min-w-0 flex-1">
+                                <p className={cn('truncate text-[13.5px] font-bold', INK_NAVY)}>{d.department}</p>
+                                <div className="mt-1.5 h-[5px] max-w-[210px] overflow-hidden rounded-full bg-[#edf1f7]">
+                                  <div className="h-full rounded-full bg-[#2f6fe0]" style={{ width: `${Math.max(2, pct)}%` }} />
+                                </div>
+                              </div>
+                            </div>
+                            <Num value={d.revenue} strong />
+                            <Num value={d.collected} muted />
+                            <Num value={d.profit} strong tone={d.profit >= 0 ? 'pos' : 'neg'} />
+                            <div className="text-right">
+                              <MarginPill margin={d.margin} />
+                            </div>
+                          </button>
+
+                          {open && (
+                            <div className="border-b border-[#eef2f8] bg-[#f6f9fd] px-5 py-2 sm:px-6">
+                              {d.projects.length === 0 ? (
+                                <p className={cn('py-2 pl-[26px] text-xs', INK_MUTED)}>
+                                  Pa projekte në këtë periudhë — vetëm arkëtime për punë të mëparshme.
+                                </p>
+                              ) : d.projects.map(p => (
+                                // Same five-column ruler as the parent row, so a
+                                // project's revenue and profit sit UNDER their own
+                                // headers instead of one column to the left.
+                                <div key={p.id} className={cn(COLS, 'items-center py-1.5 text-[12.5px]')}>
+                                  <span className="min-w-0 truncate pl-[26px] font-semibold text-[#24344d]">{p.name}</span>
+                                  <Num value={p.revenue} muted />
+                                  <span />
+                                  <Num value={p.profit} strong tone={p.profit >= 0 ? 'pos' : 'neg'} />
+                                  <span />
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    <div className={cn(COLS, 'items-center bg-[#f6f9fd] px-5 py-3.5 text-[13px] font-extrabold sm:px-6', INK_NAVY)}>
+                      <span className="pl-[26px]">Gjithsej</span>
+                      <Num value={departmentRows.totals.revenue} strong />
+                      <Num value={departmentRows.totals.collected} strong />
+                      <Num value={departmentRows.totals.profit} strong tone={departmentRows.totals.profit >= 0 ? 'pos' : 'neg'} />
+                      <span />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Data-quality guards. Without these the numbers look authoritative
+                  while quietly excluding revenue: an invoice with no projectId is
+                  dropped from the collected basis, yet the FULL overhead pool is
+                  still allocated — so unlinked invoices read as pure loss. */}
+              {(collected.unlinked.amount > 0 || departmentPnl.unallocatedLabor.total > 0) && (
+                <div className="space-y-1 border-t border-[#eef2f8] px-5 py-3 sm:px-6">
+                  {collected.unlinked.amount > 0 && (
+                    <p className={cn('text-xs leading-relaxed', INK_MUTED)}>
+                      <strong className={NUM}>{formatALL(collected.unlinked.amount)}</strong> arkëtuar nga{' '}
+                      <strong>{collected.unlinked.count}</strong> faturë pa projekt të lidhur — nuk i takon
+                      asnjë departamenti apo personi, ndaj kolona "Arkëtuar" nuk arrin totalin e faqes.{' '}
+                      <button
+                        onClick={() => navigate('/app/invoices?project=none')}
+                        className="font-bold text-[#2f6fe0] underline hover:no-underline"
+                      >
+                        Lidhi me projektet
+                      </button>
+                    </p>
+                  )}
+                  {departmentPnl.unallocatedLabor.total > 0 && (
+                    <p className={cn('text-xs', INK_WARN)}>
+                      <strong className={NUM}>{formatALL(departmentPnl.unallocatedLabor.total)}</strong> rroga
+                      stafi që s'punoi në asnjë projekt këtë periudhë — kosto e paalokuar te departamentet.
+                    </p>
+                  )}
+                </div>
+              )}
+            </section>
+
+            {/* ── Responsibles ── */}
+            <section className={cn(CARD, 'overflow-hidden')}>
+              <div className="px-5 pb-1 pt-5 sm:px-6">
+                <h2 className={cn('text-base font-extrabold', INK_NAVY)}>Të ardhurat sipas përgjegjësit</h2>
+                <p className={cn('mt-0.5 text-[12.5px]', INK_MUTED)}>
+                  Të njëjtat masa si te departamenti. Kliko një person për projektet e tij.
+                </p>
+              </div>
+
+              {staffRevenue.rows.length === 0 ? (
+                <div className="px-5 pb-5 pt-3 sm:px-6">
+                  <EmptyState text="Ende pa projekte me përgjegjës për këtë periudhë." />
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <div className="min-w-[660px]">
+                    <TableHead first="Përgjegjësi" />
+                    {staffRevenue.rows.map(r => {
+                      const open = expandedStaff === r.userId;
+                      return (
+                        <div key={r.userId}>
+                          <button
+                            type="button"
+                            onClick={() => setExpandedStaff(open ? null : r.userId)}
+                            aria-expanded={open}
+                            className={cn(
+                              COLS,
+                              'w-full items-center border-b border-[#eef2f8] px-5 py-3 text-left transition-colors hover:bg-[#f6f9fd] sm:px-6',
+                              open && 'bg-[#f6f9fd]',
+                            )}
+                          >
+                            <div className="flex min-w-0 items-center gap-3">
+                              <span
+                                aria-hidden="true"
+                                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-[#e3ecfb] text-[11.5px] font-extrabold text-[#2258bb]"
+                              >
+                                {initialsOf(r.name)}
+                              </span>
+                              <span className={cn('min-w-0 truncate text-[13.5px] font-bold', INK_NAVY)}>
+                                {r.name}
+                                <span className={cn('ml-1.5 text-xs font-medium', INK_MUTED)}>
+                                  · {r.projects.length} {r.projects.length === 1 ? 'projekt' : 'projekte'}
+                                </span>
+                              </span>
+                            </div>
+                            <Num value={r.revenue} strong />
+                            <Num value={r.collected} muted />
+                            <Num value={r.profit} strong tone={r.profit >= 0 ? 'pos' : 'neg'} />
+                            <div className="text-right">
+                              <MarginPill margin={r.revenue > 0 ? r.profit / r.revenue : null} />
+                            </div>
+                          </button>
+
+                          {open && r.projects.length > 0 && (
+                            <div className="border-b border-[#eef2f8] bg-[#f6f9fd] px-5 py-2 sm:px-6">
+                              {r.projects.map(p => (
+                                <div key={p.id} className={cn(COLS, 'items-center py-1.5 text-[12.5px]')}>
+                                  <span className="min-w-0 truncate pl-11 font-semibold text-[#24344d]">{p.name}</span>
+                                  <Num value={p.revenue} muted />
+                                  <span />
+                                  <Num value={p.profit} strong tone={p.profit >= 0 ? 'pos' : 'neg'} />
+                                  <span />
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+
+                    <div className={cn(COLS, 'items-center bg-[#f6f9fd] px-5 py-3.5 text-[13px] font-extrabold sm:px-6', INK_NAVY)}>
+                      <span className="pl-11">Gjithsej</span>
+                      <Num value={staffRevenue.totals.revenue} strong />
+                      <Num value={staffRevenue.totals.collected} strong />
+                      <Num value={staffRevenue.totals.profit} strong tone={staffRevenue.totals.profit >= 0 ? 'pos' : 'neg'} />
+                      <span />
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {(staffRevenue.unattributed > 0 || collected.withoutResponsible > 0) && (
+                <div className="space-y-1 border-t border-[#eef2f8] px-5 py-3 sm:px-6">
+                  {staffRevenue.unattributed > 0 && (
+                    <p className={cn('text-xs', INK_MUTED)}>
+                      Pa atribuar: <strong className={cn(NUM, INK_WARN)}>{formatALL(staffRevenue.unattributed)}</strong>
+                      {' '}— projekte pa përgjegjës të caktuar.
+                    </p>
+                  )}
+                  {collected.withoutResponsible > 0 && (
+                    <p className={cn('text-xs', INK_MUTED)}>
+                      <strong className={cn(NUM, INK_WARN)}>{formatALL(collected.withoutResponsible)}</strong>
+                      {' '}arkëtuar nga projekte pa përgjegjës — të njohura si departament, por pa person.
+                    </p>
+                  )}
+                </div>
+              )}
+
+              <div className="px-5 pb-4 sm:px-6">
+                <Explain label="Pse 'Të ardhura' dhe 'Arkëtuar' nuk përputhen">
+                  <p>
+                    <strong>Të ardhura</strong> = {revenueBasis === 'invoiced' ? 'faturat e paguara' : 'buxheti i projektit'}
+                    {' '}brenda periudhës — ajo që u <em>fitua</em> (accrual). Kjo kolonë ndjek toggle-in lart.
+                  </p>
+                  <p>
+                    <strong>Arkëtuar</strong> = paraja që <em>hyri</em> realisht në të njëjtën periudhë
+                    (cash), atribuar faturë → projekt → person/departament.
+                  </p>
+                  <p>
+                    Diferenca mes tyre është e pambledhur. Negative kur në këtë periudhë u arkëtua
+                    para për punë të faturuar më parë — nuk është gabim.
+                  </p>
+                </Explain>
+              </div>
+            </section>
+
+            {/* Deeper cuts, folded away: the same period + basis, one level down. */}
+            <Fold label="Fitimi projekt për projekt dhe trendi i departamenteve">
+              <div className="space-y-3.5 pt-3.5">
+                <section className={cn(CARD, 'px-5 py-5 sm:px-6')}>
+                  <h3 className={cn('text-[15px] font-extrabold', INK_NAVY)}>Fitimi sipas projekti</h3>
+                  <p className={cn('mb-3 mt-0.5 text-[12.5px]', INK_MUTED)}>
+                    Të ardhurat − kostot direkte − pjesa e kostove fikse, e ndarë sipas peshës së të ardhurave.
+                  </p>
+
+                  {projectPnl.unlinkedInvoices.count > 0 && (
+                    <Notice tone={revenueBasis === 'invoiced' ? 'warning' : 'neutral'}>
+                      <strong>{projectPnl.unlinkedInvoices.count} faturë</strong> pa projekt të lidhur
+                      (<strong className={NUM}>{formatALL(projectPnl.unlinkedInvoices.amount)}</strong>).
+                      {revenueBasis === 'invoiced'
+                        ? ' Kjo vlerë NUK numërohet si e ardhur më poshtë, ndërsa kostot fikse ndahen plotësisht — ndaj fitimi duket më i vogël se realiteti.'
+                        : ' Nuk prek llogaritjen mbi bazën "Buxhet", por do të mungojë nëse kalon te "Paguar".'}
+                    </Notice>
+                  )}
+                  {projectPnl.missingBudget.count > 0 && (
+                    <Notice tone="warning">
+                      <strong>{projectPnl.missingBudget.count} projekt</strong> me të ardhura 0 thithin
+                      overhead pa sjellë asnjë të ardhur —{' '}
+                      {projectPnl.revenueBasis === 'invoiced'
+                        ? 'nuk kanë faturë të lidhur në këtë periudhë.'
+                        : 'nuk kanë buxhet të caktuar.'}
+                      {' '}({projectPnl.missingBudget.names.slice(0, 4).join(', ')}
+                      {projectPnl.missingBudget.names.length > 4 ? `, +${projectPnl.missingBudget.names.length - 4}` : ''})
+                    </Notice>
+                  )}
+
+                  <ProjectPnlBlock pnl={projectPnl} customerNameById={customerNameById} />
+
+                  <Explain>
+                    <p>
+                      "Fikse" = pjesa e rrogave dhe shpenzimeve të përgjithshme që i takon këtij projekti.
+                      Kostot variabile shtoji si Shpenzim i lidhur me projektin te faqja Shpenzimet.
+                    </p>
+                    <p>
+                      Ky panel është i ndryshëm nga tabi "Klientët" — atje baza është faturë reale − kosto
+                      e projektit; këtu është buxhet/faturuar − overhead i alokuar.
+                    </p>
+                  </Explain>
+                </section>
+
+                {departmentTrend.departments.length > 0 && (
+                  <section className={cn(CARD, 'px-5 py-5 sm:px-6')}>
+                    <h3 className={cn('text-[15px] font-extrabold', INK_NAVY)}>Trendi sipas departamentit</h3>
+                    <p className={cn('mb-2 mt-0.5 text-[12.5px]', INK_MUTED)}>
+                      6 muajt e fundit — a po rritet apo po bie secili. (Muaji aktual është deri sot.)
+                    </p>
+                    <DepartmentTrend trend={departmentTrend} />
+                  </section>
+                )}
+              </div>
+            </Fold>
+          </TabsContent>
+
+          {/* ── TAB 3 · Clients — a different revenue basis, so it gets its own tab ── */}
+          <TabsContent value="clients" className="mt-4">
+            <div className="grid gap-4 lg:grid-cols-2">
+              <section className={cn(CARD, 'px-5 py-5 sm:px-6')}>
+                <h2 className={cn('flex items-center gap-2 text-[15px] font-extrabold', INK_POS)}>
+                  <TrendingUp className="h-4 w-4" />
+                  Klientët më fitimprurës
+                </h2>
+                {clientPnl.winners.length === 0 ? (
+                  <div className="mt-3"><EmptyState text="Ende pa të dhëna klientësh." /></div>
+                ) : clientPnl.winners.map((w, i) => (
+                  <div key={w.id} className="flex items-center gap-3.5 border-b border-[#eef2f8] py-3 last:border-0">
+                    <span className={cn('w-6 shrink-0 text-xs font-bold text-[#94a5bd]', NUM)}>
+                      {String(i + 1).padStart(2, '0')}
+                    </span>
                     <div className="min-w-0 flex-1">
-                      <p className="font-medium text-foreground">
-                        {a.title}
-                        {a.id === 'concentration' && a.customerId && (
-                          <span className="font-normal text-muted-foreground">
-                            {' '}— {customerNameById.get(a.customerId) || 'klient'}
+                      <p className={cn('truncate text-[13.5px] font-bold', INK_NAVY)}>{w.name}</p>
+                      <p className={cn('mt-px truncate text-[11.5px]', INK_MUTED)}>
+                        Ardhura {formatALL(w.revenue)} · Kosto {formatALL(w.cost)}
+                      </p>
+                    </div>
+                    <div className="shrink-0 text-right">
+                      <p className={cn('text-[13.5px] font-bold', NUM, w.margin >= 0 ? INK_POS : INK_NEG)}>
+                        {w.margin >= 0 ? '+' : ''}{formatALL(w.margin)}
+                      </p>
+                      <p className="text-[11.5px] font-extrabold text-[#6bbd97]">{w.marginPct}% marzh</p>
+                    </div>
+                  </div>
+                ))}
+              </section>
+
+              <section className={cn(CARD, 'px-5 py-5 sm:px-6')}>
+                <h2 className={cn('flex items-center gap-2 text-[15px] font-extrabold', INK_NEG)}>
+                  <TrendingDown className="h-4 w-4" />
+                  Klientët me humbje
+                </h2>
+                {clientPnl.losers.length === 0 ? (
+                  <div className="mt-3"><EmptyState text="Asnjë klient në humbje. 👍" /></div>
+                ) : clientPnl.losers.map(w => (
+                  <div key={w.id} className="flex items-center gap-3.5 border-b border-[#eef2f8] py-3 last:border-0">
+                    <AlertTriangle className={cn('h-4 w-4 shrink-0', INK_NEG)} />
+                    <div className="min-w-0 flex-1">
+                      <p className={cn('truncate text-[13.5px] font-bold', INK_NAVY)}>{w.name}</p>
+                      <p className={cn('mt-px truncate text-[11.5px]', INK_MUTED)}>
+                        Ardhura {formatALL(w.revenue)} · Kosto {formatALL(w.cost)}
+                      </p>
+                    </div>
+                    <p className={cn('shrink-0 whitespace-nowrap text-[13.5px] font-bold', NUM, INK_NEG)}>
+                      {formatALL(w.margin)}
+                    </p>
+                  </div>
+                ))}
+                <p className={cn('mt-3.5 text-xs leading-relaxed', INK_MUTED)}>
+                  Fitimi këtu numëron vetëm paranë e arkëtuar realisht — faturat e papaguara janë
+                  llogari e arkëtueshme, jo fitim.
+                </p>
+              </section>
+            </div>
+
+            <div className={cn(CARD, 'mt-4 px-5 py-4 sm:px-6')}>
+              <Explain label="Pse numrat këtu nuk përputhen me tabin 'Fitimi'">
+                <p>
+                  Baza këtu: <strong>faturë e arkëtuar − kosto e projektit</strong> (punë + shpenzime), për
+                  gjithë historikun e klientit.
+                </p>
+                <p>
+                  Baza te "Fitimi": <strong>buxhet ose faturuar − overhead i alokuar</strong>, brenda
+                  periudhës që zgjodhe. Dy pyetje të ndryshme, dy përgjigje të ndryshme.
+                </p>
+              </Explain>
+            </div>
+          </TabsContent>
+
+          {/* ── TAB 4 · Everything that is broken or at risk ── */}
+          <TabsContent value="risk" className="mt-4 space-y-4">
+            {alarms.length > 0 ? (
+              <section className={cn(CARD, 'border-[#f0d9d6] border-l-4 border-l-[#d64545] px-5 py-5 sm:px-6')}>
+                <div className="flex items-center gap-2.5">
+                  <AlertTriangle className={cn('h-4 w-4', INK_NEG)} />
+                  <h2 className={cn('text-[15px] font-extrabold uppercase tracking-[.06em]', INK_NEG)}>
+                    Çfarë kërkon vëmendje
+                  </h2>
+                  <span className="rounded-full bg-[#d64545] px-2 py-px text-[11px] font-extrabold text-white">
+                    {alarms.length}
+                  </span>
+                </div>
+                {alarmSummary && (
+                  <p className="mt-2.5 text-[13.5px] font-semibold leading-relaxed text-[#24344d]">
+                    {alarmSummary}
+                  </p>
+                )}
+                <ul className="mt-3.5 space-y-2">
+                  {alarms.map((a, i) => (
+                    <li
+                      key={i}
+                      className={cn(
+                        'flex items-center gap-3 rounded-xl border px-3.5 py-2.5',
+                        a.tone === 'red'
+                          ? 'border-[#f0d9d6] bg-[#fdf1f0]'
+                          : 'border-[#f0dfb8] bg-[#fdf6e8]',
+                      )}
+                    >
+                      <span
+                        className={cn(
+                          'shrink-0 rounded-full px-2.5 py-0.5 text-[10px] font-extrabold uppercase tracking-[.08em] text-white',
+                          a.tone === 'red' ? 'bg-[#d64545]' : 'bg-[#b98a1e]',
+                        )}
+                      >
+                        {a.tag}
+                      </span>
+                      <span className="text-[13px] font-semibold text-[#24344d]">{a.text}</span>
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            ) : (
+              <section className={cn(CARD, 'px-5 py-5 sm:px-6')}>
+                <AllClear text="Asnjë alarm financiar. Gjithçka në rregull." />
+              </section>
+            )}
+
+            <div className="grid gap-4 lg:grid-cols-2">
+              {/* Recurring invoice health */}
+              <section className={cn(CARD, 'px-5 py-5 sm:px-6')}>
+                <h2 className={cn('text-[15px] font-extrabold', INK_NAVY)}>Faturat recurring</h2>
+                <p className={cn('mt-0.5 text-xs', INK_MUTED)}>
+                  {recurringHealth.totalParents} gjithsej · {recurringHealth.healthy} në rregull ·{' '}
+                  {recurringHealth.paused} në pauzë
+                </p>
+
+                {recurringHealth.stuck.length === 0 && recurringHealth.misconfigured.length === 0 ? (
+                  <div className="mt-3.5">
+                    <AllClear
+                      text={recurringHealth.totalParents === 0
+                        ? 'Nuk ke fatura recurring.'
+                        : 'Të gjitha faturat recurring janë në rregull.'}
+                    />
+                  </div>
+                ) : (
+                  <div className="mt-3.5 space-y-2">
+                    {recurringHealth.stuck.map(s => (
+                      <div key={s.id} className="rounded-xl border border-[#f0d9d6] bg-[#fdf1f0] px-4 py-3">
+                        <div className="flex items-baseline justify-between gap-2.5">
+                          <div className="min-w-0">
+                            <p className={cn('truncate text-[13px] font-extrabold', INK_NAVY)}>{s.name}</p>
+                            <p className={cn('text-[11.5px]', INK_MUTED)}>
+                              {FREQ_LABEL[s.freq] || s.freq} · nuk u gjenerua
+                            </p>
+                          </div>
+                          <div className="shrink-0 text-right">
+                            <p className={cn('text-[13px] font-bold', NUM, INK_NAVY)}>{formatALL(s.amount)}</p>
+                            <p className={cn('text-[11.5px] font-extrabold', INK_NEG)}>{s.daysOverdue} ditë vonesë</p>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {recurringHealth.misconfigured.map(m => (
+                      <div key={m.id} className="rounded-xl border border-[#f0dfb8] bg-[#fdf6e8] px-4 py-3">
+                        <div className="flex items-baseline justify-between gap-2.5">
+                          <div className="min-w-0">
+                            <p className={cn('truncate text-[13px] font-extrabold', INK_NAVY)}>{m.name}</p>
+                            <p className={cn('text-[11.5px]', INK_MUTED)}>
+                              Konfigurim i paplotë — {m.reason}
+                            </p>
+                          </div>
+                          <p className={cn('shrink-0 text-[13px] font-bold', NUM, INK_NAVY)}>{formatALL(m.amount)}</p>
+                        </div>
+                      </div>
+                    ))}
+                    <Explain label="Si rregullohet">
+                      <p>
+                        Hap faturën te <strong>Faturat</strong>, kontrollo frekuencën dhe datën e radhës,
+                        ose prit ciklin tjetër të cron-it.
+                      </p>
+                      <p>Faturat në pauzë ({recurringHealth.paused}) nuk numërohen si problem.</p>
+                    </Explain>
+                  </div>
+                )}
+              </section>
+
+              {/* Cashflow coverage */}
+              <section className={cn(CARD, 'px-5 py-5 sm:px-6')}>
+                <h2 className={cn('text-[15px] font-extrabold', INK_NAVY)}>Shëndeti i rrjedhës së parasë</h2>
+                <p className={cn('mt-0.5 text-xs', INK_MUTED)}>
+                  Hyrjet mujore të përsëritura kundrejt daljeve fikse.
+                </p>
+
+                <CoverageBar
+                  inflow={cashflow.monthlyInflow}
+                  outflow={cashflow.monthlyOutflow}
+                  salaries={cashflow.salaries}
+                  recurringExpenses={cashflow.recurringExpenses}
+                  gap={cashflow.gap}
+                />
+
+                {cashflow.alarms.length > 0 && (
+                  <ul className="mt-4 space-y-2.5 border-t border-[#eef2f8] pt-3.5">
+                    {cashflow.alarms.map(a => (
+                      <li key={a.id} className="flex items-start gap-2.5 text-[13px]">
+                        <span className={cn(
+                          'mt-1.5 h-1.5 w-1.5 shrink-0 rounded-full',
+                          a.severity === 'red' ? 'bg-[#d64545]' : 'bg-[#e8b23b]',
+                        )} />
+                        <div className="min-w-0 flex-1">
+                          <p className={cn('font-bold', INK_NAVY)}>
+                            {a.title}
+                            {a.id === 'concentration' && a.customerId && (
+                              <span className={cn('font-medium', INK_MUTED)}>
+                                {' '}— {customerNameById.get(a.customerId) || 'klient'}
+                              </span>
+                            )}
+                          </p>
+                          <p className={cn('text-[11.5px] leading-relaxed', INK_MUTED)}>{a.detail}</p>
+                        </div>
+                        {a.amount != null && (
+                          <span className={cn(
+                            'shrink-0 text-[13px] font-bold',
+                            NUM,
+                            a.amount < 0 ? INK_NEG : INK_NAVY,
+                          )}>
+                            {formatALL(a.amount)}
                           </span>
                         )}
-                      </p>
-                      <p className="text-xs text-muted-foreground">{a.detail}</p>
-                    </div>
-                    {a.amount != null && (
-                      <span className={cn('shrink-0 text-sm font-semibold tabular-nums', a.amount < 0 ? INK_NEG : 'text-foreground')}>
-                        {formatALL(a.amount)}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </Panel>
-
-          <Panel
-            title="Fatura recurring që nuk u përsëritën"
-            icon={<Repeat className="h-4 w-4 text-sky-700" />}
-            hint="Fatura që duhej të kopjoheshin automatikisht, por s'u gjeneruan (afati kaloi, pa kopje të re)."
-            tone={recurringHealth.stuck.length > 0 || recurringHealth.misconfigured.length > 0 ? 'danger' : 'default'}
-          >
-            {recurringHealth.stuck.length === 0 && recurringHealth.misconfigured.length === 0 ? (
-              <AllClear
-                text={recurringHealth.totalParents === 0
-                  ? 'Nuk ke fatura recurring.'
-                  : `Të gjitha ${recurringHealth.totalParents} faturat recurring janë në rregull.`}
-              />
-            ) : (
-              <div className="space-y-4">
-                {recurringHealth.stuck.length > 0 && (
-                  <ul className="space-y-2">
-                    {recurringHealth.stuck.map(s => (
-                      <li key={s.id} className="flex items-center gap-2 text-sm">
-                        <XCircle className="h-4 w-4 shrink-0 text-red-600" />
-                        <span className="min-w-0 flex-1 truncate text-foreground">
-                          {s.name} <span className="text-muted-foreground">· {FREQ_LABEL[s.freq] || s.freq}</span>
-                        </span>
-                        <span className={cn('shrink-0 text-xs font-medium tabular-nums', INK_NEG)}>
-                          {s.daysOverdue} ditë vonesë
-                        </span>
-                        <span className="ml-2 shrink-0 text-sm font-semibold tabular-nums text-foreground">
-                          {formatALL(s.amount)}
-                        </span>
                       </li>
                     ))}
                   </ul>
                 )}
-
-                {recurringHealth.misconfigured.length > 0 && (
-                  <div>
-                    <p className={cn('mb-1.5 text-xs font-medium', INK_WARN)}>
-                      Konfigurim i paplotë (s'do gjenerohen kurrë):
-                    </p>
-                    <ul className="space-y-1.5">
-                      {recurringHealth.misconfigured.map(m => (
-                        <li key={m.id} className="flex items-center gap-2 text-sm">
-                          <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-amber-500" />
-                          <span className="min-w-0 flex-1 truncate text-foreground">
-                            {m.name} <span className="text-muted-foreground">· {m.reason}</span>
-                          </span>
-                          <span className="shrink-0 text-sm font-semibold tabular-nums text-foreground">
-                            {formatALL(m.amount)}
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                <Explain label="Si rregullohet">
-                  <p>
-                    Hap faturën në <strong>Faturat</strong>, kontrollo frekuencën dhe datën e radhës,
-                    ose prit ciklin tjetër të cron-it.
-                  </p>
-                  <p>Faturat në pauzë ({recurringHealth.paused}) nuk numërohen si problem.</p>
-                </Explain>
-              </div>
-            )}
-          </Panel>
-        </TabsContent>
-      </Tabs>
+              </section>
+            </div>
+          </TabsContent>
+        </Tabs>
+      </div>
     </div>
   );
 };
 
 // ── Layout primitives ──────────────────────────────────────────────────────
 
-/** Section card: one title row plus an optional one-line hint. */
-const Panel: React.FC<{
-  title: string;
-  icon?: React.ReactNode;
-  hint?: string;
-  tone?: 'default' | 'danger' | 'warning';
-  className?: string;
-  children: React.ReactNode;
-}> = ({ title, icon, hint, tone = 'default', className, children }) => (
-  <Card className={cn(
-    'p-4 sm:p-5',
-    tone === 'danger' && 'border-red-500/40',
-    tone === 'warning' && 'border-amber-500/40',
-    className,
-  )}>
-    <div className="mb-3 min-w-0">
-      <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
-        {icon}
-        {title}
-      </h2>
-      {hint && <p className="mt-1 max-w-2xl text-xs leading-relaxed text-muted-foreground">{hint}</p>}
-    </div>
+/** Pill tab, styled to the reference: active = solid navy. */
+const PillTab: React.FC<{ value: string; badge?: number; children: React.ReactNode }> = ({
+  value, badge, children,
+}) => (
+  <TabsTrigger
+    value={value}
+    className={cn(
+      'gap-2 rounded-[11px] px-4 py-2 text-[13px] font-bold text-[#5a6d8a] transition-all sm:px-5',
+      'data-[state=active]:bg-[#08183A] data-[state=active]:text-white',
+      'data-[state=active]:shadow-[0_2px_6px_rgba(8,24,58,.25)]',
+    )}
+  >
     {children}
-  </Card>
+    {badge != null && badge > 0 && (
+      <span className="rounded-full bg-[#d64545] px-1.5 py-px text-[10.5px] font-extrabold tabular-nums text-white">
+        {badge}
+      </span>
+    )}
+  </TabsTrigger>
 );
+
+/** One line of the hero's mini P&L. */
+const HeroRow: React.FC<{
+  label: string;
+  amount: number;
+  tone: 'pos' | 'neg' | 'total';
+  rule?: boolean;
+  strong?: boolean;
+}> = ({ label, amount, tone, rule, strong }) => (
+  <div className={cn(
+    'flex items-center justify-between gap-3.5',
+    rule && 'border-t pt-2.5',
+    rule && (strong ? 'border-white/20' : 'border-white/[.08]'),
+  )}>
+    <span className={cn(
+      'min-w-0 text-[12.5px] font-semibold leading-tight',
+      strong ? 'text-white' : 'text-[#c3d1e8]',
+    )}>
+      {label}
+    </span>
+    <span className={cn(
+      'shrink-0 whitespace-nowrap text-[12.5px] font-bold',
+      NUM,
+      tone === 'pos' && 'text-[#5fd8a8]',
+      tone === 'neg' && 'text-[#ef9f9f]',
+      tone === 'total' && 'text-white',
+    )}>
+      {/* Negating an empty pool yields -0, which formats as "-0 Lekë". */}
+      {formatALL(amount === 0 ? 0 : amount)}
+    </span>
+  </div>
+);
+
+/** One of the four supporting measures beside the hero. */
+const KpiCard: React.FC<{
+  icon: React.ReactNode;
+  iconBg: string;
+  iconInk: string;
+  label: string;
+  value: string;
+  sub: string;
+  danger?: boolean;
+}> = ({ icon, iconBg, iconInk, label, value, sub, danger }) => (
+  <div className={cn(
+    'flex flex-col gap-1.5 rounded-[20px] border p-5 shadow-[0_1px_3px_rgba(8,24,58,.05)]',
+    danger ? 'border-[#f3d2cd] bg-[#fef5f3]' : 'border-[#e3e9f2] bg-white',
+  )}>
+    <div className="flex items-center gap-2.5">
+      <span
+        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-[10px]"
+        style={{ background: iconBg, color: iconInk }}
+        aria-hidden="true"
+      >
+        {icon}
+      </span>
+      <span className={cn('min-w-0 truncate text-xs font-bold', INK_MUTED)}>{label}</span>
+    </div>
+    <p className={cn(
+      'break-words text-2xl font-extrabold leading-tight tracking-[-0.01em]',
+      NUM,
+      danger ? INK_NEG : INK_NAVY,
+    )}>
+      {value}
+    </p>
+    <p className={cn('text-xs font-semibold', danger ? INK_NEG : INK_MUTED)}>{sub}</p>
+  </div>
+);
+
+/** Column header for the department / responsible tables. */
+const TableHead: React.FC<{ first: string }> = ({ first }) => (
+  <div className={cn(
+    COLS,
+    'border-b border-[#e3e9f2] px-5 pb-2 pt-3 text-[11px] font-extrabold uppercase tracking-[.08em] text-[#94a5bd] sm:px-6',
+  )}>
+    <div>{first}</div>
+    <div className="text-right">Të ardhura</div>
+    <div className="text-right">Arkëtuar</div>
+    <div className="text-right">Fitimi</div>
+    <div className="text-right">Marzhi</div>
+  </div>
+);
+
+/** Right-aligned money cell. Mono + tabular so columns compare vertically. */
+const Num: React.FC<{
+  value: number;
+  strong?: boolean;
+  muted?: boolean;
+  tone?: 'pos' | 'neg';
+}> = ({ value, strong, muted, tone }) => (
+  <span className={cn(
+    'text-right text-[13px]',
+    NUM,
+    strong && 'font-bold',
+    tone === 'pos' && INK_POS,
+    tone === 'neg' && INK_NEG,
+    !tone && (muted ? INK_MUTED : INK_NAVY),
+  )}>
+    {formatALL(value)}
+  </span>
+);
+
+const MarginPill: React.FC<{ margin: number | null }> = ({ margin }) => {
+  if (margin == null) return <span className={cn('text-xs', INK_MUTED)}>—</span>;
+  const pct = Math.round(margin * 100);
+  const pos = pct >= 0;
+  return (
+    <span className={cn(
+      'inline-block rounded-full px-2.5 py-0.5 text-xs font-extrabold tabular-nums',
+      pos ? 'bg-[#e7f6ef] text-[#0f8a5f]' : 'bg-[#fdece9] text-[#d64545]',
+    )}>
+      {pct}%
+    </span>
+  );
+};
+
+function Segmented<T extends string>({ value, onChange, options, size = 'md' }: {
+  value: T | '';
+  onChange: (v: T) => void;
+  options: readonly (readonly [T, string])[];
+  size?: 'sm' | 'md';
+}) {
+  return (
+    <div className={cn(
+      'inline-flex items-center rounded-xl bg-[#e6ebf3] p-[3px]',
+      size === 'sm' && 'rounded-[10px] bg-[#edf1f7]',
+    )}>
+      {options.map(([key, label]) => {
+        const active = value === key;
+        return (
+          <button
+            key={key}
+            type="button"
+            aria-pressed={active}
+            onClick={() => onChange(key)}
+            className={cn(
+              'whitespace-nowrap rounded-lg font-bold transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2f6fe0]',
+              size === 'sm' ? 'px-3.5 py-1.5 text-xs' : 'px-4 py-2 text-[12.5px]',
+              active
+                ? 'bg-white text-[#08183A] shadow-[0_1px_3px_rgba(8,24,58,.12)]'
+                : 'text-[#7286a3] hover:text-[#08183A]',
+            )}
+          >
+            {label}
+          </button>
+        );
+      })}
+    </div>
+  );
+}
 
 /**
  * Collapsed explanation. Each card used to carry up to three paragraphs of prose
@@ -1400,262 +1684,133 @@ const Explain: React.FC<{ label?: string; children: React.ReactNode }> = ({
   label = 'Si llogaritet',
   children,
 }) => (
-  <details className="group mt-3">
-    <summary className="flex w-fit cursor-pointer list-none items-center gap-1 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
+  <details className="group mt-3.5">
+    <summary className={cn(
+      'flex w-fit cursor-pointer list-none items-center gap-1.5 text-[11px] font-bold transition-colors hover:text-[#08183A] [&::-webkit-details-marker]:hidden',
+      INK_MUTED,
+    )}>
       <Info className="h-3 w-3" />
       {label}
       <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
     </summary>
-    <div className="mt-2 space-y-1.5 border-l-2 border-border pl-2.5 text-[11px] leading-relaxed text-muted-foreground">
+    <div className={cn(
+      'mt-2 space-y-1.5 border-l-2 border-[#e3e9f2] pl-3 text-[11.5px] leading-relaxed',
+      INK_MUTED,
+    )}>
       {children}
     </div>
   </details>
 );
 
-/** Same mechanic as <Explain>, for a table-view twin rather than prose. */
-const Disclosure: React.FC<{ label: string; icon?: React.ReactNode; children: React.ReactNode }> = ({
-  label, icon, children,
-}) => (
-  <details className="group mt-4 border-t border-border pt-3">
-    <summary className="flex w-fit cursor-pointer list-none items-center gap-1.5 text-[11px] font-medium text-muted-foreground transition-colors hover:text-foreground [&::-webkit-details-marker]:hidden">
-      {icon}
+/** A whole section folded away — same mechanic as <Explain>, panel-sized. */
+const Fold: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+  <details className="group">
+    <summary className={cn(
+      'flex w-fit cursor-pointer list-none items-center gap-2 rounded-xl border border-[#e3e9f2] bg-white px-4 py-2.5 text-[12.5px] font-bold transition-colors hover:text-[#08183A] [&::-webkit-details-marker]:hidden',
+      INK_MUTED,
+    )}>
+      <ChevronRight className="h-3.5 w-3.5 transition-transform group-open:rotate-90" />
       {label}
-      <ChevronDown className="h-3 w-3 transition-transform group-open:rotate-180" />
     </summary>
-    <div className="mt-2.5">{children}</div>
+    {children}
   </details>
-);
-
-function Segmented<T extends string>({ value, onChange, options }: {
-  value: T | '';
-  onChange: (v: T) => void;
-  options: readonly (readonly [T, string])[];
-}) {
-  return (
-    <div className="inline-flex items-center gap-0.5 rounded-lg bg-muted p-0.5">
-      {options.map(([key, label]) => (
-        <button
-          key={key}
-          type="button"
-          aria-pressed={value === key}
-          onClick={() => onChange(key)}
-          className={cn(
-            'rounded-md px-2.5 py-1 text-xs transition-colors',
-            value === key
-              ? 'bg-background font-medium text-foreground shadow-sm'
-              : 'text-muted-foreground hover:text-foreground',
-          )}
-        >
-          {label}
-        </button>
-      ))}
-    </div>
-  );
-}
-
-/** Compact top-of-page urgency strip. Shows the first two, links to the rest. */
-const AlarmStrip: React.FC<{
-  alarms: { text: string; tone: 'red' | 'amber' }[];
-  onSeeAll: () => void;
-}> = ({ alarms, onSeeAll }) => {
-  const worst = alarms.some(a => a.tone === 'red') ? 'red' : 'amber';
-  const shown = alarms.slice(0, 2);
-  return (
-    <div className={cn(
-      'rounded-xl border px-3.5 py-3',
-      worst === 'red' ? 'border-red-500/35 bg-red-500/5' : 'border-amber-500/35 bg-amber-500/5',
-    )}>
-      <div className="flex items-start gap-2.5">
-        <AlertTriangle className={cn('mt-0.5 h-4 w-4 shrink-0', worst === 'red' ? 'text-red-600' : 'text-amber-600')} />
-        <div className="min-w-0 flex-1">
-          <ul className="space-y-1">
-            {shown.map((a, i) => (
-              <li key={i} className="text-sm leading-snug text-foreground">{a.text}</li>
-            ))}
-          </ul>
-          <button
-            onClick={onSeeAll}
-            className="mt-1.5 text-xs font-medium text-primary-hover underline hover:no-underline"
-          >
-            {alarms.length > shown.length ? `Shiko të gjitha (${alarms.length})` : 'Shiko detajet'}
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-/** Stat tile — label, value in proportional figures, optional delta + hint. */
-const StatTile: React.FC<{
-  icon?: React.ReactNode;
-  label: string;
-  value: number;
-  tone?: 'default' | 'pos' | 'neg' | 'sky';
-  hint?: string;
-  danger?: boolean;
-  delta?: { value: number; label: string };
-}> = ({ icon, label, value, tone = 'default', hint, danger, delta }) => (
-  <Card className={cn('p-4', danger && 'border-red-500/40')}>
-    <div className="flex items-center gap-2">
-      {icon}
-      <p className="truncate text-xs font-medium text-muted-foreground">{label}</p>
-    </div>
-    <p className={cn(
-      'mt-1.5 break-words text-2xl font-bold leading-tight',
-      tone === 'pos' && INK_POS,
-      tone === 'neg' && INK_NEG,
-      tone === 'sky' && 'text-sky-700',
-      tone === 'default' && 'text-foreground',
-    )}>
-      {formatALL(value)}
-    </p>
-    {delta && (
-      <p className={cn(
-        'mt-1 flex items-center gap-1 text-[11px] font-medium tabular-nums',
-        delta.value >= 0 ? INK_POS : INK_NEG,
-      )}>
-        {delta.value >= 0 ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
-        {delta.value >= 0 ? '+' : ''}{formatALL(delta.value)}
-        <span className="font-normal text-muted-foreground">{delta.label}</span>
-      </p>
-    )}
-    {hint && <p className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{hint}</p>}
-  </Card>
-);
-
-/**
- * The three measures a department row and a person row both carry, in one
- * layout so the two panels read identically:
- *   Të ardhura (accrual, per the page's basis) · Arkëtuar (cash) · Pa mbledhur · Fitim
- *
- * Four numbers is a table, not a sentence — hence the grid, which folds to 2×2
- * on a phone instead of overflowing the row.
- */
-const MeasureRow: React.FC<{
-  revenue: number;
-  collected: number;
-  profit: number;
-  margin: number | null;
-}> = ({ revenue, collected, profit, margin }) => {
-  const outstanding = revenue - collected;
-  return (
-    <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 sm:grid-cols-4">
-      <Cell label="Të ardhura" value={revenue} />
-      <Cell label="Arkëtuar" value={collected} accent={SERIES[0]} />
-      <Cell
-        label="Pa mbledhur"
-        value={outstanding}
-        // Only an unpaid gap is a warning; collecting ahead is not.
-        tone={outstanding > 0 ? 'warn' : 'muted'}
-      />
-      <Cell
-        label="Fitim"
-        value={profit}
-        tone={profit >= 0 ? 'pos' : 'neg'}
-        suffix={margin != null ? `${Math.round(margin * 100)}%` : undefined}
-      />
-    </div>
-  );
-};
-
-const Cell: React.FC<{
-  label: string;
-  value: number;
-  tone?: 'pos' | 'neg' | 'warn' | 'muted';
-  accent?: string;
-  suffix?: string;
-}> = ({ label, value, tone, accent, suffix }) => (
-  <div className="min-w-0">
-    <p className="flex items-center gap-1 truncate text-[10px] uppercase tracking-wide text-muted-foreground">
-      {accent && <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ background: accent }} />}
-      {label}
-    </p>
-    <p className={cn(
-      'truncate text-xs font-semibold tabular-nums',
-      tone === 'pos' && INK_POS,
-      tone === 'neg' && INK_NEG,
-      tone === 'warn' && INK_WARN,
-      tone === 'muted' && 'text-muted-foreground',
-      !tone && 'text-foreground',
-    )}>
-      {formatALL(value)}
-      {suffix && <span className="ml-1 font-normal text-muted-foreground">({suffix})</span>}
-    </p>
-  </div>
-);
-
-/** Column anchors for a MeasureRow list — the same four measures, summed. */
-const MeasureTotals: React.FC<{
-  totals: { revenue: number; collected: number; profit: number };
-}> = ({ totals }) => (
-  <div className="mb-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
-    <PoolTile label="Të ardhura" value={totals.revenue} />
-    <PoolTile label="Arkëtuar" value={totals.collected} />
-    <PoolTile label="Pa mbledhur" value={totals.revenue - totals.collected} />
-    <PoolTile label="Fitim" value={totals.profit} tone={totals.profit >= 0 ? 'pos' : 'neg'} bold />
-  </div>
-);
-
-/** Magnitude meter. The track is a lighter step of the fill's own ramp. */
-const Meter: React.FC<{ pct: number; tone: 'pos' | 'neg' | 'neutral' }> = ({ pct, tone }) => (
-  <div className={cn(
-    'h-1.5 overflow-hidden rounded-full',
-    tone === 'pos' && 'bg-emerald-600/15',
-    tone === 'neg' && 'bg-red-600/15',
-    tone === 'neutral' && 'bg-sky-600/15',
-  )}>
-    <div
-      className={cn(
-        'h-full rounded-full',
-        tone === 'pos' && 'bg-emerald-600',
-        tone === 'neg' && 'bg-red-600',
-        tone === 'neutral' && 'bg-sky-600',
-      )}
-      style={{ width: `${Math.max(2, Math.min(100, pct))}%` }}
-    />
-  </div>
 );
 
 const Notice: React.FC<{ tone: 'warning' | 'neutral'; children: React.ReactNode }> = ({ tone, children }) => (
   <div className={cn(
-    'mb-3 rounded-lg border p-2.5 text-xs leading-relaxed',
+    'mb-3 rounded-xl border px-3.5 py-2.5 text-xs leading-relaxed',
     tone === 'warning'
-      ? 'border-amber-500/40 bg-amber-500/5 text-amber-900'
-      : 'border-border bg-muted/40 text-muted-foreground',
+      ? 'border-[#f0dfb8] bg-[#fdf6e8] text-[#7a5a12]'
+      : 'border-[#e3e9f2] bg-[#f6f9fd] text-[#5a6d8a]',
   )}>
     {children}
   </div>
 );
 
 const AllClear: React.FC<{ text: string }> = ({ text }) => (
-  <p className={cn('flex items-center gap-1.5 text-sm', INK_POS)}>
-    <CheckCircle2 className="h-4 w-4" />
+  <p className={cn('flex items-center gap-2 text-[13.5px] font-semibold', INK_POS)}>
+    <span className="flex h-5 w-5 items-center justify-center rounded-full bg-[#e7f6ef] text-[11px]">✓</span>
     {text}
   </p>
 );
 
 const EmptyState: React.FC<{ text: string }> = ({ text }) => (
-  <p className="rounded-lg border border-dashed border-border px-3 py-4 text-center text-sm text-muted-foreground">
+  <p className={cn(
+    'rounded-xl border border-dashed border-[#e3e9f2] px-4 py-5 text-center text-[13px]',
+    INK_MUTED,
+  )}>
     {text}
   </p>
 );
 
+/** Recurring inflow vs fixed outflow, as a coverage ratio. */
+const CoverageBar: React.FC<{
+  inflow: number;
+  outflow: number;
+  salaries: number;
+  recurringExpenses: number;
+  gap: number;
+}> = ({ inflow, outflow, salaries, recurringExpenses, gap }) => {
+  const pct = outflow > 0 ? Math.round((inflow / outflow) * 100) : 100;
+  const covered = pct >= 100;
+  const critical = pct < 75;
+  return (
+    <div className="mt-4 flex flex-col gap-3">
+      <div className="flex items-baseline justify-between gap-2 text-[13px]">
+        <span className="font-bold text-[#24344d]">Hyrje të përsëritura</span>
+        <span className={cn('font-bold', NUM, INK_POS)}>{formatALL(inflow)}</span>
+      </div>
+      <div className="flex items-baseline justify-between gap-2 text-[13px]">
+        <span className="font-bold text-[#24344d]">Dalje fikse (rroga + shpenzime)</span>
+        <span className={cn('font-bold', NUM, INK_NEG)}>{formatALL(outflow)}</span>
+      </div>
+
+      <div className="h-2.5 overflow-hidden rounded-full bg-[#edf1f7]">
+        <div
+          className="h-full rounded-full"
+          style={{
+            width: `${Math.max(2, Math.min(100, pct))}%`,
+            background: covered
+              ? 'linear-gradient(90deg, #3ac48c, #0f8a5f)'
+              : critical
+                ? 'linear-gradient(90deg, #e88b8b, #d64545)'
+                : 'linear-gradient(90deg, #e8b23b, #d99a17)',
+          }}
+        />
+      </div>
+
+      <p className={cn(
+        'text-[12.5px] font-bold leading-relaxed',
+        covered ? INK_POS : critical ? INK_NEG : INK_WARN,
+      )}>
+        Mbulim {pct}% —{' '}
+        {covered
+          ? `hyrjet e sigurta i mbulojnë daljet fikse, me tepricë ${formatALL(gap)} në muaj.`
+          : `hyrjet e sigurta nuk i mbulojnë daljet fikse; diferenca ${formatALL(Math.abs(gap))} varet nga projektet një-herëshe.`}
+      </p>
+      <p className={cn('text-[11.5px]', INK_MUTED)}>
+        Dalje fikse = rroga {formatALL(salaries)} + shpenzime periodike {formatALL(recurringExpenses)}.
+      </p>
+    </div>
+  );
+};
+
 // ── Chart primitives ───────────────────────────────────────────────────────
 
-/** Tooltip in system tokens: text stays ink, the dot carries series identity. */
+/** Tooltip: text stays ink, the dot carries series identity. */
 const ChartTip: React.FC<any> = ({ active, payload, label }) => {
   if (!active || !payload?.length) return null;
   const rows = payload.filter((p: any) => p.value != null);
   if (!rows.length) return null;
   return (
-    <div className="rounded-lg border border-border-strong bg-popover px-3 py-2 shadow-lg">
-      <p className="mb-1.5 text-[11px] font-semibold text-foreground">{label}</p>
+    <div className="rounded-xl border border-[#e3e9f2] bg-white px-3.5 py-2.5 shadow-[0_12px_28px_-12px_rgba(8,24,58,.35)]">
+      <p className={cn('mb-1.5 text-[11px] font-extrabold', INK_NAVY)}>{label}</p>
       <ul className="space-y-1">
         {rows.map((p: any) => (
           <li key={p.dataKey} className="flex items-center gap-2 text-[11px]">
             <span className="h-2 w-2 shrink-0 rounded-full" style={{ background: p.color || p.fill }} />
-            <span className="text-muted-foreground">{p.name}</span>
-            <span className="ml-auto pl-3 font-semibold tabular-nums text-foreground">{formatALL(p.value)}</span>
+            <span className={INK_MUTED}>{p.name}</span>
+            <span className={cn('ml-auto pl-3 font-bold', NUM, INK_NAVY)}>{formatALL(p.value)}</span>
           </li>
         ))}
       </ul>
@@ -1663,16 +1818,20 @@ const ChartTip: React.FC<any> = ({ active, payload, label }) => {
   );
 };
 
-const ChartLegend: React.FC<{ items: { label: string; color: string; dashed?: boolean }[] }> = ({ items }) => (
-  <ul className="mb-2 flex flex-wrap items-center gap-x-4 gap-y-1">
+const ChartLegend: React.FC<{
+  items: { label: string; color: string; dashed?: boolean; square?: boolean }[];
+}> = ({ items }) => (
+  <ul className="flex flex-wrap items-center gap-x-4 gap-y-1">
     {items.map(it => (
-      <li key={it.label} className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+      <li key={it.label} className={cn('flex items-center gap-2 text-xs font-bold', INK_MUTED)}>
         {it.dashed ? (
-          <svg width="14" height="4" viewBox="0 0 14 4" aria-hidden="true">
-            <line x1="0" y1="2" x2="14" y2="2" stroke={it.color} strokeWidth="2" strokeDasharray="4 3" />
+          <svg width="18" height="4" viewBox="0 0 18 4" aria-hidden="true">
+            <line x1="0" y1="2" x2="18" y2="2" stroke={it.color} strokeWidth="3" strokeDasharray="5 4" />
           </svg>
+        ) : it.square ? (
+          <span className="h-2.5 w-2.5 rounded-[3px]" style={{ background: it.color }} />
         ) : (
-          <span className="h-2 w-2 rounded-full" style={{ background: it.color }} />
+          <span className="h-[3px] w-[18px] rounded-sm" style={{ background: it.color }} />
         )}
         {it.label}
       </li>
@@ -1682,86 +1841,86 @@ const ChartLegend: React.FC<{ items: { label: string; color: string; dashed?: bo
 
 // ── Data sub-components ────────────────────────────────────────────────────
 
-const BreakdownRow: React.FC<{
-  icon: React.ReactNode;
-  label: string;
-  hint: string;
-  amount: number;
-  positive?: boolean;
-  bold?: boolean;
-}> = ({ icon, label, hint, amount, positive, bold }) => (
-  <div className="flex items-center gap-2.5">
-    <div className="shrink-0">{icon}</div>
-    <div className="min-w-0 flex-1">
-      <p className={cn('text-xs text-foreground', bold ? 'font-bold' : 'font-medium')}>{label}</p>
-      <p className="truncate text-[10px] text-muted-foreground">{hint}</p>
-    </div>
-    <p className={cn(
-      'shrink-0 tabular-nums',
-      bold ? 'text-sm font-bold' : 'text-xs font-semibold',
-      positive === undefined
-        ? amount < 0 ? INK_NEG : 'text-foreground'
-        : positive ? INK_POS : INK_NEG,
-    )}>
-      {formatALL(amount)}
-    </p>
-  </div>
-);
+/**
+ * Per-department profit over the last 6 months.
+ *
+ * Capped at 4 named series with the tail folded into one "Të tjera" line: past
+ * ~5 lines on a 6-point chart the hues stop separating and it reads as
+ * spaghetti — folding beats cycling the palette.
+ */
+const DEPT_SERIES = ['#2f6fe0', '#7C3AED', '#DB2777', '#EA580C'] as const;
+const DEPT_REST = '#64748B';
 
-/** One income source: share meter + amount, so the proportion reads at a glance. */
-const SourceRow: React.FC<{
-  color: string;
-  icon: React.ReactNode;
-  label: string;
-  amount: number;
-  total: number;
-}> = ({ color, icon, label, amount, total }) => {
-  const pct = total > 0 ? Math.round((amount / total) * 100) : 0;
-  return (
-    <div>
-      <div className="flex items-center justify-between gap-2">
-        <span className="flex min-w-0 items-center gap-1.5 truncate text-xs font-medium text-foreground">
-          {icon}
-          {label}
-        </span>
-        <span className="shrink-0 text-xs font-semibold tabular-nums text-foreground">
-          {formatALL(amount)}
-          <span className="ml-1 font-normal text-muted-foreground">{pct}%</span>
-        </span>
-      </div>
-      {/* Track = the fill's own hue at low alpha, so the meter reads as one ramp. */}
-      <div className="mt-1 h-1.5 overflow-hidden rounded-full" style={{ background: `${color}26` }}>
-        <div className="h-full rounded-full" style={{ width: `${Math.max(2, pct)}%`, background: color }} />
-      </div>
-    </div>
-  );
-};
+const DepartmentTrend: React.FC<{
+  trend: ReturnType<typeof buildDepartmentProfitTrend>;
+}> = ({ trend }) => {
+  const view = useMemo(() => {
+    const REST_KEY = 'Të tjera';
+    const shown = trend.departments.slice(0, 4);
+    const rest = trend.departments.slice(4);
+    const data = trend.data.map(row => {
+      const next: Record<string, number | string> = { label: row.label as string };
+      for (const d of shown) next[d] = Number(row[d] || 0);
+      if (rest.length) next[REST_KEY] = rest.reduce((s, d) => s + Number(row[d] || 0), 0);
+      return next;
+    });
+    const series = [
+      ...shown.map((d, i) => ({ key: d, color: DEPT_SERIES[i], delta: trend.deltas[d]?.delta ?? 0 })),
+      ...(rest.length
+        ? [{
+            key: REST_KEY,
+            color: DEPT_REST,
+            delta: rest.reduce((s, d) => s + (trend.deltas[d]?.delta ?? 0), 0),
+          }]
+        : []),
+    ];
+    return { data, series, restCount: rest.length };
+  }, [trend]);
 
-const ClientList: React.FC<{
-  rows: { id: string; name: string; revenue: number; margin: number; marginPct: number }[];
-  emptyText: string;
-}> = ({ rows, emptyText }) => {
-  if (!rows.length) return <EmptyState text={emptyText} />;
-  const maxAbs = Math.max(...rows.map(r => Math.abs(r.margin)), 1);
+  if (!view.series.length) return <EmptyState text="Ende pa departamente për të krahasuar." />;
+
   return (
-    <ul className="space-y-2.5">
-      {rows.map(r => (
-        <li key={r.id}>
-          <div className="flex items-center justify-between gap-2">
-            <span className="min-w-0 flex-1 truncate text-sm text-foreground">{r.name}</span>
-            <span className={cn('shrink-0 text-sm font-semibold tabular-nums', r.margin < 0 ? INK_NEG : INK_POS)}>
-              {formatALL(r.margin)}
-              {r.revenue > 0 && (
-                <span className="ml-1 text-xs font-normal text-muted-foreground">({r.marginPct}%)</span>
-              )}
-            </span>
-          </div>
-          <div className="mt-1">
-            <Meter pct={Math.round((Math.abs(r.margin) / maxAbs) * 100)} tone={r.margin < 0 ? 'neg' : 'pos'} />
-          </div>
-        </li>
-      ))}
-    </ul>
+    <>
+      <ResponsiveContainer width="100%" height={230}>
+        <ComposedChart data={view.data} margin={{ top: 12, right: 16, left: 0, bottom: 4 }}>
+          <CartesianGrid stroke={GRID_INK} vertical={false} />
+          <XAxis dataKey="label" tick={{ fontSize: 11, fill: AXIS_INK, fontWeight: 700 }} axisLine={{ stroke: '#d7dfeb' }} tickLine={false} />
+          <YAxis tick={{ fontSize: 10, fill: AXIS_INK }} width={46} axisLine={false} tickLine={false} tickFormatter={compactALL} />
+          <ReferenceLine y={0} stroke="#d7dfeb" strokeWidth={1.5} />
+          <Tooltip content={<ChartTip />} />
+          {view.series.map(s => (
+            <Line
+              key={s.key} name={s.key} type="monotone" dataKey={s.key}
+              stroke={s.color} strokeWidth={2.5} strokeLinecap="round"
+              dot={{ r: 3.5, fill: s.color, stroke: '#FFFFFF', strokeWidth: 2 }}
+              activeDot={{ r: 6, stroke: '#FFFFFF', strokeWidth: 2 }}
+            />
+          ))}
+        </ComposedChart>
+      </ResponsiveContainer>
+
+      {/* The legend doubles as the month-over-month delta list. */}
+      <ul className="mt-3 grid grid-cols-1 gap-x-5 gap-y-1.5 sm:grid-cols-2">
+        {view.series.map(s => {
+          const up = s.delta >= 0;
+          return (
+            <li key={s.key} className="flex items-center gap-2 text-[13px]">
+              <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: s.color }} />
+              <span className={cn('min-w-0 flex-1 truncate font-semibold', INK_NAVY)}>{s.key}</span>
+              <span className={cn('flex shrink-0 items-center gap-1 text-xs font-bold', NUM, up ? INK_POS : INK_NEG)}>
+                {up ? <TrendingUp className="h-3 w-3" /> : <TrendingDown className="h-3 w-3" />}
+                {up ? '+' : ''}{formatALL(s.delta)}
+              </span>
+            </li>
+          );
+        })}
+      </ul>
+      {view.restCount > 0 && (
+        <p className={cn('mt-2 text-[11px]', INK_MUTED)}>
+          "Të tjera" përmbledh {view.restCount} departamente të tjera më të vogla.
+        </p>
+      )}
+    </>
   );
 };
 
@@ -1790,43 +1949,44 @@ const ProjectPnlBlock: React.FC<{
       </div>
 
       {allocationBasis === 'equal' && (
-        <p className={cn('text-[11px]', INK_WARN)}>
+        <p className={cn('text-[11px] font-semibold', INK_WARN)}>
           ⚠ Asnjë projekt s'ka buxhet — kostot fikse u ndanë në mënyrë të barabartë. Vendos buxhetin
           te projektet për ndarje reale.
         </p>
       )}
 
       <div className="-mx-1 overflow-x-auto">
-        <table className="w-full min-w-[560px] text-sm">
+        <table className="w-full min-w-[580px] text-[13px]">
           <thead>
-            <tr className="border-b border-border text-[11px] uppercase tracking-wide text-muted-foreground">
-              <th className="px-1 py-2 text-left font-medium">Projekti</th>
-              <th className="px-1 py-2 text-right font-medium">Të ardhura</th>
-              <th className="px-1 py-2 text-right font-medium">Direkte</th>
-              <th className="px-1 py-2 text-right font-medium">Fikse</th>
-              <th className="px-1 py-2 text-right font-medium">Fitimi</th>
-              <th className="px-1 py-2 text-right font-medium">Marzh</th>
+            <tr className="border-b border-[#e3e9f2] text-[11px] font-extrabold uppercase tracking-[.08em] text-[#94a5bd]">
+              <th className="px-1 py-2 text-left">Projekti</th>
+              <th className="px-1 py-2 text-right">Të ardhura</th>
+              <th className="px-1 py-2 text-right">Direkte</th>
+              <th className="px-1 py-2 text-right">Fikse</th>
+              <th className="px-1 py-2 text-right">Fitimi</th>
+              <th className="px-1 py-2 text-right">Marzh</th>
             </tr>
           </thead>
           <tbody>
             {pnl.rows.map(r => (
-              <tr key={r.id} className="border-b border-border/50 last:border-0 hover:bg-muted/30">
+              <tr key={r.id} className="border-b border-[#eef2f8] last:border-0 hover:bg-[#f6f9fd]">
                 <td className="max-w-[180px] px-1 py-2">
-                  <p className="truncate font-medium text-foreground">{r.name}</p>
-                  <p className="truncate text-[11px] text-muted-foreground">
+                  <p className={cn('truncate font-bold', INK_NAVY)}>{r.name}</p>
+                  <p className={cn('truncate text-[11px]', INK_MUTED)}>
                     {r.customerId ? (customerNameById.get(r.customerId) || 'Pa klient') : 'Pa klient'}
                     {r.billingType === 'monthly' ? ` · mujore ×${r.activeMonths}` : ' · njëherëshe'}
                   </p>
                 </td>
-                <td className="px-1 py-2 text-right tabular-nums text-foreground">{formatALL(r.revenue)}</td>
-                <td className="px-1 py-2 text-right tabular-nums text-muted-foreground">{formatALL(r.directCost)}</td>
-                <td className="px-1 py-2 text-right tabular-nums text-muted-foreground">{formatALL(r.overhead)}</td>
-                <td className={cn('px-1 py-2 text-right font-semibold tabular-nums', r.profit >= 0 ? INK_POS : INK_NEG)}>
+                <td className={cn('px-1 py-2 text-right', NUM, INK_NAVY)}>{formatALL(r.revenue)}</td>
+                <td className={cn('px-1 py-2 text-right', NUM, INK_MUTED)}>{formatALL(r.directCost)}</td>
+                <td className={cn('px-1 py-2 text-right', NUM, INK_MUTED)}>{formatALL(r.overhead)}</td>
+                <td className={cn('px-1 py-2 text-right font-bold', NUM, r.profit >= 0 ? INK_POS : INK_NEG)}>
                   {formatALL(r.profit)}
                 </td>
                 <td className={cn(
-                  'px-1 py-2 text-right tabular-nums',
-                  r.margin == null ? 'text-muted-foreground' : r.margin >= 0 ? INK_POS : INK_NEG,
+                  'px-1 py-2 text-right',
+                  NUM,
+                  r.margin == null ? INK_MUTED : r.margin >= 0 ? INK_POS : INK_NEG,
                 )}>
                   {r.margin == null ? '—' : `${Math.round(r.margin * 100)}%`}
                 </td>
@@ -1846,31 +2006,35 @@ const PoolTile: React.FC<{
   bold?: boolean;
   hint?: string;
 }> = ({ label, value, tone = 'default', bold, hint }) => (
-  <div className="rounded-lg border border-border bg-muted/25 p-2.5">
-    <p className="text-[11px] text-muted-foreground">{label}</p>
+  <div className="rounded-xl border border-[#e3e9f2] bg-[#f6f9fd] px-3 py-2.5">
+    <p className={cn('text-[11px] font-semibold', INK_MUTED)}>{label}</p>
     <p className={cn(
-      bold ? 'text-base font-bold' : 'text-sm font-semibold',
+      NUM,
+      bold ? 'text-base font-extrabold' : 'text-[13px] font-bold',
       tone === 'pos' && INK_POS,
       tone === 'neg' && INK_NEG,
-      tone === 'default' && 'text-foreground',
+      tone === 'default' && INK_NAVY,
     )}>
       {formatALL(value)}
     </p>
-    {hint && <p className="mt-0.5 text-[10px] leading-tight text-muted-foreground">{hint}</p>}
+    {hint && <p className={cn('mt-0.5 text-[10px] leading-tight', INK_MUTED)}>{hint}</p>}
   </div>
 );
 
 const FinancesSkeleton: React.FC = () => (
-  <div className="mx-auto max-w-6xl space-y-4 px-4 py-4 sm:px-6">
-    <Skeleton className="h-8 w-40" />
-    <Skeleton className="h-44 w-full rounded-xl" />
-    <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-      <Skeleton className="h-24 rounded-xl" />
-      <Skeleton className="h-24 rounded-xl" />
-      <Skeleton className="h-24 rounded-xl" />
+  <div className="pb-6">
+    <div className="mx-auto max-w-[1140px] space-y-4">
+      <Skeleton className="h-10 w-44 rounded-xl" />
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-[1.15fr_1fr_1fr]">
+        <Skeleton className="h-[268px] rounded-[20px] sm:col-span-2 lg:col-span-1 lg:row-span-2" />
+        <Skeleton className="h-[126px] rounded-[20px]" />
+        <Skeleton className="h-[126px] rounded-[20px]" />
+        <Skeleton className="h-[126px] rounded-[20px]" />
+        <Skeleton className="h-[126px] rounded-[20px]" />
+      </div>
+      <Skeleton className="h-11 w-[380px] max-w-full rounded-[14px]" />
+      <Skeleton className="h-72 w-full rounded-[20px]" />
     </div>
-    <Skeleton className="h-9 w-72 rounded-lg" />
-    <Skeleton className="h-64 w-full rounded-xl" />
   </div>
 );
 
