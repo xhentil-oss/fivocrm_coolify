@@ -18,6 +18,7 @@ import {
 import type { Invoice, Expense, Customer, Project, TeamMember } from '../types';
 import {
   getInvoiceCollectedBetween,
+  getInvoiceCollectedAll,
   getInvoiceOutstandingAll,
   calculateExpensesBetween,
   calculateAccountsReceivable,
@@ -241,9 +242,11 @@ const FinancesView: React.FC = () => {
     const inv = invoices || [];
     const projs = projects || [];
     const rows = (customers || []).map(c => {
+      // Profit counts only money actually RECEIVED — an issued-but-unpaid invoice
+      // (Pending/Overdue) is a receivable, not profit. Partials count their paid part.
       const revenue = inv
-        .filter(i => i.customerId === c.id && i.status !== 'Draft' && i.status !== 'Cancelled')
-        .reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0);
+        .filter(i => i.customerId === c.id)
+        .reduce((s, i) => s + getInvoiceCollectedAll(i), 0);
       const cost = projs
         .filter(p => p.customerId === c.id)
         .reduce((s, p) => s + (Number((p as any).spent) || 0), 0);
@@ -617,11 +620,11 @@ const FinancesView: React.FC = () => {
         <Segmented
           value={revenueBasis}
           onChange={setRevenueBasis}
-          options={[['budget', 'Buxhet'], ['invoiced', 'Faturuar']] as const}
+          options={[['budget', 'Buxhet'], ['invoiced', 'Paguar']] as const}
         />
       </div>
       <p className="ml-auto text-[11px] text-muted-foreground">
-        {periodLabel} · {revenueBasis === 'invoiced' ? 'fatura reale të lidhura' : 'buxheti i projekteve'}
+        {periodLabel} · {revenueBasis === 'invoiced' ? 'vetëm faturat e paguara' : 'buxheti i projekteve'}
       </p>
     </div>
   );
@@ -910,7 +913,7 @@ const FinancesView: React.FC = () => {
           >
             {/* Data-quality guards. Without these the numbers look authoritative
                 while quietly excluding revenue: an invoice with no projectId is
-                dropped from the 'Faturuar' basis, yet the FULL overhead pool is
+                dropped from the 'Paguar' (collected) basis, yet the FULL overhead pool is
                 still allocated — so unlinked invoices read as pure loss. */}
             {projectPnl.unlinkedInvoices.count > 0 && (
               <Notice tone={revenueBasis === 'invoiced' ? 'warning' : 'neutral'}>
@@ -918,7 +921,7 @@ const FinancesView: React.FC = () => {
                 (<strong>{formatALL(projectPnl.unlinkedInvoices.amount)}</strong>).
                 {revenueBasis === 'invoiced'
                   ? ' Kjo vlerë NUK numërohet si e ardhur më poshtë, ndërsa kostot fikse ndahen plotësisht — ndaj fitimi duket më i vogël se realiteti.'
-                  : ' Nuk prek llogaritjen mbi bazën "Buxhet", por do të mungojë nëse kalon te "Faturuar".'}
+                  : ' Nuk prek llogaritjen mbi bazën "Buxhet", por do të mungojë nëse kalon te "Paguar".'}
                 {' '}
                 <button
                   onClick={() => navigate('/app/invoices?project=none')}
@@ -1174,7 +1177,7 @@ const FinancesView: React.FC = () => {
             )}
             <Explain label="Pse 'Të ardhura' dhe 'Arkëtuar' nuk përputhen">
               <p>
-                <strong>Të ardhura</strong> = {revenueBasis === 'invoiced' ? 'faturat e lëshuara' : 'buxheti i projektit'}
+                <strong>Të ardhura</strong> = {revenueBasis === 'invoiced' ? 'faturat e paguara (arkëtuar)' : 'buxheti i projektit'}
                 {' '}brenda periudhës — ajo që u <em>fitua</em> (accrual). Kjo kolonë ndjek toggle-in lart.
               </p>
               <p>

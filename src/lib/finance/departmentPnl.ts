@@ -13,7 +13,7 @@
 
 import type { Project, TeamMember, Expense, Invoice } from '../../types';
 import { toAll } from '../utils';
-import { parseDate, monthsElapsedInYear, MONTH_LABELS_SQ, getInvoiceBilledBetween } from './financialAnalytics';
+import { parseDate, monthsElapsedInYear, MONTH_LABELS_SQ, getInvoiceCollectedBetween } from './financialAnalytics';
 import { memberSalaryForMonth } from './salaryHistory';
 
 export interface DepartmentPnlOptions {
@@ -101,7 +101,7 @@ export function computeDepartmentPnl(
     for (const inv of opts.invoices || []) {
       const pid = inv.projectId;
       if (!pid) continue;
-      const amt = getInvoiceBilledBetween(inv, invWindow.start, invWindow.end);
+      const amt = getInvoiceCollectedBetween(inv, invWindow.start, invWindow.end);
       if (amt) invoicedByProject.set(pid, (invoicedByProject.get(pid) || 0) + amt);
     }
   }

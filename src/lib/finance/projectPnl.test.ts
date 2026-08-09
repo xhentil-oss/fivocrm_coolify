@@ -157,15 +157,27 @@ describe('computeProjectPnl', () => {
     expect(res.totals.profit).toBeCloseTo(0, 3);
   });
 
-  it('uses actual billed invoices when revenueBasis is "invoiced"', () => {
+  it('counts only COLLECTED money on the invoiced basis (unpaid ≠ profit)', () => {
     const projects = [mkProject({ id: 'a', name: 'A', budget: 100_000, billingType: 'one-time', createdAt: new Date('2026-03-01'), updatedAt: new Date('2026-03-01') })];
     const invoices = [
-      { id: 'i1', projectId: 'a', total: 250_000, status: 'Pending', invoiceDate: new Date('2026-03-10'), createdAt: new Date('2026-03-10') },
+      { id: 'paid', projectId: 'a', total: 250_000, status: 'Paid', invoiceDate: new Date('2026-03-10'), paidAt: new Date('2026-03-15'), createdAt: new Date('2026-03-10') },
+      { id: 'pending', projectId: 'a', total: 400_000, status: 'Pending', invoiceDate: new Date('2026-03-10'), createdAt: new Date('2026-03-10') },
+      { id: 'overdue', projectId: 'a', total: 300_000, status: 'Overdue', invoiceDate: new Date('2026-03-10'), createdAt: new Date('2026-03-10') },
       { id: 'draft', projectId: 'a', total: 999_000, status: 'Draft', invoiceDate: new Date('2026-03-10'), createdAt: new Date('2026-03-10') },
     ] as any;
     const res = computeProjectPnl(projects, [], [], { year: 2026, now: new Date('2026-07-23'), revenueBasis: 'invoiced', invoices });
-    // Billed (Draft excluded), not the 100k budget.
+    // Only the PAID invoice counts — Pending/Overdue are receivables, not profit.
     expect(res.rows[0].revenue).toBe(250_000);
+  });
+
+  it('credits the paid part of a partially-paid invoice', () => {
+    const projects = [mkProject({ id: 'a', name: 'A', budget: 0, billingType: 'one-time', createdAt: new Date('2026-03-01'), updatedAt: new Date('2026-03-01') })];
+    const invoices = [
+      { id: 'p', projectId: 'a', total: 100_000, status: 'Partial', invoiceDate: new Date('2026-03-10'), createdAt: new Date('2026-03-10'),
+        partialPayments: [{ amount: 40_000, paidAt: new Date('2026-03-20') }] },
+    ] as any;
+    const res = computeProjectPnl(projects, [], [], { year: 2026, now: new Date('2026-07-23'), revenueBasis: 'invoiced', invoices });
+    expect(res.rows[0].revenue).toBe(40_000);
   });
 
   it('returns null margin for zero-revenue projects', () => {
@@ -181,14 +193,15 @@ describe('computeProjectPnl', () => {
     const now = new Date('2026-07-23');
     const projects = [mkProject({ id: 'a', name: 'A', budget: 100_000, billingType: 'one-time' })];
 
-    it('reports billed invoices that carry no projectId', () => {
+    it('reports COLLECTED invoices that carry no projectId', () => {
       const invoices = [
-        { id: 'i1', projectId: 'a', total: 250_000, status: 'Pending', invoiceDate: new Date('2026-03-10'), createdAt: new Date('2026-03-10') },
-        { id: 'i2', total: 80_000, status: 'Paid', invoiceDate: new Date('2026-04-10'), createdAt: new Date('2026-04-10') },
+        { id: 'i1', projectId: 'a', total: 250_000, status: 'Paid', invoiceDate: new Date('2026-03-10'), paidAt: new Date('2026-03-12'), createdAt: new Date('2026-03-10') },
+        { id: 'i2', total: 80_000, status: 'Paid', invoiceDate: new Date('2026-04-10'), paidAt: new Date('2026-04-12'), createdAt: new Date('2026-04-10') },
+        // Unpaid + unlinked: not collected, so it is NOT reported as lost revenue.
         { id: 'i3', projectId: '', total: 20_000, status: 'Overdue', invoiceDate: new Date('2026-05-10'), createdAt: new Date('2026-05-10') },
       ] as any;
       const res = computeProjectPnl(projects, [], [], { year: 2026, now, revenueBasis: 'invoiced', invoices });
-      expect(res.unlinkedInvoices).toEqual({ count: 2, amount: 100_000 });
+      expect(res.unlinkedInvoices).toEqual({ count: 1, amount: 80_000 });
       expect(res.rows[0].revenue).toBe(250_000); // unlinked value is NOT credited
     });
 

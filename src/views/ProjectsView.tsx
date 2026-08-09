@@ -317,6 +317,9 @@ const ProjectsView: React.FC = () => {
         tax: 0,
         status: 'Draft',
         notes: `Faturë e gjeneruar automatikisht për projektin periodik "${name}".`,
+        // Issue date: accrual revenue is recognised on invoiceDate; without it the
+        // engines fall back to createdAt and the UI shows an empty "Data" column.
+        invoiceDate: now,
         dueDate: periodEnd,
         // The PROJECT drives the cycle, not this invoice — flagging it isRecurring
         // too would make it look like a second, competing series.
@@ -335,20 +338,30 @@ const ProjectsView: React.FC = () => {
         lastInvoiceGeneratedAt: now,
       } as any);
 
-      // Create invoiceItems for selected services
-      if (selectedServiceIds && selectedServiceIds.length > 0 && services) {
-        for (const serviceId of selectedServiceIds) {
-          const service = services.find(s => s.id === serviceId);
-          if (service) {
-            await invoiceItemMutation.create({
-              invoiceId: (newInvoice as any).id,
-              serviceId: service.id,
-              quantity: 1,
-              unitPrice: service.price || 0,
-              totalPrice: service.price || 0,
-            } as any);
-          }
+      // Create invoiceItems for selected services. When the project is priced by
+      // BUDGET (no services picked) we still write one line — otherwise the invoice
+      // carries a total with nothing itemised and the detail/PDF renders empty.
+      const pickedServices = (selectedServiceIds || [])
+        .map(id => services?.find(s => s.id === id))
+        .filter(Boolean) as typeof services;
+      if (pickedServices && pickedServices.length > 0) {
+        for (const service of pickedServices) {
+          await invoiceItemMutation.create({
+            invoiceId: (newInvoice as any).id,
+            serviceId: service.id,
+            quantity: 1,
+            unitPrice: service.price || 0,
+            totalPrice: service.price || 0,
+          } as any);
         }
+      } else {
+        await invoiceItemMutation.create({
+          invoiceId: (newInvoice as any).id,
+          description: name,
+          quantity: 1,
+          unitPrice: billableTotal,
+          totalPrice: billableTotal,
+        } as any);
       }
 
       // Send invoice email to customer via API (sets status → Pending)
@@ -384,23 +397,34 @@ const ProjectsView: React.FC = () => {
         tax: 0,
         status: 'Draft',
         notes: `Faturë draft e krijuar automatikisht për projektin "${name}".`,
+        invoiceDate: now,
         dueDate,
       } as any);
 
-      // Create invoiceItems for selected services
-      if (selectedServiceIds && selectedServiceIds.length > 0 && services) {
-        for (const serviceId of selectedServiceIds) {
-          const service = services.find(s => s.id === serviceId);
-          if (service) {
-            await invoiceItemMutation.create({
-              invoiceId: (newInvoice as any).id,
-              serviceId: service.id,
-              quantity: 1,
-              unitPrice: service.price || 0,
-              totalPrice: service.price || 0,
-            } as any);
-          }
+      // Create invoiceItems for selected services. When the project is priced by
+      // BUDGET (no services picked) we still write one line — otherwise the invoice
+      // carries a total with nothing itemised and the detail/PDF renders empty.
+      const pickedServices = (selectedServiceIds || [])
+        .map(id => services?.find(s => s.id === id))
+        .filter(Boolean) as typeof services;
+      if (pickedServices && pickedServices.length > 0) {
+        for (const service of pickedServices) {
+          await invoiceItemMutation.create({
+            invoiceId: (newInvoice as any).id,
+            serviceId: service.id,
+            quantity: 1,
+            unitPrice: service.price || 0,
+            totalPrice: service.price || 0,
+          } as any);
         }
+      } else {
+        await invoiceItemMutation.create({
+          invoiceId: (newInvoice as any).id,
+          description: name,
+          quantity: 1,
+          unitPrice: billableTotal,
+          totalPrice: billableTotal,
+        } as any);
       }
     }
     } // end: only when billableTotal > 0
