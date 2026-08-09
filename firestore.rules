@@ -1136,7 +1136,7 @@ service cloud.firestore {
       // The client portal no longer reads this collection at all — recipients and
       // routing are resolved server-side by /api/notify-staff.
       allow read: if isBusinessMember(resource.data.businessId)
-        || (isAuth() && resource.data.userId == request.auth.uid)
+        || (isAuth() && resource.data.get('userId', '') == request.auth.uid)
         || (isAuth() && request.auth.token.email != null
             && resource.data.get('email', '') == request.auth.token.email.lower())
         || isSuperAdmin();
@@ -1145,8 +1145,20 @@ service cloud.firestore {
       // (api/accept-invite), which validates the token + email and bypasses rules.
       // Still HARDENED against the original hole: a stranger cannot forge a
       // membership into a team they have no server-minted authority over.
+      // The document ID is PART OF THE DATA MODEL here, not an opaque handle:
+      // isTeamMember() resolves membership with exists() on
+      // `teamMembers/{teamId}_{uid}`, and a dozen rules grant access on that alone.
+      // Left unchecked, someone with roster authority in their OWN tenant could
+      // create a row keyed `{victimTeam}_{theirUid}` while the row's DATA names
+      // their own team — passing the authority check and minting themselves into
+      // the victim's team. Pinning id == teamId + '_' + userId removes the gap
+      // between what the id claims and what the data says. (Client writers now all
+      // use that key; server paths use the Admin SDK and bypass rules.)
       allow create: if canCreateMembership(
-        request.resource.data.businessId, request.resource.data.teamId);
+          request.resource.data.get('businessId', ''),
+          request.resource.data.get('teamId', ''))
+        && docId == request.resource.data.get('teamId', '')
+                    + '_' + request.resource.data.get('userId', '');
       // Prevent role self-escalation: users can update own record but only safe fields
       allow update: if isAuth() && (
         // Self-update: only displayName/email/position/updatedAt, role must not change.
@@ -1154,8 +1166,8 @@ service cloud.firestore {
         // report asks, nothing more. It is NOT authorisation (`role`) and NOT the P&L
         // allocation (`serviceLines`), both of which stay owner-only, so letting people
         // declare their own job at first login cannot escalate anything.
-        (resource.data.userId == request.auth.uid &&
-         request.resource.data.role == resource.data.role &&
+        (resource.data.get('userId', '') == request.auth.uid &&
+         request.resource.data.get('role', '') == resource.data.get('role', '') &&
          request.resource.data.diff(resource.data).affectedKeys()
            .hasOnly(['displayName', 'email', 'position', 'updatedAt'])) ||
         // Managing a member (incl. role changes) requires roster authority — see
@@ -1163,7 +1175,7 @@ service cloud.firestore {
         // claim, or the platform operator.
         //
         // The manager's OWN row is included on purpose. This branch used to carry
-        // `resource.data.userId != request.auth.uid`, which combined with the
+        // `resource.data.get('userId', '') != request.auth.uid`, which combined with the
         // narrow self-update allow-list above meant an owner/admin could never
         // save their own monthlySalary/salaryHistory/serviceLines/status — the
         // edit failed silently and their payroll stayed missing from every P&L.
@@ -1173,14 +1185,14 @@ service cloud.firestore {
         // `role` is still pinned when editing yourself, so no one can promote
         // themselves and an owner cannot accidentally demote themselves out of
         // their own tenant.
-        (canManageMembers(resource.data.businessId, resource.data.teamId) &&
-         (resource.data.userId != request.auth.uid
-          || request.resource.data.role == resource.data.role))
+        (canManageMembers(resource.data.get('businessId', ''), resource.data.get('teamId', '')) &&
+         (resource.data.get('userId', '') != request.auth.uid
+          || request.resource.data.get('role', '') == resource.data.get('role', '')))
       );
       // Leaving yourself, or roster authority removing someone.
       allow delete: if isAuth() && (
-        resource.data.userId == request.auth.uid ||
-        canManageMembers(resource.data.businessId, resource.data.teamId)
+        resource.data.get('userId', '') == request.auth.uid ||
+        canManageMembers(resource.data.get('businessId', ''), resource.data.get('teamId', ''))
       );
     }
 

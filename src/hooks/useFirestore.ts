@@ -3,6 +3,8 @@ import {
   collection,
   doc,
   addDoc,
+  setDoc,
+  FieldValue,
   updateDoc,
   deleteDoc,
   query,
@@ -559,7 +561,12 @@ export function useDocument<T = DocumentData>(
 function removeUndefined(obj: any): any {
   if (obj === null || obj === undefined) return obj;
   if (Array.isArray(obj)) return obj.map(removeUndefined);
-  if (obj instanceof Date || obj instanceof Timestamp) return obj;
+  // A FieldValue sentinel (deleteField(), increment(), arrayUnion(), …) is an
+  // object, so without this guard the recursion below rebuilt it as a plain
+  // object and Firestore silently ignored it. That is why clearing a value was
+  // impossible: `undefined` gets stripped by design, and deleteField() — the
+  // only real way to remove a field — never survived the trip.
+  if (obj instanceof Date || obj instanceof Timestamp || obj instanceof FieldValue) return obj;
   if (typeof obj === 'object') {
     return Object.fromEntries(
       Object.entries(obj)
@@ -578,7 +585,20 @@ export function useMutation<T = DocumentData>(collectionName: string) {
   const [error, setError] = useState<Error | null>(null);
 
   // createdAt, updatedAt, createdByUserId are auto-injected — callers don't need to provide them
-  const create = useCallback(async (data: Partial<Pick<T & Record<string, any>, 'createdAt' | 'updatedAt' | 'createdByUserId'>> & Omit<T, 'id' | 'createdAt' | 'updatedAt' | 'createdByUserId'>) => {
+  const create = useCallback(async (
+    data: Partial<Pick<T & Record<string, any>, 'createdAt' | 'updatedAt' | 'createdByUserId'>> & Omit<T, 'id' | 'createdAt' | 'updatedAt' | 'createdByUserId'>,
+    /**
+     * Write under a CHOSEN document id instead of a generated one.
+     *
+     * Needed where the id is part of the data model rather than an opaque
+     * handle: `teamMembers` must be keyed `{teamId}_{userId}` because the
+     * Firestore rules resolve membership with `exists()` on exactly that path
+     * (see isTeamMember / membershipRef). `addDoc` random ids silently broke
+     * that invariant, which is what the `backfill-member-keys` cron exists to
+     * repair — this stops re-creating the drift on every new member.
+     */
+    docId?: string,
+  ) => {
     setLoading(true);
     setError(null);
     try {
@@ -632,7 +652,13 @@ export function useMutation<T = DocumentData>(collectionName: string) {
       if (typeof (docData as any).email === 'string') {
         (docData as any).email = (docData as any).email.trim().toLowerCase();
       }
-      const docRef = await addDoc(collection(db, collectionName), docData);
+      let docRef;
+      if (docId) {
+        docRef = doc(db, collectionName, docId);
+        await setDoc(docRef, docData);
+      } else {
+        docRef = await addDoc(collection(db, collectionName), docData);
+      }
       if (staticCollections.has(collectionName)) invalidateCollectionCache(collectionName);
 
       // Push + email delivery for in-app notifications — single choke point

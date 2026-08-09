@@ -727,6 +727,47 @@ test('35f. an ADMIN who did not create the team manages the roster', async () =>
   await assertFails(updateDoc(doc(admin, 'teamMembers', `${MY_TEAM}_boss`), { role: 'Owner' }));
 });
 
+test('35i. a membership must be keyed {teamId}_{userId}', async () => {
+  const admin = staffOf('boss', MY_BIZ, MY_TEAM, ['admin'], 'boss@mine.com');
+  // The exploit the key pinning closes: authority is proved with the row's OWN
+  // (legitimate) team, while the DOCUMENT ID names the victim team. isTeamMember()
+  // only checks that the id exists, so this used to mint access to teamVictim.
+  await assertFails(setDoc(doc(admin, 'teamMembers', `${VICTIM_TEAM}_boss`), {
+    userId: 'boss', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Admin', status: 'Active',
+  }));
+  // A generated/random id is refused too — it would leave a member whose own
+  // tenant checks fail until backfill-member-keys re-keys them.
+  await assertFails(setDoc(doc(admin, 'teamMembers', 'randomLookingId123'), {
+    userId: 'newbie2', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active',
+  }));
+  // Claiming someone else's uid in the id while the data says you is refused.
+  await assertFails(setDoc(doc(admin, 'teamMembers', `${MY_TEAM}_someoneelse`), {
+    userId: 'boss', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active',
+  }));
+  // The correct key is accepted.
+  await assertSucceeds(setDoc(doc(admin, 'teamMembers', `${MY_TEAM}_newbie3`), {
+    userId: 'newbie3', teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active',
+  }));
+});
+
+test('35j. a legacy row with no businessId is still manageable, not bricked', async () => {
+  // `resource.data.businessId` THREW on such a row, and a thrown expression denies
+  // for everyone — the owner included. Reading it with .get() turns that into a
+  // clean evaluation so team ownership can still carry the edit.
+  const OWNED2 = 'teamLegacy';
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'teams', OWNED2), { businessId: MY_BIZ, createdByUserId: 'legacyOwner' });
+    await setDoc(doc(db, 'teamMembers', `${OWNED2}_ghost`), {
+      userId: 'ghost', teamId: OWNED2, role: 'Member', status: 'Active',
+    });
+  });
+  const owner = testEnv.authenticatedContext('legacyOwner', { email: 'lo@mine.com' }).firestore();
+  await assertSucceeds(updateDoc(doc(owner, 'teamMembers', `${OWNED2}_ghost`), {
+    monthlySalary: 30000,
+  }));
+});
+
 test('35h. an admin cannot name ANOTHER business team on a new membership', async () => {
   // The dangerous shape: prove authority with your OWN businessId while naming a
   // team from someone else's. `isTeamMember()` is satisfied by the mere existence

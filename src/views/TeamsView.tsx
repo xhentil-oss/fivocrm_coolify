@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
-import { getDocs, query, where, collection, deleteDoc, doc, updateDoc } from 'firebase/firestore';
+import { getDocs, query, where, collection, deleteDoc, doc, updateDoc, deleteField } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { Users, Plus, MoreVertical, Mail, UserPlus, Shield, Trash2, CheckCircle, XCircle, Clock, Edit2, Check, X, Settings, Eye, Globe, Search, Share2, PenTool, Palette, Megaphone, Code2, HeadphonesIcon, Briefcase, DollarSign, TrendingUp, UserCheck, Copy, Send } from 'lucide-react';
 
@@ -141,6 +141,9 @@ const TeamsView: React.FC = () => {
 
     // Auto-add creator as Admin member so they appear in mentions
     if (newTeam?.id) {
+      // Deterministic membership key `{teamId}_{userId}`: the Firestore rules
+      // resolve membership with exists() on exactly that path, so a generated id
+      // silently breaks tenant checks (and is what backfill-member-keys repairs).
       await memberMutation.create({
         userId: user.uid,
         teamId: newTeam.id,
@@ -165,7 +168,7 @@ const TeamsView: React.FC = () => {
         invitedByUserId: user.uid,
         invitedAt: new Date(),
         status: 'Active',
-      });
+      }, `${newTeam.id}_${user.uid}`);
     }
 
     setIsCreateDialogOpen(false);
@@ -390,7 +393,7 @@ const TeamsView: React.FC = () => {
       invitedByUserId: user.uid,
       invitedAt: new Date(),
       status: 'Active',
-    });
+    }, `${selectedTeam.id}_${userId}`);
 
     // Send notification email if an address was provided
     if (email) {
@@ -457,7 +460,7 @@ const TeamsView: React.FC = () => {
       invitedByUserId: invite.invitedByUserId,
       invitedAt: new Date(),
       status: 'Active',
-    });
+    }, `${invite.teamId}_${user.uid}`);
 
     // Update invite status
     await inviteMutation.update(invite.id, { status: 'Accepted' });
@@ -1263,7 +1266,9 @@ const InviteMemberForm: React.FC<{
 // Edit Member Permissions Form
 const EditMemberForm: React.FC<{
   member: TeamMember;
-  onSubmit: (data: Partial<TeamMember>) => void;
+  // `Record<string, unknown>` on top of Partial<TeamMember> so a field can carry a
+  // Firestore deleteField() sentinel — the only way to actually REMOVE a value.
+  onSubmit: (data: Partial<TeamMember> & Record<string, unknown>) => void;
 }> = ({ member, onSubmit }) => {
   const { getName } = useUserNames([member]);
   const [role, setRole] = useState(member.role);
@@ -1330,8 +1335,12 @@ const EditMemberForm: React.FC<{
       status,
       displayName: displayName.trim() || undefined,
       email: email.trim() || undefined,
-      monthlySalary: newSalary,
-      hourlyCostRate: hourlyCostRate ? parseFloat(hourlyCostRate) : undefined,
+      // Emptying the box must REMOVE the field. `undefined` is stripped before the
+      // write (by design, so partial updates don't blank unrelated fields), so
+      // clearing a salary silently kept the old amount — and the member kept
+      // costing money in every P&L. deleteField() is the explicit erase.
+      monthlySalary: newSalary == null ? deleteField() : newSalary,
+      hourlyCostRate: hourlyCostRate ? parseFloat(hourlyCostRate) : deleteField(),
       position: position || undefined,
       serviceLines: serviceLines.length ? serviceLines : undefined,
       // Only include when we changed it, so unrelated edits don't clobber history.

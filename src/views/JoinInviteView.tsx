@@ -177,8 +177,11 @@ const JoinInviteView: React.FC = () => {
         return;
       }
 
-      // Create team member
-      await addDoc(collection(db, 'teamMembers'), {
+      // Create team member under the DETERMINISTIC key `{teamId}_{userId}`.
+      // The Firestore rules resolve membership with exists() on exactly that
+      // path, so the addDoc random id used here previously produced a member
+      // whose own tenant checks failed until backfill-member-keys re-keyed it.
+      await setDoc(doc(db, 'teamMembers', `${invite.teamId}_${user.uid}`), {
         userId: user.uid,
         email: user.email || invite.email || '',
         displayName: user.displayName || user.email?.split('@')[0] || '',
