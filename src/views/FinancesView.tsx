@@ -348,7 +348,9 @@ const FinancesView: React.FC = () => {
   // Rendered as one control row above the panels it scopes, never buried inside
   // a card that silently governs the cards below it.
   const [period, setPeriod] = useState<Period>('year');
-  const [revenueBasis, setRevenueBasis] = useState<'budget' | 'invoiced'>('budget');
+  // Default to the money actually COLLECTED ("Paguar"): profit should reflect cash
+  // that arrived, not a plan. "Buxhet" stays available as the planning view.
+  const [revenueBasis, setRevenueBasis] = useState<'budget' | 'invoiced'>('invoiced');
 
   const periodOpts = useMemo((): ProjectPnlOptions => {
     if (period === 'month') {

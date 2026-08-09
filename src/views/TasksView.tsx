@@ -353,6 +353,7 @@ const TasksView: React.FC = () => {
     const recurringDaysOfWeekRaw = formData.get('recurringDaysOfWeek') as string;
     const recurringEndDateRaw = formData.get('recurringEndDate') as string;
     const estimatedHoursRaw = formData.get('estimatedHours') as string;
+    const valueRaw = formData.get('value') as string;
     const dependsOnRaw = formData.get('dependsOn') as string;
 
     let dependsOn: string[] = [];
@@ -433,6 +434,7 @@ const TasksView: React.FC = () => {
         : undefined,
       nextRecurringDate,
       estimatedHours: estimatedHoursRaw ? (v => !isNaN(v) ? v : undefined)(parseFloat(estimatedHoursRaw)) : undefined,
+      value: valueRaw ? (v => !isNaN(v) && v >= 0 ? v : undefined)(parseFloat(valueRaw)) : undefined,
       dependsOn: dependsOn.length > 0 ? dependsOn : undefined,
     });
 
@@ -1709,9 +1711,16 @@ const TaskForm: React.FC<{
       </div>
 
       <div className="space-y-4 border-t pt-4">
-        <div>
-          <Label htmlFor="estimatedHours">Orë të Vlerësuara</Label>
-          <Input id="estimatedHours" name="estimatedHours" type="number" step="0.5" min="0" placeholder="p.sh. 4" defaultValue={(initialData as any)?.estimatedHours || ''} />
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          <div>
+            <Label htmlFor="estimatedHours">Orë të Vlerësuara</Label>
+            <Input id="estimatedHours" name="estimatedHours" type="number" step="0.5" min="0" placeholder="p.sh. 4" defaultValue={(initialData as any)?.estimatedHours || ''} />
+          </div>
+          <div>
+            <Label htmlFor="value">Vlera (opsionale)</Label>
+            <Input id="value" name="value" type="number" step="0.01" min="0" placeholder="p.sh. 15000" defaultValue={(initialData as any)?.value ?? ''} />
+            <p className="text-[11px] text-muted-foreground mt-1">Vlera e faturueshme e kësaj detyre. Lëre bosh nëse projekti çmohet me buxhet.</p>
+          </div>
         </div>
         <div className="flex items-center gap-2">
           <Checkbox 
