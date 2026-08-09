@@ -38,6 +38,40 @@ module.exports = {
           800: "#0C2C63",
           900: "#08183A",
         },
+        // ── Dashboard surface (hifi handoffs: Financat + Projekti) ──
+        // One palette for the navy-hero dashboards. Defined here, per the
+        // handoff, so no page hardcodes these hexes. Status ink (pos/neg/warn)
+        // means profit-vs-loss or on-track-vs-late ONLY; `blue` carries series
+        // identity and action, and never implies "good".
+        brand: {
+          navy: "#08183A",
+          "navy-mid": "#0d2a63",   // hero gradient start
+          "navy-deep": "#0c2456",  // avatar tile gradient start
+          blue: "#2f6fe0",
+          "blue-hover": "#2258bb",
+          "blue-soft": "#7fb2f4",  // secondary series
+          "blue-tint": "#dbe7fb",
+          ink: "#24344d",          // body text
+          muted: "#7286a3",
+          "muted-2": "#94a5bd",    // column heads, axis ink
+          line: "#e3e9f2",         // card border
+          "line-soft": "#edf1f7",  // row divider
+          "line-softer": "#f4f7fb",
+          surface: "#f6f9fd",      // row hover / inset panel
+          board: "#e9eef6",        // kanban column ground
+          chip: "#e6ebf3",
+          "chip-ink": "#5b6f8d",
+          pos: "#1e7a46",
+          "pos-tint": "#e8f2ec",
+          warn: "#d9a021",
+          "warn-ink": "#8a6413",
+          "warn-tint": "#fdf6e8",
+          "warn-line": "#eedcb2",
+          neg: "#d64545",
+          "neg-ink": "#b23030",
+          "neg-tint": "#fdeeee",
+          "neg-line": "#f3c8c8",
+        },
         // Cyan accent extras
         "accent-ink": "#0369A1",
         "accent-bright": "#38BDF8",

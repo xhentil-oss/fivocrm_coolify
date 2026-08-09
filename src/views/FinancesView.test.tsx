@@ -200,16 +200,18 @@ describe('FinancesView', () => {
     render(<FinancesView />);
     selectTab('Fitimi');
 
-    // Default: the year, on the budget basis.
+    // Default: the year, on money actually collected — profit should open on
+    // cash that arrived, not on a plan.
     expect(screen.getByRole('button', { name: 'Viti', pressed: true })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Buxhet', pressed: true })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Paguar', pressed: true })).toBeInTheDocument();
     expect(screen.getByText(new RegExp(`Viti ${now.getFullYear()}`))).toBeInTheDocument();
+    expect(screen.getByText(/vetëm faturat e paguara/)).toBeInTheDocument();
 
     // Switching the basis re-labels the summary line, proving the single control
     // reaches the panels (it used to live buried inside one card).
-    fireEvent.click(screen.getByRole('button', { name: 'Paguar' }));
-    expect(screen.getByRole('button', { name: 'Paguar', pressed: true })).toBeInTheDocument();
-    expect(screen.getByText(/vetëm faturat e paguara/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Buxhet' }));
+    expect(screen.getByRole('button', { name: 'Buxhet', pressed: true })).toBeInTheDocument();
+    expect(screen.getByText(/buxheti i projekteve/)).toBeInTheDocument();
 
     // A specific month is reachable from the same row, replacing the second,
     // independent month dropdown the responsible card used to own.

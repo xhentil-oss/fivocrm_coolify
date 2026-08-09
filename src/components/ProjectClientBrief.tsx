@@ -1,22 +1,19 @@
 import React from 'react';
-import { useDocument } from '../hooks/useFirestore';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { getInquirySections, getInquiryCompleteness, canSeeInquiryPricing } from '../lib/inquiryBrief';
-import { Badge } from './ui/badge';
-import { ClipboardList, ChevronDown, AlertTriangle, AlertCircle, Image as ImageIcon, FileText, ExternalLink } from 'lucide-react';
+import { cn } from '../lib/utils';
+import { AlertTriangle, FileText, Mail, ExternalLink } from 'lucide-react';
 import type { ServiceInquiry } from '../types';
 
 /**
- * Kartë për staff-in te faqja e projektit: shfaq të dhënat që klienti plotësoi
- * në anketë (ServiceInquiry) kur kërkesa u konvertua në projekt. Merr të dhënat
- * nga anketa e lidhur (`project.sourceQuestionnaireId`) — burim gjithmonë i saktë.
+ * Anketa e klientit (ServiceInquiry) e lidhur me projektin, si tab më vete.
+ *
+ * Kartela merr anketën si PROP — jo id-në: faqja e projektit e lexon vetë atë
+ * dokument sepse badge-i i tab-it duhet të dijë sa fusha mungojnë PARA se tab-i
+ * të hapet, dhe dy lexime të të njëjtit dokument do të ishin harxhim.
  */
-const ProjectClientBrief: React.FC<{ inquiryId?: string }> = ({ inquiryId }) => {
-  const [open, setOpen] = React.useState(true);
+const ProjectClientBrief: React.FC<{ inquiry: ServiceInquiry }> = ({ inquiry }) => {
   const permissions = usePermissions();
-  const { data: inquiry, loading } = useDocument<ServiceInquiry>('serviceInquiries', inquiryId || '');
-
-  if (!inquiryId || loading || !inquiry) return null;
 
   // Pjesa e çmimit shihet vetëm nga Admin/SuperAdmin/SalesAgent.
   const { urgent, sections } = getInquirySections(inquiry, { includePricing: canSeeInquiryPricing(permissions) });
@@ -25,113 +22,128 @@ const ProjectClientBrief: React.FC<{ inquiryId?: string }> = ({ inquiryId }) => 
   const materialFiles = inquiry.materialFiles || [];
   const isImg = (n: string, u: string) => /\.(png|jpe?g|gif|webp|svg|bmp)/i.test(n) || /\.(png|jpe?g|gif|webp|svg|bmp)/i.test(u);
 
-  if (sections.length === 0 && !logoUrl && materialFiles.length === 0) return null;
+  if (sections.length === 0 && !logoUrl && materialFiles.length === 0) {
+    return (
+      <p className="rounded-[20px] border border-dashed border-brand-line px-4 py-8 text-center text-[13px] text-brand-muted">
+        Anketa e klientit është bosh.
+      </p>
+    );
+  }
+
+  // Logo dhe materialet janë e njëjta rrjetë miniaturash — logoja thjesht vjen e para.
+  const files = [
+    ...(logoUrl ? [{ name: 'Logo', url: logoUrl }] : []),
+    ...materialFiles,
+  ];
+
+  const mailtoReminder = inquiry.email
+    ? `mailto:${inquiry.email}?subject=${encodeURIComponent('Materialet që mungojnë')}&body=${encodeURIComponent(
+        `Përshëndetje,\n\nPër të vazhduar me projektin na mungojnë ende:\n${completeness.missing.map((m, i) => `${i + 1}. ${m.label}`).join('\n')}\n\nFaleminderit!`,
+      )}`
+    : null;
 
   return (
-    <div className="mx-4 sm:mx-6 mb-4 rounded-2xl border border-primary/15 bg-gradient-to-b from-primary/[0.04] to-transparent overflow-hidden">
-      <button
-        type="button"
-        onClick={() => setOpen(o => !o)}
-        className="w-full flex items-center gap-3 px-4 py-3 text-left"
-      >
-        <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-xl bg-primary/10">
-          <ClipboardList className="h-4 w-4 text-primary" />
-        </div>
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2">
-            <h3 className="font-semibold text-sm">Detajet nga anketa e klientit</h3>
-            {urgent && (
-              <Badge className="bg-red-100 text-red-700 gap-1 rounded-full text-[11px] dark:bg-red-950/40 dark:text-red-300">
-                <AlertTriangle className="h-3 w-3" /> Urgjente
-              </Badge>
-            )}
-            {completeness.missing.length > 0 && (
-              <Badge className="bg-amber-100 text-amber-800 gap-1 rounded-full text-[11px] dark:bg-amber-950/40 dark:text-amber-300">
-                {completeness.missing.length} pa dërguar
-              </Badge>
-            )}
+    <div className="grid items-start gap-4 lg:grid-cols-[1.4fr_1fr]">
+      <section className="rounded-[20px] border border-brand-line bg-white px-6 py-5 shadow-[0_1px_3px_rgba(8,24,58,.05)]">
+        <div className="flex flex-wrap items-center justify-between gap-2.5">
+          <div>
+            <h2 className="text-[15px] font-extrabold text-brand-navy">Detajet nga anketa e klientit</h2>
+            <p className="mt-0.5 text-[12.5px] text-brand-muted">Të dhënat që plotësoi klienti gjatë kërkesës.</p>
           </div>
-          <p className="text-xs text-muted-foreground mt-0.5">Të dhënat që plotësoi klienti gjatë kërkesës</p>
+          {urgent && (
+            <span className="flex items-center gap-1.5 rounded-full bg-brand-neg-tint px-3 py-1 text-[11px] font-extrabold text-brand-neg-ink">
+              <AlertTriangle className="h-3 w-3" />
+              Urgjente
+            </span>
+          )}
         </div>
-        <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
 
-      {open && (
-        <div className="px-4 pb-4 space-y-5">
-          {/* Ende pa dërguar nga klienti */}
-          {completeness.missing.length > 0 && (
-            <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 dark:bg-amber-950/20 dark:border-amber-800/40">
-              <p className="text-xs font-bold text-amber-800 dark:text-amber-300 flex items-center gap-1.5 mb-2">
-                <AlertCircle className="h-3.5 w-3.5" /> Klienti nuk ka dërguar akoma
-              </p>
-              <ol className="space-y-1.5">
-                {completeness.missing.map((m, i) => (
-                  <li key={m.key} className="text-sm text-amber-900 dark:text-amber-200 flex items-center gap-2">
-                    <span className="flex h-5 w-5 flex-shrink-0 items-center justify-center rounded-full bg-amber-200 text-[11px] font-bold text-amber-800 dark:bg-amber-800/50 dark:text-amber-200">{i + 1}</span>
-                    {m.label}
-                  </li>
-                ))}
-              </ol>
-            </div>
-          )}
-
-          {/* Logo */}
-          {logoUrl && (
-            <div>
-              <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-1.5"><ImageIcon className="h-3.5 w-3.5" /> Logo</p>
-              <a href={logoUrl} target="_blank" rel="noopener noreferrer">
-                <img src={logoUrl} alt="Logo e biznesit" className="h-16 rounded-lg border bg-white object-contain p-1" />
-              </a>
-            </div>
-          )}
-
-          {sections.map(sec => (
-            <div key={sec.title}>
-              <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2">{sec.title}</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2.5">
-                {sec.rows.map(row => (
-                  <div key={row.label} className={Array.isArray(row.value) ? 'sm:col-span-2' : ''}>
-                    <p className="text-xs text-muted-foreground">{row.label}</p>
-                    {Array.isArray(row.value) ? (
-                      <div className="flex flex-wrap gap-1.5 mt-1">
-                        {row.value.map((v, i) => (
-                          <Badge key={i} variant="secondary" className="rounded-full text-xs font-normal">{v}</Badge>
-                        ))}
-                      </div>
-                    ) : (
-                      <p className="text-sm font-medium break-words">{row.value}</p>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          ))}
-
-          {/* Foto & materiale të ngarkuara */}
-          {materialFiles.length > 0 && (
-            <div>
-              <p className="text-[11px] font-bold uppercase tracking-wider text-muted-foreground mb-2 flex items-center gap-1.5"><ImageIcon className="h-3.5 w-3.5" /> Foto & materiale</p>
-              <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                {materialFiles.map((f, i) => (
-                  <a key={i} href={f.url} target="_blank" rel="noopener noreferrer" className="group rounded-lg border bg-muted/20 overflow-hidden" title={f.name}>
-                    {isImg(f.name, f.url) ? (
-                      <img src={f.url} alt={f.name} className="h-20 w-full object-cover" />
-                    ) : (
-                      <div className="h-20 w-full flex flex-col items-center justify-center gap-1 text-muted-foreground">
-                        <FileText className="h-5 w-5" />
-                        <span className="text-[10px] px-1 truncate max-w-full">{f.name}</span>
-                      </div>
-                    )}
-                    <div className="flex items-center gap-1 px-1.5 py-1 text-[10px] text-muted-foreground group-hover:text-primary">
-                      <ExternalLink className="h-3 w-3 flex-shrink-0" /><span className="truncate">{f.name}</span>
+        {sections.map(sec => (
+          <div key={sec.title} className="mt-5">
+            <h3 className="border-b border-brand-line-soft pb-2 text-[11px] font-extrabold uppercase tracking-[.1em] text-brand-muted-2">
+              {sec.title}
+            </h3>
+            <div className="mt-3 grid gap-x-6 gap-y-3.5 sm:grid-cols-2">
+              {sec.rows.map(row => (
+                <div key={row.label} className={cn('min-w-0', Array.isArray(row.value) && 'sm:col-span-2')}>
+                  <p className="text-[11.5px] font-bold text-brand-muted-2">{row.label}</p>
+                  {Array.isArray(row.value) ? (
+                    <div className="mt-1.5 flex flex-wrap gap-1.5">
+                      {row.value.map((v, i) => (
+                        <span key={i} className="rounded-full bg-brand-chip px-3 py-1 text-[11.5px] font-bold text-brand-chip-ink">
+                          {v}
+                        </span>
+                      ))}
                     </div>
-                  </a>
-                ))}
-              </div>
+                  ) : (
+                    <p className="mt-1 break-words text-[13.5px] font-bold leading-[1.4] text-brand-ink">{row.value}</p>
+                  )}
+                </div>
+              ))}
             </div>
-          )}
-        </div>
-      )}
+          </div>
+        ))}
+      </section>
+
+      <div className="flex flex-col gap-4">
+        {completeness.missing.length > 0 && (
+          <section className="rounded-[20px] border border-brand-warn-line bg-brand-warn-tint px-5 py-5">
+            <h3 className="flex items-center gap-2 text-[13px] font-extrabold text-brand-warn-ink">
+              <AlertTriangle className="h-3.5 w-3.5" />
+              Klienti nuk ka dërguar akoma
+            </h3>
+            <ol className="mt-3.5 flex flex-col gap-2.5">
+              {completeness.missing.map((m, i) => (
+                <li key={m.key} className="flex items-center gap-2.5">
+                  <span className="flex h-[22px] w-[22px] shrink-0 items-center justify-center rounded-full bg-brand-warn-line text-[11px] font-extrabold text-brand-warn-ink">
+                    {i + 1}
+                  </span>
+                  <span className="text-[13px] font-bold text-[#6d5312]">{m.label}</span>
+                </li>
+              ))}
+            </ol>
+            {mailtoReminder && (
+              <a
+                href={mailtoReminder}
+                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-brand-warn px-4 py-2.5 text-[12.5px] font-bold text-white transition-colors hover:bg-[#b8871a]"
+              >
+                <Mail className="h-3.5 w-3.5" />
+                Kujtoje klientin
+              </a>
+            )}
+          </section>
+        )}
+
+        {files.length > 0 && (
+          <section className="rounded-[20px] border border-brand-line bg-white px-5 py-5 shadow-[0_1px_3px_rgba(8,24,58,.05)]">
+            <h3 className="text-[13px] font-extrabold text-brand-navy">Logo &amp; materiale</h3>
+            <div className="mt-3.5 grid grid-cols-2 gap-2.5">
+              {files.map((f, i) => (
+                <a
+                  key={i}
+                  href={f.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  title={f.name}
+                  className="overflow-hidden rounded-xl border border-brand-line-soft transition-all hover:border-brand-blue hover:shadow-[0_4px_12px_rgba(8,24,58,.1)]"
+                >
+                  {isImg(f.name, f.url) ? (
+                    <img src={f.url} alt={f.name} className="h-[62px] w-full bg-white object-contain p-1.5" />
+                  ) : (
+                    <div className="flex h-[62px] w-full items-center justify-center bg-brand-blue-tint text-brand-blue-hover">
+                      <FileText className="h-5 w-5" />
+                    </div>
+                  )}
+                  <div className="flex items-center gap-1 px-2.5 py-1.5 text-[11px] font-bold text-brand-chip-ink">
+                    <ExternalLink className="h-3 w-3 shrink-0" />
+                    <span className="truncate">{f.name}</span>
+                  </div>
+                </a>
+              ))}
+            </div>
+          </section>
+        )}
+      </div>
     </div>
   );
 };
