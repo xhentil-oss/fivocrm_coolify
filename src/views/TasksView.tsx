@@ -1018,7 +1018,11 @@ const TasksView: React.FC = () => {
   }
 
   return (
-    <div className="h-[calc(100dvh-120px)] w-full min-w-0 flex flex-col lg:flex-row">
+    // Fill the route wrapper (App.tsx gives it a definite height + its own scroll)
+    // instead of guessing the viewport minus a hardcoded 120px of chrome. That
+    // guess ignored the top nav, the wrapper's own padding and any banner, so the
+    // page overflowed its container: dead space plus a second, pointless scrollbar.
+    <div className="h-full min-h-[24rem] w-full min-w-0 flex flex-col lg:flex-row">
       {/* Left Side - Task List */}
       <div className={`${
         selectedTask

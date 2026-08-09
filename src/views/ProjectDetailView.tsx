@@ -324,6 +324,12 @@ const ProjectDetailView: React.FC = () => {
       priority,
       collaboratorIds: [],
       ...(section ? { section } : {}),
+      // Optional billable value for this task (left blank when it doesn't apply).
+      ...(() => {
+        const raw = formData.get('value') as string;
+        const v = raw ? parseFloat(raw) : NaN;
+        return !isNaN(v) && v >= 0 ? { value: v } : {};
+      })(),
       // Stamp the project's team so creation works even when there's no global
       // active team (e.g. a super-admin viewing across teams).
       ...(project?.teamId ? { teamId: project.teamId } : {}),
@@ -1657,6 +1663,12 @@ const TaskForm: React.FC<{
             ))}
           </SelectContent>
         </Select>
+      </div>
+
+      <div>
+        <Label htmlFor="value">Vlera (opsionale)</Label>
+        <Input id="value" name="value" type="number" step="0.01" min="0" placeholder="p.sh. 15000" defaultValue={(initialData as any)?.value ?? ''} />
+        <p className="text-[11px] text-muted-foreground mt-1">Vlera e faturueshme e kësaj detyre. Lëre bosh nëse nuk aplikohet.</p>
       </div>
 
       <div>
