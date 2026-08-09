@@ -17,6 +17,7 @@ import { Calendar } from '../components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { Switch } from '../components/ui/switch';
 import { useActivityLogger } from '../hooks/useActivityLogger';
+import { useToast } from '../hooks/use-toast';
 import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import {
   expensePeriodKey,
@@ -30,6 +31,7 @@ const ExpensesView: React.FC = () => {
   const { user } = useAuth();
   const permissions = usePermissions();
   const logActivity = useActivityLogger();
+  const { toast } = useToast();
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [selectedExpense, setSelectedExpense] = useState<Expense | null>(null);
   const [isEditDialogOpen, setIsEditDialogOpen] = useState(false);
@@ -58,7 +60,14 @@ const ExpensesView: React.FC = () => {
     const title = formData.get('title') as string;
     const description = formData.get('description') as string;
     const amount = parseFloat(formData.get('amount') as string);
-    if (isNaN(amount) || amount < 0) return;
+    if (!title || !title.trim()) {
+      toast({ title: 'Titulli mungon', description: 'Shkruaj një titull për shpenzimin.', variant: 'destructive' });
+      return;
+    }
+    if (isNaN(amount) || amount < 0) {
+      toast({ title: 'Shuma e pavlefshme', description: 'Shkruaj një shumë pozitive.', variant: 'destructive' });
+      return;
+    }
     const currency = formData.get('currency') as string;
     const category = formData.get('category') as string;
     const departmentId = formData.get('departmentId') as string;
@@ -72,12 +81,13 @@ const ExpensesView: React.FC = () => {
 
     const memberId = formData.get('memberId') as string;
 
-    // Same title + amount + currency already recorded this month? Almost always a
-    // double entry (the live data had 19 such groups, ~1.5M L counted twice), so
-    // ask before adding a second one instead of discovering it in the P&L.
+    // Same title + amount + currency already recorded this month? Likely a double
+    // entry — but we DON'T block the save with a native confirm() (unreliable in
+    // the mobile webview, and a false return silently dropped the expense). We save
+    // and warn; duplicates are also surfaced by the banner/badge/"Dublikatat" filter.
     const now = new Date();
     const thisPeriod = expensePeriodKey('monthly', now);
-    const clash = (rawExpenses || []).find(e => {
+    const clash = (rawExpenses || []).some(e => {
       if ((e as any).approvalStatus === 'Rejected') return false;
       if ((e.title || '').trim().toLowerCase() !== title.trim().toLowerCase()) return false;
       if (Number(e.amount) !== amount) return false;
@@ -85,10 +95,6 @@ const ExpensesView: React.FC = () => {
       const d = getExpenseDate(e);
       return !!d && expensePeriodKey('monthly', d) === thisPeriod;
     });
-    if (clash && !confirm(
-      `"${title}" me ${amount} ${currency || 'ALL'} është regjistruar tashmë këtë muaj.\n\n` +
-      `Shtimi i një të dyti do ta numërojë shpenzimin dy herë. Vazhdo gjithsesi?`
-    )) return;
 
     // A recurring PARENT is itself a real row that counts in its own month, so the
     // first generated occurrence must land in the NEXT period — otherwise the cron
@@ -98,28 +104,34 @@ const ExpensesView: React.FC = () => {
     const firstNext = isRecurring ? firstGenerationDate(now, freq, pickedNext) : null;
 
     const isAdminOrManager = permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin;
-    await expenseMutation.create({
-      title,
-      description: description || undefined,
-      amount,
-      currency: currency || 'ALL',
-      category,
-      departmentId: departmentId || undefined,
-      isRecurring,
-      recurringFrequency: isRecurring ? freq : undefined,
-      nextRecurringDate: firstNext || undefined,
-      recurringAnchorDay: firstNext ? firstNext.getDate() : undefined,
-      // This row IS the current period's expense — recording the key stops the cron
-      // from generating a second one for it.
-      lastGeneratedPeriodKey: isRecurring ? expensePeriodKey(freq, now) : undefined,
-      recurringEndDate: isRecurring && recurringEndDate ? new Date(recurringEndDate) : undefined,
-      status: status || 'Active',
-      approvalStatus: isAdminOrManager ? 'Approved' : 'Submitted',
-      approvedByUserId: isAdminOrManager ? user?.uid : undefined,
-      paidDate: paidDate ? new Date(paidDate) : undefined,
-      projectId: projectId && projectId !== '__none__' ? projectId : undefined,
-      memberId: memberId && memberId !== '__none__' ? memberId : undefined,
-    } as any);
+    try {
+      await expenseMutation.create({
+        title,
+        description: description || undefined,
+        amount,
+        currency: currency || 'ALL',
+        category,
+        departmentId: departmentId || undefined,
+        isRecurring,
+        recurringFrequency: isRecurring ? freq : undefined,
+        nextRecurringDate: firstNext || undefined,
+        recurringAnchorDay: firstNext ? firstNext.getDate() : undefined,
+        // This row IS the current period's expense — recording the key stops the cron
+        // from generating a second one for it.
+        lastGeneratedPeriodKey: isRecurring ? expensePeriodKey(freq, now) : undefined,
+        recurringEndDate: isRecurring && recurringEndDate ? new Date(recurringEndDate) : undefined,
+        status: status || 'Active',
+        approvalStatus: isAdminOrManager ? 'Approved' : 'Submitted',
+        approvedByUserId: isAdminOrManager ? user?.uid : undefined,
+        paidDate: paidDate ? new Date(paidDate) : undefined,
+        projectId: projectId && projectId !== '__none__' ? projectId : undefined,
+        memberId: memberId && memberId !== '__none__' ? memberId : undefined,
+      } as any);
+    } catch (err: any) {
+      console.error('[Expenses] create failed:', err);
+      toast({ title: 'Shpenzimi nuk u ruajt', description: err?.message || 'Ndodhi një gabim — provo përsëri.', variant: 'destructive' });
+      return; // keep the dialog open so the entry isn't lost
+    }
 
     logActivity('expense_added', `Shpenzim: ${title}`, { entityType: 'expense', description: `${amount} ${currency || 'ALL'}` });
 
@@ -142,6 +154,10 @@ const ExpensesView: React.FC = () => {
     }
 
     setIsCreateDialogOpen(false);
+    toast({
+      title: 'Shpenzimi u ruajt ✓',
+      description: clash ? '⚠ Duket dublikatë e këtij muaji — kontrollo te banner-i i dublikatave.' : undefined,
+    });
   };
 
   const handleUpdateExpense = async (formData: FormData) => {
@@ -150,7 +166,14 @@ const ExpensesView: React.FC = () => {
     const title = formData.get('title') as string;
     const description = formData.get('description') as string;
     const amount = parseFloat(formData.get('amount') as string);
-    if (isNaN(amount) || amount < 0) return;
+    if (!title || !title.trim()) {
+      toast({ title: 'Titulli mungon', description: 'Shkruaj një titull për shpenzimin.', variant: 'destructive' });
+      return;
+    }
+    if (isNaN(amount) || amount < 0) {
+      toast({ title: 'Shuma e pavlefshme', description: 'Shkruaj një shumë pozitive.', variant: 'destructive' });
+      return;
+    }
     const currency = formData.get('currency') as string;
     const category = formData.get('category') as string;
     const departmentId = formData.get('departmentId') as string;
@@ -175,32 +198,39 @@ const ExpensesView: React.FC = () => {
       : wasRecurring ? picked
       : firstGenerationDate(ownDate, freq, picked);
 
-    await expenseMutation.update(selectedExpense.id, {
-      title,
-      description: description || undefined,
-      amount,
-      currency: currency || 'ALL',
-      category,
-      departmentId: departmentId || undefined,
-      isRecurring,
-      recurringFrequency: isRecurring ? freq : undefined,
-      nextRecurringDate: nextDate,
-      recurringAnchorDay: nextDate ? nextDate.getDate() : null,
-      lastGeneratedPeriodKey: isRecurring
-        ? ((selectedExpense as any).lastGeneratedPeriodKey || expensePeriodKey(freq, ownDate))
-        : null,
-      // Turning recurrence off clears the schedule fields so a stale end-date/pause
-      // can't silently resurrect the series later.
-      recurringEndDate: isRecurring ? (recurringEndDate ? new Date(recurringEndDate) : null) : null,
-      isRecurringPaused: isRecurring ? ((selectedExpense as any).isRecurringPaused ?? false) : false,
-      status: status || 'Active',
-      paidDate: paidDate ? new Date(paidDate) : undefined,
-      projectId: projectId && projectId !== '__none__' ? projectId : undefined,
-      memberId: memberId && memberId !== '__none__' ? memberId : undefined,
-    } as any);
+    try {
+      await expenseMutation.update(selectedExpense.id, {
+        title,
+        description: description || undefined,
+        amount,
+        currency: currency || 'ALL',
+        category,
+        departmentId: departmentId || undefined,
+        isRecurring,
+        recurringFrequency: isRecurring ? freq : undefined,
+        nextRecurringDate: nextDate,
+        recurringAnchorDay: nextDate ? nextDate.getDate() : null,
+        lastGeneratedPeriodKey: isRecurring
+          ? ((selectedExpense as any).lastGeneratedPeriodKey || expensePeriodKey(freq, ownDate))
+          : null,
+        // Turning recurrence off clears the schedule fields so a stale end-date/pause
+        // can't silently resurrect the series later.
+        recurringEndDate: isRecurring ? (recurringEndDate ? new Date(recurringEndDate) : null) : null,
+        isRecurringPaused: isRecurring ? ((selectedExpense as any).isRecurringPaused ?? false) : false,
+        status: status || 'Active',
+        paidDate: paidDate ? new Date(paidDate) : undefined,
+        projectId: projectId && projectId !== '__none__' ? projectId : undefined,
+        memberId: memberId && memberId !== '__none__' ? memberId : undefined,
+      } as any);
+    } catch (err: any) {
+      console.error('[Expenses] update failed:', err);
+      toast({ title: 'Ndryshimet nuk u ruajtën', description: err?.message || 'Ndodhi një gabim — provo përsëri.', variant: 'destructive' });
+      return;
+    }
 
     setIsEditDialogOpen(false);
     setSelectedExpense(null);
+    toast({ title: 'Shpenzimi u përditësua ✓' });
   };
 
   // Pause/resume generation without ending the series.
