@@ -2,17 +2,22 @@ import { describe, expect, it } from 'vitest';
 import type { Project, TeamMember, Expense } from '../../types';
 import { computeProjectPnl } from './projectPnl';
 
+// Default fixture is a COMPLETED one-time project: that is the state in which a
+// one-time deal's revenue is recognised (point in time), so cost-allocation tests
+// below keep exercising real revenue. Recognition timing has its own tests.
 function mkProject(p: Partial<Project>): Project {
   return {
     id: p.id || 'p1',
     name: p.name || 'Project',
-    status: p.status || 'Active',
+    status: p.status || 'Completed',
     budget: p.budget,
     customerId: p.customerId,
     responsibleUserId: p.responsibleUserId,
     createdByUserId: p.createdByUserId ?? null,
     createdAt: p.createdAt ?? new Date('2026-03-01'),
     updatedAt: p.updatedAt ?? new Date('2026-03-01'),
+    // No default lastCompletedAt: it would cap a MONTHLY project's active span.
+    // A completed one-time project falls back to updatedAt for its recognition date.
     ...p,
   } as Project;
 }
@@ -178,6 +183,43 @@ describe('computeProjectPnl', () => {
     ] as any;
     const res = computeProjectPnl(projects, [], [], { year: 2026, now: new Date('2026-07-23'), revenueBasis: 'invoiced', invoices });
     expect(res.rows[0].revenue).toBe(40_000);
+  });
+
+  describe('one-time revenue recognition (point in time)', () => {
+    const now = new Date('2026-07-23');
+
+    it('recognises nothing while the project is still in progress', () => {
+      const projects = [mkProject({ id: 'wip', name: 'WIP', budget: 300_000, billingType: 'one-time',
+        status: 'Active', lastCompletedAt: undefined, createdAt: new Date('2026-03-01'), updatedAt: new Date('2026-06-01') })];
+      const res = computeProjectPnl(projects, [], [], { year: 2026, now });
+      expect(res.rows[0].revenue).toBe(0);
+      expect(res.rows[0].activeMonths).toBe(0);
+    });
+
+    it('recognises the full value in the month it was completed', () => {
+      const projects = [mkProject({ id: 'done', name: 'Done', budget: 300_000, billingType: 'one-time',
+        status: 'Completed', lastCompletedAt: new Date('2026-05-20') })];
+      // May window → recognised
+      const may = computeProjectPnl(projects, [], [], { range: { start: new Date(2026, 4, 1), end: new Date(2026, 4, 31, 23, 59, 59) }, months: 1, now });
+      expect(may.rows[0]?.revenue).toBe(300_000);
+      // June window → nothing (already earned in May)
+      const jun = computeProjectPnl(projects, [], [], { range: { start: new Date(2026, 5, 1), end: new Date(2026, 5, 30, 23, 59, 59) }, months: 1, now });
+      expect(jun.rows.reduce((s, r) => s + r.revenue, 0)).toBe(0);
+    });
+
+    it('does not drift with updatedAt once a completion date exists', () => {
+      const projects = [mkProject({ id: 'd', name: 'D', budget: 100_000, billingType: 'one-time',
+        status: 'Completed', lastCompletedAt: new Date('2026-04-10'), updatedAt: new Date('2026-07-20') })];
+      const apr = computeProjectPnl(projects, [], [], { range: { start: new Date(2026, 3, 1), end: new Date(2026, 3, 30, 23, 59, 59) }, months: 1, now });
+      expect(apr.rows[0]?.revenue).toBe(100_000); // stays in April despite a July edit
+    });
+
+    it('does not apply to monthly retainers (they earn every active month)', () => {
+      const projects = [mkProject({ id: 'm', name: 'M', budget: 50_000, billingType: 'monthly',
+        status: 'Active', lastCompletedAt: undefined, createdAt: new Date('2026-01-01'), updatedAt: new Date('2026-07-01') })];
+      const res = computeProjectPnl(projects, [], [], { range: { start: new Date(2026, 6, 1), end: new Date(2026, 6, 31, 23, 59, 59) }, months: 1, now });
+      expect(res.rows[0].revenue).toBe(50_000);
+    });
   });
 
   it('returns null margin for zero-revenue projects', () => {
