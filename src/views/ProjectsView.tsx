@@ -577,10 +577,18 @@ const ProjectsView: React.FC = () => {
 
     const oldStatus = projectToEdit.status;
 
+    // Stamp the completion date when the project is marked Completed by hand
+    // (the auto-close path already does this). Revenue for a one-time project is
+    // recognised in the month it was COMPLETED, so this date must be stable —
+    // without it the P&L falls back to updatedAt and the revenue drifts months.
+    const completedNow = status === 'Completed' && oldStatus !== 'Completed'
+      && !(projectToEdit as any).lastCompletedAt;
+
     await projectMutation.update(projectToEdit.id, {
       name,
       description,
       status,
+      ...(completedNow ? { lastCompletedAt: new Date() } : {}),
       teamId: teamId && teamId !== '__none__' ? teamId : undefined,
       budget,
       currency,

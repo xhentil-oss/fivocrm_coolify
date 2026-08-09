@@ -179,7 +179,13 @@ export function computeDepartmentPnl(
     if (useInvoiced) return invoicedByProject.get(p.id) || 0;
     const fee = toAll(p.budget || 0, (p as any).currency);
     if (fee <= 0) return 0;
-    if (billingTypeOf(p) === 'one-time') return fee;
+    if (billingTypeOf(p) === 'one-time') {
+      // Point-in-time recognition: a one-time deal is earned when DELIVERED, so it
+      // is recognised in the month the project was completed — not while running.
+      if (!isCompleted(p)) return 0;
+      const done = parseDate((p as any).lastCompletedAt) || parseDate(p.updatedAt);
+      return (!!done && done >= periodStart && done <= periodEnd) ? fee : 0;
+    }
     const s = (parseDate(p.createdAt) ?? periodStart) > periodStart ? (parseDate(p.createdAt) as Date) : periodStart;
     const eRaw = parseDate((p as any).lastCompletedAt) ?? periodEnd;
     const e = eRaw < periodEnd ? eRaw : periodEnd;

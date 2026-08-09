@@ -262,7 +262,18 @@ export function computeProjectPnl(
     // Budget basis: one-time = budget; monthly = fee × active months.
     // Normalizo në ALL (kostot/pagat janë në ALL) që marzhi të jetë i saktë për EUR.
     const fee = toAll(p.budget || 0, p.currency);
-    if (bt === 'one-time') return { revenue: fee, billingType: bt, activeMonths: 1 };
+    if (bt === 'one-time') {
+      // Revenue recognition (IFRS 15, point in time): a one-time deal is EARNED
+      // when the work is delivered, so its value is recognised in the month the
+      // project was COMPLETED — never while it is still in progress. Recognising
+      // it earlier booked profit for work not yet done, and (because the fallback
+      // date was `updatedAt`) let the revenue drift between months on any edit.
+      if (!isCompleted(p)) return { revenue: 0, billingType: bt, activeMonths: 0 };
+      const done = parseDate((p as any).lastCompletedAt) || parseDate(p.updatedAt);
+      const inPeriodNow = !membershipWindow
+        || (!!done && done >= membershipWindow.start && done <= membershipWindow.end);
+      return { revenue: inPeriodNow ? fee : 0, billingType: bt, activeMonths: 1 };
+    }
     const projStart = parseDate(p.createdAt) ?? periodStart;
     const projEnd = parseDate((p as any).lastCompletedAt) ?? periodEnd;
     const s = projStart > periodStart ? projStart : periodStart;

@@ -2,9 +2,11 @@ import { describe, expect, it } from 'vitest';
 import type { Project, TeamMember, Expense } from '../../types';
 import { computeDepartmentPnl, buildDepartmentProfitTrend } from './departmentPnl';
 
+// Default fixture is a COMPLETED one-time project — the state in which a one-time
+// deal's revenue is recognised (point in time).
 function mkP(p: Partial<Project>): Project {
   return {
-    id: p.id || 'p', name: p.name || 'P', status: p.status || 'Active',
+    id: p.id || 'p', name: p.name || 'P', status: p.status || 'Completed',
     budget: p.budget, billingType: p.billingType || 'one-time', department: p.department,
     responsibleUserId: p.responsibleUserId, memberUserIds: p.memberUserIds,
     createdAt: p.createdAt ?? new Date('2026-03-01'), updatedAt: p.updatedAt ?? new Date('2026-03-01'),
