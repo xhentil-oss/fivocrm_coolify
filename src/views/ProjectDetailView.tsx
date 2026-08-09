@@ -396,7 +396,10 @@ const ProjectDetailView: React.FC = () => {
         const label = scopeId
           ? await getNextInvoiceNumber(scopeId)
           : `TASK-${Date.now().toString(36).toUpperCase()}`;
-        const due = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        // Own timestamp: the `now` further up is scoped to the recurrence branch,
+        // so referencing it here threw "now is not defined" at runtime.
+        const issuedAt = new Date();
+        const due = new Date(issuedAt.getFullYear(), issuedAt.getMonth() + 1, 0, 23, 59, 59, 999);
         const newInvoice = await invoiceMutation.create({
           invoiceNumber: label,
           projectId: projectId,
@@ -409,7 +412,7 @@ const ProjectDetailView: React.FC = () => {
           currency: (project as any)?.currency || 'ALL',
           status: 'Draft',
           notes: `Faturë për detyrën "${title}" (projekti "${project?.name || ''}").`,
-          invoiceDate: now,
+          invoiceDate: issuedAt,
           dueDate: due,
           taskId: (newTask as any)?.id,
         } as any);
