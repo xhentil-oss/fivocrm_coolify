@@ -329,6 +329,9 @@ export interface Project {
   description?: string;
   status: 'Planning' | 'Active' | 'In Review' | 'On Hold' | 'Completed' | 'Archived' | 'Cancelled';
   teamId?: string;
+  /** Tenant/isolation key — stamped on every project; the type was missing it
+   *  even though the code (and the business-scoped queries) rely on it. */
+  businessId?: string;
   customerId?: string;
   budget?: number;
   /** Monedha e `budget`/`spent`. Kur mungon, trajtohet si ALL (projektet legacy). */
