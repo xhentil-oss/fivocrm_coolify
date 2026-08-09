@@ -35,6 +35,7 @@ function getTeamDeptIcon(department?: string) {
 import { usePermissions } from '../contexts/PermissionsContext';
 import { cn } from '../lib/utils';
 import { appendSalaryChange } from '../lib/finance/salaryHistory';
+import { readTenantClaims } from '../lib/tenantClaims';
 import { parseDate } from '../lib/finance/financialAnalytics';
 import { toast } from '../hooks/use-toast';
 import { useSubscription } from '../hooks/useSubscription';
@@ -766,15 +767,23 @@ const TeamsView: React.FC = () => {
                 } catch (err) {
                   const denied = (err as any)?.code === 'permission-denied';
                   const isSelf = editingMember.userId === user?.uid;
-                  toast({
-                    title: 'Ruajtja dështoi',
-                    description: denied
-                      ? isSelf && data.role !== editingMember.role
-                        ? 'Rolin tënd nuk mund ta ndryshosh vetë — kërkoji një pronari ose admini tjetër.'
-                        : 'Nuk ke leje për këtë ndryshim. Anëtarët menaxhohen nga pronari ose admini i biznesit. Nëse ky rol të takon, dil dhe hyr përsëri që të rifreskohen lejet.'
-                      : ((err as Error)?.message || 'Gabim i panjohur.'),
-                    variant: 'destructive',
-                  });
+                  let why = (err as Error)?.message || 'Gabim i panjohur.';
+                  if (denied && isSelf && data.role !== editingMember.role) {
+                    why = 'Rolin tënd nuk mund ta ndryshosh vetë — kërkoji një pronari ose admini tjetër.';
+                  } else if (denied) {
+                    // A denial has exactly two possible causes and they need opposite
+                    // fixes: the rules are not deployed yet, or this token carries no
+                    // owner/admin authority. Print what the token ACTUALLY holds so the
+                    // next step is a fact instead of another guess.
+                    const c = await readTenantClaims().catch(() => null);
+                    const roles = c?.roles?.length ? c.roles.join(', ') : '—';
+                    why = 'Nuk ke leje për këtë ndryshim: anëtarët menaxhohen nga pronari ose admini.'
+                      + ` [tokeni: role=${roles}`
+                      + `${c?.superAdmin ? ', superAdmin' : ''}`
+                      + `, biznesi=${c?.bid || '—'}, ekipi=${c?.tid || '—'}`
+                      + `; rreshti: biznesi=${(editingMember as any).businessId || '—'}, ekipi=${editingMember.teamId || '—'}]`;
+                  }
+                  toast({ title: 'Ruajtja dështoi', description: why, variant: 'destructive' });
                   return;
                 }
                 toast({
