@@ -80,14 +80,15 @@ describe('computeDepartmentPnl', () => {
 });
 
 describe('computeDepartmentPnl — invoiced basis', () => {
-  it('uses billed invoices per project instead of budget', () => {
+  it('uses COLLECTED invoices per project instead of budget (unpaid ≠ profit)', () => {
     const projects = [mkP({ id: 'a', department: 'Social', budget: 100_000, responsibleUserId: 'u1' })];
     const invoices = [
-      { id: 'i', projectId: 'a', total: 180_000, status: 'Pending', invoiceDate: new Date('2026-03-10'), createdAt: new Date('2026-03-10') },
+      { id: 'paid', projectId: 'a', total: 180_000, status: 'Paid', invoiceDate: new Date('2026-03-10'), paidAt: new Date('2026-03-12'), createdAt: new Date('2026-03-10') },
+      { id: 'unpaid', projectId: 'a', total: 500_000, status: 'Overdue', invoiceDate: new Date('2026-03-10'), createdAt: new Date('2026-03-10') },
     ] as any;
     const res = computeDepartmentPnl(projects, [mkM('u1', 20_000)], [], { ...OPTS, revenueBasis: 'invoiced', invoices });
     const social = res.rows.find(r => r.department === 'Social')!;
-    expect(social.revenue).toBe(180_000); // invoiced, not 100k budget
+    expect(social.revenue).toBe(180_000); // only the paid one, not 100k budget nor the 500k overdue
     expect(social.profit).toBe(180_000 - 20_000);
   });
 });

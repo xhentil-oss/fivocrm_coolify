@@ -24,7 +24,7 @@
 
 import type { Project, TeamMember, Expense, Invoice } from '../../types';
 import { toAll } from '../utils';
-import { parseDate, monthsElapsedInYear, getInvoiceBilledBetween } from './financialAnalytics';
+import { parseDate, monthsElapsedInYear, getInvoiceCollectedBetween } from './financialAnalytics';
 import { totalSalaryForMonth } from './salaryHistory';
 
 export interface ProjectPnlOptions {
@@ -39,8 +39,10 @@ export interface ProjectPnlOptions {
   months?: number;
   /** Override "now" for deterministic tests. */
   now?: Date;
-  /** Revenue basis: 'budget' (plan, default) or 'invoiced' (actual billed
-   *  invoices linked to the project). 'invoiced' requires `invoices`. */
+  /** Revenue basis: 'budget' (plan, default) or 'invoiced' — which counts only
+   *  money actually COLLECTED on invoices linked to the project. An issued-but-
+   *  unpaid invoice (Pending/Overdue) is a receivable, not profit, so it never
+   *  counts. Requires `invoices`. */
   revenueBasis?: 'budget' | 'invoiced';
   /** Invoices, needed when revenueBasis === 'invoiced'. */
   invoices?: Invoice[] | null;
@@ -128,7 +130,7 @@ export function computeProjectPnl(
   };
   if (!projects) return empty;
 
-  // ── Revenue basis: actual billed invoices per project (independent of the
+  // ── Revenue basis: money actually COLLECTED per project (independent of the
   // all-time window, so no circular dependency with periodProjects). ──
   const useInvoiced = opts.revenueBasis === 'invoiced';
   const invWindow = opts.range
@@ -141,7 +143,7 @@ export function computeProjectPnl(
   // UI can warn BEFORE the user flips the toggle and sees phantom losses.
   const unlinkedInvoices = { count: 0, amount: 0 };
   for (const inv of opts.invoices || []) {
-    const amt = getInvoiceBilledBetween(inv, invWindow.start, invWindow.end);
+    const amt = getInvoiceCollectedBetween(inv, invWindow.start, invWindow.end);
     const pid = inv.projectId;
     if (!pid) {
       // A billed invoice with no project: real revenue that no project can absorb.
