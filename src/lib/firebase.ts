@@ -44,8 +44,18 @@ export const googleProvider = new GoogleAuthProvider();
  * @param fallbackMax - Seed value used ONLY when the counter document does not yet exist
  *                      (pass the highest existing FAT-XXX number so the sequence continues).
  */
-export async function getNextInvoiceNumber(teamId: string, fallbackMax = 0): Promise<string> {
-  const counterRef = doc(db, 'counters', `invoices_${teamId}`);
+/**
+ * Allocate the next invoice number for a TENANT.
+ *
+ * `scopeId` MUST be the businessId, not a teamId: teams are departments inside
+ * one business, so a per-team counter made every department restart at FAT-001
+ * and issue colliding numbers (three different invoices all numbered FAT-006).
+ * An invoice number has to be unique for the legal entity that issues it.
+ * `fallbackMax` (highest number already in use across the business) self-heals a
+ * counter that drifted low.
+ */
+export async function getNextInvoiceNumber(scopeId: string, fallbackMax = 0): Promise<string> {
+  const counterRef = doc(db, 'counters', `invoices_${scopeId}`);
   const next = await runTransaction(db, async (transaction) => {
     const snap = await transaction.get(counterRef);
     const stored = snap.exists() ? (snap.data().last as number) : 0;

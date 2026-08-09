@@ -1912,29 +1912,34 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
   );
 
   // Auto-generate invoice number for new invoices using a Firebase atomic counter.
-  // The counter doc (counters/invoices_{teamId}) is incremented transactionally to avoid duplicates.
-  // On first use the current max FAT-XXX number from existing invoices is passed as the seed.
+  // Scoped to the BUSINESS (counters/invoices_{businessId}), not the team: teams are
+  // departments inside one business, so a per-team counter restarted at FAT-001 in
+  // every department and issued colliding numbers. The seed is the highest FAT-XXX
+  // in use across the whole business.
   const numberGenerated = React.useRef(false);
   React.useEffect(() => {
-    if (!isEditing && !invoicesLoading && allInvoices && !numberGenerated.current && teamId) {
+    const scopeId = activeBusinessId || teamId;
+    if (!isEditing && !invoicesLoading && allInvoices && !numberGenerated.current && scopeId) {
       numberGenerated.current = true;
       let maxNum = 0;
-      const teamInvoices = allInvoices.filter(inv => (inv as any).teamId === teamId);
-      for (const inv of teamInvoices) {
+      const scopeInvoices = activeBusinessId
+        ? allInvoices.filter(inv => !(inv as any).businessId || (inv as any).businessId === activeBusinessId)
+        : allInvoices.filter(inv => (inv as any).teamId === teamId);
+      for (const inv of scopeInvoices) {
         const match = inv.invoiceNumber?.match(/^FAT-(\d+)$/i);
         if (match) {
           const n = parseInt(match[1], 10);
           if (n > maxNum) maxNum = n;
         }
       }
-      getNextInvoiceNumber(teamId, maxNum)
+      getNextInvoiceNumber(scopeId, maxNum)
         .then(setInvoiceNumber)
         .catch(() => {
           // Fallback to client-side if transaction fails
           setInvoiceNumber(`FAT-${String(maxNum + 1).padStart(3, '0')}`);
         });
     }
-  }, [allInvoices, invoicesLoading, teamId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [allInvoices, invoicesLoading, teamId, activeBusinessId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-fill bank defaults from settings when creating a new invoice
   React.useEffect(() => {
