@@ -8,7 +8,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { canSeeFinancials, toAll, fromAll } from '../lib/utils';
 import { projectBillingPeriodKey, projectBillingPeriodEnd } from '../lib/finance/recurringBilling';
-import { Search, Plus, List, Users, ChevronDown, MoreVertical, Folder, Trash2, Edit } from 'lucide-react';
+import { Search, Plus, List, Users, ChevronDown, MoreVertical, Folder, Trash2, Edit, RefreshCw } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
@@ -45,6 +45,8 @@ const ProjectsView: React.FC = () => {
   const [filterTeam, setFilterTeam] = useState<string>('all');
   const [filterStatus, setFilterStatus] = useState<string>('all');
   const [filterMembers, setFilterMembers] = useState<string[]>([]);
+  // Show only projects that bill/repeat every month (recurring monthly retainers).
+  const [filterMonthly, setFilterMonthly] = useState(false);
 
   // Firebase hooks
   const { data: rawProjects, loading: projectsLoading } = useCollection<Project>('projects', {
@@ -135,6 +137,15 @@ const ProjectsView: React.FC = () => {
       filtered = filtered.filter(p => p.status === filterStatus);
     }
 
+    // Monthly recurring: isRecurring with a monthly cycle (monthly is the default
+    // frequency when a project is recurring), or an explicit monthly billingType.
+    if (filterMonthly) {
+      filtered = filtered.filter(p =>
+        (p.isRecurring === true && (p.recurringFrequency ?? 'monthly') === 'monthly')
+        || p.billingType === 'monthly'
+      );
+    }
+
     // Members filter — checks memberUserIds first, falls back to team membership
     if (filterMembers.length > 0 && teamMembers) {
       filtered = filtered.filter(p => {
@@ -150,7 +161,7 @@ const ProjectsView: React.FC = () => {
     }
     
     return filtered;
-  }, [projects, searchQuery, filterOwner, filterTeam, filterStatus, filterMembers, teamMembers]);
+  }, [projects, searchQuery, filterOwner, filterTeam, filterStatus, filterMembers, filterMonthly, teamMembers]);
 
   // Get members for a project:
   //  - if memberUserIds is set → show exactly those people
@@ -786,6 +797,19 @@ const ProjectsView: React.FC = () => {
             </div>
           </PopoverContent>
         </Popover>
+
+        {/* Monthly-recurring toggle: show only projects that repeat every month */}
+        <Button
+          variant={filterMonthly ? 'default' : 'outline'}
+          size="sm"
+          className="h-8"
+          onClick={() => setFilterMonthly(v => !v)}
+          aria-pressed={filterMonthly}
+          title="Shfaq vetëm projektet që përsëriten çdo muaj"
+        >
+          <RefreshCw className="w-3 h-3 mr-1.5" />
+          Mujore
+        </Button>
 
         {/* Status Filter */}
         <Popover>
