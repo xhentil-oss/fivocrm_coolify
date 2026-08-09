@@ -41,6 +41,7 @@ import { getInvoiceTotalAll, getInvoiceCollectedAll, getInvoiceOutstandingAll } 
 import { AlertTriangle, Receipt } from 'lucide-react';
 import type { Task, Project, Team, TeamMember, TimeEntry, Expense, Invoice, InvoiceItem } from '../types';
 import { getNextInvoiceNumber } from '../lib/firebase';
+import { increment } from 'firebase/firestore';
 
 const ProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -424,9 +425,14 @@ const ProjectDetailView: React.FC = () => {
           totalPrice: taskValue,
           teamId: project?.teamId,
         } as any);
+        // The task adds scope, so it adds value: grow the project budget by it.
+        // increment() is atomic — two tasks added at once both land, which a
+        // read-then-write of `project.budget` would silently lose.
+        await projectMutation.update(projectId!, { budget: increment(taskValue) } as any);
+
         toast({
           title: 'Detyra u krijua + faturë Draft ✓',
-          description: `${label} për ${taskValue.toLocaleString()} — hape te Faturat për ta dërguar.`,
+          description: `${label} për ${taskValue.toLocaleString()} · buxheti i projektit u rrit me ${taskValue.toLocaleString()}.`,
         });
       } catch (err: any) {
         console.error('[Tasks] draft invoice for valued task failed:', err);
