@@ -1135,7 +1135,15 @@ service cloud.firestore {
       //   • super-admin (platform console).
       // The client portal no longer reads this collection at all — recipients and
       // routing are resolved server-side by /api/notify-staff.
-      allow read: if isBusinessMember(resource.data.businessId)
+      //
+      // `.get('businessId', '')`, NOT `resource.data.businessId`: on a LIST the
+      // engine evaluates the rule against the QUERY SHAPE, where `resource` holds
+      // only the fields the query constrains. A raw access to an absent field
+      // ERRORS, and an error inside `a || b` is only absorbed when the other side
+      // is provably true — so the identity bootstrap query denied outright
+      // ("Error fetching teamMembers: Missing or insufficient permissions") instead
+      // of falling through to the userId/email clauses below.
+      allow read: if isBusinessMember(resource.data.get('businessId', ''))
         || (isAuth() && resource.data.get('userId', '') == request.auth.uid)
         || (isAuth() && request.auth.token.email != null
             && resource.data.get('email', '') == request.auth.token.email.lower())
@@ -1205,7 +1213,15 @@ service cloud.firestore {
     //   • the invitee can read their own invite (email match) and accept it,
     //   • api/_accept-invite additionally verifies the invite's PROVENANCE.
     match /teamInvites/{docId} {
-      allow read: if isTeamAdmin(resource.data.teamId)
+      // Every `resource.data.X` here goes through `.get(X, '')` for the same reason
+      // as `teamMembers` above: on a LIST, `resource` carries only what the query
+      // constrains, so a raw access to an absent field errors and DENIES the whole
+      // query. That is what made the invitee's own lookup fail with
+      // "Error looking up invite: Missing or insufficient permissions" — the email
+      // clause was true, but the errored `isTeamAdmin(resource.data.teamId)` on its
+      // left poisoned the OR. The invitee's query must ALSO constrain `email` (see
+      // JoinInviteView), otherwise no clause is provable from the query shape.
+      allow read: if isTeamAdmin(resource.data.get('teamId', ''))
         || (isAuth() && request.auth.token.email != null
             && resource.data.get('email', '') == request.auth.token.email.lower())
         || isSuperAdmin();
@@ -1216,12 +1232,12 @@ service cloud.firestore {
             || isTeamOwner(request.resource.data.teamId)
             || isSuperAdmin());
       // The invitee may only flip the acceptance bookkeeping on their own invite.
-      allow update: if isTeamAdmin(resource.data.teamId)
+      allow update: if isTeamAdmin(resource.data.get('teamId', ''))
         || (isAuth() && request.auth.token.email != null
             && resource.data.get('email', '') == request.auth.token.email.lower()
             && request.resource.data.diff(resource.data).affectedKeys()
                  .hasOnly(['status', 'acceptedByUserId', 'acceptedAt', 'updatedAt']));
-      allow delete: if isTeamAdmin(resource.data.teamId) || isSuperAdmin();
+      allow delete: if isTeamAdmin(resource.data.get('teamId', '')) || isSuperAdmin();
     }
 
     match /userProfiles/{docId} {

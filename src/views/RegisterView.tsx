@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { collection, addDoc, Timestamp, query, onSnapshot, getDocs, where } from 'firebase/firestore';
+import { collection, addDoc, Timestamp, query, onSnapshot } from 'firebase/firestore';
 import { createUserWithEmailAndPassword, updateProfile, sendEmailVerification } from 'firebase/auth';
 import { db, auth } from '../lib/firebase';
 import { Button } from '../components/ui/button';
@@ -11,6 +11,7 @@ import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Loader2, CheckCircle, UserPlus } from 'lucide-react';
 import { usePortalTenant } from '../hooks/usePortalTenant';
+import { getStaffIdentity } from '../lib/staffIdentity';
 
 interface ServiceOption {
   id: string;
@@ -71,19 +72,7 @@ const RegisterView: React.FC = () => {
     }
 
     try {
-      // 0. Block staff emails from registering as clients (case-insensitive)
       const normEmail = email.trim().toLowerCase();
-      const [staffSnapExact, staffSnapLower] = await Promise.all([
-        getDocs(query(collection(db, 'teamMembers'), where('email', '==', email.trim()))),
-        getDocs(query(collection(db, 'teamMembers'), where('email', '==', normEmail))),
-      ]);
-      const isStaff = !staffSnapExact.empty || !staffSnapLower.empty ||
-        [...staffSnapExact.docs, ...staffSnapLower.docs].some(d => d.data().email?.toLowerCase() === normEmail);
-      if (isStaff) {
-        setError('Ky email është i regjistruar si staf. Ju lutem hyni nga faqja e hyrjes.');
-        setLoading(false);
-        return;
-      }
 
       // 1. Create Firebase Auth account
       const userCredential = await createUserWithEmailAndPassword(auth, email.trim(), password);
@@ -94,6 +83,20 @@ const RegisterView: React.FC = () => {
 
       // Send email verification (non-blocking — don't fail registration if this errors)
       sendEmailVerification(user).catch(() => {});
+
+      // 1b. This form registers CLIENTS. If the address is staff — already a member,
+      // or invited and not yet accepted — stop before creating a Lead/Customer for
+      // them: an invited colleague showing up in the CRM as a lead is exactly the
+      // bug this guards. The check runs AFTER sign-in on purpose: `teamMembers` and
+      // `teamInvites` are readable only for your OWN verified address, so the old
+      // pre-auth version could never succeed (and its rejection aborted the whole
+      // registration). It also only looked at memberships, never at open invites.
+      const staff = await getStaffIdentity(user);
+      if (staff.isStaffOrInvited) {
+        setLoading(false);
+        navigate(staff.pendingInviteToken ? `/join/${staff.pendingInviteToken}` : '/app');
+        return;
+      }
 
       // Resolve WHICH TENANT this public registration belongs to. Previously this
       // scanned every tenant's `teamMembers` and used the first hit — a cross-tenant

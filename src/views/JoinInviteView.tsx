@@ -3,10 +3,11 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { collection, query, where, getDocs, doc, getDoc, updateDoc, addDoc, setDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
+import { resetStaffIdentity } from '../lib/staffIdentity';
 import { Card } from '../components/ui/card';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
-import { Loader2, CheckCircle, XCircle, Users, AlertTriangle } from 'lucide-react';
+import { Loader2, CheckCircle, XCircle, Users } from 'lucide-react';
 
 interface InviteData {
   id: string;
@@ -62,14 +63,31 @@ const JoinInviteView: React.FC = () => {
     setLoading(true);
     const lookupInvite = async () => {
       try {
+        // The `email ==` predicate is NOT cosmetic: the teamInvites read rule
+        // authorizes the invitee by `resource.data.email == token.email`, and on a
+        // LIST that clause can only be PROVEN from the query's own constraints.
+        // Filtering by token alone left nothing provable and Firestore denied the
+        // whole query ("Missing or insufficient permissions") — the invite page was
+        // unusable for every invited person. Two equality filters need no composite
+        // index (Firestore merges the single-field ones).
+        const email = (user.email || '').toLowerCase();
+        if (!email) {
+          setError('Llogaria jote nuk ka email. Hyr me llogarinë ku e mori ftesën.');
+          setLoading(false);
+          return;
+        }
         const q = query(
           collection(db, 'teamInvites'),
-          where('token', '==', token)
+          where('token', '==', token),
+          where('email', '==', email)
         );
         const snapshot = await getDocs(q);
 
         if (snapshot.empty) {
-          setError('Ftesa nuk u gjet. Mund të jetë fshirë ose linku është i gabuar.');
+          // Either the token is wrong, or this account is not the invited address —
+          // the rule cannot tell us which, and /api/accept-invite rejects a mismatch
+          // anyway, so say both.
+          setError(`Ftesa nuk u gjet për ${user.email}. Kontrollo që je i kyçur me email-in ku erdhi ftesa, ose kërko një ftesë të re.`);
           setLoading(false);
           return;
         }
@@ -134,6 +152,14 @@ const JoinInviteView: React.FC = () => {
           body: JSON.stringify({ token }),
         });
         if (resp.ok) {
+          // /api/accept-invite mints the tenant claims (bid/tid/roles) server-side,
+          // but the browser still holds the PRE-membership token. Without a forced
+          // refresh the first screens after joining run with no `bid` and every
+          // business-scoped read is denied until the token happens to rotate.
+          await user.getIdToken(true).catch(() => {});
+          // The invite is spent — drop the memo so the default redirect stops
+          // pointing back at this page.
+          resetStaffIdentity(user.uid);
           setSuccess(true);
           setAccepting(false);
           return;
@@ -172,6 +198,7 @@ const JoinInviteView: React.FC = () => {
         // Already a member — just mark the invite as accepted and proceed
         const inviteRef = doc(db, 'teamInvites', invite.id);
         await updateDoc(inviteRef, { status: 'Accepted', acceptedByUserId: user.uid, acceptedAt: Timestamp.now(), updatedAt: Timestamp.now() }).catch(() => {});
+        resetStaffIdentity(user.uid);
         setSuccess(true);
         setAccepting(false);
         return;
@@ -238,6 +265,7 @@ const JoinInviteView: React.FC = () => {
         console.error('Failed to create user profile:', profileErr);
       }
 
+      resetStaffIdentity(user.uid);
       setSuccess(true);
     } catch (err) {
       console.error('Error accepting invite:', err);
@@ -340,16 +368,9 @@ const JoinInviteView: React.FC = () => {
             <span className="text-sm font-medium">{invite?.email}</span>
           </div>
 
-          {/* Email mismatch warning */}
-          {invite && user && user.email?.toLowerCase() !== invite.email?.toLowerCase() && (
-            <div className="flex items-start gap-2 p-3 bg-yellow-50 border border-yellow-200 rounded-lg">
-              <AlertTriangle className="w-4 h-4 text-yellow-600 shrink-0 mt-0.5" />
-              <p className="text-xs text-yellow-700">
-                Ftesa është dërguar për <strong>{invite.email}</strong>, por jeni i kyçur si <strong>{user.email}</strong>.
-                Mund të pranoni po dëshironi, por verifikoni me administratorin nëse ka gabim.
-              </p>
-            </div>
-          )}
+          {/* No email-mismatch warning here any more: the lookup itself is scoped to
+              the signed-in address (the read rule authorizes nothing else), so an
+              invite shown on this page always belongs to this account. */}
 
           {/* Permission summary */}
           <div className="p-3 bg-muted rounded-lg">

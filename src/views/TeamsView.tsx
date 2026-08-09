@@ -282,7 +282,11 @@ const TeamsView: React.FC = () => {
     expiresAt.setDate(expiresAt.getDate() + 7); // Expires in 7 days
 
     await inviteMutation.create({
-      email,
+      // Stored LOWERCASED: the read rule authorizes the invitee with
+      // `resource.data.email == request.auth.token.email.lower()`, and the join page
+      // queries on the same normalized value. A typed-in "Migena@Fivo.al" would have
+      // produced an invite its own recipient could neither find nor read.
+      email: normalizedEmail,
       teamId: selectedTeam.id,
       // The tenant key comes from the TEAM being invited into, not the active session.
       businessId: (selectedTeam as any).businessId || businessId,

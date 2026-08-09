@@ -4,6 +4,7 @@ import { Capacitor } from '@capacitor/core';
 import { getDoc, setDoc, doc } from 'firebase/firestore';
 import { db } from './lib/firebase';
 import { useAuth } from './contexts/AuthContext';
+import { getStaffIdentity } from './lib/staffIdentity';
 import ErrorBoundary from './components/ErrorBoundary';
 import TopNavBar from './components/TopNavBar';
 import Sidebar from './components/Sidebar';
@@ -152,8 +153,22 @@ function ProtectedRoute({ children }: { children: React.ReactNode }) {
 // Redirect to the best available page based on permissions
 function DefaultRedirect() {
   const permissions = usePermissions();
-  
-  if (permissions.isLoading) {
+  const { user } = useAuth();
+  // "No membership" is NOT the same as "customer": someone who was invited as staff
+  // has no membership until they accept. Sending them to /portal is what turned
+  // invited colleagues into leads/clients, so an open invite wins over the portal
+  // fallback and lands them on their invite instead.
+  const [invite, setInvite] = useState<{ resolved: boolean; token: string | null }>({ resolved: false, token: null });
+  useEffect(() => {
+    let cancelled = false;
+    if (!user) { setInvite({ resolved: true, token: null }); return; }
+    getStaffIdentity(user)
+      .then(r => { if (!cancelled) setInvite({ resolved: true, token: r.pendingInviteToken }); })
+      .catch(() => { if (!cancelled) setInvite({ resolved: true, token: null }); });
+    return () => { cancelled = true; };
+  }, [user]);
+
+  if (permissions.isLoading || !invite.resolved) {
     return (
       <div className="min-h-[60vh] flex items-center justify-center">
         <Loader2 className="h-8 w-8 animate-spin text-primary" />
@@ -163,9 +178,10 @@ function DefaultRedirect() {
 
   // If user has no team membership (not admin/owner/member), they are a client → go to portal
   if (!permissions.role && !permissions.isOwner && !permissions.isAdmin) {
+    if (invite.token) return <Navigate to={`/join/${invite.token}`} replace />;
     return <Navigate to="/portal" replace />;
   }
-  
+
   return <Navigate to="/app/dashboard" replace />;
 }
 

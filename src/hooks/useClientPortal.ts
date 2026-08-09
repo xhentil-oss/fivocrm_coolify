@@ -6,6 +6,7 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { collection, addDoc, updateDoc, doc, Timestamp, getDocs, query, where } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import { notifyStaff } from '../lib/notifyStaff';
+import { getStaffIdentity } from '../lib/staffIdentity';
 import type { ClientPortalAccess, Customer } from '../types';
 
 /**
@@ -98,6 +99,26 @@ export function useClientPortal() {
   // server-side (/api/notify-staff) and the tenant comes from the subdomain or the
   // explicit VITE_DEFAULT_* configuration only.
 
+  // ── Never auto-provision a COLLEAGUE as a customer ──────────────────────────
+  // A staff member who was invited but has not accepted yet has no membership, so
+  // every check in this hook read them as "a signed-in person with no client
+  // records" and happily created a Customer + portal access + Lead for them. That
+  // is how invited staff ended up in the CRM as leads/clients. Resolved once per
+  // session from their own membership/invite rows.
+  const [staffIdentity, setStaffIdentity] = useState<{ resolved: boolean; isStaffOrInvited: boolean }>(
+    { resolved: false, isStaffOrInvited: false }
+  );
+  useEffect(() => {
+    if (!user?.email) { setStaffIdentity({ resolved: true, isStaffOrInvited: false }); return; }
+    let cancelled = false;
+    getStaffIdentity(user)
+      .then(r => { if (!cancelled) setStaffIdentity({ resolved: true, isStaffOrInvited: r.isStaffOrInvited }); })
+      // Fail OPEN for a real client (the common case) — a failed lookup must not
+      // lock a paying client out of their portal.
+      .catch(() => { if (!cancelled) setStaffIdentity({ resolved: true, isStaffOrInvited: false }); });
+    return () => { cancelled = true; };
+  }, [user?.uid, user?.email]);
+
   // Filter to get only Active access records
   const activeByUserId = byUserId?.filter(a => a.status === 'Active') || [];
   const activeByEmail = byEmail?.filter(a => a.status === 'Active') || [];
@@ -174,6 +195,8 @@ export function useClientPortal() {
   useEffect(() => {
     if (previewCustomerId) return; // admin preview — never auto-create records
     if (!user?.email || authLoading || byUserIdLoading || byEmailLoading || customersLoading) return;
+    // Staff (or invited staff) are not customers — see staffIdentity above.
+    if (!staffIdentity.resolved || staffIdentity.isStaffOrInvited) return;
     if (autoCreating || didAutoCreate.current) return;
     // Block if ANY portal access record already exists (any status), not just Active.
     // This prevents re-creation for users who have Pending/legacy records.
@@ -311,7 +334,7 @@ export function useClientPortal() {
       });
       })(); // end async IIFE
     }
-  }, [user, authLoading, anyByUserId, anyByEmail, byUserIdLoading, byEmailLoading, matchingCustomers, customersLoading, autoCreating, createDoc, tenantBusinessId, resolveBusinessId]);
+  }, [user, authLoading, anyByUserId, anyByEmail, byUserIdLoading, byEmailLoading, matchingCustomers, customersLoading, autoCreating, createDoc, tenantBusinessId, resolveBusinessId, staffIdentity]);
 
   const access = (activeByUserId.find(a => a.customerId) || activeByUserId[0])
     || (activeByEmail.find(a => a.customerId) || activeByEmail[0])
@@ -359,7 +382,10 @@ export function useClientPortal() {
   // Keep isLoading=true in the gap between "queries done" and "useEffect fires auto-create"
   const queriesLoaded = !byUserIdLoading && !byEmailLoading && !customersLoading;
   const hasNoAccess = activeByUserId.length === 0 && activeByEmail.length === 0;
-  const pendingAutoCreate = !!user?.email && queriesLoaded && hasNoAccess && !autoCreating && !didAutoCreate.current;
+  // A staff/invited user never gets an auto-create, so nothing is pending for them —
+  // without this the portal would spin on "loading" forever for a colleague.
+  const pendingAutoCreate = !!user?.email && queriesLoaded && hasNoAccess && !autoCreating
+    && !didAutoCreate.current && !(staffIdentity.resolved && staffIdentity.isStaffOrInvited);
 
   // Admin "view as customer" — resolve directly to the previewed customer.
   if (previewCustomerId) {

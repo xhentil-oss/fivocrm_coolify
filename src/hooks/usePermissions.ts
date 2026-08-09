@@ -123,19 +123,17 @@ const restrictedPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
 export function usePermissions(): UserPermissions {
   const { user, loading: userLoading } = useAuth();
   
-  // Query team members for this specific user (by uid or email) instead of ALL members
-  const userIds = useMemo(() => {
-    if (!user) return [];
-    const ids = [user.uid];
-    if (user.email) ids.push(user.email);
-    return ids;
-  }, [user]);
-
-  // Primary query: by userId field (covers UID or email stored as userId)
+  // Primary query: by userId field.
+  //
+  // `userId == uid`, NOT `userId in [uid, email]`. Firestore expands an `in` into one
+  // sub-query per value and must authorize EACH from the query shape alone. The read
+  // rule proves `resource.data.userId == request.auth.uid` for the uid branch, but
+  // NOTHING can prove the `userId == <email>` branch — so the whole query was denied
+  // and every session logged "Error fetching teamMembers: Missing or insufficient
+  // permissions". A legacy row that stored the email in `userId` still carries the
+  // `email` field, so the by-email query below covers it (and auto-links the uid).
   const { data: rawTeamMembers, loading: membersLoading, error: membersError } = useCollection<any>('teamMembers', {
-    where: userIds.length > 0
-      ? [{ field: 'userId', operator: 'in', value: userIds }]
-      : [{ field: 'userId', operator: '==', value: '__never__' }],
+    where: [{ field: 'userId', operator: '==', value: user?.uid || '__never__' }],
     skipTeamFilter: true,
     skipBusinessFilter: true, // identity resolution must read unscoped to find the business
   });
