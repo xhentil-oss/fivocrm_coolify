@@ -718,6 +718,8 @@ export interface Invoice {
   invoiceNumber?: string;
   customerId?: string;
   projectId?: string;
+  /** Set when this invoice was raised from a single task carrying a value. */
+  taskId?: string;
   teamId?: string;
   amount: number;
   total?: number;
@@ -1473,6 +1475,7 @@ export interface InvoiceItem {
   id: string;
   invoiceId: string;
   serviceId?: string;
+  /** Free-text line description when the line isn't a catalogue service. */
   description?: string;
   quantity: number;
   unitPrice: number;

@@ -39,7 +39,8 @@ import { formatCurrency, toAll, canSeeFinancials } from '../lib/utils';
 import { computeProjectLabor } from '../lib/finance/laborCost';
 import { getInvoiceTotalAll, getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
 import { AlertTriangle, Receipt } from 'lucide-react';
-import type { Task, Project, Team, TeamMember, TimeEntry, Expense, Invoice } from '../types';
+import type { Task, Project, Team, TeamMember, TimeEntry, Expense, Invoice, InvoiceItem } from '../types';
+import { getNextInvoiceNumber } from '../lib/firebase';
 
 const ProjectDetailView: React.FC = () => {
   const { projectId } = useParams<{ projectId: string }>();
@@ -99,6 +100,8 @@ const ProjectDetailView: React.FC = () => {
 
   const projectMutation = useMutation<Project>('projects');
   const taskMutation = useMutation<Task>('tasks');
+  const invoiceMutation = useMutation<Invoice>('invoices');
+  const invoiceItemMutation = useMutation<InvoiceItem>('invoiceItems');
   const commentMutation = useMutation<any>('taskComments');
   const projectCommentMutation = useMutation<any>('projectComments');
   const notificationMutation = useMutation<any>('notifications');
@@ -380,6 +383,57 @@ const ProjectDetailView: React.FC = () => {
     }
 
     const newTask = await taskMutation.create(taskData);
+
+    // A task created with a monetary value gets its own invoice, as a DRAFT: a
+    // draft never counts as revenue, so it can never collide with the project's
+    // own budget billing. Review it in Faturat and send it when it's right.
+    const taskValue = Number(taskData.value) || 0;
+    if (taskValue > 0) {
+      try {
+        const scopeId = (project as any)?.businessId || project?.teamId;
+        // No fallbackMax: the per-business counter is already seeded, so this
+        // avoids reading every invoice just to allocate one number.
+        const label = scopeId
+          ? await getNextInvoiceNumber(scopeId)
+          : `TASK-${Date.now().toString(36).toUpperCase()}`;
+        const due = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999);
+        const newInvoice = await invoiceMutation.create({
+          invoiceNumber: label,
+          projectId: projectId,
+          customerId: project?.customerId,
+          teamId: project?.teamId,
+          amount: taskValue,
+          subtotal: taskValue,
+          total: taskValue,
+          tax: 0,
+          currency: (project as any)?.currency || 'ALL',
+          status: 'Draft',
+          notes: `Faturë për detyrën "${title}" (projekti "${project?.name || ''}").`,
+          invoiceDate: now,
+          dueDate: due,
+          taskId: (newTask as any)?.id,
+        } as any);
+        await invoiceItemMutation.create({
+          invoiceId: (newInvoice as any).id,
+          description: title,
+          quantity: 1,
+          unitPrice: taskValue,
+          totalPrice: taskValue,
+          teamId: project?.teamId,
+        } as any);
+        toast({
+          title: 'Detyra u krijua + faturë Draft ✓',
+          description: `${label} për ${taskValue.toLocaleString()} — hape te Faturat për ta dërguar.`,
+        });
+      } catch (err: any) {
+        console.error('[Tasks] draft invoice for valued task failed:', err);
+        toast({
+          title: 'Detyra u ruajt, fatura jo',
+          description: err?.message || 'Fatura nuk u krijua — provo ta shtosh manualisht.',
+          variant: 'destructive',
+        });
+      }
+    }
 
     if (assignedToUserId && assignedToUserId !== user?.uid) {
       await notificationMutation.create({
