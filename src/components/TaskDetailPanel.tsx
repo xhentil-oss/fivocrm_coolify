@@ -3,6 +3,7 @@ import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { TaskLabels, LabelEditor } from './TaskLabels';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { completeTask, addFrequency } from '../lib/recurringUtils';
+import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { entryDurationMinutes, totalTrackedMinutes } from '../lib/timeTracking';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -950,6 +951,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 createTask: (data) => taskMutation.create(data as any),
                 updateTask: (id, data) => onUpdate(id, data),
                 allTasks,
+                claimNextCycle: claimTaskNextCycle,
+                releaseNextCycle: releaseTaskNextCycle,
               });
               const freqLabel: Record<string, string> = { daily: 'ditore', weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
               switch (outcome.kind) {

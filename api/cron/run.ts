@@ -481,7 +481,23 @@ async function runRecurringTasks() {
   const now = new Date();
   const tasksSnap = await db.collection('tasks').where('isRecurring', '==', true).get();
   let created = 0;
+  let skippedDuplicate = 0;
   const ops: Promise<any>[] = [];
+
+  // Occurrence fingerprints that already exist. A recurring series that got
+  // duplicated once (two parents Done and due) would otherwise have the cron
+  // faithfully spawn one child EACH, every cycle, forever — that is how a single
+  // double-click in July turned into a permanently doubled weekly series.
+  // The set also absorbs children created earlier in this same run.
+  const occurrenceKey = (t: any, start: Date) =>
+    [t.businessId || '-', (t.title || '').toLowerCase().replace(/\s+/g, ' ').trim(),
+     t.assignedToUserId || '-', t.projectId || '-', start.toISOString().slice(0, 10)].join('||');
+  const existingOccurrences = new Set<string>();
+  for (const d of tasksSnap.docs) {
+    const t = d.data();
+    const s: Date | null = t.startDate?.toDate ? t.startDate.toDate() : (t.startDate ? new Date(t.startDate) : null);
+    if (s && !isNaN(s.getTime())) existingOccurrences.add(occurrenceKey(t, s));
+  }
 
   const bizCache = new Map<string, string | null>();
   for (const doc of tasksSnap.docs) {
@@ -522,9 +538,15 @@ async function runRecurringTasks() {
     const endDate: Date = task.endDate?.toDate ? task.endDate.toDate() : new Date(task.endDate);
     if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) continue;
 
+    // MIRRORS src/lib/recurringUtils.ts buildNextRecurringTask — keep in sync.
+    // Only startDate follows the recurrence rule; endDate and nextRecurringDate
+    // are re-derived from it by preserving their offset. Advancing each date
+    // independently lets the `dayOfWeek` snap push them by a different number of
+    // days, which produced 22 tasks whose end was up to 6 days BEFORE their start.
+    const spanMs = Math.max(0, endDate.getTime() - startDate.getTime());
+    const nextOffsetMs = nextRecurringDate.getTime() - startDate.getTime();
+
     let newStart = addFrequency(startDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
-    let newEnd = addFrequency(endDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
-    let newNext = addFrequency(nextRecurringDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
 
     const startOfDayMs = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
     // Roll forward so a task completed (or picked up) late never spawns an
@@ -534,9 +556,10 @@ async function runRecurringTasks() {
     let rollGuard = 0;
     while (startOfDayMs(newStart) < todayMs && rollGuard++ < 500) {
       newStart = addFrequency(newStart, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
-      newEnd = addFrequency(newEnd, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
-      newNext = addFrequency(newNext, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
     }
+
+    const newEnd = new Date(newStart.getTime() + spanMs);
+    const newNext = new Date(newStart.getTime() + nextOffsetMs);
 
     // Honor "repeat until": if the next occurrence is past recurringEndDate, stop
     // the series (mark done so it isn't reprocessed) without creating a new cycle.
@@ -545,6 +568,16 @@ async function runRecurringTasks() {
       ops.push(doc.ref.update({ nextCycleCreated: true, updatedAt: admin.firestore.Timestamp.now() }));
       continue;
     }
+
+    // Someone else (the UI, or a duplicated sibling parent) already produced this
+    // exact occurrence — close this parent out instead of doubling the series.
+    const key = occurrenceKey(task, newStart);
+    if (existingOccurrences.has(key)) {
+      ops.push(doc.ref.update({ nextCycleCreated: true, updatedAt: admin.firestore.Timestamp.now() }));
+      skippedDuplicate++;
+      continue;
+    }
+    existingOccurrences.add(key);
 
     // Create new task ref first so we can reference its ID in the notification
     const newTaskRef = db.collection('tasks').doc();
@@ -562,7 +595,7 @@ async function runRecurringTasks() {
   }
 
   await settleAll(ops, 'recurring-tasks');
-  return { created };
+  return { created, skippedDuplicate };
 }
 
 // ── helpers for recurring-invoices ───────────────────────────────────────────

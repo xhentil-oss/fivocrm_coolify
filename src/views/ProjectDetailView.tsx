@@ -34,6 +34,7 @@ import { useCommentFocus, COMMENT_FLASH_CLASS } from '../hooks/useCommentFocus';
 import { portalProjectCommentDeepLink } from '../lib/deepLinks';
 import { resolvePortalUserId } from '../lib/notifyClient';
 import { addFrequency, completeTask } from '../lib/recurringUtils';
+import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { formatCurrency, toAll, canSeeFinancials, cn } from '../lib/utils';
 import { computeProjectLabor } from '../lib/finance/laborCost';
 import { getInvoiceTotalAll, getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
@@ -907,6 +908,8 @@ const ProjectDetailView: React.FC = () => {
         createTask: (data) => taskMutation.create(data as any),
         updateTask: (id, data) => handleTaskUpdate(id, data),
         allTasks: allTasksFlat,
+        claimNextCycle: claimTaskNextCycle,
+        releaseNextCycle: releaseTaskNextCycle,
       });
       if (outcome.kind === 'blocked') {
         toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
