@@ -12,7 +12,6 @@ import { Label } from '../components/ui/label';
 import { Textarea } from '../components/ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
-import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import ExportButton from '../components/ExportButton';
 import {
   FileText,
@@ -33,8 +32,10 @@ import {
 } from 'lucide-react';
 import { toast } from '../hooks/use-toast';
 import DepartmentReportFields, { useMyServiceLine } from '../components/DepartmentReportFields';
-import { normalizeServiceLine, getReportTemplate, summableFields } from '../lib/productivity/reportTemplates';
-import type { DailyReport, TeamMember, Project } from '../types';
+import DailyReportPreviewDialog from '../components/DailyReportPreviewDialog';
+import { normalizeServiceLine, getReportTemplate, summableFields, sumFieldValue, parseFieldKey } from '../lib/productivity/reportTemplates';
+import { summariseOutcomes } from '../lib/productivity/dailyReportPlan';
+import type { Customer, DailyReport, TeamMember, Project } from '../types';
 
 function getTodayString(): string {
   const d = new Date();
@@ -103,6 +104,7 @@ const DailyReportsView: React.FC<DailyReportsViewProps> = ({ embedded = false })
   const [selectedReport, setSelectedReport] = useState<DailyReport | null>(null);
   const [filterUserId, setFilterUserId] = useState<string>('all');
   const [showCreateDialog, setShowCreateDialog] = useState(false);
+  const [showPreviewDialog, setShowPreviewDialog] = useState(false);
   const [aiSummary, setAiSummary] = useState<string | null>(null);
   const [aiLoading, setAiLoading] = useState(false);
 
@@ -111,6 +113,8 @@ const DailyReportsView: React.FC<DailyReportsViewProps> = ({ embedded = false })
   });
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
   const { data: projects } = useCollection<Project>('projects');
+  // Names for the per-client answers in the detail dialog.
+  const { data: customers } = useCollection<Customer>('customers');
   // Managers resolve blockers from the detail dialog. (`CreateReportDialog` further
   // down has its OWN mutation — that one is out of scope here.)
   const reportMutation = useMutation<DailyReport>('dailyReports');
@@ -161,6 +165,45 @@ const DailyReportsView: React.FC<DailyReportsViewProps> = ({ embedded = false })
     return activeMembers.filter(m => !reportedUids.has(m.userId));
   }, [isManagerOrAbove, activeMembers, reports, today]);
 
+  /**
+   * The CEO's "Sot" panel.
+   *
+   * Everything here answers one of three questions a manager asks at the end of a
+   * day — did everyone report, what is blocked, and did the plan survive contact
+   * with the day. Deliberately today-only: the weekly grid below is for patterns,
+   * this is for acting before tomorrow morning.
+   */
+  const todaySnapshot = useMemo(() => {
+    const todays = (reports || []).filter(r => r.date === today);
+    const outcomes = todays.flatMap(r => r.taskOutcomes || []);
+    const plan = summariseOutcomes(outcomes);
+
+    // Reasons are the point of the whole structure — surface them, most recent first.
+    const slipped = outcomes
+      .filter(o => !o.unplanned && o.state !== 'done' && (o.reason || '').trim())
+      .slice(0, 6);
+
+    // Open blockers across the WEEK, not just today: a blocker raised on Monday and
+    // still unresolved on Thursday is the one that matters most.
+    const openBlockers = weekReports
+      .filter(r => (r.blockers || '').trim() && !r.blockerResolvedAt)
+      .sort((a, b) => a.date.localeCompare(b.date));
+
+    const clientsServed = new Set<string>();
+    for (const r of todays) for (const c of r.customerIds || []) clientsServed.add(c);
+
+    return {
+      reports: todays,
+      submitted: todays.length,
+      late: todays.filter(r => r.wasLate).length,
+      atRisk: todays.filter(r => r.dailyStatus === 'blocked' || r.dailyStatus === 'at_risk').length,
+      plan,
+      slipped,
+      openBlockers,
+      clientsServed: clientsServed.size,
+    };
+  }, [reports, today, weekReports]);
+
   // Group reports by date for timeline
   const reportsByDate = useMemo(() => {
     const map = new Map<string, DailyReport[]>();
@@ -181,8 +224,11 @@ const DailyReportsView: React.FC<DailyReportsViewProps> = ({ embedded = false })
       if (!entry) { entry = { template: tmpl, totals: new Map(), reports: 0 }; byLine.set(key, entry); }
       entry.reports++;
       for (const f of summableFields(tmpl)) {
-        const v = Number(r.customFields[f.key]);
-        if (!isNaN(v) && v) entry.totals.set(f.key, (entry.totals.get(f.key) || 0) + v);
+        // `sumFieldValue`, not `customFields[f.key]`: a per-client answer is stored
+        // as `"<key>.<customerId>"`, so reading the bare key would report 0 for
+        // every field the templates ask per client.
+        const v = sumFieldValue(r.customFields, f.key);
+        if (v) entry.totals.set(f.key, (entry.totals.get(f.key) || 0) + v);
       }
     }
     return Array.from(byLine.values()).filter((e) => e.totals.size > 0);
@@ -266,6 +312,12 @@ const DailyReportsView: React.FC<DailyReportsViewProps> = ({ embedded = false })
           </div>
         )}
         <div className="flex gap-2">
+          {isManagerOrAbove && activeMembers.length > 0 && (
+            <Button size="sm" variant="outline" onClick={() => setShowPreviewDialog(true)}>
+              <Eye className="w-4 h-4 sm:mr-2" />
+              <span className="hidden sm:inline">Shiko si punonjës</span>
+            </Button>
+          )}
           {isManagerOrAbove && (
             <Button size="sm" variant="outline" onClick={handleAiSummary} disabled={aiLoading}>
               {aiLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Bot className="w-4 h-4 sm:mr-2" />}
@@ -361,20 +413,109 @@ const DailyReportsView: React.FC<DailyReportsViewProps> = ({ embedded = false })
         </Card>
       )}
 
-      {/* Missing reports banner (manager only) */}
-      {isManagerOrAbove && missingToday.length > 0 && (
-        <Card className="p-3 border-warning/30 bg-warning/5">
-          <p className="text-sm font-medium text-warning flex items-center gap-2">
-            <AlertTriangle className="w-4 h-4" />
-            {missingToday.length} anëtar nuk kanë raportuar sot:
-          </p>
-          <div className="flex flex-wrap gap-1.5 mt-2">
-            {missingToday.map(m => (
-              <Badge key={m.id} variant="outline" className="text-xs">
-                {getName(m.userId)}
-              </Badge>
-            ))}
+      {/* ── Sot ─────────────────────────────────────────────────────────────
+          The end-of-day picture in one card: who reported, what is blocked, and
+          whether the plan held. Replaces the old bare "X nuk kanë raportuar"
+          banner, which said who was missing but nothing about the day itself. */}
+      {isManagerOrAbove && activeMembers.length > 0 && (
+        <Card className="p-4 space-y-4">
+          <div className="flex items-center justify-between gap-3 flex-wrap">
+            <p className="text-sm font-semibold flex items-center gap-2">
+              <Eye className="w-4 h-4 text-primary" />
+              Sot — {formatDate(today)}
+            </p>
+            <span className="text-xs text-muted-foreground">
+              {todaySnapshot.submitted}/{activeMembers.length} raporte
+              {todaySnapshot.clientsServed > 0 && ` · ${todaySnapshot.clientsServed} klientë të shërbyer`}
+            </span>
           </div>
+
+          {/* Traffic light. Colour carries the state as well as the number, so the
+              row that needs attention reads at a glance. */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+            <div className="rounded-lg border border-success/30 bg-success/5 px-3 py-2">
+              <p className="text-[10px] text-muted-foreground">Dorëzuar</p>
+              <p className="text-lg font-bold text-success tabular-nums">{todaySnapshot.submitted}</p>
+            </div>
+            <div className={`rounded-lg border px-3 py-2 ${todaySnapshot.late ? 'border-warning/40 bg-warning/5' : 'border-border'}`}>
+              <p className="text-[10px] text-muted-foreground">Me vonesë</p>
+              <p className={`text-lg font-bold tabular-nums ${todaySnapshot.late ? 'text-warning' : ''}`}>{todaySnapshot.late}</p>
+            </div>
+            <div className={`rounded-lg border px-3 py-2 ${missingToday.length ? 'border-error/40 bg-error/5' : 'border-border'}`}>
+              <p className="text-[10px] text-muted-foreground">Mungojnë</p>
+              <p className={`text-lg font-bold tabular-nums ${missingToday.length ? 'text-error' : ''}`}>{missingToday.length}</p>
+            </div>
+            <div className={`rounded-lg border px-3 py-2 ${todaySnapshot.atRisk ? 'border-error/40 bg-error/5' : 'border-border'}`}>
+              <p className="text-[10px] text-muted-foreground">Bllokuar / në rrezik</p>
+              <p className={`text-lg font-bold tabular-nums ${todaySnapshot.atRisk ? 'text-error' : ''}`}>{todaySnapshot.atRisk}</p>
+            </div>
+          </div>
+
+          {missingToday.length > 0 && (
+            <div>
+              <p className="text-xs text-muted-foreground mb-1.5">Nuk kanë raportuar ende:</p>
+              <div className="flex flex-wrap gap-1.5">
+                {missingToday.map(m => (
+                  <Badge key={m.id} variant="outline" className="text-xs border-error/40 text-error">
+                    {getName(m.userId)}
+                  </Badge>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Plan vs reality — the number that made the whole rebuild worth it. */}
+          {todaySnapshot.plan.planned > 0 && (
+            <div>
+              <div className="flex items-center justify-between text-xs mb-1.5">
+                <span className="text-muted-foreground">Plani i ditës</span>
+                <span className="tabular-nums">
+                  {todaySnapshot.plan.done}/{todaySnapshot.plan.planned} të mbyllura
+                  {todaySnapshot.plan.unplanned > 0 && ` · ${todaySnapshot.plan.unplanned} të paplanifikuara`}
+                </span>
+              </div>
+              <div className="h-2 rounded-full bg-muted overflow-hidden flex">
+                <div className="bg-success h-full" style={{ width: `${(todaySnapshot.plan.done / todaySnapshot.plan.planned) * 100}%` }} />
+                <div className="bg-warning h-full" style={{ width: `${(todaySnapshot.plan.inProgress / todaySnapshot.plan.planned) * 100}%` }} />
+                <div className="bg-error h-full" style={{ width: `${(todaySnapshot.plan.notStarted / todaySnapshot.plan.planned) * 100}%` }} />
+              </div>
+
+              {todaySnapshot.slipped.length > 0 && (
+                <div className="mt-2 space-y-1">
+                  <p className="text-[11px] text-muted-foreground">Pse mbetën pas:</p>
+                  {todaySnapshot.slipped.map((o, i) => (
+                    <p key={`${o.taskId || o.title}-${i}`} className="text-xs text-muted-foreground">
+                      <span className="text-foreground">{o.title}</span> — {o.reason}
+                    </p>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Open blockers, oldest first: age is the severity signal here. */}
+          {todaySnapshot.openBlockers.length > 0 && (
+            <div>
+              <p className="text-xs text-error font-medium flex items-center gap-1.5 mb-1.5">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                {todaySnapshot.openBlockers.length} pengesa të pazgjidhura
+              </p>
+              <div className="space-y-1">
+                {todaySnapshot.openBlockers.slice(0, 5).map(r => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    onClick={() => setSelectedReport(r)}
+                    className="w-full text-left text-xs rounded-md border border-error/20 bg-error/5 px-2.5 py-1.5 hover:bg-error/10 transition-colors"
+                  >
+                    <span className="font-medium">{getName(r.userId)}</span>
+                    <span className="text-muted-foreground"> · {formatDate(r.date)} — </span>
+                    <span className="text-muted-foreground">{r.blockers}</span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
         </Card>
       )}
 
@@ -504,6 +645,47 @@ const DailyReportsView: React.FC<DailyReportsViewProps> = ({ embedded = false })
                 </p>
               </div>
 
+              {/* The day's plan, as answered. This is where a manager sees WHY
+                  something slipped without having to ask. */}
+              {selectedReport.taskOutcomes && selectedReport.taskOutcomes.length > 0 && (
+                <div>
+                  <Label className="flex items-center gap-2 mb-1 text-primary">
+                    <CheckCircle2 className="w-4 h-4" /> Detyrat e ditës
+                  </Label>
+                  <div className="space-y-1">
+                    {selectedReport.taskOutcomes.map((o, i) => (
+                      <div
+                        key={`${o.taskId || o.title}-${i}`}
+                        className="text-sm rounded-lg border border-border bg-muted/30 px-2.5 py-1.5"
+                      >
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge
+                            variant="outline"
+                            className={`text-[10px] ${
+                              o.state === 'done' ? 'border-success/40 text-success'
+                                : o.state === 'in_progress' ? 'border-warning/40 text-warning'
+                                : 'border-error/40 text-error'
+                            }`}
+                          >
+                            {o.state === 'done' ? 'Përfunduar' : o.state === 'in_progress' ? 'Në progres' : 'Nuk u prek'}
+                          </Badge>
+                          <span className="flex-1 min-w-0">{o.title}</span>
+                          {o.unplanned && <Badge variant="secondary" className="text-[10px]">e paplanifikuar</Badge>}
+                          {typeof o.hours === 'number' && (
+                            <span className="text-xs text-muted-foreground tabular-nums">{o.hours}h</span>
+                          )}
+                        </div>
+                        {o.reason?.trim() && (
+                          <p className="text-xs text-muted-foreground mt-1 pl-1 border-l-2 border-error/40">
+                            {o.reason}
+                          </p>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
               {selectedReport.customFields && Object.keys(selectedReport.customFields).length > 0 && (() => {
                 const tmpl = getReportTemplate(selectedReport.serviceLine);
                 const fields = tmpl?.fields || [];
@@ -516,10 +698,19 @@ const DailyReportsView: React.FC<DailyReportsViewProps> = ({ embedded = false })
                     </Label>
                     <div className="grid grid-cols-2 gap-x-4 gap-y-2 bg-primary/5 border border-primary/20 p-3 rounded-lg">
                       {entries.map(([k, v]) => {
-                        const f = fields.find((x) => x.key === k);
+                        // Per-client answers are stored as `"<key>.<customerId>"`.
+                        // Reading the raw key would print "backlinks.abc123" at a
+                        // manager, which is worse than not showing it at all.
+                        const { fieldKey, customerId } = parseFieldKey(k);
+                        const f = fields.find((x) => x.key === fieldKey);
+                        const client = customerId
+                          ? (customers || []).find(c => c.id === customerId)?.name || 'Klient'
+                          : null;
                         return (
                           <div key={k} className={f?.type === 'textarea' ? 'col-span-2' : ''}>
-                            <span className="text-muted-foreground text-xs block">{f?.label || k}</span>
+                            <span className="text-muted-foreground text-xs block">
+                              {f?.label || fieldKey}{client ? ` · ${client}` : ''}
+                            </span>
                             <span className="font-medium text-sm whitespace-pre-wrap">{String(v)}{f?.unit ? ` ${f.unit}` : ''}</span>
                           </div>
                         );
@@ -715,6 +906,15 @@ const DailyReportsView: React.FC<DailyReportsViewProps> = ({ embedded = false })
         <CreateReportDialog
           onClose={() => setShowCreateDialog(false)}
           projects={projects}
+        />
+      )}
+
+      {/* "Shiko si punonjës" — the same form the employee gets, read-only. */}
+      {isManagerOrAbove && (
+        <DailyReportPreviewDialog
+          open={showPreviewDialog}
+          onOpenChange={setShowPreviewDialog}
+          members={activeMembers}
         />
       )}
     </div>

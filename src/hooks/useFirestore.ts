@@ -140,7 +140,7 @@ const teamScopedCollections = new Set([
   'activities', 'clientRequests', 'invoiceItems', 'taskComments', 'leadActivities', 'deals',
   'taskCollaborators', 'customIndustries', 'typingIndicators',
   'directMessages', 'milestones', 'serviceInquiries', 'projectComments',
-  'workspaceFolders', 'workspaceDriveFiles', 'projects', 'dailyReports',
+  'workspaceFolders', 'workspaceDriveFiles', 'projects', 'dailyReports', 'dailyReportMisses',
   'roleTemplates', 'standups', 'quotes', 'contracts', 'dailyFocus', 'productivitySettings', 'weeklyReviews',
   'chatSnippets', 'whatsappAccounts', 'whatsappThreads', 'waTemplates', 'waBroadcasts',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments',

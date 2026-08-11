@@ -94,6 +94,9 @@ export const NOTIFICATION_TYPES = {
 
   // ── Raporte ─────────────────────────────────────────────────────────────────
   report:                   { category: 'reports',  priority: 'info',     groupLabel: 'njoftime raportesh', portal: true },
+  // The daily-report escalation ladder: the person first, their manager after.
+  daily_report_due:         { category: 'reports',  priority: 'warning',  groupLabel: 'raporte në pritje' },
+  daily_report_missing:     { category: 'reports',  priority: 'critical', groupLabel: 'raporte që mungojnë' },
 
   // ── Sistem (abonim + konfigurim i gabuar) ───────────────────────────────────
   // Deliberately its own category: these are "your account/setup is broken"

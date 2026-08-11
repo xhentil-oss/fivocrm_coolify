@@ -1647,6 +1647,144 @@ async function runLeadWhatsappAutoReminders() {
   return { sent };
 }
 
+// ── JOB: daily-report-check ──────────────────────────────────────────────────
+// The escalation ladder behind the mandatory 16:50 daily report.
+//
+// The browser can prompt and nag, but it cannot do anything for the person who
+// simply closed the laptop — which is precisely the case a mandatory report exists
+// to catch. So the deadline is enforced here:
+//
+//   stage=remind    (run ~17:35) → tell the PERSON their report is missing
+//   stage=escalate  (run ~18:35) → tell every Admin/Manager who is still missing
+//
+// The stage is explicit rather than derived from the clock: this file has no idea
+// what timezone a tenant works in, and inventing one would be worse than letting
+// the scheduler — which runs in the office's own timezone — decide. See the runbook
+// in workspace/DAILY_REPORTS_V2.md for the two crontab lines.
+//
+// Idempotent per tenant per day per stage via `dailyReportMisses/{businessId}_{date}`:
+// re-running the job (or running it twice by accident) notifies nobody twice.
+async function runDailyReportCheck(opts?: { stage?: 'remind' | 'escalate'; businessId?: string; date?: string }) {
+  const stage = opts?.stage === 'escalate' ? 'escalate' : 'remind';
+  const now = new Date();
+  const date = opts?.date
+    || `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+
+  // Weekends are not reporting days — mirrors `isReportingDay` on the client.
+  const weekday = new Date(`${date}T12:00:00`).getDay();
+  if (weekday === 0 || weekday === 6) {
+    console.log(`[daily-report-check] ${date} is a weekend — skipped`);
+    return { stage, date, skipped: 'weekend' as const, tenants: 0, notified: 0 };
+  }
+
+  const businessIds: string[] = [];
+  if (opts?.businessId) {
+    businessIds.push(opts.businessId);
+  } else {
+    const bizSnap = await db.collection('businesses').get();
+    for (const b of bizSnap.docs) businessIds.push(b.id);
+  }
+
+  let tenants = 0;
+  let notified = 0;
+  let missingTotal = 0;
+
+  for (const businessId of businessIds) {
+    try {
+      const stateRef = db.collection('dailyReportMisses').doc(`${businessId}_${date}`);
+      const stateSnap = await stateRef.get();
+      const state = stateSnap.exists ? (stateSnap.data() as any) : null;
+      // The idempotency token is the STAGE stamp, not a timestamp comparison: a job
+      // that fires twice in one evening must not double-notify anybody.
+      if (state && ((stage === 'remind' && state.remindedAt) || (stage === 'escalate' && state.escalatedAt))) {
+        continue;
+      }
+
+      // Both reads are tenant-scoped — the project's cost rule forbids an unfiltered
+      // collection read inside a cron.
+      const [membersSnap, reportsSnap] = await Promise.all([
+        db.collection('teamMembers').where('businessId', '==', businessId).where('status', '==', 'Active').get(),
+        db.collection('dailyReports').where('businessId', '==', businessId).where('date', '==', date).get(),
+      ]);
+      if (membersSnap.empty) continue;
+      tenants++;
+
+      const reported = new Set<string>();
+      for (const d of reportsSnap.docs) {
+        const uid = (d.data() as any).userId;
+        if (uid) reported.add(uid);
+      }
+
+      const members = membersSnap.docs
+        .map(d => ({ id: d.id, ...(d.data() as any) }))
+        .filter(m => !!m.userId);
+
+      const missing = members.filter(m => !reported.has(m.userId));
+      missingTotal += missing.length;
+
+      const patch: Record<string, unknown> = {
+        businessId,
+        date,
+        missingUserIds: missing.map(m => m.userId),
+        expectedCount: members.length,
+        submittedCount: members.length - missing.length,
+        updatedAt: admin.firestore.Timestamp.now(),
+      };
+      if (!stateSnap.exists) patch.createdAt = admin.firestore.Timestamp.now();
+
+      if (stage === 'remind') {
+        for (const m of missing) {
+          await notifyUser({
+            userId: m.userId,
+            type: 'daily_report_due',
+            title: '⏰ Raporti i sotëm mungon',
+            message: 'Afati ishte 17:30. Plotësoje tani — merr më pak se një minutë.',
+            actionUrl: '/app/reports?side=internal&tab=daily',
+            actionLabel: 'Plotëso raportin',
+            businessId,
+            teamId: m.teamId ?? null,
+          }).catch(err => console.error(`[daily-report-check] remind ${m.userId} failed:`, err));
+          notified++;
+        }
+        patch.remindedAt = admin.firestore.Timestamp.now();
+      } else {
+        if (missing.length) {
+          const managers = members.filter(m =>
+            (m.role === 'Admin' || m.role === 'Manager') && !missing.some(x => x.userId === m.userId));
+          const names = missing
+            .map(m => m.displayName || (m.email ? String(m.email).split('@')[0] : 'Anëtar'))
+            .slice(0, 8);
+          const extra = missing.length - names.length;
+          const list = names.join(', ') + (extra > 0 ? ` +${extra}` : '');
+
+          for (const mgr of managers) {
+            await notifyUser({
+              userId: mgr.userId,
+              type: 'daily_report_missing',
+              title: `${missing.length} raporte ditore mungojnë`,
+              message: `Nuk raportuan sot: ${list}.`,
+              actionUrl: '/app/reports?side=internal&tab=daily',
+              actionLabel: 'Shiko raportet',
+              businessId,
+              teamId: mgr.teamId ?? null,
+            }).catch(err => console.error(`[daily-report-check] escalate ${mgr.userId} failed:`, err));
+            notified++;
+          }
+          patch.escalatedToUserIds = managers.map(m => m.userId);
+        }
+        patch.escalatedAt = admin.firestore.Timestamp.now();
+      }
+
+      await stateRef.set(patch, { merge: true });
+    } catch (err) {
+      console.error(`[daily-report-check] tenant ${businessId} failed:`, err);
+    }
+  }
+
+  console.log(`[daily-report-check] stage=${stage} date=${date} tenants=${tenants} missing=${missingTotal} notified=${notified}`);
+  return { stage, date, tenants, missing: missingTotal, notified };
+}
+
 // ── JOB: notification-digest ─────────────────────────────────────────────────
 // Emails a summary of what a user has NOT read yet.
 //
@@ -2817,7 +2955,7 @@ const TENANT_DATA_COLLECTIONS = [
   'payments', 'domains', 'dailyFocus', 'productivitySettings', 'weeklyReviews',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments', 'waTemplates', 'waBroadcasts',
   'socialSnapshots', 'products', 'productCategories', 'productBrands', 'stockMovements',
-  'shopOrders', 'conversations', 'auditLogs', 'notifications',
+  'shopOrders', 'conversations', 'auditLogs', 'notifications', 'dailyReportMisses',
 ];
 
 /**
@@ -4028,6 +4166,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'notification-digest':
         result = await runNotificationDigest();
         break;
+      case 'daily-report-check':
+        // Deliberately NOT part of run-all: it is time-of-day sensitive and must be
+        // scheduled at ~17:35 (stage=remind) and ~18:35 (stage=escalate).
+        result = await runDailyReportCheck({
+          stage: req.query.stage === 'escalate' ? 'escalate' : 'remind',
+          businessId: (req.query.businessId as string) || undefined,
+          date: (req.query.date as string) || undefined,
+        });
+        break;
       case 'inquiry-materials-reminders':
         result = await runInquiryMaterialsReminders();
         break;
@@ -4122,7 +4269,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, whatsapp-broadcasts, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, daily-report-check, whatsapp-broadcasts, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social` });
     }
 
     await recordJobRun({

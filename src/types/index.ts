@@ -1810,6 +1810,29 @@ export interface StandupEntry {
 // ── Daily Reports ──
 
 /**
+ * How one planned task actually went today.
+ *
+ * `not_started` and `in_progress` REQUIRE a `reason` — that requirement is the whole
+ * point of the structure. See src/lib/productivity/dailyReportPlan.ts.
+ */
+export type TaskOutcomeState = 'done' | 'in_progress' | 'not_started';
+
+export interface DailyTaskOutcome {
+  /** Absent for unplanned work typed straight into the report. */
+  taskId?: string;
+  /** Snapshot of the title, so renaming the task later never rewrites history. */
+  title: string;
+  state: TaskOutcomeState;
+  hours?: number;
+  /** Mandatory when `state !== 'done'` and the row was planned. */
+  reason?: string;
+  projectId?: string;
+  customerId?: string;
+  /** Work that was not on today's plan — never owes an explanation. */
+  unplanned?: boolean;
+}
+
+/**
  * Daily staff report. Extended by `DailyReportAccountability` (src/types/reporting.ts)
  * with the enterprise accountability fields — structured status, billable split,
  * dependencies, submission timing and manager review. Every added field is optional,
@@ -1828,6 +1851,12 @@ export interface DailyReport extends DailyReportAccountability {
   projectIds?: string[];
   completedTaskIds?: string[];
   mood?: 'great' | 'good' | 'neutral' | 'struggling';
+  /**
+   * The day's plan, answered task by task. `completedToday`/`openItems` stay as the
+   * narrative version (generated from these, then editable), so every existing
+   * reader keeps working.
+   */
+  taskOutcomes?: DailyTaskOutcome[];
   /** Department (serviceLine) this report was filled against, e.g. "seo". */
   serviceLine?: string;
   /** Department-specific fields (keys defined by the serviceLine template). */
