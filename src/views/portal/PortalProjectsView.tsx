@@ -12,6 +12,7 @@ import { Input } from '../../components/ui/input';
 import { FolderKanban, ArrowRight, CheckCircle2, Clock, Pause, ClipboardList, Search, Plus } from 'lucide-react';
 import { StatCardsSkeleton, ListCardSkeleton } from './PortalSkeletons';
 import type { Project, Task, ServiceInquiry } from '../../types';
+import { currencySymbol } from '../../lib/utils';
 
 const STATUS_FILTERS = [
   { value: 'all', label: 'Të gjitha' },
@@ -275,7 +276,7 @@ const PortalProjectsView: React.FC = () => {
                               <Badge className={statusConfig.color} variant="secondary">{getStatusLabel(project.status)}</Badge>
                               <span className="text-xs text-muted-foreground">{project.done}/{project.total} detyra</span>
                               {project.budget != null && project.budget > 0 && (
-                                <span className="text-xs text-muted-foreground">Buxheti: {project.budget.toLocaleString()} {project.currency || 'ALL'}</span>
+                                <span className="text-xs text-muted-foreground">Buxheti: {project.budget.toLocaleString()} {currencySymbol(project.currency)}</span>
                               )}
                             </div>
                           </div>

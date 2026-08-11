@@ -11,7 +11,7 @@ import { Label } from '../components/ui/label';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import RichTextEditor from '../components/RichTextEditor';
-import { sanitizeHtml } from '../lib/utils';
+import { sanitizeHtml, currencySymbol } from '../lib/utils';
 import type { Service } from '../types';
 
 interface ServiceCategory {
@@ -225,7 +225,7 @@ const ServicesView: React.FC = () => {
                     {service.price.toLocaleString()}
                   </span>
                   <span className="text-sm text-muted-foreground ml-2">
-                    {service.currency || 'ALL'}
+                    {currencySymbol(service.currency)}
                   </span>
                 </div>
               </div>

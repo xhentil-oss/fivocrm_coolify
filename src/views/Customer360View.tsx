@@ -22,7 +22,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Separator } from '../components/ui/separator';
-import { safeHref, toAll, canSeeFinancials } from '../lib/utils';
+import { safeHref, toAll, canSeeFinancials, currencySymbol } from '../lib/utils';
 import { resolvePortalUserId } from '../lib/notifyClient';
 import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract, Service } from '../types';
 
@@ -543,7 +543,7 @@ const Customer360View: React.FC = () => {
                           <p className="text-xs text-muted-foreground">{inv.createdAt instanceof Date ? inv.createdAt.toLocaleDateString('sq-AL') : ''}</p>
                         </div>
                         <div className="flex items-center gap-2">
-                          <span className="font-semibold">{(inv.total || inv.amount || 0).toLocaleString()} {(inv as any).currency === 'EUR' ? '€' : 'L'}</span>
+                          <span className="font-semibold">{(inv.total || inv.amount || 0).toLocaleString()} {currencySymbol((inv as any).currency)}</span>
                           <Badge className={getStatusColor(inv.status)} variant="secondary">{inv.status}</Badge>
                         </div>
                       </div>
@@ -607,7 +607,7 @@ const Customer360View: React.FC = () => {
                         <span className="text-[10px] text-muted-foreground">↳ nga {invoiceNumberById.get((inv as any).parentInvoiceId) || 'nëna'}</span>
                       )}
                       <div className="mt-1 flex items-center justify-between text-sm">
-                        <span className="font-semibold">{(inv.total || inv.amount || 0).toLocaleString()} {(inv as any).currency === 'EUR' ? '€' : 'L'}</span>
+                        <span className="font-semibold">{(inv.total || inv.amount || 0).toLocaleString()} {currencySymbol((inv as any).currency)}</span>
                         <span className="text-xs text-muted-foreground">Afati: {inv.dueDate instanceof Date ? inv.dueDate.toLocaleDateString('sq-AL') : '-'}</span>
                       </div>
                       <div className="mt-1 text-xs text-muted-foreground">
@@ -649,7 +649,7 @@ const Customer360View: React.FC = () => {
                           </td>
                           <td className="px-4 py-2.5">{inv.createdAt instanceof Date ? inv.createdAt.toLocaleDateString('sq-AL') : ''}</td>
                           <td className="px-4 py-2.5">{inv.dueDate instanceof Date ? inv.dueDate.toLocaleDateString('sq-AL') : '-'}</td>
-                          <td className="px-4 py-2.5 text-right font-semibold">{(inv.total || inv.amount || 0).toLocaleString()} {(inv as any).currency === 'EUR' ? '€' : 'L'}</td>
+                          <td className="px-4 py-2.5 text-right font-semibold">{(inv.total || inv.amount || 0).toLocaleString()} {currencySymbol((inv as any).currency)}</td>
                           <td className="px-4 py-2.5"><Badge className={getStatusColor(inv.status)} variant="secondary">{inv.status}</Badge></td>
                           <td className="px-4 py-2.5">{inv.paymentMethod || '-'}</td>
                         </tr>
@@ -697,8 +697,8 @@ const Customer360View: React.FC = () => {
                     </div>
                     {p.budget != null && canSeeFinancials(permissions) && (
                       <div className="flex justify-between text-xs text-muted-foreground mt-1">
-                        <span>Buxheti: {p.budget.toLocaleString()} {(p as any).currency || 'ALL'}</span>
-                        <span>Shpenzuar: {(p.spent || 0).toLocaleString()} {(p as any).currency || 'ALL'}</span>
+                        <span>Buxheti: {p.budget.toLocaleString()} {currencySymbol((p as any).currency)}</span>
+                        <span>Shpenzuar: {(p.spent || 0).toLocaleString()} {currencySymbol((p as any).currency)}</span>
                       </div>
                     )}
                   </div>
@@ -870,7 +870,7 @@ const Customer360View: React.FC = () => {
                 {/* Mobile: stacked cards (8-column table is too wide for a phone) */}
                 <div className="sm:hidden space-y-2">
                   {customerQuotes.map(q => {
-                    const cur = q.currency === 'EUR' ? '€' : q.currency === 'USD' ? '$' : 'L';
+                    const cur = currencySymbol(q.currency);
                     return (
                       <div key={q.id} className="p-3 rounded-lg border bg-card space-y-1.5">
                         <div className="flex items-center justify-between gap-2">
@@ -935,7 +935,7 @@ const Customer360View: React.FC = () => {
                     </thead>
                     <tbody className="divide-y">
                       {customerQuotes.map(q => {
-                        const cur = q.currency === 'EUR' ? '€' : q.currency === 'USD' ? '$' : 'L';
+                        const cur = currencySymbol(q.currency);
                         return (
                           <tr key={q.id} className="hover:bg-muted/50">
                             <td className="px-4 py-2.5 font-medium">{q.label || q.result?.suggestedLabel || '-'}</td>

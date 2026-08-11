@@ -64,7 +64,7 @@ import { db } from '../lib/firebase';
 import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
 import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
-import { safeHref, phoneKeyDown, normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
+import { safeHref, phoneKeyDown, normalizeAlbanianPhone, getTimestampMs, currencySymbol } from '../lib/utils';
 import { TEMP_META } from '../lib/leadIntel';
 import { LEAD_STAGES, SELECTABLE_STATUSES, leadStageLabel } from '../lib/leadStages';
 import { calculateLeadScore } from '../lib/leadScore';
@@ -2441,7 +2441,7 @@ const CRMView: React.FC = () => {
                     <>
                       <div className="space-y-2">
                         {leadQuotes.map(q => {
-                          const cur = q.currency === 'EUR' ? '€' : q.currency === 'USD' ? '$' : 'L';
+                          const cur = currencySymbol(q.currency);
                           return (
                             <div key={q.id} className="p-2.5 rounded-lg border bg-muted/30 text-sm">
                               <div className="flex items-center justify-between">

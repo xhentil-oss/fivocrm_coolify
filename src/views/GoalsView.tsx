@@ -536,7 +536,7 @@ const KeyResultsEditor: React.FC<{ value: KeyResult[]; onChange: (v: KeyResult[]
                 <div><Label className="text-[10px]">Fillimi</Label><Input type="number" value={kr.startValue} onChange={e => patch(kr.id, { startValue: num(e.target.value) })} className="h-8" /></div>
                 <div><Label className="text-[10px]">Aktuale</Label><Input type="number" value={kr.currentValue} onChange={e => patch(kr.id, { currentValue: num(e.target.value) })} className="h-8" /></div>
                 <div><Label className="text-[10px]">Target</Label><Input type="number" value={kr.targetValue} onChange={e => patch(kr.id, { targetValue: num(e.target.value) })} className="h-8" /></div>
-                <div><Label className="text-[10px]">Njësia</Label><Input value={kr.unit || ''} onChange={e => patch(kr.id, { unit: e.target.value })} placeholder="€" className="h-8" /></div>
+                <div><Label className="text-[10px]">Njësia</Label><Input value={kr.unit || ''} onChange={e => patch(kr.id, { unit: e.target.value })} placeholder="L" className="h-8" /></div>
               </div>
             )}
             {kr.type === 'auto' && (
@@ -805,7 +805,7 @@ const GoalForm: React.FC<{
           </div>
           <div>
             <Label htmlFor="metricUnit" className="text-xs">Njësia</Label>
-            <Input id="metricUnit" name="metricUnit" placeholder="€, leads..." defaultValue={initialData?.metricUnit || ''} />
+            <Input id="metricUnit" name="metricUnit" placeholder="L, leads..." defaultValue={initialData?.metricUnit || ''} />
           </div>
         </div>
       </div>

@@ -35,7 +35,7 @@ import { portalProjectCommentDeepLink } from '../lib/deepLinks';
 import { resolvePortalUserId } from '../lib/notifyClient';
 import { addFrequency, completeTask } from '../lib/recurringUtils';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
-import { formatCurrency, toAll, canSeeFinancials, cn } from '../lib/utils';
+import { formatCurrency, formatCompactRange, toAll, canSeeFinancials, cn } from '../lib/utils';
 import { computeProjectLabor } from '../lib/finance/laborCost';
 import { getInvoiceTotalAll, getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
 import { getInquiryCompleteness } from '../lib/inquiryBrief';
@@ -62,14 +62,6 @@ import { increment } from 'firebase/firestore';
 const CARD = 'rounded-[20px] border border-brand-line bg-white shadow-[0_1px_3px_rgba(8,24,58,.05)]';
 /** Every money figure and count. */
 const NUM = 'font-mono tabular-nums';
-
-/** Short money for tiles, where "318.000 / 450.000 Lekë" never fits on one line. */
-function compactALL(v: number): string {
-  const a = Math.abs(v);
-  if (a >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-  if (a >= 1_000) return `${Math.round(v / 1_000)}k`;
-  return `${Math.round(v)}`;
-}
 
 const TASK_STATUS_META: Record<string, { label: string; pill: string; dot: string }> = {
   'Todo': { label: 'Për të bërë', pill: 'bg-brand-chip text-brand-chip-ink', dot: 'bg-brand-muted-2' },
@@ -1209,7 +1201,7 @@ const ProjectDetailView: React.FC = () => {
                 dangerIconInk="text-brand-neg-ink"
                 label="Buxheti i shpenzuar"
                 value={budgetStats.budget > 0
-                  ? `${compactALL(budgetStats.spent)} / ${compactALL(budgetStats.budget)}`
+                  ? formatCompactRange(budgetStats.spent, budgetStats.budget)
                   : formatCurrency(budgetStats.spent, 'ALL')}
                 sub={budgetStats.budget > 0
                   ? `${budgetStats.pct}% e buxhetit${budgetStats.overBudget ? ' — tejkaluar!' : ''}`
@@ -1222,7 +1214,7 @@ const ProjectDetailView: React.FC = () => {
                 iconInk="text-brand-pos"
                 label="Faturuar"
                 value={billingStats.comparable
-                  ? `${compactALL(billingStats.billed)} / ${compactALL(billingStats.budget)}`
+                  ? formatCompactRange(billingStats.billed, billingStats.budget)
                   : formatCurrency(billingStats.billed, 'ALL')}
                 sub={billingStats.invoiceCount === 0
                   ? 'asnjë faturë e lidhur'

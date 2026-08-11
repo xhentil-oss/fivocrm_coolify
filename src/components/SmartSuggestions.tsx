@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Sparkles, TrendingUp, Clock, AlertTriangle, ChevronDown, ChevronUp, DollarSign, Flag, Zap } from 'lucide-react';
 import { Badge } from './ui/badge';
-import { toAll } from '../lib/utils';
+import { toAll, currencySymbol } from '../lib/utils';
 import type { Task, Project, Customer, Invoice } from '../types';
 
 interface SmartSuggestionsProps {
@@ -84,7 +84,7 @@ function computeTaskScore(
         const budgetAll = toAll(project.budget, project.currency);
         const budgetScore = Math.min(15, Math.floor(budgetAll / 1000));
         score += budgetScore;
-        if (budgetScore >= 10) reasons.push(`Projekt me buxhet ${project.budget.toLocaleString()} ${project.currency || 'ALL'}`);
+        if (budgetScore >= 10) reasons.push(`Projekt me buxhet ${project.budget.toLocaleString()} ${currencySymbol(project.currency)}`);
       }
 
       // Customer revenue from invoices

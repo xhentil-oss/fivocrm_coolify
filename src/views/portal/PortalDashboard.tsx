@@ -8,7 +8,7 @@ import { Badge } from '../../components/ui/badge';
 import { FileText, ShoppingBag, ClipboardList, DollarSign, Clock, FolderKanban, CheckCircle2, Sparkles, Calculator, ArrowRight, MessageCircle } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useToast } from '../../hooks/use-toast';
-import { toAll } from '../../lib/utils';
+import { toAll, currencySymbol } from '../../lib/utils';
 import { DashboardSkeleton } from './PortalSkeletons';
 import type { Invoice, InvoiceItem, Service, ClientRequest, Project, Task, Quote, Lead, ServiceInquiry } from '../../types';
 
@@ -281,7 +281,7 @@ const PortalDashboard: React.FC = () => {
 
     (invoices || []).forEach(inv => {
       const num = inv.invoiceNumber || `INV-${inv.id.slice(0, 6)}`;
-      const cur = (inv as any).currency === 'EUR' ? '€' : 'L';
+      const cur = currencySymbol((inv as any).currency);
       const amount = `${(inv.total || inv.amount || 0).toLocaleString()} ${cur}`;
       const created = toDate(inv.createdAt);
       if (created) evs.push({ id: `inv-${inv.id}`, kind: 'invoice', title: `Faturë e re: ${num}`, desc: amount, date: created, to: '/portal/invoices' });
@@ -533,7 +533,7 @@ const PortalDashboard: React.FC = () => {
                     </div>
                     <div className="flex items-center gap-2 sm:gap-3 flex-shrink-0">
                       <span className="font-semibold text-sm">
-                        {(invoice.total || invoice.amount || 0).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}
+                        {(invoice.total || invoice.amount || 0).toLocaleString()} {currencySymbol((invoice as any).currency)}
                       </span>
                       <Badge className={getStatusColor(invoice.status)} variant="secondary">
                         {invoice.status}

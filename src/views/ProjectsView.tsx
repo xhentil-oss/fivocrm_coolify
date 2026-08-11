@@ -6,7 +6,7 @@ import { getNextInvoiceNumber, db } from '../lib/firebase';
 import { collection, deleteDoc, getDocs, query, updateDoc, where } from 'firebase/firestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { canSeeFinancials, toAll, fromAll } from '../lib/utils';
+import { canSeeFinancials, toAll, fromAll, currencySymbol } from '../lib/utils';
 import { projectBillingPeriodKey, projectBillingPeriodEnd } from '../lib/finance/recurringBilling';
 import { archiveConsequences, archiveProjectPatch, isProjectArchived, restoreProjectPatch } from '../lib/projectArchive';
 import {
@@ -1575,7 +1575,7 @@ const ProjectForm: React.FC<{
                       <span className="ml-1.5 text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">{s.category}</span>
                     )}
                   </div>
-                  <span className="text-sm text-primary font-medium shrink-0">{(s.price || 0).toLocaleString()} {s.currency || 'ALL'}</span>
+                  <span className="text-sm text-primary font-medium shrink-0">{(s.price || 0).toLocaleString()} {currencySymbol(s.currency)}</span>
                 </div>
               </label>
             ))}
@@ -1583,7 +1583,7 @@ const ProjectForm: React.FC<{
 
           {selectedServiceIds.length > 0 && (
             <p className="text-xs text-primary font-medium mt-1">
-              {selectedServiceIds.length} shërbim{selectedServiceIds.length !== 1 ? 'e' : ''} zgjedhur · Total: {serviceBudget?.toLocaleString()} {services[0]?.currency || 'ALL'}
+              {selectedServiceIds.length} shërbim{selectedServiceIds.length !== 1 ? 'e' : ''} zgjedhur · Total: {serviceBudget?.toLocaleString()} {currencySymbol(services[0]?.currency)}
             </p>
           )}
         </div>

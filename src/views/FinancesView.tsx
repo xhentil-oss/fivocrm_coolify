@@ -4,7 +4,7 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { useCollection } from '../hooks/useFirestore';
 import { Skeleton } from '../components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { cn, formatALL, toAll } from '../lib/utils';
+import { cn, formatALL, formatCompact, toAll } from '../lib/utils';
 import {
   AlertTriangle, ChevronDown, ChevronRight, Clock, Download, Info, Landmark,
   Percent, TrendingDown, TrendingUp, Wallet,
@@ -89,13 +89,9 @@ const MONTH_NAMES_FULL = [
   'Korrik', 'Gusht', 'Shtator', 'Tetor', 'Nëntor', 'Dhjetor',
 ];
 
-/** Short money for chart ticks/labels, where the full "1.234.567 L" never fits. */
-function compactALL(v: number): string {
-  const a = Math.abs(v);
-  if (a >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
-  if (a >= 1_000) return `${Math.round(v / 1_000)}k`;
-  return `${Math.round(v)}`;
-}
+/** Short money for chart ticks/labels, where the full "1.234.567 L" never fits.
+ *  Delegates to the shared helper so the Lek unit can never go missing again. */
+const compactALL = (v: number) => formatCompact(v, 'ALL');
 
 function monthWindow(base: Date, offset: number) {
   const d = new Date(base.getFullYear(), base.getMonth() + offset, 1);
@@ -837,7 +833,7 @@ const FinancesView: React.FC = () => {
                   />
                   <YAxis
                     tick={{ fontSize: 10, fill: AXIS_INK }}
-                    width={46}
+                    width={58}
                     axisLine={false}
                     tickLine={false}
                     tickFormatter={compactALL}
@@ -912,7 +908,7 @@ const FinancesView: React.FC = () => {
                   />
                   <YAxis
                     tick={{ fontSize: 10, fill: AXIS_INK }}
-                    width={46}
+                    width={58}
                     axisLine={false}
                     tickLine={false}
                     tickFormatter={compactALL}
@@ -1887,7 +1883,7 @@ const DepartmentTrend: React.FC<{
         <ComposedChart data={view.data} margin={{ top: 12, right: 16, left: 0, bottom: 4 }}>
           <CartesianGrid stroke={GRID_INK} vertical={false} />
           <XAxis dataKey="label" tick={{ fontSize: 11, fill: AXIS_INK, fontWeight: 700 }} axisLine={{ stroke: '#d7dfeb' }} tickLine={false} />
-          <YAxis tick={{ fontSize: 10, fill: AXIS_INK }} width={46} axisLine={false} tickLine={false} tickFormatter={compactALL} />
+          <YAxis tick={{ fontSize: 10, fill: AXIS_INK }} width={58} axisLine={false} tickLine={false} tickFormatter={compactALL} />
           <ReferenceLine y={0} stroke="#d7dfeb" strokeWidth={1.5} />
           <Tooltip content={<ChartTip />} />
           {view.series.map(s => (

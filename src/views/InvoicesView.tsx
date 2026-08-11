@@ -58,7 +58,7 @@ import {
 } from '../components/ui/dropdown-menu';
 import type { Invoice, Customer, Service, InvoiceItem, Project, ClientPortalAccess, Payment } from '../types';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
-import { toAll, getRateToAll, getTimestampMs, canSeeFinancials } from '../lib/utils';
+import { toAll, getRateToAll, getTimestampMs, canSeeFinancials, currencySymbol } from '../lib/utils';
 import { toast } from '../hooks/use-toast';
 import { getStatusColor, getInvoiceStatusLabel } from '../lib/statusColors';
 import { projectPickerLabel, sortArchivedLast } from '../lib/projectArchive';
@@ -1145,9 +1145,9 @@ const InvoicesView: React.FC = () => {
                     <p className="text-[11px] text-muted-foreground/80 truncate" title={invoice.productSummary}>📦 {invoice.productSummary}</p>
                   )}
                   <div className="flex items-center gap-3 mt-1.5">
-                    <span className="text-sm font-semibold">{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}</span>
+                    <span className="text-sm font-semibold">{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} {currencySymbol((invoice as any).currency)}</span>
                     {invoice.status === 'Partial' && invoice.paidAmount != null && (
-                      <span className="text-[10px] text-cyan-600 font-medium">Paguar: {invoice.paidAmount.toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}</span>
+                      <span className="text-[10px] text-cyan-600 font-medium">Paguar: {invoice.paidAmount.toLocaleString()} {currencySymbol((invoice as any).currency)}</span>
                     )}
                     <span className="text-[10px] text-muted-foreground">Afati: {invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : 'Pa afat'}</span>
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0">
@@ -1270,7 +1270,7 @@ const InvoicesView: React.FC = () => {
                 const proj = invoice.projectId ? projectById.get(invoice.projectId) : undefined;
                 const pill = statusPill(invoice.status);
                 const total = invoice.total ?? invoice.amount ?? 0;
-                const cur = (invoice as any).currency === 'EUR' ? '€' : 'L';
+                const cur = currencySymbol((invoice as any).currency);
                 const canPay = (invoice.status === 'Pending' || invoice.status === 'Overdue') && total > 0;
                 const due = invoice.dueDate ? new Date(invoice.dueDate) : null;
                 let dueCtx: { text: string; cls: string } | null = null;
@@ -1440,7 +1440,7 @@ const InvoicesView: React.FC = () => {
                     </span>
                   ); })()}
                   <span className="font-mono text-sm font-semibold">
-                    {(drawerInvoice.total ?? drawerInvoice.amount ?? 0).toLocaleString()} {(drawerInvoice as any).currency === 'EUR' ? '€' : 'L'}
+                    {(drawerInvoice.total ?? drawerInvoice.amount ?? 0).toLocaleString()} {currencySymbol((drawerInvoice as any).currency)}
                   </span>
                 </div>
               </div>
@@ -1467,7 +1467,7 @@ const InvoicesView: React.FC = () => {
               <div>
                 <label className="text-xs font-medium text-muted-foreground">Totali</label>
                 <div className="mt-1 w-full h-9 px-2 flex items-center border border-border rounded-md bg-muted/40 text-sm font-mono font-semibold">
-                  {(drawerInvoice.total ?? drawerInvoice.amount ?? 0).toLocaleString()} {(drawerInvoice as any).currency === 'EUR' ? '€' : 'L'}
+                  {(drawerInvoice.total ?? drawerInvoice.amount ?? 0).toLocaleString()} {currencySymbol((drawerInvoice as any).currency)}
                 </div>
                 <p className="mt-1 text-[11px] text-muted-foreground">Totali vjen nga shërbimet e faturës. Për të ndryshuar shërbimet, hap faturën e plotë më poshtë.</p>
               </div>
@@ -1533,7 +1533,7 @@ const InvoicesView: React.FC = () => {
             {(() => {
               const inv = partialPaymentInvoice;
               const invCur = (inv as any).currency || 'ALL';
-              const curSymbol = invCur === 'EUR' ? '€' : 'L';
+              const curSymbol = currencySymbol(invCur);
               const total = inv.total ?? inv.amount ?? 0;
               const alreadyPaid = inv.paidAmount ?? 0;
               const remaining = total - alreadyPaid;
@@ -2188,7 +2188,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         userId: m.userId,
         type: 'invoice_created',
         title: 'Faturë e Re',
-        message: `Faturë e re${invoiceNumber ? ` ${invoiceNumber}` : ''} për ${customerName || 'klient'} — ${total.toLocaleString()} ${invoiceData.currency || 'ALL'}.`,
+        message: `Faturë e re${invoiceNumber ? ` ${invoiceNumber}` : ''} për ${customerName || 'klient'} — ${total.toLocaleString()} ${currencySymbol(invoiceData.currency)}.`,
         isRead: false,
         actionUrl: '/app/invoices',
         actionLabel: 'Shiko Faturat',
@@ -2427,7 +2427,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
                       <SelectItem value="placeholder" disabled>Zgjidh shërbimin</SelectItem>
                       {services?.map(service => (
                         <SelectItem key={service.id} value={service.id}>
-                          {service.title || service.name} - {service.price} {(service.currency || 'ALL') === 'EUR' ? '€' : 'L'}
+                          {service.title || service.name} - {service.price} {currencySymbol(service.currency)}
                         </SelectItem>
                       ))}
                     </SelectContent>
@@ -2450,7 +2450,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
                     const svc = services?.find(s => s.id === item.serviceId);
                     if (svc) return toInvoiceCurrency(svc.price * item.quantity, svc.currency).toFixed(2);
                     return ((Number(item.unitPrice) || 0) * item.quantity).toFixed(2);
-                  })()} {currency === 'EUR' ? '€' : 'L'}
+                  })()} {currencySymbol(currency)}
                 </div>
                 <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(index)}>
                   <Trash2 className="w-4 h-4" />
@@ -2696,7 +2696,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
               onClick={() => setDiscountType('fixed')}
               className={`px-3 py-2 transition-colors ${discountType === 'fixed' ? 'bg-primary text-primary-foreground' : 'bg-background hover:bg-muted'}`}
             >
-              {currency === 'EUR' ? '€' : 'L'}
+              {currencySymbol(currency)}
             </button>
             <button
               type="button"
@@ -2752,21 +2752,21 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         <div className="space-y-2 text-right">
           <div className="flex justify-between">
             <span className="text-muted-foreground">Nëntotali:</span>
-            <span className="font-medium">{calculateSubtotal().toFixed(2)} {currency === 'EUR' ? '€' : 'L'}</span>
+            <span className="font-medium">{calculateSubtotal().toFixed(2)} {currencySymbol(currency)}</span>
           </div>
           {discount > 0 && (
             <div className="flex justify-between text-red-500">
               <span>Zbritje {discountType === 'percent' ? `(${discount}%)` : ''}:</span>
-              <span>−{calculateDiscountAmount(calculateSubtotal()).toFixed(2)} {currency === 'EUR' ? '€' : 'L'}</span>
+              <span>−{calculateDiscountAmount(calculateSubtotal()).toFixed(2)} {currencySymbol(currency)}</span>
             </div>
           )}
           <div className="flex justify-between">
             <span className="text-muted-foreground">Taksa:</span>
-            <span className="font-medium">{tax.toFixed(2)} {currency === 'EUR' ? '€' : 'L'}</span>
+            <span className="font-medium">{tax.toFixed(2)} {currencySymbol(currency)}</span>
           </div>
           <div className="flex justify-between text-lg font-bold">
             <span>Total:</span>
-            <span>{(calculateSubtotal() - calculateDiscountAmount(calculateSubtotal()) + tax).toFixed(2)} {currency === 'EUR' ? '€' : 'L'}</span>
+            <span>{(calculateSubtotal() - calculateDiscountAmount(calculateSubtotal()) + tax).toFixed(2)} {currencySymbol(currency)}</span>
           </div>
         </div>
       </div>
@@ -2793,7 +2793,7 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
     return allServices.reduce((acc, s) => ({ ...acc, [s.id]: s }), {} as Record<string, Service>);
   }, [allServices]);
 
-  const cur = (invoice as any).currency === 'EUR' ? '€' : 'L';
+  const cur = currencySymbol((invoice as any).currency);
 
   // Never offer payment on a draft or a zero/negative invoice (auto-created project
   // drafts can have no line items and a 0.00 total). Financial guard, not just UX.
@@ -3077,7 +3077,7 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             const h = doc.internal.pageSize.getHeight();
             const margin = 20;
             const isEUR = (invoice as any).currency === 'EUR';
-            const cur = isEUR ? '€' : 'L';
+            const cur = currencySymbol(isEUR ? 'EUR' : 'ALL');
             const fmt = (n: number) => `${n.toFixed(2)} ${cur}`;
 
             // ── Accent bar ──────────────────────────────────────────────────

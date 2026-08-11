@@ -6,7 +6,7 @@
  *
  * Progress on an Objective is DERIVED as the average of its Key Results' progress
  * — never typed in by hand. Three kinds of KR:
- *   • metric    — a number you update (e.g. "reach €50k", start 0 → target 50000)
+ *   • metric    — a number you update (e.g. "reach 50k L", start 0 → target 50000)
  *   • milestone — binary done/not-done (0% or 100%)
  *   • auto      — currentValue pulled LIVE from CRM data (tasks done, revenue,
  *                 leads won, …) so the goal moves on its own as work happens.
@@ -15,7 +15,7 @@
  * Pure functions only — no React, no Firestore.
  */
 
-import { getTimestampMs } from '../utils';
+import { getTimestampMs, toAll } from '../utils';
 import type { Goal, KeyResult, KeyResultAutoSource, Task, Project, Lead, Invoice } from '../../types';
 
 export interface OkrContext {
@@ -47,7 +47,7 @@ export const AUTO_SOURCE_UNIT: Record<KeyResultAutoSource, string> = {
   tasksCompleted: 'detyra',
   projectsCompleted: 'projekte',
   leadsWon: 'leads',
-  revenue: '€',
+  revenue: 'L',
   invoicesPaid: 'fatura',
 };
 
@@ -103,7 +103,9 @@ export function computeAutoKRValue(
     case 'revenue': {
       return (ctx.invoices || [])
         .filter((inv) => inv.status === 'Paid' && within(getTimestampMs((inv as any).paidAt) || getTimestampMs(inv.updatedAt)))
-        .reduce((s, inv) => s + (inv.total ?? inv.amount ?? 0), 0);
+        // Normalizo ne ALL: mbledhja e papershtatur e `total` numeronte
+        // 1 € si 1 Lek, dhe rezultati etiketohej si €.
+        .reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0);
     }
     case 'invoicesPaid': {
       return (ctx.invoices || []).filter(

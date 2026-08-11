@@ -8,7 +8,7 @@ import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Wallet, RefreshCw, Search, Banknote, Landmark, CreditCard } from 'lucide-react';
-import { formatALL, toAll } from '../lib/utils';
+import { formatALL, toAll, currencySymbol } from '../lib/utils';
 import { parseDate } from '../lib/finance/financialAnalytics';
 import { missingPayments, totalsByMethod } from '../lib/finance/payments';
 import type { Payment, Invoice, Customer } from '../types';
@@ -181,7 +181,7 @@ const PaymentsView: React.FC = () => {
                     <td className="py-2.5 px-3 truncate max-w-[160px]">{p.customerId ? (customerName.get(p.customerId) || 'Pa klient') : 'Pa klient'}</td>
                     <td className="py-2.5 px-3">{p.method || 'Tjetër'}</td>
                     <td className="py-2.5 px-3 text-right tabular-nums font-semibold">
-                      {(p.amount || 0).toLocaleString()} {p.currency === 'EUR' ? '€' : p.currency === 'USD' ? '$' : p.currency === 'GBP' ? '£' : 'L'}
+                      {(p.amount || 0).toLocaleString()} {currencySymbol(p.currency)}
                     </td>
                   </tr>
                 ))}

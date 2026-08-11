@@ -23,6 +23,7 @@ import type { Project, Task, TaskComment } from '../../types';
 import { notifyStaff } from '../../lib/notifyStaff';
 import { useCommentFocus, COMMENT_FLASH_CLASS } from '../../hooks/useCommentFocus';
 import { taskDeepLink, projectCommentDeepLink } from '../../lib/deepLinks';
+import { currencySymbol } from '../../lib/utils';
 
 interface ProjectComment {
   id: string;
@@ -371,7 +372,7 @@ const PortalProjectDetailView: React.FC = () => {
               </div>
               <div className="text-right">
                 <span className="font-semibold">{(project.spent || 0).toLocaleString()}</span>
-                <span className="text-muted-foreground"> / {project.budget.toLocaleString()} {project.currency || 'ALL'}</span>
+                <span className="text-muted-foreground"> / {project.budget.toLocaleString()} {currencySymbol(project.currency)}</span>
               </div>
             </div>
             <div className="w-full h-2 bg-muted rounded-full overflow-hidden mt-2">

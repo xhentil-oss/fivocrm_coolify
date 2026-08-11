@@ -148,6 +148,49 @@ export function formatCurrency(amount: number, currency: 'EUR' | 'ALL' | 'USD' |
   }
 }
 
+/**
+ * The symbol to print after an amount. Lek is the house currency, so anything
+ * missing or unrecognised is Lek — never the raw ISO code.
+ *
+ * This exists because the same three-way ternary was inlined in ~15 places and
+ * a fourth family of call sites printed `currency || 'ALL'`, i.e. the literal
+ * string "ALL" next to the number ("50.000 ALL" instead of "50.000 L").
+ */
+export function currencySymbol(currency?: string | null): string {
+  switch (currency) {
+    case 'EUR': return '€';
+    case 'USD': return '$';
+    case 'GBP': return '£';
+    default: return 'L';
+  }
+}
+
+/**
+ * Short money for chart ticks and tiles where "1.234.567 L" never fits.
+ *
+ * The unit is part of the output on purpose: the abbreviated form used to be
+ * currency-less ("50k"), so a Lek figure sitting next to a `formatCurrency`
+ * one in the same card read as an unlabelled number.
+ */
+export function formatCompact(amount: number, currency: string = 'ALL'): string {
+  const value = typeof amount === 'number' && isFinite(amount) ? amount : 0;
+  const unit = currencySymbol(currency);
+  const abs = Math.abs(value);
+  if (abs >= 1_000_000) return `${(value / 1_000_000).toFixed(1).replace('.', ',')}M ${unit}`;
+  if (abs >= 1_000) return `${Math.round(value / 1_000)}k ${unit}`;
+  return `${Math.round(value)} ${unit}`;
+}
+
+/**
+ * "318k / 450k L" — a spent/total pair with the unit printed once at the end.
+ * Exists so a tile showing two amounts does not have to choose between naming
+ * the currency twice and dropping it entirely.
+ */
+export function formatCompactRange(a: number, b: number, currency: string = 'ALL'): string {
+  const left = formatCompact(a, currency).replace(` ${currencySymbol(currency)}`, '');
+  return `${left} / ${formatCompact(b, currency)}`;
+}
+
 /** Shorthand: format as EUR. */
 export function formatEUR(amount: number): string {
   return formatCurrency(amount, 'EUR');

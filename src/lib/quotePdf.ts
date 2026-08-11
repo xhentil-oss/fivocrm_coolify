@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf';
 import type { Quote } from '../types';
+import { currencySymbol } from './utils';
 
 const NAVY = '#12468C';
 const CYAN = '#0EA5E9';
@@ -26,7 +27,7 @@ function companyInfo(): { name: string; email?: string; phone?: string } {
  */
 export function downloadQuotePdf(q: Quote): void {
   const doc = new jsPDF({ unit: 'pt', format: 'a4' });
-  const cur = q.currency === 'EUR' ? '€' : q.currency === 'USD' ? '$' : 'L';
+  const cur = currencySymbol(q.currency);
   const co = companyInfo();
   const pageW = doc.internal.pageSize.getWidth();
   const margin = 40;

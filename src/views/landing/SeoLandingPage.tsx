@@ -7,6 +7,7 @@ import {
 } from 'lucide-react';
 import { LangSwitcher, useLandingLang, type Lang } from './LangSwitcher';
 import LandingMobileMenu from './LandingMobileMenu';
+import { currencySymbol } from '../../lib/utils';
 
 function useInView(threshold = 0.15) {
   const ref = useRef<HTMLDivElement>(null);
@@ -345,7 +346,7 @@ export default function SeoLandingPage() {
                     <div className="p-8">
                       <h3 className="text-2xl font-bold">{pkg.title}</h3>
                       {pkg.description && (<p className="text-sm text-gray-500 mt-1">{pkg.description.replace(/<[^>]*>/g, '').slice(0, 120)}</p>)}
-                      <div className="mt-6 flex items-baseline gap-1.5"><span className={`text-4xl font-bold bg-gradient-to-r ${style.color} bg-clip-text text-transparent`}>{pkg.price.toLocaleString()}</span><span className="text-sm text-gray-500">{pkg.currency || 'ALL'}{t.packages.perMonth}</span></div>
+                      <div className="mt-6 flex items-baseline gap-1.5"><span className={`text-4xl font-bold bg-gradient-to-r ${style.color} bg-clip-text text-transparent`}>{pkg.price.toLocaleString()}</span><span className="text-sm text-gray-500">{currencySymbol(pkg.currency)}{t.packages.perMonth}</span></div>
                       {t.packages.features[i] && (<ul className="mt-6 space-y-3">{t.packages.features[i].map((feature, fi) => (<li key={fi} className="flex items-start gap-2.5 text-sm text-gray-700"><CheckCircle2 className={`w-4 h-4 mt-0.5 flex-shrink-0 ${style.popular ? 'text-purple-500' : 'text-green-500'}`} />{feature}</li>))}</ul>)}
                       <button onClick={() => scrollToContact(pkg)} className={`mt-8 w-full py-3.5 rounded-xl text-sm font-semibold transition-all hover:-translate-y-0.5 ${style.popular ? 'bg-gradient-to-r from-purple-600 to-indigo-600 text-white hover:shadow-lg hover:shadow-purple-500/25' : 'bg-gray-100 text-gray-900 hover:bg-gray-200'}`}>{isSelected ? t.packages.chosen : t.packages.cta[i] || t.packages.cta[0]}</button>
                     </div>

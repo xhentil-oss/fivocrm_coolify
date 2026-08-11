@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   sanitizeHtml, cn, safeHref,
   toAll, fromAll, formatCurrency, formatEUR, formatALL, parseLocalDate,
+  currencySymbol, formatCompact, formatCompactRange,
   normalizeAlbanianPhone, validatePhone,
 } from './utils';
 
@@ -145,5 +146,47 @@ describe('validatePhone', () => {
     expect(validatePhone('abc')).toBeNull();
     expect(validatePhone('123')).toBeNull();
     expect(validatePhone('')).toBeNull();
+  });
+});
+
+// Lek is the house currency: the abbreviated forms used to drop the unit
+// entirely ("50k"), which read as an unlabelled number beside a formatted one.
+describe('currencySymbol', () => {
+  it('maps the four supported codes', () => {
+    expect(currencySymbol('ALL')).toBe('L');
+    expect(currencySymbol('EUR')).toBe('€');
+    expect(currencySymbol('USD')).toBe('$');
+    expect(currencySymbol('GBP')).toBe('£');
+  });
+
+  it('falls back to Lek for missing or unknown codes, never the ISO string', () => {
+    expect(currencySymbol(undefined)).toBe('L');
+    expect(currencySymbol(null)).toBe('L');
+    expect(currencySymbol('')).toBe('L');
+    expect(currencySymbol('XYZ')).toBe('L');
+  });
+});
+
+describe('formatCompact', () => {
+  it('always names the currency', () => {
+    expect(formatCompact(50_000)).toBe('50k L');
+    expect(formatCompact(500)).toBe('500 L');
+    expect(formatCompact(1_250_000)).toBe('1,3M L');
+    expect(formatCompact(50_000, 'EUR')).toBe('50k €');
+  });
+
+  it('keeps the sign on negatives and survives junk input', () => {
+    expect(formatCompact(-50_000)).toBe('-50k L');
+    expect(formatCompact(-2_000_000)).toBe('-2,0M L');
+    expect(formatCompact(NaN)).toBe('0 L');
+    expect(formatCompact(Infinity)).toBe('0 L');
+  });
+});
+
+describe('formatCompactRange', () => {
+  it('prints the unit once, at the end', () => {
+    expect(formatCompactRange(318_000, 450_000)).toBe('318k / 450k L');
+    expect(formatCompactRange(0, 240_000)).toBe('0 / 240k L');
+    expect(formatCompactRange(1_000, 2_000_000, 'EUR')).toBe('1k / 2,0M €');
   });
 });

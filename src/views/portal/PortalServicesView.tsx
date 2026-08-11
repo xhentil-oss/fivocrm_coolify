@@ -8,7 +8,7 @@ import { Button } from '../../components/ui/button';
 import { Input } from '../../components/ui/input';
 import { ShoppingBag, Tag, DollarSign, FileText, Clock, Star, Check, TrendingUp, Megaphone, Navigation, Sparkles, Globe, Search } from 'lucide-react';
 import { CardGridSkeleton } from './PortalSkeletons';
-import { sanitizeHtml } from '../../lib/utils';
+import { sanitizeHtml, currencySymbol } from '../../lib/utils';
 import type { Invoice, InvoiceItem, Service } from '../../types';
 
 // Per-category icon + color for the catalog cards. Unknown categories fall back
@@ -161,7 +161,7 @@ const PortalServicesView: React.FC = () => {
                         {service.category && (
                           <Badge variant="secondary" className="gap-1 rounded-full"><Tag className="h-3 w-3" />{service.category}</Badge>
                         )}
-                        <Badge variant="outline" className="gap-1 rounded-full"><DollarSign className="h-3 w-3" />{totalSpent.toLocaleString()} {service.currency || 'ALL'}</Badge>
+                        <Badge variant="outline" className="gap-1 rounded-full"><DollarSign className="h-3 w-3" />{totalSpent.toLocaleString()} {currencySymbol(service.currency)}</Badge>
                       </div>
                       <div className="flex items-center gap-4 mt-3 text-xs text-muted-foreground">
                         <span>{invoiceCount} faturë</span>
@@ -290,7 +290,7 @@ const PortalServicesView: React.FC = () => {
                         <div>
                           <div className="flex items-baseline gap-1">
                             <span className="text-2xl font-bold font-mono tracking-tight">{(service.price ?? 0).toLocaleString()}</span>
-                            <span className="text-sm font-semibold text-muted-foreground">{service.currency || 'ALL'}</span>
+                            <span className="text-sm font-semibold text-muted-foreground">{currencySymbol(service.currency)}</span>
                           </div>
                           {period && <div className="text-xs text-muted-foreground mt-0.5">{period}</div>}
                         </div>

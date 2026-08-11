@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../componen
 import { Separator } from '../../components/ui/separator';
 import { FileText, Search, Eye, DollarSign, Calendar, CreditCard, Check, ExternalLink, Building2, Download } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
-import { toAll } from '../../lib/utils';
+import { toAll, currencySymbol } from '../../lib/utils';
 import { StatCardsSkeleton, ListCardSkeleton } from './PortalSkeletons';
 import type { Invoice, InvoiceItem, Service, Customer } from '../../types';
 import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../../lib/native';
@@ -315,7 +315,7 @@ const PortalInvoicesView: React.FC = () => {
 
                   <div className="flex flex-wrap items-center gap-3">
                     <span className="text-lg font-bold">
-                      {(invoice.total || invoice.amount || 0).toLocaleString()} {(invoice as any).currency === 'EUR' ? '€' : 'L'}
+                      {(invoice.total || invoice.amount || 0).toLocaleString()} {currencySymbol((invoice as any).currency)}
                     </span>
                     <Badge className={getStatusColor(invoice.status)} variant="secondary">
                       {getStatusLabel(invoice.status)}
@@ -420,10 +420,10 @@ const PortalInvoicesView: React.FC = () => {
                           <div>
                             <p className="font-medium">{item.description || getServiceName(item.serviceId)}</p>
                             <p className="text-muted-foreground">
-                              {item.quantity} × {item.unitPrice.toLocaleString()} {(selectedInvoice as any)?.currency === 'EUR' ? '€' : 'L'}
+                              {item.quantity} × {item.unitPrice.toLocaleString()} {currencySymbol((selectedInvoice as any)?.currency)}
                             </p>
                           </div>
-                          <p className="font-semibold">{item.totalPrice.toLocaleString()} {(selectedInvoice as any)?.currency === 'EUR' ? '€' : 'L'}</p>
+                          <p className="font-semibold">{item.totalPrice.toLocaleString()} {currencySymbol((selectedInvoice as any)?.currency)}</p>
                         </div>
                       ))}
                     </div>
@@ -434,7 +434,7 @@ const PortalInvoicesView: React.FC = () => {
               <Separator />
               <div className="flex items-center justify-between text-lg font-bold">
                 <span>Totali</span>
-                <span>{(selectedInvoice.total || selectedInvoice.amount || 0).toLocaleString()} {(selectedInvoice as any).currency === 'EUR' ? '€' : 'L'}</span>
+                <span>{(selectedInvoice.total || selectedInvoice.amount || 0).toLocaleString()} {currencySymbol((selectedInvoice as any).currency)}</span>
               </div>
 
               {/* Bank Transfer Details */}
@@ -508,7 +508,7 @@ const PortalInvoicesView: React.FC = () => {
                   const w = doc.internal.pageSize.getWidth();
                   const margin = 20;
                   let y = 20;
-                  const cur = (invoice as any).currency === 'EUR' ? '€' : 'L';
+                  const cur = currencySymbol((invoice as any).currency);
 
                   // Header
                   doc.setFontSize(22); doc.setFont('helvetica', 'bold');

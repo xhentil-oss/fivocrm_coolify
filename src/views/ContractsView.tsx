@@ -23,6 +23,7 @@ import ContractEditor, { ContractEditorHandle } from '../components/ContractEdit
 import { CONTRACT_TEMPLATES, ContractParties } from '../lib/contractTemplates';
 import { resolvePortalUserId } from '../lib/notifyClient';
 import type { Contract, Customer, Quote, Invoice, Service, TeamMember } from '../types';
+import { currencySymbol } from '../lib/utils';
 
 const STATUS_COLORS: Record<string, string> = {
   Draft: 'bg-gray-100 text-gray-700',
@@ -180,7 +181,7 @@ const ContractsView: React.FC = () => {
     if (qid === '__none__') return;
     const q = quotes?.find(x => x.id === qid);
     if (!q) return;
-    const cur = q.currency === 'EUR' ? '€' : q.currency === 'USD' ? '$' : 'L';
+    const cur = currencySymbol(q.currency);
     const pkgLines = (q.result?.categories || [])
       .filter(c => c.oneTime > 0 || c.monthly > 0)
       .map(c => `<li><strong>${c.category}</strong>: ${c.oneTime > 0 ? `${c.oneTime.toLocaleString()}${cur} (one-time)` : ''}${c.oneTime > 0 && c.monthly > 0 ? ' + ' : ''}${c.monthly > 0 ? `${c.monthly.toLocaleString()}${cur}/muaj` : ''}</li>`)
@@ -758,7 +759,7 @@ const ContractsView: React.FC = () => {
                         <p className="text-xs font-medium truncate">{svc.name || svc.title}</p>
                         {svc.price > 0 && (
                           <p className="text-[10px] text-muted-foreground">
-                            {svc.price.toLocaleString()} {svc.currency || 'ALL'}/muaj
+                            {svc.price.toLocaleString()} {currencySymbol(svc.currency)}/muaj
                           </p>
                         )}
                       </div>

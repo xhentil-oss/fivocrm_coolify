@@ -10,6 +10,7 @@ import { CardGridSkeleton } from './PortalSkeletons';
 import { useToast } from '../../hooks/use-toast';
 import type { Quote, Customer, Lead } from '../../types';
 import { notifyStaff } from '../../lib/notifyStaff';
+import { currencySymbol } from '../../lib/utils';
 
 const statusMap: Record<string, { label: string; class: string }> = {
   Draft: { label: 'Draft', class: 'bg-gray-100 text-gray-700' },
@@ -181,7 +182,7 @@ const PortalQuotesView: React.FC = () => {
       ) : (
         <div className="space-y-6">
           {filteredQuotes.map(q => {
-            const cur = q.currency === 'EUR' ? '€' : q.currency === 'USD' ? '$' : 'L';
+            const cur = currencySymbol(q.currency);
             const expired = isQuoteExpired(q);
             const st = expired ? statusMap.Expired : (statusMap[q.status] || statusMap.Draft);
             const categories = q.result?.categories || [];

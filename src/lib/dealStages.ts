@@ -1,5 +1,5 @@
 import type { Deal, DealStage } from '../types';
-import { toAll } from './utils';
+import { toAll, currencySymbol } from './utils';
 
 export const DEAL_STAGES: { key: DealStage; label: string; prob: number; color: string; accent: string }[] = [
   { key: 'Qualification', label: 'Kualifikim', prob: 25, color: 'bg-blue-500',     accent: 'border-l-blue-400' },
@@ -36,5 +36,5 @@ export function stageLabel(stage: string): string {
 }
 
 export function curSymbol(currency?: string): string {
-  return currency === 'EUR' ? '€' : currency === 'USD' ? '$' : 'L';
+  return currencySymbol(currency);
 }

@@ -17,6 +17,7 @@ import { runReportSchedules, runReportReminders, runClientHealthRollup, runRepor
 // One delivery path for every notification — see the header of api/_push.ts.
 import { notifyUser, getUserPrefs, isDndActive, isSilenced, escapeHtml, BASE_URL } from '../_push.js';
 import { isTypeMutedByPrefs } from '../_notificationTypes.js';
+import { formatMoney } from '../_money';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 function authorize(req: VercelRequest): boolean {
@@ -855,7 +856,7 @@ async function runRecurringInvoices() {
         userId: invoice.createdByUserId,
         type: 'auto_invoice_created',
         title: `🧾 Faturë e re periodike: #${invoiceNumber}`,
-        message: `Fatura ${freqLabel[freq] || freq} u gjenerua automatikisht (${(invoice.total || invoice.amount || 0).toLocaleString('sq-AL')} ${invoice.currency || 'ALL'}).`,
+        message: `Fatura ${freqLabel[freq] || freq} u gjenerua automatikisht (${formatMoney(invoice.total || invoice.amount || 0, invoice.currency)}).`,
         actionUrl: '/app/invoices',
         actionLabel: 'Shiko Faturat',
         businessId: invoice.businessId ?? null,
@@ -1265,7 +1266,7 @@ async function runRecurringExpenses() {
         userId: expense.createdByUserId,
         type: 'recurring_expense_created',
         title: `🔄 Shpenzim periodik: ${expense.title}`,
-        message: `Shpenzimi periodik "${expense.title}" (${expense.amount} ${expense.currency || 'ALL'}) u krijua automatikisht.`,
+        message: `Shpenzimi periodik "${expense.title}" (${formatMoney(expense.amount, expense.currency)}) u krijua automatikisht.`,
         actionUrl: '/app/expenses',
         actionLabel: 'Shiko Shpenzimet',
         businessId: expense.businessId ?? null,

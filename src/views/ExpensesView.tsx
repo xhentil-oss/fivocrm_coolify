@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
-import { toAll } from '../lib/utils';
+import { toAll, currencySymbol } from '../lib/utils';
 import { projectPickerLabel, sortArchivedLast } from '../lib/projectArchive';
 import { MONTH_LABELS_SQ, getExpenseDate } from '../lib/finance/financialAnalytics';
 import { useAuth } from '../contexts/AuthContext';
@@ -134,7 +134,7 @@ const ExpensesView: React.FC = () => {
       return; // keep the dialog open so the entry isn't lost
     }
 
-    logActivity('expense_added', `Shpenzim: ${title}`, { entityType: 'expense', description: `${amount} ${currency || 'ALL'}` });
+    logActivity('expense_added', `Shpenzim: ${title}`, { entityType: 'expense', description: `${amount} ${currencySymbol(currency)}` });
 
     // Notify Admins and Managers about new expense (exclude submitter)
     const adminManagers = (teamMembers || []).filter(m =>
@@ -146,7 +146,7 @@ const ExpensesView: React.FC = () => {
           userId: m.userId,
           type: 'expense_submitted',
           title: 'Shpenzim i Ri i Shtuar',
-          message: `${title} — ${amount} ${currency || 'ALL'}`,
+          message: `${title} — ${amount} ${currencySymbol(currency)}`,
           isRead: false,
           actionUrl: '/app/expenses',
           actionLabel: 'Shiko Shpenzimet',
@@ -989,7 +989,7 @@ const ExpensesView: React.FC = () => {
                   {getCategoryLabel(expense.category)}
                 </Badge>
                 <span className="font-semibold text-foreground">
-                  {expense.amount.toLocaleString()} {expense.currency || 'ALL'}
+                  {expense.amount.toLocaleString()} {currencySymbol(expense.currency)}
                 </span>
                 {team && <span className="text-xs text-muted-foreground">· {team.name}</span>}
               </div>
@@ -1138,7 +1138,7 @@ const ExpensesView: React.FC = () => {
                           {expense.amount.toLocaleString()}
                         </span>
                         <span className="text-body-sm text-muted-foreground">
-                          {expense.currency}
+                          {currencySymbol(expense.currency)}
                         </span>
                       </div>
                     </td>
