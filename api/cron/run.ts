@@ -17,7 +17,13 @@ import { runReportSchedules, runReportReminders, runClientHealthRollup, runRepor
 // One delivery path for every notification — see the header of api/_push.ts.
 import { notifyUser, getUserPrefs, isDndActive, isSilenced, escapeHtml, BASE_URL } from '../_push.js';
 import { isTypeMutedByPrefs } from '../_notificationTypes.js';
-import { formatMoney } from '../_money';
+// `.js` is NOT optional here: package.json declares "type": "module", so the
+// deployed function runs as native ESM, where a relative specifier without an
+// extension throws ERR_MODULE_NOT_FOUND at LOAD time — taking down every job in
+// this file before the handler is even reached. `npm run typecheck:api` cannot
+// catch it (tsconfig.api.json uses moduleResolution "node"), so the guard is
+// src/lib/apiImports.test.ts.
+import { formatMoney } from '../_money.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 function authorize(req: VercelRequest): boolean {
