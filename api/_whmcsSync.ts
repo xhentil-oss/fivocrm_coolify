@@ -119,10 +119,13 @@ let cachedLinkProjectId: string | null | undefined;
 async function resolveLinkProjectId(): Promise<string | null> {
   if (cachedLinkProjectId !== undefined) return cachedLinkProjectId;
   const envProj = process.env.WHMCS_PROJECT_ID;
-  if (envProj) { cachedLinkProjectId = envProj; return cachedLinkProjectId; }
+  if (envProj) { cachedLinkProjectId = envProj; return envProj; }
   const snap = await db.collection('integrations').doc('whmcs').get();
-  cachedLinkProjectId = snap.exists ? ((snap.data() as any)?.linkProjectId ?? null) : null;
-  return cachedLinkProjectId;
+  // Return the local, not the module-level cache: TS cannot narrow a captured
+  // `let` across the await, so returning the field widened to include undefined.
+  const resolved: string | null = snap.exists ? ((snap.data() as any)?.linkProjectId ?? null) : null;
+  cachedLinkProjectId = resolved;
+  return resolved;
 }
 
 // ── Customer resolution (auto-match by email, create minimal if missing) ──────
