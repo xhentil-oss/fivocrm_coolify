@@ -299,7 +299,11 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
 - **There is no "Më vonë".** Closing the dialog leaves a permanent banner, and
   `?job=daily-report-check&stage=remind|escalate` (`api/cron/run.ts`) notifies the
   person at ~17:35 and their managers at ~18:35. `stage` is explicit because the
-  server does not know the tenant's timezone — the VPS crontab decides. Idempotent
+  server does not know the tenant's timezone — the VPS scheduler decides, via
+  `scheduleDailyInZone(CRON_LOCAL_TZ, …)` in `vps/server.ts`. Use that, never
+  `scheduleDailyUtc`, for anything that is a wall-clock promise to a person: Albania
+  shifts an hour twice a year, and a UTC-pinned deadline escalates before it is due
+  all winter. Idempotent
   per tenant/day/stage via `dailyReportMisses/{businessId}_{date}`, which is
   `write: if false` (a person who skipped the report must not be able to erase the
   evidence). NOT part of `run-all`.

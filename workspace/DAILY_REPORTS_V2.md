@@ -1,8 +1,8 @@
 # Raporti Ditor v2 — plan zbatimi
 
-> **GJENDJA: Fazat 1–5 janë ZBATUAR (11 gusht 2026).** Kodi është në `main`-in lokal,
-> jo ende i deployuar. Mbeten dy veprime jashtë kodit — shih §Deploy:
-> dy rreshta në crontab-in e VPS-it dhe `firebase deploy` i rregullave + indekseve.
+> **GJENDJA: Fazat 1–5 janë ZBATUAR dhe të deployuara (11 gusht 2026).**
+> PR #59 → `main`; Vercel ✅; rregullat + indekset e Firestore ✅ (79/79 teste në emulator).
+> Mbetet një hap: `git pull` + `pm2 restart` në VPS, që orari 17:35/18:35 të nisë.
 > Faza 6 (redaktimi i pyetjeve nga Cilësimet) mbetet e pahapur.
 
 **Qëllimi:** raporti ditor të pushojë së qeni "kuti tekstesh" dhe të bëhet dokumenti nga i cili
@@ -214,20 +214,26 @@ Rollup javor per rol dhe per klient shtohet te tab-i javor ekzistues.
 
 ## Deploy / kujdes
 
-1. **Crontab i VPS-it — E DETYRUESHME, pa këtë Faza 3 nuk funksionon.**
-   Job-i NUK e merr me mend orën e tenant-it: `stage` jepet shprehimisht, dhe skeduluesi
-   (që rri në orën e zyrës) vendos kur. Dy rreshta:
+1. **Orari i VPS-it — është KOD, jo crontab.** Ky projekt nuk përdor `crontab` fare:
+   çdo orar rron te `startCronSchedulers()` në `vps/server.ts`, i cili godet
+   `POST {CRM_BASE_URL}/api/cron/run?job=…`. Të dyja shkallët janë shtuar tashmë atje:
 
-   ```cron
-   35 17 * * 1-5 curl -s -H "Authorization: Bearer $CRON_SECRET" \
-     "https://fivocrm.vercel.app/api/cron/run?job=daily-report-check&stage=remind"
-   35 18 * * 1-5 curl -s -H "Authorization: Bearer $CRON_SECRET" \
-     "https://fivocrm.vercel.app/api/cron/run?job=daily-report-check&stage=escalate"
+   ```ts
+   scheduleDailyInZone(CRON_LOCAL_TZ, 17, 35, () => triggerCronJob('daily-report-check', { stage: 'remind' }));
+   scheduleDailyInZone(CRON_LOCAL_TZ, 18, 35, () => triggerCronJob('daily-report-check', { stage: 'escalate' }));
    ```
 
+   `scheduleDailyInZone` (jo `scheduleDailyUtc`) sepse afati është orë muri: Shqipëria
+   është UTC+2 në verë dhe UTC+1 në dimër, ndaj një orar i fiksuar në UTC do të
+   njoftonte menaxherët **një orë PARA afatit gjithë dimrin**. Zona vjen nga
+   `CRON_LOCAL_TZ` (parazgjedhje `Europe/Tirane`).
+
+   Në VPS duhet vetëm: `git pull` + `pm2 restart` (server.ts ekzekutohet me ts-node —
+   pa `npm run build`). Verifikim: `pm2 logs server --lines 200 | grep CRON`.
+
    Job-i është idempotent: `dailyReportMisses/{businessId}_{date}` mban `remindedAt` /
-   `escalatedAt`, kështu që një rerun nuk njofton askënd dy herë. **Nuk është pjesë e
-   `run-all`** — është i ndjeshëm ndaj orës.
+   `escalatedAt`, kështu që një rinisje e PM2-shit nuk njofton askënd dy herë. **Nuk është
+   pjesë e `run-all`** — është i ndjeshëm ndaj orës.
 2. **Rregullat Firestore + indekset** — deploy vetëm pas testeve në emulator:
    ```bash
    firebase emulators:exec --only firestore "node --test scripts/firestore-rules.test.mjs"
