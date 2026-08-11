@@ -62,7 +62,7 @@ const PACKAGES: Pkg[] = [
     id: 'digital-foundation',
     title: 'Digital Foundation',
     tagline: 'Establishes a professional, consistent digital presence and builds the foundations for organic search visibility and paid promotion.',
-    price: 'CHF 1,800 – 2,500',
+    price: 'CHF 1,500 – 2,500',
     priceNote: '/ month',
     adBudget: 'CHF 1,500 – 2,500 / month',
     posts: '4 posts / mo',
@@ -447,18 +447,18 @@ const SECTORS = [
 const WHY = [
   {
     icon: Search,
-    title: 'Decision-makers cannot find your expertise',
-    desc: 'When a procurement officer or technical director researches monitoring specialists, they shortlist the firms that show up. Engineering excellence that is never published does not compete.',
+    title: 'Make your expertise easier to discover',
+    desc: 'When procurement teams, technical directors and potential partners research infrastructure specialists, digital visibility plays an important role in the shortlisting process. A stronger and more structured presence helps ensure AC2’s expertise is visible when relevant opportunities arise.',
   },
   {
     icon: Linkedin,
-    title: 'A dormant LinkedIn page reads as a dormant company',
-    desc: 'In B2B infrastructure, your company page is part of the due-diligence check. An empty feed signals risk to exactly the stakeholders you need to reassure.',
+    title: 'Your digital presence supports professional credibility',
+    desc: 'In B2B engineering and infrastructure, LinkedIn often forms part of the first impression stakeholders have of a company. Consistent communication around projects, expertise, partnerships and achievements reinforces the credibility already established through AC2’s work.',
   },
   {
     icon: Target,
-    title: 'Authority is built between tenders, not during them',
-    desc: 'Awards, partnerships and project milestones compound into credibility. Silence between tenders means starting from zero on every new opportunity.',
+    title: 'Authority is built continuously',
+    desc: 'Projects, awards, partnerships and technical milestones create long-term value when communicated consistently. Maintaining visibility between tenders helps strengthen market recognition and keeps AC2 present in the minds of relevant stakeholders when new opportunities emerge.',
   },
 ];
 
@@ -588,19 +588,19 @@ export default function EngineeringLandingPage() {
             <FadeIn>
               <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-sky-50 border border-sky-100 mb-8">
                 <Globe2 className="w-4 h-4 text-sky-600" />
-                <span className="text-sm font-medium text-sky-700">B2B marketing for engineering &amp; infrastructure firms</span>
+                <span className="text-sm font-medium text-sky-700">B2B Marketing for Engineering &amp; Infrastructure Firms</span>
               </div>
             </FadeIn>
             <FadeIn delay={100}>
               <h1 className="text-4xl sm:text-5xl lg:text-6xl font-bold tracking-tight leading-[1.12]">
-                Your engineering is world-class.{' '}
-                <span className="bg-gradient-to-r from-navy-700 via-sky-600 to-sky-500 bg-clip-text text-transparent">Your visibility is not.</span>
+                Turning Engineering Excellence{' '}
+                <span className="bg-gradient-to-r from-navy-700 via-sky-600 to-sky-500 bg-clip-text text-transparent">into Market Visibility</span>
               </h1>
             </FadeIn>
             <FadeIn delay={200}>
               <p className="mt-8 text-lg sm:text-xl text-gray-600 max-w-2xl mx-auto leading-relaxed">
                 LinkedIn, SEO, Google Ads and B2B networking built for firms that win work through{' '}
-                <strong className="text-navy-700">tenders, institutions and decision-makers</strong> — not impulse purchases.
+                <strong className="text-navy-700">tenders, institutions and long-term professional relationships</strong>.
               </p>
             </FadeIn>
             <FadeIn delay={300}>
@@ -635,7 +635,7 @@ export default function EngineeringLandingPage() {
       {/* ═══ WHY ═══ */}
       <section id="why" className="py-20 bg-gray-50">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <FadeIn><div className="text-center mb-16"><p className="text-sm font-semibold uppercase tracking-widest text-sky-600 mb-3">Why B2B marketing</p><h2 className="text-3xl sm:text-4xl font-bold">Technical credibility has to be visible to count</h2></div></FadeIn>
+          <FadeIn><div className="text-center mb-16"><p className="text-sm font-semibold uppercase tracking-widest text-sky-600 mb-3">Why B2B marketing</p><h2 className="text-3xl sm:text-4xl font-bold">Technical credibility works best when it is visible</h2></div></FadeIn>
           <div className="grid md:grid-cols-3 gap-8">
             {WHY.map((w, i) => (
               <FadeIn key={i} delay={i * 150}><div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-100 hover:shadow-lg hover:border-sky-100 transition-all h-full"><div className="w-14 h-14 rounded-xl bg-sky-50 flex items-center justify-center mb-6"><w.icon className="w-7 h-7 text-sky-600" /></div><h3 className="text-xl font-bold mb-3">{w.title}</h3><p className="text-gray-600 leading-relaxed">{w.desc}</p></div></FadeIn>
