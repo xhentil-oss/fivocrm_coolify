@@ -84,11 +84,34 @@ const PortalNotificationsBell: React.FC = () => {
     } catch { /* non-blocking */ }
   };
 
+  // Where a notification should land inside the portal when it has no in-portal
+  // actionUrl of its own. Everything used to fall back to /portal/chat, so an
+  // invoice or contract notification opened the conversation instead of the thing
+  // it was about.
+  const PORTAL_FALLBACK: Record<string, string> = {
+    invoice_sent: '/portal/invoices',
+    invoice_created: '/portal/invoices',
+    invoice_paid: '/portal/invoices',
+    invoice_overdue: '/portal/invoices',
+    invoice_reminder_sent: '/portal/invoices',
+    quote_sent: '/portal/quotes',
+    quote_accepted: '/portal/quotes',
+    quote_rejected: '/portal/quotes',
+    contract_sent: '/portal/contracts',
+    project_created: '/portal/projects',
+    project_completed: '/portal/projects',
+    project_comment: '/portal/projects',
+    report: '/portal/reports',
+    staff_message: '/portal/chat',
+    client_message: '/portal/chat',
+  };
+
   const handleClick = (n: Notification) => {
     if (!n.isRead) markRead(n.id);
     setOpen(false);
-    // Portal notifications carry an in-portal actionUrl; fall back to chat.
-    const target = n.actionUrl && n.actionUrl.startsWith('/portal') ? n.actionUrl : '/portal/chat';
+    const target = n.actionUrl?.startsWith('/portal')
+      ? n.actionUrl
+      : PORTAL_FALLBACK[n.type || ''] || '/portal';
     navigate(target);
   };
 

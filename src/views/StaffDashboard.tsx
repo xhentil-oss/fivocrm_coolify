@@ -103,9 +103,14 @@ const StaffDashboard: React.FC = () => {
   const { data: allTimeEntries } = useCollection<TimeEntry>('timeEntries');
   const { data: dailyReports } = useCollection<DailyReport>('dailyReports');
   const { data: userProfiles } = useCollection<any>('userProfiles');
+  // Bounded on purpose: this feeds badge counts, not a feed. Without `limit` the
+  // live listener downloaded the user's ENTIRE notification history on every mount —
+  // and since the cleanup job was broken, that history only ever grew.
   const { data: allUserNotifs } = useCollection<any>('notifications', {
     skip: !user,
     where: user ? [{ field: 'userId', operator: '==', value: user.uid }] : undefined,
+    orderBy: { field: 'createdAt', direction: 'desc' },
+    limit: 100,
     skipTeamFilter: true,
   });
 

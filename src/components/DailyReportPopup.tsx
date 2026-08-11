@@ -286,8 +286,12 @@ const DailyReportPopup: React.FC = () => {
           (m.role === 'Admin' || m.role === 'Manager') &&
           m.userId !== user.uid
         );
-        for (const mgr of managerRecipients) {
-          await notificationMutation.create({
+        // Never `await` an un-caught notification here. The report is ALREADY saved
+        // at this point, so a rejected notification (a manager without a `users`
+        // document, an offline blip) fell into the outer catch and told the employee
+        // "Nuk u ruajt raporti. Provo përsëri." — and they submitted a duplicate.
+        await Promise.allSettled(managerRecipients.map(mgr =>
+          notificationMutation.create({
             userId: mgr.userId,
             type: 'blocker_reported',
             title: 'Pengesa raportuar',
@@ -295,8 +299,8 @@ const DailyReportPopup: React.FC = () => {
             isRead: false,
             actionUrl: '/app/reports?side=internal&tab=daily',
             actionLabel: 'Shiko raportin',
-          } as any);
-        }
+          } as any)
+        ));
       }
 
       toast({ title: 'Raporti ditor u ruajt!', description: 'Faleminderit për raportimin.' });

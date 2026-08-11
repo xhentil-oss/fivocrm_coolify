@@ -638,8 +638,19 @@ export function useMutation<T = DocumentData>(collectionName: string) {
         } catch { /* parent missing/unreadable — leave customerId unset, backfill covers it */ }
       }
 
+      // `notifications` is intentionally NOT team-scoped (it is read by userId, and a
+      // portal client has no businessId of their own), so `autoScope` above skips it.
+      // It still needs the tenant STAMP: `notifications` is listed in
+      // TENANT_DATA_COLLECTIONS and the GDPR export/delete jobs query it by
+      // businessId — without this field those documents were invisible to
+      // "give me everything you have" and survived "delete everything you have".
+      const notificationScope = collectionName === 'notifications' && businessId
+        ? { businessId }
+        : {};
+
       const docData = removeUndefined({
         ...autoScope,
+        ...notificationScope,
         ...(derivedCustomerId ? { customerId: derivedCustomerId } : {}),
         ...data,
         createdAt: Timestamp.now(),

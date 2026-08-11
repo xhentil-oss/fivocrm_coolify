@@ -4,6 +4,7 @@ import admin, { adminDb as db } from './_firebaseAdmin.js';
 import { whmcsConfigured, pushInvoicePayment } from './_whmcs.js';
 import { planForPriceId, seatsForPlan, tenantStatusFromStripe, monthlyAmountCents } from './_billingPlans.js';
 import { writeAudit } from './_audit.js';
+import { notifyUser } from './_push.js';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2026-02-25.clover',
@@ -77,15 +78,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           // Create notification for invoice creator
           const invoiceData = invoiceSnap.data();
           if (invoiceData?.createdByUserId) {
-            await db.collection('notifications').add({
+            await notifyUser({
               userId: invoiceData.createdByUserId,
               type: 'invoice_paid',
               title: 'Pagesë e Pranuar ✓',
               message: `Fatura ${invoiceData.invoiceNumber || invoiceId.slice(0, 8)} u pagua me Stripe — €${((session.amount_total || 0) / 100).toFixed(2)}`,
-              isRead: false,
               actionUrl: '/app/invoices',
               actionLabel: 'Shiko Faturat',
-              createdAt: admin.firestore.FieldValue.serverTimestamp(),
+              businessId: invoiceData.businessId ?? null,
+              teamId: invoiceData.teamId ?? null,
+              customerId: invoiceData.customerId ?? null,
             }).catch(err => console.error('[Stripe Webhook] notification dërgim dështoi:', err));
           }
 

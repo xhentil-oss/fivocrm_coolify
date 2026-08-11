@@ -11,6 +11,7 @@ import {
 } from 'firebase/auth';
 import { Capacitor } from '@capacitor/core';
 import { auth, googleProvider } from '../lib/firebase';
+import { clearPushToken } from '../hooks/usePushNotifications';
 
 interface AuthContextType {
   user: User | null;
@@ -80,6 +81,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = async () => {
     try {
+      // Unregister THIS device's push token BEFORE signing out — while we still have
+      // both the uid and write permission. A token left behind kept delivering the
+      // previous user's notifications to the device after someone else logged in.
+      await clearPushToken(auth.currentUser?.uid);
       await signOut(auth);
       // Clear sensitive cached data on logout
       localStorage.removeItem('stripe_publishable_key');

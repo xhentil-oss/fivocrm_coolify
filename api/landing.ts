@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminDb, Timestamp } from './_firebaseAdmin.js';
 import { FieldValue } from 'firebase-admin/firestore';
 import { normContactEmail, findLeadForContact, findCustomerForContact, crossLinkLeadCustomer } from './_contactIdentity.js';
+import { notifyUser } from './_push.js';
 
 /**
  * Combined landing-page API (public, no auth).
@@ -359,21 +360,19 @@ async function handlePostInquiry(req: VercelRequest, res: VercelResponse) {
     if (teamId && teamMembersSnap) {
       const adminDocs = teamMembersSnap.docs.filter((d: any) => ['Admin', 'Owner'].includes(d.data().role));
 
-      const batch = adminDb.batch();
-      adminDocs.forEach((m: any) => {
-        const nRef = adminDb.collection('notifications').doc();
-        batch.set(nRef, {
-          userId: m.data().userId,
-          type: 'lead_created',
-          title: `Lead i Ri ${sCategory} — Landing Page`,
-          message: `${sName} dorëzoi kërkesë nga faqja ${sSource}${sPackageName ? ` (${sPackageName})` : ''}`,
-          isRead: false,
-          ...tenantStamp,
-          createdAt: now,
-          updatedAt: now,
-        });
-      });
-      await batch.commit();
+      // A fresh inbound lead is time-critical, so it goes out over push + email
+      // too. It used to be a batched document write only: the sales team saw a red
+      // dot the next time somebody opened the CRM, and nothing before that.
+      await Promise.allSettled(adminDocs.map((m: any) => notifyUser({
+        userId: m.data().userId,
+        type: 'lead_created',
+        title: `Lead i Ri ${sCategory} — Landing Page`,
+        message: `${sName} dorëzoi kërkesë nga faqja ${sSource}${sPackageName ? ` (${sPackageName})` : ''}`,
+        actionUrl: '/app/crm',
+        actionLabel: 'Shiko CRM',
+        businessId: (tenantStamp as any).businessId ?? null,
+        teamId: (tenantStamp as any).teamId ?? null,
+      })));
     }
 
     return res.status(200).json({

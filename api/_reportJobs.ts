@@ -1,4 +1,6 @@
 import admin, { adminDb as db } from './_firebaseAdmin.js';
+// One delivery path for every notification (doc + push + email) — see api/_push.ts.
+import { notifyUser } from './_push.js';
 
 /**
  * Scheduled work for the reporting module, invoked from `api/cron/run.ts`:
@@ -794,15 +796,16 @@ async function notify(
 ) {
   if (!userId) return;
   try {
-    await db.collection('notifications').add({
+    // notifyUser writes the document AND delivers push + email. This used to only
+    // write the document, so a report reminder or an escalation was visible solely
+    // to someone who happened to open the app.
+    await notifyUser({
       userId,
       type: 'report',
       title,
       message,
       ...(reportId ? { actionUrl: `/app/reports/${reportId}`, actionLabel: 'Hap raportin' } : {}),
-      isRead: false,
       businessId,
-      createdAt: admin.firestore.Timestamp.now(),
     });
   } catch (err) {
     console.error('[reportJobs] notify failed', err);

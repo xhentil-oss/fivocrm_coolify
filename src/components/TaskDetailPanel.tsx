@@ -679,7 +679,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       }
       if (newCollaborators.length > 0) {
         // Notify newly-mentioned staff they now follow (and can see) the task.
-        await Promise.all(newCollaborators.map(uid =>
+        // allSettled everywhere below: the COMMENT is already saved. A rejected
+        // notification must not land in the outer catch, which discards the comment
+        // text as if the save had failed.
+        await Promise.allSettled(newCollaborators.map(uid =>
           notificationMutation.create({
             userId: uid,
             type: 'task_collaborator_added',
@@ -706,7 +709,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           actionUrl: commentLink,
           actionLabel: taskLabel,
         }));
-      await Promise.all(mentionNotifPromises);
+      await Promise.allSettled(mentionNotifPromises);
 
       // Notify the task's participants (assignee, creator, collaborators, previous
       // commenters) about the new comment — so a comment never goes unseen. Excludes
@@ -734,7 +737,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           actionUrl: commentLink,
           actionLabel: taskLabel,
         }));
-      await Promise.all(participantNotifPromises);
+      await Promise.allSettled(participantNotifPromises);
     } catch {
       // Comment failed to save — keep text so user can retry
     }

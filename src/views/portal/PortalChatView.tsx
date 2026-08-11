@@ -161,7 +161,8 @@ const PortalChatView: React.FC = () => {
   });
 
   const messageMutation = useMutation<ChatMessage>('messages');
-  const notificationMutation = useMutation<any>('notifications');
+  // No notifications mutation: a portal client cannot write into `notifications`
+  // (the rules deny it). Staff are notified server-side via /api/notify-staff.
   const { upload: uploadAttachment, uploading } = useFileUpload();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);

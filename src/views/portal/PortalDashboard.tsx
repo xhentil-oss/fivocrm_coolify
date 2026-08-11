@@ -73,9 +73,13 @@ const PortalDashboard: React.FC = () => {
   const displayName = user?.displayName || user?.email?.split('@')[0] || 'klient';
 
   // ── Unread staff messages via notifications ──
+  // Same bounded query as PortalLayout, so the two share one cached listener
+  // instead of opening a second unbounded stream over the same data.
   const { data: portalUserNotifs } = useCollection<any>('notifications', {
     skip: !user,
     where: user ? [{ field: 'userId', operator: '==', value: user.uid }] : undefined,
+    orderBy: { field: 'createdAt', direction: 'desc' },
+    limit: 50,
     skipTeamFilter: true,
   });
   const unreadStaffMsgs = React.useMemo(

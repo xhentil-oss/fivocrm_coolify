@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import admin, { adminAuth, adminDb as db } from './_firebaseAdmin.js';
+import { notifyUser } from './_push.js';
 
 /**
  * POST /api/notify-staff
@@ -240,27 +241,26 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (recipients.size === 0) return res.status(200).json({ success: true, notified: 0, taskId });
-  const batch = db.batch();
-  for (const uid of recipients) {
-    batch.set(db.collection('notifications').doc(), {
-      userId: uid,
-      type: clean(type, 60),
-      title: clean(title, 200),
-      message: clean(message, 1000) || '',
-      ...(clean(actionUrl, 500) ? { actionUrl: clean(actionUrl, 500) } : {}),
-      ...(clean(actionLabel, 60) ? { actionLabel: clean(actionLabel, 60) } : {}),
-      ...(clean(linkTo, 200) ? { linkTo: clean(linkTo, 200) } : {}),
-      ...(clean(projectId, 200) ? { projectId: clean(projectId, 200) } : {}),
-      isRead: false,
-      businessId,
-      ...(teamId ? { teamId } : {}),
-      customerId,
-      createdAt: now,
-      updatedAt: now,
-      createdByUserId: decoded.uid,
-    });
-  }
-  await batch.commit();
 
-  return res.status(200).json({ success: true, notified: recipients.size, taskId });
+  // Doc + push + email per recipient. This was a plain batched write, so the single
+  // most time-critical direction in the product — a CLIENT contacting the team (new
+  // message, new request, a quote decision) — produced nothing but a red dot that
+  // staff only saw if they already had the app open.
+  const results = await Promise.allSettled([...recipients].map(uid => notifyUser({
+    userId: uid,
+    type: clean(type, 60) || 'client_request',
+    title: clean(title, 200) || 'Njoftim i ri',
+    message: clean(message, 1000) || '',
+    actionUrl: clean(actionUrl, 500) || undefined,
+    actionLabel: clean(actionLabel, 60) || undefined,
+    linkTo: clean(linkTo, 200) || undefined,
+    projectId: clean(projectId, 200) || undefined,
+    businessId,
+    teamId: teamId || null,
+    customerId,
+    actorUserId: decoded.uid,
+  })));
+  const notified = results.filter(r => r.status === 'fulfilled' && (r.value as any)?.written).length;
+
+  return res.status(200).json({ success: true, notified, taskId });
 }

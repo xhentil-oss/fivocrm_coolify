@@ -22,9 +22,85 @@ import {
 } from './ui/dropdown-menu';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from './ui/tabs';
 import type { Notification } from '../types';
+import {
+  NOTIFICATION_CATEGORIES,
+  CATEGORY_LABELS as REGISTRY_CATEGORY_LABELS,
+  CATEGORY_DESCRIPTIONS,
+  categoryOf,
+  priorityOf,
+  groupLabelOf,
+  isTypeMutedByPrefs,
+  type NotificationCategory,
+  type NotificationPriority,
+} from '../lib/notificationTypes';
 
-// ── Priority config ────────────────────────────────────────────────────────────
-type Priority = 'critical' | 'warning' | 'success' | 'info' | 'neutral';
+// ── Presentation ───────────────────────────────────────────────────────────────
+// Priority, category and group label now come from the SHARED registry
+// (src/lib/notificationTypes.ts) so the bell, the mute preferences and the server's
+// push/email gate can no longer disagree. Only the icon — the one genuinely
+// React-shaped piece — stays here.
+type Priority = NotificationPriority;
+
+const PRIORITY_STYLE: Record<Priority, { borderColor: string; bgColor: string }> = {
+  critical: { borderColor: 'border-l-red-500',     bgColor: 'bg-red-50/60 dark:bg-red-950/20' },
+  warning:  { borderColor: 'border-l-amber-500',   bgColor: 'bg-amber-50/60 dark:bg-amber-950/20' },
+  success:  { borderColor: 'border-l-emerald-500', bgColor: 'bg-emerald-50/60 dark:bg-emerald-950/20' },
+  info:     { borderColor: 'border-l-blue-500',    bgColor: 'bg-blue-50/60 dark:bg-blue-950/20' },
+  neutral:  { borderColor: '',                     bgColor: '' },
+};
+
+const TYPE_ICON: Record<string, React.ReactNode> = {
+  task_overdue:             <AlertCircle className="w-4 h-4 text-red-500" />,
+  invoice_overdue:          <AlertCircle className="w-4 h-4 text-red-500" />,
+  goal_overdue:             <Target className="w-4 h-4 text-red-500" />,
+  task_due_soon:            <Clock className="w-4 h-4 text-amber-500" />,
+  lead_follow_up:           <Clock className="w-4 h-4 text-amber-500" />,
+  lead_cadence_step:        <Clock className="w-4 h-4 text-amber-500" />,
+  invoice_reminder_sent:    <FileText className="w-4 h-4 text-amber-500" />,
+  invoice_reminder1_sent:   <FileText className="w-4 h-4 text-amber-500" />,
+  invoice_reminder2_sent:   <FileText className="w-4 h-4 text-amber-500" />,
+  project_open_reminder:    <Calendar className="w-4 h-4 text-amber-500" />,
+  invoice_paid:             <DollarSign className="w-4 h-4 text-emerald-500" />,
+  goal_achieved:            <CheckCircle className="w-4 h-4 text-emerald-500" />,
+  project_completed:        <CheckCircle className="w-4 h-4 text-emerald-500" />,
+  lead_converted:           <TrendingUp className="w-4 h-4 text-emerald-500" />,
+  quote_accepted:           <CheckCircle className="w-4 h-4 text-emerald-500" />,
+  quote_rejected:           <XCircle className="w-4 h-4 text-red-500" />,
+  quote_sent:               <FileText className="w-4 h-4 text-blue-500" />,
+  contract_sent:            <FileText className="w-4 h-4 text-amber-500" />,
+  task_assigned:            <User className="w-4 h-4 text-blue-500" />,
+  task_collaborator_added:  <Users className="w-4 h-4 text-primary" />,
+  task_mention:             <MessageSquare className="w-4 h-4 text-primary" />,
+  task_comment:             <MessageSquare className="w-4 h-4 text-blue-500" />,
+  lead_assigned:            <User className="w-4 h-4 text-blue-500" />,
+  lead_created:             <UserPlus className="w-4 h-4 text-blue-500" />,
+  goal_assigned:            <Target className="w-4 h-4 text-blue-500" />,
+  project_status_changed:   <Zap className="w-4 h-4 text-blue-500" />,
+  client_message:           <MessageSquare className="w-4 h-4 text-emerald-500" />,
+  staff_message:            <MessageSquare className="w-4 h-4 text-blue-500" />,
+  direct_message:           <MessageSquare className="w-4 h-4 text-blue-500" />,
+  mention:                  <MessageSquare className="w-4 h-4 text-primary" />,
+  project_comment:          <MessageSquare className="w-4 h-4 text-blue-500" />,
+  client_request:           <MessageSquare className="w-4 h-4 text-emerald-500" />,
+  project_created:          <Zap className="w-4 h-4 text-blue-500" />,
+  auto_invoice_created:     <FileText className="w-4 h-4 text-blue-500" />,
+  invoice_created:          <FileText className="w-4 h-4 text-blue-500" />,
+  invoice_sent:             <FileText className="w-4 h-4 text-blue-500" />,
+  recurring_task_created:   <RefreshCw className="w-4 h-4 text-tertiary" />,
+  recurring_expense_created:<RefreshCw className="w-4 h-4 text-tertiary" />,
+  project_cycle_reset:      <RefreshCw className="w-4 h-4 text-tertiary" />,
+  expense_submitted:        <DollarSign className="w-4 h-4 text-blue-500" />,
+  guest_project_invited:    <UserPlus className="w-4 h-4 text-amber-500" />,
+  guest_task_new:           <Plus className="w-4 h-4 text-amber-500" />,
+  guest_task_update:        <Eye className="w-4 h-4 text-amber-500" />,
+  blocker_reported:         <AlertCircle className="w-4 h-4 text-red-500" />,
+  report:                   <FileText className="w-4 h-4 text-primary" />,
+  billing:                  <DollarSign className="w-4 h-4 text-amber-500" />,
+  recurring_project_no_budget: <AlertCircle className="w-4 h-4 text-amber-500" />,
+  recurring_project_billing_misconfigured: <AlertCircle className="w-4 h-4 text-amber-500" />,
+};
+
+const FALLBACK_ICON = <Info className="w-4 h-4 text-muted-foreground" />;
 
 interface TypeConfig {
   icon: React.ReactNode;
@@ -33,81 +109,21 @@ interface TypeConfig {
   bgColor: string;
 }
 
-const TYPE_CONFIG: Record<string, TypeConfig> = {
-  // Critical — overdue
-  task_overdue:             { icon: <AlertCircle className="w-4 h-4 text-red-500" />,      priority: 'critical', borderColor: 'border-l-red-500',     bgColor: 'bg-red-50/60 dark:bg-red-950/20' },
-  invoice_overdue:          { icon: <AlertCircle className="w-4 h-4 text-red-500" />,      priority: 'critical', borderColor: 'border-l-red-500',     bgColor: 'bg-red-50/60 dark:bg-red-950/20' },
-  goal_overdue:             { icon: <Target className="w-4 h-4 text-red-500" />,           priority: 'critical', borderColor: 'border-l-red-500',     bgColor: 'bg-red-50/60 dark:bg-red-950/20' },
-  // Warning — due soon / follow-up
-  task_due_soon:            { icon: <Clock className="w-4 h-4 text-amber-500" />,          priority: 'warning',  borderColor: 'border-l-amber-500',   bgColor: 'bg-amber-50/60 dark:bg-amber-950/20' },
-  lead_follow_up:           { icon: <Clock className="w-4 h-4 text-amber-500" />,          priority: 'warning',  borderColor: 'border-l-amber-500',   bgColor: 'bg-amber-50/60 dark:bg-amber-950/20' },
-  invoice_reminder_sent:    { icon: <FileText className="w-4 h-4 text-amber-500" />,       priority: 'warning',  borderColor: 'border-l-amber-500',   bgColor: 'bg-amber-50/60 dark:bg-amber-950/20' },
-  project_open_reminder:    { icon: <Calendar className="w-4 h-4 text-amber-500" />,       priority: 'warning',  borderColor: 'border-l-amber-500',   bgColor: 'bg-amber-50/60 dark:bg-amber-950/20' },
-  // Success
-  invoice_paid:             { icon: <DollarSign className="w-4 h-4 text-emerald-500" />,   priority: 'success',  borderColor: 'border-l-emerald-500', bgColor: 'bg-emerald-50/60 dark:bg-emerald-950/20' },
-  goal_achieved:            { icon: <CheckCircle className="w-4 h-4 text-emerald-500" />,  priority: 'success',  borderColor: 'border-l-emerald-500', bgColor: 'bg-emerald-50/60 dark:bg-emerald-950/20' },
-  project_completed:        { icon: <CheckCircle className="w-4 h-4 text-emerald-500" />,  priority: 'success',  borderColor: 'border-l-emerald-500', bgColor: 'bg-emerald-50/60 dark:bg-emerald-950/20' },
-  lead_converted:           { icon: <TrendingUp className="w-4 h-4 text-emerald-500" />,   priority: 'success',  borderColor: 'border-l-emerald-500', bgColor: 'bg-emerald-50/60 dark:bg-emerald-950/20' },
-  quote_accepted:           { icon: <CheckCircle className="w-4 h-4 text-emerald-500" />,  priority: 'success',  borderColor: 'border-l-emerald-500', bgColor: 'bg-emerald-50/60 dark:bg-emerald-950/20' },
-  quote_rejected:           { icon: <XCircle className="w-4 h-4 text-red-500" />,          priority: 'warning',  borderColor: 'border-l-red-500',     bgColor: 'bg-red-50/60 dark:bg-red-950/20' },
-  // Info — assignments & collaboration
-  task_assigned:            { icon: <User className="w-4 h-4 text-blue-500" />,            priority: 'info',     borderColor: 'border-l-blue-500',    bgColor: 'bg-blue-50/60 dark:bg-blue-950/20' },
-  task_collaborator_added:  { icon: <Users className="w-4 h-4 text-primary" />,         priority: 'info',     borderColor: 'border-l-primary',  bgColor: 'bg-accent-soft dark:bg-primary/10' },
-  task_mention:             { icon: <MessageSquare className="w-4 h-4 text-primary" />, priority: 'info',     borderColor: 'border-l-primary',  bgColor: 'bg-accent-soft dark:bg-primary/10' },
-  lead_assigned:            { icon: <User className="w-4 h-4 text-blue-500" />,            priority: 'info',     borderColor: 'border-l-blue-500',    bgColor: 'bg-blue-50/60 dark:bg-blue-950/20' },
-  goal_assigned:            { icon: <Target className="w-4 h-4 text-blue-500" />,          priority: 'info',     borderColor: 'border-l-blue-500',    bgColor: 'bg-blue-50/60 dark:bg-blue-950/20' },
-  project_status_changed:   { icon: <Zap className="w-4 h-4 text-blue-500" />,             priority: 'info',     borderColor: 'border-l-blue-500',    bgColor: 'bg-blue-50/60 dark:bg-blue-950/20' },
-  // Messages
-  client_message:           { icon: <MessageSquare className="w-4 h-4 text-emerald-500" />, priority: 'info',   borderColor: 'border-l-emerald-500', bgColor: 'bg-emerald-50/60 dark:bg-emerald-950/20' },
-  staff_message:            { icon: <MessageSquare className="w-4 h-4 text-blue-500" />,   priority: 'info',     borderColor: 'border-l-blue-500',    bgColor: 'bg-blue-50/60 dark:bg-blue-950/20' },
-  project_comment:          { icon: <MessageSquare className="w-4 h-4 text-blue-500" />,   priority: 'info',     borderColor: 'border-l-blue-500',    bgColor: 'bg-blue-50/60 dark:bg-blue-950/20' },
-  client_request:           { icon: <MessageSquare className="w-4 h-4 text-emerald-500" />, priority: 'info',   borderColor: 'border-l-emerald-500', bgColor: 'bg-emerald-50/60 dark:bg-emerald-950/20' },
-  // Projects / invoices
-  project_created:          { icon: <Zap className="w-4 h-4 text-blue-500" />,             priority: 'neutral',  borderColor: '',                     bgColor: '' },
-  auto_invoice_created:     { icon: <FileText className="w-4 h-4 text-blue-500" />,        priority: 'neutral',  borderColor: '',                     bgColor: '' },
-  invoice_created:          { icon: <FileText className="w-4 h-4 text-blue-500" />,        priority: 'neutral',  borderColor: '',                     bgColor: '' },
-  // Recurring / automation
-  recurring_task_created:   { icon: <RefreshCw className="w-4 h-4 text-tertiary" />,     priority: 'neutral',  borderColor: '',                     bgColor: '' },
-  recurring_expense_created:{ icon: <RefreshCw className="w-4 h-4 text-tertiary" />,     priority: 'neutral',  borderColor: '',                     bgColor: '' },
-  project_cycle_reset:      { icon: <RefreshCw className="w-4 h-4 text-tertiary" />,     priority: 'neutral',  borderColor: '',                     bgColor: '' },
-  // Expenses
-  expense_submitted:        { icon: <DollarSign className="w-4 h-4 text-blue-500" />,      priority: 'neutral',  borderColor: '',                     bgColor: '' },
-  // Guest access
-  guest_project_invited:    { icon: <UserPlus className="w-4 h-4 text-amber-500" />,       priority: 'info',     borderColor: 'border-l-amber-500',   bgColor: 'bg-amber-50/60 dark:bg-amber-950/20' },
-  guest_task_new:           { icon: <Plus className="w-4 h-4 text-amber-500" />,           priority: 'neutral',  borderColor: '',                     bgColor: '' },
-  guest_task_update:        { icon: <Eye className="w-4 h-4 text-amber-500" />,            priority: 'neutral',  borderColor: '',                     bgColor: '' },
-  // Daily report blocker
-  blocker_reported:         { icon: <AlertCircle className="w-4 h-4 text-red-500" />,      priority: 'warning',  borderColor: 'border-l-red-500',     bgColor: 'bg-red-50/60 dark:bg-red-950/20' },
-};
-
-const DEFAULT_CONFIG: TypeConfig = {
-  icon: <Info className="w-4 h-4 text-muted-foreground" />,
-  priority: 'neutral',
-  borderColor: '',
-  bgColor: '',
-};
-
 function getConfig(type?: string): TypeConfig {
-  if (type && TYPE_CONFIG[type]) return TYPE_CONFIG[type];
-  return DEFAULT_CONFIG;
+  const priority = priorityOf(type);
+  return {
+    icon: (type && TYPE_ICON[type]) || FALLBACK_ICON,
+    priority,
+    ...PRIORITY_STYLE[priority],
+  };
 }
 
 // ── Category filter ────────────────────────────────────────────────────────────
-type Category = 'all' | 'tasks' | 'messages' | 'projects' | 'invoices';
-
-const CATEGORY_TYPES: Record<Exclude<Category, 'all'>, string[]> = {
-  tasks:    ['task_overdue', 'task_due_soon', 'task_assigned', 'task_collaborator_added', 'task_mention', 'recurring_task_created', 'goal_overdue', 'goal_assigned', 'goal_achieved', 'blocker_reported'],
-  messages: ['client_message', 'staff_message', 'project_comment', 'client_request'],
-  projects: ['project_created', 'project_completed', 'project_open_reminder', 'project_cycle_reset', 'lead_converted', 'lead_assigned', 'lead_follow_up', 'guest_project_invited', 'guest_task_new', 'guest_task_update', 'project_status_changed'],
-  invoices: ['invoice_overdue', 'invoice_paid', 'invoice_reminder_sent', 'auto_invoice_created', 'invoice_created', 'recurring_expense_created', 'expense_submitted', 'quote_accepted', 'quote_rejected'],
-};
+type Category = 'all' | NotificationCategory;
 
 const CATEGORY_LABELS: Record<Category, string> = {
-  all:      'Të gjitha',
-  tasks:    'Detyra',
-  messages: 'Mesazhe',
-  projects: 'Projekte',
-  invoices: 'Fatura',
+  all: 'Të gjitha',
+  ...REGISTRY_CATEGORY_LABELS,
 };
 
 // ── Notification grouping ──────────────────────────────────────────────────────
@@ -153,17 +169,38 @@ function groupNotifications(notifs: Notification[]): NotifGroup[] {
 
 // ── User preferences ───────────────────────────────────────────────────────────
 interface NotifPrefs {
-  categoryEnabled: { tasks: boolean; messages: boolean; projects: boolean; invoices: boolean };
+  categoryEnabled: Record<NotificationCategory, boolean>;
   emailEnabled: boolean;
   pushEnabled: boolean;
   soundEnabled: boolean;
   dndEnabled: boolean;
   dndStart: string;
   dndEnd: string;
+  /**
+   * IANA zone the DND window is expressed in, plus the raw offset as a fallback.
+   *
+   * The window is typed into an `<input type="time">`, i.e. WALL-CLOCK time in the
+   * user's own zone — but the server evaluated it with getUTCHours(). For Albania
+   * (UTC+2 in summer) "22:00–08:00" actually silenced 00:00–10:00: pushes came at
+   * midnight and were swallowed all morning. Storing the zone lets the server
+   * reconstruct the user's local time instead of guessing.
+   */
+  dndTimeZone?: string;
+  /** Minutes to ADD to UTC to get local time (Europe/Tirane summer = +120). */
+  dndUtcOffsetMinutes?: number;
+}
+
+const ALL_CATEGORIES_ON = NOTIFICATION_CATEGORIES.reduce((acc, c) => {
+  acc[c] = true;
+  return acc;
+}, {} as Record<NotificationCategory, boolean>);
+
+function localZone(): string {
+  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; }
 }
 
 const DEFAULT_PREFS: NotifPrefs = {
-  categoryEnabled: { tasks: true, messages: true, projects: true, invoices: true },
+  categoryEnabled: { ...ALL_CATEGORIES_ON },
   emailEnabled: true,
   pushEnabled: true,
   soundEnabled: true,
@@ -176,7 +213,19 @@ function mergePrefs(raw: Partial<NotifPrefs>): NotifPrefs {
   return {
     ...DEFAULT_PREFS,
     ...raw,
-    categoryEnabled: { ...DEFAULT_PREFS.categoryEnabled, ...(raw.categoryEnabled || {}) },
+    // A category absent from the stored doc (e.g. the new `reports` / `system`
+    // groups on an old preferences record) defaults to ON, never to muted.
+    categoryEnabled: { ...ALL_CATEGORIES_ON, ...(raw.categoryEnabled || {}) },
+  };
+}
+
+/** Stamp the current zone/offset onto the prefs so the server can honour DND. */
+function withDndZone(prefs: NotifPrefs): NotifPrefs {
+  return {
+    ...prefs,
+    dndTimeZone: localZone(),
+    // getTimezoneOffset() is minutes to ADD to local to reach UTC — invert it.
+    dndUtcOffsetMinutes: -new Date().getTimezoneOffset(),
   };
 }
 
@@ -193,12 +242,9 @@ export function isInDndWindow(prefs: { dndEnabled?: boolean; dndStart?: string; 
 }
 
 // Is a notification type muted by the user's category preferences?
+// Delegates to the shared registry so client and server mute identically.
 function isTypeMuted(type: string | undefined, prefs: NotifPrefs): boolean {
-  if (!type) return false;
-  for (const [cat, types] of Object.entries(CATEGORY_TYPES) as [Exclude<Category, 'all'>, string[]][]) {
-    if (types.includes(type) && !prefs.categoryEnabled[cat]) return true;
-  }
-  return false;
+  return isTypeMutedByPrefs(type, prefs.categoryEnabled);
 }
 
 const LOAD_STEP = 30;
@@ -231,16 +277,28 @@ const NotificationsCenter: React.FC = () => {
       try { setLocalPrefs(mergePrefs(JSON.parse(stored))); } catch { /* ignore */ }
     }
     getDoc(doc(db, 'userPreferences', user.uid)).then(snap => {
-      if (snap.exists()) {
-        const merged = mergePrefs(snap.data() as Partial<NotifPrefs>);
-        setLocalPrefs(merged);
-        localStorage.setItem(`notif_prefs_${user.uid}`, JSON.stringify(merged));
+      if (!snap.exists()) return;
+      const merged = mergePrefs(snap.data() as Partial<NotifPrefs>);
+      setLocalPrefs(merged);
+      localStorage.setItem(`notif_prefs_${user.uid}`, JSON.stringify(merged));
+      // One-time migration for records saved before DND carried a timezone: the
+      // server would otherwise keep reading these hours as UTC. Written silently
+      // on first load; costs one write per user, once.
+      if (merged.dndEnabled && !merged.dndTimeZone) {
+        const stamped = withDndZone(merged);
+        setLocalPrefs(stamped);
+        localStorage.setItem(`notif_prefs_${user.uid}`, JSON.stringify(stamped));
+        setDoc(doc(db, 'userPreferences', user.uid), {
+          dndTimeZone: stamped.dndTimeZone,
+          dndUtcOffsetMinutes: stamped.dndUtcOffsetMinutes,
+        }, { merge: true }).catch(() => { /* non-critical */ });
       }
     }).catch(() => { /* offline */ });
   }, [user?.uid]);
 
   // ── Real-time alert (toast + chime) when a brand-new notification arrives ──
-  const lastNotifIdRef = useRef<string | null>(null);
+  // Keyed on the newest createdAt (ms), not the newest id — see the effect below.
+  const lastNotifAtRef = useRef<number | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const playChime = useCallback(() => {
     try {
@@ -266,13 +324,17 @@ const NotificationsCenter: React.FC = () => {
   useEffect(() => {
     if (!notifications || notifications.length === 0) return;
     const newest = notifications[0]; // query is ordered createdAt desc
-    // First load: remember the newest without alerting (avoids a chime on every refresh)
-    if (lastNotifIdRef.current === null) {
-      lastNotifIdRef.current = newest.id;
+    // Track the newest by TIMESTAMP, not by id. Keying on `notifications[0].id`
+    // meant that deleting the top notification promoted an older one to index 0
+    // with a different id — which read as "something new arrived" and replayed a
+    // toast + chime for a notification from days ago.
+    const newestAt = new Date(newest.createdAt).getTime();
+    if (lastNotifAtRef.current === null) {
+      lastNotifAtRef.current = newestAt;   // first load: prime, never alert
       return;
     }
-    if (newest.id === lastNotifIdRef.current) return;
-    lastNotifIdRef.current = newest.id;
+    if (newestAt <= lastNotifAtRef.current) return;
+    lastNotifAtRef.current = newestAt;
     // Only alert for a fresh, unread notification, respecting DND + category mute
     if (newest.isRead) return;
     if (isInDndWindow(localPrefs)) return;
@@ -281,31 +343,29 @@ const NotificationsCenter: React.FC = () => {
     // Chat messages already get their own sound from the chat UI (Sidebar chime /
     // ChatView chirp). Skip the chime here for those types to avoid a double sound
     // on message arrival; keep it for all other notifications.
-    const CHAT_MSG_TYPES = new Set(['client_message', 'staff_message']);
+    const CHAT_MSG_TYPES = new Set(['client_message', 'staff_message', 'direct_message', 'mention']);
     if (localPrefs.soundEnabled !== false && !CHAT_MSG_TYPES.has(newest.type || '')) playChime();
   }, [notifications, localPrefs, playChime]);
 
   // Filter out muted categories
   const activeNotifications = useMemo(() => {
     if (!notifications) return [];
-    return notifications.filter(n => {
-      if (!n.type) return true;
-      for (const [cat, types] of Object.entries(CATEGORY_TYPES) as [Exclude<Category, 'all'>, string[]][]) {
-        if (types.includes(n.type) && !localPrefs.categoryEnabled[cat]) return false;
-      }
-      return true;
-    });
+    return notifications.filter(n => !isTypeMuted(n.type, localPrefs));
   }, [notifications, localPrefs]);
 
   // Filter by selected category chip
   const filteredByCategory = useMemo(() => {
     if (category === 'all') return activeNotifications;
-    return activeNotifications.filter(n => CATEGORY_TYPES[category].includes(n.type || ''));
+    return activeNotifications.filter(n => categoryOf(n.type) === category);
   }, [activeNotifications, category]);
 
   const unreadCount         = activeNotifications.filter(n => !n.isRead).length;
   const unreadClientCount   = activeNotifications.filter(n => !n.isRead && n.type === 'client_message').length;
-  const unreadMentionCount  = activeNotifications.filter(n => !n.isRead && (n.type === 'task_mention' || n.type === 'task_collaborator_added')).length;
+  // Anything that is literally someone talking TO me: task mentions, chat mentions,
+  // DMs and being pulled into a task. `mention` and `direct_message` used to be
+  // missing here, so a chat @mention never changed the bell icon.
+  const MENTION_TYPES = new Set(['task_mention', 'task_collaborator_added', 'mention', 'direct_message']);
+  const unreadMentionCount  = activeNotifications.filter(n => !n.isRead && MENTION_TYPES.has(n.type || '')).length;
   const criticalCount       = activeNotifications.filter(n => !n.isRead && getConfig(n.type).priority === 'critical').length;
 
   const handleMarkAsRead = async (id: string) => {
@@ -313,13 +373,21 @@ const NotificationsCenter: React.FC = () => {
   };
 
   const handleMarkAllAsRead = async () => {
-    const unread = activeNotifications.filter(n => !n.isRead);
+    // Deliberately over `notifications`, NOT `activeNotifications`: the latter hides
+    // muted categories, so those rows stayed unread forever — invisible in the bell
+    // yet still counted by the daily digest job. "Mark all read" now means all.
+    const unread = (notifications || []).filter(n => !n.isRead);
     if (unread.length === 0) return;
-    const batch = writeBatch(db);
-    for (const n of unread) {
-      batch.update(doc(db, 'notifications', n.id), { isRead: true });
+    // Firestore caps a batch at 500 writes; the query caps at 100, but chunk anyway
+    // so raising the limit later can't silently start failing.
+    const CHUNK = 400;
+    for (let i = 0; i < unread.length; i += CHUNK) {
+      const batch = writeBatch(db);
+      for (const n of unread.slice(i, i + CHUNK)) {
+        batch.update(doc(db, 'notifications', n.id), { isRead: true });
+      }
+      await batch.commit();
     }
-    await batch.commit();
   };
 
   const handleDelete = async (id: string) => {
@@ -328,11 +396,14 @@ const NotificationsCenter: React.FC = () => {
 
   const savePrefs = async (newPrefs: NotifPrefs) => {
     if (!user) return;
-    setLocalPrefs(newPrefs);
-    localStorage.setItem(`notif_prefs_${user.uid}`, JSON.stringify(newPrefs));
+    // Stamp the zone the DND hours were entered in, so the server evaluates the
+    // window in the user's local time instead of UTC.
+    const stamped = withDndZone(newPrefs);
+    setLocalPrefs(stamped);
+    localStorage.setItem(`notif_prefs_${user.uid}`, JSON.stringify(stamped));
     setSavingPrefs(true);
     try {
-      await setDoc(doc(db, 'userPreferences', user.uid), newPrefs, { merge: true });
+      await setDoc(doc(db, 'userPreferences', user.uid), stamped, { merge: true });
     } finally {
       setSavingPrefs(false);
     }
@@ -431,7 +502,7 @@ const NotificationsCenter: React.FC = () => {
           <>
             {/* Category filter chips */}
             <div className="flex gap-1.5 px-3 py-2 border-b overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
-              {(['all', 'tasks', 'messages', 'projects', 'invoices'] as Category[]).map(cat => (
+              {(['all', ...NOTIFICATION_CATEGORIES] as Category[]).map(cat => (
                 <button
                   key={cat}
                   onClick={() => setCategory(cat)}
@@ -551,7 +622,7 @@ const PreferencesPanel: React.FC<{
   onSave: (prefs: NotifPrefs) => void;
   saving: boolean;
 }> = ({ prefs, onSave, saving }) => {
-  const toggleCategory = (cat: Exclude<Category, 'all'>) => {
+  const toggleCategory = (cat: NotificationCategory) => {
     onSave({ ...prefs, categoryEnabled: { ...prefs.categoryEnabled, [cat]: !prefs.categoryEnabled[cat] } });
   };
 
@@ -563,15 +634,12 @@ const PreferencesPanel: React.FC<{
             Kategorite e njoftimeve
           </h4>
           <div className="space-y-3.5">
-            {(['tasks', 'messages', 'projects', 'invoices'] as Exclude<Category, 'all'>[]).map(cat => (
+            {NOTIFICATION_CATEGORIES.map(cat => (
               <div key={cat} className="flex items-center justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-sm font-medium">{CATEGORY_LABELS[cat]}</p>
                   <p className="text-xs text-muted-foreground truncate">
-                    {cat === 'tasks'    && 'Detyra, afate, objektiva, cikle'}
-                    {cat === 'messages' && 'Chat, komente, kërkesa klientësh'}
-                    {cat === 'projects' && 'Projekte, leads, status, guests'}
-                    {cat === 'invoices' && 'Fatura, pagesa, shpenzime'}
+                    {CATEGORY_DESCRIPTIONS[cat]}
                   </p>
                 </div>
                 <Switch
@@ -636,23 +704,6 @@ const PreferencesPanel: React.FC<{
   );
 };
 
-// ── Group labels ───────────────────────────────────────────────────────────────
-const GROUP_TYPE_LABEL: Record<string, string> = {
-  task_assigned:           'caktime detyrash',
-  task_overdue:            'detyra të skaduara',
-  task_due_soon:           'detyra me afat',
-  task_mention:            'përmendje',
-  task_collaborator_added: 'shtesa si bashkëpunëtor',
-  client_message:          'mesazhe klienti',
-  staff_message:           'mesazhe stafi',
-  invoice_overdue:         'fatura të skaduara',
-  invoice_paid:            'pagesa faturash',
-  lead_assigned:           'lead të caktuar',
-  lead_follow_up:          'rikontaktime lead',
-  recurring_task_created:  'detyra periodike',
-  project_open_reminder:   'kujtesa projektesh',
-};
-
 // ── Grouped notification item ──────────────────────────────────────────────────
 const GroupedNotificationItem: React.FC<{
   group: Notification[];
@@ -663,7 +714,7 @@ const GroupedNotificationItem: React.FC<{
   const [expanded, setExpanded] = useState(false);
   const config   = getConfig(group[0].type);
   const allRead  = group.every(n => n.isRead);
-  const label    = GROUP_TYPE_LABEL[group[0].type || ''] || 'njoftime';
+  const label    = groupLabelOf(group[0].type);
 
   return (
     <div className={`${!allRead && config.bgColor ? config.bgColor : !allRead ? 'bg-primary/5' : ''}`}>
@@ -721,26 +772,31 @@ const NotificationItem: React.FC<{
     return new Date(date).toLocaleDateString('sq-AL');
   };
 
-  const hasAction = notification.linkTo || notification.actionUrl ||
-    notification.type === 'client_message' || notification.type === 'staff_message';
+  const CHAT_TYPES = new Set(['client_message', 'staff_message', 'direct_message', 'mention']);
+  const isChatType = CHAT_TYPES.has(notification.type || '');
+
+  const hasAction = !!notification.linkTo || !!notification.actionUrl || isChatType;
 
   const handleAction = () => {
     if (!notification.isRead) onMarkAsRead(notification.id);
     onClose();
-    if (notification.linkTo) {
+    // An explicit actionUrl is the most specific target and now wins over the
+    // generic chat fallback — a `direct_message` carries actionUrl
+    // `/app/chat?directUserId=…` and used to be swallowed by the type check below.
+    if (notification.actionUrl?.startsWith('/')) {
+      navigate(notification.actionUrl);
+    } else if (notification.linkTo) {
       if (notification.linkTo.startsWith('/')) navigate(notification.linkTo);
       else navigate('/app/chat', { state: { channel: notification.linkTo } });
-    } else if (notification.type === 'client_message' || notification.type === 'staff_message') {
+    } else if (isChatType) {
       navigate('/app/chat');
-    } else if (notification.actionUrl) {
-      navigate(notification.actionUrl);
     }
   };
 
   const isUnread    = !notification.isRead;
   const borderClass = isUnread && config.borderColor ? `border-l-2 ${config.borderColor}` : '';
   const bgClass     = isUnread && config.bgColor ? config.bgColor : isUnread ? 'bg-primary/5' : '';
-  const isChat      = notification.type === 'client_message' || notification.type === 'staff_message' || !!notification.linkTo;
+  const isChat      = isChatType || !!notification.linkTo;
 
   return (
     <div

@@ -527,6 +527,8 @@ const ChatView: React.FC = () => {
       { field: 'userId', operator: '==' as const, value: user.uid },
       { field: 'isRead', operator: '==' as const, value: false },
     ] : undefined,
+    // Bounded: only used to auto-dismiss the bell entry for the channel just opened.
+    limit: 200,
   }), [user?.uid]);
   const { data: myUnreadNotifs } = useCollection<any>('notifications', myUnreadNotifQuery);
 
@@ -2094,7 +2096,15 @@ const ChatView: React.FC = () => {
               // actionUrl points at the PORTAL chat — the recipient is a client and
               // has no access to /app/chat, so the choke point must not derive an
               // /app/chat deep-link from linkTo. linkTo is kept for in-app routing.
-              try { await notificationMutation.create({ userId: (pa as any).userId || custId, type: 'staff_message', title, message: (effectiveText || '📎 Attachment').slice(0, 100), isRead: false, linkTo: targetChannel, actionUrl: '/portal/chat' } as any); } catch { /* skip */ }
+              // Only notify when the portal record actually carries a Firebase uid.
+              // The old fallback (`|| custId`) wrote a notification addressed to a
+              // CUSTOMER id, which is not an auth uid: nobody could ever read it, and
+              // the server could not resolve an email for it either. The email below
+              // still goes out, so a client without a portal login is not left out.
+              const portalUid = (pa as any).userId;
+              if (portalUid) {
+                try { await notificationMutation.create({ userId: portalUid, type: 'staff_message', title, message: (effectiveText || '📎 Attachment').slice(0, 100), isRead: false, linkTo: targetChannel, actionUrl: '/portal/chat' } as any); } catch { /* skip */ }
+              }
               // Send email notification (rate-limited server-side)
               if ((pa as any).email) {
                 try {

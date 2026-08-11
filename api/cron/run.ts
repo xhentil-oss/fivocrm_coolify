@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
 import { buildInvoiceEmail } from '../_invoiceEmail.js';
-import admin, { adminDb as db, adminMessaging, adminAuth } from '../_firebaseAdmin.js';
+import admin, { adminDb as db, adminAuth } from '../_firebaseAdmin.js';
 import { runWhmcsSync, runWhmcsClientSync } from '../_whmcsSync.js';
 import { sendBulkEmail, renderMergeTokens } from '../_mailer.js';
 import { syncAllAccounts, currentPeriod } from '../_social.js';
@@ -14,6 +14,9 @@ import { writeAudit } from '../_audit.js';
 // Reporting module jobs. Kept in their own file: they are self-contained,
 // idempotent, and this file is already 3.4k lines.
 import { runReportSchedules, runReportReminders, runClientHealthRollup, runReportMetricsSocial } from '../_reportJobs.js';
+// One delivery path for every notification — see the header of api/_push.ts.
+import { notifyUser, getUserPrefs, isDndActive, isSilenced, escapeHtml, BASE_URL } from '../_push.js';
+import { isTypeMutedByPrefs } from '../_notificationTypes.js';
 
 // ── Auth helper ───────────────────────────────────────────────────────────────
 function authorize(req: VercelRequest): boolean {
@@ -93,50 +96,15 @@ async function settleAll(ops: Promise<any>[], jobName: string): Promise<void> {
   });
 }
 
-// ── Notification preferences helpers ──────────────────────────────────────────
-async function getUserPrefs(userId: string): Promise<any> {
-  try {
-    const d = await db.collection('userPreferences').doc(userId).get();
-    return d.exists ? (d.data() as any) : {};
-  } catch { return {}; }
-}
-
-// True when the current time falls inside the user's Do-Not-Disturb window.
-function isDndActive(prefs: any): boolean {
-  if (!prefs?.dndEnabled || !prefs?.dndStart || !prefs?.dndEnd) return false;
-  const now = new Date();
-  const cur = now.getUTCHours() * 60 + now.getUTCMinutes();
-  const [sh, sm] = String(prefs.dndStart).split(':').map(Number);
-  const [eh, em] = String(prefs.dndEnd).split(':').map(Number);
-  const s = sh * 60 + sm;
-  const e = eh * 60 + em;
-  return s <= e ? (cur >= s && cur < e) : (cur >= s || cur < e); // overnight window
-}
-
-// ── sendPush: send FCM push to a user if they have a registered token ─────────
-// Pass `prefs` to avoid a duplicate userPreferences read when the caller already has it.
-async function sendPush(userId: string, title: string, body: string, data?: Record<string, string>, prefs?: any): Promise<void> {
-  try {
-    // Respect Do Not Disturb + the push channel toggle from userPreferences
-    const p = prefs ?? await getUserPrefs(userId);
-    if (p?.pushEnabled === false) return;
-    if (isDndActive(p)) return;
-
-    const tokenDoc = await db.collection('userPushTokens').doc(userId).get();
-    if (!tokenDoc.exists) return;
-    const token = tokenDoc.data()?.token;
-    if (!token) return;
-    await adminMessaging.send({
-      token,
-      notification: { title, body },
-      data: data || {},
-      android: { priority: 'high', notification: { icon: 'ic_stat_notify', color: '#0EA5E9' } },
-      webpush: { notification: { icon: '/icon-192.png' }, fcmOptions: { link: data?.url || '/' } },
-    });
-  } catch (err) {
-    console.error(`[Push] dërgimi për ${userId} dështoi:`, err);
-  }
-}
+// ── Notifications ─────────────────────────────────────────────────────────────
+// Delivery lives in api/_push.ts and is shared with the browser choke point, so a
+// cron notification now behaves exactly like one raised from the UI: it is written,
+// pushed to EVERY registered device and emailed, through one set of preference
+// gates. Twelve of the sites below used to write the document and nothing else,
+// which made them invisible unless the user happened to open the app.
+//
+// Every former `db.collection('notifications').add(...)` + ad-hoc `sendPush` pair in
+// this file is now a single notifyUser() call.
 
 // ── SMTP helper ───────────────────────────────────────────────────────────────
 function makeTransporter() {
@@ -272,16 +240,28 @@ async function runTaskDeadlineAlerts() {
       ? `Detyra "${task.title}" ka kaluar afatin prej ${overdueByDays} ditë.`
       : `Detyra "${task.title}" skadon ${daysLeft === 0 ? 'sot' : `për ${daysLeft} ditë`}.`;
 
-    // In-app notification is always stored (the bell respects category mutes itself).
-    ops.push(db.collection('notifications').add({ userId: recipientId, type: isOverdueAlert ? 'task_overdue' : 'task_due_soon', title: notifTitle, message: notifMessage, isRead: false, actionUrl: '/app/tasks', actionLabel: 'Shiko Detyrat', createdAt: admin.firestore.Timestamp.now() }));
+    // Doc + push (every registered device), through the shared preference gates.
+    ops.push(notifyUser({
+      userId: recipientId,
+      type: isOverdueAlert ? 'task_overdue' : 'task_due_soon',
+      title: notifTitle,
+      message: notifMessage,
+      actionUrl: '/app/tasks',
+      actionLabel: 'Shiko Detyrat',
+      businessId: task.businessId ?? null,
+      teamId: task.teamId ?? null,
+      projectId: task.projectId ?? null,
+      email: false, // the richer, styled email is sent just below
+    }));
     // Mark the stage(s) consumed. An overdue alert also implies due-soon is done.
     ops.push(doc.ref.update(isOverdueAlert ? { dueNotificationSent: true, overdueNotificationSent: true } : { dueNotificationSent: true }));
 
-    // Push + email respect the user's channel toggles + Do-Not-Disturb window.
+    // Email respects the channel toggle + Do-Not-Disturb + category mute (push is
+    // already handled by notifyUser above).
     const prefs = await getUserPrefs(recipientId);
-    ops.push(sendPush(recipientId, notifTitle, notifMessage, undefined, prefs));
 
-    if (transporter && smtpUser && prefs?.emailEnabled !== false && !isDndActive(prefs)) {
+    if (transporter && smtpUser && prefs?.emailEnabled !== false
+        && !isSilenced(prefs, isOverdueAlert ? 'task_overdue' : 'task_due_soon')) {
       try {
         const userRecord = await admin.auth().getUser(recipientId);
         if (userRecord.email) {
@@ -325,8 +305,7 @@ async function runInvoiceReminders() {
       if (invoice.createdByUserId) {
         const ovTitle = `🔴 Faturë e skaduara: #${invoiceLabel}`;
         const ovMsg = `Fatura #${invoiceLabel} ka kaluar afatin e pagesës.`;
-        ops.push(db.collection('notifications').add({ userId: invoice.createdByUserId, type: 'invoice_overdue', title: ovTitle, message: ovMsg, isRead: false, actionUrl: '/app/invoices', actionLabel: 'Shiko Faturat', createdAt: admin.firestore.Timestamp.now() }));
-        ops.push(sendPush(invoice.createdByUserId, ovTitle, ovMsg));
+        ops.push(notifyUser({ userId: invoice.createdByUserId, type: 'invoice_overdue', title: ovTitle, message: ovMsg, actionUrl: '/app/invoices', actionLabel: 'Shiko Faturat', businessId: invoice.businessId ?? null, teamId: invoice.teamId ?? null, customerId: invoice.customerId ?? null }));
       }
     } else if (dueDate <= reminderThreshold && !invoice.reminderSent) {
       ops.push(doc.ref.update({ reminderSent: true, updatedAt: admin.firestore.Timestamp.now() }));
@@ -339,7 +318,7 @@ async function runInvoiceReminders() {
           ops.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject: `Kujtesë pagese: Fatura #${invoiceLabel}`, html: `<div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px;"><h2 style="color:#f59e0b">⏰ Kujtesë Pagese</h2><p>Fatura juaj <strong>#${invoiceLabel}</strong> skadon ${daysLeft === 0 ? 'sot' : `për ${daysLeft} ditë`}.</p><p style="color:#9ca3af;font-size:12px">FivoCRM – Njoftime automatike</p></div>` }));
         }
       }
-      if (invoice.createdByUserId) ops.push(db.collection('notifications').add({ userId: invoice.createdByUserId, type: 'invoice_reminder_sent', title: `📧 Kujtesë u dërgua: Fatura #${invoiceLabel}`, message: `Kujtesa e pagesës u dërgua te klienti.`, isRead: false, actionUrl: '/app/invoices', actionLabel: 'Shiko Faturat', createdAt: admin.firestore.Timestamp.now() }));
+      if (invoice.createdByUserId) ops.push(notifyUser({ userId: invoice.createdByUserId, type: 'invoice_reminder_sent', title: `📧 Kujtesë u dërgua: Fatura #${invoiceLabel}`, message: `Kujtesa e pagesës u dërgua te klienti.`, actionUrl: '/app/invoices', actionLabel: 'Shiko Faturat', businessId: invoice.businessId ?? null, teamId: invoice.teamId ?? null, customerId: invoice.customerId ?? null, email: false }));
     }
   }
   await settleAll(ops, 'invoice-reminders');
@@ -368,7 +347,10 @@ async function runInvoiceReminders() {
       const dueDate: Date = invoice.dueDate?.toDate ? invoice.dueDate.toDate() : invoice.dueDate ? new Date(invoice.dueDate) : now;
       const { subject, html } = buildInvoiceEmail({ customerName: customer.name || 'Klient', invoiceNumber: invoiceLabel, amount: invoice.total || invoice.amount || 0, dueDate, projectName, type, currency: invoice.currency || 'ALL', paymentMethod: invoice.paymentMethod, bankName: invoice.bankName, bankIBAN: invoice.bankIBAN, bankSWIFT: invoice.bankSWIFT, bankAccountHolder: invoice.bankAccountHolder, bankCountry: invoice.bankCountry });
       if (transporter && smtpUser) reminderOps.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject, html }).then(() => doc.ref.update({ [flagField]: true, updatedAt: admin.firestore.Timestamp.now() })));
-      if (invoice.createdByUserId) reminderOps.push(db.collection('notifications').add({ userId: invoice.createdByUserId, type: `invoice_${type}_sent`, title: `📧 Kujtesë dërguar (${is25th ? '25' : 'dita e fundit'}): #${invoiceLabel}`, message: `Kujtesa e pagesës u dërgua te ${customer.name || 'klienti'}.`, isRead: false, createdAt: admin.firestore.Timestamp.now() }));
+      // The type used to be assembled as `invoice_${type}_sent`, producing values no
+      // table knew about: no icon, no category, impossible to mute. The variant now
+      // lives in the title, where it belongs, and the type is a registered one.
+      if (invoice.createdByUserId) reminderOps.push(notifyUser({ userId: invoice.createdByUserId, type: 'invoice_reminder_sent', title: `📧 Kujtesë dërguar (${is25th ? '25' : 'dita e fundit'}): #${invoiceLabel}`, message: `Kujtesa e pagesës u dërgua te ${customer.name || 'klienti'}.`, actionUrl: '/app/invoices', actionLabel: 'Shiko Faturat', businessId: invoice.businessId ?? null, teamId: invoice.teamId ?? null, customerId: invoice.customerId ?? null, email: false }));
       is25th ? reminder25Sent++ : reminderLastDaySent++;
     }
     await settleAll(reminderOps, 'invoice-reminders-recurring');
@@ -589,7 +571,7 @@ async function runRecurringTasks() {
       const taskUrl = task.projectId
         ? `/app/projects/${task.projectId}?task=${newTaskRef.id}`
         : `/app/tasks`;
-      ops.push(db.collection('notifications').add({ userId: notifRecipient, type: 'recurring_task_created', title: `🔄 Detyrë e re periodike: ${task.title}`, message: `Detyra periodike "${task.title}" (${freqLabel[task.recurringFrequency] ?? task.recurringFrequency}) u krijua automatikisht.`, isRead: false, actionUrl: taskUrl, actionLabel: 'Hap Detyrën', createdAt: admin.firestore.Timestamp.now() }));
+      ops.push(notifyUser({ userId: notifRecipient, type: 'recurring_task_created', title: `🔄 Detyrë e re periodike: ${task.title}`, message: `Detyra periodike "${task.title}" (${freqLabel[task.recurringFrequency] ?? task.recurringFrequency}) u krijua automatikisht.`, actionUrl: taskUrl, actionLabel: 'Hap Detyrën', businessId: task.businessId ?? null, teamId: task.teamId ?? null, projectId: task.projectId ?? null }));
     }
     created++;
   }
@@ -869,15 +851,16 @@ async function runRecurringInvoices() {
     // Notification to creator
     if (invoice.createdByUserId) {
       const freqLabel: Record<string, string> = { weekly: 'javore', monthly: 'mujore', quarterly: 'tremujore', yearly: 'vjetore' };
-      ops.push(db.collection('notifications').add({
+      ops.push(notifyUser({
         userId: invoice.createdByUserId,
         type: 'auto_invoice_created',
         title: `🧾 Faturë e re periodike: #${invoiceNumber}`,
         message: `Fatura ${freqLabel[freq] || freq} u gjenerua automatikisht (${(invoice.total || invoice.amount || 0).toLocaleString('sq-AL')} ${invoice.currency || 'ALL'}).`,
-        isRead: false,
         actionUrl: '/app/invoices',
         actionLabel: 'Shiko Faturat',
-        createdAt: admin.firestore.Timestamp.now(),
+        businessId: invoice.businessId ?? null,
+        teamId: invoice.teamId ?? null,
+        customerId: invoice.customerId ?? null,
       }));
     }
 
@@ -921,17 +904,19 @@ async function runRecurringInvoices() {
           legacyOps.push(projectDoc.ref.update({ billingConfigNoticeKey: noticeKey, updatedAt: admin.firestore.Timestamp.now() }));
           const uid = project.responsibleUserId || project.createdByUserId;
           if (uid) {
-            legacyOps.push(db.collection('notifications').add({
+            legacyOps.push(notifyUser({
               userId: uid,
               type: 'recurring_project_billing_misconfigured',
               title: `⚠️ Faturimi periodik i "${project.name}" është i ndalur`,
               message: block === 'one-time'
                 ? 'Projekti është shënuar periodik, por lloji i faturimit është "një-herësh" — ndaj nuk gjenerohet faturë. Ndrysho llojin e faturimit në "mujore".'
                 : `Frekuenca "${frequency}" nuk mbështetet për faturim automatik. Zgjidh "javore" ose "mujore".`,
-              isRead: false,
               actionUrl: `/app/projects/${projectDoc.id}`,
               actionLabel: 'Hap Projektin',
-              createdAt: admin.firestore.Timestamp.now(),
+              businessId: project.businessId ?? null,
+              teamId: project.teamId ?? null,
+              customerId: project.customerId ?? null,
+              projectId: projectDoc.id,
             }));
           }
         }
@@ -956,15 +941,17 @@ async function runRecurringInvoices() {
         }));
         const notifyUid = project.responsibleUserId || project.createdByUserId;
         if (notifyUid) {
-          legacyOps.push(db.collection('notifications').add({
+          legacyOps.push(notifyUser({
             userId: notifyUid,
             type: 'recurring_project_no_budget',
             title: `⚠️ Projekti periodik "${project.name}" nuk mund të faturohet`,
             message: 'Projekti është periodik por nuk ka buxhet (tarifë) të caktuar, ndaj nuk u gjenerua faturë. Vendos buxhetin për të rifilluar faturimin automatik.',
-            isRead: false,
             actionUrl: `/app/projects/${projectDoc.id}`,
             actionLabel: 'Hap Projektin',
-            createdAt: admin.firestore.Timestamp.now(),
+            businessId: project.businessId ?? null,
+            teamId: project.teamId ?? null,
+            customerId: project.customerId ?? null,
+            projectId: projectDoc.id,
           }));
         }
       }
@@ -997,7 +984,7 @@ async function runRecurringInvoices() {
     // Record the period so no later run (and no UI action) bills it twice.
     legacyOps.push(projectDoc.ref.update({ lastInvoicePeriodKey: periodKey, lastInvoiceGeneratedAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
     const notifyUid = project.responsibleUserId || project.createdByUserId;
-    if (notifyUid) legacyOps.push(db.collection('notifications').add({ userId: notifyUid, type: 'auto_invoice_created', title: `🧾 Faturë e re automatike: ${project.name}`, message: `Fatura #${invoiceLabel} (${budget.toLocaleString('sq-AL')} ${currency}) u gjenerua automatikisht.`, isRead: false, actionUrl: '/app/invoices', actionLabel: 'Shiko Faturat', createdAt: admin.firestore.Timestamp.now() }));
+    if (notifyUid) legacyOps.push(notifyUser({ userId: notifyUid, type: 'auto_invoice_created', title: `🧾 Faturë e re automatike: ${project.name}`, message: `Fatura #${invoiceLabel} (${budget.toLocaleString('sq-AL')} ${currency}) u gjenerua automatikisht.`, actionUrl: '/app/invoices', actionLabel: 'Shiko Faturat', businessId: project.businessId ?? null, teamId: project.teamId ?? null, customerId: project.customerId ?? null, projectId: projectDoc.id }));
 
     legacyCreated++;
   }
@@ -1033,17 +1020,27 @@ async function runProjectCompletionReminder() {
   const cutoffMs = now.getTime() - DEDUP_MS;
 
   for (const [userId, userProjects] of userProjectMap) {
-    // Query by userId only (index-free) and filter type/read/recency in memory.
-    const existing = await db.collection('notifications').where('userId', '==', userId).get();
+    // Bounded dedup check. This used to read the user's ENTIRE notification history
+    // ("index-free") on every run, for every user, just to answer "did I already
+    // remind them this week?". Now it asks the index that question directly:
+    // userId + type + newest-first, capped at one document.
+    // Requires the composite index (userId, type, createdAt DESC) — declared in
+    // firestore.indexes.json.
+    const existing = await db.collection('notifications')
+      .where('userId', '==', userId)
+      .where('type', '==', 'project_open_reminder')
+      .orderBy('createdAt', 'desc')
+      .limit(1)
+      .get();
     const hasRecentReminder = existing.docs.some(d => {
       const n = d.data();
-      if (n.type !== 'project_open_reminder' || n.isRead) return false;
+      if (n.isRead) return false;
       const ms = typeof n.createdAt?.toMillis === 'function' ? n.createdAt.toMillis() : 0;
       return ms >= cutoffMs;
     });
     if (hasRecentReminder) continue;
 
-    ops.push(db.collection('notifications').add({ userId, type: 'project_open_reminder', title: `📋 ${userProjects.length} projekt${userProjects.length > 1 ? 'e' : ''} akoma të hapura`, message: `Ke ${userProjects.length} projekt${userProjects.length > 1 ? 'e' : ''} të hapur${userProjects.length > 1 ? 'a' : ''} pa mbyllur këtë javë.`, isRead: false, createdAt: admin.firestore.Timestamp.now() }));
+    ops.push(notifyUser({ userId, type: 'project_open_reminder', title: `📋 ${userProjects.length} projekt${userProjects.length > 1 ? 'e' : ''} akoma të hapura`, message: `Ke ${userProjects.length} projekt${userProjects.length > 1 ? 'e' : ''} të hapur${userProjects.length > 1 ? 'a' : ''} pa mbyllur këtë javë.`, actionUrl: '/app/projects', actionLabel: 'Shiko Projektet', email: false }));
     if (transporter && smtpUser) {
       try {
         const userRecord = await admin.auth().getUser(userId);
@@ -1088,7 +1085,7 @@ async function runRecurringProjectReset() {
 
     for (const taskDoc of tasksSnap.docs) ops.push(taskDoc.ref.update({ status: 'Todo', updatedAt: admin.firestore.Timestamp.now(), dueNotificationSent: false }));
     ops.push(projectDoc.ref.update({ status: 'Active', nextRecurringDate: nextCycle, updatedAt: admin.firestore.Timestamp.now() }));
-    if (project.responsibleUserId) ops.push(db.collection('notifications').add({ userId: project.responsibleUserId, type: 'project_cycle_reset', title: `🔄 Projekti "${project.name}" u riaktivizua`, message: `Cikli i ri ka filluar. Të gjitha detyrat janë rivendosur te "Për të bërë".`, isRead: false, actionUrl: '/app/projects', actionLabel: 'Shiko Projektet', createdAt: admin.firestore.Timestamp.now() }));
+    if (project.responsibleUserId) ops.push(notifyUser({ userId: project.responsibleUserId, type: 'project_cycle_reset', title: `🔄 Projekti "${project.name}" u riaktivizua`, message: `Cikli i ri ka filluar. Të gjitha detyrat janë rivendosur te "Për të bërë".`, actionUrl: `/app/projects/${projectDoc.id}`, actionLabel: 'Shiko Projektin', businessId: project.businessId ?? null, teamId: project.teamId ?? null, customerId: project.customerId ?? null, projectId: projectDoc.id }));
     resetCount++;
   }
 
@@ -1264,15 +1261,15 @@ async function runRecurringExpenses() {
 
     // Notify the creator
     if (expense.createdByUserId) {
-      ops.push(db.collection('notifications').add({
+      ops.push(notifyUser({
         userId: expense.createdByUserId,
         type: 'recurring_expense_created',
         title: `🔄 Shpenzim periodik: ${expense.title}`,
         message: `Shpenzimi periodik "${expense.title}" (${expense.amount} ${expense.currency || 'ALL'}) u krijua automatikisht.`,
-        isRead: false,
         actionUrl: '/app/expenses',
         actionLabel: 'Shiko Shpenzimet',
-        createdAt: admin.firestore.Timestamp.now(),
+        businessId: expense.businessId ?? null,
+        teamId: expense.teamId ?? null,
       }));
     }
     created++;
@@ -1350,17 +1347,16 @@ async function runGoalOverdueAlerts() {
     }));
     const goalTitle = `⚠️ Objektiv i Vonuar: "${goal.title || 'Pa titull'}"`;
     const goalMsg = `Ky objektiv ka kaluar afatin prej më shumë se 2 javësh dhe ende nuk është arritur.`;
-    ops.push(db.collection('notifications').add({
+    ops.push(notifyUser({
       userId: recipientId,
       type: 'goal_overdue',
       title: goalTitle,
       message: goalMsg,
-      isRead: false,
       actionUrl: '/app/goals',
       actionLabel: 'Shiko Objektivat',
-      createdAt: admin.firestore.Timestamp.now(),
+      businessId: goal.businessId ?? null,
+      teamId: goal.teamId ?? null,
     }));
-    ops.push(sendPush(recipientId, goalTitle, goalMsg));
     notified++;
   }
 
@@ -1442,20 +1438,16 @@ async function runLeadFollowUpReminders() {
       ? `${dateLabel} · ${lead.followUpNote}`
       : `${dateLabel} · Është koha të rikontaktoni këtë lead.`;
 
-    ops.push(
-      db.collection('notifications').add({
-        userId: assignedUserId,
-        type: 'lead_follow_up',
-        title: followTitle,
-        message: followMsg,
-        isRead: false,
-        actionType: 'link',
-        actionUrl: '/app/crm',
-        actionLabel: 'Shko tek CRM',
-        createdAt: admin.firestore.Timestamp.now(),
-      })
-    );
-    ops.push(sendPush(assignedUserId, followTitle, followMsg));
+    ops.push(notifyUser({
+      userId: assignedUserId,
+      type: 'lead_follow_up',
+      title: followTitle,
+      message: followMsg,
+      actionUrl: '/app/crm',
+      actionLabel: 'Shko tek CRM',
+      businessId: lead.businessId ?? null,
+      teamId: lead.teamId ?? null,
+    }));
 
     // Update lastReminderSentAt to debounce future runs
     ops.push(
@@ -1534,8 +1526,7 @@ async function runLeadSlaAndStaleAlerts() {
       const title = `⏰ SLA: lead pa përgjigje — ${lead.name}`;
       const message = `Lead-i "${lead.name}" nuk ka marrë përgjigje brenda ${SLA_HOURS}h nga krijimi.`;
       for (const uid of recipients) {
-        ops.push(db.collection('notifications').add({ userId: uid, type: 'lead_follow_up', title, message, isRead: false, actionUrl: '/app/crm', actionLabel: 'Shiko CRM', createdAt: admin.firestore.Timestamp.now() }));
-        ops.push(sendPush(uid, title, message, { url: '/app/crm' }));
+        ops.push(notifyUser({ userId: uid, type: 'lead_follow_up', title, message, actionUrl: '/app/crm', actionLabel: 'Shiko CRM', businessId: lead.businessId ?? null, teamId: lead.teamId ?? null }));
       }
       ops.push(doc.ref.update({ slaBreachNotified: true }));
       slaBreaches++;
@@ -1549,8 +1540,7 @@ async function runLeadSlaAndStaleAlerts() {
       const title = `💤 Lead i ftohur — ${lead.name}`;
       const message = `Lead-i "${lead.name}" s'ka aktivitet prej ${Math.floor(staleDays)} ditësh.`;
       for (const uid of recipients) {
-        ops.push(db.collection('notifications').add({ userId: uid, type: 'lead_follow_up', title, message, isRead: false, actionUrl: '/app/crm', actionLabel: 'Shiko CRM', createdAt: admin.firestore.Timestamp.now() }));
-        ops.push(sendPush(uid, title, message, { url: '/app/crm' }));
+        ops.push(notifyUser({ userId: uid, type: 'lead_follow_up', title, message, actionUrl: '/app/crm', actionLabel: 'Shiko CRM', businessId: lead.businessId ?? null, teamId: lead.teamId ?? null }));
       }
       ops.push(doc.ref.update({ staleNotifiedAt: admin.firestore.Timestamp.now() }));
       staleLeads++;
@@ -1640,11 +1630,13 @@ async function runLeadWhatsappAutoReminders() {
     }));
     const assignee = lead.assignedToUserId || lead.createdByUserId;
     if (assignee) {
-      ops.push(db.collection('notifications').add({
+      ops.push(notifyUser({
         userId: assignee, type: 'lead_follow_up',
         title: `📲 Rikujtues WhatsApp u dërgua — ${lead.name}`,
         message: `Rikujtues automatik WhatsApp u dërgua te ${lead.name} (${Math.floor(daysSince)} ditë pa komunikim).`,
-        isRead: false, actionUrl: '/app/crm', actionLabel: 'Shiko CRM', createdAt: admin.firestore.Timestamp.now(),
+        actionUrl: '/app/crm', actionLabel: 'Shiko CRM',
+        businessId: lead.businessId ?? null, teamId: lead.teamId ?? null,
+        email: false,
       }));
     }
     sent++;
@@ -1655,34 +1647,105 @@ async function runLeadWhatsappAutoReminders() {
 }
 
 // ── JOB: notification-digest ─────────────────────────────────────────────────
-async function runNotificationDigest() {
+// Emails a summary of what a user has NOT read yet.
+//
+// Three things were wrong with the original:
+//   1. It read `notifications where isRead == false` with no tenant filter and no
+//      limit — a full, cross-tenant collection scan every single day, which the
+//      project's own cost rule forbids ("a cron job must never read a collection
+//      unfiltered"). Since the cleanup job was broken, that scan only grew.
+//   2. It ignored `emailEnabled`, Do-Not-Disturb and category mutes. A user who had
+//      switched email notifications OFF still got a daily digest — and it listed
+//      notifications from categories they had explicitly muted.
+//   3. It counted notifications the user can never see in the bell (muted
+//      categories), so the "you have 14 unread" figure did not match the UI.
+//
+// It is now scoped per tenant, capped, and passes every notification through the
+// same silence gates as the live channels.
+async function runNotificationDigest(opts?: { businessId?: string }) {
   const transporter = makeTransporter();
   const smtpUser = process.env.SMTP_USER;
   if (!transporter || !smtpUser) return { sent: 0, skipped: 'no SMTP config' };
 
-  // Only send to users who have ≥3 unread notifications (avoid noise)
-  const snap = await db.collection('notifications').where('isRead', '==', false).get();
-  if (snap.empty) return { sent: 0 };
+  const MIN_UNREAD = 3;              // below this it is noise, not a digest
+  const PER_TENANT_CAP = 2_000;      // newest unread considered per tenant
+  const LOOKBACK_DAYS = 30;          // older than this is stale, not "pending"
+  const since = admin.firestore.Timestamp.fromDate(
+    new Date(Date.now() - LOOKBACK_DAYS * 24 * 60 * 60 * 1000),
+  );
 
-  // Group by userId
+  // Tenant list: one business when asked for, otherwise every active business.
+  const businessIds: string[] = [];
+  if (opts?.businessId) {
+    businessIds.push(opts.businessId);
+  } else {
+    const bizSnap = await db.collection('businesses').get();
+    for (const b of bizSnap.docs) businessIds.push(b.id);
+  }
+
   const byUser = new Map<string, { title: string; message?: string; type?: string }[]>();
-  for (const d of snap.docs) {
-    const n = d.data();
-    if (!n.userId) continue;
-    const existing = byUser.get(n.userId) || [];
-    existing.push({ title: n.title, message: n.message, type: n.type });
-    byUser.set(n.userId, existing);
+  let scanned = 0;
+  let unstamped = 0;
+
+  for (const businessId of businessIds) {
+    // Scoped + bounded + newest-first. Requires the composite index
+    // (businessId, isRead, createdAt DESC) declared in firestore.indexes.json.
+    const snap = await db.collection('notifications')
+      .where('businessId', '==', businessId)
+      .where('isRead', '==', false)
+      .orderBy('createdAt', 'desc')
+      .limit(PER_TENANT_CAP)
+      .get();
+    scanned += snap.size;
+    if (snap.size === PER_TENANT_CAP) {
+      console.warn(`[CRON:notification-digest] tenant ${businessId} hit the ${PER_TENANT_CAP} cap — older unread rows were not considered`);
+    }
+    for (const d of snap.docs) {
+      const n = d.data();
+      if (!n.userId) continue;
+      const createdAt = n.createdAt?.toMillis ? n.createdAt.toMillis() : 0;
+      if (createdAt && createdAt < since.toMillis()) continue;
+      const list = byUser.get(n.userId) || [];
+      list.push({ title: n.title, message: n.message, type: n.type });
+      byUser.set(n.userId, list);
+    }
+  }
+
+  // Notifications written before businessId was stamped are invisible to the scoped
+  // query above. Surfaced rather than silently dropped — `backfill-tenant-keys` is
+  // the repair path.
+  if (!opts?.businessId) {
+    // OLDEST unread first: unstamped rows are by definition the old ones, and
+    // ascending order reuses the (isRead, createdAt ASC) index the retention sweep
+    // already needs — a DESC probe would have required a second composite index.
+    const legacy = await db.collection('notifications')
+      .where('isRead', '==', false)
+      .orderBy('createdAt', 'asc')
+      .limit(1)
+      .get();
+    unstamped = legacy.empty ? 0 : (legacy.docs[0].data()?.businessId ? 0 : 1);
   }
 
   let sent = 0;
+  let skippedPrefs = 0;
   const ops: Promise<any>[] = [];
 
-  for (const [userId, notifs] of byUser) {
-    if (notifs.length < 3) continue;
+  for (const [userId, all] of byUser) {
+    const prefs = await getUserPrefs(userId);
 
-    // Check if digest already sent today
-    const prefsDoc = await db.collection('userPreferences').doc(userId).get();
-    const prefs = prefsDoc.exists ? prefsDoc.data() as any : {};
+    // Respect the email channel toggle. This was missing entirely: turning email
+    // notifications off silenced every live email but not the daily digest.
+    if (prefs?.emailEnabled === false) { skippedPrefs++; continue; }
+
+    // Drop muted categories BEFORE the threshold check, so the count in the email
+    // matches the count in the bell.
+    const notifs = all.filter(n => !isTypeMutedByPrefs(n.type, prefs));
+    if (notifs.length < MIN_UNREAD) continue;
+
+    // Do-Not-Disturb: hold the digest rather than waking someone at 03:00.
+    if (isDndActive(prefs)) { skippedPrefs++; continue; }
+
+    // Already sent in the last 23h?
     if (prefs?.digestSentAt) {
       const last: Date = prefs.digestSentAt?.toDate ? prefs.digestSentAt.toDate() : new Date(prefs.digestSentAt);
       const dayAgo = new Date(Date.now() - 23 * 60 * 60 * 1000);
@@ -1695,7 +1758,7 @@ async function runNotificationDigest() {
 
       const criticalCount = notifs.filter(n => ['task_overdue', 'invoice_overdue', 'goal_overdue'].includes(n.type || '')).length;
       const listHtml = notifs.slice(0, 10).map(n =>
-        `<li style="margin-bottom:6px"><strong>${n.title}</strong>${n.message ? `<br><span style="color:#6b7280;font-size:13px">${n.message}</span>` : ''}</li>`
+        `<li style="margin-bottom:6px"><strong>${escapeHtml(n.title || '')}</strong>${n.message ? `<br><span style="color:#6b7280;font-size:13px">${escapeHtml(n.message)}</span>` : ''}</li>`
       ).join('');
       const moreCount = notifs.length > 10 ? `<p style="color:#6b7280;font-size:13px">... dhe ${notifs.length - 10} njoftime të tjera</p>` : '';
 
@@ -1705,12 +1768,12 @@ async function runNotificationDigest() {
         subject: `📬 Digest i njoftimeve: ${notifs.length} të palexuara${criticalCount > 0 ? ` (${criticalCount} urgjente)` : ''}`,
         html: `
           <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;padding:24px">
-            <h2 style="color:#667eea">📬 Njoftime të Palexuara</h2>
+            <h2 style="color:#12468C">📬 Njoftime të Palexuara</h2>
             <p>Keni <strong>${notifs.length}</strong> njoftime të palexuara${criticalCount > 0 ? `, nga të cilat <strong style="color:#ef4444">${criticalCount} janë urgjente</strong>` : ''}.</p>
             <ul style="padding-left:16px;line-height:1.6">${listHtml}</ul>
             ${moreCount}
-            <a href="${process.env.VITE_APP_URL || 'https://app.fivoo.net'}/app" style="display:inline-block;margin-top:16px;padding:10px 20px;background:#667eea;color:white;border-radius:6px;text-decoration:none">Hap FivoCRM</a>
-            <p style="color:#9ca3af;font-size:12px;margin-top:24px">FivoCRM – Digest ditor automatik</p>
+            <a href="${BASE_URL}/app" style="display:inline-block;margin-top:16px;padding:10px 20px;background:#12468C;color:white;border-radius:6px;text-decoration:none">Hap FivoCRM</a>
+            <p style="color:#9ca3af;font-size:12px;margin-top:24px">FivoCRM – Digest ditor automatik. Mund ta çaktivizoni te Cilësimet → Njoftimet.</p>
           </div>
         `,
       }).then(() => {
@@ -1724,37 +1787,78 @@ async function runNotificationDigest() {
   }
 
   await settleAll(ops, 'notification-digest');
-  return { sent };
+  return { sent, scanned, tenants: businessIds.length, skippedPrefs, unstampedLegacyRows: unstamped };
 }
 
 // ── JOB: cleanup-old-notifications ───────────────────────────────────────────
+// Two sweeps, both paged and time-budgeted:
+//   1. READ notifications older than 60 days — the normal retention rule.
+//   2. ANY notification older than 365 days — an unread one is not a reason to keep
+//      a document forever; without this the collection only ever grows, which is
+//      what made the digest job's full scan progressively more expensive.
+//
+// `where(isRead) + where(createdAt <)` is an equality + range on DIFFERENT fields,
+// so it REQUIRES the composite index (isRead ASC, createdAt ASC) — it is declared in
+// firestore.indexes.json and must be deployed before this job can run at all.
+// Without it the whole job failed with FAILED_PRECONDITION and nothing was ever
+// purged. Pages are `limit()`-ed so a large backlog is drained over several runs
+// instead of blowing the 60s function budget on one unbounded `.get()`.
 async function runCleanupOldNotifications() {
-  const cutoff = new Date();
-  cutoff.setDate(cutoff.getDate() - 60);
-  const cutoffTs = admin.firestore.Timestamp.fromDate(cutoff);
+  const PAGE = 400;
+  const MAX_DELETES = 20_000;   // hard ceiling per invocation
+  const BUDGET_MS = 45_000;     // leave headroom inside the 60s maxDuration
+  const started = Date.now();
 
-  // Only delete read notifications older than 60 days (keep all unread)
-  const snap = await db.collection('notifications')
-    .where('isRead', '==', true)
-    .where('createdAt', '<', cutoffTs)
-    .get();
+  const readCutoff = admin.firestore.Timestamp.fromDate(
+    new Date(Date.now() - 60 * 24 * 60 * 60 * 1000),
+  );
+  const hardCutoff = admin.firestore.Timestamp.fromDate(
+    new Date(Date.now() - 365 * 24 * 60 * 60 * 1000),
+  );
 
-  if (snap.empty) return { deleted: 0 };
+  let deletedRead = 0;
+  let deletedStale = 0;
+  let truncated = false;
 
-  let deleted = 0;
-  const BATCH_SIZE = 400;
-  const docs = snap.docs;
+  const drain = async (
+    build: () => FirebaseFirestore.Query,
+    onDeleted: (n: number) => void,
+  ) => {
+    for (;;) {
+      if (Date.now() - started > BUDGET_MS || deletedRead + deletedStale >= MAX_DELETES) {
+        truncated = true;
+        return;
+      }
+      const snap = await build().limit(PAGE).get();
+      if (snap.empty) return;
+      const batch = db.batch();
+      for (const d of snap.docs) batch.delete(d.ref);
+      await batch.commit();
+      onDeleted(snap.size);
+      if (snap.size < PAGE) return;
+    }
+  };
 
-  for (let i = 0; i < docs.length; i += BATCH_SIZE) {
-    const batch = db.batch();
-    const chunk = docs.slice(i, i + BATCH_SIZE);
-    for (const d of chunk) batch.delete(d.ref);
-    await batch.commit();
-    deleted += chunk.length;
-  }
+  // 1. Read + older than 60 days.
+  await drain(
+    () => db.collection('notifications')
+      .where('isRead', '==', true)
+      .where('createdAt', '<', readCutoff)
+      .orderBy('createdAt', 'asc'),
+    (n) => { deletedRead += n; },
+  );
 
-  console.log(`[CRON:cleanup-old-notifications] fshirë ${deleted} njoftime të vjetra`);
-  return { deleted };
+  // 2. Anything older than a year, read or not (single range → no composite index).
+  await drain(
+    () => db.collection('notifications')
+      .where('createdAt', '<', hardCutoff)
+      .orderBy('createdAt', 'asc'),
+    (n) => { deletedStale += n; },
+  );
+
+  const deleted = deletedRead + deletedStale;
+  console.log(`[CRON:cleanup-old-notifications] fshirë ${deleted} njoftime (${deletedRead} të lexuara >60d, ${deletedStale} >365d)${truncated ? ' — TRUNCATED, do të vazhdojë në run-in tjetër' : ''}`);
+  return { deleted, deletedRead, deletedStale, truncated };
 }
 
 // ── JOB: whatsapp-broadcasts ─────────────────────────────────────────────────
@@ -2855,17 +2959,14 @@ async function runSubscriptionLifecycle(opts?: { dryRun?: boolean }) {
 
   const notifyOwner = async (businessId: string, ownerId: string | null, title: string, message: string) => {
     if (!ownerId || opts?.dryRun) return;
-    await db.collection('notifications').add({
+    await notifyUser({
       userId: ownerId,
       type: 'billing',
       title,
       message,
       actionUrl: '/app/billing',
       actionLabel: 'Hap Abonimin',
-      isRead: false,
       businessId,
-      createdAt: nowTs,
-      updatedAt: nowTs,
     }).catch(() => { /* non-critical */ });
   };
 
@@ -3501,15 +3602,16 @@ async function runLeadCadenceSteps() {
       updatedAt: admin.firestore.Timestamp.now(),
     }));
     if (recipientId) {
-      ops.push(db.collection('notifications').add({
+      ops.push(notifyUser({
         userId: recipientId,
         type: 'lead_cadence_step',
         title: `🔁 Ndjekje: ${lead.name || 'Lead'}`,
         message: `Hapi ${step + 1}/${days.length} i sekuencës — koha për rikontakt.`,
-        isRead: false,
         actionUrl: '/app/crm',
         actionLabel: 'Shiko CRM',
-        createdAt: admin.firestore.Timestamp.now(),
+        businessId: lead.businessId ?? null,
+        teamId: lead.teamId ?? null,
+        email: false,
       }));
     }
     const nextStep = step + 1;

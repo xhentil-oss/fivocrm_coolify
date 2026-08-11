@@ -1,22 +1,62 @@
 import { useEffect, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
-import { doc, setDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
+/**
+ * Push registration for native (Capacitor) and web (Firebase Messaging).
+ *
+ * Tokens are stored PER DEVICE at `userPushTokens/{uid}/tokens/{deviceKey}`.
+ * They used to live in a single field on `userPushTokens/{uid}`, which meant a user
+ * had exactly one push destination: registering on the desktop overwrote the phone's
+ * token and vice versa, so only the most recently opened device ever rang. Worse, the
+ * token survived logout — so if someone else signed in on that device, the previous
+ * user's notifications kept arriving there. `clearPushToken()` (called from logout)
+ * now removes this device's entry.
+ */
+
+// Deterministic per-token document id. The raw FCM token cannot be a document id
+// (length + reserved patterns), so we combine a hash of the whole token with its
+// sanitised tail — stable across reloads, so re-registering updates the same row
+// instead of accumulating a new one every session.
+function deviceKeyFor(token: string): string {
+  let h = 0x811c9dc5; // FNV-1a
+  for (let i = 0; i < token.length; i++) {
+    h ^= token.charCodeAt(i);
+    h = Math.imul(h, 0x01000193) >>> 0;
+  }
+  return `${h.toString(36)}_${token.slice(-32).replace(/[^A-Za-z0-9_-]/g, '')}`;
+}
+
+// Remembered so logout can delete exactly the entry this device created.
+const LAST_TOKEN_KEY = 'fivocrm_push_device_key';
+
 async function saveToken(userId: string, token: string, platform: string) {
+  const key = deviceKeyFor(token);
+  try { localStorage.setItem(LAST_TOKEN_KEY, key); } catch { /* private mode */ }
   await setDoc(
-    doc(db, 'userPushTokens', userId),
+    doc(db, 'userPushTokens', userId, 'tokens', key),
     { token, platform, updatedAt: serverTimestamp() },
-    { merge: true }
+    { merge: true },
   );
 }
 
 /**
- * Registers for push notifications on both native (Android/iOS via Capacitor)
- * and web (Firebase Messaging). Saves the FCM token to Firestore so cron jobs
- * can look it up for push delivery.
+ * Remove THIS device's push token. Call before signing out, otherwise the device
+ * keeps receiving the previous user's notifications after someone else logs in.
  */
+export async function clearPushToken(userId?: string | null): Promise<void> {
+  if (!userId) return;
+  let key: string | null = null;
+  try { key = localStorage.getItem(LAST_TOKEN_KEY); } catch { /* noop */ }
+  if (!key) return;
+  try {
+    await deleteDoc(doc(db, 'userPushTokens', userId, 'tokens', key));
+  } catch { /* best-effort — a stale token is dropped server-side on first failure */ }
+  try { localStorage.removeItem(LAST_TOKEN_KEY); } catch { /* noop */ }
+}
+
 export function usePushNotifications(userId?: string) {
   const userIdRef = useRef(userId);
   userIdRef.current = userId;
@@ -90,22 +130,12 @@ export function usePushNotifications(userId?: string) {
           return;
         }
 
-        // Register service worker for background messages
+        // The service worker is generated at build time WITH the Firebase config
+        // baked in (scripts/generate-sw-config.mjs), so it can show a background
+        // notification on a cold start. It previously waited for a postMessage from
+        // the page, which never arrives when the app is closed — exactly when a
+        // background push matters — so those notifications were simply dropped.
         const swReg = await navigator.serviceWorker.register('/firebase-messaging-sw.js');
-
-        // Inject Firebase config into the SW (it can't access import.meta.env)
-        const swTarget = swReg.installing || swReg.waiting || swReg.active;
-        if (swTarget) {
-          const firebaseConfig = {
-            apiKey:            import.meta.env.VITE_FIREBASE_API_KEY as string,
-            authDomain:        import.meta.env.VITE_FIREBASE_AUTH_DOMAIN as string,
-            projectId:         import.meta.env.VITE_FIREBASE_PROJECT_ID as string,
-            storageBucket:     import.meta.env.VITE_FIREBASE_STORAGE_BUCKET as string,
-            messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID as string,
-            appId:             import.meta.env.VITE_FIREBASE_APP_ID as string,
-          };
-          swTarget.postMessage({ type: 'FIREBASE_CONFIG', config: firebaseConfig });
-        }
 
         const token = await getToken(messaging, { vapidKey, serviceWorkerRegistration: swReg });
         if (token && mounted && userIdRef.current) {

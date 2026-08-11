@@ -480,7 +480,10 @@ const TasksView: React.FC = () => {
         );
       }
     }
-    await Promise.all(notificationPromises);
+    // allSettled, not all: the task is already created by this point. A rejected
+    // notification used to reject this whole handler, so the dialog stayed open on a
+    // task that existed — and the user created it a second time.
+    await Promise.allSettled(notificationPromises);
 
     setDateConflict(null);
     setIsCreateDialogOpen(false);

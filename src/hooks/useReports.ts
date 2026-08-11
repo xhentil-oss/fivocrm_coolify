@@ -240,6 +240,10 @@ export function useReports(options: UseReportsOptions = {}) {
         type: 'report',
         title,
         message,
+        // `isRead` was omitted here and nowhere else. An UNDEFINED value matches
+        // neither `isRead == false` (the digest query) nor `isRead == true` (the
+        // retention sweep), so these rows sat outside both jobs forever.
+        isRead: false,
         actionUrl: reportDeepLink(reportId, commentId),
         actionLabel: commentId ? 'Hap komentin' : 'Hap raportin',
       } as any);

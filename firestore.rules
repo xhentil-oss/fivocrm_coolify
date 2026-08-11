@@ -1607,8 +1607,16 @@ service cloud.firestore {
     }
 
     // ── userPushTokens: FCM push tokens per user ──
+    // The parent doc is the LEGACY single-token record (one device per user, which is
+    // why registering on a second device silently killed push on the first). Devices
+    // now each get their own doc in the `tokens` subcollection; the parent is kept
+    // readable/writable so old clients keep working until they re-register.
     match /userPushTokens/{userId} {
       allow read, write: if isAuth() && request.auth.uid == userId;
+
+      match /tokens/{deviceKey} {
+        allow read, write: if isAuth() && request.auth.uid == userId;
+      }
     }
   }
 }

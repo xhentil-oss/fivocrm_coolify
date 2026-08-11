@@ -799,3 +799,58 @@ test('35e. an owner of ANOTHER team cannot touch this team member', async () => 
     monthlySalary: 1,
   }));
 });
+
+// ── Notifications & push tokens ───────────────────────────────────────────────
+
+test('36a. a push token belongs to exactly one user', async () => {
+  // Tokens moved from a single doc `userPushTokens/{uid}` to a per-device
+  // subcollection so a phone and a laptop stop overwriting each other. The
+  // subcollection must inherit the same owner-only rule as the parent — a device
+  // token is enough to receive somebody else's notifications.
+  const alice = testEnv.authenticatedContext('alice', { email: 'a@mine.com', bid: MY_BIZ }).firestore();
+  const mallory = testEnv.authenticatedContext('mallory', { email: 'm@victim.com', bid: VICTIM_BIZ }).firestore();
+
+  await assertSucceeds(setDoc(doc(alice, 'userPushTokens', 'alice', 'tokens', 'dev1'), {
+    token: 'fcm-token-1', platform: 'web',
+  }));
+  // Same user, second device — both coexist.
+  await assertSucceeds(setDoc(doc(alice, 'userPushTokens', 'alice', 'tokens', 'dev2'), {
+    token: 'fcm-token-2', platform: 'android',
+  }));
+  // Logout removes only this device.
+  await assertSucceeds(deleteDoc(doc(alice, 'userPushTokens', 'alice', 'tokens', 'dev2')));
+
+  // Nobody else may read or write them.
+  await assertFails(getDoc(doc(mallory, 'userPushTokens', 'alice', 'tokens', 'dev1')));
+  await assertFails(setDoc(doc(mallory, 'userPushTokens', 'alice', 'tokens', 'evil'), {
+    token: 'attacker-device',
+  }));
+  await assertFails(deleteDoc(doc(mallory, 'userPushTokens', 'alice', 'tokens', 'dev1')));
+});
+
+test('36b. notifications stay readable only by their addressee', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'notifications', 'notifAlice'), {
+      userId: 'alice', type: 'task_assigned', title: 'Detyrë', isRead: false, businessId: MY_BIZ,
+    });
+  });
+  const alice = testEnv.authenticatedContext('alice', { email: 'a@mine.com', bid: MY_BIZ }).firestore();
+  const mallory = testEnv.authenticatedContext('mallory', { email: 'm@victim.com', bid: VICTIM_BIZ }).firestore();
+
+  await assertSucceeds(getDoc(doc(alice, 'notifications', 'notifAlice')));
+  await assertSucceeds(updateDoc(doc(alice, 'notifications', 'notifAlice'), { isRead: true }));
+  // A tenant stamp does not make it readable by that tenant — only the addressee.
+  await assertFails(getDoc(doc(mallory, 'notifications', 'notifAlice')));
+  await assertFails(updateDoc(doc(mallory, 'notifications', 'notifAlice'), { isRead: true }));
+  await assertFails(deleteDoc(doc(mallory, 'notifications', 'notifAlice')));
+});
+
+test('36c. notification preferences are private to their owner', async () => {
+  const alice = testEnv.authenticatedContext('alice', { email: 'a@mine.com', bid: MY_BIZ }).firestore();
+  const mallory = testEnv.authenticatedContext('mallory', { email: 'm@victim.com', bid: VICTIM_BIZ }).firestore();
+  await assertSucceeds(setDoc(doc(alice, 'userPreferences', 'alice'), {
+    dndEnabled: true, dndStart: '22:00', dndEnd: '08:00', dndTimeZone: 'Europe/Tirane',
+  }));
+  await assertFails(getDoc(doc(mallory, 'userPreferences', 'alice')));
+  await assertFails(setDoc(doc(mallory, 'userPreferences', 'alice'), { emailEnabled: false }));
+});

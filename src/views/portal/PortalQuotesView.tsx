@@ -8,7 +8,7 @@ import { Input } from '../../components/ui/input';
 import { FileText, Calculator, CheckCircle2, XCircle, ChevronDown, ChevronUp, Search, Clock } from 'lucide-react';
 import { CardGridSkeleton } from './PortalSkeletons';
 import { useToast } from '../../hooks/use-toast';
-import type { Quote, Customer, Lead, Notification } from '../../types';
+import type { Quote, Customer, Lead } from '../../types';
 import { notifyStaff } from '../../lib/notifyStaff';
 
 const statusMap: Record<string, { label: string; class: string }> = {
@@ -40,7 +40,9 @@ const PortalQuotesView: React.FC = () => {
   const { customerId } = useClientPortal();
   const { toast } = useToast();
   const quoteMutation = useMutation<Quote>('quotes');
-  const notificationMutation = useMutation<Notification>('notifications');
+  // No notifications mutation here on purpose: a portal client never writes into
+  // `notifications` directly (the Firestore rules deny it). Staff are notified
+  // server-side via notifyStaff() → POST /api/notify-staff.
   const [respondingId, setRespondingId] = useState<string | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [search, setSearch] = useState('');

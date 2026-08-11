@@ -221,6 +221,26 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   `projectPnl.projectDate()` falls back to `updatedAt`, so bumping it dragged
   un-completed one-time projects into the current month's P&L.
 
+### Project archive (the reversible alternative to delete)
+
+- **Archiving never writes `status: 'Archived'` by hand.** All of it lives in
+  `src/lib/projectArchive.ts` (`archiveProjectPatch` / `restoreProjectPatch`,
+  unit-tested) because `Archived` is a TERMINAL billing status: a hand-archived
+  retainer keeps `isRecurring: true` until the cron notices and kills the series,
+  so restoring it later gives back a retainer that silently never bills again.
+  Archiving therefore stops the cycle itself (`recurringBillingStoppedReason:
+  'archived'`) and records `wasRecurringBeforeArchive` so restore can switch it
+  back on.
+- `statusBeforeArchive` is what makes restore honest — without it every restored
+  project flattens to `Active`. Nothing is ever deleted: `project.status` is the
+  only answer to "is this archived", and `archivedAt` reads as "last archived at".
+- **The archive is a separate shelf, not a status you scroll past.** ProjectsView
+  shows live projects OR the archive (toggle **Arkiva**, or the `Arkivuar` status
+  filter), never a mix, and archived projects are out of the portfolio KPIs so
+  their leftover overdue tasks stop colouring "në rrezik" red.
+- Both entry points (the row button / detail-page menu AND the edit dialog's status
+  select) go through the same two patches — that is the point of the module.
+
 ### Recurring EXPENSES (same period-key law as project billing)
 
 - **The idempotency token is the period key, never a timestamp.**
@@ -335,6 +355,40 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   unsigned simulator build, `testflight` = signed upload). Full runbook, Apple
   account steps and the App Store IAP/`Sign in with Apple` decisions:
   `workspace/IOS_BUILD.md`.
+
+### Notifications (bell + push + email)
+
+- **A notification type is declared ONCE**, in `src/lib/notificationTypes.ts`
+  (category, priority, group label). `api/_notificationTypes.ts` is the server
+  mirror — `src/lib/notificationTypes.test.ts` fails the run if the two drift, and
+  also scans the codebase for any `type:` literal that is not registered. An
+  unregistered type gets no icon, hides behind every category chip and can never be
+  muted; `NotificationType` therefore no longer ends in `| string`.
+- **Two write paths, one delivery path.**
+  Browser → `useMutation('notifications').create` (the choke point) → the document
+  + `POST /api/send-notification-email`.
+  Server (cron, webhooks, `/api/notify-staff`, report jobs) → **`notifyUser()` in
+  `api/_push.ts`**, which writes the document AND pushes AND emails.
+  Never call `db.collection('notifications').add()` directly — that produces a red
+  dot nobody sees until they happen to open the app.
+- **Gates are shared and evaluated in this order**: `pushEnabled`/`emailEnabled` per
+  channel, then Do-Not-Disturb, then category mute. An UNKNOWN type is never muted
+  (fail-open) on both sides.
+- **DND is wall-clock time in the USER's zone.** The client stamps `dndTimeZone` +
+  `dndUtcOffsetMinutes` onto `userPreferences`; the server reconstructs local time
+  from them. Reading the hours as UTC shifted the window by the whole offset.
+- **Push tokens are per device**: `userPushTokens/{uid}/tokens/{deviceKey}`. The
+  parent doc is the legacy single-token record, still read as a fallback. Logout
+  MUST call `clearPushToken()` or the device keeps receiving the previous user's
+  notifications.
+- **Stamp `businessId`** on every notification. `notifications` is in
+  `TENANT_DATA_COLLECTIONS`, so GDPR export/delete query it by that field.
+- **A failed notification must never fail the action that raised it.** Use
+  `Promise.allSettled` / per-call `.catch` — the task, comment or report is already
+  saved by then, and surfacing an error made users submit duplicates.
+- Cron reads over `notifications` must be scoped and capped (`businessId` +
+  `limit`). Index requirements live in `firestore.indexes.json`; the retention sweep
+  needs `(isRead, createdAt)` and without it nothing was ever purged.
 
 ### Roles & Permissions
 - Roles: `Admin`, `Manager`, `Sales`, `SalesAgent`, `Member`, `Viewer`

@@ -44,9 +44,13 @@ const PortalLayout: React.FC = () => {
   const [mobileOpen, setMobileOpen] = useState(false);
 
   // ── Unread staff messages badge ──
+  // Bounded: this only drives an unread badge. Unlimited, it streamed the client's
+  // whole notification history on every portal page load.
   const { data: portalNotifs } = useCollection<any>('notifications', {
     skip: !user,
     where: user ? [{ field: 'userId', operator: '==', value: user.uid }] : undefined,
+    orderBy: { field: 'createdAt', direction: 'desc' },
+    limit: 50,
     skipTeamFilter: true,
   });
   const unreadStaffMsgs = useMemo(

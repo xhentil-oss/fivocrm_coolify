@@ -383,6 +383,17 @@ export interface Project {
   zeroBudgetNoticePeriodKey?: string;
   /** Debounce for the "billing settings contradict each other" warning. */
   billingConfigNoticeKey?: string;
+  // ── Archive (see src/lib/projectArchive.ts) ──
+  /** When the project was last put in the archive. `status === 'Archived'` — not
+   *  this field — is what "is archived" means. */
+  archivedAt?: Date;
+  archivedByUserId?: string | null;
+  /** The status the project had before archiving, so restore puts it back where
+   *  it was instead of flattening everything to 'Active'. */
+  statusBeforeArchive?: Project['status'];
+  /** It was a live retainer when archived — restore switches billing back on.
+   *  Archiving always stops billing ('Archived' is a terminal billing status). */
+  wasRecurringBeforeArchive?: boolean;
   // ── Written by the project-spend-rollup cron (never by the UI) ──
   laborCost?: number;
   billableValue?: number;
@@ -1664,40 +1675,39 @@ export interface UserProfile {
   updatedAt: Date;
 }
 
-export type NotificationType =
-  | 'task_assigned' | 'task_overdue' | 'task_due_soon' | 'task_mention' | 'task_collaborator_added'
-  | 'project_completed' | 'project_created' | 'project_open_reminder' | 'project_cycle_reset'
-  | 'invoice_paid' | 'invoice_overdue' | 'invoice_created' | 'invoice_reminder_sent'
-  | 'invoice_reminder1_sent' | 'invoice_reminder2_sent' | 'auto_invoice_created'
-  | 'lead_created' | 'lead_assigned' | 'lead_converted' | 'lead_follow_up'
-  | 'quote_accepted' | 'quote_rejected' | 'quote_sent' | 'contract_sent' | 'invoice_sent'
-  | 'goal_achieved' | 'goal_assigned' | 'goal_overdue'
-  | 'client_message' | 'staff_message' | 'project_comment' | 'client_request'
-  | 'recurring_task_created' | 'recurring_expense_created'
-  | 'expense_submitted'
-  | 'guest_project_invited' | 'guest_task_new' | 'guest_task_update'
-  | 'project_status_changed'
-  | 'blocker_reported'
-  | string; // fallback for future types
+// The union is DERIVED from the registry in src/lib/notificationTypes.ts — it used
+// to end in `| string`, which made every typo and every unregistered type compile
+// cleanly. That is how eleven live types ended up with no icon, no category and no
+// way to be muted. Adding a type now means adding it to the registry, full stop.
+export type { NotificationType } from '../lib/notificationTypes';
+import type { NotificationType as _NotificationType } from '../lib/notificationTypes';
 
 export interface Notification {
   id: string;
   userId: string;
-  type: NotificationType;
+  /** A value outside the registry is a bug — see src/lib/notificationTypes.ts. */
+  type: _NotificationType;
   title: string;
   message?: string;
   isRead?: boolean;
   teamId?: string;
+  /** Tenant stamp. Required for GDPR export/delete to reach the document. */
+  businessId?: string;
   actionType?: 'link' | 'approve' | 'view';
   actionUrl?: string;
   actionLabel?: string;
+  /** Chat channel id (not a path) — the bell routes it to /app/chat. */
   linkTo?: string;
+  /** Sender avatar shown inside the push notification. */
+  imageUrl?: string;
+  projectId?: string;
+  customerId?: string;
   createdAt: Date;
 }
 
 export interface Activity {
   id: string;
-  type: 'invoice_created' | 'invoice_paid' | 'lead_created' | 'lead_converted' | 'task_completed' | 'project_created' | 'customer_created' | 'expense_added' | 'request_created' | 'meeting' | 'call' | 'email_sent' | 'note';
+  type: 'invoice_created' | 'invoice_paid' | 'lead_created' | 'lead_converted' | 'task_completed' | 'project_created' | 'project_updated' | 'project_deleted' | 'project_archived' | 'project_restored' | 'customer_created' | 'expense_added' | 'request_created' | 'meeting' | 'call' | 'email_sent' | 'note';
   title: string;
   description?: string;
   teamId?: string;

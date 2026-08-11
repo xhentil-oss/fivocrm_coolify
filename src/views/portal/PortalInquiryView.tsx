@@ -13,7 +13,7 @@ import { ArrowLeft, CheckCircle2, ClipboardList, Info, TrendingUp, Loader2, Edit
 import { useToast } from '../../hooks/use-toast';
 import ServiceQuestionnaireForm from '../../components/ServiceQuestionnaireForm';
 import { getInquiryCompleteness } from '../../lib/inquiryBrief';
-import type { ServiceInquiry, Notification } from '../../types';
+import type { ServiceInquiry } from '../../types';
 import { notifyStaff } from '../../lib/notifyStaff';
 
 /**
@@ -46,7 +46,6 @@ const PortalInquiryView: React.FC = () => {
   const [editing, setEditing] = React.useState(false);
 
   const inquiryMutation = useMutation<ServiceInquiry>('serviceInquiries');
-  const notificationMutation = useMutation<Notification>('notifications');
   // The portal never reads `teamMembers` (cross-tenant staff data). The follow-up
   // task + notifications are created server-side by /api/notify-staff, which assigns
   // them to sales staff of THIS client's business. The teamId for the lead comes from

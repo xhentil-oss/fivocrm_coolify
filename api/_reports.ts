@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import admin, { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 import { writeAudit } from './_audit.js';
 import { getTeamConfig } from './_tenantConfig.js';
+import { notifyUser } from './_push.js';
 import nodemailer from 'nodemailer';
 
 /**
@@ -358,17 +359,16 @@ async function notifyStaffOfReport(
       }
     } catch { /* best effort */ }
   }
-  const now = admin.firestore.Timestamp.now();
-  await Promise.allSettled([...targets].map(uid => db.collection('notifications').add({
+  // Doc + push + email. A client approving or rejecting a report is exactly the
+  // kind of event staff should not have to discover by opening the app.
+  await Promise.allSettled([...targets].map(uid => notifyUser({
     userId: uid,
     type: 'report',
     title,
     message,
     actionUrl: `/app/reports/${reportId}`,
     actionLabel: 'Hap raportin',
-    isRead: false,
     businessId,
-    createdAt: now,
   })));
 }
 
