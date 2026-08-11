@@ -1847,7 +1847,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
   const [selectedProjectId, setSelectedProjectId] = useState<string>(editInvoice?.projectId || '');
   const [customerSearchOpen, setCustomerSearchOpen] = useState(false);
   const [customerSearch, setCustomerSearch] = useState('');
-  const [lineItems, setLineItems] = useState<Array<{ serviceId: string; quantity: number }>>([]);
+  // A line is either a catalogue service (serviceId) or a free-text line carrying
+  // its own description + unitPrice (invoices raised from a task or a project
+  // budget). Both must survive an edit: the form used to keep only serviceId, so
+  // opening such an invoice and saving wiped its lines and zeroed the total.
+  const [lineItems, setLineItems] = useState<Array<{ serviceId: string; quantity: number; description?: string; unitPrice?: number }>>([]);
   const [tax, setTax] = useState<number>((editInvoice as any)?.tax || 0);
   const [discount, setDiscount] = useState<number>((editInvoice as any)?.discount || 0);
   const [discountType, setDiscountType] = useState<'fixed' | 'percent'>((editInvoice as any)?.discountType || 'fixed');
@@ -1978,6 +1982,8 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       setLineItems(existingItems.map(item => ({
         serviceId: item.serviceId || '',
         quantity: item.quantity,
+        description: (item as any).description || undefined,
+        unitPrice: typeof item.unitPrice === 'number' ? item.unitPrice : undefined,
       })));
       setLoadedExistingItems(true);
     }
@@ -1993,7 +1999,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     onDirtyChange?.(true);
   };
 
-  const updateLineItem = (index: number, field: 'serviceId' | 'quantity', value: string | number) => {
+  const updateLineItem = (index: number, field: 'serviceId' | 'quantity' | 'description' | 'unitPrice', value: string | number) => {
     const updated = [...lineItems];
     updated[index] = { ...updated[index], [field]: value };
     setLineItems(updated);
@@ -2013,7 +2019,10 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
   const calculateSubtotal = () => {
     return lineItems.reduce((sum, item) => {
       const service = services?.find(s => s.id === item.serviceId);
-      return sum + toInvoiceCurrency(service?.price || 0, service?.currency) * item.quantity;
+      if (service) return sum + toInvoiceCurrency(service.price, service.currency) * item.quantity;
+      // Free-text line: its own price is the source of truth (a task/budget line
+      // has no catalogue service, and returning 0 here zeroed the invoice).
+      return sum + (Number(item.unitPrice) || 0) * item.quantity;
     }, 0);
   };
 
@@ -2122,6 +2131,16 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
             unitPrice: toInvoiceCurrency(service.price, service.currency),
             totalPrice: toInvoiceCurrency(service.price * item.quantity, service.currency),
           });
+        } else if (Number(item.unitPrice) > 0 || item.description) {
+          // Free-text line (task/budget invoice): keep it instead of dropping it.
+          await invoiceItemMutation.create({
+            invoiceId: editInvoice!.id,
+            customerId: editInvoice!.customerId,
+            description: item.description || '',
+            quantity: item.quantity,
+            unitPrice: Number(item.unitPrice) || 0,
+            totalPrice: (Number(item.unitPrice) || 0) * item.quantity,
+          } as any);
         }
       }
     } else {
@@ -2178,6 +2197,15 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
             unitPrice: toInvoiceCurrency(service.price, service.currency),
             totalPrice: toInvoiceCurrency(service.price * item.quantity, service.currency),
           });
+        } else if (Number(item.unitPrice) > 0 || item.description) {
+          await invoiceItemMutation.create({
+            invoiceId: invoice.id,
+            customerId: selectedCustomerId,
+            description: item.description || '',
+            quantity: item.quantity,
+            unitPrice: Number(item.unitPrice) || 0,
+            totalPrice: (Number(item.unitPrice) || 0) * item.quantity,
+          } as any);
         }
       }
     }
@@ -2334,26 +2362,49 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
           {lineItems.map((item, index) => (
             <div key={index} className="flex flex-col sm:flex-row gap-2 sm:items-end p-2 sm:p-0 bg-muted/30 sm:bg-transparent rounded-lg sm:rounded-none">
               <div className="flex-1">
-                <Select
-                  value={item.serviceId || "placeholder"}
-                  onValueChange={(value) => {
-                    if (value !== "placeholder") {
-                      updateLineItem(index, 'serviceId', value);
-                    }
-                  }}
-                >
-                  <SelectTrigger>
-                    <SelectValue placeholder="Zgjidh shërbimin" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="placeholder" disabled>Zgjidh shërbimin</SelectItem>
-                    {services?.map(service => (
-                      <SelectItem key={service.id} value={service.id}>
-                        {service.title || service.name} - {service.price} {(service.currency || 'ALL') === 'EUR' ? '€' : 'L'}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                {/* A free-text line (raised from a task or a project budget) has no
+                    catalogue service: edit its description + price directly, so it
+                    survives an edit instead of being replaced by an empty select. */}
+                {!item.serviceId && (item.description !== undefined || Number(item.unitPrice) > 0) ? (
+                  <div className="flex gap-2">
+                    <Input
+                      value={item.description || ''}
+                      onChange={(e) => updateLineItem(index, 'description', e.target.value)}
+                      placeholder="Përshkrimi"
+                      className="flex-1"
+                    />
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      value={item.unitPrice ?? ''}
+                      onChange={(e) => updateLineItem(index, 'unitPrice', parseFloat(e.target.value) || 0)}
+                      placeholder="Çmimi"
+                      className="w-24 sm:w-32"
+                    />
+                  </div>
+                ) : (
+                  <Select
+                    value={item.serviceId || "placeholder"}
+                    onValueChange={(value) => {
+                      if (value !== "placeholder") {
+                        updateLineItem(index, 'serviceId', value);
+                      }
+                    }}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Zgjidh shërbimin" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="placeholder" disabled>Zgjidh shërbimin</SelectItem>
+                      {services?.map(service => (
+                        <SelectItem key={service.id} value={service.id}>
+                          {service.title || service.name} - {service.price} {(service.currency || 'ALL') === 'EUR' ? '€' : 'L'}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-20 sm:w-24">
@@ -2367,7 +2418,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
                   />
                 </div>
                 <div className="w-20 sm:w-24 text-right text-sm font-medium">
-                  {(() => { const svc = services?.find(s => s.id === item.serviceId); return toInvoiceCurrency((svc?.price || 0) * item.quantity, svc?.currency).toFixed(2); })()} {currency === 'EUR' ? '€' : 'L'}
+                  {(() => {
+                    const svc = services?.find(s => s.id === item.serviceId);
+                    if (svc) return toInvoiceCurrency(svc.price * item.quantity, svc.currency).toFixed(2);
+                    return ((Number(item.unitPrice) || 0) * item.quantity).toFixed(2);
+                  })()} {currency === 'EUR' ? '€' : 'L'}
                 </div>
                 <Button type="button" variant="outline" size="sm" onClick={() => removeLineItem(index)}>
                   <Trash2 className="w-4 h-4" />
