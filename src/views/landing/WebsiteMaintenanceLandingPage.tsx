@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Shield, ArrowRight } from 'lucide-react';
-
-type Lang = 'sq' | 'en' | 'it';
+import { useLandingLang, type Lang } from './LangSwitcher';
 
 type Pkg = {
   id: string;
@@ -342,7 +341,7 @@ const COPY: Record<Lang, Copy> = { sq: SQ, en: EN, it: IT };
 const ACCENTS = ['from-slate-500 to-gray-600', 'from-blue-600 to-indigo-600', 'from-violet-600 to-purple-600'];
 
 export default function WebsiteMaintenanceLandingPage() {
-  const [lang, setLang] = useState<Lang>('sq');
+  const [lang, setLang] = useLandingLang();
   const t = COPY[lang];
   const [selected, setSelected] = useState<Pkg | null>(null);
   const [formData, setFormData] = useState({ name: '', email: '', phone: '', website: '', message: '' });

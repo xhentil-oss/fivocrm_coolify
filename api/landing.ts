@@ -77,9 +77,28 @@ async function resolveLandingTenant(): Promise<{ teamId: string | null; business
   return { teamId, businessId: resolved };
 }
 
+/**
+ * GET /api/landing?geo=1 → { country: 'IT' }
+ *
+ * The landing pages auto-pick their language. Browser language and time zone are
+ * the fast signals, but neither follows the actual connection: a visitor on a VPN
+ * (or an Albanian phone used in Milan) keeps reporting the old locale. Only the
+ * request IP knows where the visitor really is, and Vercel already resolves it
+ * into `x-vercel-ip-country` at the edge — no third-party geo service, no IP is
+ * ever stored, and nothing here touches Firestore.
+ */
+function handleGeo(req: VercelRequest, res: VercelResponse) {
+  const raw = req.headers['x-vercel-ip-country'];
+  const country = (Array.isArray(raw) ? raw[0] : raw || '').toUpperCase().slice(0, 2);
+  // Per-visitor answer — never let a CDN hand one visitor's country to another.
+  res.setHeader('Cache-Control', 'no-store, private');
+  return res.status(200).json({ country: /^[A-Z]{2}$/.test(country) ? country : null });
+}
+
 // ── Handler ──────────────────────────────────────────────────────────
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   try {
+    if (req.method === 'GET' && req.query.geo !== undefined) return handleGeo(req, res);
     if (req.method === 'GET') return await handleGetServices(req, res);
     if (req.method === 'POST') return await handlePostInquiry(req, res);
     return res.status(405).json({ error: 'Method not allowed' });

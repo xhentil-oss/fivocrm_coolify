@@ -6,7 +6,7 @@ import {
   Sparkles, TrendingUp, Zap, Shield, BarChart3, Globe,
   Video, Instagram, Search, MessageSquare, X, Play,
 } from 'lucide-react';
-import { LangSwitcher, type Lang } from './LangSwitcher';
+import { LangSwitcher, useLandingLang, type Lang } from './LangSwitcher';
 import LandingMobileMenu from './LandingMobileMenu';
 
 function useInView(threshold = 0.15) {
@@ -255,7 +255,7 @@ const IT: Copy = {
 const COPY: Record<Lang, Copy> = { sq: SQ, en: EN, it: IT };
 
 const EducationLandingPage: React.FC = () => {
-  const [lang, setLang] = useState<Lang>('sq');
+  const [lang, setLang] = useLandingLang();
   const t = COPY[lang];
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [selectedPkg, setSelectedPkg] = useState<string>('');

@@ -6,6 +6,7 @@ import {
   Gauge, Search,
 } from 'lucide-react';
 import LandingMobileMenu from './LandingMobileMenu';
+import { LangSwitcher, useLandingLang, type Lang } from './LangSwitcher';
 
 /* ─── scroll-in animation ─── */
 function useInView(threshold = 0.15) {
@@ -33,8 +34,6 @@ function FadeIn({ children, className = '', delay = 0 }: { children: React.React
     </div>
   );
 }
-
-type Lang = 'sq' | 'en' | 'it';
 
 interface Pkg {
   id: string;
@@ -76,21 +75,21 @@ interface Copy {
 /* ─────────────────────────── ALBANIAN ─────────────────────────── */
 const SQ: Copy = {
   langName: 'Shqip',
-  nav: { results: 'Pse ne', process: 'Procesi', packages: 'Paketat', maintenance: 'Mirëmbajtje', faq: 'FAQ', login: 'Hyr', cta: 'Merr Ofertën' },
+  nav: { results: 'Pse ne', process: 'Procesi', packages: 'Paketat', maintenance: 'Mirëmbajtje', faq: 'FAQ', login: 'Hyr', cta: 'Merrni Ofertën' },
   hero: {
     badge: '120+ faqe interneti të dorëzuara',
     h1a: 'Faqja juaj e re —', h1b: 'profesionale, e shpejtë', h1c: 'dhe që sjell klientë.',
-    sub: 'Dizajn modern, shumëgjuhësh dhe i optimizuar për Google. Ndërtojmë faqe që nuk janë thjesht të bukura — janë makina shitjeje.',
-    ctaPrimary: 'Shiko Paketat', ctaSecondary: 'Konsultim Falas',
+    sub: 'Dizajn modern, strukturë shumëgjuhëshe dhe optimizim për Google. Ndërtojmë faqe që nuk janë thjesht të bukura — janë makina shitjeje.',
+    ctaPrimary: 'Shikoni Paketat', ctaSecondary: 'Konsultim Falas',
     t1: 'Pa kontratë afatgjatë', t2: 'Dorëzim brenda afatit', t3: 'Anglisht · Italisht · Shqip',
   },
   pains: {
-    kicker: 'A e njeh këtë situatë?',
-    title: 'Një faqe e dobët po të kushton klientë',
+    kicker: 'A ju tingëllon e njohur?',
+    title: 'Një faqe e dobët po ju kushton klientë',
     items: [
-      { title: 'Klientët largohen për 3 sekonda', desc: 'Faqe e ngadaltë ose e vjetëruar = besim i humbur dhe klientë që ikin te konkurrenti.' },
-      { title: 'Je i padukshëm në Google', desc: 'Pa SEO dhe strukturë të saktë, klientët nuk të gjejnë dot kur të kërkojnë.' },
-      { title: 'Nuk flet gjuhën e klientit', desc: 'Tregu ndërkombëtar kërkon faqe shumëgjuhëshe. Një faqe vetëm në një gjuhë mbyll dyer.' },
+      { title: 'Klientët largohen brenda 3 sekondave', desc: 'Faqe e ngadaltë ose e vjetëruar = besim i humbur dhe klientë që ikin te konkurrenti.' },
+      { title: 'Nuk dukeni në Google', desc: 'Pa SEO dhe strukturë të saktë, klientët nuk ju gjejnë dot kur kërkojnë.' },
+      { title: 'Nuk flisni gjuhën e klientit', desc: 'Tregu ndërkombëtar kërkon faqe shumëgjuhëshe. Një faqe vetëm në një gjuhë mbyll dyer.' },
     ],
     bridge: 'Zgjidhja? Një faqe e ndërtuar siç duhet — nga e para.',
   },
@@ -101,7 +100,7 @@ const SQ: Copy = {
       { metric: '120+', label: 'Faqe të dorëzuara' },
       { metric: '<2s', label: 'Kohë ngarkimi' },
       { metric: '3', label: 'Gjuhë: EN · IT · SQ' },
-      { metric: '98%', label: 'Klientë të kthyer' },
+      { metric: '98%', label: 'Klientë që kthehen' },
     ],
   },
   process: {
@@ -115,48 +114,48 @@ const SQ: Copy = {
   },
   packages: {
     kicker: 'Paketat', title: 'Zgjidh paketën që i përshtatet biznesit', sub: 'Çmim një herë — pa kosto mujore të fshehura. TVSH nuk përfshihet.',
-    oneTime: 'një herë', choose: 'Zgjidh Këtë Paket', chosen: '✓ Zgjedhur', note: 'Të gjitha paketat: dizajn responsive, hosting, dhe trajnim bazë për përdorim. Çmimet në Euro (€).',
+    oneTime: 'një herë', choose: 'Zgjidhni Këtë Paketë', chosen: '✓ Zgjedhur', note: 'Të gjitha paketat: dizajn responsive, hosting dhe trajnim bazë për përdorim. Çmimet në Euro (€).',
     included: 'Përfshihet', notIncluded: 'Nuk përfshihet',
     list: [
       {
-        id: 'basic', name: 'Bazike', tagline: 'Prania jote e parë profesionale online', price: 550,
+        id: 'basic', name: 'Bazike', tagline: 'Prania juaj e parë profesionale online', price: 990,
         included: ['Dizajn profesional & responsive', 'Deri në 10 faqe', 'Gjuha kryesore sipas zgjedhjes', 'SEO bazike', 'Google Analytics', 'Hosting bazik', 'Formular kontakti + Google Maps', 'Lidhje me rrjetet sociale', 'Siguri bazike', 'Mbështetje teknike 1 muaj'],
         excluded: ['SEO Premium', 'Reklama Google & Social', 'SSL & siguri e avancuar', 'Hosting Premium'],
       },
       {
-        id: 'standard', name: 'Standard', tagline: 'Për biznese që duan të rriten seriozisht', price: 1200, popular: true, badge: 'Më e zgjedhura',
-        included: ['Gjithçka nga Bazike, plus:', 'Dizajn i personalizuar me brand', 'Deri në 15 faqe', 'SEO Premium', 'Integrim me rrjetet sociale', 'Gati për shumë gjuhë', 'Certifikatë SSL', 'Hosting Premium', 'Siguri e avancuar', 'Mbështetje teknike 3 muaj'],
+        id: 'standard', name: 'Standard', tagline: 'Për biznese që duan të rriten seriozisht', price: 1490, popular: true, badge: 'Më e zgjedhura',
+        included: ['Gjithçka nga Bazike, plus:', 'Dizajn i personalizuar me brandin tuaj', 'Deri në 15 faqe', 'SEO Premium', 'Integrim me rrjetet sociale', 'Gati për shumë gjuhë', 'Certifikatë SSL', 'Hosting Premium', 'Siguri e avancuar', 'Mbështetje teknike 3 muaj'],
         excluded: ['SEO Plus', 'Sistem rezervimesh ndërkombëtar', 'Integrim CDN', 'Hosting Plus'],
       },
       {
-        id: 'advanced', name: 'Avancuar', tagline: 'Faqja që rezervon dhe shet vetë', price: 1750, badge: 'Vlera më e mirë',
+        id: 'advanced', name: 'Avancuar', tagline: 'Faqja që rezervon dhe shet vetë', price: 1990, badge: 'Vlera më e mirë',
         included: ['Gjithçka nga Standard, plus:', 'Elemente vizuale të personalizuara', 'Deri në 20 faqe', 'Sistem rezervimesh online', 'SEO Plus', 'Analiza të avancuara', 'Integrim CDN', 'Hosting Plus', 'Backup ditor', 'Pagesa online', 'Mbështetje teknike 6 muaj'],
         excluded: ['Integrim Google Reviews', 'SEO me analizë konkurruese', 'Hosting Premium Plus'],
       },
       {
-        id: 'premium', name: 'Premium', tagline: 'Zgjidhja totale, pa kompromise', price: 2400,
+        id: 'premium', name: 'Premium', tagline: 'Zgjidhja totale, pa kompromise', price: 2900,
         included: ['Gjithçka nga Avancuar, plus:', 'Dizajn unik plotësisht i personalizuar', 'Faqe të pakufizuara + përditësime', 'Sistem i plotë rezervimesh & pagesash', 'SEO me analizë konkurruese', 'Reklama Google & Social + gjurmim', 'Integrim Google Reviews', 'Hosting Premium Plus', 'Siguri + monitorim 24/7', 'Mbështetje teknike 12 muaj'],
         excluded: [],
       },
     ],
   },
   maintenance: {
-    kicker: 'Mirëmbajtje', title: 'Paketat mujore të mirëmbajtjes së website-it', sub: 'Siguroji faqes suaj performancë të qëndrueshme dhe mbështetje të shpejtë pas lansimit.',
-    monthly: '€/muaj', choose: 'Zgjidh këtë paketë', chosen: '✓ Zgjedhur', note: 'Të gjitha paketat përfshijnë monitorim, backup dhe riparime të shpejta.',
+    kicker: 'Mirëmbajtje', title: 'Paketat mujore të mirëmbajtjes së faqes', sub: 'Mbajeni faqen tuaj të shpejtë, të sigurt dhe të përditësuar pas lansimit.',
+    monthly: '/muaj', choose: 'Zgjidhni Këtë Paketë', chosen: '✓ Zgjedhur', note: 'Të gjitha paketat përfshijnë monitorim, backup dhe riparime të shpejta.',
     list: [
       {
-        id: 'maintenance-basic', name: 'Basic', tagline: 'Mbështetje themelore dhe siguri bazike', price: 120,
-        included: ['Përditësime mujore të CMS/plugin', 'Backup javor', 'Monitorim uptime', 'Siguri bazike dhe patch', '1 orë ndryshime të vogla', 'Raport mujor performancë'],
-        excluded: ['Përditësime ditore', 'Optimizim performancë', 'Mbështetje urgjente 24/7'],
+        id: 'maintenance-basic', name: 'Bazike', tagline: 'Mbështetje themelore dhe siguri bazike', price: 120,
+        included: ['Përditësime mujore të CMS-së dhe plugin-eve', 'Backup javor', 'Monitorim uptime', 'Patch-e sigurie bazike', '1 orë ndryshime të vogla në muaj', 'Raport mujor i performancës'],
+        excluded: ['Përditësime ditore', 'Optimizim i performancës', 'Mbështetje urgjente 24/7'],
       },
       {
         id: 'maintenance-standard', name: 'Standard', tagline: 'Optimizim dhe shërbim proaktiv', price: 220, popular: true, badge: 'Më e zgjedhura',
-        included: ['Gjithçka nga Basic, plus:', 'Backup ditor', 'Monitorim performancë dhe siguri', '3 orë ndryshime të vogla', 'Raport mujor SEO', 'Përditësime prioritare'],
+        included: ['Gjithçka nga Bazike, plus:', 'Backup ditor', 'Monitorim i performancës dhe sigurisë', '3 orë ndryshime të vogla në muaj', 'Raport mujor SEO', 'Përditësime prioritare'],
         excluded: ['Redaktime të mëdha të përmbajtjes', 'Optimizim i avancuar i konvertimit'],
       },
       {
         id: 'maintenance-premium', name: 'Premium', tagline: 'Mbështetje 24/7 dhe përmirësim i vazhdueshëm', price: 420,
-        included: ['Gjithçka nga Standard, plus:', 'Monitorim 24/7 dhe reagim emergjent', 'Përmirësime të performancës dhe sigurisë', 'Konsulim strategjik mujor', 'Ndryshime të vogla të pakufizuara', 'Audit teknike çdo muaj'],
+        included: ['Gjithçka nga Standard, plus:', 'Monitorim 24/7 dhe reagim emergjent', 'Përmirësime të performancës dhe sigurisë', 'Konsultim strategjik mujor', 'Ndryshime të vogla të pakufizuara', 'Audit teknik çdo muaj'],
         excluded: [],
       },
     ],
@@ -172,21 +171,21 @@ const SQ: Copy = {
   faq: {
     kicker: 'FAQ', title: 'Pyetjet më të shpeshta',
     items: [
-      { q: 'Sa kohë merr ndërtimi i faqes?', a: 'Zakonisht 2–4 javë në varësi të paketës dhe përmbajtjes. Ju japim një afat të qartë që në fillim.' },
+      { q: 'Sa kohë duhet për të ndërtuar faqen?', a: 'Zakonisht 2–4 javë, në varësi të paketës dhe përmbajtjes. Ju japim një afat të qartë që në fillim.' },
       { q: 'A është faqja në 3 gjuhë?', a: 'Po — ofrojmë Anglisht, Italisht dhe Shqip. Paketat Standard e lart janë gati për shumë gjuhë.' },
-      { q: 'A i mbani ju hosting dhe mirëmbajtjen?', a: 'Po, hosting përfshihet dhe ofrojmë mbështetje teknike sipas paketës (1–12 muaj).' },
+      { q: 'A i mbuloni ju hostingun dhe mirëmbajtjen?', a: 'Po, hostingu përfshihet dhe ofrojmë mbështetje teknike sipas paketës (1–12 muaj).' },
       { q: 'A mund të shtoj dyqan online ose rezervime?', a: 'Absolutisht. Paketat Avancuar dhe Premium përfshijnë rezervime dhe pagesa online.' },
       { q: 'Çfarë ndodh pas dorëzimit?', a: 'Faqja është 100% e juaja. Ju trajnojmë për ta përdorur dhe ju mbështesim sipas paketës.' },
     ],
   },
   contact: {
-    kicker: 'Gati për të filluar?', title: 'Merr ofertën tënde falas sot', sub: 'Plotëso formularin dhe merr një konsultim falas + ofertë të personalizuar brenda 24 orëve.',
+    kicker: 'Gati për të filluar?', title: 'Merrni ofertën tuaj falas sot', sub: 'Plotësoni formularin dhe merrni një konsultim falas + ofertë të personalizuar brenda 24 orëve.',
     perks: ['Konsultim falas pa detyrim', 'Ofertë e personalizuar për biznesin tuaj', 'Këshilla konkrete edhe nëse nuk vazhdoni'],
     urgency: 'Pranojmë vetëm pak projekte të reja çdo muaj për cilësi maksimale.',
-    formTitle: 'Merr ofertën falas', selected: 'Paketa e zgjedhur', change: 'Ndrysho',
+    formTitle: 'Merrni ofertën falas', selected: 'Paketa e zgjedhur', change: 'Ndrysho',
     name: 'Emri i plotë *', namePh: 'Emri Mbiemri', email: 'Email *', phone: 'Telefon', phonePh: '+355 6X XXX XXXX',
-    website: 'Faqja aktuale (nëse ke)', websitePh: 'https://example.com', message: 'Mesazh (opsional)', messagePh: 'Na trego pak për biznesin tuaj...',
-    submit: 'Dërgo Kërkesën', submitting: 'Duke dërguar...', privacy: 'Duke dërguar pranoni politikën e privatësisë. Nuk do merrni spam.',
+    website: 'Faqja aktuale (nëse keni)', websitePh: 'https://example.com', message: 'Mesazh (opsional)', messagePh: 'Na tregoni pak për biznesin tuaj...',
+    submit: 'Dërgoni Kërkesën', submitting: 'Duke dërguar...', privacy: 'Duke dërguar formularin, pranoni politikën e privatësisë. Nuk do të merrni spam.',
     successTitle: 'Faleminderit!', successBody: 'Kërkesa juaj u dërgua. Do t\'ju kontaktojmë brenda 24 orëve.', error: 'Diçka shkoi keq. Provoni përsëri.',
   },
   footer: { rights: 'Të gjitha të drejtat e rezervuara.', pricing: 'Çmimet', contact: 'Kontakt' },
@@ -238,22 +237,22 @@ const EN: Copy = {
     included: 'Included', notIncluded: 'Not included',
     list: [
       {
-        id: 'basic', name: 'Basic', tagline: 'Your first professional presence online', price: 550,
+        id: 'basic', name: 'Basic', tagline: 'Your first professional presence online', price: 990,
         included: ['Professional & responsive design', 'Up to 10 pages', 'Primary language of your choice', 'Basic SEO', 'Google Analytics', 'Basic hosting', 'Contact form + Google Maps', 'Social media links', 'Basic security', '1-month technical support'],
         excluded: ['Premium SEO', 'Google & Social ads', 'SSL & advanced security', 'Premium hosting'],
       },
       {
-        id: 'standard', name: 'Standard', tagline: 'For businesses ready to grow seriously', price: 1200, popular: true, badge: 'Most popular',
+        id: 'standard', name: 'Standard', tagline: 'For businesses ready to grow seriously', price: 1490, popular: true, badge: 'Most popular',
         included: ['Everything in Basic, plus:', 'Custom branded design', 'Up to 15 pages', 'Premium SEO', 'Social media integration', 'Multi-language ready', 'SSL certificate', 'Premium hosting', 'Advanced security', '3-month technical support'],
         excluded: ['SEO Plus', 'International booking system', 'CDN integration', 'Hosting Plus'],
       },
       {
-        id: 'advanced', name: 'Advanced', tagline: 'A site that books and sells on its own', price: 1750, badge: 'Best value',
+        id: 'advanced', name: 'Advanced', tagline: 'A site that books and sells on its own', price: 1990, badge: 'Best value',
         included: ['Everything in Standard, plus:', 'Custom visual elements', 'Up to 20 pages', 'Online booking system', 'SEO Plus', 'Advanced analytics', 'CDN integration', 'Hosting Plus', 'Daily backup', 'Online payments', '6-month technical support'],
         excluded: ['Google Reviews integration', 'SEO with competitor analysis', 'Premium Plus hosting'],
       },
       {
-        id: 'premium', name: 'Premium', tagline: 'The complete solution, no compromises', price: 2400,
+        id: 'premium', name: 'Premium', tagline: 'The complete solution, no compromises', price: 2900,
         included: ['Everything in Advanced, plus:', 'Fully custom unique design', 'Unlimited pages + updates', 'Full booking & payment system', 'SEO with competitor analysis', 'Google & Social ads + tracking', 'Google Reviews integration', 'Premium Plus hosting', '24/7 security & monitoring', '12-month technical support'],
         excluded: [],
       },
@@ -261,16 +260,16 @@ const EN: Copy = {
   },
   maintenance: {
     kicker: 'Maintenance', title: 'Monthly website maintenance plans', sub: 'Keep your site fast, secure and up-to-date after launch.',
-    monthly: '/month', choose: 'Choose this plan', chosen: '✓ Selected', note: 'All plans include monitoring, backups and fast fix support.',
+    monthly: '/month', choose: 'Choose This Plan', chosen: '✓ Selected', note: 'All plans include monitoring, backups and fast fix support.',
     list: [
       {
         id: 'maintenance-basic', name: 'Basic', tagline: 'Essential care and baseline security', price: 120,
-        included: ['Monthly CMS/plugin updates', 'Weekly backups', 'Uptime monitoring', 'Basic security patching', '1 hour small edits', 'Monthly health report'],
+        included: ['Monthly CMS/plugin updates', 'Weekly backups', 'Uptime monitoring', 'Basic security patching', '1 hour of small edits per month', 'Monthly health report'],
         excluded: ['Daily updates', 'Performance tuning', '24/7 emergency support'],
       },
       {
         id: 'maintenance-standard', name: 'Standard', tagline: 'Proactive upkeep and performance care', price: 220, popular: true, badge: 'Most popular',
-        included: ['Everything in Basic, plus:', 'Daily backups', 'Performance and security monitoring', '3 hours small edits', 'Monthly SEO report', 'Priority updates'],
+        included: ['Everything in Basic, plus:', 'Daily backups', 'Performance and security monitoring', '3 hours of small edits per month', 'Monthly SEO report', 'Priority updates'],
         excluded: ['Large content revisions', 'Advanced conversion optimization'],
       },
       {
@@ -303,7 +302,7 @@ const EN: Copy = {
     perks: ['Free, no-obligation consultation', 'Tailored quote for your business', 'Concrete advice even if you don\'t proceed'],
     urgency: 'We only take a few new projects each month for maximum quality.',
     formTitle: 'Get your free quote', selected: 'Selected package', change: 'Change',
-    name: 'Full name *', namePh: 'First Last', email: 'Email *', phone: 'Phone', phonePh: '+39 3XX XXX XXXX',
+    name: 'Full name *', namePh: 'First Last', email: 'Email *', phone: 'Phone', phonePh: '+XX XXX XXX XXXX',
     website: 'Current website (if any)', websitePh: 'https://example.com', message: 'Message (optional)', messagePh: 'Tell us a bit about your business...',
     submit: 'Send Request', submitting: 'Sending...', privacy: 'By submitting you accept the privacy policy. No spam.',
     successTitle: 'Thank you!', successBody: 'Your request was sent. We\'ll contact you within 24 hours.', error: 'Something went wrong. Please try again.',
@@ -353,48 +352,48 @@ const IT: Copy = {
   },
   packages: {
     kicker: 'Pacchetti', title: 'Scegli il pacchetto adatto alla tua attività', sub: 'Prezzo una tantum — nessun costo mensile nascosto. IVA esclusa.',
-    oneTime: 'una tantum', choose: 'Scegli Questo Piano', chosen: '✓ Selezionato', note: 'Tutti i pacchetti: design responsive, hosting e formazione di base. Prezzi in Euro (€).',
+    oneTime: 'una tantum', choose: 'Scegli Questo Pacchetto', chosen: '✓ Selezionato', note: 'Tutti i pacchetti: design responsive, hosting e formazione di base. Prezzi in Euro (€).',
     included: 'Incluso', notIncluded: 'Non incluso',
     list: [
       {
-        id: 'basic', name: 'Base', tagline: 'La tua prima presenza professionale online', price: 550,
+        id: 'basic', name: 'Base', tagline: 'La tua prima presenza professionale online', price: 990,
         included: ['Design professionale & responsive', 'Fino a 10 pagine', 'Lingua principale a scelta', 'SEO di base', 'Google Analytics', 'Hosting di base', 'Modulo contatti + Google Maps', 'Collegamento ai social', 'Sicurezza di base', 'Supporto tecnico 1 mese'],
         excluded: ['SEO Premium', 'Pubblicità Google & Social', 'SSL & sicurezza avanzata', 'Hosting Premium'],
       },
       {
-        id: 'standard', name: 'Standard', tagline: 'Per attività pronte a crescere sul serio', price: 1200, popular: true, badge: 'Più scelto',
-        included: ['Tutto del Base, più:', 'Design personalizzato col brand', 'Fino a 15 pagine', 'SEO Premium', 'Integrazione social', 'Pronto per più lingue', 'Certificato SSL', 'Hosting Premium', 'Sicurezza avanzata', 'Supporto tecnico 3 mesi'],
-        excluded: ['SEO Plus', 'Sistema prenotazioni internazionale', 'Integrazione CDN', 'Hosting Plus'],
+        id: 'standard', name: 'Standard', tagline: 'Per attività pronte a crescere sul serio', price: 1490, popular: true, badge: 'Più scelto',
+        included: ['Tutto ciò che c\'è in Base, più:', 'Design personalizzato sul tuo brand', 'Fino a 15 pagine', 'SEO Premium', 'Integrazione social', 'Pronto per più lingue', 'Certificato SSL', 'Hosting Premium', 'Sicurezza avanzata', 'Supporto tecnico 3 mesi'],
+        excluded: ['SEO Plus', 'Sistema di prenotazione internazionale', 'Integrazione CDN', 'Hosting Plus'],
       },
       {
-        id: 'advanced', name: 'Avanzato', tagline: 'Un sito che prenota e vende da solo', price: 1750, badge: 'Miglior valore',
-        included: ['Tutto dello Standard, più:', 'Elementi visivi personalizzati', 'Fino a 20 pagine', 'Sistema di prenotazione online', 'SEO Plus', 'Analisi avanzate', 'Integrazione CDN', 'Hosting Plus', 'Backup giornaliero', 'Pagamenti online', 'Supporto tecnico 6 mesi'],
+        id: 'advanced', name: 'Avanzato', tagline: 'Un sito che prenota e vende da solo', price: 1990, badge: 'Miglior valore',
+        included: ['Tutto ciò che c\'è in Standard, più:', 'Elementi visivi personalizzati', 'Fino a 20 pagine', 'Sistema di prenotazione online', 'SEO Plus', 'Analisi avanzate', 'Integrazione CDN', 'Hosting Plus', 'Backup giornaliero', 'Pagamenti online', 'Supporto tecnico 6 mesi'],
         excluded: ['Integrazione Google Reviews', 'SEO con analisi della concorrenza', 'Hosting Premium Plus'],
       },
       {
-        id: 'premium', name: 'Premium', tagline: 'La soluzione totale, senza compromessi', price: 2400,
-        included: ['Tutto dell\'Avanzato, più:', 'Design unico totalmente personalizzato', 'Pagine illimitate + aggiornamenti', 'Sistema completo prenotazioni & pagamenti', 'SEO con analisi della concorrenza', 'Pubblicità Google & Social + tracking', 'Integrazione Google Reviews', 'Hosting Premium Plus', 'Sicurezza & monitoraggio 24/7', 'Supporto tecnico 12 mesi'],
+        id: 'premium', name: 'Premium', tagline: 'La soluzione totale, senza compromessi', price: 2900,
+        included: ['Tutto ciò che c\'è in Avanzato, più:', 'Design unico totalmente personalizzato', 'Pagine illimitate + aggiornamenti', 'Sistema completo prenotazioni & pagamenti', 'SEO con analisi della concorrenza', 'Pubblicità Google & Social + tracking', 'Integrazione Google Reviews', 'Hosting Premium Plus', 'Sicurezza & monitoraggio 24/7', 'Supporto tecnico 12 mesi'],
         excluded: [],
       },
     ],
   },
   maintenance: {
     kicker: 'Manutenzione', title: 'Piani mensili di manutenzione del sito', sub: 'Mantieni il sito veloce, sicuro e aggiornato dopo il lancio.',
-    monthly: '/mese', choose: 'Scegli questo pacchetto', chosen: '✓ Selezionato', note: 'Tutti i piani includono monitoraggio, backup e interventi rapidi.',
+    monthly: '/mese', choose: 'Scegli Questo Pacchetto', chosen: '✓ Selezionato', note: 'Tutti i piani includono monitoraggio, backup e interventi rapidi.',
     list: [
       {
         id: 'maintenance-basic', name: 'Base', tagline: 'Cura essenziale e sicurezza di base', price: 120,
-        included: ['Aggiornamenti mensili CMS/plugin', 'Backup settimanali', 'Monitoraggio uptime', 'Patch di sicurezza di base', '1 ora modifiche minori', 'Report mensile sullo stato'],
-        excluded: ['Aggiornamenti giornalieri', 'Ottimizzazione delle prestazioni', 'Supporto emergenza 24/7'],
+        included: ['Aggiornamenti mensili di CMS e plugin', 'Backup settimanali', 'Monitoraggio uptime', 'Patch di sicurezza di base', '1 ora di modifiche minori al mese', 'Report mensile sullo stato'],
+        excluded: ['Aggiornamenti giornalieri', 'Ottimizzazione delle prestazioni', 'Supporto d\'emergenza 24/7'],
       },
       {
         id: 'maintenance-standard', name: 'Standard', tagline: 'Manutenzione proattiva e cura delle prestazioni', price: 220, popular: true, badge: 'Più scelto',
-        included: ['Tutto del Base, più:', 'Backup giornalieri', 'Monitoraggio prestazioni e sicurezza', '3 ore modifiche minori', 'Report mensile SEO', 'Aggiornamenti prioritari'],
-        excluded: ['Revisioni contenuti importanti', 'Ottimizzazione avanzata delle conversioni'],
+        included: ['Tutto ciò che c\'è in Base, più:', 'Backup giornalieri', 'Monitoraggio di prestazioni e sicurezza', '3 ore di modifiche minori al mese', 'Report mensile SEO', 'Aggiornamenti prioritari'],
+        excluded: ['Revisioni importanti dei contenuti', 'Ottimizzazione avanzata delle conversioni'],
       },
       {
         id: 'maintenance-premium', name: 'Premium', tagline: 'Assistenza 24/7 e miglioramento continuo', price: 420,
-        included: ['Tutto dello Standard, più:', 'Monitoraggio 24/7 e risposta emergenza', 'Ottimizzazione prestazioni e sicurezza', 'Sessione strategica mensile', 'Modifiche minori illimitate', 'Audit tecnico ogni mese'],
+        included: ['Tutto ciò che c\'è in Standard, più:', 'Monitoraggio 24/7 e risposta d\'emergenza', 'Ottimizzazione di prestazioni e sicurezza', 'Sessione strategica mensile', 'Modifiche minori illimitate', 'Audit tecnico ogni mese'],
         excluded: [],
       },
     ],
@@ -439,7 +438,7 @@ const PKG_ACCENTS = [
 ];
 
 export default function WebsiteLandingPage() {
-  const [lang, setLang] = useState<Lang>('sq');
+  const [lang, setLang] = useLandingLang();
   const t = COPY[lang];
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [selected, setSelected] = useState<Pkg | null>(null);
@@ -498,14 +497,9 @@ export default function WebsiteLandingPage() {
             <a href="#faq" className="hover:text-blue-600 transition-colors">{t.nav.faq}</a>
           </div>
           <div className="flex items-center gap-3">
-            {/* Language switcher */}
-            <div className="hidden sm:flex items-center gap-0.5 rounded-full border border-gray-200 p-0.5 text-xs font-semibold">
-              {(['sq', 'en', 'it'] as Lang[]).map(l => (
-                <button key={l} onClick={() => setLang(l)}
-                  className={`px-2.5 py-1 rounded-full uppercase transition-colors ${lang === l ? 'bg-blue-600 text-white' : 'text-gray-500 hover:text-gray-900'}`}>
-                  {l}
-                </button>
-              ))}
+            {/* Language switcher — auto-detected, overridable */}
+            <div className="hidden sm:block">
+              <LangSwitcher lang={lang} setLang={setLang} accentClass="bg-blue-600" />
             </div>
             <button onClick={() => scrollTo('contact')}
               className="px-5 py-2.5 text-sm font-semibold text-white rounded-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:shadow-lg hover:shadow-blue-500/25 transition-all hover:-translate-y-0.5">
@@ -522,6 +516,7 @@ export default function WebsiteLandingPage() {
               ctaLabel={t.nav.cta}
               onCta={() => scrollTo('contact')}
               accentClass="bg-gradient-to-r from-blue-600 to-indigo-600"
+              langSlot={<LangSwitcher lang={lang} setLang={setLang} accentClass="bg-blue-600" />}
             />
           </div>
         </div>

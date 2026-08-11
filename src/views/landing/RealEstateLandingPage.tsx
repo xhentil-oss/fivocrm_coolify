@@ -6,7 +6,7 @@ import {
   ArrowUpRight, Sparkles, Camera, Instagram, Megaphone, BarChart3,
   X, Lock, Video, Image, Plane,
 } from 'lucide-react';
-import { LangSwitcher, type Lang } from './LangSwitcher';
+import { LangSwitcher, useLandingLang, type Lang } from './LangSwitcher';
 import LandingMobileMenu from './LandingMobileMenu';
 
 function useInView(threshold = 0.15) {
@@ -219,7 +219,7 @@ const IT: Copy = {
 const COPY: Record<Lang, Copy> = { sq: SQ, en: EN, it: IT };
 
 export default function RealEstateLandingPage() {
-  const [lang, setLang] = useState<Lang>('sq');
+  const [lang, setLang] = useLandingLang();
   const t = COPY[lang];
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [formData, setFormData] = useState({ name: '', email: '', phone: '', website: '', message: '' });

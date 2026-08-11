@@ -18,7 +18,13 @@ export const LandingMobileMenu: React.FC<{
   onCta: () => void;
   /** Tailwind bg-* (or gradient) class matching the page's accent, e.g. "bg-emerald-600". */
   accentClass?: string;
-}> = ({ links, ctaLabel, onCta, accentClass = 'bg-primary' }) => {
+  /**
+   * Optional language switcher shown at the top of the dropdown. The navbar one is
+   * `hidden sm:flex`, so without this a phone visitor who was auto-detected into the
+   * wrong language has no way out.
+   */
+  langSlot?: React.ReactNode;
+}> = ({ links, ctaLabel, onCta, accentClass = 'bg-primary', langSlot }) => {
   const [open, setOpen] = useState(false);
 
   return (
@@ -39,6 +45,7 @@ export const LandingMobileMenu: React.FC<{
           <div className="fixed inset-0 top-16 z-40 bg-black/20" onClick={() => setOpen(false)} aria-hidden="true" />
           <div className="fixed left-0 right-0 top-16 z-50 bg-white border-b border-gray-100 shadow-lg animate-in fade-in slide-in-from-top-2 duration-150">
             <nav className="flex flex-col p-4 gap-1">
+              {langSlot && <div className="flex justify-center pb-3 mb-1 border-b border-gray-100">{langSlot}</div>}
               {links.map(l => (
                 <a
                   key={l.href}

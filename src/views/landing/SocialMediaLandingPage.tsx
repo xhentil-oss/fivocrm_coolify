@@ -6,7 +6,7 @@ import {
   BarChart3, X, Video, MessageSquare, Search,
   Shield, Award, Camera, Globe, Megaphone,
 } from 'lucide-react';
-import { LangSwitcher, type Lang } from './LangSwitcher';
+import { LangSwitcher, useLandingLang, type Lang } from './LangSwitcher';
 import ClientLogos from './ClientLogos';
 import LandingMobileMenu from './LandingMobileMenu';
 
@@ -296,7 +296,7 @@ const COPY: Record<Lang, Copy> = { sq: SQ, en: EN, it: IT };
 const STAT_VALUES = [{ end: 120, suffix: '+', color: 'text-pink-600' }, { end: 450, suffix: '%', color: 'text-violet-600' }, { end: 2800, suffix: 'K+', color: 'text-indigo-600' }, { end: 99, suffix: '%', color: 'text-green-600' }];
 
 const SocialMediaLandingPage: React.FC = () => {
-  const [lang, setLang] = useState<Lang>('sq');
+  const [lang, setLang] = useLandingLang();
   const t = COPY[lang];
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [selectedPkg, setSelectedPkg] = useState('');
