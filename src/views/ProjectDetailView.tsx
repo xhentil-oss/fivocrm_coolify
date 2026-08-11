@@ -8,7 +8,7 @@ import { useCollection, useMutation, useDocument } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useToast } from '../hooks/use-toast';
-import { ArrowLeft, Plus, LayoutGrid, List, Calendar as CalendarIcon, Users, Settings, MoreVertical, Trash2, MessageSquare, CheckSquare, Filter, Search, UserPlus, Eye, ClipboardList, Wallet, CheckCircle2, CircleDollarSign } from 'lucide-react';
+import { ArrowLeft, Plus, LayoutGrid, List, Calendar as CalendarIcon, Users, Settings, MoreVertical, Trash2, MessageSquare, CheckSquare, Filter, Search, UserPlus, Eye, ClipboardList, Wallet, CheckCircle2, CircleDollarSign, Archive, ArchiveRestore } from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
@@ -39,6 +39,7 @@ import { formatCurrency, toAll, canSeeFinancials, cn } from '../lib/utils';
 import { computeProjectLabor } from '../lib/finance/laborCost';
 import { getInvoiceTotalAll, getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
 import { getInquiryCompleteness } from '../lib/inquiryBrief';
+import { archiveProjectPatch, isProjectArchived, restoreProjectPatch } from '../lib/projectArchive';
 import { Receipt } from 'lucide-react';
 import type { Task, Project, Team, TeamMember, TimeEntry, Expense, Invoice, InvoiceItem, Customer, ServiceInquiry } from '../types';
 import { getNextInvoiceNumber } from '../lib/firebase';
@@ -681,6 +682,8 @@ const ProjectDetailView: React.FC = () => {
         // increment() is atomic — two tasks added at once both land, which a
         // read-then-write of `project.budget` would silently lose.
         await projectMutation.update(projectId!, { budget: increment(taskValue) } as any);
+        // Mark it counted so a later backfill can't add the same value twice.
+        await taskMutation.update((newTask as any).id, { valueAppliedToBudget: true } as any);
 
         toast({
           title: 'Detyra u krijua + faturë Draft ✓',
@@ -873,6 +876,43 @@ const ProjectDetailView: React.FC = () => {
     }
   }, [taskMutation, project, rawProjectTasks, projectMutation, notificationMutation, user]);
 
+  // ── Archive / restore ──
+  // The reversible alternative to deleting: the project and everything hanging off
+  // it stay in place, it just leaves the live list. Rules (remember the previous
+  // status, stop a retainer) live in lib/projectArchive.ts so this page and
+  // ProjectsView cannot drift apart.
+  const archived = isProjectArchived(project);
+
+  const handleArchiveToggle = React.useCallback(async () => {
+    if (!project) return;
+    const goingToArchive = !isProjectArchived(project);
+    try {
+      if (goingToArchive) {
+        await projectMutation.update(project.id, archiveProjectPatch(project, {
+          at: new Date(),
+          byUserId: user?.uid ?? null,
+        }) as any);
+        toast({
+          title: `"${project.name}" u arkivua`,
+          description: project.isRecurring
+            ? 'Faturimi i përsëritur ndaloi. E gjen te Projektet → Arkiva.'
+            : 'E gjen te Projektet → Arkiva.',
+        });
+      } else {
+        await projectMutation.update(project.id, restoreProjectPatch(project) as any);
+        toast({
+          title: `"${project.name}" u kthye nga arkiva`,
+          description: project.wasRecurringBeforeArchive
+            ? 'Faturimi i përsëritur u aktivizua përsëri.'
+            : undefined,
+        });
+      }
+    } catch (err) {
+      console.error('[ProjectDetailView] arkivimi/kthimi dështoi:', err);
+      toast({ title: goingToArchive ? 'Gabim gjatë arkivimit' : 'Gabim gjatë kthimit', variant: 'destructive' });
+    }
+  }, [project, projectMutation, toast, user]);
+
   // --- @dnd-kit drag-and-drop for kanban ---
   // Mouse drags on a small move; touch drags only after a 200ms hold so scrolling
   // the board on a phone isn't hijacked into a drag.
@@ -1049,6 +1089,21 @@ const ProjectDetailView: React.FC = () => {
                   </DropdownMenuItem>
                 )}
                 {permissions.canEdit && !isGuestOnProject && (
+                  <DropdownMenuItem onClick={handleArchiveToggle}>
+                    {archived ? (
+                      <>
+                        <ArchiveRestore className="w-4 h-4 mr-2" />
+                        Kthe nga Arkiva
+                      </>
+                    ) : (
+                      <>
+                        <Archive className="w-4 h-4 mr-2" />
+                        Arkivo Projektin
+                      </>
+                    )}
+                  </DropdownMenuItem>
+                )}
+                {permissions.canEdit && !isGuestOnProject && (
                   <DropdownMenuItem
                     className="text-error"
                     onClick={() => setShowDeleteConfirm(true)}
@@ -1061,6 +1116,29 @@ const ProjectDetailView: React.FC = () => {
             </DropdownMenu>
           </div>
         </div>
+
+        {/* Archived projects stay fully usable — but nobody should read this page
+            as the live state of the business without knowing it is on the shelf. */}
+        {archived && (
+          <div className="mt-4 flex flex-wrap items-center gap-3 rounded-2xl border border-[#d7dfeb] bg-brand-chip px-4 py-3">
+            <Archive className="h-4 w-4 shrink-0 text-brand-muted" />
+            <p className="min-w-0 flex-1 text-[12.5px] font-semibold text-brand-ink">
+              Ky projekt është në arkivë
+              {project.archivedAt && ` (${new Date(project.archivedAt as any).toLocaleDateString('sq-AL')})`}
+              {project.wasRecurringBeforeArchive && ' · faturimi i përsëritur është ndalur'}
+            </p>
+            {permissions.canEdit && !isGuestOnProject && (
+              <button
+                type="button"
+                onClick={handleArchiveToggle}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-[#d7dfeb] bg-white px-3.5 py-1.5 text-[12.5px] font-bold text-brand-ink transition-colors hover:border-brand-blue hover:text-brand-blue"
+              >
+                <ArchiveRestore className="h-3.5 w-3.5" />
+                Kthe nga arkiva
+              </button>
+            )}
+          </div>
+        )}
 
         {/* ── Hero (progress) + KPI band ── */}
         {/* Tablet gets hero-full-width + a 2×2 KPI block; desktop puts the KPIs

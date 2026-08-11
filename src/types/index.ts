@@ -633,9 +633,11 @@ export interface Task {
   section?: string;
   estimatedHours?: number;
   /** Optional billable value of this task, in the project's currency. Lets a
-   *  project be priced task-by-task instead of (or alongside) a single budget.
-   *  Purely informational unless the project is billed from task values. */
+   *  project be priced task-by-task instead of (or alongside) a single budget. */
   value?: number;
+  /** True once `value` has been added to the project's budget. Makes the increment
+   *  idempotent: a backfill can tell which tasks are already counted. */
+  valueAppliedToBudget?: boolean;
   isRecurring?: boolean;
   recurringFrequency?: 'daily' | 'weekly' | 'monthly' | 'yearly';
   recurringInterval?: number; // e.g. 2 = every 2 weeks/months
