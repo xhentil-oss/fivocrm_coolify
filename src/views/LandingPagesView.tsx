@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Shield, Sun, Camera, Car, Croissant, Store, Layers } from 'lucide-react';
+import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Shield, Sun, Camera, Car, Croissant, Store, Layers, HardHat } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
 
@@ -223,6 +223,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     icon: Store,
     color: 'text-emerald-600',
     gradient: 'from-emerald-500 to-teal-600',
+    status: 'active',
+  },
+  {
+    id: 'engineering',
+    title: 'Inxhinieri & Infrastrukturë (B2B)',
+    description: 'Faqe në ANGLISHT me çmime në CHF për kompani inxhinierike (monitorim strukturor, inxhinieri civile, diagnostikë infrastrukture) që shesin në tendera, institucione dhe projekte IFI/BE. LinkedIn + SEO + Google Ads + LinkedIn Ads + networking B2B: Digital Foundation (CHF 1.800–2.500/muaj), Authority & Lead Growth (CHF 3.000–4.200), Strategic B2B Growth (CHF 4.500–6.500) dhe International & Institutional (custom).',
+    path: '/engineering',
+    category: 'B2B Marketing',
+    icon: HardHat,
+    color: 'text-navy-700',
+    gradient: 'from-navy-700 to-sky-600',
     status: 'active',
   },
 ];
