@@ -562,7 +562,7 @@ export function instantiateTemplate(
     projectManagerUserId: args.projectManagerUserId ?? null,
     blocks,
     kpiValues: [],
-    currency: args.currency || 'EUR',
+    currency: args.currency || 'ALL',
     templateId: template.id,
     templateKey: template.key,
     templateVersion: template.version,

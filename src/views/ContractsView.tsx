@@ -41,7 +41,7 @@ function isBodyEmpty(html: string) {
 
 function buildServiceHTML(svc: Service): string {
   const name = svc.name || svc.title || 'Shërbim';
-  const cur = svc.currency || 'EUR';
+  const cur = svc.currency || 'ALL';
   const price = svc.price > 0 ? ` — <strong>${svc.price.toLocaleString()} ${cur}/muaj</strong>` : '';
   const desc = svc.description ? `<p><em>${svc.description}</em></p>` : '';
   return `<p><strong>${name}</strong>${price}</p>${desc}`;
@@ -243,7 +243,7 @@ const ContractsView: React.FC = () => {
 
     const packageSummary = q ? {
       label: q.label || q.result?.suggestedLabel || 'Paketa',
-      currency: q.currency || 'EUR',
+      currency: q.currency || 'ALL',
       categories: (q.result?.categories || []).map(cat => ({
         category: cat.category,
         oneTime: cat.oneTime || 0,
@@ -758,7 +758,7 @@ const ContractsView: React.FC = () => {
                         <p className="text-xs font-medium truncate">{svc.name || svc.title}</p>
                         {svc.price > 0 && (
                           <p className="text-[10px] text-muted-foreground">
-                            {svc.price.toLocaleString()} {svc.currency || 'EUR'}/muaj
+                            {svc.price.toLocaleString()} {svc.currency || 'ALL'}/muaj
                           </p>
                         )}
                       </div>

@@ -127,7 +127,7 @@ export function buildReportPdf(report: Report, opts: PdfOptions): jsPDF {
   const bottom = pageH - 64;
   const primary = opts.branding.primaryColor || NAVY;
   const accent = opts.branding.accentColor || CYAN;
-  const currency = report.currency || 'EUR';
+  const currency = report.currency || 'ALL';
   const kpiById = new Map((report.kpiValues || []).map(k => [k.kpiId, k]));
 
   const cur: Cursor = { y: 0, page: 1 };

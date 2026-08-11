@@ -37,7 +37,7 @@ interface Props {
 }
 
 const ReportBlockRenderer: React.FC<Props> = ({
-  blocks, kpiValues = [], currency = 'EUR', showVisibilityBadges = false, variant = 'screen', className = '',
+  blocks, kpiValues = [], currency = 'ALL', showVisibilityBadges = false, variant = 'screen', className = '',
 }) => {
   const byId = new Map(kpiValues.map(k => [k.kpiId, k]));
 

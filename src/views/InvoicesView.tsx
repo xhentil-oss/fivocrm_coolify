@@ -397,7 +397,10 @@ const InvoicesView: React.FC = () => {
 
       // Stripe does not support ALL (Albanian Lek) — convert an ALL invoice to EUR
       // for checkout. Other currencies (EUR/USD/GBP) are passed through as-is.
-      const invCur = ((invoice as any).currency || 'EUR').toUpperCase();
+      // ALL is the house currency, so an invoice with no currency set is Lek. This
+      // used to default to EUR, which charged a 120,000 L invoice as €120,000
+      // (face value, unconverted) instead of ~€1,200.
+      const invCur = ((invoice as any).currency || 'ALL').toUpperCase();
       const stripeCurrency = invCur === 'ALL' ? 'eur' : invCur.toLowerCase();
       const stripeAmount = invCur === 'ALL' ? amount / getRateToAll('EUR') : amount;
 
@@ -2925,7 +2928,9 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
                 toast({ title: 'Duke hapur Stripe Checkout...' });
                 // Stripe does not support ALL (Albanian Lek) — convert an ALL invoice
                 // to EUR for checkout. Other currencies are passed through as-is.
-                const invCur = ((invoice as any).currency || 'EUR').toUpperCase();
+                // No currency set = Lek (the house currency); defaulting to EUR here
+                // charged the Lek face value as euros.
+                const invCur = ((invoice as any).currency || 'ALL').toUpperCase();
                 const stripeCurrency = invCur === 'ALL' ? 'eur' : invCur.toLowerCase();
                 const stripeAmount = invCur === 'ALL' ? amount / getRateToAll('EUR') : amount;
                 const authToken = await user?.getIdToken();
