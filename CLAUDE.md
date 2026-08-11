@@ -477,6 +477,14 @@ npm run build
 # Tests
 npm run test
 
+# Typecheck — NEVER use bare `tsc --noEmit`
+# The root tsconfig.json is a SOLUTION file ("files": [] + references), so
+# `tsc --noEmit` on it checks NOTHING and exits 0. `vite build` does not
+# type-check either (esbuild strips types), so a build passing proves nothing.
+npm run typecheck       # app (src/) — has pre-existing errors: compare the count
+npm run typecheck:api   # api/ — currently CLEAN, keep it at 0
+npm run typecheck:all   # app + node + api
+
 # Android
 npm run android:sync   # build + cap sync
 npm run android:open   # open in Android Studio
