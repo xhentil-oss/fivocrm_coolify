@@ -59,22 +59,32 @@ export function buildNextRecurringTask(task: Task): Omit<Task, 'id' | 'createdAt
   const baseEnd = parseDate(task.endDate);
   const baseNext = task.nextRecurringDate ? parseDate(task.nextRecurringDate) : new Date();
 
+  // ONLY startDate is advanced by the recurrence rule; endDate and
+  // nextRecurringDate are re-derived from it by preserving their offset.
+  //
+  // Running addFrequency() on each date independently destroys the task: the
+  // `dayOfWeek` snap moves each one to the configured weekday on its own, so a
+  // start and end that sit on *different* weekdays get pushed by a different
+  // number of days. In production this turned a 20-hour task into one whose end
+  // was 6 days BEFORE its start (22 rows), and made the series jump 13 days
+  // instead of 7.
+  const spanMs = Math.max(0, baseEnd.getTime() - baseStart.getTime());
+  const nextOffsetMs = baseNext.getTime() - baseStart.getTime();
+
   let newStart = addFrequency(baseStart, freq, dow, dom, interval, dows);
-  let newEnd = addFrequency(baseEnd, freq, dow, dom, interval, dows);
-  let newNext = addFrequency(baseNext, freq, dow, dom, interval, dows);
 
   // Roll forward so the next occurrence never lands in the past — matches how
   // Asana/Todoist behave when a recurring task is completed late: the next due
   // date is always the first *future* one, not blindly (previous due + interval).
-  // All three dates advance in lockstep so the span and trigger offset are kept.
   const sod = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
   const todayMs = sod(new Date());
   let guard = 0;
   while (sod(newStart) < todayMs && guard++ < 500) {
     newStart = addFrequency(newStart, freq, dow, dom, interval, dows);
-    newEnd = addFrequency(newEnd, freq, dow, dom, interval, dows);
-    newNext = addFrequency(newNext, freq, dow, dom, interval, dows);
   }
+
+  const newEnd = new Date(newStart.getTime() + spanMs);
+  const newNext = new Date(newStart.getTime() + nextOffsetMs);
 
   return {
     title: task.title,
@@ -126,6 +136,12 @@ export interface CompleteTaskDeps {
   updateTask: (id: string, data: Partial<Task>) => Promise<unknown>;
   /** All tasks in scope — used to enforce the dependency (blocker) guard. */
   allTasks?: Task[];
+  /** Atomically reserve the next cycle (see `claimTaskNextCycle`). Returns false
+   *  when another completion already reserved it — the caller then skips
+   *  creating a child. Omitted only in unit tests / non-Firestore callers. */
+  claimNextCycle?: (taskId: string) => Promise<boolean>;
+  /** Undo the claim when the child could not be created. */
+  releaseNextCycle?: (taskId: string) => Promise<void>;
 }
 
 /**
@@ -149,7 +165,19 @@ export async function completeTask(task: Task, deps: CompleteTaskDeps): Promise<
 
   // "After completion" recurring: on Done, immediately spawn the next cycle
   // (unless the recurrence has ended) and flag the current one so cron skips it.
+  //
+  // `task.nextCycleCreated` here is a possibly stale snapshot, so it is only a
+  // cheap pre-filter — the authoritative check is the atomic claim below.
   if (task.isRecurring && task.recurringFrequency && !task.nextCycleCreated) {
+    // Reserve the cycle BEFORE creating anything. Losing the race means another
+    // completion already spawned the child; we must not spawn a second one.
+    if (deps.claimNextCycle) {
+      const claimed = await deps.claimNextCycle(task.id);
+      if (!claimed) {
+        await deps.updateTask(task.id, { status: 'Done' });
+        return { kind: 'completed' };
+      }
+    }
     try {
       const ended = recurrenceHasEnded(task);
       if (!ended) {
@@ -158,7 +186,11 @@ export async function completeTask(task: Task, deps: CompleteTaskDeps): Promise<
       await deps.updateTask(task.id, { status: 'Done', nextCycleCreated: true });
       return ended ? { kind: 'recurring-ended' } : { kind: 'recurring-created' };
     } catch (error) {
-      // Best effort: still mark it Done so the user isn't stuck.
+      // The child never landed — hand the claim back so the cron backstop can
+      // still produce the missing cycle, then mark Done so the user isn't stuck.
+      if (deps.releaseNextCycle) {
+        try { await deps.releaseNextCycle(task.id); } catch { /* best effort */ }
+      }
       await deps.updateTask(task.id, { status: 'Done' });
       return { kind: 'error', error };
     }

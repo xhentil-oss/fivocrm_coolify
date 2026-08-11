@@ -5,6 +5,7 @@ import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } 
 import { CSS } from '@dnd-kit/utilities';
 import { getStatusColor, getPriorityColor, getTaskStatusLabel } from '../lib/statusColors';
 import { completeTask } from '../lib/recurringUtils';
+import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
@@ -759,6 +760,8 @@ const TasksView: React.FC = () => {
               // Blocker guard must see the full workspace (all statuses + subtasks),
               // not the status/assignee/search-filtered display list `tasks`.
               allTasks,
+              claimNextCycle: claimTaskNextCycle,
+              releaseNextCycle: releaseTaskNextCycle,
             });
             if (outcome.kind === 'blocked') {
               toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
@@ -923,6 +926,8 @@ const TasksView: React.FC = () => {
                 updateTask: (id, data) => taskMutation.update(id, data),
                 // Blocker guard must see the full workspace, not the filtered list.
                 allTasks,
+                claimNextCycle: claimTaskNextCycle,
+                releaseNextCycle: releaseTaskNextCycle,
               });
               if (outcome.kind === 'blocked') {
                 toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
