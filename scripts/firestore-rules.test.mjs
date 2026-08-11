@@ -854,3 +854,27 @@ test('36c. notification preferences are private to their owner', async () => {
   await assertFails(getDoc(doc(mallory, 'userPreferences', 'alice')));
   await assertFails(setDoc(doc(mallory, 'userPreferences', 'alice'), { emailEnabled: false }));
 });
+
+test('37. dailyReportMisses is readable inside the tenant and writable by nobody', async () => {
+  // The absence record behind the mandatory daily report. It is written only by the
+  // daily-report-check cron (Admin SDK, which bypasses rules). If a client could
+  // write here, the person who skipped the report could erase the evidence — and the
+  // escalation to their manager would never fire.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'dailyReportMisses', `${MY_BIZ}_2026-08-11`), {
+      businessId: MY_BIZ, date: '2026-08-11', missingUserIds: ['alice'], expectedCount: 3, submittedCount: 2,
+    });
+  });
+  const alice = testEnv.authenticatedContext('alice', { email: 'a@mine.com', bid: MY_BIZ }).firestore();
+  const mallory = testEnv.authenticatedContext('mallory', { email: 'm@victim.com', bid: VICTIM_BIZ }).firestore();
+
+  await assertSucceeds(getDoc(doc(alice, 'dailyReportMisses', `${MY_BIZ}_2026-08-11`)));
+  // Cross-tenant read is denied.
+  await assertFails(getDoc(doc(mallory, 'dailyReportMisses', `${MY_BIZ}_2026-08-11`)));
+  // Nobody writes — not even a member of the tenant it belongs to.
+  await assertFails(updateDoc(doc(alice, 'dailyReportMisses', `${MY_BIZ}_2026-08-11`), { missingUserIds: [] }));
+  await assertFails(deleteDoc(doc(alice, 'dailyReportMisses', `${MY_BIZ}_2026-08-11`)));
+  await assertFails(setDoc(doc(mallory, 'dailyReportMisses', `${VICTIM_BIZ}_2026-08-11`), {
+    businessId: VICTIM_BIZ, date: '2026-08-11', missingUserIds: [],
+  }));
+});

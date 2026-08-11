@@ -1,95 +1,201 @@
 /**
- * Department (serviceLine) daily-report templates.
+ * Department (position) daily-report templates.
  *
- * A SEO expert should report different numbers than an Ads or Design person.
- * These are ready-made, fixed field sets keyed by the member's `serviceLine`
- * (already on TeamMember). Numeric fields marked `summable` roll up into the
- * weekly "what we achieved" totals. Pure data + helpers — no React.
+ * A SEO expert should report different numbers than an Ads or Design person. These
+ * are ready-made, fixed question sets keyed by the member's `position` (already on
+ * TeamMember). Pure data + helpers — no React.
+ *
+ * ── Why every template follows the same four movements ──────────────────────────
+ *
+ * The first version of this file asked each craft for a handful of counters, and a
+ * counter is exactly the thing a CEO cannot act on: "backlinks: 5" says nothing about
+ * which client got them, whether they helped, or what happens tomorrow. So each
+ * template now runs Output → Impakt → Rrezik → Hapi tjetër:
+ *
+ *   output  — what came out, tied to the client wherever the work is client work
+ *   impact  — what changed because of it (the question people skip when not asked)
+ *   risk    — what could break, surfaced on the day it appears rather than the day
+ *             it explodes
+ *   next    — the concrete next move, which is also tomorrow's plan
+ *
+ * `perClient: true` marks a field asked once per client TOUCHED TODAY — the client
+ * list is derived from the day's answered tasks (see dailyReportPlan.ts), never typed
+ * again by hand. Those answers are stored under `"<key>.<customerId>"` inside the same
+ * flat `customFields` record, so nothing about the stored shape changed and every
+ * existing report still reads.
+ *
+ * Field keys are permanent: an existing key keeps its meaning so historical
+ * `customFields` keep aggregating in the weekly totals. Add, don't rename.
  */
 
-export type ReportFieldType = 'text' | 'number' | 'textarea';
+export type ReportFieldType = 'text' | 'number' | 'textarea' | 'url' | 'select';
+
+/** The four movements, in the order they are rendered. */
+export type ReportFieldKind = 'output' | 'impact' | 'risk' | 'next';
+
+export const FIELD_KINDS: Array<{ key: ReportFieldKind; label: string; hint: string }> = [
+  { key: 'output', label: 'Output',      hint: 'Çfarë doli konkretisht sot' },
+  { key: 'impact', label: 'Impakt',      hint: 'Çfarë ndryshoi për klientin' },
+  { key: 'risk',   label: 'Rrezik',      hint: 'Çfarë mund të prishet' },
+  { key: 'next',   label: 'Hapi tjetër', hint: 'Çfarë ndodh nesër me këtë' },
+];
 
 export interface ReportField {
   key: string;
   label: string;
   type: ReportFieldType;
+  /** Which movement this belongs to. Defaults to `output` for legacy fields. */
+  kind?: ReportFieldKind;
   placeholder?: string;
   unit?: string;         // shown after the value (e.g. "€")
   summable?: boolean;    // numeric fields that make sense to sum over a week
+  /** Blocks submission when empty. Used sparingly — see dailyReportQuality.ts. */
+  required?: boolean;
+  /** Minimum length for text/textarea answers, so "ok" cannot pass as an answer. */
+  minChars?: number;
+  /** Asked once per client touched today; stored as `"<key>.<customerId>"`. */
+  perClient?: boolean;
+  /** Choices for `type: 'select'`. */
+  options?: string[];
 }
 
 export interface ReportTemplate {
-  key: string;           // normalized serviceLine
+  key: string;           // normalized position
   label: string;         // display name
   emoji: string;
   fields: ReportField[];
 }
 
-const N = (key: string, label: string, extra: Partial<ReportField> = {}): ReportField =>
-  ({ key, label, type: 'number', summable: true, ...extra });
+// ── tiny builders, so a template reads as its questions and not as punctuation ──
+const N = (key: string, label: string, kind: ReportFieldKind = 'output', extra: Partial<ReportField> = {}): ReportField =>
+  ({ key, label, type: 'number', kind, summable: true, ...extra });
+const T = (key: string, label: string, kind: ReportFieldKind, extra: Partial<ReportField> = {}): ReportField =>
+  ({ key, label, type: 'text', kind, ...extra });
+const A = (key: string, label: string, kind: ReportFieldKind, extra: Partial<ReportField> = {}): ReportField =>
+  ({ key, label, type: 'textarea', kind, ...extra });
+const U = (key: string, label: string, kind: ReportFieldKind = 'output', extra: Partial<ReportField> = {}): ReportField =>
+  ({ key, label, type: 'url', kind, placeholder: 'https://…', ...extra });
+const S = (key: string, label: string, kind: ReportFieldKind, options: string[], extra: Partial<ReportField> = {}): ReportField =>
+  ({ key, label, type: 'select', kind, options, ...extra });
 
 export const REPORT_TEMPLATES: ReportTemplate[] = [
   {
     key: 'seo', label: 'SEO', emoji: '🔍',
     fields: [
-      N('keywords', 'Fjalë kyçe të punuara'),
-      N('backlinks', 'Backlinks të ndërtuar'),
-      N('pagesOptimized', 'Faqe/artikuj të optimizuar'),
-      N('technicalFixes', 'Rregullime teknike'),
-      { key: 'rankingNotes', label: 'Shënime mbi renditjen', type: 'textarea', placeholder: 'p.sh. keyword X u ngjit në faqen 1…' },
+      N('pagesOptimized', 'Faqe/URL të optimizuara', 'output', { perClient: true }),
+      U('optimizedUrls', 'Linket e faqeve të prekura', 'output', { perClient: true }),
+      N('backlinks', 'Backlinks të ndërtuar', 'output', { perClient: true }),
+      N('backlinkQuality', 'Cilësia mesatare e tyre (DR)', 'output', { summable: false }),
+      N('technicalFixes', 'Rregullime teknike', 'output'),
+      T('technicalFixNotes', 'Çfarë ishin', 'output', { placeholder: 'p.sh. redirect chains, sitemap, Core Web Vitals' }),
+      N('top3', 'Fjalë kyçe që hynë në top-3', 'impact'),
+      N('top10', 'Fjalë kyçe që hynë në top-10', 'impact'),
+      // Key kept from the first version so old reports keep their answer, but the
+      // question changed from "shënime" to the one a CEO actually needs.
+      A('rankingNotes', 'Çfarë do lëvizë renditjen muajin tjetër', 'impact', {
+        required: true, minChars: 30,
+        placeholder: 'Lidhe me punën e sotme — jo plan i përgjithshëm.',
+      }),
+      T('seoBlockers', 'Çfarë e ngadalëson progresin te ky klient', 'risk', { perClient: true }),
+      T('nextStep', 'Hapi tjetër konkret nesër', 'next', { required: true }),
     ],
   },
   {
     key: 'ads', label: 'Ads / PPC', emoji: '🎯',
     fields: [
-      N('campaigns', 'Fushata të menaxhuara'),
-      N('adSpend', 'Shpenzim reklamash', { unit: '€' }),
-      N('leads', 'Leads të gjeneruara'),
-      { key: 'ctr', label: 'CTR / performancë', type: 'text', placeholder: 'p.sh. CTR 3.2%, CPL 1.4€' },
-      { key: 'optimizations', label: 'Optimizime', type: 'textarea', placeholder: 'p.sh. ndalova 2 ad-set me performancë të ulët…' },
+      N('campaigns', 'Fushata të menaxhuara', 'output'),
+      N('adSpend', 'Shpenzim sot', 'output', { unit: '€', perClient: true }),
+      N('leads', 'Leads të gjeneruara', 'output', { perClient: true }),
+      A('changesMade', 'Ndryshimet që bëra sot', 'output', {
+        required: true, minChars: 25,
+        placeholder: 'p.sh. ndala ad-set-in me CPL 6€, dyfishova buxhetin e krijimtarisë B',
+      }),
+      N('cpl', 'CPL', 'impact', { unit: '€', summable: false }),
+      N('roas', 'ROAS', 'impact', { summable: false }),
+      N('conversions', 'Konvertime', 'impact'),
+      T('campaignAtRisk', 'Fushatë në rrezik + arsyeja', 'risk', {
+        placeholder: 'p.sh. Klienti A — CPL u trefishua pas ndryshimit të faqes',
+      }),
+      T('budgetRemaining', 'Buxheti i mbetur / kur mbaron', 'risk', { required: true }),
+      T('nextStep', 'Çfarë do ndryshoj nesër', 'next', { required: true }),
     ],
   },
   {
     key: 'social', label: 'Social Media', emoji: '📱',
     fields: [
-      N('posts', 'Postime'),
-      N('reels', 'Reels / Video'),
-      N('stories', 'Stories'),
-      N('interactions', 'Komente/mesazhe të përgjigjura'),
-      { key: 'contentNotes', label: 'Shënime mbi përmbajtjen', type: 'textarea' },
+      N('posts', 'Postime', 'output', { perClient: true }),
+      N('reels', 'Reels / Video', 'output', { perClient: true }),
+      N('stories', 'Stories', 'output', { perClient: true }),
+      N('reach', 'Reach', 'impact'),
+      N('engagement', 'Engagement', 'impact'),
+      N('newFollowers', 'Ndjekës të rinj', 'impact'),
+      A('whatWorked', 'Çfarë funksionoi më mirë sot dhe pse', 'impact', {
+        placeholder: 'Një fjali — kjo është ajo që përsëritet javën tjetër.',
+      }),
+      N('unansweredMessages', 'Komente/mesazhe pa përgjigje', 'risk', { required: true }),
+      T('missingMaterials', 'Materialet që mungojnë nga klienti', 'risk', { perClient: true }),
+      S('tomorrowCalendarReady', 'A është gati kalendari i nesërm', 'next',
+        ['Po', 'Pjesërisht', 'Jo'], { required: true }),
     ],
   },
   {
     key: 'design', label: 'Design', emoji: '🎨',
     fields: [
-      N('designs', 'Dizajne të përfunduara'),
-      N('revisions', 'Rishikime'),
-      { key: 'assets', label: 'Materiale të dorëzuara', type: 'text', placeholder: 'p.sh. 3 banera, 1 logo' },
+      N('designs', 'Dizajne të përfunduara', 'output', { perClient: true }),
+      N('revisions', 'Rishikime', 'output'),
+      U('assetsLink', 'Link i materialeve', 'output', {
+        required: true, placeholder: 'Drive, Figma ose folderi i klientit',
+      }),
+      T('campaignUse', 'Për cilën fushatë/kanal shkojnë', 'impact'),
+      T('awaitingApproval', 'Çfarë pret aprovim', 'risk', { perClient: true }),
+      T('nextStep', 'Çfarë dorëzoj nesër', 'next', { required: true }),
     ],
   },
   {
     key: 'dev', label: 'Development', emoji: '💻',
     fields: [
-      N('features', 'Features/detyra të dorëzuara'),
-      N('bugsFixed', 'Bug-e të rregulluar'),
-      { key: 'devNotes', label: 'Shënime teknike', type: 'textarea' },
+      N('features', 'Features/detyra të dorëzuara', 'output'),
+      U('prLink', 'Link PR / deploy', 'output', { required: true, placeholder: 'https://github.com/…/pull/…' }),
+      N('bugsFixed', 'Bug-e të rregulluar', 'output'),
+      T('userImpact', 'Çfarë u përmirësua për përdoruesin', 'impact', {
+        placeholder: 'Në gjuhë njerëzore, jo emra funksionesh.',
+      }),
+      S('readyForProd', 'A është gati për prodhim', 'impact', ['Po', 'Pas review', 'Jo']),
+      T('releaseBlockers', 'Çfarë bllokon release-in', 'risk'),
+      A('techDebt', 'Borxh teknik i hasur sot', 'risk', {
+        placeholder: 'Shkruaje sot ose harrohet përgjithmonë.',
+      }),
+      T('nextStep', 'Çfarë marr nesër', 'next', { required: true }),
     ],
   },
   {
     key: 'content', label: 'Content', emoji: '✍️',
     fields: [
-      N('articles', 'Artikuj/tekste të shkruar'),
-      N('words', 'Fjalë të shkruara'),
-      { key: 'topics', label: 'Tema të mbuluara', type: 'text' },
+      N('articles', 'Artikuj/tekste të shkruar', 'output', { perClient: true }),
+      N('words', 'Fjalë të shkruara', 'output'),
+      T('topics', 'Tema të mbuluara', 'output'),
+      T('publishTarget', 'Ku publikohet dhe çfarë synon', 'impact', {
+        required: true, placeholder: 'p.sh. blogu i Klientit A — fjala kyçe "çmim paneli diellor"',
+      }),
+      T('awaitingApproval', 'Çfarë pret aprovim', 'risk', { perClient: true }),
+      T('nextStep', 'Çfarë shkruaj nesër', 'next', { required: true }),
     ],
   },
   {
     key: 'sales', label: 'Sales', emoji: '📞',
     fields: [
-      N('calls', 'Telefonata'),
-      N('meetings', 'Takime'),
-      N('proposals', 'Propozime të dërguara'),
-      N('dealsWon', 'Marrëveshje të fituara'),
+      N('calls', 'Telefonata', 'output'),
+      N('meetings', 'Takime', 'output'),
+      N('proposals', 'Propozime të dërguara', 'output'),
+      N('pipelineMoved', 'Vlera e pipeline-it të lëvizur', 'impact', { unit: '€' }),
+      N('dealsWon', 'Marrëveshje të fituara', 'impact'),
+      // The single most expensive piece of information an agency throws away daily.
+      T('dealsLostReason', 'Të humbura + arsyeja e vërtetë', 'impact', {
+        required: true, placeholder: 'Çmim, kohë, konkurrent, heshtje — ose "asnjë".',
+      }),
+      N('overdueFollowUps', 'Follow-up të vonuar', 'risk'),
+      T('coolingDeal', 'Marrëveshja që rrezikon të ftohet', 'risk'),
+      T('nextStep', 'Kë kontaktoj nesër', 'next', { required: true }),
     ],
   },
   // Web DESIGN is its own craft, not a flavour of development. It used to fall through
@@ -98,31 +204,48 @@ export const REPORT_TEMPLATES: ReportTemplate[] = [
   {
     key: 'web', label: 'Web Design', emoji: '🖥️',
     fields: [
-      N('pagesDesigned', 'Faqe/seksione të dizajnuara'),
-      N('prototypes', 'Prototipe/wireframe'),
-      N('revisions', 'Raunde rishikimi'),
-      N('handoffs', 'Dorëzime te zhvillimi'),
-      { key: 'webNotes', label: 'Shënime dizajni', type: 'textarea', placeholder: 'p.sh. u rishikua hero-ja sipas feedback-ut të klientit…' },
+      N('pagesDesigned', 'Faqe/seksione të dorëzuara', 'output', { perClient: true }),
+      U('previewLink', 'Link i preview-t', 'output', {
+        required: true, placeholder: 'Figma, staging ose shared link',
+      }),
+      N('prototypes', 'Prototipe/wireframe', 'output'),
+      N('revisions', 'Raunde revizioni', 'output'),
+      S('handedToDev', 'A kaloi te zhvillimi', 'impact', ['Po', 'Pjesërisht', 'Jo']),
+      T('userProblemSolved', 'Çfarë u zgjidh për përdoruesin', 'impact', {
+        placeholder: 'p.sh. formulari u shkurtua nga 9 fusha në 4',
+      }),
+      T('awaitingFromClient', 'Çfarë pres nga klienti', 'risk', {
+        perClient: true, placeholder: 'p.sh. tekstet e shërbimeve, fotot e ekipit',
+      }),
+      T('nextRound', 'Raundi i radhës — çfarë dhe kur', 'next', { required: true }),
     ],
   },
   {
     key: 'photo-video', label: 'Foto & Video', emoji: '🎥',
     fields: [
-      N('shoots', 'Seanca xhirimi/fotografimi'),
-      N('photosEdited', 'Foto të përpunuara'),
-      N('videosEdited', 'Video të montuara'),
-      N('footageMinutes', 'Minuta material të xhiruar', { unit: 'min' }),
-      { key: 'mediaNotes', label: 'Shënime prodhimi', type: 'textarea', placeholder: 'p.sh. lokacioni u ndryshua për shkak të motit…' },
+      N('shoots', 'Seanca xhirimi/fotografimi', 'output', { perClient: true }),
+      N('photosEdited', 'Foto të përpunuara', 'output'),
+      N('videosEdited', 'Video të montuara', 'output'),
+      N('footageMinutes', 'Minuta material të xhiruar', 'output', { unit: 'min' }),
+      U('deliveryLink', 'Link i dorëzimit', 'output', { placeholder: 'Drive / WeTransfer' }),
+      T('clientCampaign', 'Për cilin klient dhe cilën fushatë', 'impact', { required: true }),
+      A('notShot', 'Çfarë mbeti pa xhiruar dhe pse', 'risk', {
+        placeholder: 'Moti, lokacioni, mungesa e personazhit…',
+      }),
+      T('nextStep', 'Çfarë xhiroj/montoj nesër', 'next', { required: true }),
     ],
   },
   {
     key: 'regjia', label: 'Regjia', emoji: '🎬',
     fields: [
-      N('scripts', 'Skenarë/koncepte'),
-      N('storyboards', 'Storyboard-e'),
-      N('shootsDirected', 'Xhirime të drejtuara'),
-      N('castingSessions', 'Takime kastingu/lokacioni'),
-      { key: 'directionNotes', label: 'Shënime regjie', type: 'textarea', placeholder: 'p.sh. u vendos ndryshimi i ritmit në skenën 3…' },
+      N('scripts', 'Skenarë/koncepte', 'output', { perClient: true }),
+      N('storyboards', 'Storyboard-e', 'output'),
+      N('shootsDirected', 'Xhirime të drejtuara', 'output'),
+      N('castingSessions', 'Takime kastingu/lokacioni', 'output'),
+      S('conceptApproved', 'A u aprovua koncepti', 'impact',
+        ['Po', 'Me ndryshime', 'Jo', 'Ende në pritje'], { required: true }),
+      T('shootRisk', 'Çfarë rrezikon datën e xhirimit', 'risk'),
+      T('nextDecision', 'Vendimi që duhet marrë nesër', 'next', { required: true }),
     ],
   },
   // Not everyone who logs in delivers client work. Once declaring a position became
@@ -132,11 +255,16 @@ export const REPORT_TEMPLATES: ReportTemplate[] = [
   {
     key: 'management', label: 'Menaxhim / Administratë', emoji: '🧭',
     fields: [
-      N('meetings', 'Takime'),
-      N('decisions', 'Vendime të marra'),
-      N('blockersRemoved', 'Pengesa të hequra ekipit'),
-      N('clientsContacted', 'Klientë të kontaktuar'),
-      { key: 'managementNotes', label: 'Shënime', type: 'textarea', placeholder: 'p.sh. u rishpërnda ngarkesa e javës…' },
+      N('meetings', 'Takime', 'output'),
+      N('decisions', 'Vendime të marra', 'output'),
+      N('blockersRemoved', 'Pengesa të hequra ekipit', 'output'),
+      N('clientsContacted', 'Klientë të kontaktuar', 'output', { perClient: true }),
+      T('decisionImpact', 'Cili vendim ndryshoi diçka sot', 'impact'),
+      A('portfolioRisks', 'Rreziqet e portofolit', 'risk', {
+        required: true, minChars: 30,
+        placeholder: 'Klientë të pakënaqur, projekte pa përparim, ngarkesë e çekuilibruar.',
+      }),
+      T('whoNeedsHelp', 'Kush ka nevojë për ndihmë nesër', 'next', { required: true }),
     ],
   },
 ];
@@ -200,4 +328,64 @@ export function getReportTemplate(serviceLine?: string | null): ReportTemplate |
 /** Numeric fields of a template that should be summed for weekly totals. */
 export function summableFields(t: ReportTemplate): ReportField[] {
   return t.fields.filter((f) => f.type === 'number' && f.summable);
+}
+
+/** Fields of one movement, in declaration order. */
+export function fieldsByKind(t: ReportTemplate, kind: ReportFieldKind): ReportField[] {
+  return t.fields.filter((f) => (f.kind || 'output') === kind);
+}
+
+/** Fields that block submission when left empty. */
+export function requiredFields(t: ReportTemplate): ReportField[] {
+  return t.fields.filter((f) => f.required);
+}
+
+// ── per-client storage ────────────────────────────────────────────────────────
+// A per-client answer lives at `"<key>.<customerId>"` in the SAME flat customFields
+// record. Keeping one record (rather than nesting a map per client) is what lets every
+// existing reader — the weekly rollup, the export, the detail dialog — keep working
+// without knowing this feature exists.
+
+export function perClientKey(fieldKey: string, customerId: string): string {
+  return `${fieldKey}.${customerId}`;
+}
+
+/** `'backlinks.cust-1'` → `{ fieldKey: 'backlinks', customerId: 'cust-1' }`. */
+export function parseFieldKey(storedKey: string): { fieldKey: string; customerId?: string } {
+  const dot = storedKey.indexOf('.');
+  if (dot === -1) return { fieldKey: storedKey };
+  return { fieldKey: storedKey.slice(0, dot), customerId: storedKey.slice(dot + 1) };
+}
+
+/**
+ * Total for one field across a report, per-client answers included.
+ *
+ * Without this the weekly rollup silently reports 0 for every per-client field: the
+ * plain key `backlinks` no longer exists once the answer is split per client.
+ */
+export function sumFieldValue(customFields: Record<string, string | number> | undefined, fieldKey: string): number {
+  if (!customFields) return 0;
+  let total = 0;
+  for (const [k, raw] of Object.entries(customFields)) {
+    if (parseFieldKey(k).fieldKey !== fieldKey) continue;
+    const v = Number(raw);
+    if (!isNaN(v)) total += v;
+  }
+  return total;
+}
+
+/** Every value stored for one field, keyed by client (`''` = the non-per-client one). */
+export function valuesByCustomer(
+  customFields: Record<string, string | number> | undefined,
+  fieldKey: string,
+): Array<{ customerId: string; value: string | number }> {
+  if (!customFields) return [];
+  const out: Array<{ customerId: string; value: string | number }> = [];
+  for (const [k, value] of Object.entries(customFields)) {
+    const parsed = parseFieldKey(k);
+    if (parsed.fieldKey !== fieldKey) continue;
+    if (value === '' || value === undefined || value === null) continue;
+    out.push({ customerId: parsed.customerId || '', value });
+  }
+  return out;
 }

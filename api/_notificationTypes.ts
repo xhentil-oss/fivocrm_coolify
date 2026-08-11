@@ -67,6 +67,8 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   contract_sent: 'invoices',
   // reports
   report: 'reports',
+  daily_report_due: 'reports',
+  daily_report_missing: 'reports',
   // system
   billing: 'system',
   recurring_project_no_budget: 'system',

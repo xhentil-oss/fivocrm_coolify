@@ -81,6 +81,7 @@
 | `reportVersions` / `reportApprovals` / `reportEvents` | Append-only history, sign-off, audit |
 | `reportComments` | Report discussion (`internal` = the client boundary) |
 | `contactMerges` | Duplicate-merge archive (full snapshot of the absorbed contact; read-only) |
+| `dailyReportMisses` | Who did not file a daily report, per tenant per day (cron-written, `write: if false`) |
 | `reportTemplates` / `reportSchedules` / `reportKpis` / `reportMetrics` | Reporting config + metric values |
 | `clientHealthScores` / `employeeReportScores` | Health + accountability rollups |
 
@@ -270,6 +271,46 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   `scripts/dedupe-expenses.mjs` is the repair path (dry-run by default,
   `--archive` snapshots into `expenseDeduped`, a recurring parent is never
   deleted).
+
+### Daily staff report (mandatory, 16:50)
+
+- **One form, two mounts.** `DailyReportForm` is the ONLY place the daily questions
+  are rendered — `DailyReportPopup` (the employee, on schedule) and
+  `DailyReportPreviewDialog` ("Shiko si punonjës", admin) both mount it. A second
+  copy would drift the first time a field is added, and the preview would then show
+  a form nobody fills.
+- **The report is the day's PLAN, answered.** Every task the day planned becomes a
+  `DailyTaskOutcome` (`done` / `in_progress` / `not_started`), and the two unfinished
+  states REQUIRE a `reason`. That rule is the feature: before it, an untouched task
+  simply vanished from the report. Pure logic in
+  `src/lib/productivity/dailyReportPlan.ts`; `completedToday`/`openItems` are
+  GENERATED from the rows and stay editable, so every existing reader still works.
+- **Questions are declared once**, in `src/lib/productivity/reportTemplates.ts` —
+  the same registry that defines the position picker, so a new craft can never exist
+  without its questions. Each template runs Output → Impakt → Rrezik → Hapi tjetër.
+- **Per-client answers live in the SAME flat `customFields`**, keyed
+  `"<field>.<customerId>"` (`perClientKey`). Never read `customFields[key]` for a
+  summable field — use `sumFieldValue()`, or per-client answers silently total 0.
+  The client list is DERIVED from the answered tasks, never typed twice.
+- **Timing is one source of truth**: `DAILY_PROMPT_*` (16:50) and `DAILY_DUE_*`
+  (17:30) in `DailyReportForm`. These used to disagree (popup 16:45, `dueAt` 18:00),
+  so `wasLate` never fired and the accountability dashboard reported 0 late reports
+  forever.
+- **There is no "Më vonë".** Closing the dialog leaves a permanent banner, and
+  `?job=daily-report-check&stage=remind|escalate` (`api/cron/run.ts`) notifies the
+  person at ~17:35 and their managers at ~18:35. `stage` is explicit because the
+  server does not know the tenant's timezone — the VPS crontab decides. Idempotent
+  per tenant/day/stage via `dailyReportMisses/{businessId}_{date}`, which is
+  `write: if false` (a person who skipped the report must not be able to erase the
+  evidence). NOT part of `run-all`.
+- **Quality is advisory except where something is missing**
+  (`dailyReportQuality.ts`): only unanswered required fields and unexplained
+  unfinished work block submission. A declared absence (`leave`/`sick`/`holiday`)
+  waives the whole form.
+- Adding a field to a template? → nothing else to touch. Adding a `required` one?
+  → keep the per-template total under ~12 fields and ≤4 required (the tests enforce
+  both) — the daily habit dies the moment it stops being a 60-second job.
+- Full runbook, crontab lines and limitations: `workspace/DAILY_REPORTS_V2.md`.
 
 ### Reporting & Accountability module (`id: 'reporting'`, `minPlan: 'pro'`)
 

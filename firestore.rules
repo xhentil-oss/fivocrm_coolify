@@ -870,6 +870,14 @@ service cloud.firestore {
       allow update, delete: if canManageBusinessDoc();
     }
 
+    // Who did NOT report, per tenant per day. Written ONLY by the daily-report-check
+    // cron (Admin SDK, which bypasses these rules) — a client that could write here
+    // could erase its own absence, which is the one record the escalation depends on.
+    match /dailyReportMisses/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow write: if false;
+    }
+
     match /invoiceItems/{docId} {
       // Staff via businessId; portal client via customerId (derived from invoice).
       allow read: if isBusinessMember(resource.data.businessId)
