@@ -832,32 +832,39 @@ app.post('/whmcs-proxy', requireApiKey, async (req, res) => {
 const CRM_BASE_URL = (process.env.CRM_BASE_URL || '').replace(/\/$/, '');
 const CRON_SECRET = process.env.CRON_SECRET || '';
 const CRON_DAILY_HOUR = parseInt(process.env.CRON_DAILY_HOUR || '8'); // UTC, matches old "0 8 * * *"
+// The office's wall clock, for deadlines that are promises to people rather than
+// machine schedules (the daily report). IANA name, e.g. 'Europe/Tirane'.
+const CRON_LOCAL_TZ = process.env.CRON_LOCAL_TZ || 'Europe/Tirane';
 const cronInFlight = new Set<string>();
 
-async function triggerCronJob(job: string): Promise<void> {
+async function triggerCronJob(job: string, params?: Record<string, string>): Promise<void> {
   if (!CRM_BASE_URL || !CRON_SECRET) return;
-  if (cronInFlight.has(job)) {
-    console.warn(`[CRON] anashkalo "${job}" — ekzekutimi i mëparshëm ende në punë`);
+  // The in-flight key includes the params, so two stages of the same job (e.g.
+  // daily-report-check remind vs escalate) never block each other.
+  const query = new URLSearchParams({ job, ...(params || {}) }).toString();
+  const label = params ? `${job} ${new URLSearchParams(params).toString()}` : job;
+  if (cronInFlight.has(query)) {
+    console.warn(`[CRON] anashkalo "${label}" — ekzekutimi i mëparshëm ende në punë`);
     return;
   }
-  cronInFlight.add(job);
+  cronInFlight.add(query);
   const started = Date.now();
   try {
     const ctrl = new AbortController();
     const to = setTimeout(() => ctrl.abort(), 90_000);
-    const res = await fetch(`${CRM_BASE_URL}/api/cron/run?job=${encodeURIComponent(job)}`, {
+    const res = await fetch(`${CRM_BASE_URL}/api/cron/run?${query}`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${CRON_SECRET}` },
       signal: ctrl.signal,
     });
     clearTimeout(to);
     const ms = Date.now() - started;
-    if (!res.ok) console.error(`[CRON] "${job}" → HTTP ${res.status} (${ms}ms)`);
-    else console.log(`[CRON] "${job}" ok (${ms}ms)`);
+    if (!res.ok) console.error(`[CRON] "${label}" → HTTP ${res.status} (${ms}ms)`);
+    else console.log(`[CRON] "${label}" ok (${ms}ms)`);
   } catch (err) {
-    console.error(`[CRON] "${job}" dështoi:`, (err as Error)?.message || err);
+    console.error(`[CRON] "${label}" dështoi:`, (err as Error)?.message || err);
   } finally {
-    cronInFlight.delete(job);
+    cronInFlight.delete(query);
   }
 }
 
@@ -869,6 +876,51 @@ function scheduleDailyUtc(hour: number, minute: number, fn: () => void): void {
   if (next.getTime() <= now.getTime()) next.setUTCDate(next.getUTCDate() + 1);
   const run = () => { fn(); setTimeout(run, DAY); };
   setTimeout(run, next.getTime() - now.getTime());
+}
+
+/** Wall-clock date + time in an IANA zone, without pulling in a date library. */
+function partsInZone(d: Date, timeZone: string): { day: string; hour: number; minute: number } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone, hour12: false,
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit',
+  }).formatToParts(d);
+  const get = (t: string) => parts.find(p => p.type === t)?.value || '0';
+  return {
+    day: `${get('year')}-${get('month')}-${get('day')}`,
+    // Intl can emit "24" for midnight in some locales/engines.
+    hour: Number(get('hour')) % 24,
+    minute: Number(get('minute')),
+  };
+}
+
+/**
+ * Fire once per LOCAL day, at or after `hour:minute` in `timeZone`.
+ *
+ * Not `scheduleDailyUtc`: an office deadline is wall-clock. Albania is UTC+2 in
+ * summer and UTC+1 in winter, so a fixed UTC time silently drifts an hour twice a
+ * year — for the daily-report escalation that means notifying managers BEFORE the
+ * deadline all winter.
+ *
+ * "At or after" rather than "exactly at" is also deliberate: a PM2 restart at 17:34
+ * must not swallow the day's run. The minute ticker costs nothing — it only makes a
+ * network call when it actually fires.
+ */
+function scheduleDailyInZone(timeZone: string, hour: number, minute: number, fn: () => void): void {
+  let lastFiredDay = partsInZone(new Date(), timeZone).day;
+  // Boot-day guard: if the process starts AFTER the target time, do not fire
+  // immediately for a moment that has already passed unnoticed — wait for tomorrow.
+  const boot = partsInZone(new Date(), timeZone);
+  const alreadyPast = boot.hour > hour || (boot.hour === hour && boot.minute >= minute);
+  if (!alreadyPast) lastFiredDay = '';
+
+  setInterval(() => {
+    const p = partsInZone(new Date(), timeZone);
+    if (p.day === lastFiredDay) return;
+    if (p.hour > hour || (p.hour === hour && p.minute >= minute)) {
+      lastFiredDay = p.day;
+      fn();
+    }
+  }, 60_000);
 }
 
 function startCronSchedulers(): void {
@@ -925,9 +977,21 @@ function startCronSchedulers(): void {
   scheduleDailyUtc(5, 0, () => {
     if (new Date().getUTCDate() === 1) void triggerCronJob('report-metrics-social');
   });
+  // ── Daily staff report (mandatory, prompted 16:50, due 17:30 LOCAL) ──
+  // Two rungs: the person first, their managers an hour later. Scheduled in the
+  // office's own timezone because the deadline is a wall-clock promise — see
+  // scheduleDailyInZone. The job itself skips weekends and is idempotent per
+  // tenant/day/stage (dailyReportMisses), so a restart cannot double-notify.
+  scheduleDailyInZone(CRON_LOCAL_TZ, 17, 35, () => {
+    void triggerCronJob('daily-report-check', { stage: 'remind' });
+  });
+  scheduleDailyInZone(CRON_LOCAL_TZ, 18, 35, () => {
+    void triggerCronJob('daily-report-check', { stage: 'escalate' });
+  });
+
   // Kick the frequent set shortly after boot so a restart doesn't stall a broadcast.
   setTimeout(() => { void triggerCronJob('whatsapp-broadcasts'); }, MIN);
-  console.log(`[CRON] ✅ Schedulerët aktiv → ${CRM_BASE_URL} (daily run-all @ ${CRON_DAILY_HOUR}:00 UTC)`);
+  console.log(`[CRON] ✅ Schedulerët aktiv → ${CRM_BASE_URL} (daily run-all @ ${CRON_DAILY_HOUR}:00 UTC, raporti ditor 17:35/18:35 ${CRON_LOCAL_TZ})`);
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────
