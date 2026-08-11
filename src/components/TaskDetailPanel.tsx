@@ -1779,7 +1779,9 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                               {subtask.title}
                             </p>
                             {subtask.description && (
-                              <p className="text-xs text-muted-foreground mt-1 line-clamp-2">
+                              // Subtasks are written in a plain textarea, so the
+                              // stored value keeps real newlines — render them.
+                              <p className="text-xs text-muted-foreground mt-1 line-clamp-2 whitespace-pre-line">
                                 {subtask.description}
                               </p>
                             )}

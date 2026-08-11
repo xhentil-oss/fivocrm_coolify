@@ -20,6 +20,7 @@ import {
 import { cn } from '../lib/utils';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { toast } from '../hooks/use-toast';
+import { htmlForPastedText, normalizeToHtml, plainTextToHtml } from '../lib/richText';
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
 const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
@@ -122,7 +123,10 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({
       TextStyle,
       Color,
     ],
-    content,
+    // Descriptions written server-side (api/landing.ts joins with '\n') are
+    // stored as plain text. Handing that to TipTap raw collapsed every line
+    // break — and the next save wrote the collapsed version back permanently.
+    content: normalizeToHtml(content),
     editable,
     autofocus: autoFocus,
     onUpdate: ({ editor }) => {
@@ -152,13 +156,25 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({
             return true;
           }
         }
+        const html = event.clipboardData?.getData('text/html') || '';
+        const plain = event.clipboardData?.getData('text/plain') || '';
+
         // Strip any pasted HTML with data:image base64 (defense in depth)
-        const html = event.clipboardData?.getData('text/html');
         if (html && /<img[^>]+src="data:image\//i.test(html)) {
           event.preventDefault();
-          const text = event.clipboardData?.getData('text/plain') || '';
-          editor?.chain().focus().insertContent(text).run();
+          editor?.chain().focus().insertContent(plainTextToHtml(plain)).run();
           toast({ title: 'Imazhi inline u hoq', description: 'Përdor butonin e imazhit për ta ngarkuar.' });
+          return true;
+        }
+
+        // Text copied from WhatsApp & co. arrives either as bare plain text or
+        // wrapped in structure-less HTML whose newlines HTML collapses to
+        // spaces — which glued the whole message into one paragraph. Rebuild the
+        // paragraphs ourselves whenever the clipboard HTML has nothing to keep.
+        const rebuilt = htmlForPastedText(plain, html);
+        if (rebuilt) {
+          event.preventDefault();
+          editor?.chain().focus().insertContent(rebuilt).run();
           return true;
         }
         return false;
@@ -352,7 +368,7 @@ export const RichTextDisplay: React.FC<{ content: string; className?: string }> 
       TextStyle,
       Color,
     ],
-    content,
+    content: normalizeToHtml(content),
     editable: false,
     editorProps: {
       attributes: {
