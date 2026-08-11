@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { computeMomentum, computeMomentumTrend, DEFAULT_TARGETS, SCORE_WEIGHTS } from './momentum';
+import { computeMomentum, computeMomentumTrend, SCORE_WEIGHTS } from './momentum';
 import type { MomentumInput } from './momentum';
 import type { Task, TimeEntry } from '../../types';
 

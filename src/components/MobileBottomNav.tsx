@@ -1,10 +1,24 @@
 import React, { useState, useMemo } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
-  LayoutDashboard, CheckSquare, MessageSquare, Users,
-  Grid3x3, X, FolderKanban, Target, Receipt, BarChart3,
-  Timer, DollarSign, Settings, UserCircle, Briefcase,
-  Award, UsersRound, FileText, Shield, Wallet, Package,
+  LayoutDashboard,
+  CheckSquare,
+  MessageSquare,
+  Users,
+  Grid3x3,
+  X,
+  FolderKanban,
+  Target,
+  Receipt,
+  DollarSign,
+  Settings,
+  UserCircle,
+  Briefcase,
+  Award,
+  UsersRound,
+  Shield,
+  Wallet,
+  Package,
 } from 'lucide-react';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';

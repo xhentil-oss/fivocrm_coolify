@@ -3,8 +3,22 @@ import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { usePermissions } from '../hooks/usePermissions';
-import { User, Briefcase, MapPin, Phone, Mail, Award, Edit, Save, X, Users, ChevronDown, Check, FlaskConical, Camera } from 'lucide-react';
+import {
+  User,
+  Briefcase,
+  MapPin,
+  Phone,
+  Award,
+  Edit,
+  Save,
+  X,
+  ChevronDown,
+  Check,
+  FlaskConical,
+  Camera,
+} from 'lucide-react';
 import { phoneKeyDown } from '../lib/utils';
+import { sortArchivedLast } from '../lib/projectArchive';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -126,7 +140,7 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
   const userProjects = React.useMemo(() => {
     if (!allProjects || !userTasks) return [];
     const projectIds = new Set(userTasks.map(t => t.projectId).filter(Boolean));
-    return allProjects.filter(p => projectIds.has(p.id));
+    return sortArchivedLast(allProjects.filter(p => projectIds.has(p.id)));
   }, [allProjects, userTasks]);
 
   const { data: userGoals } = useCollection<Goal>('goals', {

@@ -13,7 +13,6 @@ import type { Invoice, Expense, TeamMember, Project } from '../../types';
 import { toAll } from '../utils';
 import {
   parseDate,
-  getInvoiceOutstandingAll,
   getInvoiceCollectedBetween,
   buildARAging,
 } from './financialAnalytics';

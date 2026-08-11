@@ -6,10 +6,32 @@ import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useAuth } from '../contexts/AuthContext';
-import { Link } from 'react-router-dom';
-import { DollarSign, Plus, Calendar as CalendarIcon, CreditCard, Mail, Send, Building2, ShoppingCart, Trash2, Eye, Edit2, Check, X, ExternalLink, Loader2, MoreVertical, Download, ChevronsUpDown, RefreshCw, Pause, Play, CircleStop, AlertTriangle, Folder } from 'lucide-react';
+import {
+  DollarSign,
+  Plus,
+  Calendar as CalendarIcon,
+  CreditCard,
+  Mail,
+  Send,
+  Building2,
+  Trash2,
+  Eye,
+  Edit2,
+  Check,
+  X,
+  ExternalLink,
+  Loader2,
+  MoreVertical,
+  Download,
+  ChevronsUpDown,
+  RefreshCw,
+  Pause,
+  Play,
+  CircleStop,
+  AlertTriangle,
+  Folder,
+} from 'lucide-react';
 import ExportButton from '../components/ExportButton';
-import { loadStripe } from '@stripe/stripe-js';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
@@ -39,6 +61,7 @@ import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import { toAll, getRateToAll, getTimestampMs, canSeeFinancials } from '../lib/utils';
 import { toast } from '../hooks/use-toast';
 import { getStatusColor, getInvoiceStatusLabel } from '../lib/statusColors';
+import { projectPickerLabel, sortArchivedLast } from '../lib/projectArchive';
 import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../lib/native';
 import { resolvePortalUserId } from '../lib/notifyClient';
 
@@ -1029,10 +1052,10 @@ const InvoicesView: React.FC = () => {
           >
             <option value="__all__">Çdo projekt</option>
             <option value="__none__">Pa projekt{unlinkedCount ? ` (${unlinkedCount})` : ''}</option>
-            {(allProjects || [])
-              .slice()
-              .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-              .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+            {/* Alphabetical, archive last (sortArchivedLast is stable). */}
+            {sortArchivedLast(
+              (allProjects || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+            ).map(p => <option key={p.id} value={p.id}>{projectPickerLabel(p)}</option>)}
           </select>
           <select
             value={monthFilter}
@@ -1639,8 +1662,9 @@ const InvoicesView: React.FC = () => {
             const all = (allProjects || []).filter(p => !q || (p.name || '').toLowerCase().includes(q));
             // The customer's own projects first — that is the link the user almost
             // always wants — but every other project stays reachable below.
-            const ofCustomer = inv.customerId ? all.filter(p => p.customerId === inv.customerId) : [];
-            const others = all.filter(p => !inv.customerId || p.customerId !== inv.customerId);
+            // Inside each group, archived projects sink to the bottom.
+            const ofCustomer = sortArchivedLast(inv.customerId ? all.filter(p => p.customerId === inv.customerId) : []);
+            const others = sortArchivedLast(all.filter(p => !inv.customerId || p.customerId !== inv.customerId));
             const current = inv.projectId ? projectById.get(inv.projectId) : undefined;
 
             const row = (p: Project) => (
@@ -1654,7 +1678,7 @@ const InvoicesView: React.FC = () => {
               >
                 <span className="flex items-center gap-2 min-w-0">
                   <Folder className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
-                  <span className="truncate">{p.name}</span>
+                  <span className="truncate">{projectPickerLabel(p)}</span>
                 </span>
                 <span className="flex items-center gap-2 shrink-0">
                   {p.id === inv.projectId && <Check className="w-3.5 h-3.5 text-success" />}
@@ -2287,12 +2311,16 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       {(() => {
         const all = projects || [];
         const linked = selectedProjectId ? all.find(p => p.id === selectedProjectId) : undefined;
-        const customerProjects = selectedCustomerId ? all.filter(p => p.customerId === selectedCustomerId) : [];
+        // Archived projects stay linkable (an old invoice belongs to one) but sit at
+        // the bottom of their group; the status is already spelled out per row.
+        const customerProjects = sortArchivedLast(
+          selectedCustomerId ? all.filter(p => p.customerId === selectedCustomerId) : []
+        );
         // Projects of other customers (or with none) stay reachable under a separate
         // group instead of being silently unavailable.
-        const otherProjects = all
+        const otherProjects = sortArchivedLast(all
           .filter(p => !selectedCustomerId || p.customerId !== selectedCustomerId)
-          .sort((a, b) => (a.name || '').localeCompare(b.name || ''));
+          .sort((a, b) => (a.name || '').localeCompare(b.name || '')));
         const mismatch = !!linked && !!selectedCustomerId && !!linked.customerId && linked.customerId !== selectedCustomerId;
 
         return (

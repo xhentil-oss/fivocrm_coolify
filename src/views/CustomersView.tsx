@@ -10,10 +10,31 @@ import { getStatusColor, getPriorityColor } from '../lib/statusColors';
 import { getDocs, query, where, collection, deleteDoc, doc } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import {
-  Building2, Plus, Mail, Phone, Search, Filter, X,
-  CheckCircle2, XCircle, AlertCircle, Star, Users,
-  ShieldCheck, ClipboardList, UserPlus, Ban, Clock,
-  ExternalLink, Globe, Trash2, MoreVertical, PlusCircle, UserCheck, Download, Merge, Copy,
+  Building2,
+  Plus,
+  Mail,
+  Phone,
+  Search,
+  Filter,
+  X,
+  CheckCircle2,
+  XCircle,
+  AlertCircle,
+  Star,
+  Users,
+  ShieldCheck,
+  ClipboardList,
+  UserPlus,
+  Ban,
+  Clock,
+  ExternalLink,
+  Trash2,
+  MoreVertical,
+  PlusCircle,
+  UserCheck,
+  Download,
+  Merge,
+  Copy,
 } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { SkeletonLoader } from '../components/PageSkeleton';

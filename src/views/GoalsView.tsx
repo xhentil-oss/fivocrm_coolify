@@ -4,6 +4,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useUserNames } from '../hooks/useUserNames';
 import { getStatusColor } from '../lib/statusColors';
+import { projectPickerLabel, sortArchivedLast } from '../lib/projectArchive';
 import {
   Target, Plus, CheckCircle2, Calendar, Users, User as UserIcon,
   AlertCircle, Link2, Trash2, ChevronDown, ChevronRight,
@@ -831,8 +832,8 @@ const GoalForm: React.FC<{
           <Select onValueChange={(v) => { if (v && !linkedProjects.includes(v)) setLinkedProjects(prev => [...prev, v]); }}>
             <SelectTrigger className="h-8 text-xs"><SelectValue placeholder="+ Shto projekt" /></SelectTrigger>
             <SelectContent>
-              {projects.filter(p => !linkedProjects.includes(p.id)).map(p => (
-                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+              {sortArchivedLast(projects.filter(p => !linkedProjects.includes(p.id))).map(p => (
+                <SelectItem key={p.id} value={p.id}>{projectPickerLabel(p)}</SelectItem>
               ))}
             </SelectContent>
           </Select>

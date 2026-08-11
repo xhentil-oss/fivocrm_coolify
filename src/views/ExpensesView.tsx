@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { toAll } from '../lib/utils';
+import { projectPickerLabel, sortArchivedLast } from '../lib/projectArchive';
 import { MONTH_LABELS_SQ, getExpenseDate } from '../lib/finance/financialAnalytics';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -752,10 +753,11 @@ const ExpensesView: React.FC = () => {
             >
               <option value="__all__">Çdo projekt</option>
               <option value="__none__">Pa projekt</option>
-              {(projects || [])
-                .slice()
-                .sort((a, b) => (a.name || '').localeCompare(b.name || ''))
-                .map(p => <option key={p.id} value={p.id}>{p.name}</option>)}
+              {/* Alphabetical, then the archive at the bottom (sortArchivedLast is
+                  stable, so it only moves archived rows down). */}
+              {sortArchivedLast(
+                (projects || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))
+              ).map(p => <option key={p.id} value={p.id}>{projectPickerLabel(p)}</option>)}
             </select>
             <div className="flex items-center gap-1.5">
               <span className="text-xs text-muted-foreground">Shuma (ALL)</span>
@@ -1560,11 +1562,11 @@ const ExpenseForm: React.FC<{
               />
             </div>
             <SelectItem value="__none__">Asnjë projekt</SelectItem>
-            {projects
-              ?.filter(p => p.name.toLowerCase().includes(projectSearch.toLowerCase()))
-              .map(p => (
-                <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
-              ))}
+            {sortArchivedLast(
+              (projects || []).filter(p => p.name.toLowerCase().includes(projectSearch.toLowerCase()))
+            ).map(p => (
+              <SelectItem key={p.id} value={p.id}>{projectPickerLabel(p)}</SelectItem>
+            ))}
             {projects?.filter(p => p.name.toLowerCase().includes(projectSearch.toLowerCase())).length === 0 && (
               <div className="px-3 py-2 text-sm text-muted-foreground">Asnjë rezultat</div>
             )}

@@ -4,6 +4,7 @@ import { useCollection, useDocument, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
 import { getStatusColor } from '../lib/statusColors';
+import { sortArchivedLast } from '../lib/projectArchive';
 import {
   ArrowLeft, Building2, Mail, Phone, FileText, DollarSign,
   ClipboardList, Calendar, Plus, Clock, Target, Calculator, Send,
@@ -136,7 +137,8 @@ const Customer360View: React.FC = () => {
 
   const customerProjects = useMemo(() => {
     if (!projects) return [];
-    return projects.filter(p => p.customerId === customerId);
+    // Archived ones stay on the client's record (history), just at the bottom.
+    return sortArchivedLast(projects.filter(p => p.customerId === customerId));
   }, [projects, customerId]);
 
   const allCustomerRequests = useMemo(() => {

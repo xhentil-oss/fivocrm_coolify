@@ -3,7 +3,33 @@ import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFir
 import { useAuth } from '../contexts/AuthContext';
 import { getDocs, query, where, collection, deleteDoc, doc, updateDoc, deleteField } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { Users, Plus, MoreVertical, Mail, UserPlus, Shield, Trash2, CheckCircle, XCircle, Clock, Edit2, Check, X, Settings, Eye, Globe, Search, Share2, PenTool, Palette, Megaphone, Code2, HeadphonesIcon, Briefcase, DollarSign, TrendingUp, UserCheck, Copy, Send } from 'lucide-react';
+import {
+  Users,
+  Plus,
+  MoreVertical,
+  Mail,
+  UserPlus,
+  Shield,
+  Trash2,
+  XCircle,
+  Edit2,
+  Check,
+  X,
+  Settings,
+  Search,
+  Share2,
+  PenTool,
+  Palette,
+  Megaphone,
+  Code2,
+  HeadphonesIcon,
+  Briefcase,
+  DollarSign,
+  TrendingUp,
+  UserCheck,
+  Copy,
+  Send,
+} from 'lucide-react';
 
 // Returns icon + colour classes based on the team's department / service category
 function getTeamDeptIcon(department?: string) {

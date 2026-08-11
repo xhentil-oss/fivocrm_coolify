@@ -1,8 +1,17 @@
 import React, { useMemo } from 'react';
 import { useCollection } from '../hooks/useFirestore';
 import {
-  BarChart as RBarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, Cell,
-  AreaChart, Area, PieChart, Pie, Legend,
+  BarChart as RBarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  ResponsiveContainer,
+  Cell,
+  AreaChart,
+  Area,
+  PieChart,
+  Pie,
 } from 'recharts';
 import { Mail, Send, Eye, MousePointerClick, Zap, TrendingUp, Info } from 'lucide-react';
 import type { EmailCampaign, CampaignEnrollment, WhatsAppBroadcast } from '../types';

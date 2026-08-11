@@ -39,7 +39,7 @@ import { formatCurrency, toAll, canSeeFinancials, cn } from '../lib/utils';
 import { computeProjectLabor } from '../lib/finance/laborCost';
 import { getInvoiceTotalAll, getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
 import { getInquiryCompleteness } from '../lib/inquiryBrief';
-import { archiveProjectPatch, isProjectArchived, restoreProjectPatch } from '../lib/projectArchive';
+import { archiveProjectPatch, isProjectArchived, projectPickerLabel, restoreProjectPatch, sortArchivedLast } from '../lib/projectArchive';
 import { Receipt } from 'lucide-react';
 import type { Task, Project, Team, TeamMember, TimeEntry, Expense, Invoice, InvoiceItem, Customer, ServiceInquiry } from '../types';
 import { getNextInvoiceNumber } from '../lib/firebase';
@@ -2251,8 +2251,8 @@ const TaskForm: React.FC<{
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__none__">Asnjë</SelectItem>
-            {projects.map(p => (
-              <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+            {sortArchivedLast(projects).map(p => (
+              <SelectItem key={p.id} value={p.id}>{projectPickerLabel(p)}</SelectItem>
             ))}
           </SelectContent>
         </Select>

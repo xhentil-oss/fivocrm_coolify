@@ -15,7 +15,34 @@ import { LeadFiltersBar } from './crm/LeadFiltersBar';
 import LeadAnalytics from './crm/LeadAnalytics';
 import ExportButton from '../components/ExportButton';
 import LeadImportDialog from '../components/LeadImportDialog';
-import { Mail, Phone, Building, DollarSign, TrendingUp, Plus, Calendar as CalendarIcon, Zap, Trash2, MoreVertical, Search, X, UserCircle, Edit2, Percent, MessageSquare, ExternalLink, Calculator, FileText, Clock, Bell, Send, ArrowUp, ArrowDown, ChevronsUpDown, Inbox, Upload } from 'lucide-react';
+import {
+  Mail,
+  Phone,
+  Building,
+  DollarSign,
+  TrendingUp,
+  Plus,
+  Calendar as CalendarIcon,
+  Zap,
+  Trash2,
+  MoreVertical,
+  X,
+  UserCircle,
+  Edit2,
+  Percent,
+  MessageSquare,
+  ExternalLink,
+  Calculator,
+  FileText,
+  Clock,
+  Bell,
+  Send,
+  ArrowUp,
+  ArrowDown,
+  ChevronsUpDown,
+  Inbox,
+  Upload,
+} from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';

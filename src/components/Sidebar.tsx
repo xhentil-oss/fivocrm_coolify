@@ -1,6 +1,38 @@
 import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { FolderKanban, Users, CheckSquare, BarChart3, Settings, UsersRound, Receipt, MessageSquare, MessageCircle, Target, UserCircle, DollarSign, Shield, FileText, Briefcase, LayoutDashboard, Timer, Award, PieChart, Calculator, Globe, ScrollText, Handshake, Building2, Wallet, ChevronDown, PiggyBank, Megaphone, TrendingUp, Rocket, Share2, Package, CreditCard, ClipboardList, HeartPulse } from 'lucide-react';
+import {
+  FolderKanban,
+  Users,
+  CheckSquare,
+  Settings,
+  UsersRound,
+  Receipt,
+  MessageSquare,
+  MessageCircle,
+  Target,
+  UserCircle,
+  DollarSign,
+  Shield,
+  FileText,
+  Briefcase,
+  LayoutDashboard,
+  Award,
+  Calculator,
+  Globe,
+  ScrollText,
+  Handshake,
+  Building2,
+  Wallet,
+  ChevronDown,
+  PiggyBank,
+  Megaphone,
+  Rocket,
+  Share2,
+  Package,
+  CreditCard,
+  ClipboardList,
+  HeartPulse,
+} from 'lucide-react';
 import { cn } from '../lib/utils';
 import { isPathEnabled, type PlanKey } from '../lib/modules';
 import { usePermissions } from '../contexts/PermissionsContext';

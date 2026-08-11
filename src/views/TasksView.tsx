@@ -3,21 +3,48 @@ import { useSearchParams } from 'react-router-dom';
 import { DndContext, DragOverlay, closestCorners, MouseSensor, TouchSensor, useSensor, useSensors, type DragStartEvent, type DragEndEvent } from '@dnd-kit/core';
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { getStatusColor, getPriorityColor, getTaskStatusLabel } from '../lib/statusColors';
+import { getTaskStatusLabel } from '../lib/statusColors';
 import { completeTask } from '../lib/recurringUtils';
+import { projectPickerLabel, sortArchivedLast } from '../lib/projectArchive';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
-import { Calendar as CalendarIcon, User, Flag, MoreVertical, Plus, MessageSquare, CalendarDays, Filter, List, LayoutGrid, Users, ChevronLeft, ChevronRight, ChevronDown, Target, Clock, Play, Pause, Square, Check, X, AlertCircle, CheckCircle2, CircleDot, ListChecks, Maximize2, Minimize2, Edit2, Trash2, AlertTriangle, GripVertical } from 'lucide-react';
+import {
+  Calendar as CalendarIcon,
+  User,
+  Flag,
+  MoreVertical,
+  Plus,
+  MessageSquare,
+  CalendarDays,
+  List,
+  LayoutGrid,
+  Users,
+  ChevronLeft,
+  ChevronRight,
+  ChevronDown,
+  Target,
+  Clock,
+  Play,
+  Check,
+  X,
+  AlertCircle,
+  CheckCircle2,
+  CircleDot,
+  ListChecks,
+  Edit2,
+  Trash2,
+  AlertTriangle,
+  GripVertical,
+} from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
 import { Checkbox } from '../components/ui/checkbox';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
 import { Label } from '../components/ui/label';
-import { Textarea } from '../components/ui/textarea';
 import RichTextEditor from '../components/RichTextEditor';
 import { Calendar } from '../components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
@@ -1715,8 +1742,10 @@ const TaskForm: React.FC<{
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__none__">Asnjë</SelectItem>
-            {projects.map(p => (
-              <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>
+            {/* Archived projects stay selectable (a task may belong to one) but sink
+                to the bottom, marked as such. */}
+            {sortArchivedLast(projects).map(p => (
+              <SelectItem key={p.id} value={p.id}>{projectPickerLabel(p)}</SelectItem>
             ))}
           </SelectContent>
         </Select>

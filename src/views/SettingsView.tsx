@@ -1,5 +1,35 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { User, Bell, Lock, Palette, Globe, CreditCard, Key, ExternalLink, CheckCircle2, AlertCircle, Clock, RefreshCw, Play, Zap, Shield, Check, ChevronDown, Plus, Trash2, MessageSquare, Copy, Phone, Cloud, UserCircle, QrCode, Wifi, WifiOff, ScrollText, Sparkles, Mail, Boxes } from 'lucide-react';
+import {
+  User,
+  Bell,
+  Lock,
+  Palette,
+  Globe,
+  CreditCard,
+  Key,
+  ExternalLink,
+  CheckCircle2,
+  AlertCircle,
+  Clock,
+  RefreshCw,
+  Play,
+  Zap,
+  Shield,
+  Check,
+  Plus,
+  Trash2,
+  MessageSquare,
+  Copy,
+  Phone,
+  Cloud,
+  QrCode,
+  Wifi,
+  WifiOff,
+  ScrollText,
+  Sparkles,
+  Mail,
+  Boxes,
+} from 'lucide-react';
 import { WhatsAppAccount, TeamMember, UserProfile } from '../types';
 import { MetaChannel } from '../hooks/useTeamSettings';
 import { swiftKeyDown, ibanChange } from '../lib/utils';

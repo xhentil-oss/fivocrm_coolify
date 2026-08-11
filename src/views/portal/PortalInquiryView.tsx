@@ -5,7 +5,7 @@ import { db } from '../../lib/firebase';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { usePortalTenant } from '../../hooks/usePortalTenant';
 import { useAuth } from '../../contexts/AuthContext';
-import { useCollection, useMutation, useDocument } from '../../hooks/useFirestore';
+import { useMutation, useDocument } from '../../hooks/useFirestore';
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';

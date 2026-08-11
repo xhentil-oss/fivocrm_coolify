@@ -1,7 +1,16 @@
 import React, { useMemo, useState, useEffect, useCallback } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
-  Share2, Facebook, Instagram, Plus, RefreshCw, Trash2, CheckCircle2, AlertCircle, Link2, X, Globe,
+  Share2,
+  Facebook,
+  Instagram,
+  RefreshCw,
+  Trash2,
+  CheckCircle2,
+  AlertCircle,
+  Link2,
+  X,
+  Globe,
 } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';

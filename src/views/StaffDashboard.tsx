@@ -7,10 +7,25 @@ import ActivationChecklist from '../components/ActivationChecklist';
 import { useToast } from '../hooks/use-toast';
 import { getPriorityColor, getStatusColor } from '../lib/statusColors';
 import {
-  CheckCircle2, Clock, AlertTriangle, Flame, Target, TrendingUp,
-  ArrowRight, Sparkles, Calendar, Zap, Flag,
-  FolderKanban, MessageSquare, Users, ChevronRight, Timer, Coffee,
-  Trophy, BarChart3, FileCheck
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+  Flame,
+  Target,
+  ArrowRight,
+  Sparkles,
+  Calendar,
+  Zap,
+  Flag,
+  FolderKanban,
+  MessageSquare,
+  Users,
+  ChevronRight,
+  Timer,
+  Coffee,
+  Trophy,
+  BarChart3,
+  FileCheck,
 } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';

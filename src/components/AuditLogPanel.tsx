@@ -2,7 +2,6 @@ import React, { useMemo, useState } from 'react';
 import { ScrollText, ShieldCheck, Filter } from 'lucide-react';
 import { Card } from './ui/card';
 import { Badge } from './ui/badge';
-import { Button } from './ui/button';
 import { useCollection } from '../hooks/useFirestore';
 
 /**

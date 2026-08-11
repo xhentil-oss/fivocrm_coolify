@@ -4,7 +4,7 @@
 // and real-time writes converge without duplicating rows.
 
 import type { Invoice, Payment } from '../../types';
-import { parseDate, getInvoiceTotalAll } from './financialAnalytics';
+import { parseDate } from './financialAnalytics';
 import { toAll } from '../utils';
 
 /** A payment event derived from an invoice, ready to persist (no id/createdAt). */

@@ -24,6 +24,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '.
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '../components/ui/tabs';
 import { toast } from '../hooks/use-toast';
+import { projectPickerLabel, sortArchivedLast } from '../lib/projectArchive';
 import { useAuth } from '../contexts/AuthContext';
 import { useCollection } from '../hooks/useFirestore';
 import { useUserNames } from '../hooks/useUserNames';
@@ -631,9 +632,8 @@ const CreateReportDialog: React.FC<{
               <Select value={projectId} onValueChange={setProjectId}>
                 <SelectTrigger><SelectValue placeholder="Pa projekt" /></SelectTrigger>
                 <SelectContent>
-                  {projects
-                    .filter(p => !customerId || p.customerId === customerId)
-                    .map(p => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}
+                  {sortArchivedLast(projects.filter(p => !customerId || p.customerId === customerId))
+                    .map(p => <SelectItem key={p.id} value={p.id}>{projectPickerLabel(p)}</SelectItem>)}
                 </SelectContent>
               </Select>
             </div>

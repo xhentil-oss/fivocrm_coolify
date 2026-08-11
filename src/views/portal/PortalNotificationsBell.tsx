@@ -5,8 +5,15 @@ import { db } from '../../lib/firebase';
 import { useAuth } from '../../contexts/AuthContext';
 import { useCollection, useMutation } from '../../hooks/useFirestore';
 import {
-  Bell, FileText, Calculator, ScrollText, MessageCircle, FolderKanban,
-  CheckCircle2, ClipboardList, Check, X,
+  Bell,
+  FileText,
+  Calculator,
+  ScrollText,
+  MessageCircle,
+  FolderKanban,
+  CheckCircle2,
+  ClipboardList,
+  Check,
 } from 'lucide-react';
 import {
   DropdownMenu, DropdownMenuTrigger, DropdownMenuContent,

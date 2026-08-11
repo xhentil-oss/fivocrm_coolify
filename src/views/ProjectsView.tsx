@@ -8,8 +8,20 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { canSeeFinancials, toAll, fromAll } from '../lib/utils';
 import { projectBillingPeriodKey, projectBillingPeriodEnd } from '../lib/finance/recurringBilling';
-import { Search, Plus, List, Users, ChevronDown, MoreVertical, Folder, Trash2, Edit, RefreshCw } from 'lucide-react';
-import { Card } from '../components/ui/card';
+import { archiveConsequences, archiveProjectPatch, isProjectArchived, restoreProjectPatch } from '../lib/projectArchive';
+import {
+  Search,
+  Plus,
+  List,
+  Users,
+  ChevronDown,
+  Folder,
+  Trash2,
+  Edit,
+  RefreshCw,
+  Archive,
+  ArchiveRestore,
+} from 'lucide-react';
 import { Button } from '../components/ui/button';
 import { Badge } from '../components/ui/badge';
 import { Input } from '../components/ui/input';
@@ -38,6 +50,7 @@ const ProjectsView: React.FC = () => {
   const [isCreateDialogOpen, setIsCreateDialogOpen] = useState(false);
   const [projectToDelete, setProjectToDelete] = useState<{ id: string; name: string } | null>(null);
   const [projectToEdit, setProjectToEdit] = useState<Project | null>(null);
+  const [projectToArchive, setProjectToArchive] = useState<Project | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   
   // Filters
@@ -47,6 +60,9 @@ const ProjectsView: React.FC = () => {
   const [filterMembers, setFilterMembers] = useState<string[]>([]);
   // Show only projects that bill/repeat every month (recurring monthly retainers).
   const [filterMonthly, setFilterMonthly] = useState(false);
+  // The archive is a separate shelf, not a status you scroll past: the list shows
+  // live projects, and archived ones only when this is on.
+  const [showArchive, setShowArchive] = useState(false);
 
   // Firebase hooks
   const { data: rawProjects, loading: projectsLoading } = useCollection<Project>('projects', {
@@ -60,7 +76,9 @@ const ProjectsView: React.FC = () => {
   const projectHealth = useMemo(() => {
     const map = new Map<string, { total: number; done: number; overdue: number; pct: number; health: 'on' | 'risk' | 'off' }>();
     const now = Date.now();
-    (projects || []).forEach(p => {
+    // Archived projects are out of the portfolio: their leftover overdue tasks
+    // must not keep the "në rrezik" counter red forever.
+    (projects || []).filter(p => !isProjectArchived(p)).forEach(p => {
       const ts = (allTasks || []).filter(t => (t as any).projectId === p.id);
       const total = ts.length;
       const done = ts.filter(t => t.status === 'Done').length;
@@ -74,8 +92,13 @@ const ProjectsView: React.FC = () => {
   const portfolio = useMemo(() => {
     let total = 0, done = 0, overdue = 0, atRisk = 0;
     projectHealth.forEach(h => { total += h.total; done += h.done; overdue += h.overdue; if (h.health !== 'on') atRisk++; });
-    return { activeProjects: projects?.length || 0, avgPct: total ? Math.round((done / total) * 100) : 0, overdue, atRisk };
-  }, [projectHealth, projects]);
+    // projectHealth already excludes the archive, so its size is the live count.
+    return { activeProjects: projectHealth.size, avgPct: total ? Math.round((done / total) * 100) : 0, overdue, atRisk };
+  }, [projectHealth]);
+  const archivedCount = useMemo(
+    () => (projects || []).filter(p => isProjectArchived(p)).length,
+    [projects]
+  );
   const { data: teams } = useCollection<Team>('teams');
   const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
@@ -113,7 +136,13 @@ const ProjectsView: React.FC = () => {
     if (!projects) return [];
     
     let filtered = [...projects];
-    
+
+    // Archive split, applied first: the list is either the live portfolio or the
+    // archive, never a mix. Picking "Arkivuar" in the status filter is the same
+    // request, so it opens the archive too.
+    const archiveOnly = showArchive || filterStatus === 'Archived';
+    filtered = filtered.filter(p => isProjectArchived(p) === archiveOnly);
+
     // Search filter
     if (searchQuery) {
       filtered = filtered.filter(p => 
@@ -161,7 +190,7 @@ const ProjectsView: React.FC = () => {
     }
     
     return filtered;
-  }, [projects, searchQuery, filterOwner, filterTeam, filterStatus, filterMembers, filterMonthly, teamMembers]);
+  }, [projects, searchQuery, filterOwner, filterTeam, filterStatus, filterMembers, filterMonthly, showArchive, teamMembers]);
 
   // Get members for a project:
   //  - if memberUserIds is set → show exactly those people
@@ -526,6 +555,77 @@ const ProjectsView: React.FC = () => {
     }
   };
 
+  // Tell the people on the project that its status moved. Same recipients as the
+  // edit dialog's status-change notice, so archiving is not a silent event.
+  const notifyStatusChange = async (project: Project, title: string, message: string) => {
+    const recipientIds = new Set<string>([
+      ...(project.memberUserIds || []),
+      ...(project.responsibleUserId ? [project.responsibleUserId] : []),
+    ]);
+    recipientIds.delete(user?.uid || '');
+    if (!recipientIds.size) return;
+    await Promise.all([...recipientIds].map(uid =>
+      notificationMutation.create({
+        userId: uid,
+        type: 'project_status_changed',
+        title,
+        message,
+        isRead: false,
+        actionUrl: `/app/projects/${project.id}`,
+        actionLabel: 'Shiko Projektin',
+      }).catch(() => {})
+    ));
+  };
+
+  // Archive = the reversible alternative to delete. Nothing is removed; the
+  // project leaves the live list and (if it was a retainer) stops billing.
+  const handleArchiveProject = async (project: Project) => {
+    try {
+      await projectMutation.update(project.id, archiveProjectPatch(project, {
+        at: new Date(),
+        byUserId: user?.uid ?? null,
+      }) as any);
+      logActivity('project_archived', `Projekt i arkivuar: ${project.name}`, { entityType: 'project', entityId: project.id });
+      await notifyStatusChange(
+        project,
+        `🗄️ "${project.name}" u arkivua`,
+        'Projekti u kalua në arkivë. Të dhënat ruhen dhe mund të kthehet në çdo moment.',
+      );
+      setProjectToArchive(null);
+      toast({
+        title: `Projekti "${project.name}" u arkivua`,
+        description: project.isRecurring
+          ? 'Faturimi i përsëritur ndaloi. E gjen te skeda "Arkiva".'
+          : 'E gjen te skeda "Arkiva".',
+      });
+    } catch (err) {
+      console.error('[ProjectsView] arkivimi i projektit dështoi:', err);
+      toast({ title: 'Gabim gjatë arkivimit', variant: 'destructive' });
+    }
+  };
+
+  const handleRestoreProject = async (project: Project) => {
+    try {
+      const patch = restoreProjectPatch(project);
+      await projectMutation.update(project.id, patch as any);
+      logActivity('project_restored', `Projekt i kthyer nga arkiva: ${project.name}`, { entityType: 'project', entityId: project.id });
+      await notifyStatusChange(
+        project,
+        `♻️ "${project.name}" u kthye nga arkiva`,
+        `Projekti është aktiv përsëri (statusi: ${patch.status}).`,
+      );
+      toast({
+        title: `Projekti "${project.name}" u kthye`,
+        description: project.wasRecurringBeforeArchive
+          ? 'Faturimi i përsëritur u aktivizua përsëri.'
+          : undefined,
+      });
+    } catch (err) {
+      console.error('[ProjectsView] kthimi nga arkiva dështoi:', err);
+      toast({ title: 'Gabim gjatë kthimit nga arkiva', variant: 'destructive' });
+    }
+  };
+
   const handleEditProject = async (formData: FormData) => {
     if (!projectToEdit) return;
     const name = formData.get('name') as string;
@@ -584,6 +684,18 @@ const ProjectsView: React.FC = () => {
     const completedNow = status === 'Completed' && oldStatus !== 'Completed'
       && !(projectToEdit as any).lastCompletedAt;
 
+    // Picking 'Arkivuar' in this form must archive exactly like the Arkivo button
+    // does (remember the old status, stop the retainer) — and picking anything
+    // else on an archived project must restore it the same way. Otherwise the two
+    // paths disagree and a hand-archived retainer keeps `isRecurring` until the
+    // cron notices and switches it off for good.
+    const archiveTransition =
+      status === 'Archived' && oldStatus !== 'Archived'
+        ? archiveProjectPatch({ ...projectToEdit, isRecurring }, { at: new Date(), byUserId: user?.uid ?? null })
+        : oldStatus === 'Archived' && status !== 'Archived'
+          ? { ...restoreProjectPatch(projectToEdit), status }
+          : {};
+
     await projectMutation.update(projectToEdit.id, {
       name,
       description,
@@ -605,9 +717,17 @@ const ProjectsView: React.FC = () => {
       // Write [] (not undefined) so clearing a manual split resets to the default
       // "100% to responsible" instead of leaving the old split in place.
       profitSplit: profitSplit && profitSplit.length > 0 ? profitSplit : [],
+      // Last, so the archive rules win over the plain form fields above.
+      ...archiveTransition,
     } as any);
 
-    logActivity('project_updated', `Projekt i përditësuar: ${name}`, { entityType: 'project', entityId: projectToEdit.id });
+    logActivity(
+      status === 'Archived' && oldStatus !== 'Archived' ? 'project_archived'
+        : oldStatus === 'Archived' && status !== 'Archived' ? 'project_restored'
+        : 'project_updated',
+      `Projekt i përditësuar: ${name}`,
+      { entityType: 'project', entityId: projectToEdit.id },
+    );
 
     // Keep DRAFT invoices in step with the fee. A draft was never sent, so silently
     // leaving it on the old price (the previous behaviour) meant the number the
@@ -848,6 +968,28 @@ const ProjectsView: React.FC = () => {
           </PopoverContent>
         </Popover>
 
+        {/* Archive shelf: live projects vs. archived ones (never mixed) */}
+        <Button
+          variant={showArchive || filterStatus === 'Archived' ? 'default' : 'outline'}
+          size="sm"
+          className="h-8"
+          onClick={() => {
+            const archiveOpen = showArchive || filterStatus === 'Archived';
+            // Leaving the archive also drops a lingering "Arkivuar" status filter,
+            // which would otherwise keep the archive open.
+            if (filterStatus === 'Archived') setFilterStatus('all');
+            setShowArchive(!archiveOpen);
+          }}
+          aria-pressed={showArchive || filterStatus === 'Archived'}
+          title="Projektet e arkivuara"
+        >
+          <Archive className="w-3 h-3 mr-1.5" />
+          Arkiva
+          {archivedCount > 0 && (
+            <span className="ml-1.5 text-xs opacity-70">{archivedCount}</span>
+          )}
+        </Button>
+
         {/* Clear Filters */}
         {(filterOwner !== 'all' || filterTeam !== 'all' || filterStatus !== 'all' || filterMembers.length > 0) && (
           <Button 
@@ -898,6 +1040,7 @@ const ProjectsView: React.FC = () => {
             const team = getTeamName(project.teamId);
             const isJoined = members.some(m => m.userId === user?.uid);
             const isGuestOnProject = Array.isArray(project.guestUserIds) && project.guestUserIds.includes(user?.uid);
+            const archived = isProjectArchived(project);
 
             return (
               <div
@@ -913,6 +1056,12 @@ const ProjectsView: React.FC = () => {
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <span className="font-medium text-foreground truncate">{project.name}</span>
+                      {archived && (
+                        <Badge variant="secondary" className="gap-1 text-[10px] px-1.5 py-0 h-4 border-0">
+                          <Archive className="w-2.5 h-2.5" />
+                          Arkivuar
+                        </Badge>
+                      )}
                       {isGuestOnProject && (
                         <Badge className="text-[10px] px-1.5 py-0 h-4 bg-amber-100 text-amber-700 dark:bg-amber-950 dark:text-amber-400 border-0">
                           Guest
@@ -933,6 +1082,22 @@ const ProjectsView: React.FC = () => {
                         onClick={(e) => { e.stopPropagation(); setProjectToEdit(project); }}
                       >
                         <Edit className="w-3.5 h-3.5" />
+                      </Button>
+                    )}
+                    {permissions.canEdit && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="h-7 w-7 p-0"
+                        aria-label={archived ? 'Kthe nga arkiva' : 'Arkivo projektin'}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          archived ? handleRestoreProject(project) : setProjectToArchive(project);
+                        }}
+                      >
+                        {archived
+                          ? <ArchiveRestore className="w-3.5 h-3.5" />
+                          : <Archive className="w-3.5 h-3.5" />}
                       </Button>
                     )}
                     {permissions.canEdit && (
@@ -1030,6 +1195,22 @@ const ProjectsView: React.FC = () => {
                     <Button
                       variant="ghost"
                       size="sm"
+                      className="h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        archived ? handleRestoreProject(project) : setProjectToArchive(project);
+                      }}
+                      title={archived ? 'Kthe nga arkiva' : 'Arkivo projektin'}
+                    >
+                      {archived
+                        ? <ArchiveRestore className="w-3.5 h-3.5" />
+                        : <Archive className="w-3.5 h-3.5" />}
+                    </Button>
+                  )}
+                  {permissions.canEdit && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
                       className="text-destructive hover:text-destructive h-7 w-7 p-0 opacity-0 group-hover:opacity-100 transition-opacity"
                       onClick={(e) => { e.stopPropagation(); setProjectToDelete({ id: project.id, name: project.name }); }}
                       title="Fshi projektin"
@@ -1044,8 +1225,18 @@ const ProjectsView: React.FC = () => {
 
           {filteredProjects.length === 0 && (
             <div className="text-center py-12 text-muted-foreground">
-              <Folder className="w-12 h-12 mx-auto mb-4 opacity-50" />
-              <p>Asnjë projekt u gjet</p>
+              {showArchive || filterStatus === 'Archived' ? (
+                <>
+                  <Archive className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                  <p>Arkiva është bosh</p>
+                  <p className="text-xs mt-1">Arkivo një projekt për ta hequr nga lista pa fshirë të dhënat.</p>
+                </>
+              ) : (
+                <>
+                  <Folder className="w-12 h-12 mx-auto mb-4 opacity-50" />
+                  <p>Asnjë projekt u gjet</p>
+                </>
+              )}
               {searchQuery && (
                 <Button 
                   variant="link" 
@@ -1063,7 +1254,32 @@ const ProjectsView: React.FC = () => {
       {/* Results Count */}
       <div className="text-sm text-muted-foreground">
         {filteredProjects.length} projekt{filteredProjects.length !== 1 ? 'e' : ''}
+        {(showArchive || filterStatus === 'Archived') && ' në arkivë'}
       </div>
+
+      {/* Archive Project Confirmation — reversible, so it explains rather than warns */}
+      <Dialog open={!!projectToArchive} onOpenChange={(open) => { if (!open) setProjectToArchive(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Arkivo Projektin</DialogTitle></DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            Arkivo projektin <span className="font-semibold">"{projectToArchive?.name}"</span>?
+          </p>
+          {projectToArchive && (
+            <ul className="space-y-1 text-xs text-muted-foreground list-disc pl-4">
+              {archiveConsequences(projectToArchive).map(line => (
+                <li key={line}>{line}</li>
+              ))}
+            </ul>
+          )}
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setProjectToArchive(null)}>Anulo</Button>
+            <Button onClick={() => projectToArchive && handleArchiveProject(projectToArchive)}>
+              <Archive className="w-4 h-4 mr-2" />
+              Arkivo
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete Project Confirmation */}
       <Dialog open={!!projectToDelete} onOpenChange={(open) => { if (!open) setProjectToDelete(null); }}>
@@ -1084,6 +1300,19 @@ const ProjectsView: React.FC = () => {
               </div>
             );
           })()}
+          {/* Deleting is the irreversible option — offer the reversible one here. */}
+          <button
+            type="button"
+            className="flex w-full items-center gap-2 rounded-md border p-2.5 text-left text-xs text-muted-foreground transition-colors hover:border-primary hover:text-foreground"
+            onClick={() => {
+              const target = (projects || []).find(p => p.id === projectToDelete?.id);
+              setProjectToDelete(null);
+              if (target) setProjectToArchive(target);
+            }}
+          >
+            <Archive className="w-4 h-4 shrink-0" />
+            <span><strong>Arkivoje</strong> në vend të fshirjes — hiqet nga lista, të dhënat ruhen.</span>
+          </button>
           <div className="flex justify-end gap-2 pt-2">
             <Button variant="outline" onClick={() => setProjectToDelete(null)}>Anulo</Button>
             <Button variant="destructive" onClick={() => projectToDelete && handleDeleteProject(projectToDelete.id, projectToDelete.name)}>Fshi</Button>

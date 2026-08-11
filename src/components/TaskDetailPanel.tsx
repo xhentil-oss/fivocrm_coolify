@@ -9,7 +9,31 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
 import { useGoogleApi, DriveFile } from '../contexts/GoogleApiContext';
-import { Calendar as CalendarIcon, MessageSquare, Users, ChevronRight, ChevronDown, Clock, Play, Pause, Square, Paperclip, Upload, X, AtSign, Eye, Plus, Trash2, Edit2, Send, Hash, Check, Cloud, Maximize2, Minimize2, ImageIcon, Loader2, FileText, Download, SmilePlus } from 'lucide-react';
+import {
+  Calendar as CalendarIcon,
+  MessageSquare,
+  Users,
+  ChevronDown,
+  Clock,
+  Play,
+  Square,
+  Paperclip,
+  Upload,
+  X,
+  Eye,
+  Plus,
+  Trash2,
+  Send,
+  Check,
+  Cloud,
+  Maximize2,
+  Minimize2,
+  ImageIcon,
+  Loader2,
+  FileText,
+  Download,
+  SmilePlus,
+} from 'lucide-react';
 import GoogleDrivePicker from './GoogleDrivePicker';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -137,7 +161,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     el.style.height = 'auto';
     el.style.height = `${Math.min(el.scrollHeight, 160)}px`;
   }, [commentText]);
-  const [showSubtasks, setShowSubtasks] = useState(true);
+  // (a `showSubtasks` toggle used to live here; the collapse control it drove was
+  //  removed, so the state was dead — subtasks are always shown.)
   const [isEditingTitle, setIsEditingTitle] = useState(false);
   const [titleText, setTitleText] = useState(task.title);
   const [isEditingDescription, setIsEditingDescription] = useState(false);
@@ -238,6 +263,9 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     // Query server-side by taskId (uses messages: taskId,createdAt index) instead of
     // downloading the whole team's messages and filtering client-side.
     skipTeamFilter: true,
+    // Only listen while the panel is actually open. It used to subscribe on every
+    // task open, so most tasks paid for a listener nobody looked at.
+    skip: !showChat,
   });
 
   const { data: allActiveTimeEntries } = useCollection<any>('timeEntries', {
@@ -2042,6 +2070,99 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                     </div>
                   );
                 })}
+              </div>
+            )}
+          </div>
+
+          {/* Chat — a live conversation about this task, separate from the comment
+              log. Collapsed by default: the listener only runs while it is open. */}
+          <div className="pt-4 border-t">
+            <button
+              type="button"
+              onClick={() => setShowChat(v => !v)}
+              aria-expanded={showChat}
+              className="w-full flex items-center justify-between mb-3 group"
+            >
+              <h4 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
+                <MessageSquare className="w-4 h-4 text-muted-foreground" />
+                Chat
+                {taskMessages.length > 0 && (
+                  <span className="text-xs font-normal text-muted-foreground">({taskMessages.length})</span>
+                )}
+              </h4>
+              <ChevronDown
+                className={`w-4 h-4 text-muted-foreground transition-transform ${showChat ? 'rotate-180' : ''}`}
+              />
+            </button>
+
+            {showChat && (
+              <div className="space-y-2">
+                <div
+                  ref={chatScrollRef}
+                  className="max-h-64 overflow-y-auto space-y-2 pr-1"
+                >
+                  {isLoadingMessages ? (
+                    <div className="flex items-center justify-center gap-2 py-6 text-xs text-muted-foreground">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      Po ngarkohen mesazhet...
+                    </div>
+                  ) : taskMessages.length === 0 ? (
+                    <p className="py-6 text-center text-xs text-muted-foreground">
+                      Asnjë mesazh. Shkruaj të parin.
+                    </p>
+                  ) : (
+                    taskMessages.map((m: any) => {
+                      const mine = m.senderId === user?.uid;
+                      const at = m.createdAt instanceof Date ? m.createdAt : null;
+                      return (
+                        <div key={m.id} className={`flex ${mine ? 'justify-end' : 'justify-start'}`}>
+                          <div
+                            className={`max-w-[80%] rounded-2xl px-3 py-2 text-sm break-words ${
+                              mine
+                                ? 'bg-primary text-primary-foreground rounded-br-sm'
+                                : 'bg-muted text-foreground rounded-bl-sm'
+                            }`}
+                          >
+                            {!mine && (
+                              <p className="text-[11px] font-medium opacity-70 mb-0.5">
+                                {getUserDisplayName(m.senderId)}
+                              </p>
+                            )}
+                            <p className="whitespace-pre-wrap">{m.content}</p>
+                            {at && (
+                              <p className={`text-[10px] mt-0.5 ${mine ? 'opacity-70' : 'text-muted-foreground'}`}>
+                                {at.toLocaleTimeString('sq-AL', { hour: '2-digit', minute: '2-digit' })}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <Input
+                    value={chatMessageText}
+                    onChange={(e) => setChatMessageText(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        handleSendChatMessage();
+                      }
+                    }}
+                    placeholder="Shkruaj një mesazh..."
+                    className="flex-1 text-base sm:text-sm"
+                  />
+                  <Button
+                    size="icon"
+                    onClick={handleSendChatMessage}
+                    disabled={!chatMessageText.trim()}
+                    aria-label="Dërgo mesazhin"
+                  >
+                    <Send className="w-4 h-4" />
+                  </Button>
+                </div>
               </div>
             )}
           </div>

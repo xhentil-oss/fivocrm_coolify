@@ -1,5 +1,15 @@
 import React, { useMemo } from 'react';
-import { FolderKanban, Users, CheckSquare, BarChart3, Settings, Hash, MessageSquare, User as UserIcon, Wallet, Package } from 'lucide-react';
+import {
+  FolderKanban,
+  Users,
+  CheckSquare,
+  Settings,
+  Hash,
+  MessageSquare,
+  User as UserIcon,
+  Wallet,
+  Package,
+} from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
   Dialog,

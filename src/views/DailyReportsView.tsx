@@ -15,9 +15,21 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import ExportButton from '../components/ExportButton';
 import {
-  FileText, CheckCircle2, Clock, AlertTriangle,
-  ArrowRight, Smile, Meh, Frown, User, Plus, ChevronLeft, ChevronRight,
-  Sparkles, Eye, Bot, Loader2,
+  FileText,
+  CheckCircle2,
+  Clock,
+  AlertTriangle,
+  ArrowRight,
+  Smile,
+  Meh,
+  Frown,
+  Plus,
+  ChevronLeft,
+  ChevronRight,
+  Sparkles,
+  Eye,
+  Bot,
+  Loader2,
 } from 'lucide-react';
 import { toast } from '../hooks/use-toast';
 import DepartmentReportFields, { useMyServiceLine } from '../components/DepartmentReportFields';
