@@ -131,7 +131,9 @@ export function canSeeFinancials(p: { isAdmin?: boolean; isManager?: boolean } |
 // converge on one implementation (sq-AL locale, consistent rounding).
 
 /** Format a number as a currency string in sq-AL locale. Defaults to EUR. */
-export function formatCurrency(amount: number, currency: 'EUR' | 'ALL' | 'USD' | 'GBP' = 'EUR'): string {
+/** ALL (Lek) is the house currency: an amount with no explicit currency is Lek.
+ *  This defaulted to EUR, which silently mislabelled Lek figures as euros. */
+export function formatCurrency(amount: number, currency: 'EUR' | 'ALL' | 'USD' | 'GBP' = 'ALL'): string {
   const value = typeof amount === 'number' && isFinite(amount) ? amount : 0;
   try {
     return value.toLocaleString('sq-AL', {

@@ -124,7 +124,7 @@ const DealsView: React.FC = () => {
   const openCreate = () => { setForm(emptyForm()); setEditId(null); setDialogOpen(true); };
   const openEdit = (d: Deal) => {
     setForm({
-      title: d.title, amount: d.amount, currency: d.currency || 'EUR', stage: d.stage,
+      title: d.title, amount: d.amount, currency: d.currency || 'ALL', stage: d.stage,
       customerId: d.customerId || '', ownerId: d.ownerId, notes: d.notes,
       expectedCloseDate: d.expectedCloseDate, probability: d.probability,
     });
@@ -158,7 +158,7 @@ const DealsView: React.FC = () => {
       const payload: any = {
         title: form.title.trim(),
         amount: Number(form.amount) || 0,
-        currency: form.currency || 'EUR',
+        currency: form.currency || 'ALL',
         stage: form.stage || 'Qualification',
         customerId: form.customerId || undefined,
         customerName: customer?.name || form.customerName || undefined,
@@ -258,7 +258,7 @@ const DealsView: React.FC = () => {
               </div>
               <div>
                 <Label>Monedha</Label>
-                <Select value={form.currency || 'EUR'} onValueChange={(v) => setForm(f => ({ ...f, currency: v }))}>
+                <Select value={form.currency || 'ALL'} onValueChange={(v) => setForm(f => ({ ...f, currency: v }))}>
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent><SelectItem value="EUR">EUR (€)</SelectItem><SelectItem value="ALL">ALL (L)</SelectItem><SelectItem value="USD">USD ($)</SelectItem></SelectContent>
                 </Select>

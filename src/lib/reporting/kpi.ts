@@ -250,7 +250,8 @@ export function formatKpiValue(
   const n = formatNumberSq(value, decimals);
   switch (unit) {
     case 'percent': return `${n}%`;
-    case 'currency': return `${n} ${CURRENCY_SYMBOL[opts.currency || 'EUR'] || opts.currency || '€'}`;
+    // ALL (Lek) is the house currency — an unset currency is Lek, not euros.
+    case 'currency': return `${n} ${CURRENCY_SYMBOL[opts.currency || 'ALL'] || opts.currency || 'L'}`;
     case 'hours': return `${n} h`;
     case 'days': return `${n} ditë`;
     case 'ratio': return `${n}×`;
