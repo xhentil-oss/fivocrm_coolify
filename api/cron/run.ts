@@ -127,35 +127,77 @@ function makeTransporter() {
 }
 
 // ── addFrequency (for recurring tasks) ───────────────────────────────────────
+// MIRROR of `addFrequency` in src/lib/recurringUtils.ts (api/ never imports from
+// src/). That module carries the reasoning and the tests; two things were out of
+// sync here and both changed the next cycle a task got:
+//
+//  1. The day math read the MACHINE's timezone. This process is UTC on Vercel
+//     while the browser is UTC+2, so the same task resolved to a different
+//     weekday in each — the client and this backstop disagreed about the next
+//     cycle. Now both do the arithmetic in Europe/Tirane.
+//  2. The weekly snap was `+ diff`, which can move the date BACKWARDS and yield
+//     an interval shorter than 7 days. The client was fixed to `(diff + 7) % 7`
+//     (forward only); this copy never got it.
+const RECURRENCE_TIMEZONE = 'Europe/Tirane';
+
+function recurrenceZoneOffsetMs(at: Date): number {
+  try {
+    const fmt = new Intl.DateTimeFormat('en-US', { timeZone: RECURRENCE_TIMEZONE, timeZoneName: 'longOffset' });
+    const part = fmt.formatToParts(at).find((p) => p.type === 'timeZoneName')?.value || '';
+    const m = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(part);
+    if (!m) return 0;
+    const sign = m[1] === '-' ? -1 : 1;
+    return sign * (Number(m[2]) * 60 + Number(m[3] || 0)) * 60_000;
+  } catch {
+    return 0;
+  }
+}
+/** Civil (wall-clock) time in the recurrence zone, read through the UTC getters. */
+function toRecurrenceZone(at: Date): Date {
+  return new Date(at.getTime() + recurrenceZoneOffsetMs(at));
+}
+/** Inverse; two passes so a date crossing a DST switch keeps its wall-clock time. */
+function fromRecurrenceZone(zoned: Date): Date {
+  const guess = new Date(zoned.getTime() - recurrenceZoneOffsetMs(zoned));
+  return new Date(zoned.getTime() - recurrenceZoneOffsetMs(guess));
+}
+/** Start of the calendar day in the recurrence zone, as a comparable number. */
+function startOfRecurrenceDay(x: Date): number {
+  const z = toRecurrenceZone(x);
+  z.setUTCHours(0, 0, 0, 0);
+  return z.getTime();
+}
+
 function addFrequency(date: Date, frequency: string, dayOfWeek?: number, dayOfMonth?: number, interval = 1, daysOfWeek?: number[]): Date {
-  const d = new Date(date);
+  const d = toRecurrenceZone(date);
   const step = Math.max(1, Math.round(interval));
   if (frequency === 'daily') {
-    d.setDate(d.getDate() + step);
+    d.setUTCDate(d.getUTCDate() + step);
     // If specific weekdays are configured, advance until we land on one
     if (daysOfWeek && daysOfWeek.length > 0) {
       let tries = 0;
-      while (!daysOfWeek.includes(d.getDay()) && tries < 7) {
-        d.setDate(d.getDate() + 1);
+      while (!daysOfWeek.includes(d.getUTCDay()) && tries < 7) {
+        d.setUTCDate(d.getUTCDate() + 1);
         tries++;
       }
     }
   } else if (frequency === 'weekly') {
-    d.setDate(d.getDate() + 7 * step);
+    d.setUTCDate(d.getUTCDate() + 7 * step);
     if (dayOfWeek !== undefined && dayOfWeek !== null) {
-      const diff = dayOfWeek - d.getDay();
-      if (diff !== 0) d.setDate(d.getDate() + diff);
+      const diff = dayOfWeek - d.getUTCDay();
+      // Forward only — see note 2 above.
+      if (diff !== 0) d.setUTCDate(d.getUTCDate() + ((diff + 7) % 7));
     }
   } else if (frequency === 'monthly') {
-    d.setMonth(d.getMonth() + step);
+    d.setUTCMonth(d.getUTCMonth() + step);
     if (dayOfMonth !== undefined && dayOfMonth !== null) {
-      const maxDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-      d.setDate(Math.min(dayOfMonth, maxDay));
+      const maxDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+      d.setUTCDate(Math.min(dayOfMonth, maxDay));
     }
   } else if (frequency === 'yearly') {
-    d.setFullYear(d.getFullYear() + step);
+    d.setUTCFullYear(d.getUTCFullYear() + step);
   }
-  return d;
+  return fromRecurrenceZone(d);
 }
 
 
@@ -537,7 +579,10 @@ async function runRecurringTasks() {
 
     let newStart = addFrequency(startDate, task.recurringFrequency, task.recurringDayOfWeek, task.recurringDayOfMonth, task.recurringInterval, task.recurringDaysOfWeek);
 
-    const startOfDayMs = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
+    // Day comparison in the recurrence zone, not this process's (UTC on Vercel) —
+    // otherwise "is the next occurrence still in the past?" is answered on a
+    // different calendar than the browser uses.
+    const startOfDayMs = startOfRecurrenceDay;
     // Roll forward so a task completed (or picked up) late never spawns an
     // already-overdue occurrence — the next due date is always the first future
     // one (same behaviour as the client-side buildNextRecurringTask / Asana).

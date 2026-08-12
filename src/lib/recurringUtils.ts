@@ -1,5 +1,63 @@
 import type { Task } from '../types';
 
+// ── Recurrence day arithmetic is timezone-EXPLICIT ───────────────────────────
+//
+// Recurrence asks CALENDAR questions — "the next Monday", "has the series passed
+// its repeat-until date?" — and a calendar day only exists inside a timezone.
+// This code used to read the MACHINE's timezone (`getDate`/`getDay`/`setHours`),
+// which made the answer depend on where it ran:
+//
+//   A task starting 2026-08-03T22:00:00Z is Monday 00:00 in Tirana but Sunday
+//   22:00 in UTC. For "weekly on Monday", the browser (UTC+2) saw Monday and
+//   advanced exactly 7 days; the cron backstop on Vercel (UTC) saw Sunday and
+//   snapped forward to the following Monday — a different next cycle for the
+//   same task, from the same rule. The test suite only passed on a UTC+2 laptop
+//   and had been failing in CI (UTC) since 2026-08-11 for exactly this reason.
+//
+// Fix: do the arithmetic in ONE declared timezone. Same technique as
+// `src/lib/reporting/schedule.ts` — shift the instant by the zone's offset, then
+// use the *UTC* getters, so the host's zone cannot influence the result.
+// Europe/Tirane is the business timezone the rest of the app already stands on
+// (reporting periods, DND windows, the VPS schedulers).
+export const RECURRENCE_TIMEZONE = 'Europe/Tirane';
+
+/** The zone's UTC offset in ms at a given instant (DST-aware). */
+function zoneOffsetMs(at: Date, tz: string): number {
+  try {
+    const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, timeZoneName: 'longOffset' });
+    const part = fmt.formatToParts(at).find((p) => p.type === 'timeZoneName')?.value || '';
+    const m = /GMT([+-])(\d{1,2})(?::(\d{2}))?/.exec(part);
+    if (!m) return 0;
+    const sign = m[1] === '-' ? -1 : 1;
+    return sign * (Number(m[2]) * 60 + Number(m[3] || 0)) * 60_000;
+  } catch {
+    return 0; // unknown zone → behave as UTC rather than guess
+  }
+}
+
+/** Civil (wall-clock) time in the zone, expressed through the UTC getters. */
+function toZoned(at: Date, tz: string): Date {
+  return new Date(at.getTime() + zoneOffsetMs(at, tz));
+}
+
+/**
+ * Inverse of `toZoned`. Two passes because the offset depends on the instant we
+ * are solving for: the first guess picks an offset, the second re-reads it at
+ * that guess so a date landing on the other side of a DST switch still returns
+ * the right wall-clock time.
+ */
+function fromZoned(zoned: Date, tz: string): Date {
+  const guess = new Date(zoned.getTime() - zoneOffsetMs(zoned, tz));
+  return new Date(zoned.getTime() - zoneOffsetMs(guess, tz));
+}
+
+/** Start of the calendar day in the recurrence zone, as a comparable number. */
+export function startOfRecurrenceDay(x: Date): number {
+  const z = toZoned(x, RECURRENCE_TIMEZONE);
+  z.setUTCHours(0, 0, 0, 0);
+  return z.getTime();
+}
+
 export function addFrequency(
   date: Date,
   frequency: string,
@@ -8,36 +66,37 @@ export function addFrequency(
   interval = 1,
   daysOfWeek?: number[] | null,
 ): Date {
-  const d = new Date(date);
+  // Work on the zone's wall clock, via the UTC getters (see the note above).
+  const d = toZoned(date, RECURRENCE_TIMEZONE);
   const step = Math.max(1, Math.round(interval));
 
   if (frequency === 'daily') {
-    d.setDate(d.getDate() + step);
+    d.setUTCDate(d.getUTCDate() + step);
     if (daysOfWeek && daysOfWeek.length > 0) {
       let tries = 0;
-      while (!daysOfWeek.includes(d.getDay()) && tries < 7) {
-        d.setDate(d.getDate() + 1);
+      while (!daysOfWeek.includes(d.getUTCDay()) && tries < 7) {
+        d.setUTCDate(d.getUTCDate() + 1);
         tries++;
       }
     }
   } else if (frequency === 'weekly') {
-    d.setDate(d.getDate() + 7 * step);
+    d.setUTCDate(d.getUTCDate() + 7 * step);
     if (dayOfWeek != null) {
-      const diff = dayOfWeek - d.getDay();
+      const diff = dayOfWeek - d.getUTCDay();
       // Only ever snap forward — a negative diff would pull the date backwards,
       // producing an interval shorter than 7 days. `(diff + 7) % 7` keeps it future.
-      if (diff !== 0) d.setDate(d.getDate() + ((diff + 7) % 7));
+      if (diff !== 0) d.setUTCDate(d.getUTCDate() + ((diff + 7) % 7));
     }
   } else if (frequency === 'monthly') {
-    d.setMonth(d.getMonth() + step);
+    d.setUTCMonth(d.getUTCMonth() + step);
     if (dayOfMonth != null) {
-      const maxDay = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
-      d.setDate(Math.min(dayOfMonth, maxDay));
+      const maxDay = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+      d.setUTCDate(Math.min(dayOfMonth, maxDay));
     }
   } else if (frequency === 'yearly') {
-    d.setFullYear(d.getFullYear() + step);
+    d.setUTCFullYear(d.getUTCFullYear() + step);
   }
-  return d;
+  return fromZoned(d, RECURRENCE_TIMEZONE);
 }
 
 /** Build the data for the next cycle task from a completed recurring task. */
@@ -76,7 +135,7 @@ export function buildNextRecurringTask(task: Task): Omit<Task, 'id' | 'createdAt
   // Roll forward so the next occurrence never lands in the past — matches how
   // Asana/Todoist behave when a recurring task is completed late: the next due
   // date is always the first *future* one, not blindly (previous due + interval).
-  const sod = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
+  const sod = startOfRecurrenceDay;
   const todayMs = sod(new Date());
   let guard = 0;
   while (sod(newStart) < todayMs && guard++ < 500) {
@@ -205,7 +264,9 @@ export async function completeTask(task: Task, deps: CompleteTaskDeps): Promise<
 export function recurrenceHasEnded(task: Task): boolean {
   if (!task.recurringEndDate || !task.recurringFrequency) return false;
   const parse = (d: any): Date => (d && d.toDate ? d.toDate() : new Date(d));
-  const sod = (x: Date) => { const n = new Date(x); n.setHours(0, 0, 0, 0); return n.getTime(); };
+  // Day-level comparison in the recurrence zone: "until 11 August" is a calendar
+  // statement, so an occurrence ON the 11th is still inside the series.
+  const sod = startOfRecurrenceDay;
   const next = buildNextRecurringTask(task);
   return sod(parse(next.startDate)) > sod(parse(task.recurringEndDate));
 }
