@@ -2051,6 +2051,209 @@ async function runCleanupOldNotifications() {
   return { deleted, deletedRead, deletedStale, truncated };
 }
 
+// ── WhatsApp automation rules engine ─────────────────────────────────────────
+// MIRROR of src/lib/marketing/waAutomation.ts — the browser previews the segment
+// with that module, the cron sends with this one. They must agree, or the count
+// the user approved is not the count that goes out. Keep the two in sync (the
+// module carries the tests and the full reasoning).
+const WA_MS_PER_DAY = 86_400_000;
+
+function waContactTags(e: any): string[] {
+  const t = e?.tags;
+  if (Array.isArray(t)) return t.map((x: any) => String(x).trim()).filter(Boolean);
+  if (typeof t === 'string') return t.split(',').map((s: string) => s.trim()).filter(Boolean);
+  return [];
+}
+
+function waToDate(v: any): Date | null {
+  if (!v) return null;
+  if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
+  if (typeof v?.toDate === 'function') {
+    const d = v.toDate();
+    return d instanceof Date && !isNaN(d.getTime()) ? d : null;
+  }
+  if (typeof v === 'number' || typeof v === 'string') {
+    const d = new Date(v);
+    return isNaN(d.getTime()) ? null : d;
+  }
+  return null;
+}
+
+/** Newest touch across every signal. `createdAt` is deliberately NOT a contact. */
+function waResolveLastContactAt(e: any, lastMessageAt?: Date | null): Date | null {
+  const c = [waToDate(lastMessageAt), waToDate(e?.lastActivityAt), waToDate(e?.lastFollowUpDate), waToDate(e?.firstResponseAt)]
+    .filter((d): d is Date => !!d);
+  return c.length ? c.reduce((a, b) => (b.getTime() > a.getTime() ? b : a)) : null;
+}
+
+function waDaysSince(d: Date | null, now: Date): number | null {
+  return d ? Math.floor((now.getTime() - d.getTime()) / WA_MS_PER_DAY) : null;
+}
+
+/** Most specific matching variant wins; a tagless variant is the fallback. */
+function waPickVariant(e: any, variants: any[] | undefined): any | null {
+  const list = (variants || []).filter((v) => v && String(v.body || '').trim());
+  if (!list.length) return null;
+  const tags = waContactTags(e);
+  let best: any = null;
+  let bestScore = -1;
+  for (const v of list) {
+    const want: string[] = (v.tags || []).filter(Boolean);
+    if (!want.length) { if (bestScore < 0) { best = v; bestScore = 0; } continue; }
+    const hits = want.filter((t) => tags.includes(t)).length;
+    if (hits > 0 && hits > bestScore) { best = v; bestScore = hits; }
+  }
+  return best;
+}
+
+function waVariantServiceLabel(e: any, v: any | null): string {
+  if (!v) return '';
+  const tags = waContactTags(e);
+  return (v.tags || []).find((t: string) => tags.includes(t)) || v.label || '';
+}
+
+function waWithUtm(url: string | undefined, utm?: any): string {
+  const raw = String(url || '').trim();
+  if (!raw || !/^https?:\/\//i.test(raw)) return raw;
+  try {
+    const u = new URL(raw);
+    const map: Record<string, string | undefined> = {
+      utm_source: utm?.source, utm_medium: utm?.medium,
+      utm_campaign: utm?.campaign, utm_content: utm?.content,
+    };
+    for (const [k, v] of Object.entries(map)) if (v && !u.searchParams.has(k)) u.searchParams.set(k, v);
+    return u.toString();
+  } catch { return raw; }
+}
+
+function waFirstName(name?: string): string {
+  return String(name || '').trim().split(/\s+/)[0] || '';
+}
+
+/** First meaningful line of the notes, de-noised and capped — a quotable clause. */
+function waSummarizeNotes(notes?: string, maxLen = 160): string {
+  const first = String(notes || '')
+    .split(/\r?\n/)
+    .map((l) => l.replace(/^\s*(?:[-•*]|\d{1,2}[./]\d{1,2}(?:[./]\d{2,4})?\s*[:-]?)\s*/, '').trim())
+    .find((l) => l.length > 0);
+  if (!first) return '';
+  if (first.length <= maxLen) return first;
+  const cut = first.slice(0, maxLen);
+  const lastSpace = cut.lastIndexOf(' ');
+  return `${(lastSpace > maxLen * 0.6 ? cut.slice(0, lastSpace) : cut).replace(/[,;:.\s]+$/, '')}…`;
+}
+
+/** Named-token renderer. Unknown tokens render EMPTY — never leak `{{foo}}`. */
+function waRenderMessage(body: string, e: any, ctx: { link?: string; service?: string } = {}): string {
+  const vars: Record<string, string> = {
+    name: waFirstName(e?.name),
+    fullname: String(e?.name || '').trim(),
+    company: String(e?.company || '').trim(),
+    notes: waSummarizeNotes(e?.notes),
+    link: ctx.link || '',
+    service: ctx.service || '',
+  };
+  const hadLinkToken = /\{\{\s*link\s*\}\}/i.test(body || '');
+  let out = String(body || '').replace(/\{\{\s*([a-zA-Z_][\w.]*)\s*\}\}/g, (_m, key: string) => {
+    const v = vars[String(key).toLowerCase()];
+    return v == null ? '' : v;
+  });
+  out = out.replace(/[ \t]{2,}/g, ' ').replace(/\n{3,}/g, '\n\n').trim();
+  if (!hadLinkToken && ctx.link) out = `${out}\n\n${ctx.link}`;
+  return out;
+}
+
+/** The ONE gate: null = send, otherwise the named reason. Cheapest checks first. */
+function waBlockReason(
+  e: any,
+  segment: any,
+  conditions: any,
+  ctx: {
+    now: Date;
+    kind: 'lead' | 'customer';
+    lastMessageByPhone?: Map<string, Date>;
+    sentPhones?: Set<string>;
+    domainCustomerIds?: Set<string> | null;
+  },
+  variants?: any[],
+): string | null {
+  const phone = normalizeWaPhone(e?.phone || e?.phoneNumber);
+  if (phone.length < 7) return 'no-phone';
+
+  if (ctx.kind === 'lead' && segment?.statuses?.length && !segment.statuses.includes(String(e.status || ''))) {
+    return 'status-mismatch';
+  }
+  const wantTags: string[] = segment?.tags?.length ? segment.tags : (segment?.tag ? [segment.tag] : []);
+  if (wantTags.length) {
+    const has = waContactTags(e);
+    const ok = segment.tagMatch === 'all' ? wantTags.every((t) => has.includes(t)) : wantTags.some((t) => has.includes(t));
+    if (!ok) return 'tag-mismatch';
+  }
+  if (segment?.assignedToUserId && e.assignedToUserId !== segment.assignedToUserId) return 'assignee-mismatch';
+  if (segment?.source && String(e.source || '') !== segment.source) return 'source-mismatch';
+  if (segment?.hasDomain) {
+    if (ctx.kind === 'lead') return 'domain-mismatch';
+    if (ctx.domainCustomerIds && !ctx.domainCustomerIds.has(String(e.id))) return 'domain-mismatch';
+  }
+  if (ctx.sentPhones?.has(phone)) return 'already-sent';
+
+  if (conditions?.requireNotes && !waSummarizeNotes(e.notes)) return 'no-notes';
+
+  const hasDormancyRule =
+    conditions?.lastContactMinDays != null || conditions?.lastContactMaxDays != null || !!conditions?.requireContacted;
+  if (hasDormancyRule) {
+    const age = waDaysSince(waResolveLastContactAt(e, ctx.lastMessageByPhone?.get(phone) || null), ctx.now);
+    if (age == null) {
+      // Never contacted = maximally dormant, so a min-days rule passes. An
+      // explicit requireContacted, or a window CEILING (a statement about a real
+      // past contact), excludes them.
+      if (conditions.requireContacted) return 'never-contacted';
+      if (conditions.lastContactMaxDays != null) return 'never-contacted';
+    } else {
+      if (conditions.lastContactMinDays != null && age < conditions.lastContactMinDays) return 'contacted-too-recently';
+      if (conditions.lastContactMaxDays != null && age > conditions.lastContactMaxDays) return 'contact-too-old';
+    }
+  }
+
+  if (variants?.length && !waPickVariant(e, variants)) return 'no-variant';
+  return null;
+}
+
+/**
+ * Phones contacted since `since`, newest date per phone.
+ *
+ * This is the inverse of the dormancy question, and it's why the condition is
+ * cheap: we do NOT read every message ever sent, only the ones inside the
+ * window — anyone absent from the result has not been contacted in it. Uses the
+ * existing (teamId, createdAt DESC) index.
+ */
+async function recentWaContactsByPhone(teamId: string, since: Date): Promise<Map<string, Date>> {
+  const MAX = 5000;
+  const map = new Map<string, Date>();
+  if (!teamId) return map;
+  const snap = await db.collection('whatsappMessages')
+    .where('teamId', '==', teamId)
+    .where('createdAt', '>=', admin.firestore.Timestamp.fromDate(since))
+    .orderBy('createdAt', 'desc')
+    .limit(MAX)
+    .get();
+  for (const d of snap.docs) {
+    const m = d.data() as any;
+    const phone = normalizeWaPhone(m.phone);
+    if (!phone) continue;
+    const at = waToDate(m.createdAt);
+    if (!at) continue;
+    const prev = map.get(phone);
+    if (!prev || at.getTime() > prev.getTime()) map.set(phone, at);
+  }
+  if (snap.size >= MAX) {
+    // Truncated → some recent contacts are missing from the exclusion set, so a
+    // few people could be messaged sooner than the rule intends. Loud, not silent.
+    console.warn(`[cron:wa] recent-contact lookup TRUNCATED at ${MAX} for team ${teamId} — dormancy may under-exclude`);
+  }
+  return map;
+}
+
 // ── JOB: whatsapp-broadcasts ─────────────────────────────────────────────────
 // Template-only bulk sends via Meta Cloud API.  Idempotent & resumable: each
 // send is logged to whatsappMessages tagged with broadcastId; already-sent
@@ -2150,9 +2353,239 @@ async function sendBaileysBroadcastMessage(
   }
 }
 
+/**
+ * Positional params for a Meta template.
+ *
+ * Meta only delivers APPROVED templates outside the 24h window, so variant free
+ * text can't be sent there. What we can do is feed the same personalization
+ * through the template's own placeholders: alongside real contact fields,
+ * `paramFields` now understands the pseudo-fields `firstName`, `notes` (the
+ * summarized clause), `service` and `link` (the UTM-tagged landing page). So an
+ * approved "Përshëndetje {{1}}, për {{2}} shiko {{3}}" carries the whole idea.
+ */
+function waTemplateParams(tpl: any, t: any, ctx: { link?: string; service?: string }): string[] {
+  return (tpl.paramFields || []).map((f: string) => {
+    switch (f) {
+      case 'firstName': return waFirstName(t.name);
+      case 'notes': return waSummarizeNotes(t.notes);
+      case 'service': return ctx.service || '';
+      case 'link': return ctx.link || '';
+      case 'custom': case '': case undefined: return '';
+      default: return t[f] != null ? String(t[f]) : '';
+    }
+  });
+}
+
+/**
+ * Resolve a campaign's segment to the messages that would go out, and account
+ * for everyone excluded. Shared by the one-shot job and the evergreen one — the
+ * only difference between them is what happens to the doc afterwards.
+ */
+async function resolveWaCampaignTargets(
+  b: any,
+  now: Date,
+  opts: { skipSentPhones: boolean },
+): Promise<{
+  targets: Array<{ contact: any; phone: string; message: string; link: string; service: string; kind: 'lead' | 'customer' }>;
+  blocked: Record<string, number>;
+  considered: number;
+}> {
+  const seg = b.segment || {};
+  const conditions = b.conditions || {};
+  const variants: any[] = Array.isArray(b.variants) ? b.variants : [];
+  const audience: string[] = seg.audience?.length ? seg.audience : ['leads'];
+  const audienceScope = { businessId: b.businessId || null, teamId: b.teamId || null };
+
+  const domainCustomerIds: Set<string> | null = seg.hasDomain
+    ? new Set((await tenantScopedDocs('domains', audienceScope)).map((d) => d.data.customerId).filter(Boolean).map(String))
+    : null;
+
+  // Only pay for the recent-contact lookup when a dormancy rule needs it, and
+  // only over the window it asks about.
+  const windowDays = Math.max(
+    Number(conditions.lastContactMinDays) || 0,
+    conditions.requireContacted ? 1 : 0,
+  );
+  const lastMessageByPhone = windowDays > 0
+    ? await recentWaContactsByPhone(b.teamId, new Date(now.getTime() - windowDays * WA_MS_PER_DAY))
+    : undefined;
+
+  const sentPhones = opts.skipSentPhones
+    ? new Set<string>((b.sentPhones || []).map((p: string) => normalizeWaPhone(p)))
+    : undefined;
+
+  const blocked: Record<string, number> = {};
+  const bump = (r: string) => { blocked[r] = (blocked[r] || 0) + 1; };
+  const byPhone = new Map<string, {
+    contact: any; phone: string; message: string; link: string; service: string; kind: 'lead' | 'customer';
+  }>();
+  let considered = 0;
+
+  // A link depends only on the variant — build each one once, not per contact.
+  const linkCache = new Map<string, string>();
+  const linkFor = (raw: string | undefined) => {
+    const key = raw || '';
+    let v = linkCache.get(key);
+    if (v === undefined) { v = waWithUtm(key, b.utm); linkCache.set(key, v); }
+    return v;
+  };
+
+  const consider = (raw: any, id: string, kind: 'lead' | 'customer') => {
+    considered++;
+    const e = { ...raw, id };
+    const reason = waBlockReason(e, seg, conditions, { now, kind, lastMessageByPhone, sentPhones, domainCustomerIds }, variants);
+    if (reason) { bump(reason); return; }
+    const phone = normalizeWaPhone(e.phone || e.phoneNumber);
+    if (byPhone.has(phone)) return;   // same person as lead AND customer → one chat
+    const variant = waPickVariant(e, variants);
+    const service = waVariantServiceLabel(e, variant);
+    const link = linkFor(variant?.landingUrl || b.landingUrl);
+    const body = variant?.body || '';
+    byPhone.set(phone, {
+      contact: e, phone, link, service, kind,
+      message: body ? waRenderMessage(body, e, { link, service }) : '',
+    });
+  };
+
+  if (audience.includes('leads')) {
+    for (const { id, data } of await tenantScopedDocs('leads', audienceScope)) consider(data, id, 'lead');
+  }
+  if (audience.includes('customers')) {
+    for (const { id, data } of await tenantScopedDocs('customers', audienceScope)) consider(data, id, 'customer');
+  }
+
+  return { targets: Array.from(byPhone.values()), blocked, considered };
+}
+
+const PER_RUN_META = 200;     // Meta: high throughput, parallel, safe
+const PER_RUN_BAILEYS = 8;    // Baileys: tiny batch + paced to limit ban risk
+
+/**
+ * Record the touch on the LEAD after a campaign message lands.
+ *
+ * Two reasons, and the second one is a bug fix:
+ *
+ *  1. The CRM timeline should show that we reached out — a message the user can't
+ *     see in the lead's history looks like it never happened.
+ *  2. `lead-wa-auto-reminders` (the team-wide stale-lead reminder) decides from
+ *     `lastActivityAt`/`lastFollowUpDate` ALONE — it never looks at
+ *     `whatsappMessages`. Without this stamp, a campaign could message a lead and
+ *     that job would message them AGAIN days later, both believing the lead had
+ *     gone quiet. Stamping the same fields it reads (plus its own
+ *     `waAutoReminderAt` debounce) makes the two suppress each other.
+ *
+ * Never allowed to fail the send — the message is already delivered by now.
+ */
+async function stampWaCampaignTouch(
+  targets: Array<{ contact: any; kind: 'lead' | 'customer' }>,
+  sentPhones: Set<string>,
+  campaignName: string,
+  teamId: string,
+): Promise<void> {
+  const now = admin.firestore.Timestamp.now();
+  const ops: Promise<any>[] = [];
+  for (const t of targets) {
+    if (t.kind !== 'lead' || !sentPhones.has(normalizeWaPhone(t.contact.phone || t.contact.phoneNumber))) continue;
+    ops.push(db.collection('leads').doc(t.contact.id).update({
+      lastActivityAt: now,
+      lastFollowUpDate: now,
+      waAutoReminderAt: now,   // shares the older job's debounce
+      updatedAt: now,
+    }).catch(() => {}));
+    ops.push(db.collection('leadActivities').add({
+      leadId: t.contact.id,
+      teamId,
+      type: 'whatsapp',
+      title: 'WhatsApp automatik (fushatë)',
+      body: `Fushata “${campaignName}”.`,
+      userId: null,
+      userName: 'Sistemi',
+      createdAt: now,
+    }).catch(() => {}));
+  }
+  await Promise.allSettled(ops);
+}
+
+/**
+ * Send one campaign's next batch. Returns what happened; the CALLER decides what
+ * that means for the doc (a one-shot completes, an evergreen rule never does).
+ * Throws on a misconfiguration the caller should record as `failed`.
+ */
+async function sendWaCampaignBatch(
+  bDoc: admin.firestore.QueryDocumentSnapshot,
+  b: any,
+  now: Date,
+  opts: { skipSentPhones: boolean },
+): Promise<{ total: number; succeeded: string[]; blocked: Record<string, number>; considered: number }> {
+  const tplDoc = b.templateId ? await db.collection('waTemplates').doc(b.templateId).get() : null;
+  const tpl = tplDoc?.exists ? (tplDoc.data() as any) : null;
+  const variants: any[] = Array.isArray(b.variants) ? b.variants : [];
+  const useBaileys = b.channel === 'baileys';
+
+  // Text has to come from SOMEWHERE: a variant (Baileys) or a template (both).
+  if (!tpl && !variants.some((v) => String(v?.body || '').trim())) {
+    throw new Error('Template mungon');
+  }
+  if (!useBaileys && !tpl) {
+    // Meta can only deliver approved templates — free-text variants are Baileys-only.
+    throw new Error('Kanali Meta kërkon një template të aprovuar (variantet me tekst të lirë punojnë vetëm me Baileys)');
+  }
+
+  const settings = await getTeamConfig(b.teamId);
+  let metaChannel: any = null;
+  let vpsUrl = '';
+  let vpsSecret = '';
+  if (useBaileys) {
+    vpsUrl = settings.whatsappVpsUrl || '';
+    vpsSecret = settings.whatsappVpsSecret || '';
+    if (!vpsUrl || !vpsSecret || !b.agentId) throw new Error('Konfigurimi i Baileys/VPS mungon');
+  } else {
+    const channels: any[] = settings.metaChannels || [];
+    metaChannel = channels.find((c) => c.phoneNumberId === b.channelPhoneNumberId) || channels[0];
+    if (!metaChannel?.accessToken || !metaChannel?.phoneNumberId) throw new Error('Kanali Meta mungon');
+  }
+
+  const { targets, blocked, considered } = await resolveWaCampaignTargets(b, now, opts);
+  const total = targets.length;
+
+  const cap = Number(b.conditions?.dailyCap) || 0;
+  const perRun = Math.min(useBaileys ? PER_RUN_BAILEYS : PER_RUN_META, cap > 0 ? cap : Number.MAX_SAFE_INTEGER);
+  const batch = targets.slice(0, perRun);
+  const succeeded: string[] = [];
+
+  if (useBaileys) {
+    // Sequential + randomized pacing to look human and respect the VPS
+    // 30/min per-agent limit (reduces — does not eliminate — ban risk).
+    for (const t of batch) {
+      // A variant's rendered body wins; otherwise the legacy positional template.
+      const message = t.message
+        || renderTemplateBody(tpl?.body || '', waTemplateParams(tpl || {}, t.contact, t));
+      if (!message.trim()) { blocked['no-variant'] = (blocked['no-variant'] || 0) + 1; continue; }
+      const ok = await sendBaileysBroadcastMessage(
+        vpsUrl, vpsSecret, b.agentId, t.phone, message, b.teamId,
+        { id: t.contact.id, name: t.contact.name },
+      );
+      if (ok) succeeded.push(t.phone);
+      await sleep(1500 + Math.floor(Math.random() * 2500)); // 1.5–4s between sends
+    }
+  } else {
+    const results = await Promise.allSettled(
+      batch.map((t) => sendMetaBroadcastMessage(
+        metaChannel, t.phone, tpl, waTemplateParams(tpl, t.contact, t), b.teamId, bDoc.id,
+        { id: t.contact.id, name: t.contact.name },
+      ).then(() => t.phone)),
+    );
+    for (const r of results) if (r.status === 'fulfilled') succeeded.push(r.value);
+  }
+
+  if (succeeded.length) {
+    await stampWaCampaignTouch(batch, new Set(succeeded), b.name || 'pa emër', b.teamId);
+  }
+
+  return { total, succeeded, blocked, considered };
+}
+
 async function runWhatsappBroadcasts() {
-  const PER_RUN_META = 200;     // Meta: high throughput, parallel, safe
-  const PER_RUN_BAILEYS = 8;    // Baileys: tiny batch + paced to limit ban risk
   const now = new Date();
   const snap = await db.collection('waBroadcasts')
     .where('status', 'in', ['queued', 'sending'])
@@ -2163,142 +2596,28 @@ async function runWhatsappBroadcasts() {
 
   for (const bDoc of snap.docs) {
     const b = bDoc.data() as any;
+    // Evergreen rules are driven by `whatsapp-automations`, not here.
+    if (b.trigger === 'dormant') continue;
     try {
       // Respect scheduling.
       if (b.scheduledAt?.toDate && b.scheduledAt.toDate() > now) continue;
 
-      const tplDoc = await db.collection('waTemplates').doc(b.templateId).get();
-      if (!tplDoc.exists) { await bDoc.ref.update({ status: 'failed', error: 'Template mungon', updatedAt: now }); continue; }
-      const tpl = tplDoc.data() as any;
-
-      const settings = await getTeamConfig(b.teamId);
-      const useBaileys = b.channel === 'baileys';
-
-      // Resolve channel credentials up front.
-      let metaChannel: any = null;
-      let vpsUrl = '';
-      let vpsSecret = '';
-      if (useBaileys) {
-        vpsUrl = settings.whatsappVpsUrl || '';
-        vpsSecret = settings.whatsappVpsSecret || '';
-        if (!vpsUrl || !vpsSecret || !b.agentId) {
-          await bDoc.ref.update({ status: 'failed', error: 'Konfigurimi i Baileys/VPS mungon', updatedAt: now });
-          continue;
-        }
-      } else {
-        const channels: any[] = settings.metaChannels || [];
-        metaChannel = channels.find((c) => c.phoneNumberId === b.channelPhoneNumberId) || channels[0];
-        if (!metaChannel?.accessToken || !metaChannel?.phoneNumberId) {
-          await bDoc.ref.update({ status: 'failed', error: 'Kanali Meta mungon', updatedAt: now });
-          continue;
-        }
-      }
-
-      // Resolve segment → recipients from leads and/or customers (filtered in
-      // memory to avoid composite indexes), then merge + dedupe by phone.
-      const seg = b.segment || {};
-      const audience: string[] = seg.audience?.length ? seg.audience : ['leads'];
-      const byPhone = new Map<string, { id: string; name?: string; phone: string; [k: string]: any }>();
-      // "Has a registered domain" filter → set of customerIds owning a domain.
-      const audienceScope = { businessId: (b as any).businessId || null, teamId: b.teamId || null };
-      const domainCustomerIds: Set<string> | null = seg.hasDomain
-        ? new Set((await tenantScopedDocs('domains', audienceScope)).map(d => d.data.customerId).filter(Boolean).map(String))
-        : null;
-
-      // Tag filtering (normalize array/comma-string; support ANY/ALL + legacy single tag).
-      const wantTags: string[] = seg.tags?.length ? seg.tags : (seg.tag ? [seg.tag] : []);
-      const tagMatchAll = seg.tagMatch === 'all';
-      const entityTags = (e: any): string[] => {
-        const t = e?.tags;
-        if (Array.isArray(t)) return t.map((x: any) => String(x).trim()).filter(Boolean);
-        if (typeof t === 'string') return t.split(',').map((s: string) => s.trim()).filter(Boolean);
-        return [];
-      };
-      const matchesTags = (e: any): boolean => {
-        if (!wantTags.length) return true;
-        const et = entityTags(e);
-        return tagMatchAll ? wantTags.every((t) => et.includes(t)) : wantTags.some((t) => et.includes(t));
-      };
-
-      if (audience.includes('leads')) {
-        // Leads of THIS tenant only. (This used to read every tenant's leads, which
-        // both leaked contacts across tenants and made the cost platform-wide.)
-        for (const { id: leadId, data: l } of await tenantScopedDocs('leads', audienceScope)) {
-          const d = { id: leadId };
-          const rawPhone = l.phone || l.phoneNumber;
-          if (!rawPhone) continue;
-          if (seg.statuses?.length && !seg.statuses.includes(l.status)) continue;
-          if (!matchesTags(l)) continue;
-          if (seg.assignedToUserId && l.assignedToUserId !== seg.assignedToUserId) continue;
-          if (seg.source && String(l.source || '') !== seg.source) continue;
-          if (domainCustomerIds) continue; // leads never own a domain
-          const phone = normalizeWaPhone(rawPhone);
-          if (phone.length >= 7 && !byPhone.has(phone)) byPhone.set(phone, { ...l, id: d.id, phone });
-        }
-      }
-      if (audience.includes('customers')) {
-        // Customers of THIS tenant only (see the note on leads above).
-        for (const { id: custId, data: c } of await tenantScopedDocs('customers', audienceScope)) {
-          const d = { id: custId };
-          if (!c.phone) continue;
-          if (!matchesTags(c)) continue;
-          if (seg.assignedToUserId && c.assignedToUserId !== seg.assignedToUserId) continue;
-          if (seg.source && String(c.source || '') !== seg.source) continue;
-          if (domainCustomerIds && !domainCustomerIds.has(String(d.id))) continue;
-          const phone = normalizeWaPhone(c.phone);
-          if (phone.length >= 7 && !byPhone.has(phone)) byPhone.set(phone, { ...c, id: d.id, phone });
-        }
-      }
-
-      // Idempotency: skip recipients already sent (tracked on the broadcast doc,
-      // channel-agnostic so it works for both Meta and Baileys).
+      // One-shot: `sentPhones` is the permanent exclusion list, so a re-run
+      // resumes where it stopped instead of messaging anyone twice.
       const alreadySent = new Set<string>((b.sentPhones || []).map((p: string) => normalizeWaPhone(p)));
-      const total = byPhone.size;
-      let targets = Array.from(byPhone.values()).filter((t) => !alreadySent.has(t.phone));
-
-      const perRun = useBaileys ? PER_RUN_BAILEYS : PER_RUN_META;
-      const batch = targets.slice(0, perRun);
-      const succeeded: string[] = [];
-
-      if (useBaileys) {
-        // Sequential + randomized pacing to look human and respect the VPS
-        // 30/min per-agent limit (reduces — does not eliminate — ban risk).
-        for (const t of batch) {
-          const phone = normalizeWaPhone(t.phone || t.phoneNumber);
-          const params: string[] = (tpl.paramFields || []).map((f: string) =>
-            f && f !== 'custom' && t[f] != null ? String(t[f]) : ''
-          );
-          const ok = await sendBaileysBroadcastMessage(
-            vpsUrl, vpsSecret, b.agentId, phone, renderTemplateBody(tpl.body, params), b.teamId, { id: t.id, name: t.name }
-          );
-          if (ok) { succeeded.push(phone); sent++; }
-          await sleep(1500 + Math.floor(Math.random() * 2500)); // 1.5–4s between sends
-        }
-      } else {
-        // Meta: parallel template sends; collect the ones that succeeded.
-        const results = await Promise.allSettled(
-          batch.map((t) => {
-            const phone = normalizeWaPhone(t.phone || t.phoneNumber);
-            const params: string[] = (tpl.paramFields || []).map((f: string) =>
-              f && f !== 'custom' && t[f] != null ? String(t[f]) : ''
-            );
-            return sendMetaBroadcastMessage(metaChannel, phone, tpl, params, b.teamId, bDoc.id, { id: t.id, name: t.name })
-              .then(() => phone);
-          })
-        );
-        for (const r of results) {
-          if (r.status === 'fulfilled') { succeeded.push(r.value); sent++; }
-        }
-      }
+      const { total, succeeded, blocked } = await sendWaCampaignBatch(bDoc, b, now, { skipSentPhones: true });
+      sent += succeeded.length;
 
       const newSentTotal = alreadySent.size + succeeded.length;
-      const remaining = total - newSentTotal;
+      const remaining = total - succeeded.length;
       await bDoc.ref.update({
-        totalTargets: total,
+        totalTargets: alreadySent.size + total,
         sentCount: newSentTotal,
         // arrayUnion requires ≥1 element — only include when something succeeded.
         ...(succeeded.length ? { sentPhones: admin.firestore.FieldValue.arrayUnion(...succeeded) } : {}),
         status: remaining > 0 ? 'sending' : 'completed',
+        lastRunBlocked: blocked,
+        lastRunAt: now,
         error: null,
         updatedAt: new Date(),
       });
@@ -2310,6 +2629,67 @@ async function runWhatsappBroadcasts() {
   }
 
   return { processed, sent };
+}
+
+// ── JOB: whatsapp-automations ────────────────────────────────────────────────
+// EVERGREEN WhatsApp rules (`trigger: 'dormant'`, `status: 'active'`): every run
+// they re-resolve their segment and message whoever has gone quiet long enough —
+// "leads tagged SEO we haven't touched in 30 days get the SEO re-engagement text
+// plus its landing page".
+//
+// Unlike the one-shot job this NEVER completes and never accumulates
+// `sentPhones`. The dormancy condition is the cooldown: sending resets the
+// contact's last-contact date, so they drop out of the segment for the length of
+// the window and re-enter only if they go quiet again. A permanent sent-list
+// would turn a recurring rule into a once-per-contact-ever blast.
+//
+// Mirrors the email module's `purchase-campaigns` in spirit. NOT part of run-all
+// on purpose — an evergreen sender should be scheduled deliberately, once a day.
+async function runWhatsappAutomations() {
+  const now = new Date();
+  const snap = await db.collection('waBroadcasts').where('trigger', '==', 'dormant').get();
+  const rules = snap.docs.filter((d) => (d.data() as any).status === 'active');
+  if (!rules.length) return { rules: 0, processed: 0, sent: 0 };
+
+  let processed = 0;
+  let sent = 0;
+
+  for (const bDoc of rules) {
+    const b = bDoc.data() as any;
+    try {
+      if (b.scheduledAt?.toDate && b.scheduledAt.toDate() > now) continue;
+      // A rule with no dormancy threshold would message the whole segment on
+      // every run. Refuse rather than spam.
+      if (b.conditions?.lastContactMinDays == null) {
+        await bDoc.ref.update({
+          status: 'paused',
+          error: 'Automatizimi kërkon kushtin “Të pakontaktuar prej X ditësh”.',
+          updatedAt: now,
+        });
+        continue;
+      }
+
+      const { total, succeeded, blocked, considered } = await sendWaCampaignBatch(bDoc, b, now, { skipSentPhones: false });
+      sent += succeeded.length;
+      await bDoc.ref.update({
+        totalTargets: total,
+        sentCount: admin.firestore.FieldValue.increment(succeeded.length),
+        lastRunAt: now,
+        lastRunBlocked: blocked,
+        error: null,
+        updatedAt: now,
+      });
+      console.log(`[CRON:whatsapp-automations] ${b.name}: ${succeeded.length} dërguar, ${total} të pranueshëm nga ${considered} kontakte`);
+      processed++;
+    } catch (err: any) {
+      // A broken evergreen rule is PAUSED, not left retrying every run — it
+      // would otherwise log the same failure forever with nobody looking.
+      console.error(`[CRON:whatsapp-automations] rule ${bDoc.id} dështoi:`, err);
+      await bDoc.ref.update({ status: 'paused', error: err?.message || 'Gabim', updatedAt: now }).catch(() => {});
+    }
+  }
+
+  return { rules: rules.length, processed, sent };
 }
 
 // ── JOB: email-campaigns ─────────────────────────────────────────────────────
@@ -4187,6 +4567,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'whatsapp-broadcasts':
         result = await runWhatsappBroadcasts();
         break;
+      // Evergreen dormancy rules. NOT in run-all — schedule it once a day so an
+      // always-on sender can never fire several times an hour.
+      case 'whatsapp-automations':
+        result = await runWhatsappAutomations();
+        break;
       case 'email-campaigns':
         result = await runEmailCampaigns();
         break;
@@ -4320,7 +4705,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, daily-report-check, whatsapp-broadcasts, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, daily-report-check, whatsapp-broadcasts, whatsapp-automations, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social` });
     }
 
     await recordJobRun({

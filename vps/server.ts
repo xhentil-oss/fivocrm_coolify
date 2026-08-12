@@ -989,9 +989,22 @@ function startCronSchedulers(): void {
     void triggerCronJob('daily-report-check', { stage: 'escalate' });
   });
 
+  // ── Evergreen WhatsApp rules (dormancy re-engagement) ──
+  // ONCE a day, and deliberately not inside run-all: this job messages real people
+  // unprompted, so it must fire on a schedule someone chose rather than piggybacking
+  // on whatever else run-all does. 10:00 LOCAL, in the office's timezone — a
+  // re-engagement message should land during working hours, when a reply can be
+  // answered, and Albania shifts an hour twice a year (that's why it is
+  // scheduleDailyInZone and not scheduleDailyUtc). Each rule is capped by its own
+  // `dailyCap`, and the dormancy window is the cooldown, so a restart-triggered
+  // extra run cannot re-message anyone.
+  scheduleDailyInZone(CRON_LOCAL_TZ, 10, 0, () => {
+    void triggerCronJob('whatsapp-automations');
+  });
+
   // Kick the frequent set shortly after boot so a restart doesn't stall a broadcast.
   setTimeout(() => { void triggerCronJob('whatsapp-broadcasts'); }, MIN);
-  console.log(`[CRON] ✅ Schedulerët aktiv → ${CRM_BASE_URL} (daily run-all @ ${CRON_DAILY_HOUR}:00 UTC, raporti ditor 17:35/18:35 ${CRON_LOCAL_TZ})`);
+  console.log(`[CRON] ✅ Schedulerët aktiv → ${CRM_BASE_URL} (daily run-all @ ${CRON_DAILY_HOUR}:00 UTC, raporti ditor 17:35/18:35 ${CRON_LOCAL_TZ}, automatizimet WhatsApp 10:00 ${CRON_LOCAL_TZ})`);
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────

@@ -43,6 +43,18 @@ export interface WhatsAppMessage {
   updatedAt: Date;
 }
 
+// One service-specific message inside a campaign. The FIRST (most specific)
+// variant whose tags match the contact wins; a variant with no tags is the
+// fallback. Bodies use named tokens — {{name}}, {{company}}, {{notes}},
+// {{service}}, {{link}} — rendered by `renderWaMessage`.
+export interface WhatsAppMessageVariant {
+  id: string;
+  label?: string;                     // internal name, e.g. "SEO — riaktivizim"
+  tags: string[];                     // service tags that select this variant ([] = fallback)
+  body: string;
+  landingUrl?: string;                // "more info" link for THIS service
+}
+
 // A bulk WhatsApp campaign (template-only, Meta channel).  The cron processor
 // resolves the segment to leads at send time and logs each send to
 // whatsappMessages tagged with broadcastId (for idempotency / resume).
@@ -64,11 +76,36 @@ export interface WhatsAppBroadcast {
     source?: string;                  // filter by origin (e.g. 'whmcs') — leads + customers
     hasDomain?: boolean;              // only customers with a registered WHMCS domain
   };
+  // ── Conditions layered on top of the segment (src/lib/marketing/waAutomation.ts) ──
+  // Dormancy is what makes re-engagement possible: "leads we haven't touched in
+  // 30 days". It also IS the cooldown for an evergreen rule — a contact we just
+  // messaged has a fresh last-contact date and cannot be picked up again until
+  // the window passes, which is why no per-person enrollment record exists.
+  conditions?: {
+    lastContactMinDays?: number;      // ≥ N days since the last contact (dormancy)
+    lastContactMaxDays?: number;      // …and ≤ M days (skip ancient, dead contacts)
+    requireContacted?: boolean;       // exclude contacts nobody ever touched
+    requireNotes?: boolean;           // only contacts with notes (so {{notes}} isn't empty)
+    dailyCap?: number;                // evergreen: max sends per run
+  };
+  // 'dormant' automations are EVERGREEN: they re-resolve the segment every run
+  // and use active/paused instead of draft→queued→completed (mirrors the email
+  // module's 'purchase' trigger).
+  trigger?: 'manual' | 'dormant';
+  // Per-service message variants. The variant is chosen by the CONTACT's tags,
+  // so one rule serves "interested in SEO" and "interested in Ads" with
+  // different text and different landing pages. Absent = use `templateId`.
+  variants?: WhatsAppMessageVariant[];
+  landingUrl?: string;                // default "more info" link (variants may override)
+  utm?: { source?: string; medium?: string; campaign?: string; content?: string };
   scheduledAt?: Date | null;
-  status: 'draft' | 'queued' | 'sending' | 'completed' | 'failed';
+  status: 'draft' | 'queued' | 'sending' | 'completed' | 'failed' | 'active' | 'paused';
   totalTargets?: number;
   sentCount?: number;
-  sentPhones?: string[];              // idempotency: recipients already sent
+  sentPhones?: string[];              // idempotency: recipients already sent (one-shot only)
+  /** Per-reason count of who the segment excluded on the last run (diagnostics). */
+  lastRunBlocked?: Record<string, number>;
+  lastRunAt?: Date;                   // evergreen: when the rule last evaluated
   error?: string | null;
   createdAt?: Date;
   updatedAt?: Date;

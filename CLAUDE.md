@@ -272,6 +272,57 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   `--archive` snapshots into `expenseDeduped`, a recurring parent is never
   deleted).
 
+### WhatsApp campaign automation (conditions + variants + evergreen rules)
+
+- **`src/lib/marketing/waAutomation.ts` is the rules engine** (pure, unit-tested)
+  and is **mirrored** in `api/cron/run.ts` (`waBlockReason`,
+  `resolveWaCampaignTargets`, `sendWaCampaignBatch`) — `api/` never imports from
+  `src/`. If the two drift, the target count the user approved is not the count
+  that goes out. Full runbook: `workspace/WHATSAPP_AUTOMATION.md`.
+- **`waSendBlockReason()` is the only gate.** Every filter returns a NAMED reason
+  (`contacted-too-recently`, `no-notes`, `no-variant`, …) instead of a silent
+  `continue`, so the builder can show "1 240 shqyrtuar → 340 target, 900
+  kontaktuar së fundmi" and `lastRunBlocked` records it per run. Never add a
+  filter inline in the cron loop.
+- **The dormancy window IS the cooldown.** An evergreen rule
+  (`trigger: 'dormant'`, `status: active⇄paused`, job `whatsapp-automations`)
+  keeps NO per-person enrollment record: sending resets the contact's
+  last-contact date, so a `lastContactMinDays: 30` rule can't reach them again
+  for 30 days. Turning that into a permanent `sentPhones` list would silently
+  make a recurring rule fire once per contact, ever. One-shot campaigns
+  (`trigger: 'manual'`, job `whatsapp-broadcasts`) DO use `sentPhones`.
+- **`createdAt` is not a contact.** `resolveLastContactAt()` reads the newest of
+  the last WhatsApp message, `lastActivityAt`, `lastFollowUpDate`,
+  `firstResponseAt`. An imported lead nobody touched is "never contacted" —
+  maximally dormant, unless `requireContacted` or a `lastContactMaxDays` ceiling
+  is set.
+- **The dormancy query only reads INSIDE the window**
+  (`recentWaContactsByPhone`: `teamId` + `createdAt >=` cutoff, existing
+  `(teamId, createdAt DESC)` index) — anyone absent was not contacted in it. It
+  is skipped entirely when no dormancy condition is set. Truncation can only
+  under-exclude, never leak, and logs.
+- **Variants, not one body**: `variants[]` is picked by the CONTACT's tags (most
+  specific match wins; `tags: []` = fallback), each with its own `landingUrl`.
+  Tokens `{{name}} {{company}} {{notes}} {{service}} {{link}}`; an unknown token
+  renders EMPTY (never leak `{{foo}}` to a customer), and a missing `{{link}}`
+  appends the link instead of dropping it. `{{notes}}` is `summarizeNotes()` — the
+  first de-noised line, capped — not a paste of the CRM.
+- **Free-text variants are Baileys-only** — Meta delivers approved templates
+  only. Meta still personalizes via `waTemplates.paramFields`, which now accepts
+  the pseudo-fields `firstName`/`notes`/`service`/`link`.
+- `whatsapp-automations` is **NOT in `run-all`** — it messages real people
+  unprompted, so it fires on a chosen hour: `scheduleDailyInZone(CRON_LOCAL_TZ,
+  10, 0, …)` in `vps/server.ts`. Nothing goes in `vercel.json` (it has no `crons`
+  block — the schedule lives on the VPS; only the job LOGIC is on Vercel). A
+  broken rule is PAUSED, never left retrying forever.
+- **A campaign send STAMPS the lead** (`stampWaCampaignTouch`: `lastActivityAt`,
+  `lastFollowUpDate`, `waAutoReminderAt` + a `leadActivities` row). This is not
+  cosmetic: the older team-wide reminder (`lead-wa-auto-reminders`, configured in
+  `WhatsappAutomation.tsx` → `teamSettings.waAutoReminder*`) decides from those
+  lead fields ALONE and never reads `whatsappMessages`, so without the stamp both
+  jobs would message the same lead days apart. The two features coexist — the old
+  one is a single team-wide rule, these are many per-service ones.
+
 ### Daily staff report (mandatory, 16:50)
 
 - **One form, two mounts.** `DailyReportForm` is the ONLY place the daily questions
