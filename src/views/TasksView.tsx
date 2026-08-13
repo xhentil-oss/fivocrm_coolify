@@ -12,7 +12,6 @@ import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings'
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import {
-  Calendar as CalendarIcon,
   User,
   Flag,
   MoreVertical,
@@ -44,8 +43,6 @@ import { Badge } from '../components/ui/badge';
 import { Checkbox } from '../components/ui/checkbox';
 import { Button } from '../components/ui/button';
 import { Input } from '../components/ui/input';
-import { Label } from '../components/ui/label';
-import RichTextEditor from '../components/RichTextEditor';
 import { Calendar } from '../components/ui/calendar';
 import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
@@ -65,7 +62,7 @@ import TaskDetailPanel from '../components/TaskDetailPanel';
 import TaskDateConflictDialog from '../components/TaskDateConflictDialog';
 import { findSameDayTasks } from '../lib/taskConflicts';
 import SmartSuggestions from '../components/SmartSuggestions';
-import { TaskLabels, LabelEditor } from '../components/TaskLabels';
+import { TaskLabels } from '../components/TaskLabels';
 import TaskTimeline from '../components/TaskTimeline';
 import { GanttChart } from 'lucide-react';
 
@@ -335,7 +332,7 @@ const TasksView: React.FC = () => {
 
 
 
-  const handleCreateTask = async (formData: FormData, options?: { skipDateConflictCheck?: boolean }) => {
+  const handleCreateTask = async (formData: FormData, options?: { skipDateConflictCheck?: boolean; createAnother?: boolean }) => {
     const title = formData.get('title') as string;
     const description = formData.get('description') as string;
     // Dates are optional (only the title is required) — guard against Invalid Date.
@@ -513,8 +510,12 @@ const TasksView: React.FC = () => {
     await Promise.allSettled(notificationPromises);
 
     setDateConflict(null);
-    setIsCreateDialogOpen(false);
-    setSelectedTask(newTask);
+    // "Krijo & shto tjetër" keeps the dialog open for the next entry — the form
+    // resets itself and shows its own confirmation, so don't steal focus either.
+    if (!options?.createAnother) {
+      setIsCreateDialogOpen(false);
+      setSelectedTask(newTask);
+    }
   };
 
   /** "Po, vazhdo" on the same-day warning — re-runs the parked submission. */
@@ -1082,14 +1083,18 @@ const TasksView: React.FC = () => {
                     <span className="hidden xs:inline">Detyrë e Re</span>
                   </Button>
                 </DialogTrigger>
-                <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
-                  <DialogHeader>
-                    <DialogTitle>Krijo Detyrë të Re</DialogTitle>
+                <DialogContent className="max-w-[640px] max-h-[90vh] overflow-y-auto p-0 gap-0 rounded-2xl">
+                  <DialogHeader className="px-6 pt-5 pb-0 space-y-0">
+                    <DialogTitle className="text-xs font-extrabold uppercase tracking-[0.08em] text-muted-foreground">
+                      Detyrë e re
+                    </DialogTitle>
                   </DialogHeader>
-                  <TaskForm
-                    onSubmit={handleCreateTask}
+                  <QuickTaskForm
+                    // The quick form shows the same-day warning inline (non-blocking,
+                    // "krijohet gjithsesi") so the parked-confirmation dialog is skipped.
+                    onSubmit={(fd, opts) => handleCreateTask(fd, { skipDateConflictCheck: true, createAnother: opts?.createAnother })}
                     projects={projects || []}
-                    allTasks={tasks}
+                    conflictTasks={rawTasks || []}
                     teamMembers={teamMembers?.filter((m: any) => !businessId || !m.businessId || m.businessId === businessId) || []}
                     canAssignTasks={permissions.canAssignTasks}
                     currentUserId={user?.uid || ''}
@@ -1518,433 +1523,367 @@ const TasksView: React.FC = () => {
 };
 
 // Task Form Component
-const TaskForm: React.FC<{
-  onSubmit: (data: FormData) => void;
+// ── Quick-create form ────────────────────────────────────────────────────────
+// Chip-driven creator (redesign, Aug 2026): only the title is required, everything
+// else is a one-tap choice (personi, afati, prioriteti, projekti, përsëritja).
+// The same-day workload warning renders inline and never blocks — "krijohet
+// gjithsesi" — so the parked TaskDateConflictDialog is skipped for this path.
+// Editing an existing task still goes through TaskDetailPanel.
+
+const QUICK_AVATAR_COLORS: Array<[string, string]> = [
+  ['#08183A', '#ffffff'],
+  ['#dbe7fb', '#2258bb'],
+  ['#e8f2ec', '#1e7a46'],
+  ['#fdf6e8', '#8a6413'],
+  ['#fde8ea', '#b23048'],
+  ['#efe8fd', '#6d3fb2'],
+];
+
+const quickChipCls = (on: boolean) =>
+  `rounded-full border-[1.5px] px-3.5 py-1.5 text-xs font-bold transition-colors ${
+    on
+      ? 'border-primary bg-primary/10 text-primary'
+      : 'border-border bg-background text-muted-foreground hover:border-primary/50'
+  }`;
+
+const QuickFormRow: React.FC<{ label: string; children: React.ReactNode }> = ({ label, children }) => (
+  <div className="grid grid-cols-[92px_1fr] items-center gap-2.5">
+    <span className="text-xs font-bold text-muted-foreground">{label}</span>
+    <div className="flex min-w-0 flex-wrap items-center gap-1.5">{children}</div>
+  </div>
+);
+
+const QuickTaskForm: React.FC<{
+  onSubmit: (data: FormData, opts?: { createAnother?: boolean }) => Promise<unknown> | void;
   projects: Project[];
-  initialData?: Task;
-  allTasks?: Task[];
+  /** Raw (unfiltered) task list — the role filter must not hide a same-day conflict. */
+  conflictTasks: Task[];
   teamMembers?: any[];
   canAssignTasks?: boolean;
   currentUserId?: string;
   allLabels?: string[];
-}> = ({ onSubmit, projects, initialData, allTasks = [], teamMembers = [], canAssignTasks = false, currentUserId = '', allLabels = [] }) => {
-  // A user who belongs to multiple teams has one teamMember record per team. Without
-  // deduping by userId the assignee <Select> renders several <SelectItem>s with the
-  // same value, and Radix concatenates all their labels in the trigger
-  // ("xhentil (ti)Xhentil Kanina (ti)…"). Dedupe so each person appears once.
+}> = ({ onSubmit, projects, conflictTasks, teamMembers = [], canAssignTasks = false, currentUserId = '', allLabels = [] }) => {
+  // Dedupe by userId — a user on several teams has one teamMember record per team
+  // and would otherwise render as several chips for the same person.
   const uniqueMembers = useUniqueTeamMembers(teamMembers);
-  const [labels, setLabels] = useState<string[]>((initialData as any)?.labels || []);
-  const [startDate, setStartDate] = useState<Date | undefined>(
-    initialData?.startDate ? new Date(initialData.startDate) : new Date()
-  );
-  const [endDate, setEndDate] = useState<Date | undefined>(
-    // Default to the same day as start — many tasks are done within a day. Extend if needed.
-    initialData?.endDate ? new Date(initialData.endDate) : new Date()
-  );
-  const [status, setStatus] = useState(initialData?.status || 'Todo');
-  const [descriptionHtml, setDescriptionHtml] = useState(initialData?.description || '');
-  const [priority, setPriority] = useState(initialData?.priority || 'medium');
-  const [projectId, setProjectId] = useState(initialData?.projectId || '__none__');
-  const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
-  const [recurringFrequency, setRecurringFrequency] = useState(initialData?.recurringFrequency || 'weekly');
-  const [recurringDayOfWeek, setRecurringDayOfWeek] = useState<number>(
-    (initialData as any)?.recurringDayOfWeek ?? 1
-  );
-  const [recurringDayOfMonth, setRecurringDayOfMonth] = useState<number>(
-    (initialData as any)?.recurringDayOfMonth ?? 1
-  );
-  // How many periods between occurrences (every N days/weeks/months/years).
-  const [recurringInterval, setRecurringInterval] = useState<number>(
-    (initialData as any)?.recurringInterval ?? 1
-  );
-  // For daily recurrence: which days of the week (default Mon-Fri)
-  const [recurringDaysOfWeek, setRecurringDaysOfWeek] = useState<number[]>(
-    (initialData as any)?.recurringDaysOfWeek ?? [1, 2, 3, 4, 5]
-  );
-  const toggleDayOfWeek = (day: number) => {
-    setRecurringDaysOfWeek(prev =>
-      prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day].sort((a, b) => a - b)
-    );
-  };
-  const [dependsOn, setDependsOn] = useState<string[]>(initialData?.dependsOn || []);
+  const [title, setTitle] = useState('');
+  const [desc, setDesc] = useState('');
+  const [who, setWho] = useState(currentUserId);
+  const [due, setDue] = useState<'today' | 'tomorrow' | 'week' | 'none'>('today');
+  const [prio, setPrio] = useState('medium');
+  const [projectId, setProjectId] = useState('__none__');
+  const [rec, setRec] = useState<'never' | 'daily' | 'weekly' | 'monthly'>('never');
+  const [recDays, setRecDays] = useState<number[]>([1, 2, 3, 4, 5]);
+  const [showMore, setShowMore] = useState(false);
+  const [hours, setHours] = useState('');
+  const [taskValue, setTaskValue] = useState('');
+  const [labels, setLabels] = useState<string[]>([]);
+  const [newLabel, setNewLabel] = useState('');
+  const [savedMsg, setSavedMsg] = useState('');
+  const [saving, setSaving] = useState(false);
+  const toastTimer = React.useRef<ReturnType<typeof setTimeout>>();
+  useEffect(() => () => clearTimeout(toastTimer.current), []);
 
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    
-    if (startDate) {
-      formData.set('startDate', startDate.toISOString());
+  const memberName = (m: any) => m?.displayName || m?.email?.split('@')[0] || m?.userId || 'Ti';
+  const assignableMembers = canAssignTasks
+    ? uniqueMembers
+    : uniqueMembers.filter((m: any) => m.userId === currentUserId);
+  const whoName = memberName(uniqueMembers.find((m: any) => m.userId === who));
+  const whoFirst = who === currentUserId ? 'Ti' : whoName.split(' ')[0];
+
+  // "Sot / Nesër / Këtë javë" — single-day tasks (09:00–17:00 on the due day),
+  // consistent with the recurrence model where occurrences live within one day.
+  const dueDate = useMemo(() => {
+    if (due === 'none') return undefined;
+    const d = new Date();
+    if (due === 'tomorrow') d.setDate(d.getDate() + 1);
+    else if (due === 'week') {
+      const dow = d.getDay();
+      if (dow !== 0) d.setDate(d.getDate() + (7 - dow)); // deri të dielën e kësaj jave
     }
-    if (endDate) {
-      formData.set('endDate', endDate.toISOString());
-    }
-    
-    formData.set('status', status);
-    formData.set('priority', priority);
-    const cleanDesc = descriptionHtml === '<p></p>' ? '' : descriptionHtml;
-    formData.set('description', cleanDesc);
-    
-    if (projectId && projectId !== '__none__') {
-      formData.set('projectId', projectId);
-    }
-    
-    if (dependsOn.length > 0) {
-      formData.set('dependsOn', JSON.stringify(dependsOn));
-    }
-    onSubmit(formData);
+    d.setHours(17, 0, 0, 0);
+    return d;
+  }, [due]);
+
+  const sameDay = useMemo(() => {
+    if (!dueDate || !who) return [] as Task[];
+    return findSameDayTasks(conflictTasks, { assigneeId: who, date: dueDate });
+  }, [conflictTasks, who, dueDate]);
+
+  const labelSuggestions = useMemo(
+    () => Array.from(new Set([...allLabels, ...labels])),
+    [allLabels, labels]
+  );
+  const toggleLabel = (l: string) =>
+    setLabels(prev => (prev.includes(l) ? prev.filter(x => x !== l) : [...prev, l]));
+  const addNewLabel = () => {
+    const l = newLabel.trim();
+    if (!l) return;
+    setLabels(prev => (prev.includes(l) ? prev : [...prev, l]));
+    setNewLabel('');
   };
 
-  // Date+time helpers so a task can be scheduled within a single day (e.g. 09:00–11:00).
-  const timeStr = (d?: Date) => d ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '';
-  const pickDateKeepTime = (setter: (d?: Date) => void, prev?: Date) => (d?: Date) => {
-    if (!d) { setter(undefined); return; }
-    const nd = new Date(d);
-    if (prev) nd.setHours(prev.getHours(), prev.getMinutes(), 0, 0);
-    else nd.setHours(9, 0, 0, 0);
-    setter(nd);
-  };
-  const setTimeOnDate = (setter: (d?: Date) => void, prev?: Date) => (e: React.ChangeEvent<HTMLInputElement>) => {
-    const [h, m] = e.target.value.split(':').map(Number);
-    const nd = prev ? new Date(prev) : new Date();
-    nd.setHours(h || 0, m || 0, 0, 0);
-    setter(nd);
+  const canCreate = title.trim().length > 0;
+  const dueLabel = { today: 'sot', tomorrow: 'nesër', week: 'këtë javë', none: 'pa afat' }[due];
+
+  const doCreate = async (createAnother: boolean) => {
+    if (!canCreate || saving) return;
+    const fd = new FormData();
+    fd.set('title', title.trim());
+    fd.set('description', desc.trim());
+    fd.set('status', 'Todo');
+    fd.set('priority', prio);
+    fd.set('assignedToUserId', who || currentUserId);
+    if (dueDate) {
+      const start = new Date(dueDate);
+      start.setHours(9, 0, 0, 0);
+      fd.set('startDate', start.toISOString());
+      fd.set('endDate', dueDate.toISOString());
+    }
+    if (projectId !== '__none__') fd.set('projectId', projectId);
+    if (labels.length > 0) fd.set('labels', JSON.stringify(labels));
+    if (hours.trim()) fd.set('estimatedHours', hours.trim());
+    if (taskValue.trim()) fd.set('value', taskValue.trim());
+    if (rec !== 'never') {
+      const anchor = dueDate || new Date();
+      fd.set('isRecurring', 'true');
+      fd.set('recurringFrequency', rec);
+      fd.set('recurringInterval', '1');
+      fd.set('recurringDayOfWeek', String(anchor.getDay()));
+      fd.set('recurringDayOfMonth', String(anchor.getDate()));
+      if (rec === 'daily') fd.set('recurringDaysOfWeek', JSON.stringify(recDays.length > 0 ? recDays : [1, 2, 3, 4, 5]));
+    }
+    setSaving(true);
+    try {
+      await Promise.resolve(onSubmit(fd, { createAnother }));
+      if (createAnother) {
+        setSavedMsg(`"${title.trim()}" u krijua — ${whoFirst}, ${dueLabel}.`);
+        setTitle(''); setDesc(''); setHours(''); setTaskValue(''); setLabels([]);
+        clearTimeout(toastTimer.current);
+        toastTimer.current = setTimeout(() => setSavedMsg(''), 3500);
+      }
+    } finally {
+      setSaving(false);
+    }
   };
 
-  const availableTasks = allTasks.filter(t => t.id !== initialData?.id);
+  const dayNames = ['D', 'H', 'M', 'M', 'E', 'P', 'Sh'];
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div>
-        <Label htmlFor="title">Titulli</Label>
-        <Input id="title" name="title" required defaultValue={initialData?.title} placeholder="Emri i detyrës" />
-      </div>
-
-      <div>
-        <Label htmlFor="description">Përshkrimi</Label>
-        <RichTextEditor
-          content={descriptionHtml}
-          onChange={setDescriptionHtml}
-          placeholder="Përshkruaj detyrën..."
-          minHeight="100px"
+    <div className="flex flex-col">
+      {/* Titulli + përshkrimi — pa kornizë, titulli është heroi i formës */}
+      <div className="px-6 pt-1">
+        <input
+          value={title}
+          onChange={e => setTitle(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); doCreate(false); } }}
+          autoFocus
+          placeholder="Çfarë duhet bërë?"
+          className="w-full border-none bg-transparent py-2 text-[21px] font-extrabold tracking-tight text-foreground outline-none placeholder:text-muted-foreground/50"
+        />
+        <textarea
+          value={desc}
+          onChange={e => setDesc(e.target.value)}
+          rows={2}
+          placeholder="Shto një përshkrim… (opsionale)"
+          className="w-full resize-none border-none bg-transparent pb-1.5 text-[13.5px] font-medium leading-relaxed text-muted-foreground outline-none placeholder:text-muted-foreground/50"
         />
       </div>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
-          <Label>Data/ora e fillimit</Label>
-          <div className="flex gap-2">
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="outline" className="flex-1 justify-start text-sm" type="button">
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {startDate ? startDate.toLocaleDateString() : "Zgjidh"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <Calendar mode="single" selected={startDate} onSelect={pickDateKeepTime(setStartDate, startDate)} initialFocus />
-              </PopoverContent>
-            </Popover>
-            <Input type="time" value={timeStr(startDate)} onChange={setTimeOnDate(setStartDate, startDate)} className="w-[110px] text-sm" />
+      <div className="flex flex-col gap-3.5 border-t px-6 pt-3.5">
+        <QuickFormRow label="Personi">
+          {assignableMembers.map((m: any, i: number) => {
+            const on = who === m.userId;
+            const name = memberName(m);
+            const [avBg, avFg] = QUICK_AVATAR_COLORS[i % QUICK_AVATAR_COLORS.length];
+            return (
+              <button
+                key={m.userId}
+                type="button"
+                title={name}
+                onClick={() => setWho(m.userId)}
+                className={`flex items-center gap-1.5 rounded-full border-[1.5px] py-1 pl-1 pr-3 text-xs font-bold transition-colors ${
+                  on ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background text-muted-foreground hover:border-primary/50'
+                }`}
+              >
+                <span
+                  className="flex h-[21px] w-[21px] shrink-0 items-center justify-center rounded-full text-[8px] font-extrabold"
+                  style={{ background: avBg, color: avFg }}
+                >
+                  {name.split(' ').map((w: string) => w[0]).slice(0, 2).join('').toUpperCase()}
+                </span>
+                {name.split(' ')[0]}{m.userId === currentUserId ? ' (ti)' : ''}
+              </button>
+            );
+          })}
+          {!canAssignTasks && (
+            <span className="text-[11px] text-muted-foreground">Vetëm Admin/Manager caktojnë te të tjerët.</span>
+          )}
+        </QuickFormRow>
+
+        <QuickFormRow label="Afati">
+          {([['today', 'Sot'], ['tomorrow', 'Nesër'], ['week', 'Këtë javë'], ['none', 'Pa afat']] as const).map(([id, label]) => (
+            <button key={id} type="button" onClick={() => setDue(id)} className={quickChipCls(due === id)}>
+              {label}
+            </button>
+          ))}
+        </QuickFormRow>
+
+        {sameDay.length > 0 && (
+          <div className="flex items-start gap-2.5 rounded-xl border border-amber-300/70 bg-amber-50 px-3.5 py-2.5 dark:border-amber-500/30 dark:bg-amber-500/10 sm:ml-[102px]">
+            <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+            <p className="text-xs font-semibold leading-relaxed text-amber-800 dark:text-amber-300">
+              {who === currentUserId ? 'Ti ke' : `${whoName} ka`} tashmë {sameDay.length}{' '}
+              {sameDay.length === 1 ? 'detyrë të hapur' : 'detyra të hapura'}{' '}
+              {due === 'today' ? 'sot' : due === 'tomorrow' ? 'nesër' : 'atë ditë'}.{' '}
+              <span className="font-extrabold">Detyra krijohet gjithsesi</span> — ose zgjidh një ditë tjetër.
+            </p>
           </div>
-        </div>
+        )}
 
-        <div>
-          <Label>Data/ora e afatit</Label>
-          <div className="flex gap-2">
-            <Popover>
-              <PopoverTrigger asChild>
-                <Button variant="outline" className="flex-1 justify-start text-sm" type="button">
-                  <CalendarIcon className="mr-2 h-4 w-4" />
-                  {endDate ? endDate.toLocaleDateString() : "Zgjidh"}
-                </Button>
-              </PopoverTrigger>
-              <PopoverContent className="w-auto p-0" align="start">
-                <Calendar mode="single" selected={endDate} onSelect={pickDateKeepTime(setEndDate, endDate)} initialFocus />
-              </PopoverContent>
-            </Popover>
-            <Input type="time" value={timeStr(endDate)} onChange={setTimeOnDate(setEndDate, endDate)} className="w-[110px] text-sm" />
-          </div>
-        </div>
-      </div>
+        <QuickFormRow label="Prioriteti">
+          {([['urgent', 'Urgjent', '#d64545'], ['high', 'I lartë', '#e07a3f'], ['medium', 'Mesatar', '#d9a021'], ['low', 'I ulët', '#94a5bd']] as const).map(([id, label, dot]) => (
+            <button
+              key={id}
+              type="button"
+              onClick={() => setPrio(id)}
+              className={`flex items-center gap-1.5 ${quickChipCls(prio === id)}`}
+            >
+              <span className="h-[7px] w-[7px] rounded-full" style={{ background: dot }} />
+              {label}
+            </button>
+          ))}
+        </QuickFormRow>
 
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
-          <Label htmlFor="status">Statusi</Label>
-          <Select value={status} onValueChange={setStatus}>
-            <SelectTrigger>
-              <SelectValue />
+        <QuickFormRow label="Projekti">
+          <Select value={projectId} onValueChange={setProjectId}>
+            <SelectTrigger className="h-auto w-auto gap-2 rounded-full border-[1.5px] px-3.5 py-1.5 text-xs font-bold">
+              <SelectValue placeholder="Pa projekt" />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="Todo">Për të bërë</SelectItem>
-              <SelectItem value="In Progress">Në progres</SelectItem>
-              <SelectItem value="Review">Rishikim</SelectItem>
-              <SelectItem value="Done">Përfunduar</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div>
-          <Label htmlFor="priority">Prioriteti</Label>
-          <Select value={priority} onValueChange={setPriority}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="low">I ulët</SelectItem>
-              <SelectItem value="medium">Mesatar</SelectItem>
-              <SelectItem value="high">I lartë</SelectItem>
-              <SelectItem value="urgent">Urgjent</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      <div>
-        <Label>Etiketat</Label>
-        <input type="hidden" name="labels" value={JSON.stringify(labels)} />
-        <LabelEditor value={labels} onChange={setLabels} suggestions={allLabels} />
-      </div>
-
-      <div>
-        <Label htmlFor="assignedToUserId">Cakto te</Label>
-        {canAssignTasks ? (
-          <Select name="assignedToUserId" defaultValue={initialData?.assignedToUserId || currentUserId}>
-            <SelectTrigger id="assignedToUserId">
-              <SelectValue placeholder="Zgjidh anëtarin" />
-            </SelectTrigger>
-            <SelectContent>
-              {uniqueMembers.map((m: any) => (
-                <SelectItem key={m.userId} value={m.userId}>
-                  {m.displayName || m.email?.split('@')[0] || m.userId}
-                  {m.userId === currentUserId ? ' (Ti)' : ''}
-                </SelectItem>
+              <SelectItem value="__none__">Pa projekt</SelectItem>
+              {/* Archived projects stay selectable (a task may belong to one) but sink
+                  to the bottom, marked as such. */}
+              {sortArchivedLast(projects).map(p => (
+                <SelectItem key={p.id} value={p.id}>{projectPickerLabel(p)}</SelectItem>
               ))}
             </SelectContent>
           </Select>
-        ) : (
-          <>
-            <input type="hidden" name="assignedToUserId" value={currentUserId} />
-            <div className="flex items-center h-9 px-3 rounded-md border bg-muted text-sm text-muted-foreground">
-              {uniqueMembers.find((m: any) => m.userId === currentUserId)?.displayName ||
-               uniqueMembers.find((m: any) => m.userId === currentUserId)?.email?.split('@')[0] ||
-               'Ti'} <span className="ml-1 text-xs">(vetëm ti)</span>
-            </div>
-            <p className="text-xs text-muted-foreground mt-1">Vetëm Admin/Manager mund të caktojnë te anëtarë të tjerë.</p>
-          </>
+        </QuickFormRow>
+
+        <QuickFormRow label="Përsëritet">
+          {([['never', 'Jo'], ['daily', 'Çdo ditë'], ['weekly', 'Çdo javë'], ['monthly', 'Çdo muaj']] as const).map(([id, label]) => (
+            <button key={id} type="button" onClick={() => setRec(id)} className={quickChipCls(rec === id)}>
+              {label}
+            </button>
+          ))}
+        </QuickFormRow>
+
+        {rec === 'daily' && (
+          <div className="flex items-center gap-1.5 sm:ml-[102px]">
+            {[1, 2, 3, 4, 5, 6, 0].map(d => {
+              const on = recDays.includes(d);
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => setRecDays(prev => (on ? prev.filter(x => x !== d) : [...prev, d].sort((a, b) => a - b)))}
+                  className={`h-[30px] w-[34px] rounded-[9px] border-[1.5px] text-[11px] font-extrabold transition-colors ${
+                    on ? 'border-primary bg-primary text-primary-foreground' : 'border-border bg-background text-muted-foreground hover:border-primary/50'
+                  }`}
+                >
+                  {dayNames[d]}
+                </button>
+              );
+            })}
+          </div>
         )}
-      </div>
 
-      <div>
-        <Label htmlFor="projectId">Projekti (Opsional)</Label>
-        <Select value={projectId} onValueChange={setProjectId}>
-          <SelectTrigger>
-            <SelectValue placeholder="Zgjidh projektin" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__none__">Asnjë</SelectItem>
-            {/* Archived projects stay selectable (a task may belong to one) but sink
-                to the bottom, marked as such. */}
-            {sortArchivedLast(projects).map(p => (
-              <SelectItem key={p.id} value={p.id}>{projectPickerLabel(p)}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+        <button
+          type="button"
+          onClick={() => setShowMore(!showMore)}
+          className="pt-0.5 text-left text-xs font-bold text-primary"
+        >
+          {showMore ? '− Më pak opsione' : '+ Më shumë opsione (orë, vlera, etiketa)'}
+        </button>
 
-      <div className="space-y-4 border-t pt-4">
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-          <div>
-            <Label htmlFor="estimatedHours">Orë të Vlerësuara</Label>
-            <Input id="estimatedHours" name="estimatedHours" type="number" step="0.5" min="0" placeholder="p.sh. 4" defaultValue={(initialData as any)?.estimatedHours || ''} />
-          </div>
-          <div>
-            <Label htmlFor="value">Vlera (opsionale)</Label>
-            <Input id="value" name="value" type="number" step="0.01" min="0" placeholder="p.sh. 15000" defaultValue={(initialData as any)?.value ?? ''} />
-            <p className="text-[11px] text-muted-foreground mt-1">Vlera e faturueshme e kësaj detyre. Lëre bosh nëse projekti çmohet me buxhet.</p>
-          </div>
-        </div>
-        <div className="flex items-center gap-2">
-          <Checkbox 
-            id="isRecurring" 
-            checked={isRecurring}
-            onCheckedChange={(checked) => setIsRecurring(checked as boolean)}
-          />
-          <Label htmlFor="isRecurring" className="cursor-pointer text-sm">
-            Detyrë e përsëritur
-          </Label>
-        </div>
-
-        {isRecurring && (
-          <div className="space-y-3 pl-6 border-l-2 border-primary/20">
-            <div>
-              <Label htmlFor="recurringFrequency">Frekuenca</Label>
-              <Select value={recurringFrequency} onValueChange={setRecurringFrequency}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="daily">Çdo ditë</SelectItem>
-                  <SelectItem value="weekly">Çdo javë</SelectItem>
-                  <SelectItem value="monthly">Çdo muaj</SelectItem>
-                  <SelectItem value="yearly">Çdo vit</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            <div>
-              <Label htmlFor="recurringInterval">Përsërit çdo</Label>
-              <div className="flex items-center gap-2 mt-1">
-                <Input
-                  id="recurringInterval"
-                  type="number"
-                  min={1}
-                  step={1}
-                  value={recurringInterval}
-                  onChange={(e) => setRecurringInterval(Math.max(1, Math.round(Number(e.target.value) || 1)))}
-                  className="w-20"
-                />
-                <span className="text-sm text-muted-foreground">
-                  {recurringFrequency === 'daily' ? (recurringInterval > 1 ? 'ditë' : 'ditë')
-                    : recurringFrequency === 'weekly' ? (recurringInterval > 1 ? 'javë' : 'javë')
-                    : recurringFrequency === 'monthly' ? (recurringInterval > 1 ? 'muaj' : 'muaj')
-                    : (recurringInterval > 1 ? 'vite' : 'vit')}
-                </span>
-              </div>
-              <p className="text-[11px] text-muted-foreground mt-1">P.sh. “2 javë” = çdo dy javë.</p>
-            </div>
-
-            {recurringFrequency === 'daily' && (
-              <div>
-                <Label>Ditët e javës</Label>
-                <div className="flex flex-wrap gap-1.5 mt-1.5">
-                  {[
-                    { value: 1, label: 'Hën' },
-                    { value: 2, label: 'Mar' },
-                    { value: 3, label: 'Mër' },
-                    { value: 4, label: 'Enj' },
-                    { value: 5, label: 'Pre' },
-                    { value: 6, label: 'Sht' },
-                    { value: 0, label: 'Die' },
-                  ].map(day => (
-                    <button
-                      key={day.value}
-                      type="button"
-                      onClick={() => toggleDayOfWeek(day.value)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
-                        recurringDaysOfWeek.includes(day.value)
-                          ? 'bg-primary text-primary-foreground border-primary'
-                          : 'bg-background text-foreground border-border hover:bg-muted'
-                      }`}
-                    >
-                      {day.label}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[11px] text-muted-foreground mt-1.5">
-                  {recurringDaysOfWeek.length === 0 ? 'Zgjidh të paktën një ditë' : `${recurringDaysOfWeek.length} ditë të zgjedhura`}
-                </p>
-              </div>
-            )}
-
-            {recurringFrequency === 'weekly' && (
-              <div>
-                <Label>Dita e javës</Label>
-                <div className="flex flex-wrap gap-1.5 mt-1.5">
-                  {[
-                    { value: 1, label: 'Hën' },
-                    { value: 2, label: 'Mar' },
-                    { value: 3, label: 'Mër' },
-                    { value: 4, label: 'Enj' },
-                    { value: 5, label: 'Pre' },
-                    { value: 6, label: 'Sht' },
-                    { value: 0, label: 'Diel' },
-                  ].map(day => (
-                    <button
-                      key={day.value}
-                      type="button"
-                      onClick={() => setRecurringDayOfWeek(day.value)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
-                        recurringDayOfWeek === day.value
-                          ? 'bg-primary text-primary-foreground border-primary'
-                          : 'bg-background text-foreground border-border hover:bg-muted'
-                      }`}
-                    >
-                      {day.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {recurringFrequency === 'monthly' && (
-              <div>
-                <Label>Dita e muajit</Label>
-                <Select value={String(recurringDayOfMonth)} onValueChange={(v) => setRecurringDayOfMonth(Number(v))}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Array.from({ length: 31 }, (_, i) => i + 1).map(d => (
-                      <SelectItem key={d} value={String(d)}>
-                        {d}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            <div>
-              <Label>Përsërit deri më (opsionale)</Label>
-              <input
-                type="date"
-                name="recurringEndDate"
-                defaultValue={(initialData as any)?.recurringEndDate ? (() => { const d = new Date((initialData as any).recurringEndDate); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; })() : ''}
-                className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+        {showMore && (
+          <div className="flex flex-col gap-3.5">
+            <div className="grid grid-cols-[92px_1fr] items-center gap-2.5 sm:grid-cols-[92px_1fr_92px_1fr]">
+              <span className="text-xs font-bold text-muted-foreground">Orë vlerësim</span>
+              <Input
+                value={hours}
+                onChange={e => setHours(e.target.value)}
+                type="number" step="0.5" min="0"
+                placeholder="p.sh. 4"
+                className="h-8 w-24 rounded-[10px] text-xs font-semibold"
               />
-              <p className="text-xs text-muted-foreground mt-1">Lëre bosh që të përsëritet pa fund. P.sh. vendos datën pas 4 muajve që të ndalojë atëherë.</p>
+              <span className="text-xs font-bold text-muted-foreground">Vlera (L)</span>
+              <Input
+                value={taskValue}
+                onChange={e => setTaskValue(e.target.value)}
+                type="number" step="0.01" min="0"
+                placeholder="p.sh. 15000"
+                className="h-8 w-28 rounded-[10px] text-xs font-semibold"
+              />
             </div>
-
-            <input type="hidden" name="isRecurring" value={isRecurring.toString()} />
-            <input type="hidden" name="recurringFrequency" value={recurringFrequency} />
-            <input type="hidden" name="recurringInterval" value={String(recurringInterval)} />
-            <input type="hidden" name="recurringDayOfWeek" value={String(recurringDayOfWeek)} />
-            <input type="hidden" name="recurringDayOfMonth" value={String(recurringDayOfMonth)} />
-            {recurringFrequency === 'daily' && (
-              <input type="hidden" name="recurringDaysOfWeek" value={JSON.stringify(recurringDaysOfWeek)} />
-            )}
+            <QuickFormRow label="Etiketat">
+              {labelSuggestions.map(l => {
+                const on = labels.includes(l);
+                return (
+                  <button key={l} type="button" onClick={() => toggleLabel(l)} className={quickChipCls(on)}>
+                    {on ? `✓ ${l}` : l}
+                  </button>
+                );
+              })}
+              <input
+                value={newLabel}
+                onChange={e => setNewLabel(e.target.value)}
+                onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addNewLabel(); } }}
+                onBlur={addNewLabel}
+                placeholder="+ e re…"
+                className="w-24 rounded-full border-[1.5px] border-dashed border-border bg-transparent px-3 py-1.5 text-xs font-semibold outline-none placeholder:text-muted-foreground/60 focus:border-primary"
+              />
+            </QuickFormRow>
           </div>
         )}
       </div>
 
-      {/* Task Dependencies */}
-      {availableTasks.length > 0 && (
-        <div>
-          <Label>Varet nga (detyra paraprake)</Label>
-          <div className="max-h-32 overflow-y-auto border rounded-md p-2 space-y-1 mt-1">
-            {availableTasks.map(t => (
-              <label key={t.id} className="flex items-center gap-2 text-sm cursor-pointer hover:bg-muted/50 rounded px-1 py-0.5">
-                <Checkbox
-                  checked={dependsOn.includes(t.id)}
-                  onCheckedChange={(checked) => {
-                    setDependsOn(prev => checked ? [...prev, t.id] : prev.filter(id => id !== t.id));
-                  }}
-                />
-                <span className="truncate">{t.title}</span>
-                <Badge variant="outline" className="text-[10px] ml-auto flex-shrink-0">{getTaskStatusLabel(t.status)}</Badge>
-              </label>
-            ))}
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t bg-muted/40 px-6 py-4">
+        <span className="text-[11.5px] font-semibold text-muted-foreground">
+          {canCreate ? `${whoFirst} · ${dueLabel}${rec !== 'never' ? ' · përsëritet' : ''}` : 'Vetëm titulli është i detyrueshëm'}
+        </span>
+        <div className="flex items-center gap-2">
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            disabled={!canCreate || saving}
+            onClick={() => doCreate(true)}
+            className="rounded-xl text-xs font-bold"
+          >
+            Krijo &amp; shto tjetër
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            disabled={!canCreate || saving}
+            onClick={() => doCreate(false)}
+            className="rounded-xl text-[13px] font-bold shadow-md shadow-primary/25"
+          >
+            Krijo detyrën
+          </Button>
+        </div>
+      </div>
+
+      {savedMsg && (
+        <div className="bg-muted/40 px-6 pb-4">
+          <div className="rounded-xl border border-emerald-300/70 bg-emerald-50 px-4 py-2.5 text-xs font-bold text-emerald-700 dark:border-emerald-500/30 dark:bg-emerald-500/10 dark:text-emerald-400">
+            ✓ {savedMsg}
           </div>
-          {dependsOn.length > 0 && (
-            <p className="text-xs text-muted-foreground mt-1">{dependsOn.length} varësi të zgjedhura</p>
-          )}
         </div>
       )}
-
-      <Button type="submit" className="w-full">
-        {initialData ? 'Ruaj Ndryshimet' : 'Krijo Detyrën'}
-      </Button>
-    </form>
+    </div>
   );
 };
 
