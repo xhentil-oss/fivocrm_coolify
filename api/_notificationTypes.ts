@@ -36,6 +36,7 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   mention: 'messages',
   project_comment: 'messages',
   client_request: 'messages',
+  gmb_negative_review: 'messages',
   // projects
   project_created: 'projects',
   project_completed: 'projects',

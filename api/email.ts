@@ -7,6 +7,7 @@ import notificationHandler from './_send-notification-email.js';
 import marketingWebhookHandler from './_marketing-webhook.js';
 import acceptInviteHandler from './_accept-invite.js';
 import socialHandler from './_social-api.js';
+import gmbHandler from './_gmb-api.js';
 import linkContactHandler from './_link-contact.js';
 import mergeContactsHandler from './_merge-contacts.js';
 import syncClaimsHandler from './_sync-claims.js';
@@ -27,6 +28,7 @@ import platformAdminHandler from './_platformAdmin.js';
  *   /api/send-welcome-email       -> ?type=welcome
  *   /api/accept-invite            -> ?type=accept-invite
  *   /api/social                   -> ?type=social  (sub-dispatches on ?action=)
+ *   /api/gmb                      -> ?type=gmb     (Google Reviews; sub-dispatches on ?action=)
  *   /api/link-contact             -> ?type=link-contact
  *   /api/merge-contacts           -> ?type=merge-contacts  (manual duplicate merge)
  *   /api/sync-claims              -> ?type=sync-claims     (tenant custom claims)
@@ -52,6 +54,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.url.includes('marketing-webhook')) type = 'marketing-webhook';
     else if (req.url.includes('accept-invite')) type = 'accept-invite';
     else if (req.url.includes('/api/social')) type = 'social';
+    else if (req.url.includes('/api/gmb')) type = 'gmb';
     else if (req.url.includes('merge-contacts')) type = 'merge-contacts';
     else if (req.url.includes('link-contact')) type = 'link-contact';
     else if (req.url.includes('sync-claims')) type = 'sync-claims';
@@ -94,6 +97,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     case 'social':
       // Social Media module — sub-dispatches on ?action= (oauth/list/sync/...).
       return socialHandler(req, res);
+    case 'gmb':
+      // Google Reviews (Business Profile) module — sub-dispatches on ?action=.
+      return gmbHandler(req, res);
     case 'accept-invite':
       return acceptInviteHandler(req, res);
     case 'marketing-webhook':

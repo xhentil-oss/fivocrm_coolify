@@ -25,6 +25,8 @@ export const SECRET_FIELDS = [
   'metaWebhookVerifyToken',
   /** Map of phoneNumberId → Meta page access token (metaChannels keeps the metadata). */
   'metaChannelTokens',
+  /** Google OAuth client secret for the GMB/Reviews module (gmbClientId stays in teamSettings — it is not secret). */
+  'gmbClientSecret',
 ] as const;
 
 /** Public boolean markers mirrored onto teamSettings so the UI can say "configured". */
@@ -35,6 +37,7 @@ export const SECRET_FLAGS: Record<string, string> = {
   whatsappVpsSecret: 'hasWhatsappVpsSecret',
   metaWebhookVerifyToken: 'hasMetaWebhookVerifyToken',
   metaChannelTokens: 'hasMetaChannelTokens',
+  gmbClientSecret: 'hasGmbClientSecret',
 };
 
 export interface TeamConfig extends Record<string, any> {}

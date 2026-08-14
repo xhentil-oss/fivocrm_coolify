@@ -37,6 +37,10 @@
       "destination": "/api/email?type=social"
     },
     {
+      "source": "/api/gmb",
+      "destination": "/api/email?type=gmb"
+    },
+    {
       "source": "/api/link-contact",
       "destination": "/api/email?type=link-contact"
     },

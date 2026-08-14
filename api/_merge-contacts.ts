@@ -68,6 +68,7 @@ const CUSTOMER_REFS: RefSpec[] = [
   { collection: 'campaignEnrollments', field: 'customerId' },
   { collection: 'socialAccounts', field: 'customerId' },
   { collection: 'socialSnapshots', field: 'customerId' },
+  { collection: 'gmbAccounts', field: 'customerId' },
   { collection: 'reports', field: 'customerId' },
   { collection: 'reportVersions', field: 'customerId' },
   { collection: 'reportComments', field: 'customerId' },

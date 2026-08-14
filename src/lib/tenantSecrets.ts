@@ -19,6 +19,8 @@ export interface TenantSecretsInput {
   metaWebhookVerifyToken?: string;
   /** phoneNumberId → Meta page access token */
   metaChannelTokens?: Record<string, string>;
+  /** Google OAuth client secret (GMB/Reviews module) */
+  gmbClientSecret?: string;
 }
 
 export async function saveTenantSecrets(teamId: string, secrets: TenantSecretsInput): Promise<void> {

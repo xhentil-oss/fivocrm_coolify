@@ -124,6 +124,7 @@ export const MODULES: ModuleDef[] = [
   // ── Marketing ──
   { id: 'marketing', path: '/app/marketing', label: 'Marketing', description: 'Kampanja email + WhatsApp me drip.', permissionKey: 'canAccessMarketing', minPlan: 'business', optional: true, group: 'Marketing' },
   { id: 'social', path: '/app/social', label: 'Rrjetet Sociale', description: 'Analitika mujore Facebook & Instagram.', permissionKey: 'canAccessMarketing', minPlan: 'business', optional: true, group: 'Marketing' },
+  { id: 'gmb', path: '/app/gmb', label: 'Google Reviews', description: 'Reviews të Google Business Profile: përgjigje me AI, raportime dhe postime.', permissionKey: 'canAccessMarketing', minPlan: 'pro', optional: true, defaultOff: true, group: 'Marketing' },
   { id: 'landing-pages', path: '/app/landing-pages', label: 'Landing Pages', description: 'Faqe marketing publike (modul i agjencisë).', permissionKey: 'canAccessServices', minPlan: 'enterprise', optional: true, defaultOff: true, group: 'Marketing' },
 ];
 

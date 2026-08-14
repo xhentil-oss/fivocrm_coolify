@@ -1536,6 +1536,28 @@ service cloud.firestore {
       allow create, update, delete: if false;
     }
 
+    // ── Google Reviews (Business Profile) ──
+    // gmbAccounts holds Google OAuth refresh tokens → NEVER exposed to the client
+    // SDK. The staff UI gets a token-stripped list via /api/gmb; sync/reply/post
+    // all run through the Admin SDK. Deny all client access outright.
+    match /gmbAccounts/{docId} {
+      allow read, write: if false;
+    }
+
+    // gmbReviews are the token-free mirrored reviews. Staff read their business's
+    // (queries filter by businessId); every write (sync, reply, report mark) goes
+    // through /api/gmb so the mirror can never diverge from Google by a client edit.
+    match /gmbReviews/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create, update, delete: if false;
+    }
+
+    // gmbPosts mirror what was published to the Google profile — same regime.
+    match /gmbPosts/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create, update, delete: if false;
+    }
+
     match /lidMappings/{docId} {
       // WhatsApp LID ↔ phone mapping. Written by the VPS/webhook (Admin SDK) and read
       // by the Inbox; keep it tenant-scoped with a teamId fallback for legacy rows.

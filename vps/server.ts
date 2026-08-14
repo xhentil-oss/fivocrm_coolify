@@ -934,6 +934,10 @@ function startCronSchedulers(): void {
   // whatsapp-broadcasts only reads queued broadcasts (tiny), so it stays frequent.
   setInterval(() => { void triggerCronJob('whatsapp-broadcasts'); }, 5 * MIN);
   setInterval(() => { void triggerCronJob('lead-sla-stale-alerts'); }, 60 * MIN);
+  // Google Reviews: hourly pull. The job reads ONLY connected gmbAccounts and
+  // diffs reviews per location, so an hour with no new reviews costs a handful of
+  // reads and zero writes. A tenant can opt out via teamSettings.gmbAutoSync.
+  setInterval(() => { void triggerCronJob('gmb-sync'); }, 60 * MIN);
   setInterval(() => { void triggerCronJob('overdue-reminders'); }, 120 * MIN);
   // ── Reporting module ──
   // report-schedules reads ONLY active schedules (tiny), so it can tick hourly.

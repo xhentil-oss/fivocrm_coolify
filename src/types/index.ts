@@ -316,6 +316,81 @@ export interface SeoSnapshot {
   devices?: Record<string, number>;   // clicks by device (DESKTOP/MOBILE/TABLET)
 }
 
+// ── Google Reviews (Business Profile / GMB) ────────────────────────────────
+// A connected Google Business Profile location. The Google REFRESH token lives
+// here — STAFF-ONLY, deny-all collection (like SocialAccount): the UI fetches a
+// token-stripped list via GET /api/gmb?action=list, never through Firestore.
+export interface GmbAccount {
+  id: string;                       // `${businessId}_gmb_${locationId}` — idempotent connect
+  teamId: string;
+  businessId?: string;
+  customerId?: string | null;       // optional CRM customer this profile belongs to (agency use)
+  name: string;                     // business title on Google
+  address?: string | null;
+  accountName: string;              // Google resource: 'accounts/123'
+  locationName: string;             // Google resource: 'locations/456'
+  refreshToken: string;             // Google OAuth refresh token (server-only)
+  connected: boolean;               // false after disconnect (reviews kept for history)
+  rating?: number | null;           // Google's own averageRating (not recomputed locally)
+  reviewCount?: number;             // Google's totalReviewCount
+  starCounts?: Record<string, number>; // distribution over the mirrored reviews ('1'..'5')
+  lastSyncedAt?: Date | null;
+  lastSyncError?: string | null;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+// One mirrored Google review. Written EXCLUSIVELY by the server sync/reply
+// endpoints (client writes are denied) — replies go to Google first, then the
+// doc is stamped, so the mirror never claims a reply Google doesn't have.
+export interface GmbReview {
+  id: string;                       // `${accountId}_${reviewId}` — idempotent upsert key
+  teamId: string;
+  businessId?: string;
+  customerId?: string | null;
+  accountId: string;                // ref → GmbAccount doc id
+  locationTitle: string;            // denormalized for lists
+  reviewId: string;                 // Google's review id (used for the reply call)
+  author: string;
+  authorPhotoUrl?: string | null;
+  starRating: number;               // 1..5
+  comment: string;                  // may be '' (stars-only review)
+  googleCreateTime?: string | null; // ISO strings as returned by Google
+  googleUpdateTime?: string | null;
+  replyComment?: string | null;     // the public owner reply visible on Google
+  replyTime?: string | null;
+  repliedVia?: 'manual' | 'ai-auto' | null;
+  repliedByUserId?: string | null;
+  /** Cached AI drafts (generated once per review, on demand). */
+  aiSuggestion?: string | null;
+  aiReportAnalysis?: string | null;
+  /** INTERNAL report mark — Google has no flag/report API; this tracks the manual filing. */
+  reported?: { reason: string; argument?: string; reportedAt: Date; reportedByUserId: string } | null;
+  firstSyncedAt?: Date;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
+// A local post published to the Google profile via the API (mirror of what went out).
+export interface GmbPost {
+  id: string;
+  teamId: string;
+  businessId?: string;
+  accountId: string;
+  locationTitle: string;
+  summary: string;
+  ctaType?: string | null;          // LEARN_MORE | BOOK | ORDER | SHOP | SIGN_UP | CALL
+  ctaUrl?: string | null;
+  mediaUrl?: string | null;
+  googleName?: string | null;       // Google resource name of the created post
+  state?: string;                   // LIVE | REJECTED | PROCESSING …
+  searchUrl?: string | null;        // public link to the post
+  createdByUserId: string;
+  createdAt: Date;
+  updatedAt: Date;
+}
+
 // A monthly analytics snapshot for one SocialAccount. Written once per month by
 // the cron sync (one Graph API call per account → one doc), so Firebase cost is
 // negligible. Holds headline metrics + a daily breakdown + top posts. This is

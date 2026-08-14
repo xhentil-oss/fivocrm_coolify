@@ -40,6 +40,7 @@ export interface TeamSettings {
   hasWhatsappVpsSecret?: boolean;
   hasMetaWebhookVerifyToken?: boolean;
   hasMetaChannelTokens?: boolean;
+  hasGmbClientSecret?: boolean;
   // Company identity (used in contract templates)
   companyName?: string;
   companyAddress?: string;
@@ -111,6 +112,17 @@ export interface TeamSettings {
   // Automated lead follow-up cadence: day-offsets (from enrollment) at which a
   // follow-up task is auto-created. Default [1, 3, 7, 14].
   leadCadenceDays?: number[];
+  // ── Google Reviews (GMB) module ──
+  /** Google OAuth Client ID i tenant-it (jo sekret; sekreti → teamSecrets.gmbClientSecret). */
+  gmbClientId?: string;
+  /** Sinkronizim i orarit (cron every hour). Default true; manual sync always works. */
+  gmbAutoSync?: boolean;
+  /** Njofto Admin/Manager kur vjen review ≤ 2★. Default true. */
+  gmbNotifyNegative?: boolean;
+  /** Auto-përgjigje AI për reviews të reja: off (default) | positive (4-5★) | all. */
+  gmbAutoReply?: 'off' | 'positive' | 'all';
+  /** Kontekst i lirë për AI (ton, emri i markës, oraret…) — futet në prompt. */
+  gmbAiContext?: string;
 }
 
 /** Credential fields that must never be written to `teamSettings` (see tenantSecrets). */

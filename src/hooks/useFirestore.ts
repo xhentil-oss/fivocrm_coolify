@@ -145,6 +145,7 @@ const teamScopedCollections = new Set([
   'chatSnippets', 'whatsappAccounts', 'whatsappThreads', 'waTemplates', 'waBroadcasts',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments',
   'socialAccounts', 'socialSnapshots',
+  'gmbAccounts', 'gmbReviews', 'gmbPosts',
   // Reporting & accountability module. Portal reads (published client reports and
   // their non-internal comments) pass skipTeamFilter and scope by businessId +
   // customerId explicitly, so membership here mainly enforces teamId on create.
@@ -184,6 +185,7 @@ const businessIsolatedAlways = new Set<string>([
   'timeEntries', 'standups', 'dailyReports', 'dailyFocus', 'productivitySettings', 'weeklyReviews', 'customIndustries', 'activities',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments',
   'socialAccounts', 'socialSnapshots',
+  'gmbAccounts', 'gmbReviews', 'gmbPosts',
   // Reporting module. Reports carry client-facing AND internal content plus employee
   // accountability data, so cross-tenant leakage here is the worst case in the
   // product — every one of these is business-isolated even when a view passes

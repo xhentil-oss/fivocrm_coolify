@@ -59,6 +59,10 @@ export const NOTIFICATION_TYPES = {
   project_comment:          { category: 'messages', priority: 'info',     groupLabel: 'komente projekti', portal: true },
   client_request:           { category: 'messages', priority: 'info',     groupLabel: 'kërkesa klientësh' },
 
+  // Google Reviews (GMB): a fresh ≤2★ review is a client communication that needs
+  // a same-day public answer — deliberately in `messages`, not `system`.
+  gmb_negative_review:      { category: 'messages', priority: 'warning',  groupLabel: 'reviews negative në Google' },
+
   // ── Projekte & CRM ──────────────────────────────────────────────────────────
   project_created:          { category: 'projects', priority: 'neutral',  portal: true },
   project_completed:        { category: 'projects', priority: 'success',  portal: true },

@@ -6,6 +6,7 @@ import { runWhmcsSync, runWhmcsClientSync } from '../_whmcsSync.js';
 import { sendBulkEmail, renderMergeTokens } from '../_mailer.js';
 import { syncAllAccounts, currentPeriod } from '../_social.js';
 import { sendReportsForPeriod } from '../_socialEmail.js';
+import { syncAllGmbAccounts } from '../_gmb.js';
 // Credentials live in `teamSecrets` (client-unreadable), NOT in `teamSettings`.
 // Always resolve tenant config through getTeamConfig so secrets are merged in.
 import { getTeamConfig, SECRET_FIELDS, writeTeamSecrets } from '../_tenantConfig.js';
@@ -3387,6 +3388,7 @@ const TENANT_DATA_COLLECTIONS = [
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments', 'waTemplates', 'waBroadcasts',
   'socialSnapshots', 'products', 'productCategories', 'productBrands', 'stockMovements',
   'shopOrders', 'conversations', 'auditLogs', 'notifications', 'dailyReportMisses',
+  'gmbAccounts', 'gmbReviews', 'gmbPosts',
 ];
 
 /**
@@ -4640,6 +4642,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'social-monthly-sync':
         result = await runSocialMonthlySync(req.query.period as string | undefined, { email: req.query.email !== '0' });
         break;
+      case 'gmb-sync': {
+        // Google Reviews pull for every connected location (hourly, VPS-scheduled).
+        // Scoped reads only: gmbAccounts where connected==true, then per-account
+        // review diffs — writes are proportional to actual review change.
+        const gmbResults = await syncAllGmbAccounts();
+        const failed = gmbResults.filter((r) => r.error);
+        if (failed.length) console.error(`[CRON:gmb-sync] ${failed.length} dështuan:`, failed);
+        result = {
+          locations: gmbResults.length,
+          synced: gmbResults.filter((r) => !r.error).length,
+          created: gmbResults.reduce((a, r) => a + (r.created || 0), 0),
+          autoReplied: gmbResults.reduce((a, r) => a + (r.autoReplied || 0), 0),
+          failed: failed.length,
+        };
+        break;
+      }
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
         const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, campaignSteps, whmcs, inquiryReminders, projectRollup, leadCadence, subscriptions, reportSchedules, reportReminders, tenantUsage, platformMetricsRun] = await Promise.allSettled([
@@ -4705,7 +4723,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, daily-report-check, whatsapp-broadcasts, whatsapp-automations, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, daily-report-check, whatsapp-broadcasts, whatsapp-automations, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social, gmb-sync` });
     }
 
     await recordJobRun({

@@ -878,3 +878,54 @@ test('37. dailyReportMisses is readable inside the tenant and writable by nobody
     businessId: VICTIM_BIZ, date: '2026-08-11', missingUserIds: [],
   }));
 });
+
+// ══════════════════════════════════════════════════════════════════════════════
+// Google Reviews module (gmbAccounts / gmbReviews / gmbPosts)
+// Invariant 5 of TENANT_ISOLATION_ENTERPRISE.md: a new collection ships with a
+// negative cross-tenant test.
+// ══════════════════════════════════════════════════════════════════════════════
+
+test('38a. gmbAccounts (refresh tokens) is unreadable and unwritable — even by its own tenant', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'gmbAccounts', `${MY_BIZ}_gmb_loc1`), {
+      businessId: MY_BIZ, teamId: MY_TEAM, name: 'Biznesi Im',
+      accountName: 'accounts/1', locationName: 'locations/1', refreshToken: 'g-refresh-secret', connected: true,
+    });
+  });
+  const alice = testEnv.authenticatedContext('alice', { email: 'a@mine.com', bid: MY_BIZ }).firestore();
+  await assertFails(getDoc(doc(alice, 'gmbAccounts', `${MY_BIZ}_gmb_loc1`)));
+  await assertFails(setDoc(doc(alice, 'gmbAccounts', `${MY_BIZ}_gmb_loc1`), { connected: false }, { merge: true }));
+});
+
+test('38b. gmbReviews: own tenant reads, cross-tenant cannot, nobody writes', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'gmbReviews', 'revMine'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, accountId: `${MY_BIZ}_gmb_loc1`,
+      reviewId: 'r1', author: 'Klient', starRating: 2, comment: 'Shërbim i ngadaltë',
+    });
+    await setDoc(doc(ctx.firestore(), 'gmbReviews', 'revVictim'), {
+      businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, accountId: `${VICTIM_BIZ}_gmb_locV`,
+      reviewId: 'rV', author: 'Klient V', starRating: 1, comment: 'Victim review',
+    });
+  });
+  const alice = testEnv.authenticatedContext('alice', { email: 'a@mine.com', bid: MY_BIZ }).firestore();
+  await assertSucceeds(getDoc(doc(alice, 'gmbReviews', 'revMine')));
+  await assertFails(getDoc(doc(alice, 'gmbReviews', 'revVictim')));
+  // Replies/report marks go ONLY through /api/gmb (Admin SDK) — a client edit could
+  // make the mirror claim a reply Google doesn't have.
+  await assertFails(updateDoc(doc(alice, 'gmbReviews', 'revMine'), { replyComment: 'forged' }));
+  await assertFails(deleteDoc(doc(alice, 'gmbReviews', 'revMine')));
+});
+
+test('38c. gmbPosts follow the same boundary', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'gmbPosts', 'postVictim'), {
+      businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, accountId: `${VICTIM_BIZ}_gmb_locV`, summary: 'Oferta',
+    });
+  });
+  const alice = testEnv.authenticatedContext('alice', { email: 'a@mine.com', bid: MY_BIZ }).firestore();
+  await assertFails(getDoc(doc(alice, 'gmbPosts', 'postVictim')));
+  await assertFails(setDoc(doc(alice, 'gmbPosts', 'postInjected'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, accountId: 'x', summary: 'injected',
+  }));
+});
