@@ -358,6 +358,8 @@ function AppContent() {
                 collapsed={sidebarCollapsed}
                 mobileOpen={mobileMenuOpen}
                 onCloseMobile={() => setMobileMenuOpen(false)}
+                onToggleCollapse={toggleSidebar}
+                onOpenCommandPalette={() => setCommandPaletteOpen(true)}
               />
 
               <main
