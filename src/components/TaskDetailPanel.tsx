@@ -51,6 +51,7 @@ import { toast } from '../hooks/use-toast';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { useCommentFocus, COMMENT_FLASH_CLASS } from '../hooks/useCommentFocus';
 import { taskDeepLink } from '../lib/deepLinks';
+import { taskCompletedNotifications } from '../lib/taskNotifications';
 import type { Task, TaskComment } from '../types';
 
 // Quick-reaction emoji set — mirrors the chat reactions for a consistent feel.
@@ -1057,6 +1058,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
         releaseNextCycle: releaseTaskNextCycle,
       });
       const freqLabel: Record<string, string> = { daily: 'ditore', weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
+      // Every non-blocked outcome ends with the task Done — tell the creator,
+      // assignee and collaborators (never the actor themselves).
+      if (outcome.kind !== 'blocked' && user?.uid) {
+        taskCompletedNotifications(task, user.uid, user.displayName || undefined).forEach(n =>
+          notificationMutation.create(n as any).catch(err => console.error('[Notifications] task_completed dërgim dështoi:', err)));
+      }
       switch (outcome.kind) {
         case 'blocked':
           toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });

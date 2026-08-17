@@ -19,6 +19,7 @@ export type NotificationCategory =
 export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = {
   // tasks
   task_assigned: 'tasks',
+  task_completed: 'tasks',
   task_overdue: 'tasks',
   task_due_soon: 'tasks',
   task_mention: 'tasks',

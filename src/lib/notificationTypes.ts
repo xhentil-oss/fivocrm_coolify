@@ -40,6 +40,7 @@ export interface NotificationTypeSpec {
 export const NOTIFICATION_TYPES = {
   // ── Detyra & objektiva ──────────────────────────────────────────────────────
   task_assigned:            { category: 'tasks',    priority: 'info',     groupLabel: 'caktime detyrash' },
+  task_completed:           { category: 'tasks',    priority: 'success',  groupLabel: 'detyra të përfunduara' },
   task_overdue:             { category: 'tasks',    priority: 'critical', groupLabel: 'detyra të skaduara' },
   task_due_soon:            { category: 'tasks',    priority: 'warning',  groupLabel: 'detyra me afat' },
   task_mention:             { category: 'tasks',    priority: 'info',     groupLabel: 'përmendje' },

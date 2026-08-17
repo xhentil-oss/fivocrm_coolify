@@ -32,8 +32,9 @@ import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
 import type {
   Task, Project, Customer, Invoice, TimeEntry,
-  Activity, Goal, DailyReport
+  Activity, Goal, DailyReport, Notification
 } from '../types';
+import { taskCompletedNotifications } from '../lib/taskNotifications';
 import { useFilteredTasks, useFilteredProjects, useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import MomentumWidget from '../components/MomentumWidget';
 
@@ -137,6 +138,7 @@ const StaffDashboard: React.FC = () => {
   const goals = useFilteredByOwner(rawGoals);
 
   const taskMutation = useMutation<Task>('tasks');
+  const notificationMutation = useMutation<Notification>('notifications');
 
   // ── "Today" section: tasks due today OR overdue (open), grouped per person ──
   // Definition (Asana "Today" style): endDate (or dueDate) <= today AND not Done.
@@ -459,6 +461,13 @@ const StaffDashboard: React.FC = () => {
   const handleQuickComplete = async (taskId: string, e: React.MouseEvent) => {
     e.stopPropagation();
     await taskMutation.update(taskId, { status: 'Done' });
+    // Closing a task is not a private act — creator/collaborators hear about it
+    // (the actor is excluded inside the builder).
+    const closed = (myTasks || []).find(t => t.id === taskId);
+    if (closed && user?.uid) {
+      taskCompletedNotifications(closed, user.uid, user.displayName || undefined).forEach(n =>
+        notificationMutation.create(n as any).catch(err => console.error('[Notifications] task_completed dërgim dështoi:', err)));
+    }
     toast({ title: '✅ Detyrë e përfunduar!' });
   };
 

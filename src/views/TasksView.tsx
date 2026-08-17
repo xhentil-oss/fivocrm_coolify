@@ -61,6 +61,7 @@ import QuickTaskForm, { QUICK_TASK_DIALOG_CLASS } from '../components/QuickTaskF
 import TaskDateConflictDialog from '../components/TaskDateConflictDialog';
 import { findSameDayTasks } from '../lib/taskConflicts';
 import { taskDeepLink } from '../lib/deepLinks';
+import { taskCompletedNotifications } from '../lib/taskNotifications';
 import SmartSuggestions from '../components/SmartSuggestions';
 import { TaskLabels } from '../components/TaskLabels';
 import TaskTimeline from '../components/TaskTimeline';
@@ -610,7 +611,18 @@ const TasksView: React.FC = () => {
     const task = tasks.find(t => t.id === taskId);
     if (task && task.status !== targetStatus) {
       await taskMutation.update(taskId, { status: targetStatus });
+      // Dragging a card into "Përfunduar" closes it — tell its followers.
+      if (targetStatus === 'Done') notifyTaskClosed(task);
     }
+  };
+
+  // Closing a task by someone else was a silent mutation — creator, assignee and
+  // collaborators (minus the actor) now hear about it, from EVERY completion
+  // surface (checkbox, quick-action, kanban drag; the detail panel notifies itself).
+  const notifyTaskClosed = (task: Task) => {
+    if (!user?.uid) return;
+    taskCompletedNotifications(task, user.uid, user.displayName || undefined).forEach(n =>
+      notificationMutation.create(n as any).catch(err => console.error('[Notifications] task_completed dërgim dështoi:', err)));
   };
 
   const columns = [
@@ -802,6 +814,7 @@ const TasksView: React.FC = () => {
               toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
               return;
             }
+            notifyTaskClosed(task);
             if (outcome.kind === 'recurring-created') {
               toast({ title: '✅ Detyrë e kryer + cikli i ri!', description: `"${task.title}" u rigjenerua automatikisht.` });
             } else if (outcome.kind === 'recurring-ended') {
@@ -968,6 +981,7 @@ const TasksView: React.FC = () => {
                 toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
                 return;
               }
+              notifyTaskClosed(task);
               if (outcome.kind === 'recurring-created') {
                 toast({ title: '✅ Detyrë e kryer + cikli i ri!', description: `"${task.title}" u rigjenerua automatikisht.` });
               } else if (outcome.kind === 'recurring-ended') {

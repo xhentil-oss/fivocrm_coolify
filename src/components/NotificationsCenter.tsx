@@ -70,6 +70,7 @@ const TYPE_ICON: Record<string, React.ReactNode> = {
   quote_sent:               <FileText className="w-4 h-4 text-blue-500" />,
   contract_sent:            <FileText className="w-4 h-4 text-amber-500" />,
   task_assigned:            <User className="w-4 h-4 text-blue-500" />,
+  task_completed:           <CheckCircle className="w-4 h-4 text-emerald-500" />,
   task_collaborator_added:  <Users className="w-4 h-4 text-primary" />,
   task_mention:             <MessageSquare className="w-4 h-4 text-primary" />,
   task_comment:             <MessageSquare className="w-4 h-4 text-blue-500" />,

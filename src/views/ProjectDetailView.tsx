@@ -31,6 +31,7 @@ import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFiltered
 import { useUserNames } from '../hooks/useUserNames';
 import { useCommentFocus, COMMENT_FLASH_CLASS } from '../hooks/useCommentFocus';
 import { portalProjectCommentDeepLink, taskDeepLink } from '../lib/deepLinks';
+import { taskCompletedNotifications } from '../lib/taskNotifications';
 import { resolvePortalUserId } from '../lib/notifyClient';
 import { addFrequency, completeTask } from '../lib/recurringUtils';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
@@ -974,6 +975,11 @@ const ProjectDetailView: React.FC = () => {
         toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
       } else if (outcome.kind === 'error') {
         console.error('[Recurring] krijimi i ciklit tjetër dështoi (drag):', outcome.error);
+      }
+      // Any non-blocked outcome closed the task — tell creator/assignee/collaborators.
+      if (outcome.kind !== 'blocked' && user?.uid) {
+        taskCompletedNotifications(task, user.uid, user.displayName || undefined).forEach(n =>
+          notificationMutation.create(n as any).catch(err => console.error('[Notifications] task_completed dërgim dështoi:', err)));
       }
     } else {
       await handleTaskUpdate(taskId, { status: targetStatus });
