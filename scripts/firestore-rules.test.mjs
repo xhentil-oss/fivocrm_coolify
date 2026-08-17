@@ -845,6 +845,29 @@ test('36b. notifications stay readable only by their addressee', async () => {
   await assertFails(deleteDoc(doc(mallory, 'notifications', 'notifAlice')));
 });
 
+test('36e. a notification cannot be re-addressed or rewritten after creation', async () => {
+  // The create rule limits WHO you may notify (self or same tenant). Without a field
+  // guard on update, the check was bypassable: create a notification for yourself,
+  // then update userId to any uid on the platform — phishing with an attacker-chosen
+  // actionUrl, cross-tenant. Update must stay strictly "mark as read".
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'notifications', 'notifSelf'), {
+      userId: 'alice', type: 'task_assigned', title: 'Detyrë', isRead: false, businessId: MY_BIZ,
+    });
+  });
+  const alice = testEnv.authenticatedContext('alice', { email: 'a@mine.com', bid: MY_BIZ }).firestore();
+
+  // Re-addressing to another user (even alongside a legal field) must fail.
+  await assertFails(updateDoc(doc(alice, 'notifications', 'notifSelf'), { userId: 'vstaff' }));
+  await assertFails(updateDoc(doc(alice, 'notifications', 'notifSelf'), { userId: 'vstaff', isRead: true }));
+  // Rewriting content/link after the fact must fail — only read-state may change.
+  await assertFails(updateDoc(doc(alice, 'notifications', 'notifSelf'), { actionUrl: 'https://evil.example' }));
+  await assertFails(updateDoc(doc(alice, 'notifications', 'notifSelf'), { title: 'Klikoni këtu' }));
+  // The legitimate mark-as-read shapes keep working.
+  await assertSucceeds(updateDoc(doc(alice, 'notifications', 'notifSelf'), { isRead: true }));
+  await assertSucceeds(updateDoc(doc(alice, 'notifications', 'notifSelf'), { isRead: false, readAt: new Date() }));
+});
+
 test('36c. notification preferences are private to their owner', async () => {
   const alice = testEnv.authenticatedContext('alice', { email: 'a@mine.com', bid: MY_BIZ }).firestore();
   const mallory = testEnv.authenticatedContext('mallory', { email: 'm@victim.com', bid: VICTIM_BIZ }).firestore();

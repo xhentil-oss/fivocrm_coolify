@@ -101,9 +101,11 @@ const PortalNotificationsBell: React.FC = () => {
     invoice_paid: '/portal/invoices',
     invoice_overdue: '/portal/invoices',
     invoice_reminder_sent: '/portal/invoices',
-    quote_sent: '/portal/quotes',
-    quote_accepted: '/portal/quotes',
-    quote_rejected: '/portal/quotes',
+    // The route is `preventiva` (App.tsx), NOT `quotes` — the old value matched no
+    // portal child route and silently bounced the tap to the dashboard.
+    quote_sent: '/portal/preventiva',
+    quote_accepted: '/portal/preventiva',
+    quote_rejected: '/portal/preventiva',
     contract_sent: '/portal/contracts',
     project_created: '/portal/projects',
     project_completed: '/portal/projects',

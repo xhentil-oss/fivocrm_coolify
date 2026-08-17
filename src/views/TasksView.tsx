@@ -60,6 +60,7 @@ import TaskDetailPanel from '../components/TaskDetailPanel';
 import QuickTaskForm, { QUICK_TASK_DIALOG_CLASS } from '../components/QuickTaskForm';
 import TaskDateConflictDialog from '../components/TaskDateConflictDialog';
 import { findSameDayTasks } from '../lib/taskConflicts';
+import { taskDeepLink } from '../lib/deepLinks';
 import SmartSuggestions from '../components/SmartSuggestions';
 import { TaskLabels } from '../components/TaskLabels';
 import TaskTimeline from '../components/TaskTimeline';
@@ -483,13 +484,17 @@ const TasksView: React.FC = () => {
           title: 'Detyrë e Re e Caktuar',
           message: `Ju u caktuat te detyra: ${title}`,
           isRead: false,
-          actionUrl: '/app/tasks',
-          actionLabel: 'Shiko Detyrat',
+          // Deep link straight to the task — a bare '/app/tasks' landed on the
+          // list and nothing opened or scrolled.
+          actionUrl: taskDeepLink((newTask as any).id, projectId || undefined),
+          actionLabel: 'Shiko Detyrën',
         })
       );
     }
     for (const collabId of collaboratorIds) {
-      if (collabId !== user?.uid) {
+      // Skip the assignee too — they were just told "detyrë e re" above; a second
+      // "u shtuat si bashkëpunëtor" for the same creation is a duplicate ping.
+      if (collabId !== user?.uid && collabId !== assignedToUserId) {
         notificationPromises.push(
           notificationMutation.create({
             userId: collabId,
@@ -497,8 +502,8 @@ const TasksView: React.FC = () => {
             title: 'U shtuat si bashkëpunëtor',
             message: `U shtuat si bashkëpunëtor te detyra: ${title}`,
             isRead: false,
-            actionUrl: '/app/tasks',
-            actionLabel: 'Shiko Detyrat',
+            actionUrl: taskDeepLink((newTask as any).id, projectId || undefined),
+            actionLabel: 'Shiko Detyrën',
           })
         );
       }

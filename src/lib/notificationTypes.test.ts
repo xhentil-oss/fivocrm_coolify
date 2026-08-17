@@ -116,7 +116,9 @@ describe('emitted notification types', () => {
       for (const file of walk(join(ROOT, dir))) {
         const src = readFileSync(file, 'utf8');
         // Only look at blocks that are clearly notification writes.
-        const isNotifFile = /collection\('notifications'\)|useMutation<[^>]*>\('notifications'\)|useMutation\('notifications'\)|notifyUser\(/.test(src);
+        // notifyStaff( is the portal→staff relay — `new_client` shipped unregistered
+        // through it because this scan didn't include it.
+        const isNotifFile = /collection\('notifications'\)|useMutation<[^>]*>\('notifications'\)|useMutation\('notifications'\)|notifyUser\(|notifyStaff\(/.test(src);
         if (!isNotifFile) continue;
         for (const m of src.matchAll(/\btype:\s*'([a-z][a-z0-9_]*)'/g)) {
           const t = m[1];

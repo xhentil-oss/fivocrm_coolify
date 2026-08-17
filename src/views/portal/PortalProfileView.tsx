@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { updatePassword, reauthenticateWithCredential, EmailAuthProvider, sendPasswordResetEmail } from 'firebase/auth';
 import { db, auth } from '../../lib/firebase';
+import { dndZoneStamp } from '../../lib/notificationPrefs';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useAuth } from '../../contexts/AuthContext';
 import { useDocument, useMutation } from '../../hooks/useFirestore';
@@ -118,7 +119,10 @@ const PortalProfileView: React.FC = () => {
   const savePrefs = (next: Prefs) => {
     setPrefs(next);
     if (!user) return;
-    setDoc(doc(db, 'userPreferences', user.uid), next, { merge: true }).catch(() => {
+    // Stamp the client's timezone alongside the DND window: portal users never
+    // mount the staff bell (which used to be the only place that stamped it), so
+    // their DND hours were read as UTC and the window shifted by the full offset.
+    setDoc(doc(db, 'userPreferences', user.uid), { ...next, ...dndZoneStamp() }, { merge: true }).catch(() => {
       toast({ title: 'Gabim', description: 'Preferencat nuk u ruajtën.', variant: 'destructive' });
     });
   };

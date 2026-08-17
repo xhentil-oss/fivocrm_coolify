@@ -1,4 +1,5 @@
 import { auth } from './firebase';
+import type { NotificationType } from './notificationTypes';
 
 /**
  * Portal → staff notification (and optional conversation routing), performed by the
@@ -12,7 +13,10 @@ import { auth } from './firebase';
  * Fire-and-forget: never blocks the client's action.
  */
 export interface NotifyStaffInput {
-  type: string;
+  /** Must be registered — a bare string let `new_client` ship unregistered (no
+   *  icon, un-mutable) and dodge the registry guard test. The server coerces an
+   *  unknown value to `client_request`. */
+  type: NotificationType;
   title: string;
   message?: string;
   actionUrl?: string;

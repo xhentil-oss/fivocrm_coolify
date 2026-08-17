@@ -68,10 +68,10 @@ export function usePushNotifications(userId?: string) {
     let mounted = true;
 
     const register = async () => {
-      const perm = await PushNotifications.requestPermissions();
-      if (perm.receive !== 'granted') return;
-      await PushNotifications.register();
-
+      // Listeners BEFORE register() — Capacitor documents this order. The
+      // `registration` event can fire as soon as register() resolves; a listener
+      // attached afterwards races it, and a lost registration event means the
+      // token is never persisted and this device stays permanently silent.
       PushNotifications.addListener('registration', async (tokenData) => {
         if (!mounted || !userIdRef.current) return;
         try {
@@ -93,6 +93,10 @@ export function usePushNotifications(userId?: string) {
           window.location.hash = url.startsWith('#') ? url : `#${url}`;
         }
       });
+
+      const perm = await PushNotifications.requestPermissions();
+      if (perm.receive !== 'granted') return;
+      await PushNotifications.register();
     };
 
     register();
@@ -111,7 +115,18 @@ export function usePushNotifications(userId?: string) {
     const registerWeb = async () => {
       if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
 
-      const permission = await Notification.requestPermission();
+      // Never re-prompt a denial (browsers punish repeat prompts from the origin).
+      if (Notification.permission === 'denied') return;
+      // On the client portal, the prompt belongs to the explicit "Aktivizo" banner
+      // (PortalPushPrompt) — it must come from a real user gesture (Safari/iOS
+      // reject a cold prompt outright), and the banner only renders while
+      // permission is still 'default', so prompting here made it unreachable.
+      const isPortal = `${window.location.pathname}${window.location.hash}`.includes('/portal');
+      if (Notification.permission !== 'granted' && isPortal) return;
+
+      const permission = Notification.permission === 'granted'
+        ? 'granted'
+        : await Notification.requestPermission();
       if (permission !== 'granted') return;
 
       try {

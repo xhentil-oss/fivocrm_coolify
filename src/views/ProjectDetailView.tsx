@@ -30,7 +30,7 @@ import ProjectClientBrief from '../components/ProjectClientBrief';
 import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
 import { useCommentFocus, COMMENT_FLASH_CLASS } from '../hooks/useCommentFocus';
-import { portalProjectCommentDeepLink } from '../lib/deepLinks';
+import { portalProjectCommentDeepLink, taskDeepLink } from '../lib/deepLinks';
 import { resolvePortalUserId } from '../lib/notifyClient';
 import { addFrequency, completeTask } from '../lib/recurringUtils';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
@@ -719,8 +719,9 @@ const ProjectDetailView: React.FC = () => {
         title: 'Detyrë e Re e Caktuar',
         message: `Ju u caktuat te detyra: ${title}`,
         isRead: false,
-        actionUrl: `/app/projects/${projectId}`,
-        actionLabel: 'Shiko Projektin',
+        // Land on the task itself (opens the panel), not just the project page.
+        actionUrl: taskDeepLink((newTask as any).id, projectId),
+        actionLabel: 'Shiko Detyrën',
       }).catch(err => console.error('[Notifications] task_assigned dërgim dështoi:', err));
     }
 
@@ -737,8 +738,8 @@ const ProjectDetailView: React.FC = () => {
               title: `➕ ${project.name}: detyrë e re`,
               message: `"${title}" u shtua në projekt.`,
               isRead: false,
-              actionUrl: `/app/projects/${projectId}`,
-              actionLabel: 'Shiko Projektin',
+              actionUrl: taskDeepLink((newTask as any).id, projectId),
+              actionLabel: 'Shiko Detyrën',
             }).catch(err => console.error('[Notifications] guest_task_new dërgim dështoi:', err))
           )
       );
@@ -879,6 +880,8 @@ const ProjectDetailView: React.FC = () => {
       }
       // Notify creator (skip if it's the same person who just updated)
       if (project.createdByUserId && project.createdByUserId !== user?.uid) {
+        // .catch, never await-throw: the task and project are already written by
+        // now — a failed notification must not surface as a failed status change.
         await notificationMutation.create({
           userId: project.createdByUserId,
           type: 'project_completed',
@@ -887,7 +890,7 @@ const ProjectDetailView: React.FC = () => {
           isRead: false,
           actionUrl: `/app/projects/${project.id}`,
           actionLabel: 'Shiko Projektin',
-        });
+        }).catch(err => console.error('[Notifications] project_completed dërgim dështoi:', err));
       }
     }
   }, [taskMutation, project, rawProjectTasks, projectMutation, notificationMutation, user]);

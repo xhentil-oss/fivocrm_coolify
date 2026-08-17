@@ -72,6 +72,9 @@ export const NOTIFICATION_TYPES = {
   lead_created:             { category: 'projects', priority: 'info',     groupLabel: 'lead të rinj' },
   lead_assigned:            { category: 'projects', priority: 'info',     groupLabel: 'lead të caktuar' },
   lead_converted:           { category: 'projects', priority: 'success' },
+  // Emitted through notifyStaff() when a portal client self-registers
+  // (useClientPortal) — was live but unregistered, so it had no icon and no mute.
+  new_client:               { category: 'projects', priority: 'success',  groupLabel: 'klientë të rinj' },
   lead_follow_up:           { category: 'projects', priority: 'warning',  groupLabel: 'rikontaktime lead' },
   lead_cadence_step:        { category: 'projects', priority: 'warning',  groupLabel: 'hapa ndjekjeje' },
   guest_project_invited:    { category: 'projects', priority: 'info' },

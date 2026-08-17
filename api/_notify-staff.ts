@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import admin, { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 import { notifyUser } from './_push.js';
+import { NOTIFICATION_TYPE_CATEGORY } from './_notificationTypes.js';
 
 /**
  * POST /api/notify-staff
@@ -246,9 +247,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // most time-critical direction in the product — a CLIENT contacting the team (new
   // message, new request, a quote decision) — produced nothing but a red dot that
   // staff only saw if they already had the app open.
+  // The type is client-supplied and MUST be registered: an unknown value fails OPEN
+  // through every category mute (that fail-open exists for legacy rows), so an
+  // unvalidated type would let the portal send notifications staff can never mute.
+  const rawType = clean(type, 60) || 'client_request';
+  const safeType = Object.prototype.hasOwnProperty.call(NOTIFICATION_TYPE_CATEGORY, rawType)
+    ? rawType
+    : 'client_request';
+
   const results = await Promise.allSettled([...recipients].map(uid => notifyUser({
     userId: uid,
-    type: clean(type, 60) || 'client_request',
+    type: safeType,
     title: clean(title, 200) || 'Njoftim i ri',
     message: clean(message, 1000) || '',
     actionUrl: clean(actionUrl, 500) || undefined,

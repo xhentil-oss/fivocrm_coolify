@@ -1,6 +1,6 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from '../hooks/use-toast';
 import {
@@ -33,6 +33,7 @@ import {
   type NotificationCategory,
   type NotificationPriority,
 } from '../lib/notificationTypes';
+import { dndZoneStamp } from '../lib/notificationPrefs';
 
 // ── Presentation ───────────────────────────────────────────────────────────────
 // Priority, category and group label now come from the SHARED registry
@@ -195,10 +196,6 @@ const ALL_CATEGORIES_ON = NOTIFICATION_CATEGORIES.reduce((acc, c) => {
   return acc;
 }, {} as Record<NotificationCategory, boolean>);
 
-function localZone(): string {
-  try { return Intl.DateTimeFormat().resolvedOptions().timeZone || ''; } catch { return ''; }
-}
-
 const DEFAULT_PREFS: NotifPrefs = {
   categoryEnabled: { ...ALL_CATEGORIES_ON },
   emailEnabled: true,
@@ -221,12 +218,7 @@ function mergePrefs(raw: Partial<NotifPrefs>): NotifPrefs {
 
 /** Stamp the current zone/offset onto the prefs so the server can honour DND. */
 function withDndZone(prefs: NotifPrefs): NotifPrefs {
-  return {
-    ...prefs,
-    dndTimeZone: localZone(),
-    // getTimezoneOffset() is minutes to ADD to local to reach UTC — invert it.
-    dndUtcOffsetMinutes: -new Date().getTimezoneOffset(),
-  };
+  return { ...prefs, ...dndZoneStamp() };
 }
 
 // True when the current local time falls inside the user's Do-Not-Disturb window.
@@ -347,11 +339,18 @@ const NotificationsCenter: React.FC = () => {
     if (localPrefs.soundEnabled !== false && !CHAT_MSG_TYPES.has(newest.type || '')) playChime();
   }, [notifications, localPrefs, playChime]);
 
-  // Filter out muted categories
+  // Tenant boundary + muted categories. The query is by userId only, so a user who
+  // is staff in TWO businesses (or a super-admin inside a tenant) saw the other
+  // tenant's notifications here, with actionUrls that 403 after navigation. Filtered
+  // client-side, not in the query: legacy rows carry no businessId and must stay
+  // visible, and no composite index is needed this way.
+  const activeBusinessId = useGlobalBusinessId();
   const activeNotifications = useMemo(() => {
     if (!notifications) return [];
-    return notifications.filter(n => !isTypeMuted(n.type, localPrefs));
-  }, [notifications, localPrefs]);
+    return notifications.filter(n =>
+      (!activeBusinessId || !(n as any).businessId || (n as any).businessId === activeBusinessId)
+      && !isTypeMuted(n.type, localPrefs));
+  }, [notifications, localPrefs, activeBusinessId]);
 
   // Filter by selected category chip
   const filteredByCategory = useMemo(() => {
@@ -360,6 +359,10 @@ const NotificationsCenter: React.FC = () => {
   }, [activeNotifications, category]);
 
   const unreadCount         = activeNotifications.filter(n => !n.isRead).length;
+  // Over ALL fetched rows (muted included): "Shëno të lexuara" clears muted rows too,
+  // but its visibility keyed on unreadCount — when only muted unread remained, the
+  // button vanished and those rows stayed unread forever (still counted by the digest).
+  const unreadTotalCount    = (notifications || []).filter(n => !n.isRead).length;
   const unreadClientCount   = activeNotifications.filter(n => !n.isRead && n.type === 'client_message').length;
   // Anything that is literally someone talking TO me: task mentions, chat mentions,
   // DMs and being pulled into a task. `mention` and `direct_message` used to be
@@ -478,7 +481,7 @@ const NotificationsCenter: React.FC = () => {
             )}
           </div>
           <div className="flex items-center gap-1">
-            {!showPrefs && unreadCount > 0 && (
+            {!showPrefs && unreadTotalCount > 0 && (
               <Button variant="ghost" size="sm" onClick={handleMarkAllAsRead} className="text-xs">
                 <Check className="w-3 h-3 mr-1" />
                 Shëno të lexuara

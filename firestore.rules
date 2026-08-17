@@ -1275,7 +1275,14 @@ service cloud.firestore {
         || notifyTargetInMyTenant(request.resource.data.userId)
         || isSuperAdmin()
       );
-      allow update: if isAuth() && resource.data.userId == request.auth.uid;
+      // WAS `update: if owner` with no field guard — you could create a notification
+      // for YOURSELF (always allowed above) and then update its userId to ANY uid on
+      // the platform, bypassing the tenant check on create (cross-tenant phishing).
+      // Update is now strictly "mark as read": userId pinned, only read-state fields.
+      allow update: if isAuth() && resource.data.userId == request.auth.uid
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.diff(resource.data).affectedKeys()
+             .hasOnly(['isRead', 'readAt', 'updatedAt']);
       allow delete: if isAuth() && resource.data.userId == request.auth.uid;
     }
 

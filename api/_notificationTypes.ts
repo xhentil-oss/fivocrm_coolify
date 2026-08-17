@@ -46,6 +46,7 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   lead_created: 'projects',
   lead_assigned: 'projects',
   lead_converted: 'projects',
+  new_client: 'projects',
   lead_follow_up: 'projects',
   lead_cadence_step: 'projects',
   guest_project_invited: 'projects',

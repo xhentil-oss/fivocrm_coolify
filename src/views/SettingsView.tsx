@@ -53,6 +53,7 @@ import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { getDocs, getDoc, setDoc, query, where, collection, writeBatch, doc, Timestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
+import { dndZoneStamp } from '../lib/notificationPrefs';
 import { toast } from '../hooks/use-toast';
 import { reportingCapabilitiesFor } from '../lib/reporting/permissions';
 
@@ -341,7 +342,9 @@ const SettingsView: React.FC = () => {
     setNotifPrefs(prev => {
       const next = { ...prev, ...patch };
       if (user) {
-        // Persist in the canonical shape the bell + cron read.
+        // Persist in the canonical shape the bell + cron read. The DND window is
+        // wall-clock time in the user's zone — always stamp the zone alongside it,
+        // or the server falls back to UTC and shifts the window by the full offset.
         const doc_: any = {
           emailEnabled: next.emailEnabled,
           pushEnabled: next.pushEnabled,
@@ -349,6 +352,7 @@ const SettingsView: React.FC = () => {
           dndEnabled: next.dndEnabled,
           dndStart: next.dndStart,
           dndEnd: next.dndEnd,
+          ...dndZoneStamp(),
         };
         if ('taskReminders' in patch) doc_.categoryEnabled = { tasks: next.taskReminders };
         setDoc(doc(db, 'userPreferences', user.uid), doc_, { merge: true }).catch(() => { /* ignore */ });

@@ -649,6 +649,11 @@ export function useMutation<T = DocumentData>(collectionName: string) {
       const notificationScope = collectionName === 'notifications' && businessId
         ? { businessId }
         : {};
+      // The stamp above is what the comment promises — make its absence loud instead
+      // of silently writing a row that GDPR export/delete can never find.
+      if (collectionName === 'notifications' && !businessId && !(data as any)?.businessId) {
+        console.warn('[notifications] created WITHOUT businessId (no active business context) — row will escape GDPR export/delete');
+      }
 
       const docData = removeUndefined({
         ...autoScope,
@@ -693,7 +698,7 @@ export function useMutation<T = DocumentData>(collectionName: string) {
             const resolvedUrl = rawLink
               ? (String(rawLink).startsWith('/') ? String(rawLink) : `/app/chat?channel=${encodeURIComponent(String(rawLink))}`)
               : undefined;
-            await fetch('/api/send-notification-email', {
+            const res = await fetch('/api/send-notification-email', {
               method: 'POST',
               headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
               body: JSON.stringify({
@@ -707,7 +712,15 @@ export function useMutation<T = DocumentData>(collectionName: string) {
                 imageUrl: (docData as any).imageUrl ?? (docData as any).avatarUrl,
               }),
             });
-          } catch { /* non-critical: in-app notification already saved */ }
+            // Still non-blocking, but never SILENT: a 429/500 here means the doc
+            // exists (red dot) while push+email never went out — without this log
+            // that was indistinguishable from a successful delivery.
+            if (!res.ok) {
+              console.warn(`[notifications] delivery relay failed (${res.status}) for type "${(docData as any).type}" — doc saved, push/email skipped`);
+            }
+          } catch (err) {
+            console.warn('[notifications] delivery relay unreachable — doc saved, push/email skipped:', err);
+          }
         })();
       }
 

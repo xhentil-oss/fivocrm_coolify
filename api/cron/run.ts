@@ -1060,12 +1060,18 @@ async function runProjectCompletionReminder() {
   if (projectsSnap.empty) return { notified: 0 };
 
   const userProjectMap = new Map<string, { name: string; status: string }[]>();
+  // Tenant stamp for the notification doc — without it the row escapes GDPR
+  // export/delete. A responsible user's open projects are all in their business.
+  const userBusinessMap = new Map<string, string>();
   for (const doc of projectsSnap.docs) {
     const p = doc.data();
     if (!p.responsibleUserId) continue;
     const existing = userProjectMap.get(p.responsibleUserId) || [];
     existing.push({ name: p.name || 'Pa emër', status: p.status });
     userProjectMap.set(p.responsibleUserId, existing);
+    if (p.businessId && !userBusinessMap.has(p.responsibleUserId)) {
+      userBusinessMap.set(p.responsibleUserId, p.businessId);
+    }
   }
 
   let notified = 0;
@@ -1097,8 +1103,11 @@ async function runProjectCompletionReminder() {
     });
     if (hasRecentReminder) continue;
 
-    ops.push(notifyUser({ userId, type: 'project_open_reminder', title: `📋 ${userProjects.length} projekt${userProjects.length > 1 ? 'e' : ''} akoma të hapura`, message: `Ke ${userProjects.length} projekt${userProjects.length > 1 ? 'e' : ''} të hapur${userProjects.length > 1 ? 'a' : ''} pa mbyllur këtë javë.`, actionUrl: '/app/projects', actionLabel: 'Shiko Projektet', email: false }));
-    if (transporter && smtpUser) {
+    const prefs = await getUserPrefs(userId);
+    ops.push(notifyUser({ userId, type: 'project_open_reminder', title: `📋 ${userProjects.length} projekt${userProjects.length > 1 ? 'e' : ''} akoma të hapura`, message: `Ke ${userProjects.length} projekt${userProjects.length > 1 ? 'e' : ''} të hapur${userProjects.length > 1 ? 'a' : ''} pa mbyllur këtë javë.`, actionUrl: '/app/projects', actionLabel: 'Shiko Projektet', businessId: userBusinessMap.get(userId) ?? null, prefs, email: false }));
+    // The richer email below honours the same gates as everywhere else — this was
+    // the LAST job that mailed users who had turned email off (no prefs check at all).
+    if (transporter && smtpUser && prefs?.emailEnabled !== false && !isSilenced(prefs, 'project_open_reminder')) {
       try {
         const userRecord = await admin.auth().getUser(userId);
         if (userRecord.email) {
@@ -4673,7 +4682,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, campaignSteps, whmcs, inquiryReminders, projectRollup, leadCadence, subscriptions, reportSchedules, reportReminders, tenantUsage, platformMetricsRun] = await Promise.allSettled([
+        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, campaignSteps, whmcs, inquiryReminders, projectRollup, leadCadence, subscriptions, reportSchedules, reportReminders, tenantUsage, platformMetricsRun, notifCleanup] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
           runOverdueReminders(),
@@ -4701,6 +4710,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           runReportReminders(),
           runTenantUsageRollup(),
           runPlatformMetricsRollup(),
+          // Retention used to hang off the VPS scheduler ALONE — if PM2 was down,
+          // purging silently stopped and the collection only ever grew (which is
+          // what made the digest's scans expensive). Paged + budgeted, so a second
+          // daily run is cheap; deletes are idempotent.
+          runCleanupOldNotifications(),
         ]);
         const settled = (r: PromiseSettledResult<any>) =>
           r.status === 'fulfilled' ? r.value : { error: (r.reason as Error)?.message || 'failed' };
@@ -4732,6 +4746,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           platformMetrics: settled(platformMetricsRun),
           reportSchedules: settled(reportSchedules),
           reportReminders: settled(reportReminders),
+          notificationCleanup: settled(notifCleanup),
         };
         break;
       }

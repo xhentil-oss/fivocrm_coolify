@@ -29,7 +29,7 @@
 
 import admin, { adminDb as db, adminMessaging, adminAuth } from './_firebaseAdmin.js';
 import nodemailer from 'nodemailer';
-import { isTypeMutedByPrefs } from './_notificationTypes.js';
+import { isTypeMutedByPrefs, NOTIFICATION_TYPE_CATEGORY } from './_notificationTypes.js';
 
 export const BASE_URL = (process.env.PUBLIC_BASE_URL || 'https://fivocrm.vercel.app').replace(/\/$/, '');
 
@@ -107,8 +107,14 @@ export async function listPushTokens(userId: string): Promise<TokenEntry[]> {
   const out: TokenEntry[] = [];
   const seen = new Set<string>();
   try {
-    const sub = await db.collection('userPushTokens').doc(String(userId))
-      .collection('tokens').limit(25).get();
+    // Newest devices first: a bare limit() returns docs by id (a token hash, i.e.
+    // random), so a user with >25 accumulated rows could get ONLY dead ones and a
+    // live phone would silently never ring. saveToken always writes updatedAt; the
+    // unordered fallback covers any legacy row written before it existed (orderBy
+    // excludes docs missing the field).
+    const col = db.collection('userPushTokens').doc(String(userId)).collection('tokens');
+    let sub = await col.orderBy('updatedAt', 'desc').limit(25).get();
+    if (sub.empty) sub = await col.limit(25).get();
     for (const d of sub.docs) {
       const t = d.data()?.token;
       if (typeof t === 'string' && t && !seen.has(t)) {
@@ -199,12 +205,16 @@ export async function sendPushToUser(userId: string, input: PushInput): Promise<
       sent++;
     } catch (err: any) {
       const code = err?.errorInfo?.code || err?.code;
-      // Stale device — stop retrying it forever.
+      // Stale device — stop retrying it forever. NOT invalid-argument: FCM returns
+      // that for a malformed PAYLOAD too, and the payload is identical for every
+      // device — treating it as a dead token deleted ALL of a user's tokens on one
+      // bad send, permanently killing their push until they reopened the app.
       if (code === 'messaging/registration-token-not-registered'
-        || code === 'messaging/invalid-registration-token'
-        || code === 'messaging/invalid-argument') {
+        || code === 'messaging/invalid-registration-token') {
         await dropToken(entry);
         removed++;
+      } else if (code === 'messaging/invalid-argument') {
+        console.error('[push] rejected payload (token kept):', err?.message || err);
       } else {
         console.error('[push] send failed:', err?.message || err);
       }
@@ -357,6 +367,16 @@ export async function notifyUser(input: NotifyUserInput): Promise<NotifyUserResu
   const userId = input.userId ? String(input.userId) : '';
   if (!userId) return { written: false, skipped: 'no-user' };
   if (input.actorUserId && input.actorUserId === userId) return { written: false, skipped: 'self' };
+
+  // Both are contract violations by the CALLER, surfaced loudly instead of silently
+  // degrading: an unregistered type can never be muted (fail-open) and gets no icon;
+  // a missing businessId makes the row invisible to GDPR export/delete.
+  if (!Object.prototype.hasOwnProperty.call(NOTIFICATION_TYPE_CATEGORY, input.type)) {
+    console.error(`[notifyUser] unregistered notification type "${input.type}" — add it to _notificationTypes.ts + src/lib/notificationTypes.ts`);
+  }
+  if (!input.businessId) {
+    console.error(`[notifyUser] missing businessId on type "${input.type}" for user ${userId} — this row will escape GDPR export/delete`);
+  }
 
   const now = admin.firestore.Timestamp.now();
   const doc: Record<string, any> = {
