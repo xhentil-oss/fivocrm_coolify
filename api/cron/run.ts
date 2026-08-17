@@ -4644,17 +4644,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'gmb-sync': {
         // Google Reviews pull for every connected location (hourly, VPS-scheduled).
-        // Scoped reads only: gmbAccounts where connected==true, then per-account
-        // review diffs — writes are proportional to actual review change.
-        const gmbResults = await syncAllGmbAccounts();
+        // Scoped reads only: gmbAccounts where connected==true, then per-page
+        // bounded diffs — writes are proportional to actual review change. Runs
+        // under a time budget; a truncated run reports `skipped` and those
+        // accounts go FIRST next hour (ordered by lastSyncedAt asc).
+        const { results: gmbResults, skipped } = await syncAllGmbAccounts();
         const failed = gmbResults.filter((r) => r.error);
         if (failed.length) console.error(`[CRON:gmb-sync] ${failed.length} dështuan:`, failed);
         result = {
           locations: gmbResults.length,
           synced: gmbResults.filter((r) => !r.error).length,
           created: gmbResults.reduce((a, r) => a + (r.created || 0), 0),
+          deleted: gmbResults.reduce((a, r) => a + (r.deleted || 0), 0),
           autoReplied: gmbResults.reduce((a, r) => a + (r.autoReplied || 0), 0),
           failed: failed.length,
+          skipped,
         };
         break;
       }

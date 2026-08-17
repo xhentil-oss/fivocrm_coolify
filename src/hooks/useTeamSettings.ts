@@ -128,6 +128,7 @@ export interface TeamSettings {
 /** Credential fields that must never be written to `teamSettings` (see tenantSecrets). */
 const SECRET_FIELDS = [
   'aiApiKey', 'emailApiKey', 'emailSmtpPass', 'whatsappVpsSecret', 'metaWebhookVerifyToken',
+  'gmbClientSecret',
 ] as const;
 
 /**

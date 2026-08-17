@@ -423,6 +423,7 @@ export const MERGE_COLLECTION_LABELS: Record<string, string> = {
   socialAccounts: 'Llogari sociale',
   socialSnapshots: 'Statistika sociale',
   gmbAccounts: 'Profile Google Business',
+  gmbReviews: 'Reviews Google',
   reports: 'Raporte',
   reportVersions: 'Versione raportesh',
   reportComments: 'Komente raportesh',

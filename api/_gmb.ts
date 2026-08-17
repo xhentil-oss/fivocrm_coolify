@@ -10,6 +10,12 @@
  * platform's Google OAuth client (GOOGLE_CLIENT_ID/SECRET) — the same client
  * used for Search Console, with the business.manage scope added.
  *
+ * A refresh token is PERMANENTLY BOUND to the OAuth client that minted it, so
+ * the connect flow pins `oauthClientId` on the account doc and
+ * `accessTokenForAccount()` refuses to refresh with a different client —
+ * otherwise a tenant that later configures its own credentials would silently
+ * break every previously connected location with invalid_grant.
+ *
  * API surface used (reviews and local posts still live on the v4 endpoint;
  * account/location management moved to the newer per-area APIs):
  *   accounts:   GET https://mybusinessaccountmanagement.googleapis.com/v1/accounts
@@ -40,15 +46,45 @@ export const GMB_REPORT_URL = 'https://business.google.com/reviews';
 const ENV_CLIENT_ID = process.env.GOOGLE_CLIENT_ID || process.env.VITE_GOOGLE_CLIENT_ID || '';
 const ENV_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET || '';
 
-/** Per-tenant OAuth client (Settings → Google Reviews), env fallback. */
-export async function gmbOAuthClient(teamId?: string | null): Promise<{ clientId: string; clientSecret: string; source: 'tenant' | 'env' }> {
-  if (teamId) {
-    const cfg = await getTeamConfig(teamId);
-    if (cfg.gmbClientId && cfg.gmbClientSecret) {
-      return { clientId: String(cfg.gmbClientId), clientSecret: String(cfg.gmbClientSecret), source: 'tenant' };
-    }
+export interface GmbOAuthClientInfo { clientId: string; clientSecret: string; source: 'tenant' | 'env' }
+
+/**
+ * Per-tenant OAuth client (Settings → Google Reviews), env fallback. Pass an
+ * already-loaded team config to avoid a redundant getTeamConfig read (the cron
+ * caches configs per team).
+ */
+export async function gmbOAuthClient(teamId?: string | null, cfg?: Record<string, any>): Promise<GmbOAuthClientInfo> {
+  const conf = cfg ?? (teamId ? await getTeamConfig(teamId) : {});
+  if (conf.gmbClientId && conf.gmbClientSecret) {
+    return { clientId: String(conf.gmbClientId), clientSecret: String(conf.gmbClientSecret), source: 'tenant' };
   }
   return { clientId: ENV_CLIENT_ID, clientSecret: ENV_CLIENT_SECRET, source: 'env' };
+}
+
+/**
+ * Access token for a connected account, honoring the OAuth client the refresh
+ * token was minted under (`oauthClientId`, pinned at connect time). A token
+ * refreshed with a DIFFERENT client id always fails (invalid_grant), so when the
+ * pinned client is no longer configured we fail with an actionable message
+ * instead of an opaque Google error.
+ */
+export async function accessTokenForAccount(a: Record<string, any>, cfg?: Record<string, any>): Promise<string> {
+  const tenant = await gmbOAuthClient(a.teamId, cfg);
+  const candidates: GmbOAuthClientInfo[] = [];
+  if (tenant.clientId && tenant.clientSecret) candidates.push(tenant);
+  if (ENV_CLIENT_ID && ENV_CLIENT_SECRET && tenant.clientId !== ENV_CLIENT_ID) {
+    candidates.push({ clientId: ENV_CLIENT_ID, clientSecret: ENV_CLIENT_SECRET, source: 'env' });
+  }
+  if (!candidates.length) throw new Error('Google OAuth nuk është konfiguruar (Client ID/Secret)');
+
+  // Legacy docs (pre-pinning) have no oauthClientId — use the current resolution order.
+  const pinned = a.oauthClientId
+    ? candidates.find((c) => c.clientId === a.oauthClientId)
+    : candidates[0];
+  if (!pinned) {
+    throw new Error('Kredencialet OAuth me të cilat u lidh ky profil nuk janë më të konfiguruara — shkëputeni dhe rilidheni profilin.');
+  }
+  return refreshGoogleToken(pinned.clientId, pinned.clientSecret, a.refreshToken);
 }
 
 export function buildGmbAuthUrl(clientId: string, redirectUri: string, state: string): string {
@@ -122,8 +158,10 @@ export interface GmbSyncResult {
   location: string;
   synced?: number;
   created?: number;
+  deleted?: number;
   autoReplied?: number;
   notified?: number;
+  backfill?: boolean;
   error?: string;
 }
 
@@ -210,36 +248,56 @@ export function gmbReportPrompt(review: { author?: string; starRating?: number; 
 
 // ── Review sync ────────────────────────────────────────────────────────────────
 
-/** Notify the tenant's Admin/Manager staff (capped) — used for negative reviews. */
-async function notifyBusinessManagers(
-  businessId: string,
-  teamId: string | null,
-  build: (userId: string) => Parameters<typeof notifyUser>[0],
-): Promise<number> {
-  if (!businessId) return 0;
+const MANAGER_ROLES = new Set(['Admin', 'Manager', 'Owner', 'SuperAdmin']);
+
+/** Admin/Manager userIds of a business (capped) — resolved once per sync, not per review. */
+async function businessManagerIds(businessId?: string | null): Promise<string[]> {
+  if (!businessId) return [];
   const snap = await adminDb.collection('teamMembers').where('businessId', '==', businessId).limit(50).get();
   const seen = new Set<string>();
   const targets: string[] = [];
   for (const d of snap.docs) {
     const m = d.data();
-    const role = String(m.role || '');
     if (!m.userId || seen.has(m.userId)) continue;
     if (m.status === 'Inactive') continue;
-    if (!['Admin', 'Manager', 'Owner', 'SuperAdmin'].includes(role)) continue;
+    if (!MANAGER_ROLES.has(String(m.role || ''))) continue;
     seen.add(m.userId);
     targets.push(m.userId);
     if (targets.length >= 5) break;
   }
-  const results = await Promise.allSettled(targets.map((uid) => notifyUser(build(uid))));
-  return results.filter((r) => r.status === 'fulfilled').length;
+  return targets;
+}
+
+interface NewReviewSideEffectInput {
+  docId: string;
+  reviewId: string;
+  stars: number;
+  author: string;
+  comment: string;
+  hasReply: boolean;
 }
 
 /**
- * Pull one location's reviews and upsert gmbReviews docs. Idempotent: doc id is
- * `${accountDocId}_${reviewId}`; unchanged reviews (same updateTime + reply) are
- * skipped to keep Firestore writes proportional to actual change. Also refreshes
- * rating/reviewCount/starCounts on the account doc (Google returns the real
- * totals with the first page, so the UI never depends on how many we mirrored).
+ * Pull one location's reviews and upsert gmbReviews docs.
+ *
+ * Invariants this function is responsible for:
+ *  - Idempotent mirror: doc id is `${accountDocId}_${reviewId}`; unchanged
+ *    reviews are skipped so Firestore writes stay proportional to real change.
+ *  - Bounded reads: per fetched page we `getAll()` exactly those ≤50 mirror docs
+ *    (never the whole mirror), and we STOP paging as soon as an entire page is
+ *    unchanged — Google returns reviews newest-updated first, so nothing older
+ *    changed either.
+ *  - BACKFILL IS SILENT: on the first-ever sync (`lastSyncedAt == null`) every
+ *    review is "new to the mirror" but not new in reality — no notifications and
+ *    no AI auto-replies fire for historical reviews. Side effects only run once
+ *    the account has completed at least one sync.
+ *  - Ghost pruning: when a run has seen Google's FULL list (no remaining page
+ *    token and no early stop), mirror docs absent from it are deleted — a review
+ *    removed on Google (e.g. after a successful report) must not haunt the
+ *    "Pa përgjigje" KPI forever.
+ *  - Honest distribution: starCounts is only (re)written together with
+ *    `starCountsComplete`, and left untouched on an early-stop run where the
+ *    previously stored distribution is still the best known.
  */
 export async function syncGmbAccount(
   accountDoc: QueryDocumentSnapshot,
@@ -249,24 +307,22 @@ export async function syncGmbAccount(
   const now = Timestamp.now();
   const base: GmbSyncResult = { accountId: accountDoc.id, location: a.name || a.locationName };
   try {
-    const { clientId, clientSecret } = await gmbOAuthClient(a.teamId);
-    if (!clientId || !clientSecret) throw new Error('Google OAuth nuk është konfiguruar (Client ID/Secret)');
-    const accessToken = opts?.accessToken
-      || await refreshGoogleToken(clientId, clientSecret, a.refreshToken);
     const cfg = opts?.config ?? (a.teamId ? await getTeamConfig(a.teamId) : {});
+    const accessToken = opts?.accessToken || await accessTokenForAccount(a, cfg);
+    const isBackfill = !a.lastSyncedAt;
 
-    // Existing mirror (one single-field query) so we can diff instead of rewriting.
-    const existingSnap = await adminDb.collection('gmbReviews').where('accountId', '==', accountDoc.id).get();
-    const existing = new Map<string, any>();
-    existingSnap.forEach((d) => existing.set(d.id, d.data()));
+    let managersCache: string[] | null = null;
+    const managerIds = async () => (managersCache ??= await businessManagerIds(a.businessId));
 
     const maxPages = opts?.maxPages ?? 4; // 4 × 50 = the 200 newest reviews
     let pageToken: string | undefined;
     let page = 0;
+    let stoppedEarly = false;
     let averageRating: number | null = null;
     let totalReviewCount: number | null = null;
     const starCounts: Record<string, number> = { '1': 0, '2': 0, '3': 0, '4': 0, '5': 0 };
-    let synced = 0, created = 0, autoReplied = 0, notified = 0;
+    const seenIds = new Set<string>();
+    let synced = 0, created = 0, deleted = 0, autoReplied = 0, notified = 0;
 
     do {
       const qs = new URLSearchParams({ pageSize: '50', ...(pageToken ? { pageToken } : {}) });
@@ -275,20 +331,35 @@ export async function syncGmbAccount(
         averageRating = typeof json.averageRating === 'number' ? json.averageRating : null;
         totalReviewCount = typeof json.totalReviewCount === 'number' ? json.totalReviewCount : null;
       }
-      for (const r of json.reviews || []) {
-        const reviewId = String(r.reviewId || (r.name || '').split('/').pop() || '');
-        if (!reviewId) continue;
+      const pageReviews: any[] = json.reviews || [];
+
+      // Bounded diff: read exactly this page's mirror docs, nothing more.
+      const entries = pageReviews
+        .map((r) => ({ r, reviewId: String(r.reviewId || (r.name || '').split('/').pop() || '') }))
+        .filter((e) => e.reviewId);
+      const refs = entries.map((e) => adminDb.collection('gmbReviews').doc(`${accountDoc.id}_${e.reviewId}`));
+      const prevSnaps = refs.length ? await adminDb.getAll(...refs) : [];
+      const prevById = new Map<string, any>();
+      prevSnaps.forEach((s) => { if (s.exists) prevById.set(s.id, s.data()); });
+
+      const batch = adminDb.batch();
+      let batchCount = 0;
+      const newOnPage: NewReviewSideEffectInput[] = [];
+      let pageChanged = false;
+
+      for (const { r, reviewId } of entries) {
         const stars = STAR_NUM[r.starRating] || 0;
         if (stars) starCounts[String(stars)] = (starCounts[String(stars)] || 0) + 1;
         const docId = `${accountDoc.id}_${reviewId}`;
-        const prev = existing.get(docId);
+        seenIds.add(docId);
+        synced++;
+        const prev = prevById.get(docId);
         const replyComment = r.reviewReply?.comment || null;
         const updateTime = r.updateTime || r.createTime || null;
-        const unchanged = prev && prev.googleUpdateTime === updateTime && (prev.replyComment || null) === replyComment;
-        synced++;
-        if (unchanged) continue;
+        if (prev && prev.googleUpdateTime === updateTime && (prev.replyComment || null) === replyComment) continue;
 
-        await adminDb.collection('gmbReviews').doc(docId).set({
+        pageChanged = true;
+        batch.set(adminDb.collection('gmbReviews').doc(docId), {
           teamId: a.teamId ?? null,
           businessId: a.businessId ?? null,
           customerId: a.customerId ?? null,
@@ -306,58 +377,97 @@ export async function syncGmbAccount(
           ...(prev ? {} : { firstSyncedAt: now, repliedVia: null, reported: null, aiSuggestion: null, aiReportAnalysis: null, createdAt: now }),
           updatedAt: now,
         }, { merge: true });
+        batchCount++;
 
         if (!prev) {
           created++;
-          // ── New NEGATIVE review → notify the tenant's managers ──
-          if (stars > 0 && stars <= 2 && cfg.gmbNotifyNegative !== false) {
-            notified += await notifyBusinessManagers(a.businessId, a.teamId ?? null, (userId) => ({
+          newOnPage.push({
+            docId, reviewId, stars,
+            author: r.reviewer?.displayName || 'Anonim',
+            comment: r.comment || '',
+            hasReply: !!replyComment,
+          });
+        }
+      }
+
+      if (batchCount) await batch.commit();
+
+      // ── Side effects: only for genuinely new reviews, never for the backfill ──
+      if (!isBackfill) {
+        for (const nr of newOnPage) {
+          if (nr.stars > 0 && nr.stars <= 2 && cfg.gmbNotifyNegative !== false) {
+            const targets = await managerIds();
+            const results = await Promise.allSettled(targets.map((userId) => notifyUser({
               userId,
               type: 'gmb_negative_review',
-              title: `⭐ Review ${stars}★ në Google: ${a.name || 'profili juaj'}`,
-              message: `${r.reviewer?.displayName || 'Anonim'}: "${String(r.comment || '(pa tekst)').slice(0, 140)}"`,
+              title: `⭐ Review ${nr.stars}★ në Google: ${a.name || 'profili juaj'}`,
+              message: `${nr.author}: "${(nr.comment || '(pa tekst)').slice(0, 140)}"`,
               actionUrl: '/app/gmb',
               actionLabel: 'Shiko Reviews',
               businessId: a.businessId ?? null,
               teamId: a.teamId ?? null,
-            }));
+            })));
+            notified += results.filter((x) => x.status === 'fulfilled').length;
           }
-          // ── AI auto-reply (opt-in; 'positive' = only 4-5★, 'all' = every new one) ──
+
           const mode = cfg.gmbAutoReply === 'all' || cfg.gmbAutoReply === 'positive' ? cfg.gmbAutoReply : 'off';
-          const eligible = mode === 'all' || (mode === 'positive' && stars >= 4);
-          if (!replyComment && eligible && mode !== 'off') {
+          const eligible = mode === 'all' || (mode === 'positive' && nr.stars >= 4);
+          if (!nr.hasReply && eligible) {
             try {
               const text = await generateAiText(a.teamId, gmbReplyPrompt(
-                { author: r.reviewer?.displayName, starRating: stars, comment: r.comment },
+                { author: nr.author, starRating: nr.stars, comment: nr.comment },
                 a.name || 'biznesi', typeof cfg.gmbAiContext === 'string' ? cfg.gmbAiContext : undefined,
               ));
               if (text) {
-                await publishGmbReply(accessToken, a, reviewId, text);
-                await adminDb.collection('gmbReviews').doc(docId).set({
+                await publishGmbReply(accessToken, a, nr.reviewId, text);
+                await adminDb.collection('gmbReviews').doc(nr.docId).set({
                   replyComment: text, replyTime: new Date().toISOString(), repliedVia: 'ai-auto', updatedAt: Timestamp.now(),
                 }, { merge: true });
                 autoReplied++;
               }
             } catch (err) {
               // Auto-reply is best-effort — a failed draft must never fail the sync.
-              console.error(`[gmb] auto-reply dështoi (${docId}):`, (err as Error)?.message);
+              console.error(`[gmb] auto-reply dështoi (${nr.docId}):`, (err as Error)?.message);
             }
           }
         }
       }
+
       pageToken = json.nextPageToken;
       page++;
+      // Newest-updated-first ordering: a fully unchanged page (that had known
+      // reviews at all) means every older page is unchanged too — stop paging.
+      if (!pageChanged && entries.length > 0 && prevById.size === entries.length && pageToken) {
+        stoppedEarly = true;
+        break;
+      }
     } while (pageToken && page < maxPages);
+
+    const sawFullList = !pageToken && !stoppedEarly;
+
+    // ── Prune ghosts: only when this run saw Google's complete list ──
+    if (sawFullList) {
+      const mirror = await adminDb.collection('gmbReviews').where('accountId', '==', accountDoc.id).get();
+      const stale = mirror.docs.filter((d) => !seenIds.has(d.id));
+      for (let i = 0; i < stale.length; i += 400) {
+        const delBatch = adminDb.batch();
+        stale.slice(i, i + 400).forEach((d) => delBatch.delete(d.ref));
+        await delBatch.commit();
+      }
+      deleted = stale.length;
+    }
 
     await accountDoc.ref.update({
       rating: averageRating,
       reviewCount: totalReviewCount ?? synced,
-      starCounts,
+      // starCounts stays untouched on an early stop (previous value still valid);
+      // otherwise it reflects what was fetched, flagged complete/partial honestly.
+      ...(stoppedEarly ? {} : { starCounts, starCountsComplete: sawFullList }),
       lastSyncedAt: now,
       lastSyncError: null,
       updatedAt: now,
     });
-    return { ...base, synced, created, autoReplied, notified };
+    return { ...base, synced, created, deleted, autoReplied, notified, backfill: isBackfill || undefined };
   } catch (err) {
     const msg = err instanceof Error ? err.message : 'sync failed';
     await accountDoc.ref.update({ lastSyncError: msg, updatedAt: Timestamp.now() }).catch(() => {});
@@ -365,14 +475,29 @@ export async function syncGmbAccount(
   }
 }
 
+export interface GmbSyncAllResult {
+  results: GmbSyncResult[];
+  /** Accounts not reached before the time budget ran out (they go FIRST next run). */
+  skipped: number;
+}
+
 /**
  * Sync every connected GMB location, optionally narrowed to one tenant scope.
- * Serial (Google per-minute quota is tight: ~300 QPM shared per project) and
- * config is cached per team so a 10-location tenant costs one settings read.
+ * Serial (Google per-minute quota is tight: ~300 QPM shared per project), but:
+ *  - accounts are ordered by lastSyncedAt ASC (never-synced first), so a run
+ *    that hits the time budget starves DIFFERENT accounts next hour instead of
+ *    the same tail forever;
+ *  - a time budget keeps the whole run inside Vercel's 60s maxDuration — a
+ *    truncated run reports `skipped` instead of being killed mid-loop with no
+ *    record at all.
+ * Config is cached per team so a 10-location tenant costs one settings read.
  */
 export async function syncAllGmbAccounts(
   scope?: { teamId?: string | null; businessId?: string | null },
-): Promise<GmbSyncResult[]> {
+  opts?: { budgetMs?: number },
+): Promise<GmbSyncAllResult> {
+  const started = Date.now();
+  const budgetMs = opts?.budgetMs ?? 48_000;
   const col = adminDb.collection('gmbAccounts');
   const byId = new Map<string, QueryDocumentSnapshot>();
   if (scope?.teamId || scope?.businessId) {
@@ -381,11 +506,21 @@ export async function syncAllGmbAccounts(
   } else {
     (await col.where('connected', '==', true).get()).forEach((d) => byId.set(d.id, d as QueryDocumentSnapshot));
   }
+
+  // Oldest-synced first; never-synced (null) at the very front.
+  const ordered = [...byId.values()].sort((x, y) => {
+    const mx = x.data().lastSyncedAt?.toMillis?.() ?? 0;
+    const my = y.data().lastSyncedAt?.toMillis?.() ?? 0;
+    return mx - my;
+  });
+
   const cfgCache = new Map<string, Record<string, any>>();
   const results: GmbSyncResult[] = [];
-  for (const doc of byId.values()) {
+  let skipped = 0;
+  for (const doc of ordered) {
     const a = doc.data();
     if (a.connected === false) continue;
+    if (Date.now() - started > budgetMs) { skipped++; continue; }
     let cfg = a.teamId ? cfgCache.get(a.teamId) : undefined;
     if (a.teamId && !cfg) {
       cfg = await getTeamConfig(a.teamId);
@@ -395,5 +530,6 @@ export async function syncAllGmbAccounts(
     if (!scope && cfg && cfg.gmbAutoSync === false) continue;
     results.push(await syncGmbAccount(doc, { config: cfg }));
   }
-  return results;
+  if (skipped) console.warn(`[gmb] time budget hit — ${skipped} llogari shtyhen për run-in e ardhshëm (do të kenë përparësi)`);
+  return { results, skipped };
 }

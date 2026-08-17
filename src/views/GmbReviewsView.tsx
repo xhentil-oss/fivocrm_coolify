@@ -23,6 +23,7 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { useCollection, getGlobalTeamId, getGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
 import { saveTenantSecrets } from '../lib/tenantSecrets';
+import { toDate } from '../lib/utils';
 import type { GmbReview, GmbPost } from '../types';
 
 /**
@@ -46,6 +47,8 @@ interface ApiAccount {
   rating: number | null;
   reviewCount: number;
   starCounts: Record<string, number> | null;
+  /** false → the distribution covers only the newest mirrored reviews. */
+  starCountsComplete: boolean | null;
   lastSyncedAt: string | null;
   lastSyncError: string | null;
 }
@@ -71,14 +74,6 @@ const CTA_OPTIONS: { value: string; label: string }[] = [
   { value: 'SIGN_UP', label: 'Regjistrohu' },
   { value: 'CALL', label: 'Telefono' },
 ];
-
-const toDate = (v: any): Date | null => {
-  if (!v) return null;
-  if (v instanceof Date) return v;
-  if (typeof v?.toDate === 'function') return v.toDate();
-  const d = new Date(v);
-  return isNaN(d.getTime()) ? null : d;
-};
 
 const fmtDate = (v: any): string => {
   const d = toDate(v);
@@ -573,6 +568,12 @@ const GmbReviewsView: React.FC = () => {
                         <span className={`text-[10px] font-mono font-bold w-6 text-right ${starFilter === d.star ? 'text-primary' : 'text-muted-foreground'}`}>{d.n}</span>
                       </button>
                     ))}
+                    {(selected.starCountsComplete === false
+                      || (selected.starCountsComplete == null && (selected.reviewCount || 0) > selReviews.length)) && (
+                      <p className="text-[10px] text-muted-foreground mt-0.5">
+                        Shpërndarja bazohet në {dist.reduce((a, d) => a + d.n, 0)} reviews më të fundit — jo në të {selected.reviewCount} gjithsej.
+                      </p>
+                    )}
                   </div>
                   <div className="flex flex-col gap-1 pl-5 border-l border-border/60">
                     <span className="text-[10px] font-bold uppercase tracking-wider text-muted-foreground">Norma e përgjigjes</span>

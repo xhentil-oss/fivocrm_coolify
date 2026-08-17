@@ -330,10 +330,12 @@ export interface GmbAccount {
   accountName: string;              // Google resource: 'accounts/123'
   locationName: string;             // Google resource: 'locations/456'
   refreshToken: string;             // Google OAuth refresh token (server-only)
+  oauthClientId?: string;           // OAuth client the refresh token was minted under (client-bound!)
   connected: boolean;               // false after disconnect (reviews kept for history)
   rating?: number | null;           // Google's own averageRating (not recomputed locally)
   reviewCount?: number;             // Google's totalReviewCount
   starCounts?: Record<string, number>; // distribution over the mirrored reviews ('1'..'5')
+  starCountsComplete?: boolean;     // false → distribution covers only the newest mirrored reviews
   lastSyncedAt?: Date | null;
   lastSyncError?: string | null;
   createdAt: Date;
