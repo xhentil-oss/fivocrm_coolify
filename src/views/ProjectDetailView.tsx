@@ -1768,15 +1768,15 @@ const ProjectDetailView: React.FC = () => {
         </div>
       </div>
 
-      {/* Task detail — a right-hand drawer, so opening a task no longer squeezes
-          the list into half a column. Full screen on a phone. */}
+      {/* Task detail — a right-hand drawer on desktop (the page stays visible
+          behind), a bottom sheet on mobile. */}
       {selectedTask && (
         <div
-          className="fixed inset-0 z-50 flex justify-end bg-brand-navy/20"
+          className="fixed inset-0 z-50 flex flex-col justify-end bg-brand-navy/20 lg:flex-row lg:justify-end"
           onClick={() => { setSelectedTask(null); setFocusComment(null); }}
         >
           <div
-            className="h-full w-full overflow-y-auto bg-background pt-[72px] shadow-2xl lg:w-[620px] lg:border-l"
+            className="flex h-[88dvh] w-full flex-col overflow-hidden rounded-t-[22px] bg-background shadow-2xl lg:h-full lg:w-[620px] lg:rounded-none lg:border-l"
             onClick={(e) => e.stopPropagation()}
           >
             <TaskDetailPanel

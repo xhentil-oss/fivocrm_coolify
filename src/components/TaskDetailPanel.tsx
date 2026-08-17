@@ -33,6 +33,7 @@ import {
   FileText,
   Download,
   SmilePlus,
+  Search,
 } from 'lucide-react';
 import GoogleDrivePicker from './GoogleDrivePicker';
 import { Badge } from './ui/badge';
@@ -54,6 +55,79 @@ import type { Task, TaskComment } from '../types';
 
 // Quick-reaction emoji set — mirrors the chat reactions for a consistent feel.
 const COMMENT_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
+
+// ── Redesign (Aug 2026, Claude Design "Detyrat e Krijuara" + "Detyra e Krijuar
+// Mobile") ─────────────────────────────────────────────────────────────────────
+// The panel owns its own overlay: a centered 660px dialog on desktop, a bottom
+// sheet on mobile. Status is a pill dropdown; the project and the assignee are
+// picked through searchable pickers (anchored dropdown on desktop, full-screen
+// sheet on mobile); dates/recurrence/priority are one-tap chips. Both mounts
+// (TasksView, ProjectDetailView) render the SAME component with no wrapper.
+
+const STATUS_OPTS: Array<{ v: string; label: string; dot: string; pill: string }> = [
+  { v: 'Todo', label: 'Për të bërë', dot: '#94A5BD', pill: 'bg-slate-200/80 text-slate-700 dark:bg-slate-700 dark:text-slate-300' },
+  { v: 'In Progress', label: 'Në progres', dot: '#0EA5E9', pill: 'bg-blue-500/15 text-blue-700 dark:text-blue-400' },
+  { v: 'Review', label: 'Rishikim', dot: '#D9A514', pill: 'bg-amber-500/15 text-amber-700 dark:text-amber-400' },
+  { v: 'Done', label: 'E përfunduar', dot: '#22A565', pill: 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400' },
+];
+
+/** Deterministic HSL colour from a name — used for project dots + avatars. */
+const hashColor = (name: string) => {
+  let h = 0;
+  for (let i = 0; i < name.length; i++) h = name.charCodeAt(i) + ((h << 5) - h);
+  return `hsl(${Math.abs(h) % 360}, 55%, 42%)`;
+};
+
+/** One-tap selection chip (dates, recurrence, priority). Active = filled navy. */
+const chipCls = (on: boolean) =>
+  `rounded-full border-[1.5px] px-3 py-[5px] text-xs font-semibold transition-colors ${
+    on ? 'border-foreground bg-foreground text-background' : 'border-border bg-background text-muted-foreground hover:border-primary'
+  }`;
+
+/** Searchable picker body — anchored dropdown on sm+, full-screen bottom sheet
+ * on mobile (the two design variants share this one implementation). */
+const PickerPanel: React.FC<{
+  title: string;
+  searchPlaceholder: string;
+  query: string;
+  onQuery: (v: string) => void;
+  onClose: () => void;
+  children: React.ReactNode;
+}> = ({ title, searchPlaceholder, query, onQuery, onClose, children }) => (
+  <div
+    className="max-sm:fixed max-sm:inset-0 max-sm:z-[70] max-sm:flex max-sm:flex-col max-sm:justify-end max-sm:bg-[#0C1B33]/50 sm:absolute sm:left-0 sm:top-[calc(100%+6px)] sm:z-40"
+    onClick={(e) => { e.stopPropagation(); onClose(); }}
+  >
+    <div
+      className="flex flex-col bg-background max-sm:h-[78dvh] max-sm:rounded-t-[22px] max-sm:shadow-[0_-12px_40px_rgba(4,12,30,.4)] sm:w-[330px] sm:overflow-hidden sm:rounded-[14px] sm:border sm:shadow-[0_14px_36px_rgba(12,27,51,.22)]"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex justify-center pb-0.5 pt-2 sm:hidden">
+        <span className="h-[5px] w-[38px] rounded-full bg-border" />
+      </div>
+      <div className="flex items-center gap-2 px-4 pb-1.5 pt-1 sm:hidden">
+        <span className="flex-1 text-[14.5px] font-extrabold text-foreground">{title}</span>
+        <button type="button" onClick={onClose} className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-muted text-xs text-muted-foreground">✕</button>
+      </div>
+      <div className="px-3 pb-2 pt-2.5">
+        <div className="flex items-center gap-2 rounded-full border bg-muted/50 px-3.5 py-2">
+          <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <input
+            autoFocus
+            value={query}
+            onChange={(e) => onQuery(e.target.value)}
+            placeholder={searchPlaceholder}
+            className="w-full min-w-[40px] bg-transparent text-[13px] font-semibold text-foreground outline-none placeholder:text-muted-foreground/60"
+          />
+          {query && (
+            <button type="button" onClick={() => onQuery('')} className="shrink-0 text-[11px] text-muted-foreground">✕</button>
+          )}
+        </div>
+      </div>
+      <div className="flex flex-1 flex-col gap-px overflow-y-auto px-2 pb-3 sm:max-h-[258px]">{children}</div>
+    </div>
+  </div>
+);
 
 interface TaskDetailPanelProps {
   task: Task;
@@ -954,626 +1028,683 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     }
   };
 
-  const taskLabel = React.useMemo(() => {
-    const words = task.title.split(' ').slice(0, 3);
-    if (words.length === 1 && words[0].length > 15) {
-      return words[0].slice(0, 12) + '...';
-    }
-    return words.join(' ');
-  }, [task.title]);
-
   // Format date compactly
   const formatDateCompact = (date: Date) => {
     const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
     return `${months[date.getMonth()]} ${date.getDate()}`;
   };
 
+  // ── Redesign state: pill dropdowns + searchable pickers ──
+  const [statusOpen, setStatusOpen] = useState(false);
+  const [assignOpen, setAssignOpen] = useState(false);
+  const [assignQuery, setAssignQuery] = useState('');
+  const [projectOpen, setProjectOpen] = useState(false);
+  const [projectQuery, setProjectQuery] = useState('');
+  const closePickers = () => { setStatusOpen(false); setAssignOpen(false); setProjectOpen(false); };
+
+  const statusMeta = STATUS_OPTS.find(s => s.v === task.status) || STATUS_OPTS[0];
+
+  // Status change — the completeTask flow (recurring next-cycle, blockers) is the
+  // same one the old header select ran; both status dropdowns call this.
+  const changeStatus = async (newStatus: string) => {
+    if (newStatus === task.status) return;
+    if (newStatus === 'Done') {
+      const outcome = await completeTask(task, {
+        createTask: (data) => taskMutation.create(data as any),
+        updateTask: (id, data) => onUpdate(id, data),
+        allTasks,
+        claimNextCycle: claimTaskNextCycle,
+        releaseNextCycle: releaseTaskNextCycle,
+      });
+      const freqLabel: Record<string, string> = { daily: 'ditore', weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
+      switch (outcome.kind) {
+        case 'blocked':
+          toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
+          return;
+        case 'recurring-created':
+          toast({ title: '✅ Detyrë e kryer + cikli i ri!', description: `Detyra periodike ${freqLabel[task.recurringFrequency ?? ''] ?? ''} u rigjenerua automatikisht.` });
+          return;
+        case 'recurring-ended':
+          toast({ title: '✅ Detyrë e kryer', description: 'Cikli i fundit i përsëritjes — nuk u krijua tjetër.' });
+          return;
+        case 'error':
+          console.error('[Recurring] krijimi i ciklit tjetër dështoi:', outcome.error);
+          toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
+          return;
+        default:
+          toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
+          return;
+      }
+    }
+    await onUpdate(task.id, { status: newStatus });
+    const labels: Record<string, string> = { Todo: 'Për të bërë', 'In Progress': 'Në progres', Review: 'Rishikim', Done: 'Përfunduar' };
+    toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${labels[newStatus] ?? newStatus}` });
+  };
+
+  // Reassign — notifies the new assignee AND the previous one, and logs, exactly
+  // like the old popover handlers did.
+  const assignTo = async (newUserId: string) => {
+    setAssignOpen(false);
+    setAssignQuery('');
+    const prevAssignee = task.assignedToUserId;
+    if (!newUserId || newUserId === prevAssignee) return;
+    await onUpdate(task.id, { assignedToUserId: newUserId });
+    const link = taskDeepLink(task.id, task.projectId);
+    if (newUserId !== user?.uid) {
+      await notificationMutation.create({
+        userId: newUserId,
+        type: 'task_assigned',
+        title: 'Detyrë e Re e Caktuar',
+        message: `${user?.displayName || 'Dikush'} ju caktoi detyrën: ${task.title}`,
+        isRead: false,
+        actionUrl: link,
+        actionLabel: 'Shiko Detyrën',
+      }).catch(err => console.error('[Notifications] task_assigned dërgim dështoi:', err));
+    }
+    if (prevAssignee && prevAssignee !== newUserId && prevAssignee !== user?.uid) {
+      await notificationMutation.create({
+        userId: prevAssignee,
+        type: 'task_assigned',
+        title: 'Detyrë e Ri-caktuar',
+        message: `Detyra "${task.title}" u ri-caktua te ${getUserDisplayName(newUserId)}`,
+        isRead: false,
+        actionUrl: link,
+        actionLabel: 'Shiko Detyrën',
+      }).catch(err => console.error('[Notifications] task_assigned dërgim dështoi:', err));
+    }
+    logActivity('update', `Detyra "${task.title}" u ri-caktua`, {
+      description: `Nga: ${prevAssignee || 'Pa caktuar'} → Te: ${newUserId}`,
+      entityType: 'task',
+      entityId: task.id,
+    });
+  };
+
+  const changeProject = async (pid: string) => {
+    setProjectOpen(false);
+    setProjectQuery('');
+    if ((task.projectId || '') === pid) return;
+    await onUpdate(task.id, { projectId: pid || null } as any);
+  };
+
+  // Assignee load: open tasks per person — colours match the create form's bars.
+  const activeCountOf = (uid: string) => (allTasks || []).filter(t => t.assignedToUserId === uid && t.status !== 'Done').length;
+  const loadToneOf = (n: number) => (n >= 8 ? 'text-red-600 dark:text-red-400' : n >= 6 ? 'text-amber-600 dark:text-amber-400' : 'text-muted-foreground');
+
+  const currentProject = projects.find(p => p.id === task.projectId);
+
+  const pq = projectQuery.trim().toLowerCase();
+  const projectOptions = [
+    { id: '', name: 'Pa projekt', dot: '#C3CEDD', sub: '' },
+    ...projects.map(p => {
+      const n = (allTasks || []).filter(t => t.projectId === p.id && t.status !== 'Done').length;
+      return { id: p.id, name: p.name, dot: hashColor(p.name), sub: n > 0 ? `${n} detyra aktive` : '' };
+    }),
+  ].filter(o => !pq || o.name.toLowerCase().includes(pq));
+
+  const aq = assignQuery.trim().toLowerCase();
+  const assignMembers = (teamMembers || [])
+    .filter((m: any) => m.userId !== user?.uid)
+    .filter((m: any) => {
+      if (!aq) return true;
+      const nm = getUserDisplayName(m.userId).toLowerCase();
+      return nm.includes(aq) || (m.email || '').toLowerCase().includes(aq);
+    });
+  const showSelfOption = !!user && (!aq || (user.displayName || '').toLowerCase().includes(aq) || (user.email || '').toLowerCase().includes(aq));
+  const assigneeName = getUserDisplayName(task.assignedToUserId || '') || 'Pa caktuar';
+
+  // Quick-date chips: Sot / Nesër / Kjo javë (e premtja) / 📅 datë e lirë.
+  const dayKeyOf = (d: Date) => {
+    const today = new Date();
+    const tom = new Date(); tom.setDate(tom.getDate() + 1);
+    const fri = new Date(); fri.setDate(fri.getDate() + ((5 - fri.getDay() + 7) % 7));
+    if (d.toDateString() === today.toDateString()) return 'sot';
+    if (d.toDateString() === tom.toDateString()) return 'neser';
+    if (d.toDateString() === fri.toDateString()) return 'jave';
+    return 'date';
+  };
+  const quickDate = (k: string) => {
+    const d = new Date();
+    if (k === 'neser') d.setDate(d.getDate() + 1);
+    if (k === 'jave') d.setDate(d.getDate() + ((5 - d.getDay() + 7) % 7));
+    return d;
+  };
+  const dueKey = dayKeyOf(endDate);
+  const startKey = dayKeyOf(startDate);
+
+  // "krijuar sot 09:40 nga ti" — the subtitle under the title (per the design).
+  const createdDate = (() => {
+    const raw: any = (task as any).createdAt;
+    if (!raw) return null;
+    const d = raw instanceof Date ? raw : raw?.toDate?.() ? raw.toDate() : new Date(raw);
+    return isNaN(d.getTime()) ? null : d;
+  })();
+  const justCreated = !!createdDate && Date.now() - createdDate.getTime() < 10 * 60 * 1000;
+  const createdLabel = createdDate ? (() => {
+    const hm = `${String(createdDate.getHours()).padStart(2, '0')}:${String(createdDate.getMinutes()).padStart(2, '0')}`;
+    if (createdDate.toDateString() === new Date().toDateString()) return `sot ${hm}`;
+    const months = ['jan', 'shk', 'mar', 'pri', 'maj', 'qer', 'kor', 'gus', 'sht', 'tet', 'nën', 'dhj'];
+    return `${createdDate.getDate()} ${months[createdDate.getMonth()]}`;
+  })() : null;
+  const creatorLabel = (task as any).createdByUserId
+    ? ((task as any).createdByUserId === user?.uid ? 'ti' : getUserDisplayName((task as any).createdByUserId))
+    : '';
+  const subtitleText = [
+    currentProject?.name || 'Pa projekt',
+    createdLabel ? `krijuar ${createdLabel}${creatorLabel ? ` nga ${creatorLabel}` : ''}` : null,
+  ].filter(Boolean).join(' · ');
+
+  const footerSummary = `${assigneeName.split(' ')[0]} · ${formatDateCompact(endDate)}${task.isRecurring ? ' · përsëritet' : ''}`;
+
+  // "Ruaj ndryshimet" — commits any in-progress title/description edit and closes.
+  // Every other field already saved on tap (chips/pickers write straight through).
+  const handleFooterSave = async () => {
+    const patch: any = {};
+    if (titleText.trim() && titleText.trim() !== task.title) patch.title = titleText.trim();
+    const cleanedDesc = descriptionText === '<p></p>' ? '' : descriptionText;
+    if (isEditingDescription && cleanedDesc !== (task.description || '')) patch.description = cleanedDesc;
+    if (Object.keys(patch).length > 0) await onUpdate(task.id, patch);
+    onClose();
+  };
+
+  const rowCls = 'grid grid-cols-[92px_1fr] items-center gap-2.5 border-b border-border/60 py-2 sm:grid-cols-[118px_1fr]';
+  const rowLabelCls = 'text-[12.5px] font-semibold text-muted-foreground';
+
+  const memberOption = (uid: string, email: string | undefined, isYou: boolean) => {
+    const name = isYou ? (user?.displayName || 'Ti') : getUserDisplayName(uid);
+    const n = activeCountOf(uid);
+    const on = task.assignedToUserId === uid;
+    return (
+      <button
+        key={uid}
+        type="button"
+        onClick={() => assignTo(uid)}
+        className={`flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left transition-colors hover:bg-muted max-sm:min-h-[52px] ${on ? 'bg-primary/10' : ''}`}
+      >
+        <span className="flex h-[30px] w-[30px] shrink-0 items-center justify-center rounded-full text-[10.5px] font-bold text-white" style={{ background: hashColor(name) }}>
+          {name.slice(0, 2).toUpperCase()}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="flex items-center gap-1.5 text-[13px] font-semibold text-foreground">
+            <span className="truncate">{name}</span>
+            {isYou && <span className="shrink-0 rounded-[5px] bg-primary/10 px-1.5 py-px text-[9.5px] font-extrabold text-primary">Ti</span>}
+          </span>
+          {email && <span className="mt-px block truncate text-[11px] text-muted-foreground">{email}</span>}
+        </span>
+        <span title="Detyra aktive" className={`shrink-0 whitespace-nowrap text-[10.5px] font-semibold ${loadToneOf(n)}`}>{n} aktive</span>
+        {on && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+      </button>
+    );
+  };
+
   return (
     <>
-    <div className="h-full flex flex-col bg-background border-l">
-      {/* Header with Status Select and Close */}
-      <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-b bg-muted/30">
-        <Select
-          value={task.status}
-          disabled={isGuestMode}
-          onValueChange={async (newStatus) => {
-            if (newStatus === 'Done') {
-              const outcome = await completeTask(task, {
-                createTask: (data) => taskMutation.create(data as any),
-                updateTask: (id, data) => onUpdate(id, data),
-                allTasks,
-                claimNextCycle: claimTaskNextCycle,
-                releaseNextCycle: releaseTaskNextCycle,
-              });
-              const freqLabel: Record<string, string> = { daily: 'ditore', weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
-              switch (outcome.kind) {
-                case 'blocked':
-                  toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
-                  return;
-                case 'recurring-created':
-                  toast({ title: '✅ Detyrë e kryer + cikli i ri!', description: `Detyra periodike ${freqLabel[task.recurringFrequency ?? ''] ?? ''} u rigjenerua automatikisht.` });
-                  return;
-                case 'recurring-ended':
-                  toast({ title: '✅ Detyrë e kryer', description: 'Cikli i fundit i përsëritjes — nuk u krijua tjetër.' });
-                  return;
-                case 'error':
-                  console.error('[Recurring] krijimi i ciklit tjetër dështoi:', outcome.error);
-                  toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
-                  return;
-                default:
-                  toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
-                  return;
-              }
-            }
-
-            await onUpdate(task.id, { status: newStatus });
-            const labels: Record<string, string> = { Todo: 'Për të bërë', 'In Progress': 'Në progres', Review: 'Rishikim', Done: 'Përfunduar' };
-            toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${labels[newStatus] ?? newStatus}` });
-          }}
-        >
-          <SelectTrigger
-            className={`
-              h-7 w-auto border-0 shadow-none text-xs font-semibold px-2.5 py-1 rounded-full focus:ring-0 gap-1.5
-              ${task.status === 'Done' ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-500/25'
-                : task.status === 'In Progress' ? 'bg-blue-500/15 text-blue-700 dark:text-blue-400 hover:bg-blue-500/25'
-                : task.status === 'Review' ? 'bg-amber-500/15 text-amber-700 dark:text-amber-400 hover:bg-amber-500/25'
-                : 'bg-slate-200/80 text-slate-700 dark:bg-slate-700 dark:text-slate-300 hover:bg-slate-300/80'}
-            `}
-          >
-            {task.status === 'Done' && <Check className="w-3 h-3" />}
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="Todo">Për të bërë</SelectItem>
-            <SelectItem value="In Progress">Në progres</SelectItem>
-            <SelectItem value="Review">Rishikim</SelectItem>
-            <SelectItem value="Done">Përfunduar</SelectItem>
-          </SelectContent>
-        </Select>
-        <div className="flex items-center gap-1">
-          {activeWorkers.length > 0 && (
-            <div className="flex items-center gap-1 text-xs text-success">
-              <Eye className="w-3 h-3 animate-pulse" />
-              <span>{activeWorkers.length} duke punuar</span>
-            </div>
-          )}
-          {/* Expand / shrink panel */}
-          {onExpand && (
-            <Button variant="ghost" size="sm" onClick={onExpand} title={isExpanded ? 'Palos' : 'Zgjero'}>
-              {isExpanded ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-            </Button>
-          )}
-          {/* Close button — clearly visible */}
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={onClose}
-            className="h-8 w-8 p-0 rounded-md hover:bg-destructive/10 hover:text-destructive"
-            title="Mbyll"
-          >
-            <X className="w-4 h-4" />
-          </Button>
+    {/* The parents position the panel (side panel on desktop, bottom sheet on
+        mobile) — the panel only brings the design's content. */}
+      <div
+        className="flex h-full min-h-0 flex-col overflow-hidden bg-background"
+        onClick={closePickers}
+      >
+        {/* Mobile drag handle */}
+        <div className="flex justify-center pb-0.5 pt-2 sm:hidden">
+          <span className="h-[5px] w-[38px] rounded-full bg-border" />
         </div>
-      </div>
 
-      {/* Scrollable Content */}
-      <ScrollArea className="flex-1">
-        <div className="p-4 sm:p-6 space-y-4 sm:space-y-6">
-          {/* Editable Title */}
-          <div>
-            {isEditingTitle ? (
-              <div className="flex items-center gap-2">
-                <Input
-                  ref={titleInputRef}
-                  value={titleText}
-                  onChange={(e) => setTitleText(e.target.value)}
-                  onBlur={handleSaveTitle}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') handleSaveTitle();
-                    if (e.key === 'Escape') {
-                      setTitleText(task.title);
-                      setIsEditingTitle(false);
-                    }
-                  }}
-                  className="text-xl sm:text-2xl font-semibold h-auto py-1 px-2"
-                />
-              </div>
-            ) : (
-              <h1
-                className={`text-xl sm:text-2xl font-semibold text-foreground rounded px-2 py-1 -mx-2 transition-colors ${!isGuestMode ? 'cursor-pointer hover:bg-muted/50' : ''}`}
-                onClick={() => !isGuestMode && setIsEditingTitle(true)}
+        {/* Header: status pill + freshness + expand/close */}
+        <div className="flex items-center gap-2 border-b bg-muted/30 px-4 py-2 sm:px-[18px] sm:py-3">
+          <div className="relative">
+            <button
+              type="button"
+              disabled={isGuestMode}
+              onClick={(e) => { e.stopPropagation(); setAssignOpen(false); setProjectOpen(false); setStatusOpen(v => !v); }}
+              className={`flex items-center gap-1.5 rounded-full px-3.5 py-1.5 text-xs font-bold ${statusMeta.pill} disabled:cursor-default`}
+            >
+              {task.status === 'Done' && <Check className="h-3 w-3" />}
+              {statusMeta.label}
+              {!isGuestMode && <span className="text-[9px]">▼</span>}
+            </button>
+            {statusOpen && (
+              <div
+                className="absolute left-0 top-[calc(100%+6px)] z-40 hidden w-[190px] flex-col gap-px rounded-xl border bg-background p-1.5 shadow-[0_14px_36px_rgba(12,27,51,.2)] sm:flex"
+                onClick={(e) => e.stopPropagation()}
               >
-                {task.title}
-              </h1>
+                {STATUS_OPTS.map(s => (
+                  <button
+                    key={s.v}
+                    type="button"
+                    onClick={() => { setStatusOpen(false); changeStatus(s.v); }}
+                    className={`flex items-center gap-2.5 rounded-lg px-2.5 py-2 text-left text-[12.5px] font-semibold text-foreground hover:bg-muted ${task.status === s.v ? 'bg-primary/10' : ''}`}
+                  >
+                    <span className="h-[9px] w-[9px] rounded-full" style={{ background: s.dot }} />
+                    <span className="flex-1">{s.label}</span>
+                    {task.status === s.v && <Check className="h-3.5 w-3.5 text-primary" />}
+                  </button>
+                ))}
+              </div>
             )}
           </div>
+          {justCreated && (
+            <span className="rounded-md bg-emerald-500/15 px-2 py-0.5 text-[10.5px] font-bold text-emerald-700 dark:text-emerald-400">✓ U krijua tani</span>
+          )}
+          {activeWorkers.length > 0 && (
+            <span className="flex items-center gap-1 text-xs text-success">
+              <Eye className="h-3 w-3 animate-pulse" />
+              {activeWorkers.length} duke punuar
+            </span>
+          )}
+          <span className="flex-1" />
+          {onExpand && (
+            <button
+              type="button"
+              onClick={onExpand}
+              title={isExpanded ? 'Palos' : 'Zgjero'}
+              className="hidden h-[30px] w-[30px] items-center justify-center rounded-full bg-muted text-muted-foreground transition-colors hover:text-foreground sm:flex"
+            >
+              {isExpanded ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            title="Mbyll"
+            className="flex h-[30px] w-[30px] items-center justify-center rounded-full bg-muted text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
 
-          {/* Compact Info Row: Assignee + Dates */}
-          <div className="space-y-3">
-            {/* Assignee - Editable */}
-            <div className="flex items-center gap-3 sm:gap-4">
-              <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0">Caktuar te</span>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button
-                    disabled={isGuestMode}
-                    className="flex items-center gap-2 hover:bg-muted/50 rounded px-2 py-1 -mx-2 transition-colors disabled:opacity-100 disabled:cursor-default disabled:hover:bg-transparent"
+        {/* Mobile: status as a chips row (design mobile), not an anchored menu */}
+        {statusOpen && (
+          <div className="flex flex-wrap gap-1.5 border-b px-4 py-2.5 sm:hidden">
+            {STATUS_OPTS.map(s => (
+              <button
+                key={s.v}
+                type="button"
+                onClick={() => { setStatusOpen(false); changeStatus(s.v); }}
+                className={`flex min-h-[34px] items-center gap-1.5 rounded-full border-[1.5px] px-3 text-[11.5px] font-bold ${
+                  task.status === s.v ? 'border-foreground bg-foreground text-background' : 'border-border bg-background text-muted-foreground'
+                }`}
+              >
+                <span className="h-2 w-2 rounded-full" style={{ background: s.dot }} />
+                {s.label}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Scrollable Content */}
+        <ScrollArea className="min-h-0 flex-1">
+        <div className="space-y-4 p-4 sm:space-y-5 sm:px-6 sm:py-5">
+          {/* Title + created info */}
+          <div>
+            <input
+              ref={titleInputRef}
+              value={titleText}
+              disabled={isGuestMode}
+              onChange={(e) => setTitleText(e.target.value)}
+              onBlur={handleSaveTitle}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
+                if (e.key === 'Escape') setTitleText(task.title);
+              }}
+              className="w-full border-none bg-transparent text-[21px] font-extrabold tracking-tight text-foreground outline-none disabled:opacity-100 sm:text-[23px]"
+            />
+            <div className="mt-0.5 text-xs text-muted-foreground">{subtitleText}</div>
+          </div>
+
+          {/* Meta rows — label grid per the design */}
+          <div className="flex flex-col">
+            {/* Projekti */}
+            <div className={rowCls}>
+              <span className={rowLabelCls}>Projekti</span>
+              <div className="relative max-w-full justify-self-start">
+                <button
+                  type="button"
+                  disabled={isGuestMode}
+                  onClick={(e) => { e.stopPropagation(); setStatusOpen(false); setAssignOpen(false); setProjectQuery(''); setProjectOpen(v => !v); }}
+                  className={`flex max-w-full items-center gap-2 rounded-full border px-3 py-1.5 transition-colors disabled:cursor-default ${projectOpen ? 'border-primary bg-primary/10' : 'border-border bg-background hover:border-primary/50'}`}
+                >
+                  <span className="h-[9px] w-[9px] shrink-0 rounded-full" style={{ background: currentProject ? hashColor(currentProject.name) : '#C3CEDD' }} />
+                  <span className="truncate text-[13px] font-bold text-foreground">
+                    {projectsLoading ? 'Duke ngarkuar…' : (currentProject?.name || 'Pa projekt')}
+                  </span>
+                  {!isGuestMode && <span className="text-[10px] text-muted-foreground">{projectOpen ? '▲' : '▼'}</span>}
+                </button>
+                {projectOpen && (
+                  <PickerPanel
+                    title="Zgjidh projektin"
+                    searchPlaceholder="Kërko projektin…"
+                    query={projectQuery}
+                    onQuery={setProjectQuery}
+                    onClose={() => { setProjectOpen(false); setProjectQuery(''); }}
                   >
-                    <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-xs font-medium">
-                      {getUserDisplayName(task.assignedToUserId!).slice(0, 2).toUpperCase()}
-                    </div>
-                    <span className="text-sm">
-                      {getUserDisplayName(task.assignedToUserId || '') || 'Pa caktuar'}
-                    </span>
-                    {!isGuestMode && <ChevronDown className="w-3 h-3 text-muted-foreground" />}
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent className="w-64 p-2" align="start">
-                  <div className="space-y-1">
-                    <p className="text-xs text-muted-foreground px-2 py-1">Zgjidh përdoruesin</p>
-                    
-                    {/* Current user option */}
-                    {user && (
-                      <button
-                        className={`w-full flex items-center gap-2 px-2 py-2 rounded hover:bg-muted/50 text-left ${
-                          task.assignedToUserId === user.uid ? 'bg-primary/10' : ''
-                        }`}
-                        onClick={async () => {
-                          const prevAssignee = task.assignedToUserId;
-                          await onUpdate(task.id, { assignedToUserId: user.uid });
-                          if (prevAssignee && prevAssignee !== user.uid) {
-                            await notificationMutation.create({
-                              userId: prevAssignee,
-                              type: 'task_assigned',
-                              title: 'Detyrë e Ri-caktuar',
-                              message: `Detyra "${task.title}" u ri-caktua nga ti te ${user.displayName || 'një anëtar tjetër'}`,
-                              isRead: false,
-                              actionUrl: taskDeepLink(task.id, task.projectId),
-                              actionLabel: 'Shiko Detyrën',
-                            });
-                            logActivity('update', `Detyra "${task.title}" u ri-caktua`, {
-                              description: `Nga: ${prevAssignee || 'Pa caktuar'} → Te: ${user.uid}`,
-                              entityType: 'task',
-                              entityId: task.id,
-                            });
-                          }
-                        }}
-                      >
-                        <div className="w-6 h-6 rounded-full bg-primary/20 flex items-center justify-center text-xs font-medium">
-                          {user.displayName?.slice(0, 2).toUpperCase() || 'U'}
-                        </div>
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium truncate">{user.displayName || 'Ti'}</p>
-                          <p className="text-xs text-muted-foreground truncate">{user.email}</p>
-                        </div>
-                        {task.assignedToUserId === user.uid && (
-                          <Check className="w-4 h-4 text-primary" />
-                        )}
-                      </button>
+                    {projectOptions.length === 0 && (
+                      <div className="px-3 py-5 text-center text-xs text-muted-foreground">Asnjë projekt nuk përputhet me "{projectQuery}"</div>
                     )}
-                    
-                    {/* Team members - only for users with canAssignTasks */}
-                    {permissions.canAssignTasks && teamMembers && teamMembers.length > 0 && (
+                    {projectOptions.map(p => (
+                      <button
+                        key={p.id || '__none__'}
+                        type="button"
+                        onClick={() => changeProject(p.id)}
+                        className={`flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-2 text-left transition-colors hover:bg-muted max-sm:min-h-[52px] ${(task.projectId || '') === p.id ? 'bg-primary/10' : ''}`}
+                      >
+                        <span className="h-[10px] w-[10px] shrink-0 rounded-full" style={{ background: p.dot }} />
+                        <span className="min-w-0 flex-1">
+                          <span className="block truncate text-[13px] font-semibold text-foreground">{p.name}</span>
+                          {p.sub && <span className="mt-px block text-[11px] text-muted-foreground">{p.sub}</span>}
+                        </span>
+                        {(task.projectId || '') === p.id && <Check className="h-3.5 w-3.5 shrink-0 text-primary" />}
+                      </button>
+                    ))}
+                  </PickerPanel>
+                )}
+              </div>
+            </div>
+
+            {/* Caktuar te */}
+            <div className={rowCls}>
+              <span className={rowLabelCls}>Caktuar te</span>
+              <div className="relative max-w-full justify-self-start">
+                <button
+                  type="button"
+                  disabled={isGuestMode}
+                  onClick={(e) => { e.stopPropagation(); setStatusOpen(false); setProjectOpen(false); setAssignQuery(''); setAssignOpen(v => !v); }}
+                  className={`flex max-w-full items-center gap-2 rounded-full border py-1 pl-1 pr-3 transition-colors disabled:cursor-default ${assignOpen ? 'border-primary bg-primary/10' : 'border-border bg-background hover:border-primary/50'}`}
+                >
+                  <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[10.5px] font-bold text-white" style={{ background: hashColor(assigneeName) }}>
+                    {assigneeName.slice(0, 2).toUpperCase()}
+                  </span>
+                  <span className="truncate text-[13.5px] font-bold text-foreground">{assigneeName}</span>
+                  {!isGuestMode && <span className="text-[10px] text-muted-foreground">{assignOpen ? '▲' : '▼'}</span>}
+                </button>
+                {assignOpen && (
+                  <PickerPanel
+                    title="Cakto anëtarin"
+                    searchPlaceholder="Kërko anëtarin…"
+                    query={assignQuery}
+                    onQuery={setAssignQuery}
+                    onClose={() => { setAssignOpen(false); setAssignQuery(''); }}
+                  >
+                    {showSelfOption && user && (
                       <>
-                        <div className="border-t my-2" />
-                        <p className="text-xs text-muted-foreground px-2 py-1">Anëtarët e ekipit</p>
-                        {teamMembers
-                          .filter(m => m.userId !== user?.uid)
-                          .map(member => (
-                            <button
-                              key={member.id}
-                              className={`w-full flex items-center gap-2 px-2 py-2 rounded hover:bg-muted/50 text-left ${
-                                task.assignedToUserId === member.userId ? 'bg-primary/10' : ''
-                              }`}
-                              onClick={async () => {
-                                  const prevAssignee = task.assignedToUserId;
-                                  await onUpdate(task.id, { assignedToUserId: member.userId });
-                                  if (member.userId !== prevAssignee) {
-                                    if (member.userId !== user?.uid) {
-                                      await notificationMutation.create({
-                                        userId: member.userId,
-                                        type: 'task_assigned',
-                                        title: 'Detyrë e Re e Caktuar',
-                                        message: `${user?.displayName || 'Dikush'} ju caktoi detyrën: ${task.title}`,
-                                        isRead: false,
-                                        actionUrl: taskDeepLink(task.id, task.projectId),
-                                        actionLabel: 'Shiko Detyrën',
-                                      });
-                                    }
-                                    logActivity('update', `Detyra "${task.title}" u ri-caktua`, {
-                                      description: `Nga: ${prevAssignee || 'Pa caktuar'} → Te: ${member.userId}`,
-                                      entityType: 'task',
-                                      entityId: task.id,
-                                    });
-                                  }
-                              }}
-                            >
-                              <div className="w-6 h-6 rounded-full bg-secondary/50 flex items-center justify-center text-xs font-medium">
-                                {getUserDisplayName(member.userId).slice(0, 2).toUpperCase()}
-                              </div>
-                              <div className="flex-1 min-w-0">
-                                <p className="text-sm truncate">{getUserDisplayName(member.userId)}</p>
-                                <p className="text-xs text-muted-foreground">{member.role}</p>
-                              </div>
-                              {task.assignedToUserId === member.userId && (
-                                <Check className="w-4 h-4 text-primary" />
-                              )}
-                            </button>
-                          ))}
+                        <div className="px-2.5 pb-1 pt-1.5 text-[10px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground">Përdoruesi aktual</div>
+                        {memberOption(user.uid, user.email || undefined, true)}
                       </>
                     )}
-                    
-                    {/* Manual input option - only for admin/manager */}
-                    {permissions.canAssignTasks && (
-                    <>
-                    <div className="border-t my-2" />
-                    <div className="px-2">
-                      <p className="text-xs text-muted-foreground mb-1">Ose shkruaj User ID:</p>
-                      <Input
-                        placeholder="User ID..."
-                        className="h-8 text-xs"
-                        defaultValue={task.assignedToUserId || ''}
-                        onKeyDown={async (e) => {
-                          if (e.key === 'Enter') {
-                            const newUserId = (e.target as HTMLInputElement).value;
-                            if (newUserId && newUserId !== task.assignedToUserId) {
-                              manualInputRef.current = newUserId;
-                              const prevAssignee = task.assignedToUserId;
-                              await onUpdate(task.id, { assignedToUserId: newUserId });
-                              if (newUserId !== user?.uid) {
-                                await notificationMutation.create({
-                                  userId: newUserId,
-                                  type: 'task_assigned',
-                                  title: 'Detyrë e Re e Caktuar',
-                                  message: `${user?.displayName || 'Dikush'} ju caktoi detyrën: ${task.title}`,
-                                  isRead: false,
-                                  actionUrl: taskDeepLink(task.id, task.projectId),
-                                  actionLabel: 'Shiko Detyrën',
-                                });
-                              }
-                              logActivity('update', `Detyra "${task.title}" u ri-caktua`, {
-                                description: `Nga: ${prevAssignee || 'Pa caktuar'} → Te: ${newUserId}`,
-                                entityType: 'task',
-                                entityId: task.id,
-                              });
-                            }
-                          }
-                        }}
-                        onBlur={async (e) => {
-                          const newUserId = e.target.value;
-                          // Skip if already handled by Enter key
-                          if (manualInputRef.current === newUserId) {
-                            manualInputRef.current = '';
-                            return;
-                          }
-                          if (newUserId && newUserId !== task.assignedToUserId) {
-                            const prevAssignee = task.assignedToUserId;
-                            await onUpdate(task.id, { assignedToUserId: newUserId });
-                            if (newUserId !== user?.uid) {
-                              await notificationMutation.create({
-                                userId: newUserId,
-                                type: 'task_assigned',
-                                title: 'Detyrë e Re e Caktuar',
-                                message: `${user?.displayName || 'Dikush'} ju caktoi detyrën: ${task.title}`,
-                                isRead: false,
-                                actionUrl: taskDeepLink(task.id, task.projectId),
-                                actionLabel: 'Shiko Detyrën',
-                              });
-                            }
-                            logActivity('update', `Detyra "${task.title}" u ri-caktua`, {
-                              description: `Nga: ${prevAssignee || 'Pa caktuar'} → Te: ${newUserId}`,
-                              entityType: 'task',
-                              entityId: task.id,
-                            });
-                          }
-                        }}
-                      />
-                    </div>
-                    </>
+                    {permissions.canAssignTasks && assignMembers.length > 0 && (
+                      <div className="px-2.5 pb-1 pt-2 text-[10px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground">Anëtarët e ekipit</div>
                     )}
-                  </div>
-                </PopoverContent>
-              </Popover>
-            </div>
-
-            {/* Due Date - Compact */}
-            <div className="flex items-center gap-3 sm:gap-4">
-              <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0">Afati</span>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button disabled={isGuestMode} className="flex items-center gap-2 text-sm hover:bg-muted/50 rounded px-2 py-1 -mx-2 transition-colors disabled:cursor-default disabled:hover:bg-transparent">
-                    <CalendarIcon className="w-4 h-4 text-muted-foreground" />
-                    <span>{formatDateCompact(endDate)}</span>
-                    {!isGuestMode && <X className="w-3 h-3 text-muted-foreground hover:text-foreground" onClick={(e) => e.stopPropagation()} />}
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    mode="single"
-                    selected={endDate}
-                    onSelect={handleEndDateChange}
-                    initialFocus
-                  />
-                </PopoverContent>
-              </Popover>
-              {!isGuestMode && (
-                <input type="time" value={timeStr(endDate)} onChange={handleEndTimeChange}
-                  className="h-7 px-1.5 text-xs rounded border border-border/50 bg-muted/40 focus:outline-none focus:ring-1 focus:ring-primary" />
-              )}
-            </div>
-
-            {/* Start Date - Compact (optional, smaller) */}
-            <div className="flex items-center gap-3 sm:gap-4">
-              <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0">Fillimi</span>
-              <Popover>
-                <PopoverTrigger asChild>
-                  <button disabled={isGuestMode} className="flex items-center gap-2 text-sm text-muted-foreground hover:bg-muted/50 rounded px-2 py-1 -mx-2 transition-colors disabled:cursor-default disabled:hover:bg-transparent">
-                    <CalendarIcon className="w-3 h-3" />
-                    <span className="text-xs">{formatDateCompact(startDate)}</span>
-                  </button>
-                </PopoverTrigger>
-                <PopoverContent className="w-auto p-0" align="start">
-                  <Calendar
-                    mode="single"
-                    selected={startDate}
-                    onSelect={handleStartDateChange}
-                    initialFocus
-                  />
-                </PopoverContent>
-              </Popover>
-              {!isGuestMode && (
-                <input type="time" value={timeStr(startDate)} onChange={handleStartTimeChange}
-                  className="h-6 px-1.5 text-[11px] rounded border border-border/50 bg-muted/40 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary" />
-              )}
-            </div>
-
-            {/* Recurring Info */}
-            {(task.isRecurring || permissions.canEdit) && (
-              <div className="flex items-start gap-3 sm:gap-4">
-                <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0 pt-0.5">Përsërit.</span>
-                <div className="flex-1">
-                  {!task.isRecurring ? (
-                    <Select onValueChange={(v) => enableRecurring(v as any)}>
-                      <SelectTrigger className="h-8 w-full max-w-[220px] text-xs">
-                        <SelectValue placeholder="Bëje të përsëritur…" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="daily">Çdo ditë</SelectItem>
-                        <SelectItem value="weekly">Çdo javë</SelectItem>
-                        <SelectItem value="monthly">Çdo muaj</SelectItem>
-                        <SelectItem value="yearly">Çdo vit</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  ) : (
-                  <>
-                  {!editingRecurring ? (
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <span className="inline-flex items-center gap-1.5 text-xs font-medium bg-primary/10 text-primary px-2.5 py-1 rounded-full">
-                        🔄 {task.recurringFrequency === 'daily'
-                             ? (() => {
-                                 const days = (task as any).recurringDaysOfWeek as number[] | undefined;
-                                 const names = ['Die','Hën','Mar','Mër','Enj','Pre','Sht'];
-                                 return days && days.length > 0
-                                   ? `Çdo ${days.map(d => names[d]).join(', ')}`
-                                   : `Çdo ditë`;
-                               })()
-                             : task.recurringFrequency === 'weekly'
-                             ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' javë' : 'javë'}, ${['Diel','Hënë','Martë','Mërkurë','Enjte','Premte','Shtunë'][(task as any).recurringDayOfWeek ?? 0]}`
-                             : task.recurringFrequency === 'monthly'
-                             ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' muaj' : 'muaj'}, ditën ${(task as any).recurringDayOfMonth ?? 1}`
-                             : `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' vite' : 'vit'}`}
-                      </span>
-                      {permissions.canEdit && (task.recurringFrequency === 'weekly' || task.recurringFrequency === 'daily') && (
-                        <button
-                          onClick={() => setEditingRecurring(true)}
-                          className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
-                        >
-                          Ndrysho
-                        </button>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="space-y-2">
-                      {task.recurringFrequency === 'weekly' && (
-                        <div className="flex flex-wrap gap-1.5">
-                          {[{v:1,l:'Hën'},{v:2,l:'Mar'},{v:3,l:'Mër'},{v:4,l:'Enj'},{v:5,l:'Pre'},{v:6,l:'Sht'},{v:0,l:'Die'}].map(day => (
-                            <button
-                              key={day.v}
-                              type="button"
-                              onClick={() => setRecurringDayOfWeek(day.v)}
-                              className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
-                                recurringDayOfWeek === day.v
-                                  ? 'bg-primary text-primary-foreground border-primary'
-                                  : 'bg-background text-foreground border-border hover:bg-muted'
-                              }`}
-                            >
-                              {day.l}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      {task.recurringFrequency === 'daily' && (
-                        <div className="flex flex-wrap gap-1.5">
-                          {[{v:1,l:'Hën'},{v:2,l:'Mar'},{v:3,l:'Mër'},{v:4,l:'Enj'},{v:5,l:'Pre'},{v:6,l:'Sht'},{v:0,l:'Die'}].map(day => (
-                            <button
-                              key={day.v}
-                              type="button"
-                              onClick={() => toggleRecurringDay(day.v)}
-                              className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
-                                recurringDaysOfWeek.includes(day.v)
-                                  ? 'bg-primary text-primary-foreground border-primary'
-                                  : 'bg-background text-foreground border-border hover:bg-muted'
-                              }`}
-                            >
-                              {day.l}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      <div className="flex gap-2">
-                        <Button size="sm" className="h-7 text-xs" onClick={saveRecurring}>Ruaj</Button>
-                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setEditingRecurring(false)}>Anulo</Button>
+                    {permissions.canAssignTasks && assignMembers.map((m: any) => memberOption(m.userId, m.email, false))}
+                    {!showSelfOption && (!permissions.canAssignTasks || assignMembers.length === 0) && (
+                      <div className="px-3 py-5 text-center text-xs text-muted-foreground">Asnjë anëtar nuk përputhet me "{assignQuery}"</div>
+                    )}
+                    {permissions.canAssignTasks && (
+                      <div className="mt-1 border-t px-2.5 pb-1 pt-2">
+                        <p className="mb-1 text-[10px] font-semibold text-muted-foreground">Ose shkruaj User ID:</p>
+                        <Input
+                          placeholder="User ID…"
+                          className="h-8 text-xs"
+                          defaultValue={task.assignedToUserId || ''}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const v = (e.target as HTMLInputElement).value.trim();
+                              if (v) { manualInputRef.current = v; assignTo(v); }
+                            }
+                          }}
+                          onBlur={(e) => {
+                            const v = e.target.value.trim();
+                            if (manualInputRef.current === v) { manualInputRef.current = ''; return; }
+                            if (v && v !== task.assignedToUserId) assignTo(v);
+                          }}
+                        />
                       </div>
-                    </div>
-                  )}
-                  {/* Repeat-until — bounds the recurrence (e.g. repeat weekly for 4 months) */}
-                  <div className="flex items-center gap-2 mt-2">
-                    <span className="text-[11px] text-muted-foreground">Deri më:</span>
-                    <input
-                      type="date"
-                      defaultValue={(task as any).recurringEndDate ? (() => { const d = new Date((task as any).recurringEndDate); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; })() : ''}
-                      disabled={!permissions.canEdit}
-                      onChange={(e) => { const v = e.target.value; const nd = v ? (() => { const [y, mo, dd] = v.split('-').map(Number); return new Date(y, mo - 1, dd); })() : (null as any); onUpdate(task.id, { recurringEndDate: nd } as any); }}
-                      className="h-6 px-1.5 text-[11px] rounded border border-border/50 bg-muted/40 text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
-                    />
-                    {(task as any).recurringEndDate
-                      ? <button type="button" onClick={() => onUpdate(task.id, { recurringEndDate: null as any } as any)} className="text-[11px] text-muted-foreground hover:text-foreground underline">Hiq</button>
-                      : <span className="text-[11px] text-muted-foreground/70">pa fund</span>}
+                    )}
+                  </PickerPanel>
+                )}
+              </div>
+            </div>
+
+            {/* Afati */}
+            <div className={rowCls}>
+              <span className={rowLabelCls}>Afati</span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {([['sot', 'Sot'], ['neser', 'Nesër'], ['jave', 'Kjo javë']] as const).map(([k, l]) => (
+                  <button key={k} type="button" disabled={isGuestMode} onClick={() => handleEndDateChange(quickDate(k))} className={chipCls(dueKey === k)}>
+                    {l}
+                  </button>
+                ))}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button type="button" disabled={isGuestMode} className={chipCls(dueKey === 'date')}>📅 {formatDateCompact(endDate)}</button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar mode="single" selected={endDate} onSelect={handleEndDateChange} initialFocus />
+                  </PopoverContent>
+                </Popover>
+                {!isGuestMode && (
+                  <input
+                    type="time"
+                    value={timeStr(endDate)}
+                    onChange={handleEndTimeChange}
+                    className="h-7 rounded border border-border/50 bg-muted/40 px-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                )}
+              </div>
+            </div>
+
+            {/* Fillimi */}
+            <div className={rowCls}>
+              <span className={rowLabelCls}>Fillimi</span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {([['sot', 'Sot'], ['neser', 'Nesër']] as const).map(([k, l]) => (
+                  <button key={k} type="button" disabled={isGuestMode} onClick={() => handleStartDateChange(quickDate(k))} className={chipCls(startKey === k)}>
+                    {l}
+                  </button>
+                ))}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button type="button" disabled={isGuestMode} className={chipCls(startKey === 'date' || startKey === 'jave')}>📅 {formatDateCompact(startDate)}</button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar mode="single" selected={startDate} onSelect={handleStartDateChange} initialFocus />
+                  </PopoverContent>
+                </Popover>
+                {!isGuestMode && (
+                  <input
+                    type="time"
+                    value={timeStr(startDate)}
+                    onChange={handleStartTimeChange}
+                    className="h-7 rounded border border-border/50 bg-muted/40 px-1.5 text-xs text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                )}
+              </div>
+            </div>
+
+            {/* Përsëritet */}
+            {(task.isRecurring || permissions.canEdit) && (
+              <div className={`${rowCls} items-start`}>
+                <span className={`${rowLabelCls} pt-1`}>Përsërit.</span>
+                <div className="flex flex-col gap-2">
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={isGuestMode || !permissions.canEdit}
+                      onClick={() => task.isRecurring && onUpdate(task.id, { isRecurring: false } as any)}
+                      className={chipCls(!task.isRecurring)}
+                    >
+                      Asnjëherë
+                    </button>
+                    {([['daily', 'Çdo ditë'], ['weekly', 'Çdo javë'], ['monthly', 'Çdo muaj']] as const).map(([k, l]) => (
+                      <button
+                        key={k}
+                        type="button"
+                        disabled={isGuestMode || !permissions.canEdit}
+                        onClick={() => (!task.isRecurring || task.recurringFrequency !== k) && enableRecurring(k)}
+                        className={chipCls(!!task.isRecurring && task.recurringFrequency === k)}
+                      >
+                        ↻ {l}
+                      </button>
+                    ))}
+                    {task.isRecurring && <span className="text-[11px] text-muted-foreground">Europe/Tirane</span>}
                   </div>
-                  </>
+                  {task.isRecurring && (
+                    <>
+                      {!editingRecurring ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-xs font-medium text-primary">
+                            🔄 {task.recurringFrequency === 'daily'
+                                 ? (() => {
+                                     const days = (task as any).recurringDaysOfWeek as number[] | undefined;
+                                     const names = ['Die', 'Hën', 'Mar', 'Mër', 'Enj', 'Pre', 'Sht'];
+                                     return days && days.length > 0 ? `Çdo ${days.map(d => names[d]).join(', ')}` : 'Çdo ditë';
+                                   })()
+                                 : task.recurringFrequency === 'weekly'
+                                 ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' javë' : 'javë'}, ${['Diel', 'Hënë', 'Martë', 'Mërkurë', 'Enjte', 'Premte', 'Shtunë'][(task as any).recurringDayOfWeek ?? 0]}`
+                                 : task.recurringFrequency === 'monthly'
+                                 ? `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' muaj' : 'muaj'}, ditën ${(task as any).recurringDayOfMonth ?? 1}`
+                                 : `Çdo ${(task.recurringInterval ?? 1) > 1 ? (task.recurringInterval ?? 1) + ' vite' : 'vit'}`}
+                          </span>
+                          {permissions.canEdit && (task.recurringFrequency === 'weekly' || task.recurringFrequency === 'daily') && (
+                            <button
+                              type="button"
+                              onClick={() => setEditingRecurring(true)}
+                              className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                            >
+                              Ndrysho
+                            </button>
+                          )}
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          {task.recurringFrequency === 'weekly' && (
+                            <div className="flex flex-wrap gap-1.5">
+                              {[{ v: 1, l: 'Hën' }, { v: 2, l: 'Mar' }, { v: 3, l: 'Mër' }, { v: 4, l: 'Enj' }, { v: 5, l: 'Pre' }, { v: 6, l: 'Sht' }, { v: 0, l: 'Die' }].map(day => (
+                                <button key={day.v} type="button" onClick={() => setRecurringDayOfWeek(day.v)} className={chipCls(recurringDayOfWeek === day.v)}>
+                                  {day.l}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          {task.recurringFrequency === 'daily' && (
+                            <div className="flex flex-wrap gap-1.5">
+                              {[{ v: 1, l: 'Hën' }, { v: 2, l: 'Mar' }, { v: 3, l: 'Mër' }, { v: 4, l: 'Enj' }, { v: 5, l: 'Pre' }, { v: 6, l: 'Sht' }, { v: 0, l: 'Die' }].map(day => (
+                                <button key={day.v} type="button" onClick={() => toggleRecurringDay(day.v)} className={chipCls(recurringDaysOfWeek.includes(day.v))}>
+                                  {day.l}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                          <div className="flex gap-2">
+                            <Button size="sm" className="h-7 text-xs" onClick={saveRecurring}>Ruaj</Button>
+                            <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setEditingRecurring(false)}>Anulo</Button>
+                          </div>
+                        </div>
+                      )}
+                      {/* Repeat-until — bounds the recurrence */}
+                      <div className="flex items-center gap-2">
+                        <span className="text-[11px] text-muted-foreground">Deri më:</span>
+                        <input
+                          type="date"
+                          defaultValue={(task as any).recurringEndDate ? (() => { const d = new Date((task as any).recurringEndDate); const p = (n: number) => String(n).padStart(2, '0'); return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`; })() : ''}
+                          disabled={!permissions.canEdit}
+                          onChange={(e) => { const v = e.target.value; const nd = v ? (() => { const [y, mo, dd] = v.split('-').map(Number); return new Date(y, mo - 1, dd); })() : (null as any); onUpdate(task.id, { recurringEndDate: nd } as any); }}
+                          className="h-6 rounded border border-border/50 bg-muted/40 px-1.5 text-[11px] text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
+                        />
+                        {(task as any).recurringEndDate
+                          ? <button type="button" onClick={() => onUpdate(task.id, { recurringEndDate: null as any } as any)} className="text-[11px] text-muted-foreground underline hover:text-foreground">Hiq</button>
+                          : <span className="text-[11px] text-muted-foreground/70">pa fund</span>}
+                      </div>
+                    </>
                   )}
                 </div>
               </div>
             )}
 
-            {/* Dependencies / blockers */}
+            {/* Bllokohet nga */}
             {(!isGuestMode || (task.dependsOn && task.dependsOn.length > 0)) && (
-              <div className="flex items-start gap-3 sm:gap-4">
-                <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0 pt-0.5">Bllokohet nga</span>
-                <div className="flex flex-col gap-1.5 flex-1 min-w-0">
-                  <div className="flex flex-wrap gap-1.5">
+              <div className={`${rowCls} items-start`}>
+                <span className={`${rowLabelCls} pt-1`}>Bllokohet nga</span>
+                <div className="flex min-w-0 flex-col gap-1.5">
+                  <div className="flex flex-wrap items-center gap-1.5">
                     {(task.dependsOn || []).map((depId) => {
-                      // Resolve across ALL workspace tasks (not just subtasks) so cross-project blockers show their title.
                       const dep = allTasks?.find((t) => t.id === depId);
                       const isDone = dep?.status === 'Done';
                       return (
                         <span
                           key={depId}
-                          className={`inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border ${
+                          className={`inline-flex items-center gap-1 rounded-full border px-2.5 py-1 text-xs font-semibold ${
                             isDone
-                              ? 'bg-emerald-50 text-emerald-700 border-emerald-200 dark:bg-emerald-950 dark:text-emerald-300'
-                              : 'bg-orange-50 text-orange-700 border-orange-200 dark:bg-orange-950 dark:text-orange-300'
+                              ? 'border-emerald-200 bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300'
+                              : 'border-orange-200 bg-orange-50 text-orange-700 dark:bg-orange-950 dark:text-orange-300'
                           }`}
                         >
                           {isDone ? '✓' : '🔒'}
-                          <span className="truncate max-w-[160px]">{dep?.title || depId.slice(0, 8) + '…'}</span>
+                          <span className="max-w-[160px] truncate">{dep?.title || depId.slice(0, 8) + '…'}</span>
                           {!isGuestMode && (
                             <button type="button" onClick={() => onUpdate(task.id, { dependsOn: (task.dependsOn || []).filter((x) => x !== depId) } as any)} className="hover:opacity-70" aria-label="Hiq bllokuesin">
-                              <X className="w-3 h-3" />
+                              <X className="h-3 w-3" />
                             </button>
                           )}
                         </span>
                       );
                     })}
-                    {(!task.dependsOn || task.dependsOn.length === 0) && (
-                      <span className="text-xs text-muted-foreground">Asnjë bllokues</span>
+                    {!isGuestMode && (
+                      <Popover>
+                        <PopoverTrigger asChild>
+                          <button type="button" className="rounded-full border-[1.5px] border-dashed border-border bg-background px-3 py-[5px] text-xs font-semibold text-muted-foreground transition-colors hover:border-primary">
+                            ⛓ + Zgjidh detyrën bllokuese
+                          </button>
+                        </PopoverTrigger>
+                        <PopoverContent className="w-72 p-2" align="start">
+                          <Input value={blockerSearch} onChange={(e) => setBlockerSearch(e.target.value)} placeholder="Kërko detyrë…" className="mb-2 h-8 text-sm" />
+                          <div className="max-h-52 space-y-0.5 overflow-y-auto">
+                            {(allTasks || [])
+                              .filter((t) => t.id !== task.id && !(task.dependsOn || []).includes(t.id) && (!blockerSearch.trim() || t.title.toLowerCase().includes(blockerSearch.toLowerCase())))
+                              .slice(0, 25)
+                              .map((t) => (
+                                <button
+                                  key={t.id}
+                                  type="button"
+                                  onClick={() => { onUpdate(task.id, { dependsOn: [...(task.dependsOn || []), t.id] } as any); setBlockerSearch(''); }}
+                                  className="w-full truncate rounded px-2 py-1.5 text-left text-xs hover:bg-accent"
+                                >
+                                  {t.title}
+                                </button>
+                              ))}
+                            {(allTasks || []).filter((t) => t.id !== task.id && !(task.dependsOn || []).includes(t.id) && (!blockerSearch.trim() || t.title.toLowerCase().includes(blockerSearch.toLowerCase()))).length === 0 && (
+                              <p className="px-2 py-1.5 text-xs text-muted-foreground">Asnjë detyrë.</p>
+                            )}
+                          </div>
+                        </PopoverContent>
+                      </Popover>
                     )}
                   </div>
-                  {!isGuestMode && (
-                    <Popover>
-                      <PopoverTrigger asChild>
-                        <button type="button" className="self-start inline-flex items-center gap-1 text-xs text-primary hover:underline">
-                          <Plus className="w-3 h-3" /> Shto bllokues
-                        </button>
-                      </PopoverTrigger>
-                      <PopoverContent className="w-72 p-2" align="start">
-                        <Input value={blockerSearch} onChange={(e) => setBlockerSearch(e.target.value)} placeholder="Kërko detyrë…" className="h-8 text-sm mb-2" />
-                        <div className="max-h-52 overflow-y-auto space-y-0.5">
-                          {(allTasks || [])
-                            .filter((t) => t.id !== task.id && !(task.dependsOn || []).includes(t.id) && (!blockerSearch.trim() || t.title.toLowerCase().includes(blockerSearch.toLowerCase())))
-                            .slice(0, 25)
-                            .map((t) => (
-                              <button
-                                key={t.id}
-                                type="button"
-                                onClick={() => { onUpdate(task.id, { dependsOn: [...(task.dependsOn || []), t.id] } as any); setBlockerSearch(''); }}
-                                className="w-full text-left text-xs px-2 py-1.5 rounded hover:bg-accent truncate"
-                              >
-                                {t.title}
-                              </button>
-                            ))}
-                          {(allTasks || []).filter((t) => t.id !== task.id && !(task.dependsOn || []).includes(t.id) && (!blockerSearch.trim() || t.title.toLowerCase().includes(blockerSearch.toLowerCase()))).length === 0 && (
-                            <p className="text-xs text-muted-foreground px-2 py-1.5">Asnjë detyrë.</p>
-                          )}
-                        </div>
-                      </PopoverContent>
-                    </Popover>
-                  )}
+                  <span className="text-[11px] text-muted-foreground">S'mund të përfundohet para varësisë</span>
                 </div>
               </div>
             )}
 
-            {/* Project */}
-            {task.projectId && (
-              <div className="flex items-center gap-3 sm:gap-4">
-                <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0">Projekti</span>
-                <span className="text-sm">
-                  {projectsLoading
-                    ? <span className="text-muted-foreground">Duke ngarkuar...</span>
-                    : (projects.find(p => p.id === task.projectId)?.name || <span className="text-muted-foreground italic">Pa projekt</span>)
-                  }
-                </span>
+            {/* Prioriteti */}
+            <div className={rowCls}>
+              <span className={rowLabelCls}>Prioriteti</span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {([['low', 'I ulët'], ['medium', 'Mesatar'], ['high', 'I lartë'], ['urgent', '⚠ Urgjent']] as const).map(([k, l]) => (
+                  <button
+                    key={k}
+                    type="button"
+                    disabled={isGuestMode}
+                    onClick={() => onUpdate(task.id, { priority: k })}
+                    className={chipCls((task.priority || 'medium') === k)}
+                  >
+                    {l}
+                  </button>
+                ))}
               </div>
-            )}
-
-            {/* Status & Priority - Inline */}
-            <div className="flex items-center gap-3 sm:gap-4">
-              <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0">Statusi</span>
-              <Select
-                value={task.status}
-                onValueChange={async (newStatus) => {
-                  if (newStatus === 'Done' && task.dependsOn && task.dependsOn.length > 0 && allTasks) {
-                    const blockers = task.dependsOn.filter(depId => {
-                      const dep = allTasks.find(t => t.id === depId);
-                      return dep && dep.status !== 'Done';
-                    });
-                    if (blockers.length > 0) {
-                      toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${blockers.length} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
-                      return;
-                    }
-                  }
-                  await onUpdate(task.id, { status: newStatus });
-                  const labels: Record<string, string> = { Todo: 'Për të bërë', 'In Progress': 'Në progres', Review: 'Rishikim', Done: 'Përfunduar' };
-                  toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${labels[newStatus] ?? newStatus}` });
-                }}
-              >
-                <SelectTrigger className="w-32 h-8 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="Todo">Për të bërë</SelectItem>
-                  <SelectItem value="In Progress">Në progres</SelectItem>
-                  <SelectItem value="Review">Rishikim</SelectItem>
-                  <SelectItem value="Done">Përfunduar</SelectItem>
-                </SelectContent>
-              </Select>
             </div>
 
-            <div className="flex items-center gap-3 sm:gap-4">
-              <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0">Prioriteti</span>
-              <Select
-                value={task.priority || 'medium'}
-                disabled={isGuestMode}
-                onValueChange={async (newPriority) => {
-                  await onUpdate(task.id, { priority: newPriority });
-                }}
-              >
-                <SelectTrigger className="w-32 h-8 text-sm">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="low">I ulët</SelectItem>
-                  <SelectItem value="medium">Mesatar</SelectItem>
-                  <SelectItem value="high">I lartë</SelectItem>
-                  <SelectItem value="urgent">Urgjent</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-
-            {/* Labels */}
-            <div className="flex items-start gap-3 sm:gap-4">
-              <span className="text-xs sm:text-sm text-muted-foreground w-16 sm:w-20 flex-shrink-0 pt-1.5">Etiketat</span>
-              <div className="flex-1 min-w-0">
+            {/* Etiketat */}
+            <div className={`${rowCls} items-start border-b-0`}>
+              <span className={`${rowLabelCls} pt-1.5`}>Etiketat</span>
+              <div className="min-w-0 flex-1">
                 {isGuestMode ? (
                   <TaskLabels labels={(task as any).labels} />
                 ) : (
@@ -1590,7 +1721,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           {/* Activity history (audit trail) */}
           {taskActivities.length > 0 && (
             <div className="pt-4 border-t">
-              <h4 className="text-sm font-medium text-muted-foreground mb-2">Historik</h4>
+              <h4 className="text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground mb-2">Historik</h4>
               <ul className="space-y-1.5">
                 {taskActivities.map((a) => (
                   <li key={a.id} className="flex items-start gap-2 text-xs text-muted-foreground">
@@ -1608,7 +1739,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
           {/* Description - Rich Text Editor */}
           <div className="pt-4 border-t">
-            <h4 className="text-sm font-medium text-muted-foreground mb-2">Përshkrimi</h4>
+            <h4 className="text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground mb-2">Përshkrimi</h4>
             {isEditingDescription ? (
               <div>
                 <RichTextEditor
@@ -1667,7 +1798,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           {/* Collaborators */}
           {taskCollaborators && taskCollaborators.length > 0 && (
             <div className="pt-4 border-t">
-              <h4 className="text-sm font-medium text-muted-foreground mb-2">Bashkëpunëtorët</h4>
+              <h4 className="text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground mb-2">Bashkëpunëtorët</h4>
               <div className="flex flex-wrap gap-2">
                 {taskCollaborators.map(collab => (
                   <Badge key={collab.id} variant="secondary" className="text-xs">
@@ -1682,7 +1813,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           {/* Time Tracking - with live timer + entry log */}
           <div className="pt-4 border-t">
             <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <h4 className="text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground flex items-center gap-2">
                 <Clock className="w-4 h-4" />
                 Koha
               </h4>
@@ -1740,7 +1871,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           {!task.parentTaskId && (
             <div className="pt-4 border-t">
               <div className="flex items-center justify-between mb-3">
-                <h4 className="text-sm font-medium text-muted-foreground">
+                <h4 className="text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground">
                   Nën-detyra ({subtasks?.length || 0})
                 </h4>
                 {!isGuestMode && (
@@ -1990,7 +2121,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           {/* Attachments */}
           <div className="pt-4 border-t">
             <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+              <h4 className="text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground flex items-center gap-2">
                 <Paperclip className="w-4 h-4" />
                 Materiale ({attachments.length})
               </h4>
@@ -2083,7 +2214,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
               aria-expanded={showChat}
               className="w-full flex items-center justify-between mb-3 group"
             >
-              <h4 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
+              <h4 className="text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground flex items-center gap-1.5">
                 <MessageSquare className="w-4 h-4 text-muted-foreground" />
                 Chat
                 {taskMessages.length > 0 && (
@@ -2170,7 +2301,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           {/* Comments */}
           <div className="pt-4 border-t">
             <div className="flex items-center justify-between mb-3">
-              <h4 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
+              <h4 className="text-[11px] font-extrabold uppercase tracking-[0.06em] text-muted-foreground flex items-center gap-1.5">
                 <MessageSquare className="w-4 h-4 text-muted-foreground" />
                 Komente
                 {comments.length > 0 && (
@@ -2431,21 +2562,31 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
         </div>
       </ScrollArea>
 
-      {/* Footer Actions */}
-      <div className="flex items-center justify-between px-4 sm:px-6 py-3 border-t bg-muted/30">
-        {!isGuestMode ? (
-          <Button variant="ghost" size="sm" className="text-error hover:text-error" onClick={() => setDeleteConfirm(true)}>
-            <Trash2 className="w-4 h-4 mr-1" />
-            Fshi
-          </Button>
-        ) : (
-          <span className="text-xs text-amber-600 flex items-center gap-1">
-            <Eye className="w-3 h-3" />
-            Vetëm shikimi + komente
-          </span>
-        )}
+        {/* Footer: Fshi · përmbledhja · Ruaj (design) */}
+        <div className="flex items-center gap-2.5 border-t bg-muted/30 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-3.5">
+          {!isGuestMode ? (
+            <button
+              type="button"
+              onClick={() => setDeleteConfirm(true)}
+              className="flex items-center gap-1.5 text-[12.5px] font-bold text-red-600 transition-colors hover:text-red-700"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Fshi
+            </button>
+          ) : (
+            <span className="flex items-center gap-1 text-xs text-amber-600">
+              <Eye className="h-3 w-3" />
+              Vetëm shikimi + komente
+            </span>
+          )}
+          <span className="flex-1" />
+          <span className="hidden text-[11.5px] text-muted-foreground sm:block">{footerSummary}</span>
+          {!isGuestMode && (
+            <Button size="sm" className="rounded-[10px] text-[13px] font-extrabold" onClick={handleFooterSave}>
+              ✓ Ruaj ndryshimet
+            </Button>
+          )}
+        </div>
       </div>
-    </div>
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteConfirm} onOpenChange={setDeleteConfirm}>

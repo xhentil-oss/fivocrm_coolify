@@ -1447,16 +1447,16 @@ const TasksView: React.FC = () => {
         )}
       </div>
 
-      {/* Right Side - Task Detail Panel */}
+      {/* Right Side - Task Detail Panel (side panel on desktop, bottom sheet on mobile) */}
       {selectedTask && (
         <div className={`
-          fixed bottom-0 left-0 right-0 z-50 rounded-t-2xl
+          fixed bottom-0 left-0 right-0 z-50 rounded-t-[22px] overflow-hidden
           sm:fixed sm:inset-0 sm:rounded-none sm:pt-[72px]
           lg:relative lg:inset-auto lg:z-auto lg:rounded-none lg:pt-0
           bg-background
           ${panelExpanded ? 'lg:flex-1' : 'lg:w-1/2'}
-          h-[80dvh] sm:h-full
-          max-h-[100dvh] overflow-y-auto flex flex-col
+          h-[88dvh] sm:h-full
+          max-h-[100dvh] flex flex-col
           shadow-2xl lg:shadow-none border-t lg:border-t-0 lg:border-l
         `}>
           <TaskDetailPanel
