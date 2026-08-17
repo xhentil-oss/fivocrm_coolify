@@ -2,7 +2,10 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import Stripe from 'stripe';
 import admin, { adminDb as db } from './_firebaseAdmin.js';
 import { whmcsConfigured, pushInvoicePayment } from './_whmcs.js';
-import { planForPriceId, seatsForPlan, tenantStatusFromStripe, monthlyAmountCents } from './_billingPlans.js';
+import {
+  planForPriceId, seatsForPlan, tenantStatusFromStripe, monthlyAmountCents,
+  subscriptionPeriodEnd, invoiceSubscriptionId,
+} from './_billingPlans.js';
 import { writeAudit } from './_audit.js';
 import { notifyUser } from './_push.js';
 
@@ -22,6 +25,17 @@ async function getRawBody(req: VercelRequest): Promise<Buffer> {
     req.on('end', () => resolve(Buffer.concat(chunks)));
     req.on('error', reject);
   });
+}
+
+/** Human-readable amount in the currency Stripe actually charged — never a hardcoded €. */
+function formatAmount(cents: number, currency?: string | null): string {
+  const value = (cents / 100).toFixed(2);
+  const cur = (currency || 'eur').toLowerCase();
+  if (cur === 'eur') return `€${value}`;
+  if (cur === 'usd') return `$${value}`;
+  if (cur === 'gbp') return `£${value}`;
+  if (cur === 'all') return `${value} L`;
+  return `${value} ${cur.toUpperCase()}`;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -46,7 +60,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'Invalid signature' });
   }
 
-  if (event.type === 'checkout.session.completed') {
+  // A tenant's CLIENT paying an invoice (mode: 'payment'). Card payments confirm via
+  // `checkout.session.completed`; async/delayed methods (bank transfers etc.) complete
+  // later via `checkout.session.async_payment_succeeded` — both land here.
+  if (event.type === 'checkout.session.completed'
+    || event.type === 'checkout.session.async_payment_succeeded') {
     const session = event.data.object as Stripe.Checkout.Session;
     const invoiceId = session.metadata?.invoiceId;
 
@@ -54,7 +72,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // also fires for async/delayed payment methods with payment_status 'unpaid';
     // acting on those would mark the invoice Paid (and post to WHMCS) before the
     // money actually arrives. The real confirmation for those arrives later via
-    // `checkout.session.async_payment_succeeded`.
+    // `checkout.session.async_payment_succeeded`, handled by this same branch.
     if (invoiceId && session.payment_status !== 'paid') {
       console.warn(`[Stripe Webhook] session ${session.id} completed but payment_status=${session.payment_status}; not marking paid.`);
       return res.status(200).json({ received: true, skipped: 'payment_not_completed' });
@@ -62,77 +80,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (invoiceId) {
       try {
-        const invoiceRef = db.collection('invoices').doc(invoiceId);
-        const invoiceSnap = await invoiceRef.get();
-
-        if (invoiceSnap.exists) {
-          await invoiceRef.update({
-            status: 'Paid',
-            paidAt: admin.firestore.FieldValue.serverTimestamp(),
-            paymentMethod: 'Stripe',
-            stripeSessionId: session.id,
-            stripePaymentIntentId: session.payment_intent as string,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-
-          // Create notification for invoice creator
-          const invoiceData = invoiceSnap.data();
-          if (invoiceData?.createdByUserId) {
-            await notifyUser({
-              userId: invoiceData.createdByUserId,
-              type: 'invoice_paid',
-              title: 'Pagesë e Pranuar ✓',
-              message: `Fatura ${invoiceData.invoiceNumber || invoiceId.slice(0, 8)} u pagua me Stripe — €${((session.amount_total || 0) / 100).toFixed(2)}`,
-              actionUrl: '/app/invoices',
-              actionLabel: 'Shiko Faturat',
-              businessId: invoiceData.businessId ?? null,
-              teamId: invoiceData.teamId ?? null,
-              customerId: invoiceData.customerId ?? null,
-            }).catch(err => console.error('[Stripe Webhook] notification dërgim dështoi:', err));
-          }
-
-          console.log(`Invoice ${invoiceId} marked as paid via Stripe`);
-
-          // Write the payment back to WHMCS for WHMCS-sourced invoices (best-effort).
-          // Never fail the Stripe webhook on a WHMCS error — the FivoCRM invoice is
-          // already Paid; a 500 would make Stripe retry the whole event.
-          // Idempotency: skip if this invoice's payment was already pushed to WHMCS
-          // (Stripe can redeliver the same event). transId dedup is a second guard.
-          const alreadySynced = !!invoiceData?.whmcsPaymentSyncedAt;
-          if (invoiceData?.source === 'whmcs' && invoiceData?.whmcsInvoiceId && !alreadySynced && whmcsConfigured()) {
-            try {
-              // SECURITY: only send a numeric amount when the Stripe charge currency
-              // matches the invoice currency. On a mismatch, omit it so WHMCS closes
-              // the full balance in its own currency instead of recording a wrong sum.
-              const invCurrency = String(invoiceData.currency || '').toLowerCase();
-              const payCurrency = String(session.currency || '').toLowerCase();
-              const currencyMatches = !!invCurrency && invCurrency === payCurrency;
-              if (!currencyMatches) {
-                console.warn(`[Stripe Webhook] currency mismatch (invoice=${invCurrency || '?'} stripe=${payCurrency || '?'}) for WHMCS invoice ${invoiceData.whmcsInvoiceId}; letting WHMCS close full balance.`);
-              }
-              const result = await pushInvoicePayment({
-                whmcsInvoiceId: invoiceData.whmcsInvoiceId,
-                transId: (session.payment_intent as string) || session.id,
-                gateway: 'stripe',
-                amount: currencyMatches ? (session.amount_total || 0) / 100 : undefined,
-                date: new Date(),
-              });
-              if (result.ok) {
-                console.log(`[Stripe Webhook] WHMCS invoice ${invoiceData.whmcsInvoiceId} payment recorded${result.alreadyRecorded ? ' (already existed)' : ''}`);
-                await invoiceRef.update({
-                  whmcsPaymentSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
-                  whmcsPaymentSyncError: admin.firestore.FieldValue.delete(),
-                }).catch(() => {});
-              } else {
-                console.error(`[Stripe Webhook] WHMCS write-back failed for invoice ${invoiceData.whmcsInvoiceId}: ${result.message}`);
-                await invoiceRef.update({ whmcsPaymentSyncError: result.message || 'unknown' }).catch(() => {});
-              }
-            } catch (err: any) {
-              console.error('[Stripe Webhook] WHMCS write-back threw:', err?.message || err);
-              await invoiceRef.update({ whmcsPaymentSyncError: String(err?.message || err).slice(0, 500) }).catch(() => {});
-            }
-          }
-        }
+        await handleInvoiceCheckoutPaid(session, invoiceId);
       } catch (err: any) {
         console.error('Error updating invoice:', err.message);
         return res.status(500).json({ error: 'Failed to update invoice' });
@@ -154,6 +102,147 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // Acknowledge the event
   return res.status(200).json({ received: true });
+}
+
+/**
+ * A paid Checkout session for a tenant-client invoice → mark it Paid.
+ *
+ * Guards, in order:
+ *  1. redelivery of the same session → no-op (no duplicate notification/WHMCS push);
+ *  2. a DIFFERENT session paying an already-Paid invoice → double payment: never
+ *     overwritten, recorded + escalated for a manual refund;
+ *  3. paid amount ≠ current invoice total (invoice edited after the link was created)
+ *     → payment recorded but the invoice is NOT marked fully Paid; a human reconciles.
+ */
+async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoiceId: string): Promise<void> {
+  const invoiceRef = db.collection('invoices').doc(invoiceId);
+  const invoiceSnap = await invoiceRef.get();
+  if (!invoiceSnap.exists) return;
+  const invoiceData = invoiceSnap.data()!;
+
+  const notifyCreator = async (title: string, message: string) => {
+    if (!invoiceData.createdByUserId) return;
+    await notifyUser({
+      userId: invoiceData.createdByUserId,
+      type: 'invoice_paid',
+      title,
+      message,
+      actionUrl: '/app/invoices',
+      actionLabel: 'Shiko Faturat',
+      businessId: invoiceData.businessId ?? null,
+      teamId: invoiceData.teamId ?? null,
+      customerId: invoiceData.customerId ?? null,
+    }).catch(err => console.error('[Stripe Webhook] notification dërgim dështoi:', err));
+  };
+
+  const invoiceLabel = invoiceData.invoiceNumber || invoiceId.slice(0, 8);
+  const paidCents = session.amount_total ?? 0;
+  const paidPretty = formatAmount(paidCents, session.currency);
+
+  // 1. Idempotency: Stripe redelivers events. If this exact session already marked
+  // the invoice Paid, do nothing — a second run would re-notify and re-push to WHMCS.
+  if (invoiceData.status === 'Paid' && invoiceData.stripeSessionId === session.id) {
+    console.log(`[Stripe Webhook] invoice ${invoiceId} already paid by session ${session.id}; skipping redelivery.`);
+    return;
+  }
+
+  // 2. A different payment on an already-Paid invoice is a DOUBLE PAYMENT (stale tab,
+  // or paid by bank in the meantime). Stripe took the money, so surface it loudly for
+  // a manual refund — never silently overwrite the original payment record.
+  if (invoiceData.status === 'Paid') {
+    console.error(`[Stripe Webhook] DOUBLE PAYMENT: invoice ${invoiceId} already Paid (session ${invoiceData.stripeSessionId || '?'}) but session ${session.id} paid it again.`);
+    await invoiceRef.update({
+      duplicateStripeSessionIds: admin.firestore.FieldValue.arrayUnion(session.id),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    await notifyCreator(
+      'Pagesë e dyfishtë ⚠️',
+      `Fatura ${invoiceLabel} ishte tashmë e paguar, por u pagua sërish me Stripe (${paidPretty}). Nevojitet rimbursim manual nga Stripe Dashboard.`,
+    );
+    return;
+  }
+
+  // 3. The session's amount was snapshotted from the invoice when the link was created.
+  // If the invoice was edited since, the client paid the OLD amount — record the payment
+  // but leave the status alone so a human reconciles instead of closing a wrong total.
+  const expectedCents = Math.round(((invoiceData.total ?? invoiceData.amount ?? 0) as number) * 100);
+  const invCurrency = String(invoiceData.currency || '').toLowerCase();
+  const payCurrency = String(session.currency || '').toLowerCase();
+  const currencyMismatch = !!invCurrency && !!payCurrency && invCurrency !== payCurrency;
+  if (paidCents !== expectedCents || currencyMismatch) {
+    console.error(`[Stripe Webhook] AMOUNT MISMATCH on invoice ${invoiceId}: paid ${paidCents} ${payCurrency || '?'}, invoice expects ${expectedCents} ${invCurrency || '?'}; not marking Paid.`);
+    await invoiceRef.update({
+      stripeSessionId: session.id,
+      stripePaymentIntentId: (session.payment_intent as string) || null,
+      stripePaymentMismatch: {
+        paidCents,
+        expectedCents,
+        paidCurrency: payCurrency || null,
+        invoiceCurrency: invCurrency || null,
+        at: admin.firestore.Timestamp.now(),
+      },
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    await notifyCreator(
+      'Pagesë me shumë të ndryshuar ⚠️',
+      `Fatura ${invoiceLabel} u pagua me Stripe (${paidPretty}), por totali aktual i faturës është ${formatAmount(expectedCents, invCurrency || payCurrency)}. Fatura NUK u shënua e paguar — kontrolloje manualisht.`,
+    );
+    return;
+  }
+
+  await invoiceRef.update({
+    status: 'Paid',
+    paidAt: admin.firestore.FieldValue.serverTimestamp(),
+    paymentMethod: 'Stripe',
+    stripeSessionId: session.id,
+    stripePaymentIntentId: session.payment_intent as string,
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+
+  await notifyCreator(
+    'Pagesë e Pranuar ✓',
+    `Fatura ${invoiceLabel} u pagua me Stripe — ${paidPretty}`,
+  );
+
+  console.log(`Invoice ${invoiceId} marked as paid via Stripe`);
+
+  // Write the payment back to WHMCS for WHMCS-sourced invoices (best-effort).
+  // Never fail the Stripe webhook on a WHMCS error — the FivoCRM invoice is
+  // already Paid; a 500 would make Stripe retry the whole event.
+  // Idempotency: skip if this invoice's payment was already pushed to WHMCS
+  // (Stripe can redeliver the same event). transId dedup is a second guard.
+  const alreadySynced = !!invoiceData?.whmcsPaymentSyncedAt;
+  if (invoiceData?.source === 'whmcs' && invoiceData?.whmcsInvoiceId && !alreadySynced && whmcsConfigured()) {
+    try {
+      // SECURITY: only send a numeric amount when the Stripe charge currency
+      // matches the invoice currency. On a mismatch, omit it so WHMCS closes
+      // the full balance in its own currency instead of recording a wrong sum.
+      const currencyMatches = !!invCurrency && invCurrency === payCurrency;
+      if (!currencyMatches) {
+        console.warn(`[Stripe Webhook] currency mismatch (invoice=${invCurrency || '?'} stripe=${payCurrency || '?'}) for WHMCS invoice ${invoiceData.whmcsInvoiceId}; letting WHMCS close full balance.`);
+      }
+      const result = await pushInvoicePayment({
+        whmcsInvoiceId: invoiceData.whmcsInvoiceId,
+        transId: (session.payment_intent as string) || session.id,
+        gateway: 'stripe',
+        amount: currencyMatches ? paidCents / 100 : undefined,
+        date: new Date(),
+      });
+      if (result.ok) {
+        console.log(`[Stripe Webhook] WHMCS invoice ${invoiceData.whmcsInvoiceId} payment recorded${result.alreadyRecorded ? ' (already existed)' : ''}`);
+        await invoiceRef.update({
+          whmcsPaymentSyncedAt: admin.firestore.FieldValue.serverTimestamp(),
+          whmcsPaymentSyncError: admin.firestore.FieldValue.delete(),
+        }).catch(() => {});
+      } else {
+        console.error(`[Stripe Webhook] WHMCS write-back failed for invoice ${invoiceData.whmcsInvoiceId}: ${result.message}`);
+        await invoiceRef.update({ whmcsPaymentSyncError: result.message || 'unknown' }).catch(() => {});
+      }
+    } catch (err: any) {
+      console.error('[Stripe Webhook] WHMCS write-back threw:', err?.message || err);
+      await invoiceRef.update({ whmcsPaymentSyncError: String(err?.message || err).slice(0, 500) }).catch(() => {});
+    }
+  }
 }
 
 /** Resolve the tenant a Stripe object belongs to, without trusting client input. */
@@ -200,7 +289,7 @@ async function handleSubscriptionEvent(event: Stripe.Event): Promise<void> {
     if (subscriptionId) {
       const sub = await stripe.subscriptions.retrieve(subscriptionId);
       plan = planForPriceId(sub.items.data[0]?.price?.id) || (session.metadata?.plan as string) || null;
-      periodEnd = ((sub as any).current_period_end as number) || null;
+      periodEnd = subscriptionPeriodEnd(sub);
       stripeStatus = sub.status;
       // What Stripe actually bills, normalised to a month — the console's MRR.
       money = monthlyAmountCents(sub as any);
@@ -211,13 +300,17 @@ async function handleSubscriptionEvent(event: Stripe.Event): Promise<void> {
     // later renewal (hence the read before the write).
     const bizBefore = await db.collection('businesses').doc(businessId).get();
     const alreadyActivated = !!(bizBefore.data() as any)?.activatedAt;
-    const nextStatus = tenantStatusFromStripe(stripeStatus);
+    const nextStatus = tenantStatusFromStripe(stripeStatus); // null = not a transition
+    // The grace clock is only cleared for a genuinely healthy subscription; a checkout
+    // that resolves to past_due (or no transition at all) must not reset dunning.
+    const clearsDunning = nextStatus === 'active' || nextStatus === 'trialing';
 
     await db.collection('businesses').doc(businessId).set({
-      stripeCustomerId: typeof session.customer === 'string' ? session.customer : null,
+      // Never write null over an existing stripeCustomerId — resolveBusinessId
+      // depends on it for every later event that has no metadata.
+      ...(typeof session.customer === 'string' ? { stripeCustomerId: session.customer } : {}),
       stripeSubscriptionId: subscriptionId,
       ...(!alreadyActivated && nextStatus === 'active' ? { activatedAt: now } : {}),
-      canceledAt: admin.firestore.FieldValue.delete(),
       ...(plan ? { plan, seats: seatsForPlan(plan) } : {}),
       ...(money ? {
         mrrCents: money.mrrCents,
@@ -226,10 +319,13 @@ async function handleSubscriptionEvent(event: Stripe.Event): Promise<void> {
         billingQuantity: money.quantity,
       } : {}),
       ...(livemode === null ? {} : { stripeLivemode: livemode }),
-      status: tenantStatusFromStripe(stripeStatus),
+      ...(nextStatus ? { status: nextStatus } : {}),
+      ...(clearsDunning ? {
+        canceledAt: admin.firestore.FieldValue.delete(),
+        pastDueSince: admin.firestore.FieldValue.delete(),
+        suspendedAt: admin.firestore.FieldValue.delete(),
+      } : {}),
       ...(periodEnd ? { currentPeriodEnd: admin.firestore.Timestamp.fromMillis(periodEnd * 1000) } : {}),
-      pastDueSince: admin.firestore.FieldValue.delete(),
-      suspendedAt: admin.firestore.FieldValue.delete(),
       updatedAt: now,
     }, { merge: true });
     await writeAudit({
@@ -253,7 +349,12 @@ async function handleSubscriptionEvent(event: Stripe.Event): Promise<void> {
     const deleted = event.type === 'customer.subscription.deleted';
     const plan = planForPriceId(sub.items.data[0]?.price?.id);
     const status = deleted ? 'canceled' : tenantStatusFromStripe(sub.status);
-    const periodEnd = (sub as any).current_period_end as number | undefined;
+    if (!status) {
+      // 'incomplete': the checkout was never finished — not a tenant transition.
+      console.log(`[Stripe Webhook] subscription ${sub.id} is '${sub.status}'; ignoring.`);
+      return;
+    }
+    const periodEnd = subscriptionPeriodEnd(sub);
 
     const patch: Record<string, any> = {
       stripeSubscriptionId: deleted ? admin.firestore.FieldValue.delete() : sub.id,
@@ -309,7 +410,7 @@ async function handleSubscriptionEvent(event: Stripe.Event): Promise<void> {
     const invoice = event.data.object as Stripe.Invoice;
     // Only OUR subscription invoices matter here; a tenant's own client invoices are
     // one-off payments (handled above) and carry no subscription.
-    const subscriptionId = (invoice as any).subscription;
+    const subscriptionId = invoiceSubscriptionId(invoice);
     if (!subscriptionId) return;
     const businessId = await resolveBusinessId({
       metadataBusinessId: (invoice.metadata?.businessId as string) || null,
@@ -318,6 +419,14 @@ async function handleSubscriptionEvent(event: Stripe.Event): Promise<void> {
     if (!businessId) return;
 
     if (event.type === 'invoice.paid') {
+      // A €0 "paid" invoice (100% coupon, Stripe-trial start) is not a payment: it
+      // must neither flip the tenant active nor stamp the trial→paid conversion —
+      // `customer.subscription.updated` already keeps the status truthful.
+      const amountPaid = (invoice as any).amount_paid ?? 0;
+      if (amountPaid <= 0) {
+        console.log(`[Stripe Webhook] invoice ${invoice.id} paid with amount 0; not treating as a payment.`);
+        return;
+      }
       const paidSnap = await db.collection('businesses').doc(businessId).get();
       const paidBefore = (paidSnap.data() as any) || {};
       await db.collection('businesses').doc(businessId).set({

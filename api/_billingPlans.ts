@@ -69,6 +69,7 @@ export function seatsForPlan(plan: string | undefined): number {
 export function monthlyAmountCents(sub: {
   items?: { data?: Array<any> };
   discount?: any;
+  discounts?: any[];
   currency?: string;
 }): { mrrCents: number; currency: string; interval: string; quantity: number } | null {
   const item = sub?.items?.data?.[0];
@@ -86,9 +87,20 @@ export function monthlyAmountCents(sub: {
 
   let gross = unit * quantity;
 
-  // Coupons are part of what the tenant actually pays.
-  const coupon = sub?.discount?.coupon;
-  if (coupon) {
+  // Coupons are part of what the tenant actually pays. `discount` (singular) was
+  // REMOVED from the Subscription object in newer Stripe API versions in favour of
+  // `discounts[]`, so read both shapes. Array entries are only usable when expanded
+  // to objects (unexpanded id strings are skipped — MRR then shows gross, never NaN).
+  const discountEntries: any[] = [
+    ...(sub?.discount ? [sub.discount] : []),
+    ...(Array.isArray(sub?.discounts) ? sub.discounts : []),
+  ].filter(d => d && typeof d === 'object' && d.coupon);
+  const applied = new Set<string>();
+  for (const d of discountEntries) {
+    const coupon = d.coupon;
+    const key = String(d.id || coupon.id || JSON.stringify(coupon));
+    if (applied.has(key)) continue; // legacy `discount` and `discounts[0]` are the same object
+    applied.add(key);
     if (typeof coupon.percent_off === 'number' && coupon.percent_off > 0) {
       gross = gross * (1 - coupon.percent_off / 100);
     } else if (typeof coupon.amount_off === 'number' && coupon.amount_off > 0) {
@@ -105,8 +117,11 @@ export function monthlyAmountCents(sub: {
   };
 }
 
-/** Map a Stripe subscription status onto the tenant lifecycle status. */
-export function tenantStatusFromStripe(stripeStatus: string): 'active' | 'trialing' | 'past_due' | 'canceled' {
+/**
+ * Map a Stripe subscription status onto the tenant lifecycle status.
+ * Returns null for statuses that are NOT a tenant transition and must be ignored.
+ */
+export function tenantStatusFromStripe(stripeStatus: string): 'active' | 'trialing' | 'past_due' | 'canceled' | null {
   switch (stripeStatus) {
     case 'active':
     case 'trialing':
@@ -120,8 +135,36 @@ export function tenantStatusFromStripe(stripeStatus: string): 'active' | 'triali
     case 'incomplete_expired':
       return 'canceled';
     case 'incomplete':
+      // Checkout not finished (3DS pending / abandoned). Mapping this to past_due
+      // used to start the 7-day grace clock on a tenant whose own trial was still
+      // valid — an abandoned checkout must not change the tenant's state at all.
+      return null;
     case 'paused':
     default:
       return 'past_due';
   }
+}
+
+/**
+ * `current_period_end` was REMOVED from the Subscription object in newer Stripe API
+ * versions (≥ 2025-03-31 "basil") — it now lives on each subscription item. Read the
+ * new shape first, keep the old one as a fallback for older webhook payloads.
+ */
+export function subscriptionPeriodEnd(sub: any): number | null {
+  const fromItem = sub?.items?.data?.[0]?.current_period_end;
+  if (typeof fromItem === 'number') return fromItem;
+  const legacy = sub?.current_period_end;
+  return typeof legacy === 'number' ? legacy : null;
+}
+
+/**
+ * `Invoice.subscription` was likewise moved to `invoice.parent.subscription_details`
+ * in newer Stripe API versions. Handles both shapes, string id or expanded object.
+ */
+export function invoiceSubscriptionId(invoice: any): string | null {
+  const raw = invoice?.subscription
+    ?? invoice?.parent?.subscription_details?.subscription
+    ?? null;
+  if (!raw) return null;
+  return typeof raw === 'string' ? raw : (raw.id || null);
 }

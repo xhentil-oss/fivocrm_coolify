@@ -103,6 +103,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // An invoice that is already settled or voided must never be payable again —
+    // a stale portal tab would double-charge the client. The webhook guards this
+    // too (a paid session on a Paid invoice is escalated, not overwritten), but
+    // refusing here stops the charge before Stripe ever takes the money.
+    if (invoiceData.status === 'Paid') {
+      return res.status(409).json({ error: 'Fatura është paguar tashmë.' });
+    }
+    if (invoiceData.status === 'Cancelled') {
+      return res.status(409).json({ error: 'Fatura është anuluar dhe nuk mund të paguhet.' });
+    }
+
     // Use server-side amount — never trust client-supplied amount
     const amount = invoiceData.total ?? invoiceData.amount ?? 0;
     if (typeof amount !== 'number' || amount <= 0) {

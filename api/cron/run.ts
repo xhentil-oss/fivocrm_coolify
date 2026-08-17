@@ -291,13 +291,17 @@ async function runTaskDeadlineAlerts() {
       : `Detyra "${task.title}" skadon ${daysLeft === 0 ? 'sot' : `për ${daysLeft} ditë`}.`;
 
     // Doc + push (every registered device), through the shared preference gates.
+    // Deep link to the task itself (mirrors taskDeepLink in src/lib/deepLinks.ts —
+    // api/ never imports from src/): a project task opens on its project page.
     ops.push(notifyUser({
       userId: recipientId,
       type: isOverdueAlert ? 'task_overdue' : 'task_due_soon',
       title: notifTitle,
       message: notifMessage,
-      actionUrl: '/app/tasks',
-      actionLabel: 'Shiko Detyrat',
+      actionUrl: task.projectId
+        ? `/app/projects/${task.projectId}?taskId=${doc.id}`
+        : `/app/tasks?taskId=${doc.id}`,
+      actionLabel: 'Shiko Detyrën',
       businessId: task.businessId ?? null,
       teamId: task.teamId ?? null,
       projectId: task.projectId ?? null,
@@ -622,8 +626,8 @@ async function runRecurringTasks() {
     if (notifRecipient) {
       const freqLabel: Record<string, string> = { daily: 'ditore', weekly: 'javore', monthly: 'mujore', yearly: 'vjetore' };
       const taskUrl = task.projectId
-        ? `/app/projects/${task.projectId}?task=${newTaskRef.id}`
-        : `/app/tasks`;
+        ? `/app/projects/${task.projectId}?taskId=${newTaskRef.id}`
+        : `/app/tasks?taskId=${newTaskRef.id}`;
       ops.push(notifyUser({ userId: notifRecipient, type: 'recurring_task_created', title: `🔄 Detyrë e re periodike: ${task.title}`, message: `Detyra periodike "${task.title}" (${freqLabel[task.recurringFrequency] ?? task.recurringFrequency}) u krijua automatikisht.`, actionUrl: taskUrl, actionLabel: 'Hap Detyrën', businessId: task.businessId ?? null, teamId: task.teamId ?? null, projectId: task.projectId ?? null }));
     }
     created++;
@@ -3524,7 +3528,12 @@ const BILLING_GRACE_DAYS = 7;
 async function runSubscriptionLifecycle(opts?: { dryRun?: boolean }) {
   const now = new Date();
   const nowTs = admin.firestore.Timestamp.now();
-  const snap = await db.collection('businesses').get();
+  // Cost rule: don't pull fat tenant docs whole. A `where('status', in …)` filter
+  // would silently skip legacy docs with NO status field (treated as 'trialing'
+  // below), so keep the full scan but project only the fields the loop reads.
+  const snap = await db.collection('businesses')
+    .select('status', 'ownerId', 'trialEndsAt', 'trialWarnedAt', 'pastDueSince', 'currentPeriodEnd', 'updatedAt')
+    .get();
 
   let warned = 0, expired = 0, suspended = 0, skipped = 0;
   const actions: Array<{ businessId: string; action: string }> = [];
