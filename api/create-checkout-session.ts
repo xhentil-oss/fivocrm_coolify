@@ -6,9 +6,47 @@ const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2026-02-25.clover',
 });
 
-// Currencies Stripe supports here. Anything else is rejected rather than
-// silently forwarded to Stripe (which would 400 late, or worse, charge wrong).
-const ALLOWED_CURRENCIES = new Set(['eur', 'usd', 'gbp', 'all']);
+// Currencies this endpoint will forward to Stripe. ALL (Lek) is deliberately NOT
+// here: Stripe rejects it for this account (session creation 500s), so Lek
+// invoices are converted to EUR server-side below.
+const ALLOWED_CURRENCIES = new Set(['eur', 'usd', 'gbp']);
+
+// Fallback EUR→ALL rate — mirrors DEFAULT_RATES.EUR in src/lib/utils.ts. Only used
+// when no team of the invoice's tenant has set teamSettings.eurAllRate.
+const DEFAULT_EUR_ALL_RATE = 100;
+
+/**
+ * The tenant's own EUR→ALL rate. `teamSettings/{teamId}.eurAllRate` is the same
+ * value the UI mirrors into localStorage (useTeamSettingsSync), so the server and
+ * the client always convert with one rate. Bounded to a sanity window so a
+ * corrupted setting can never divide a charge into pennies.
+ */
+async function eurToAllRate(teamId?: string, businessId?: string): Promise<number> {
+  const valid = (raw: any): number | null => {
+    const v = Number(raw);
+    return Number.isFinite(v) && v >= 50 && v <= 500 ? v : null;
+  };
+  try {
+    if (teamId) {
+      const snap = await db.collection('teamSettings').doc(teamId).get();
+      const v = valid((snap.data() as any)?.eurAllRate);
+      if (v) return v;
+    }
+    if (businessId) {
+      // Legacy invoices carry teamId=null but still a businessId — any team of the
+      // business that has configured a rate will do.
+      const teams = await db.collection('teams').where('businessId', '==', businessId).limit(5).get();
+      for (const t of teams.docs) {
+        const snap = await db.collection('teamSettings').doc(t.id).get();
+        const v = valid((snap.data() as any)?.eurAllRate);
+        if (v) return v;
+      }
+    }
+  } catch (err: any) {
+    console.warn('[create-checkout-session] eurAllRate lookup failed, using default:', err?.message || err);
+  }
+  return DEFAULT_EUR_ALL_RATE;
+}
 
 // Same host allowlist convention used by the email endpoints (ALLOWED_HOSTS).
 // We echo the request Origin only when its host is allowed — never a blanket
@@ -58,7 +96,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
-    const { invoiceId, invoiceNumber, currency, customerEmail, customerName, successUrl, cancelUrl } = req.body;
+    // NOTE: the client also sends `amount` and `currency`; both are deliberately
+    // ignored — the invoice document is the only authority on what is charged.
+    const { invoiceId, invoiceNumber, customerEmail, customerName, successUrl, cancelUrl } = req.body;
 
     if (!invoiceId || !successUrl || !cancelUrl) {
       return res.status(400).json({ error: 'Missing required fields: invoiceId, successUrl, cancelUrl' });
@@ -120,11 +160,23 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Invoice has no payable amount' });
     }
 
-    // Normalise currency: use invoice's stored currency, fall back to client hint, then EUR
-    const invoiceCurrency = (invoiceData.currency as string | undefined)?.toLowerCase();
-    const resolvedCurrency = invoiceCurrency === 'all' ? 'all' : (invoiceCurrency || (currency as string | undefined)?.toLowerCase() || 'eur');
-    if (!ALLOWED_CURRENCIES.has(resolvedCurrency)) {
-      return res.status(400).json({ error: `Unsupported currency: ${resolvedCurrency}` });
+    // ── Currency & conversion ────────────────────────────────────────────────
+    // The house currency is ALL (Lek): an invoice with NO explicit currency is Lek,
+    // the same rule the UI applies. Defaulting it to EUR here once charged a
+    // 120,000 L invoice as €120,000 (face value, unconverted). Stripe rejects 'all'
+    // as a charge currency, so Lek invoices are charged in EUR, converted HERE with
+    // the tenant's own rate — the client's pre-converted amount is never trusted.
+    const invoiceCurrency = ((invoiceData.currency as string | undefined) || 'all').toLowerCase();
+    let chargeCurrency = invoiceCurrency;
+    let chargeAmount = amount;
+    let fxRate = 1;
+    if (invoiceCurrency === 'all') {
+      fxRate = await eurToAllRate(invoiceTeamId, invoiceBusinessId);
+      chargeCurrency = 'eur';
+      chargeAmount = amount / fxRate;
+    }
+    if (!ALLOWED_CURRENCIES.has(chargeCurrency)) {
+      return res.status(400).json({ error: `Unsupported currency: ${chargeCurrency}` });
     }
 
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
@@ -133,12 +185,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       line_items: [
         {
           price_data: {
-            currency: resolvedCurrency,
+            currency: chargeCurrency,
             product_data: {
               name: `Fatura ${invoiceNumber || invoiceData.invoiceNumber || invoiceId.slice(0, 8)}`,
               description: customerName ? `Pagesë nga ${customerName}` : undefined,
             },
-            unit_amount: Math.round(amount * 100),
+            unit_amount: Math.round(chargeAmount * 100),
           },
           quantity: 1,
         },
@@ -147,6 +199,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         invoiceId,
         invoiceNumber: invoiceNumber || invoiceData.invoiceNumber || '',
         requestedByUid: uid,
+        // Conversion snapshot: lets the webhook recompute what the CURRENT invoice
+        // should cost through the SAME rate, so its amount-mismatch guard doesn't
+        // misfire on Lek invoices legitimately charged in EUR.
+        invoiceCurrency,
+        fxRate: String(fxRate),
       },
       success_url: successUrl,
       cancel_url: cancelUrl,

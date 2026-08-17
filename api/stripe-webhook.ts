@@ -162,30 +162,43 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
     return;
   }
 
-  // 3. The session's amount was snapshotted from the invoice when the link was created.
-  // If the invoice was edited since, the client paid the OLD amount — record the payment
-  // but leave the status alone so a human reconciles instead of closing a wrong total.
-  const expectedCents = Math.round(((invoiceData.total ?? invoiceData.amount ?? 0) as number) * 100);
+  // 3. The session's amount was snapshotted from the invoice when the link was created —
+  // including the ALL→EUR conversion rate for Lek invoices (metadata.fxRate; Stripe
+  // can't charge 'all'). Recompute what the CURRENT invoice should cost through that
+  // same rate: a difference means the invoice was edited after the link was created —
+  // record the payment but leave the status alone so a human reconciles instead of
+  // closing a wrong total.
+  const fxRate = Number(session.metadata?.fxRate) || 1;
+  const expectedCents = Math.round((Number(invoiceData.total ?? invoiceData.amount ?? 0) / fxRate) * 100);
   const invCurrency = String(invoiceData.currency || '').toLowerCase();
   const payCurrency = String(session.currency || '').toLowerCase();
-  const currencyMismatch = !!invCurrency && !!payCurrency && invCurrency !== payCurrency;
+  // A Lek invoice is LEGITIMATELY paid in EUR, so "currency changed" is judged against
+  // the invoice currency the server snapshotted at link creation, not against the
+  // charge currency. Sessions from before this metadata existed fall back to the raw
+  // comparison, skipping 'all'/'' (the house currency, which always charges as EUR).
+  const snapCurrency = String(session.metadata?.invoiceCurrency || '').toLowerCase();
+  const currentCurrency = invCurrency || 'all'; // no currency set = Lek (house currency)
+  const currencyMismatch = snapCurrency
+    ? currentCurrency !== snapCurrency
+    : (currentCurrency !== 'all' && !!payCurrency && currentCurrency !== payCurrency);
   if (paidCents !== expectedCents || currencyMismatch) {
-    console.error(`[Stripe Webhook] AMOUNT MISMATCH on invoice ${invoiceId}: paid ${paidCents} ${payCurrency || '?'}, invoice expects ${expectedCents} ${invCurrency || '?'}; not marking Paid.`);
+    console.error(`[Stripe Webhook] AMOUNT MISMATCH on invoice ${invoiceId}: paid ${paidCents} ${payCurrency || '?'}, expected ${expectedCents} (fxRate=${fxRate}, invoice currency ${currentCurrency}); not marking Paid.`);
     await invoiceRef.update({
       stripeSessionId: session.id,
       stripePaymentIntentId: (session.payment_intent as string) || null,
       stripePaymentMismatch: {
         paidCents,
         expectedCents,
+        fxRate,
         paidCurrency: payCurrency || null,
-        invoiceCurrency: invCurrency || null,
+        invoiceCurrency: currentCurrency,
         at: admin.firestore.Timestamp.now(),
       },
       updatedAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     await notifyCreator(
       'Pagesë me shumë të ndryshuar ⚠️',
-      `Fatura ${invoiceLabel} u pagua me Stripe (${paidPretty}), por totali aktual i faturës është ${formatAmount(expectedCents, invCurrency || payCurrency)}. Fatura NUK u shënua e paguar — kontrolloje manualisht.`,
+      `Fatura ${invoiceLabel} u pagua me Stripe (${paidPretty}), por totali aktual i faturës nuk përputhet me shumën e paguar (${formatAmount(expectedCents, payCurrency)} e pritur). Fatura NUK u shënua e paguar — kontrolloje manualisht.`,
     );
     return;
   }
@@ -215,8 +228,9 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
   if (invoiceData?.source === 'whmcs' && invoiceData?.whmcsInvoiceId && !alreadySynced && whmcsConfigured()) {
     try {
       // SECURITY: only send a numeric amount when the Stripe charge currency
-      // matches the invoice currency. On a mismatch, omit it so WHMCS closes
-      // the full balance in its own currency instead of recording a wrong sum.
+      // matches the invoice currency. On a mismatch (incl. Lek invoices charged in
+      // EUR), omit it so WHMCS closes the full balance in its own currency instead
+      // of recording a wrong sum.
       const currencyMatches = !!invCurrency && invCurrency === payCurrency;
       if (!currencyMatches) {
         console.warn(`[Stripe Webhook] currency mismatch (invoice=${invCurrency || '?'} stripe=${payCurrency || '?'}) for WHMCS invoice ${invoiceData.whmcsInvoiceId}; letting WHMCS close full balance.`);
