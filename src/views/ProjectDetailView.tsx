@@ -18,8 +18,6 @@ import { Checkbox } from '../components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '../components/ui/dialog';
 import { Tabs, TabsList, TabsTrigger } from '../components/ui/tabs';
-import { Calendar } from '../components/ui/calendar';
-import { Popover, PopoverContent, PopoverTrigger } from '../components/ui/popover';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -27,6 +25,7 @@ import {
   DropdownMenuTrigger,
 } from '../components/ui/dropdown-menu';
 import TaskDetailPanel from '../components/TaskDetailPanel';
+import QuickTaskForm, { QUICK_TASK_DIALOG_CLASS } from '../components/QuickTaskForm';
 import ProjectClientBrief from '../components/ProjectClientBrief';
 import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
@@ -39,7 +38,7 @@ import { formatCurrency, formatCompactRange, toAll, canSeeFinancials, cn } from 
 import { computeProjectLabor } from '../lib/finance/laborCost';
 import { getInvoiceTotalAll, getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
 import { getInquiryCompleteness } from '../lib/inquiryBrief';
-import { archiveProjectPatch, isProjectArchived, projectPickerLabel, restoreProjectPatch, sortArchivedLast } from '../lib/projectArchive';
+import { archiveProjectPatch, isProjectArchived, restoreProjectPatch } from '../lib/projectArchive';
 import { Receipt } from 'lucide-react';
 import type { Task, Project, Team, TeamMember, TimeEntry, Expense, Invoice, InvoiceItem, Customer, ServiceInquiry } from '../types';
 import { getNextInvoiceNumber } from '../lib/firebase';
@@ -236,6 +235,19 @@ const ProjectDetailView: React.FC = () => {
   });
   // Role-based filtering: Member/Viewer see only their assigned tasks within this project
   const allTasks = useFilteredTasks(rawProjectTasks);
+  // ALL the business's tasks — fetched only while the create dialog is open. The
+  // quick form's capacity bars need the assignee's booked hours across EVERY
+  // project; rawProjectTasks (scoped to this project) would under-report them.
+  const { data: capacityTasks } = useCollection<Task>('tasks', {
+    skip: !isCreateTaskOpen,
+    skipTeamFilter: true,
+  });
+  // Workspace-wide label set for the quick form's label chips.
+  const allLabels = React.useMemo(() => {
+    const s = new Set<string>();
+    (capacityTasks || allTasks || []).forEach(t => ((t as any).labels as string[] | undefined)?.forEach(l => s.add(l)));
+    return Array.from(s).sort();
+  }, [capacityTasks, allTasks]);
   const { data: teams } = useCollection<Team>('teams');
   const { data: rawTeamMembers } = useCollection<TeamMember>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }]
@@ -536,7 +548,7 @@ const ProjectDetailView: React.FC = () => {
 
 
 
-  const handleCreateTask = async (formData: FormData) => {
+  const handleCreateTask = async (formData: FormData, opts?: { createAnother?: boolean }) => {
     const title = formData.get('title') as string;
     if (!title || !title.trim()) return;
     const description = formData.get('description') as string;
@@ -561,6 +573,13 @@ const ProjectDetailView: React.FC = () => {
     const recurringDaysOfWeekParsed: number[] | undefined = recurringDaysOfWeekRaw
       ? (() => { try { return JSON.parse(recurringDaysOfWeekRaw); } catch { return [1,2,3,4,5]; } })()
       : undefined;
+    // The quick form's time window doubles as the estimate — it feeds the
+    // capacity load bars, so it must be persisted like TasksView does.
+    const estimatedHoursRaw = formData.get('estimatedHours') as string;
+    const estimatedHours = estimatedHoursRaw ? parseFloat(estimatedHoursRaw) : NaN;
+    const labelsRaw = formData.get('labels') as string;
+    let labels: string[] = [];
+    try { labels = labelsRaw ? JSON.parse(labelsRaw) : []; } catch { labels = []; }
 
     const taskData: any = {
       title,
@@ -572,6 +591,8 @@ const ProjectDetailView: React.FC = () => {
       status,
       priority,
       collaboratorIds: [],
+      ...(!isNaN(estimatedHours) && estimatedHours > 0 ? { estimatedHours } : {}),
+      ...(labels.length > 0 ? { labels } : {}),
       ...(section ? { section } : {}),
       // Optional billable value for this task (left blank when it doesn't apply).
       ...(() => {
@@ -723,8 +744,11 @@ const ProjectDetailView: React.FC = () => {
       );
     }
 
-    setIsCreateTaskOpen(false);
-    setSelectedTask(newTask);
+    // "Krijo & shto tjetër" keeps the dialog open for batch entry.
+    if (!opts?.createAnother) {
+      setIsCreateTaskOpen(false);
+      setSelectedTask(newTask);
+    }
   };
 
   const handleAddComment = async (taskId: string, content: string) => {
@@ -1053,15 +1077,20 @@ const ProjectDetailView: React.FC = () => {
                     Detyrë e re
                   </button>
                 </DialogTrigger>
-                <DialogContent className="max-w-2xl">
-                  <DialogHeader>
-                    <DialogTitle>Krijo Detyrë të Re</DialogTitle>
-                  </DialogHeader>
-                  <TaskForm
-                    onSubmit={handleCreateTask}
+                <DialogContent className={QUICK_TASK_DIALOG_CLASS}>
+                  <DialogTitle className="sr-only">Detyrë e re</DialogTitle>
+                  {/* The same quick form as TasksView (design v3) — the project
+                      is fixed to this one, so it renders as a locked pill. */}
+                  <QuickTaskForm
+                    onSubmit={(fd, opts) => handleCreateTask(fd, opts)}
                     projects={project ? [project] : []}
-                    defaultProjectId={projectId}
+                    conflictTasks={capacityTasks || rawProjectTasks || []}
                     teamMembers={projectMembers.length > 0 ? projectMembers : (teamMembers || [])}
+                    canAssignTasks={permissions.canAssignTasks}
+                    currentUserId={user?.uid || ''}
+                    allLabels={allLabels}
+                    defaultProjectId={projectId}
+                    lockProject
                   />
                 </DialogContent>
               </Dialog>
@@ -2046,356 +2075,6 @@ const ProjectGuestForm: React.FC<{
         {saving ? 'Duke ruajtur...' : 'Ruaj Guestët'}
       </Button>
     </div>
-  );
-};
-
-// Task Form Component - Same as TasksView
-const TaskForm: React.FC<{
-  onSubmit: (data: FormData) => void;
-  projects: Project[];
-  initialData?: Task;
-  defaultProjectId?: string;
-  teamMembers?: import('../types').TeamMember[];
-}> = ({ onSubmit, projects, initialData, defaultProjectId, teamMembers }) => {
-  const { getName } = useUserNames(teamMembers || []);
-  const [startDate, setStartDate] = useState<Date | undefined>(
-    initialData?.startDate ? new Date(initialData.startDate) : new Date()
-  );
-  const [endDate, setEndDate] = useState<Date | undefined>(
-    initialData?.endDate ? new Date(initialData.endDate) : new Date(Date.now() + 7 * 24 * 60 * 60 * 1000)
-  );
-  const [status, setStatus] = useState(initialData?.status || 'Todo');
-  const [priority, setPriority] = useState(initialData?.priority || 'medium');
-  const [projectId, setProjectId] = useState(initialData?.projectId || defaultProjectId || '__none__');
-  const [assignedUserId, setAssignedUserId] = useState(initialData?.assignedToUserId || '__none__');
-  const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
-  const [recurringFrequency, setRecurringFrequency] = useState(initialData?.recurringFrequency || 'weekly');
-  const [recurringInterval, setRecurringInterval] = useState(initialData?.recurringInterval || 1);
-  const [recurringDayOfWeek, setRecurringDayOfWeek] = useState(initialData?.recurringDayOfWeek ?? 1);
-  const [recurringDayOfMonth, setRecurringDayOfMonth] = useState(initialData?.recurringDayOfMonth ?? 1);
-  // For daily recurrence: which weekdays (default Mon-Fri)
-  const [recurringDaysOfWeek, setRecurringDaysOfWeek] = useState<number[]>(
-    (initialData as any)?.recurringDaysOfWeek ?? [1, 2, 3, 4, 5]
-  );
-  const toggleDayOfWeek = (day: number) => {
-    setRecurringDaysOfWeek(prev =>
-      prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day].sort((a, b) => a - b)
-    );
-  };
-
-  const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
-    e.preventDefault();
-    const formData = new FormData(e.currentTarget);
-    
-    if (startDate) {
-      formData.set('startDate', startDate.toISOString());
-    }
-    if (endDate) {
-      formData.set('endDate', endDate.toISOString());
-    }
-    
-    formData.set('status', status);
-    formData.set('priority', priority);
-    
-    if (projectId && projectId !== '__none__') {
-      formData.set('projectId', projectId);
-    }
-    
-    if (assignedUserId && assignedUserId !== '__none__') {
-      formData.set('assignedToUserId', assignedUserId);
-    }
-    
-    if (isRecurring) {
-      formData.set('isRecurring', 'true');
-      formData.set('recurringFrequency', recurringFrequency);
-      formData.set('recurringInterval', String(recurringInterval));
-      if (recurringFrequency === 'weekly') {
-        formData.set('recurringDayOfWeek', String(recurringDayOfWeek));
-      }
-      if (recurringFrequency === 'daily') {
-        formData.set('recurringDaysOfWeek', JSON.stringify(recurringDaysOfWeek));
-      }
-      if (recurringFrequency === 'monthly') {
-        formData.set('recurringDayOfMonth', String(recurringDayOfMonth));
-      }
-    }
-    
-    onSubmit(formData);
-  };
-
-  return (
-    <form onSubmit={handleSubmit} className="space-y-4">
-      <div>
-        <Label htmlFor="title">Titulli</Label>
-        <Input id="title" name="title" required defaultValue={initialData?.title} placeholder="Emri i detyrës" />
-      </div>
-
-      <div>
-        <Label htmlFor="section">Seksioni (opsional)</Label>
-        <Input id="section" name="section" defaultValue={(initialData as any)?.section || ''} placeholder="p.sh. Dizajn, Zhvillim, Testim" />
-      </div>
-
-      <div>
-        <Label htmlFor="description">Përshkrimi</Label>
-        <Textarea id="description" name="description" defaultValue={initialData?.description} placeholder="Përshkruaj detyrën..." rows={3} />
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
-          <Label>Data e Fillimit</Label>
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="outline" className="w-full justify-start text-sm" type="button">
-                <CalendarIcon className="mr-2 h-4 w-4" />
-                {startDate ? startDate.toLocaleDateString() : "Zgjidh"}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-              <Calendar 
-                mode="single" 
-                selected={startDate} 
-                onSelect={setStartDate}
-                initialFocus
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
-
-        <div>
-          <Label>Afati</Label>
-          <Popover>
-            <PopoverTrigger asChild>
-              <Button variant="outline" className="w-full justify-start text-sm" type="button">
-                <CalendarIcon className="mr-2 h-4 w-4" />
-                {endDate ? endDate.toLocaleDateString() : "Zgjidh"}
-              </Button>
-            </PopoverTrigger>
-            <PopoverContent className="w-auto p-0" align="start">
-              <Calendar 
-                mode="single" 
-                selected={endDate} 
-                onSelect={setEndDate}
-                initialFocus
-              />
-            </PopoverContent>
-          </Popover>
-        </div>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <div>
-          <Label htmlFor="status">Statusi</Label>
-          <Select value={status} onValueChange={setStatus}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="Todo">Për të bërë</SelectItem>
-              <SelectItem value="In Progress">Në progres</SelectItem>
-              <SelectItem value="Review">Rishikim</SelectItem>
-              <SelectItem value="Done">Përfunduar</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div>
-          <Label htmlFor="priority">Prioriteti</Label>
-          <Select value={priority} onValueChange={setPriority}>
-            <SelectTrigger>
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="low">I ulët</SelectItem>
-              <SelectItem value="medium">Mesatar</SelectItem>
-              <SelectItem value="high">I lartë</SelectItem>
-              <SelectItem value="urgent">Urgjent</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-      </div>
-
-      <div>
-        <Label htmlFor="assignedToUserId">Cakto te</Label>
-        <Select value={assignedUserId} onValueChange={setAssignedUserId}>
-          <SelectTrigger id="assignedToUserId">
-            <SelectValue placeholder="Zgjidh anëtarin" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__none__">I pacaktuar</SelectItem>
-            {(teamMembers || []).map(m => (
-              <SelectItem key={m.id} value={m.userId}>{getName(m.userId)}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div>
-        <Label htmlFor="value">Vlera (opsionale)</Label>
-        <Input id="value" name="value" type="number" step="0.01" min="0" placeholder="p.sh. 15000" defaultValue={(initialData as any)?.value ?? ''} />
-        <p className="text-[11px] text-muted-foreground mt-1">Vlera e faturueshme e kësaj detyre. Lëre bosh nëse nuk aplikohet.</p>
-      </div>
-
-      <div>
-        <Label htmlFor="projectId">Projekti</Label>
-        <Select value={projectId} onValueChange={setProjectId}>
-          <SelectTrigger>
-            <SelectValue placeholder="Zgjidh projektin" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__none__">Asnjë</SelectItem>
-            {sortArchivedLast(projects).map(p => (
-              <SelectItem key={p.id} value={p.id}>{projectPickerLabel(p)}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
-
-      <div className="space-y-4 border-t pt-4">
-        <div className="flex items-center gap-2">
-          <Checkbox 
-            id="isRecurring" 
-            checked={isRecurring}
-            onCheckedChange={(checked) => setIsRecurring(checked as boolean)}
-          />
-          <Label htmlFor="isRecurring" className="cursor-pointer text-sm">
-            Detyrë e përsëritur
-          </Label>
-        </div>
-
-        {isRecurring && (
-          <div className="space-y-3">
-            <div className="grid grid-cols-2 gap-3">
-              <div>
-                <Label htmlFor="recurringFrequency">Frekuenca</Label>
-                <Select value={recurringFrequency} onValueChange={setRecurringFrequency}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="daily">Çdo ditë</SelectItem>
-                    <SelectItem value="weekly">Çdo javë</SelectItem>
-                    <SelectItem value="monthly">Çdo muaj</SelectItem>
-                    <SelectItem value="yearly">Çdo vit</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-
-              <div>
-                <Label>Çdo sa?</Label>
-                <Select value={String(recurringInterval)} onValueChange={(v) => setRecurringInterval(Number(v))}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {[1, 2, 3, 4, 6, 8, 12].map(n => (
-                      <SelectItem key={n} value={String(n)}>
-                        {n === 1 ? 'Çdo' : `Çdo ${n}`} {recurringFrequency === 'daily' ? (n === 1 ? 'ditë' : 'ditë') : recurringFrequency === 'weekly' ? (n === 1 ? 'javë' : 'javë') : recurringFrequency === 'monthly' ? (n === 1 ? 'muaj' : 'muaj') : (n === 1 ? 'vit' : 'vite')}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            {recurringFrequency === 'daily' && (
-              <div>
-                <Label>Ditët e javës</Label>
-                <div className="flex flex-wrap gap-1.5 mt-1.5">
-                  {[
-                    { value: 1, label: 'Hën' },
-                    { value: 2, label: 'Mar' },
-                    { value: 3, label: 'Mër' },
-                    { value: 4, label: 'Enj' },
-                    { value: 5, label: 'Pre' },
-                    { value: 6, label: 'Sht' },
-                    { value: 0, label: 'Die' },
-                  ].map(day => (
-                    <button
-                      key={day.value}
-                      type="button"
-                      onClick={() => toggleDayOfWeek(day.value)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
-                        recurringDaysOfWeek.includes(day.value)
-                          ? 'bg-primary text-primary-foreground border-primary'
-                          : 'bg-background text-foreground border-border hover:bg-muted'
-                      }`}
-                    >
-                      {day.label}
-                    </button>
-                  ))}
-                </div>
-                <p className="text-[11px] text-muted-foreground mt-1.5">
-                  {recurringDaysOfWeek.length === 0 ? 'Zgjidh të paktën një ditë' : `${recurringDaysOfWeek.length} ditë të zgjedhura`}
-                </p>
-              </div>
-            )}
-
-            {recurringFrequency === 'weekly' && (
-              <div>
-                <Label>Dita e javës</Label>
-                <div className="flex flex-wrap gap-1.5 mt-1.5">
-                  {[
-                    { value: 1, label: 'Hën' },
-                    { value: 2, label: 'Mar' },
-                    { value: 3, label: 'Mër' },
-                    { value: 4, label: 'Enj' },
-                    { value: 5, label: 'Pre' },
-                    { value: 6, label: 'Sht' },
-                    { value: 0, label: 'Die' },
-                  ].map(day => (
-                    <button
-                      key={day.value}
-                      type="button"
-                      onClick={() => setRecurringDayOfWeek(day.value)}
-                      className={`px-3 py-1.5 text-xs font-medium rounded-full border transition-colors ${
-                        recurringDayOfWeek === day.value
-                          ? 'bg-primary text-primary-foreground border-primary'
-                          : 'bg-background text-foreground border-border hover:bg-muted'
-                      }`}
-                    >
-                      {day.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {recurringFrequency === 'monthly' && (
-              <div>
-                <Label>Dita e muajit</Label>
-                <Select value={String(recurringDayOfMonth)} onValueChange={(v) => setRecurringDayOfMonth(Number(v))}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {Array.from({ length: 31 }, (_, i) => i + 1).map(d => (
-                      <SelectItem key={d} value={String(d)}>Dita {d}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-
-            <p className="text-xs text-muted-foreground">
-              {recurringFrequency === 'daily'
-                ? `Çdo ${recurringInterval > 1 ? recurringInterval + ' ditë' : 'ditë'}: ${
-                    recurringDaysOfWeek.length === 0 ? 'asnjë ditë' :
-                    recurringDaysOfWeek.map(d => ['Die','Hën','Mar','Mër','Enj','Pre','Sht'][d]).join(', ')
-                  }`
-                : `Përsëritet çdo ${recurringInterval > 1 ? recurringInterval + ' ' : ''}${recurringFrequency === 'weekly' ? 'javë' : recurringFrequency === 'monthly' ? 'muaj' : 'vit'}${
-                    recurringFrequency === 'weekly' ? `, ditën e ${['Diel','Hënë','Martë','Mërkurë','Enjte','Premte','Shtunë'][recurringDayOfWeek]}s` :
-                    recurringFrequency === 'monthly' ? `, në ditën ${recurringDayOfMonth}` : ''
-                  }`
-              }
-            </p>
-          </div>
-        )}
-      </div>
-
-      <Button type="submit" className="w-full">
-        {initialData ? 'Ruaj Ndryshimet' : 'Krijo Detyrën'}
-      </Button>
-    </form>
   );
 };
 
