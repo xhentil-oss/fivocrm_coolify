@@ -55,12 +55,11 @@ function Counter({ end, suffix = '', duration = 2000 }: { end: number; suffix?: 
 
 /* ─── Static (non-translatable) package styling ─── */
 const PKG_STYLES = [
-  { id: 'starter', color: 'from-pink-400 to-rose-500', border: 'border-pink-200 hover:border-pink-400', headerBg: 'bg-gradient-to-br from-pink-50 to-rose-50', popular: false },
   { id: 'growth', color: 'from-violet-500 to-purple-600', border: 'border-violet-200 hover:border-violet-400', headerBg: 'bg-gradient-to-br from-violet-50 to-purple-50', popular: true },
   { id: 'pro', color: 'from-indigo-500 to-blue-600', border: 'border-indigo-300 hover:border-indigo-500', headerBg: 'bg-gradient-to-br from-indigo-50 to-blue-50', popular: false },
   { id: 'agency', color: 'from-amber-500 to-orange-500', border: 'border-amber-200 hover:border-amber-500', headerBg: 'bg-gradient-to-br from-amber-50 to-orange-50', popular: false },
 ];
-const COMPARE_COLORS = ['text-pink-600', 'text-violet-600', 'text-indigo-600', 'text-amber-600'];
+const COMPARE_COLORS = ['text-violet-600', 'text-indigo-600', 'text-amber-600'];
 const PAIN_ICONS = [Users, Clock, BarChart3, Search];
 const PAIN_STYLE = [
   { color: 'text-rose-500', bg: 'bg-rose-50' },
@@ -108,11 +107,8 @@ const SQ: Copy = {
       { title: 'Reklamat po konsumojnë buxhetin tuaj?', body: 'Keni investuar në Meta Ads, por rezultatet nuk kanë përmbushur pritshmëritë? Pa një strategji të mirëfilltë, optimizim të vazhdueshëm dhe targetim të saktë, reklamat mund të shpenzojnë buxhetin pa sjellë rezultatet e dëshiruara. Investoni me strategji, jo thjesht me buxhet.' },
       { title: 'Konkurrenti është kudo', body: 'Kompetitorët tuaj janë aktiv, postojnë çdo ditë dhe marrin klientët tuaj potencialë. Çdo ditë pa prezencë është mundësi e humbur.' },
     ] },
-  packages: { kicker: 'Çmimet', title: '4 paketa — 1 zgjidhje e duhur për ju', sub: 'Nga 500€/muaj deri në 2,800€/muaj. Pa kontratë — ndryshoni kur dëshironi.', idealFor: 'Ideal për', notIncluded: 'Nuk përfshihet', note: '* Buxheti i reklamave paguhet direkt te platformat (Meta/Google/TikTok) — nuk përfshihet në çmim.', compareChoose: 'Zgjidh',
+  packages: { kicker: 'Çmimet', title: '3 paketa — 1 zgjidhje e duhur për ju', sub: 'Nga 700€/muaj deri në 2,800€/muaj. Pa kontratë — ndryshoni kur dëshironi.', idealFor: 'Ideal për', notIncluded: 'Nuk përfshihet', note: '* Buxheti i reklamave paguhet direkt te platformat (Meta/Google/TikTok) — nuk përfshihet në çmim.', compareChoose: 'Zgjidh',
     pkgs: [
-      { title: 'Starter', subtitle: 'Prezencë profesionale dhe aktivitet i rregullt', price: '500€', priceNote: '/ muaj + ad spend', badge: '', cta: 'Fillo me Starter', targetAudience: ['Biznese të reja online', 'Brand-e personale & influencerë fillestarë', 'Dyqane & shërbime lokale'],
-        features: [{ category: 'Platformat & Kontent', items: ['Menaxhim 2 platformash (Facebook + Instagram)', '12 postime / muaj', '8 reels / muaj', 'Design grafik profesional', 'Copywriting & hashtag strategy', 'Kalendar mujor kontent', 'Publikim sipas orarit optimal'] }, { category: 'Reklama', items: ['Setup i fushatave Meta Ads', '1 fushatë aktive', 'Targetim bazë i audiencës'] }, { category: 'Raportim', items: ['Raport mujor bazë', 'KPIs: reach, engagement, followers'] }],
-        notIncluded: ['Buxheti i reklamave', 'TikTok / LinkedIn / YouTube', 'Xhirime video profesionale', 'Community management', 'Google Ads'] },
       { title: 'Growth', subtitle: 'Rritje e audiencës dhe gjenerim i klientëve', price: '700€', priceNote: '/ muaj + ad spend', badge: 'Popullor', cta: 'Zgjidh Growth', targetAudience: ['Biznese në rritje që duan followers', 'E-commerce & shitje online', 'Brand-e që duan lead generation'],
         features: [{ category: 'Platformat & Kontent', items: ['Menaxhim 3 platformash (FB + IG + TikTok)', '16 postime / muaj', '14 reels / muaj', '1 ditë xhirimi kontent / muaj', 'Design grafik & branding', 'Copywriting storytelling', 'Stories / Highlights optimizim', 'Kalendar strategjik kontent'] }, { category: 'Reklama', items: ['Menaxhim i plotë Meta Ads', '2–3 fushata aktive', 'Audience targeting i avancuar', 'Optimizim javor i reklamave', 'Raportim javor performancës'] }, { category: 'Community & Raportim', items: ['Community management bazë', 'Monitorim komentesh & mentions', 'Raport mujor i detajuar'] }],
         notIncluded: ['Buxheti i reklamave', 'LinkedIn / YouTube', 'Google Ads', 'Influencer management', 'Email marketing'] },
@@ -149,9 +145,9 @@ const SQ: Copy = {
     ] },
   faq: { kicker: 'FAQ', title: 'Pyetjet e shpeshta',
     items: [
-      { q: 'Cila paketë është e duhura për mua?', a: 'Varet nga qëllimet dhe buxheti juaj. Starter është ideal për prezencë profesionale, Growth për rritje audiencës, Pro për lead generation agresive, Agency për kompani të mëdha me nevojë për ekip të dedikuar. Gjatë konsultimit falas, ju rekomandojmë paketën e duhur.' },
+      { q: 'Cila paketë është e duhura për mua?', a: 'Varet nga qëllimet dhe buxheti juaj. Growth është ideal për rritje audiencës dhe prezencë të rregullt, Pro për lead generation agresive, Agency për kompani të mëdha me nevojë për ekip të dedikuar. Gjatë konsultimit falas, ju rekomandojmë paketën e duhur.' },
       { q: 'Sa kohë duhet për të parë rezultate?', a: 'Rezultate të para (rritje engagement, followers) shfaqen brenda 30 ditëve. Lead-et dhe konvertimet fillojnë pas 4–8 javësh, ndërsa rritja e qëndrueshme ndjehet pas 3 muajsh bashkëpunimi.' },
-      { q: 'Çfarë buxheti reklamash duhet?', a: 'Për paketën Starter rekomandojmë 100–200€/muaj. Growth: 200–400€/muaj. Pro: 400–800€/muaj. Agency: sipas strategjisë. Buxheti menaxhohet direkt nga ne dhe paguhet te platformat (Meta/Google).' },
+      { q: 'Çfarë buxheti reklamash duhet?', a: 'Për paketën Growth rekomandojmë 200–400€/muaj. Pro: 400–800€/muaj. Agency: sipas strategjisë. Buxheti menaxhohet direkt nga ne dhe paguhet te platformat (Meta/Google).' },
       { q: 'A mund të ndryshoj paketën pas fillimit?', a: 'Po, mund të upgradoni ose downgradoni çdo muaj. Nuk kemi kontratë afatgjatë — punojmë muaj pas muaji me rezultate.' },
       { q: 'Kush prodhon materialin vizual (foto/video)?', a: 'Ne prodhojmë çdo material. Në paketat Growth e lart, përfshihet 1–3 ditë xhirimi/muaj. Mund të shtoni edhe "Foto Profesionale" si add-on nëse keni nevojë për sesion të dedikuar.' },
       { q: 'A punoni me çdo lloj biznesi?', a: 'Po. Kemi eksperiencë në: e-commerce, restorante, hotele, bukuri & estetikë, fashion, fitness, arsim, imobiliare, teknologji, shërbime profesionale dhe shumë të tjera. Strategjia personalizohet sipas industrisë.' },
@@ -173,11 +169,8 @@ const EN: Copy = {
       { title: 'Are ads consuming your budget?', body: 'You invested in Meta Ads, but the results fell short of expectations? Without a sound strategy, continuous optimisation and precise targeting, ads can spend the budget without delivering the results you want. Invest with strategy, not with budget alone.' },
       { title: 'Competitors are everywhere', body: 'Your competitors are active, posting daily and taking your potential clients. Every day without presence is a lost opportunity.' },
     ] },
-  packages: { kicker: 'Pricing', title: '4 packages — 1 right solution for you', sub: 'From €500/month up to €2,800/month. No contract — change whenever you want.', idealFor: 'Ideal for', notIncluded: 'Not included', note: '* Ad budget is paid directly to the platforms (Meta/Google/TikTok) — not included in the price.', compareChoose: 'Choose',
+  packages: { kicker: 'Pricing', title: '3 packages — 1 right solution for you', sub: 'From €700/month up to €2,800/month. No contract — change whenever you want.', idealFor: 'Ideal for', notIncluded: 'Not included', note: '* Ad budget is paid directly to the platforms (Meta/Google/TikTok) — not included in the price.', compareChoose: 'Choose',
     pkgs: [
-      { title: 'Starter', subtitle: 'Professional presence and steady activity', price: '€500', priceNote: '/ month + ad spend', badge: '', cta: 'Start with Starter', targetAudience: ['New online businesses', 'Personal brands & early influencers', 'Local shops & services'],
-        features: [{ category: 'Platforms & Content', items: ['Management of 2 platforms (Facebook + Instagram)', '12 posts / month', '8 reels / month', 'Professional graphic design', 'Copywriting & hashtag strategy', 'Monthly content calendar', 'Publishing at optimal times'] }, { category: 'Ads', items: ['Meta Ads campaign setup', '1 active campaign', 'Basic audience targeting'] }, { category: 'Reporting', items: ['Basic monthly report', 'KPIs: reach, engagement, followers'] }],
-        notIncluded: ['Ad budget', 'TikTok / LinkedIn / YouTube', 'Professional video shoots', 'Community management', 'Google Ads'] },
       { title: 'Growth', subtitle: 'Audience growth and client generation', price: '€700', priceNote: '/ month + ad spend', badge: 'Popular', cta: 'Choose Growth', targetAudience: ['Growing businesses wanting followers', 'E-commerce & online sales', 'Brands wanting lead generation'],
         features: [{ category: 'Platforms & Content', items: ['Management of 3 platforms (FB + IG + TikTok)', '16 posts / month', '14 reels / month', '1 content shoot day / month', 'Graphic design & branding', 'Storytelling copywriting', 'Stories / Highlights optimization', 'Strategic content calendar'] }, { category: 'Ads', items: ['Full Meta Ads management', '2–3 active campaigns', 'Advanced audience targeting', 'Weekly ad optimization', 'Weekly performance reporting'] }, { category: 'Community & Reporting', items: ['Basic community management', 'Comment & mention monitoring', 'Detailed monthly report'] }],
         notIncluded: ['Ad budget', 'LinkedIn / YouTube', 'Google Ads', 'Influencer management', 'Email marketing'] },
@@ -214,9 +207,9 @@ const EN: Copy = {
     ] },
   faq: { kicker: 'FAQ', title: 'Frequently asked questions',
     items: [
-      { q: 'Which package is right for me?', a: 'It depends on your goals and budget. Starter is ideal for a professional presence, Growth for audience growth, Pro for aggressive lead generation, Agency for large companies needing a dedicated team. During the free consultation we recommend the right package.' },
+      { q: 'Which package is right for me?', a: 'It depends on your goals and budget. Growth is ideal for audience growth and a steady presence, Pro for aggressive lead generation, Agency for large companies needing a dedicated team. During the free consultation we recommend the right package.' },
       { q: 'How long until I see results?', a: 'First results (engagement and follower growth) appear within 30 days. Leads and conversions start after 4–8 weeks, while steady growth is felt after 3 months of collaboration.' },
-      { q: 'What ad budget is needed?', a: 'For Starter we recommend €100–200/month. Growth: €200–400/month. Pro: €400–800/month. Agency: per strategy. The budget is managed directly by us and paid to the platforms (Meta/Google).' },
+      { q: 'What ad budget is needed?', a: 'For Growth we recommend €200–400/month. Pro: €400–800/month. Agency: per strategy. The budget is managed directly by us and paid to the platforms (Meta/Google).' },
       { q: 'Can I change the package after starting?', a: 'Yes, you can upgrade or downgrade every month. We have no long-term contract — we work month by month with results.' },
       { q: 'Who produces the visual material (photo/video)?', a: 'We produce all material. In Growth and up, 1–3 shoot days/month are included. You can also add "Professional Photos" as an add-on if you need a dedicated session.' },
       { q: 'Do you work with any kind of business?', a: 'Yes. We have experience in: e-commerce, restaurants, hotels, beauty & aesthetics, fashion, fitness, education, real estate, technology, professional services and many more. The strategy is tailored to the industry.' },
@@ -238,11 +231,8 @@ const IT: Copy = {
       { title: 'Le ads stanno consumando il tuo budget?', body: 'Hai investito in Meta Ads, ma i risultati non hanno soddisfatto le aspettative? Senza una strategia solida, ottimizzazione continua e targeting preciso, le ads possono spendere il budget senza portare i risultati desiderati. Investi con strategia, non solo con budget.' },
       { title: 'I concorrenti sono ovunque', body: 'I tuoi concorrenti sono attivi, pubblicano ogni giorno e si prendono i tuoi clienti potenziali. Ogni giorno senza presenza è un\'opportunità persa.' },
     ] },
-  packages: { kicker: 'Prezzi', title: '4 pacchetti — 1 soluzione giusta per te', sub: 'Da 500€/mese fino a 2.800€/mese. Nessun contratto — cambia quando vuoi.', idealFor: 'Ideale per', notIncluded: 'Non incluso', note: '* Il budget pubblicitario si paga direttamente alle piattaforme (Meta/Google/TikTok) — non incluso nel prezzo.', compareChoose: 'Scegli',
+  packages: { kicker: 'Prezzi', title: '3 pacchetti — 1 soluzione giusta per te', sub: 'Da 700€/mese fino a 2.800€/mese. Nessun contratto — cambia quando vuoi.', idealFor: 'Ideale per', notIncluded: 'Non incluso', note: '* Il budget pubblicitario si paga direttamente alle piattaforme (Meta/Google/TikTok) — non incluso nel prezzo.', compareChoose: 'Scegli',
     pkgs: [
-      { title: 'Starter', subtitle: 'Presenza professionale e attività regolare', price: '500€', priceNote: '/ mese + ad spend', badge: '', cta: 'Inizia con Starter', targetAudience: ['Nuove attività online', 'Personal brand & influencer alle prime armi', 'Negozi & servizi locali'],
-        features: [{ category: 'Piattaforme & Contenuti', items: ['Gestione di 2 piattaforme (Facebook + Instagram)', '12 post / mese', '8 reels / mese', 'Grafica professionale', 'Copywriting & strategia hashtag', 'Calendario contenuti mensile', 'Pubblicazione negli orari ottimali'] }, { category: 'Pubblicità', items: ['Setup campagne Meta Ads', '1 campagna attiva', 'Targeting base del pubblico'] }, { category: 'Report', items: ['Report mensile base', 'KPI: reach, engagement, follower'] }],
-        notIncluded: ['Budget pubblicitario', 'TikTok / LinkedIn / YouTube', 'Riprese video professionali', 'Community management', 'Google Ads'] },
       { title: 'Growth', subtitle: 'Crescita del pubblico e generazione di clienti', price: '700€', priceNote: '/ mese + ad spend', badge: 'Popolare', cta: 'Scegli Growth', targetAudience: ['Attività in crescita che vogliono follower', 'E-commerce & vendite online', 'Brand che vogliono lead generation'],
         features: [{ category: 'Piattaforme & Contenuti', items: ['Gestione di 3 piattaforme (FB + IG + TikTok)', '16 post / mese', '14 reels / mese', '1 giorno di riprese / mese', 'Grafica & branding', 'Copywriting storytelling', 'Ottimizzazione Stories / Highlights', 'Calendario contenuti strategico'] }, { category: 'Pubblicità', items: ['Gestione completa Meta Ads', '2–3 campagne attive', 'Targeting avanzato del pubblico', 'Ottimizzazione settimanale', 'Report settimanale delle performance'] }, { category: 'Community & Report', items: ['Community management base', 'Monitoraggio commenti & menzioni', 'Report mensile dettagliato'] }],
         notIncluded: ['Budget pubblicitario', 'LinkedIn / YouTube', 'Google Ads', 'Influencer management', 'Email marketing'] },
@@ -279,9 +269,9 @@ const IT: Copy = {
     ] },
   faq: { kicker: 'FAQ', title: 'Domande frequenti',
     items: [
-      { q: 'Quale pacchetto fa per me?', a: 'Dipende dai tuoi obiettivi e dal budget. Starter è ideale per una presenza professionale, Growth per la crescita del pubblico, Pro per la lead generation aggressiva, Agency per grandi aziende che necessitano di un team dedicato. Durante la consulenza gratuita ti consigliamo il pacchetto giusto.' },
+      { q: 'Quale pacchetto fa per me?', a: 'Dipende dai tuoi obiettivi e dal budget. Growth è ideale per la crescita del pubblico e una presenza costante, Pro per la lead generation aggressiva, Agency per grandi aziende che necessitano di un team dedicato. Durante la consulenza gratuita ti consigliamo il pacchetto giusto.' },
       { q: 'Quanto tempo per vedere risultati?', a: 'I primi risultati (crescita di engagement e follower) appaiono entro 30 giorni. Lead e conversioni iniziano dopo 4–8 settimane, mentre la crescita stabile si sente dopo 3 mesi di collaborazione.' },
-      { q: 'Che budget pubblicitario serve?', a: 'Per Starter consigliamo 100–200€/mese. Growth: 200–400€/mese. Pro: 400–800€/mese. Agency: in base alla strategia. Il budget è gestito direttamente da noi e pagato alle piattaforme (Meta/Google).' },
+      { q: 'Che budget pubblicitario serve?', a: 'Per Growth consigliamo 200–400€/mese. Pro: 400–800€/mese. Agency: in base alla strategia. Il budget è gestito direttamente da noi e pagato alle piattaforme (Meta/Google).' },
       { q: 'Posso cambiare pacchetto dopo l\'inizio?', a: 'Sì, puoi fare upgrade o downgrade ogni mese. Non abbiamo contratti a lungo termine — lavoriamo mese per mese con risultati.' },
       { q: 'Chi produce il materiale visivo (foto/video)?', a: 'Produciamo tutto il materiale. Da Growth in su sono inclusi 1–3 giorni di riprese/mese. Puoi anche aggiungere "Foto Professionali" come extra se ti serve una sessione dedicata.' },
       { q: 'Lavorate con qualsiasi tipo di attività?', a: 'Sì. Abbiamo esperienza in: e-commerce, ristoranti, hotel, bellezza & estetica, moda, fitness, istruzione, immobiliare, tecnologia, servizi professionali e molto altro. La strategia è personalizzata per il settore.' },
@@ -449,7 +439,7 @@ const SocialMediaLandingPage: React.FC = () => {
               </div>
             </div>
           </FadeIn>
-          <div className="grid sm:grid-cols-2 xl:grid-cols-4 gap-6 items-start">
+          <div className="grid sm:grid-cols-2 xl:grid-cols-3 gap-6 items-start">
             {t.packages.pkgs.map((pkg, i) => { const style = PKG_STYLES[i]; return (
               <FadeIn key={style.id} delay={i * 100}>
                 <div className={`relative bg-white rounded-2xl border-2 ${style.border} transition-all duration-300 shadow-sm hover:shadow-xl flex flex-col overflow-hidden`}>
