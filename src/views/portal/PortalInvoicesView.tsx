@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useClientPortal } from '../../hooks/useClientPortal';
-import { useCollection, useDocument, useMutation } from '../../hooks/useFirestore';
+import { useCollection, useDocument } from '../../hooks/useFirestore';
 import { useAuth } from '../../contexts/AuthContext';
 import { Card, CardContent } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
@@ -71,7 +71,6 @@ const PortalInvoicesView: React.FC = () => {
   });
   // Read only the client's own customer doc (server-side RLS: isPortalClientDoc).
   const { data: customer } = useDocument<Customer>('customers', customerId || undefined);
-  useMutation<Invoice>('invoices');
 
   const handleStripePayment = async (invoice: Invoice) => {
     const stripeKey = import.meta.env.VITE_STRIPE_PUBLISHABLE_KEY;
@@ -325,7 +324,7 @@ const PortalInvoicesView: React.FC = () => {
                         {invoice.paymentMethod === 'Bank' ? 'Transfer' : invoice.paymentMethod}
                       </Badge>
                     )}
-                    {(invoice.status === 'Pending' || invoice.status === 'Overdue') && invoice.paymentMethod === 'Stripe' && (
+                    {(invoice.status === 'Pending' || invoice.status === 'Overdue') && (invoice.paymentMethod === 'Stripe' || !invoice.paymentMethod) && (
                       <Button
                         size="sm"
                         className="bg-[#635BFF] hover:bg-[#5851ea] text-white"
@@ -478,7 +477,10 @@ const PortalInvoicesView: React.FC = () => {
                       Hap Linkun e Pagesës
                     </Button>
                   )}
-                  {selectedInvoice.paymentMethod === 'Stripe' && (
+                  {/* An invoice with no explicit payment method can still be paid
+                      online — handleStripePayment falls back to a clear toast when
+                      Stripe isn't configured for this deployment. */}
+                  {(selectedInvoice.paymentMethod === 'Stripe' || !selectedInvoice.paymentMethod) && (
                     <Button
                       className="w-full bg-[#635BFF] hover:bg-[#5851ea] text-white"
                       onClick={() => handleStripePayment(selectedInvoice)}

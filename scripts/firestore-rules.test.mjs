@@ -952,3 +952,27 @@ test('38c. gmbPosts follow the same boundary', async () => {
     businessId: MY_BIZ, teamId: MY_TEAM, accountId: 'x', summary: 'injected',
   }));
 });
+
+// 37. Invoices are STAFF-ONLY writes. The portal client may read their own invoice
+// but must never update it (self-marking Paid without paying) or delete it (an
+// accounting record). Payment goes Stripe -> webhook (Admin SDK), never the client.
+test('37. portal client cannot mark own invoice Paid or delete it', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'invoices', 'invCarol'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1',
+      invoiceNumber: 'INV-2026-0100', total: 1000, currency: 'EUR', status: 'Pending',
+    });
+  });
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+
+  // Own invoice stays readable in the portal.
+  await assertSucceeds(getDoc(doc(carol, 'invoices', 'invCarol')));
+  // ...but is never client-writable: no self-paying, no partial edits, no delete.
+  await assertFails(updateDoc(doc(carol, 'invoices', 'invCarol'), { status: 'Paid' }));
+  await assertFails(updateDoc(doc(carol, 'invoices', 'invCarol'), { total: 1 }));
+  await assertFails(deleteDoc(doc(carol, 'invoices', 'invCarol')));
+
+  // Staff of the tenant still manage it normally.
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(updateDoc(doc(alice, 'invoices', 'invCarol'), { status: 'Paid' }));
+});

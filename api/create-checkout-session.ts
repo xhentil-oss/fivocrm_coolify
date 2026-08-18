@@ -154,9 +154,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(409).json({ error: 'Fatura është anuluar dhe nuk mund të paguhet.' });
     }
 
-    // Use server-side amount — never trust client-supplied amount
-    const amount = invoiceData.total ?? invoiceData.amount ?? 0;
-    if (typeof amount !== 'number' || amount <= 0) {
+    // Use server-side amount — never trust client-supplied amount. A partially-paid
+    // invoice (staff records cash instalments as `paidAmount`/`partialPayments`)
+    // charges only the REMAINDER — charging `total` again made the client pay the
+    // already-settled part twice.
+    const invoiceTotal = invoiceData.total ?? invoiceData.amount ?? 0;
+    const alreadyPaidRaw = Number(invoiceData.paidAmount || 0);
+    const alreadyPaid = Number.isFinite(alreadyPaidRaw) && alreadyPaidRaw > 0 ? alreadyPaidRaw : 0;
+    const amount = invoiceTotal - alreadyPaid;
+    if (typeof invoiceTotal !== 'number' || amount <= 0) {
       return res.status(400).json({ error: 'Invoice has no payable amount' });
     }
 
@@ -179,6 +185,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: `Unsupported currency: ${chargeCurrency}` });
     }
 
+    const unitAmount = Math.round(chargeAmount * 100);
+    // Stripe enforces a ~0.50 minimum per charge; failing here gives a clear 400
+    // instead of a generic 500 from Stripe's rejection.
+    if (unitAmount < 50) {
+      return res.status(400).json({ error: 'Shuma e mbetur është nën minimumin e pagesës online (0.50).' });
+    }
+
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       payment_method_types: ['card'],
       mode: 'payment',
@@ -190,7 +203,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
               name: `Fatura ${invoiceNumber || invoiceData.invoiceNumber || invoiceId.slice(0, 8)}`,
               description: customerName ? `Pagesë nga ${customerName}` : undefined,
             },
-            unit_amount: Math.round(chargeAmount * 100),
+            unit_amount: unitAmount,
           },
           quantity: 1,
         },

@@ -390,8 +390,11 @@ service cloud.firestore {
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
       allow create: if canCreateBusinessDoc();
-      allow update, delete: if canManageBusinessDoc()
-        || isPortalClientFor(resource.data.customerId);
+      // STAFF ONLY. The portal client must never write an invoice: the portal has no
+      // legitimate invoice write (payment goes through Stripe → webhook, Admin SDK),
+      // and the old `|| isPortalClientFor(...)` clause let a client mark their own
+      // invoice Paid from the browser console — or delete the accounting record.
+      allow update, delete: if canManageBusinessDoc();
     }
 
     match /payments/{docId} {

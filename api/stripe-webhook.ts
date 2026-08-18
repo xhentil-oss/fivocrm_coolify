@@ -88,6 +88,19 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
   }
 
+  // A refund on a client-invoice charge (issued from the Stripe Dashboard, e.g. for
+  // the double-payment case). The invoice is stamped and the creator notified — the
+  // STATUS is deliberately left alone: whether a refunded invoice reopens is an
+  // accounting decision, never an automatic one.
+  if (event.type === 'charge.refunded') {
+    try {
+      await handleChargeRefunded(event.data.object as Stripe.Charge);
+    } catch (err: any) {
+      console.error('[Stripe Webhook] refund handling failed:', err?.message || err);
+      return res.status(500).json({ error: 'Failed to record refund' });
+    }
+  }
+
   // ── SaaS SUBSCRIPTION lifecycle (the tenant's own plan) ────────────────────
   // Distinct from the block above, which is a TENANT'S CLIENT paying an invoice
   // (mode: 'payment'). Here the FivoCRM tenant pays FivoCRM (mode: 'subscription').
@@ -169,7 +182,14 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
   // record the payment but leave the status alone so a human reconciles instead of
   // closing a wrong total.
   const fxRate = Number(session.metadata?.fxRate) || 1;
-  const expectedCents = Math.round((Number(invoiceData.total ?? invoiceData.amount ?? 0) / fxRate) * 100);
+  const invoiceTotal = Number(invoiceData.total ?? invoiceData.amount ?? 0);
+  const alreadyPaidRaw = Number(invoiceData.paidAmount || 0);
+  const alreadyPaid = Number.isFinite(alreadyPaidRaw) && alreadyPaidRaw > 0 ? alreadyPaidRaw : 0;
+  // What the link charges is the REMAINDER (checkout subtracts recorded instalments);
+  // an instalment recorded AFTER the link was created changes the remainder and is
+  // caught here as a mismatch — exactly the "invoice changed under the link" case.
+  const remainderNative = invoiceTotal - alreadyPaid;
+  const expectedCents = Math.round((remainderNative / fxRate) * 100);
   const invCurrency = String(invoiceData.currency || '').toLowerCase();
   const payCurrency = String(session.currency || '').toLowerCase();
   // A Lek invoice is LEGITIMATELY paid in EUR, so "currency changed" is judged against
@@ -203,14 +223,53 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
     return;
   }
 
-  await invoiceRef.update({
+  const nowTs = admin.firestore.Timestamp.now();
+  const hasInstalments = alreadyPaid > 0 || Array.isArray(invoiceData.partialPayments);
+
+  // Mark Paid AND mirror into the payment ledger (arkëtime) in ONE batch: staff
+  // instalments write a `payments` row, so online payments must too or the ledger
+  // under-reports. Atomic, so a webhook retry can never mark Paid without the row
+  // (the redelivery guard would then skip the ledger forever).
+  const batch = db.batch();
+  batch.update(invoiceRef, {
     status: 'Paid',
     paidAt: admin.firestore.FieldValue.serverTimestamp(),
     paymentMethod: 'Stripe',
     stripeSessionId: session.id,
     stripePaymentIntentId: session.payment_intent as string,
+    // A partially-paid invoice closes: bring its instalment bookkeeping up to date
+    // so `paidAmount` never reads less than a Paid invoice's total.
+    ...(hasInstalments ? {
+      paidAmount: invoiceTotal,
+      partialPayments: admin.firestore.FieldValue.arrayUnion({
+        amount: remainderNative,
+        method: 'Stripe',
+        note: 'Stripe Checkout',
+        paidAt: nowTs,
+      }),
+    } : {}),
     updatedAt: admin.firestore.FieldValue.serverTimestamp(),
   });
+  // Deterministic id keyed on the session → redeliveries and retries overwrite the
+  // same row instead of double-counting a receipt.
+  batch.set(db.collection('payments').doc(`${invoiceId}_stripe_${session.id}`), {
+    invoiceId,
+    invoiceNumber: invoiceData.invoiceNumber || null,
+    customerId: invoiceData.customerId ?? null,
+    amount: remainderNative,
+    currency: invoiceData.currency || 'ALL',
+    method: 'Stripe',
+    paidAt: nowTs,
+    teamId: invoiceData.teamId ?? null,
+    businessId: invoiceData.businessId ?? null,
+    source: 'stripe',
+    sourceKey: `${invoiceId}#stripe:${session.id}`,
+    stripeSessionId: session.id,
+    stripePaymentIntentId: (session.payment_intent as string) || null,
+    chargedCents: paidCents,
+    chargedCurrency: payCurrency || null,
+  }, { merge: true });
+  await batch.commit();
 
   await notifyCreator(
     'Pagesë e Pranuar ✓',
@@ -256,6 +315,61 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
       console.error('[Stripe Webhook] WHMCS write-back threw:', err?.message || err);
       await invoiceRef.update({ whmcsPaymentSyncError: String(err?.message || err).slice(0, 500) }).catch(() => {});
     }
+  }
+}
+
+/**
+ * A charge tied to a client invoice was refunded (fully or partially) in Stripe.
+ * Stamps the invoice + its ledger row and notifies the invoice creator. Idempotent:
+ * re-stamping the same amounts is a no-op in effect, and notifications key off a
+ * change in the refunded amount.
+ */
+async function handleChargeRefunded(charge: Stripe.Charge): Promise<void> {
+  const pi = typeof charge.payment_intent === 'string' ? charge.payment_intent : charge.payment_intent?.id;
+  if (!pi) return;
+  const snap = await db.collection('invoices').where('stripePaymentIntentId', '==', pi).limit(1).get();
+  if (snap.empty) {
+    // E.g. the refund of a DOUBLE payment: the duplicate session's PI is not the one
+    // stored on the invoice. Nothing to stamp — the duplicate was already escalated.
+    console.log(`[Stripe Webhook] refund for PI ${pi} matches no invoice; ignoring.`);
+    return;
+  }
+  const invoiceRef = snap.docs[0].ref;
+  const invoiceData = snap.docs[0].data();
+  const refundedCents = charge.amount_refunded ?? 0;
+  const alreadyStamped = Number(invoiceData.stripeRefundedCents || 0);
+  if (refundedCents <= alreadyStamped) return; // redelivery / older event
+
+  const fullyRefunded = charge.refunded === true || refundedCents >= (charge.amount ?? 0);
+  await invoiceRef.update({
+    stripeRefundedCents: refundedCents,
+    stripeRefundedAt: admin.firestore.Timestamp.now(),
+    ...(fullyRefunded ? { stripeFullyRefunded: true } : {}),
+    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+  });
+  // Mirror onto the ledger row so arkëtime reports can exclude refunded receipts.
+  const ledger = await db.collection('payments').where('stripePaymentIntentId', '==', pi).limit(5).get();
+  for (const d of ledger.docs) {
+    await d.ref.update({
+      refundedCents,
+      refundedAt: admin.firestore.Timestamp.now(),
+      ...(fullyRefunded ? { refunded: true } : {}),
+    }).catch(() => {});
+  }
+
+  if (invoiceData.createdByUserId) {
+    const label = invoiceData.invoiceNumber || invoiceRef.id.slice(0, 8);
+    await notifyUser({
+      userId: invoiceData.createdByUserId,
+      type: 'invoice_paid',
+      title: fullyRefunded ? 'Pagesa u rimbursua ⚠️' : 'Rimbursim i pjesshëm ⚠️',
+      message: `Fatura ${label}: u rimbursuan ${formatAmount(refundedCents, charge.currency)} në Stripe. Statusi i faturës nuk u ndryshua — përditësoje manualisht nëse duhet.`,
+      actionUrl: '/app/invoices',
+      actionLabel: 'Shiko Faturat',
+      businessId: invoiceData.businessId ?? null,
+      teamId: invoiceData.teamId ?? null,
+      customerId: invoiceData.customerId ?? null,
+    }).catch(err => console.error('[Stripe Webhook] refund notification dështoi:', err));
   }
 }
 
