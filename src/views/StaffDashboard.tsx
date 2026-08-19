@@ -103,7 +103,7 @@ function calculateStreak(activities: (Activity & { id: string })[], userId: stri
 
 const StaffDashboard: React.FC = () => {
   const { user } = useAuth();
-  const { isGuest, dataScope } = usePermissions(); // also ensures teamId is synced
+  const { isGuest, dataScope, canEdit } = usePermissions(); // also ensures teamId is synced
   const navigate = useNavigate();
   const { toast } = useToast();
   const [showAllMyTasks, setShowAllMyTasks] = useState(false);
@@ -371,11 +371,13 @@ const StaffDashboard: React.FC = () => {
     return calculateStreak(activities, user.uid);
   }, [activities, user]);
 
-  // My active projects
+  // My active projects (uid AND email — legacy email-keyed assignments, same
+  // dual-matcher as `myIds` above)
   const myProjects = useMemo(() => {
     if (!projects || !tasks || !user) return [];
+    const mine = new Set([user.uid, user.email].filter(Boolean) as string[]);
     const myProjectIds = new Set(
-      tasks.filter(t => t.assignedToUserId === user.uid && t.projectId).map(t => t.projectId!)
+      tasks.filter(t => !!t.assignedToUserId && mine.has(t.assignedToUserId) && t.projectId).map(t => t.projectId!)
     );
     return projects
       .filter(p => myProjectIds.has(p.id) && p.status === 'Active')
@@ -465,6 +467,9 @@ const StaffDashboard: React.FC = () => {
   // labels/column).
   const handleQuickComplete = async (taskId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    // Read-only roles must not complete from the dashboard either — the rules
+    // accept any member's write, so the UI is the gate.
+    if (!canEdit) return;
     const closed = (rawTasks || []).find(t => t.id === taskId) || (myTasks || []).find(t => t.id === taskId);
     if (!closed) return;
     const outcome = await completeTask(closed, {

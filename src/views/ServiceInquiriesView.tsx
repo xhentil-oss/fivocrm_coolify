@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import { createPortal } from 'react-dom';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, useMutation, getGlobalBusinessId } from '../hooks/useFirestore';
 import { useToast } from '../hooks/use-toast';
 import { getStatusColor } from '../lib/statusColors';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -124,10 +124,17 @@ const ServiceInquiriesView: React.FC = () => {
     if (convertingId) return;
     setConvertingId(inquiry.id);
     try {
-      // Check if a lead with the same email already exists
+      // Check if a lead with the same email already exists.
+      // businessId makes the query provable under the leads read rule — an
+      // email-only list was denied for normal staff, so conversion failed.
       if (inquiry.email) {
+        const dedupeBid = (inquiry as any).businessId || getGlobalBusinessId();
         const existingSnap = await getDocs(
-          query(collection(db, 'leads'), where('email', '==', inquiry.email))
+          query(
+            collection(db, 'leads'),
+            ...(dedupeBid ? [where('businessId', '==', dedupeBid)] : []),
+            where('email', '==', inquiry.email),
+          )
         );
         if (!existingSnap.empty) {
           // Link inquiry to existing lead instead of creating a duplicate

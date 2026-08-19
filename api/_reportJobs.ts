@@ -299,6 +299,9 @@ export async function runReportSchedules(): Promise<{ created: number; skipped: 
           kind: sched.kind || tmpl.kind,
           title: `${tmpl.name}${titleSubject ? ` — ${titleSubject}` : ''} · ${verdict.period.key}`,
           status: 'draft',
+          // Drafts are never portal-visible; explicit false so the portal's
+          // provable query (`portalVisible == true`) always has the field.
+          portalVisible: false,
           period: verdict.period,
           service: sched.service || tmpl.service || null,
           customerId: sched.customerId || null,

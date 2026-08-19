@@ -63,7 +63,8 @@ const PortalProjectsView: React.FC = () => {
   const projects = React.useMemo(() => {
     if (!rawProjects) return [];
     return rawProjects.map(p => {
-      const pTasks = projectTasks?.filter(t => t.projectId === p.id) || [];
+      // Top-level only — subtasks are internal breakdown and skew the client's %.
+      const pTasks = projectTasks?.filter(t => t.projectId === p.id && !t.parentTaskId) || [];
       const done = pTasks.filter(t => t.status === 'Done').length;
       const total = pTasks.length;
       const pct = total > 0 ? Math.round((done / total) * 100) : 0;

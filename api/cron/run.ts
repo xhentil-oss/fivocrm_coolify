@@ -255,7 +255,15 @@ async function runTaskDeadlineAlerts() {
   // Only tasks whose deadline is already inside the alert window can produce an
   // alert, so the range filter does the work Firestore is good at. Previously this
   // read EVERY task of EVERY tenant on every run.
+  //
+  // Lower bound too: without it the read set was "every past-dated task ever,
+  // platform-wide, incl. Done and already-alerted ones", growing forever. A task
+  // overdue by 60+ days has either been alerted (flag set within the window) or
+  // is dead — same-field range, so no composite index is needed.
+  const overdueFloor = new Date(now);
+  overdueFloor.setDate(overdueFloor.getDate() - 60);
   const tasksSnap = await db.collection('tasks')
+    .where('endDate', '>=', admin.firestore.Timestamp.fromDate(overdueFloor))
     .where('endDate', '<=', admin.firestore.Timestamp.fromDate(alertThreshold))
     .get();
   let notified = 0;
@@ -282,13 +290,16 @@ async function runTaskDeadlineAlerts() {
     else if (isDueSoon && !isOverdue && !dueSent) stage = 'due_soon';
     if (!stage) continue;
 
-    const daysLeft = Math.ceil((endDate.getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
-    const overdueByDays = Math.abs(daysLeft);
+    // CALENDAR days in the recurrence zone, not an hour-based ceil — Math.ceil
+    // returned ≥1 for any future time-of-day, so "skadon sot" was unreachable
+    // (a task due later today always said "për 1 ditë").
+    const dayDiff = Math.round((startOfRecurrenceDay(endDate) - startOfRecurrenceDay(now)) / 86400000);
+    const overdueByDays = Math.max(1, -dayDiff);
     const isOverdueAlert = stage === 'overdue';
     const notifTitle = isOverdueAlert ? `⚠️ Detyrë e skaduara: ${task.title}` : `⏰ Afati afrohet: ${task.title}`;
     const notifMessage = isOverdueAlert
       ? `Detyra "${task.title}" ka kaluar afatin prej ${overdueByDays} ditë.`
-      : `Detyra "${task.title}" skadon ${daysLeft === 0 ? 'sot' : `për ${daysLeft} ditë`}.`;
+      : `Detyra "${task.title}" skadon ${dayDiff <= 0 ? 'sot' : `për ${dayDiff} ditë`}.`;
 
     // Doc + push (every registered device), through the shared preference gates.
     // Deep link to the task itself (mirrors taskDeepLink in src/lib/deepLinks.ts —
@@ -1158,7 +1169,9 @@ async function runRecurringProjectReset() {
     if (tasksSnap.empty) continue;
     if (!tasksSnap.docs.every(t => t.data().status === 'Done')) continue;
 
-    for (const taskDoc of tasksSnap.docs) ops.push(taskDoc.ref.update({ status: 'Todo', updatedAt: admin.firestore.Timestamp.now(), dueNotificationSent: false }));
+    // BOTH alert flags reset — clearing only dueNotificationSent left reused
+    // tasks unable to overdue-alert ever again.
+    for (const taskDoc of tasksSnap.docs) ops.push(taskDoc.ref.update({ status: 'Todo', updatedAt: admin.firestore.Timestamp.now(), dueNotificationSent: false, overdueNotificationSent: false }));
     ops.push(projectDoc.ref.update({ status: 'Active', nextRecurringDate: nextCycle, updatedAt: admin.firestore.Timestamp.now() }));
     if (project.responsibleUserId) ops.push(notifyUser({ userId: project.responsibleUserId, type: 'project_cycle_reset', title: `🔄 Projekti "${project.name}" u riaktivizua`, message: `Cikli i ri ka filluar. Të gjitha detyrat janë rivendosur te "Për të bërë".`, actionUrl: `/app/projects/${projectDoc.id}`, actionLabel: 'Shiko Projektin', businessId: project.businessId ?? null, teamId: project.teamId ?? null, customerId: project.customerId ?? null, projectId: projectDoc.id }));
     resetCount++;
@@ -3411,6 +3424,18 @@ const TENANT_DATA_COLLECTIONS = [
   'socialSnapshots', 'products', 'productCategories', 'productBrands', 'stockMovements',
   'shopOrders', 'conversations', 'auditLogs', 'notifications', 'dailyReportMisses',
   'gmbAccounts', 'gmbReviews', 'gmbPosts',
+  // Reporting module — client deliverables, internal commentary and per-employee
+  // accountability scores; all businessId-stamped but previously missing here,
+  // so "delete everything" reported complete while every report survived.
+  'reports', 'reportVersions', 'reportComments', 'reportApprovals', 'reportEvents',
+  'reportTemplates', 'reportSchedules', 'reportKpis', 'reportMetrics',
+  'clientHealthScores', 'employeeReportScores',
+  // contactMerges holds the FULL snapshot of an absorbed contact (the only copy
+  // once the duplicate is deleted) — personal data that must not survive erasure.
+  'contactMerges',
+  // Portal login records (client emails), staff profiles, per-tenant social OAuth
+  // tokens, and the expense-dedupe archive — all businessId-stamped PII/credentials.
+  'clientPortalAccess', 'userProfiles', 'socialAccounts', 'expenseDeduped',
 ];
 
 /**
@@ -3510,7 +3535,24 @@ async function runTenantDelete(businessId: string, confirm: string, opts?: { dry
   // Structure + credentials last, and only once the data is gone.
   if (!exhausted) {
     const teamsSnap = await db.collection('teams').where('businessId', '==', businessId).get();
+    // WhatsApp content is deliberately NOT businessId-stamped (reads are
+    // team-scoped), so the businessId sweep above can never touch it — but it
+    // is real conversations with real people and must not survive erasure.
+    // Swept here by teamId, BEFORE the team docs go (they are the only link).
     for (const t of teamsSnap.docs) {
+      for (const coll of ['whatsappMessages', 'whatsappThreads', 'whatsappAccounts', 'whatsappConversations']) {
+        if (exhausted) break;
+        try {
+          const waSnap = await db.collection(coll).where('teamId', '==', t.id).limit(2000).get();
+          if (!waSnap.empty) await deleteQuery(coll, waSnap);
+          if (waSnap.size === 2000) exhausted = true;
+        } catch (err: any) {
+          console.error(`[tenant-delete] ${coll} (team ${t.id}) failed:`, err?.message || err);
+        }
+      }
+    }
+    for (const t of teamsSnap.docs) {
+      if (exhausted) break;
       if (!opts?.dryRun) {
         await db.collection('teamSettings').doc(t.id).delete().catch(() => {});
         await db.collection('teamSecrets').doc(t.id).delete().catch(() => {});
@@ -3518,11 +3560,14 @@ async function runTenantDelete(businessId: string, confirm: string, opts?: { dry
       }
       totalDeleted += 3;
     }
-    // publicTenants entry (subdomain → tenant) and finally the business itself.
-    const bizSnap = await db.collection('businesses').doc(businessId).get();
-    const sub = bizSnap.exists ? (bizSnap.data() as any)?.portalSubdomain : null;
-    if (sub && !opts?.dryRun) await db.collection('publicTenants').doc(String(sub)).delete().catch(() => {});
-    if (!opts?.dryRun) await db.collection('businesses').doc(businessId).delete().catch(() => {});
+    // publicTenants entry (subdomain → tenant) and finally the business itself —
+    // but only when the WhatsApp sweep above finished too (resume otherwise).
+    if (!exhausted) {
+      const bizSnap = await db.collection('businesses').doc(businessId).get();
+      const sub = bizSnap.exists ? (bizSnap.data() as any)?.portalSubdomain : null;
+      if (sub && !opts?.dryRun) await db.collection('publicTenants').doc(String(sub)).delete().catch(() => {});
+      if (!opts?.dryRun) await db.collection('businesses').doc(businessId).delete().catch(() => {});
+    }
   }
 
   // The audit entry is written OUTSIDE the tenant (businessId kept for traceability)
@@ -3964,6 +4009,12 @@ async function runBackfillCustomerId(opts?: { reset?: boolean }) {
       snap.docs.forEach(d => {
         const data = d.data() as any;
         if (data.customerId) return;
+        // taskComments: customerId IS the client-visibility switch (the portal
+        // reads `customerId == mine`). Blanket-stamping it would publish every
+        // internal staff comment on a client task to the portal — stamp only
+        // comments the CLIENT authored; staff ones stay internal unless the
+        // composer marked them client-visible (which sets customerId itself).
+        if (col === 'taskComments' && data.senderType !== 'client') return;
         const pid = data[parentKey];
         const cid = pid ? lookup.get(pid) : undefined;
         if (cid) toUpdate.push({ ref: d.ref, customerId: cid });

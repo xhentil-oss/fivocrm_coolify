@@ -168,9 +168,11 @@ const SmartSuggestions: React.FC<SmartSuggestionsProps> = ({
   const customerRevenueMap = useMemo(() => {
     const map = new Map<string, number>();
     invoices?.forEach(inv => {
-      if (inv.customerId && (inv.status === 'Paid' || inv.status === 'Pending')) {
+      // Paid only (Pending is hope, not revenue), normalized to ALL — summing
+      // EUR and Lek totals raw under-scored every EUR-billed client's VIP rank.
+      if (inv.customerId && inv.status === 'Paid') {
         const current = map.get(inv.customerId) || 0;
-        map.set(inv.customerId, current + (inv.total ?? inv.amount ?? 0));
+        map.set(inv.customerId, current + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency));
       }
     });
     return map;

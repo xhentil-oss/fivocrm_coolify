@@ -513,8 +513,15 @@ const TeamsView: React.FC = () => {
         await Promise.all(invitesSnap.docs.map(d => deleteDoc(doc(db, 'teamInvites', d.id))));
       }
 
-      // Cascade: remove userId from memberUserIds in this team's projects only
-      const projectsSnap = await getDocs(query(collection(db, 'projects'), where('teamId', '==', member.teamId)));
+      // Cascade: remove userId from memberUserIds in this team's projects only.
+      // businessId first — the projects read rule proves nothing from teamId, so
+      // this query was denied for every non-super-admin and the removal
+      // half-failed with "Gabim!" AFTER the member was already deleted.
+      const projectsSnap = await getDocs(query(
+        collection(db, 'projects'),
+        ...(businessId ? [where('businessId', '==', businessId)] : []),
+        where('teamId', '==', member.teamId),
+      ));
       await Promise.all(
         projectsSnap.docs
           .filter(d => ((d.data().memberUserIds as string[]) || []).includes(member.userId))
@@ -870,8 +877,15 @@ const TeamsView: React.FC = () => {
               onClick={async () => {
                 if (!teamToDelete) return;
                 await teamMutation.remove(teamToDelete.id);
+                // teamMembers needs businessId to be provable (no read clause is
+                // satisfiable from teamId alone → denied for non-super-admins);
+                // teamInvites is fine as-is (isTeamAdmin(teamId) is evaluable).
                 const [membersSnap, invitesSnap] = await Promise.all([
-                  getDocs(query(collection(db, 'teamMembers'), where('teamId', '==', teamToDelete.id))),
+                  getDocs(query(
+                    collection(db, 'teamMembers'),
+                    ...(businessId ? [where('businessId', '==', businessId)] : []),
+                    where('teamId', '==', teamToDelete.id),
+                  )),
                   getDocs(query(collection(db, 'teamInvites'), where('teamId', '==', teamToDelete.id))),
                 ]);
                 await Promise.all([

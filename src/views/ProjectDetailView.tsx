@@ -737,9 +737,15 @@ const ProjectDetailView: React.FC = () => {
     }
   };
 
-  const handleAddComment = async (taskId: string, content: string) => {
+  const handleAddComment = async (taskId: string, content: string, opts?: { visibleToClient?: boolean }) => {
     // Return the created doc — the panel needs its id to deep-link the notifications.
-    return commentMutation.create({ taskId, content });
+    // customerId is the client-visibility switch — stamped only on request.
+    const customerId = opts?.visibleToClient ? (project as any)?.customerId : undefined;
+    return commentMutation.create({
+      taskId,
+      content,
+      ...(customerId ? { customerId, senderType: 'team' } : {}),
+    } as any);
   };
 
   // Reply to the client in the project-level discussion. The client's notification
@@ -932,6 +938,12 @@ const ProjectDetailView: React.FC = () => {
 
   const handleDragEnd = async (event: DragEndEvent) => {
     setActiveTaskId(null);
+    // Guests are view+comment only. The guard used to live only inside
+    // handleTaskUpdate (which silently no-ops), so a guest's drag-to-Done still
+    // ran completeTask: the claim wrote `nextCycleCreated: true` (guests ARE
+    // business members, rules accept it), the next cycle spawned, the status
+    // write no-opped — a corrupted, still-open series plus false notifications.
+    if (isGuestOnProject) return;
     const { active, over } = event;
     if (!over) return;
     const taskId = String(active.id);
@@ -1783,7 +1795,10 @@ const ProjectDetailView: React.FC = () => {
               onDeleteComment={handleDeleteComment}
               onToggleReaction={handleToggleReaction}
               onUpdate={handleTaskUpdate}
-              onDelete={(id) => deleteTaskCascade(id)}
+              onDelete={(id) => deleteTaskCascade(id).catch(err => {
+                console.error('[Tasks] fshirja dështoi:', err);
+                toast({ title: 'Detyra nuk u fshi', description: err?.message, variant: 'destructive' });
+              })}
               projects={project ? [project] : undefined}
               onSelectSubtask={(subtask) => setSelectedTask(subtask)}
               isProjectGuest={isGuestOnProject}

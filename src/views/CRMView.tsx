@@ -767,7 +767,13 @@ const CRMView: React.FC = () => {
   // source of truth). Finds the deal by leadId and advances its stage.
   const syncDealFromLead = async (leadId: string, stage: 'Won' | 'Lost') => {
     try {
-      const snap = await getDocs(query(collection(db, 'deals'), where('leadId', '==', leadId)));
+      // businessId makes the query provable under the deals rule — a leadId-only
+      // list is denied outright for non-super-admins ("rules are not filters").
+      const snap = await getDocs(query(
+        collection(db, 'deals'),
+        ...(activeBusinessId ? [where('businessId', '==', activeBusinessId)] : []),
+        where('leadId', '==', leadId),
+      ));
       await Promise.all(snap.docs
         .filter(d => { const s = d.data().stage; return s !== 'Won' && s !== 'Lost'; })
         .map(d => dealMutation.update(d.id, { stage, ...(stage === 'Won' ? { wonAt: new Date() } : { lostAt: new Date() }), lastActivityAt: new Date() } as any)));

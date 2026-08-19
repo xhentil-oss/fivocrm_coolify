@@ -364,8 +364,23 @@ export interface NotifyUserResult {
  * transport failure can never lose the notification.
  */
 export async function notifyUser(input: NotifyUserInput): Promise<NotifyUserResult> {
-  const userId = input.userId ? String(input.userId) : '';
+  let userId = input.userId ? String(input.userId) : '';
   if (!userId) return { written: false, skipped: 'no-user' };
+
+  // Legacy identity guard: `teamMembers.userId` was sometimes an EMAIL, and the
+  // pickers copied it verbatim into assignedToUserId — so a notification keyed
+  // on it reached nobody (the bell reads by uid, push tokens live at
+  // userPushTokens/{uid}, prefs at userPreferences/{uid}). Resolve it to the
+  // real uid here, at the single delivery choke point.
+  if (userId.includes('@')) {
+    try {
+      const auth = await admin.auth().getUserByEmail(userId.trim().toLowerCase());
+      userId = auth.uid;
+    } catch {
+      console.error(`[notifyUser] recipient "${userId}" is an email with no auth user — notification dropped`);
+      return { written: false, skipped: 'no-user' };
+    }
+  }
   if (input.actorUserId && input.actorUserId === userId) return { written: false, skipped: 'self' };
 
   // Both are contract violations by the CALLER, surfaced loudly instead of silently

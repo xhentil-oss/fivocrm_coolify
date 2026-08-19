@@ -230,7 +230,8 @@ const PortalDashboard: React.FC = () => {
   const customerProjects = React.useMemo(() => {
     if (!rawProjects) return [];
     return rawProjects.map(p => {
-      const projectTasks = allTasks?.filter(t => t.projectId === p.id) || [];
+      // Top-level only — subtasks are internal breakdown and skew the client's %.
+      const projectTasks = allTasks?.filter(t => t.projectId === p.id && !t.parentTaskId) || [];
       const done = projectTasks.filter(t => t.status === 'Done').length;
       const total = projectTasks.length;
       return { ...p, done, total, pct: total > 0 ? Math.round((done / total) * 100) : 0 };

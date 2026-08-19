@@ -1168,7 +1168,7 @@ const ChatView: React.FC = () => {
         assigneeUid = (match as any)?.userId;
       }
       try {
-        await taskMutation.create({
+        const createdTask = await taskMutation.create({
           title: a.title.trim(),
           description: `Krijuar automatikisht nga AI bazuar në bisedë.`,
           status: 'Todo',
@@ -1176,6 +1176,18 @@ const ChatView: React.FC = () => {
           assignedToUserId: assigneeUid || user.uid,
           createdByUserId: user.uid,
         } as any);
+        // Chat was the only assignment surface that didn't notify the assignee.
+        if (assigneeUid && assigneeUid !== user.uid) {
+          notificationMutation.create({
+            userId: assigneeUid,
+            type: 'task_assigned',
+            title: 'Detyrë e Re e Caktuar',
+            message: `Ju u caktuat te detyra: ${a.title.trim()}`,
+            isRead: false,
+            actionUrl: `/app/tasks?taskId=${(createdTask as any)?.id || ''}`,
+            actionLabel: 'Shiko Detyrën',
+          } as any).catch(err => console.error('[Notifications] task_assigned dërgim dështoi:', err));
+        }
         created++;
       } catch (err) {
         console.error('[ChatView] create proposed task failed', err);
@@ -1385,15 +1397,35 @@ const ChatView: React.FC = () => {
       ? `Nga ${senderName} në chat:\n\n${taskFromMsgSource.content || ''}`
       : '';
     try {
-      await taskMutation.create({
+      // endDate, not the legacy dueDate: the deadline cron, calendar, timeline
+      // and every date UI key on endDate — a chat task with only dueDate got no
+      // due/overdue alert and was invisible on calendar/timeline.
+      const due = taskFromMsgDueDate ? new Date(taskFromMsgDueDate) : undefined;
+      if (due) due.setHours(17, 0, 0, 0);
+      const assignee = taskFromMsgAssignee || user.uid;
+      const created = await taskMutation.create({
         title: taskFromMsgTitle.trim() || 'Detyrë nga chat',
         description,
         status: 'Todo',
         priority: taskFromMsgPriority,
-        assignedToUserId: taskFromMsgAssignee || user.uid,
-        dueDate: taskFromMsgDueDate ? new Date(taskFromMsgDueDate) : undefined,
+        assignedToUserId: assignee,
+        ...(due ? { startDate: due, endDate: due } : {}),
+        dueNotificationSent: false,
         createdByUserId: user.uid,
       } as any);
+      // Every other assignment surface notifies the assignee — chat was the
+      // exception, so tasks delegated from a conversation went unseen.
+      if (assignee !== user.uid) {
+        notificationMutation.create({
+          userId: assignee,
+          type: 'task_assigned',
+          title: 'Detyrë e Re e Caktuar',
+          message: `Ju u caktuat te detyra: ${taskFromMsgTitle.trim() || 'Detyrë nga chat'}`,
+          isRead: false,
+          actionUrl: `/app/tasks?taskId=${(created as any)?.id || ''}`,
+          actionLabel: 'Shiko Detyrën',
+        } as any).catch(err => console.error('[Notifications] task_assigned dërgim dështoi:', err));
+      }
       toast({ title: 'Detyra u krijua', description: 'U shtua në listën e detyrave.' });
       setTaskFromMsgOpen(false);
       setTaskFromMsgSource(null);

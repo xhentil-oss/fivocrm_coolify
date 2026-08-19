@@ -59,7 +59,12 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
     }
     let min = dated[0].start, max = dated[0].end;
     dated.forEach(d => { if (d.start < min) min = d.start; if (d.end > max) max = d.end; });
-    const start = startOfDay(min);
+    // Anchor around TODAY, not the oldest task: one stale year-old task used to
+    // pin the window start so far back that the 370-day cap ran out before
+    // today — the today marker vanished and current bars rendered past the grid.
+    const floor = startOfDay(new Date());
+    floor.setDate(floor.getDate() - 60);
+    const start = startOfDay(min < floor ? floor : min);
     // Cap the window so a far-future task can't render thousands of day columns.
     const days = Math.min(370, Math.max(7, daysBetween(start, max) + 2));
     return { start, days };
@@ -139,8 +144,13 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
             <div className="absolute top-0 bottom-0 w-px bg-primary/50 z-[5]" style={{ left: labelW + todayOffset * DAY_W + DAY_W / 2 }} />
           )}
           {dated.map(({ task, start, end }) => {
-            const left = labelW + daysBetween(range.start, start) * DAY_W;
-            const span = Math.max(1, daysBetween(start, end) + 1);
+            // Clamp into the visible window: a bar starting before the anchored
+            // range.start (or ending past the cap) must not paint outside the
+            // labeled grid into a dateless void.
+            const startIdx = Math.max(0, Math.min(range.days - 1, daysBetween(range.start, start)));
+            const endIdx = Math.max(startIdx, Math.min(range.days - 1, daysBetween(range.start, end)));
+            const left = labelW + startIdx * DAY_W;
+            const span = Math.max(1, endIdx - startIdx + 1);
             const width = span * DAY_W - 6;
             return (
               <div key={task.id} className="relative flex items-center border-b border-border/30" style={{ height: ROW_H }}>

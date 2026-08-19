@@ -50,12 +50,16 @@ const PortalReportsView: React.FC = () => {
     where: [
       { field: 'businessId', operator: '==', value: businessId || '' },
       { field: 'customerId', operator: '==', value: customerId || '' },
+      // The provable form of "published + client-facing + not deleted" — the
+      // rule keys on this denormalized flag; without it the whole query was
+      // denied for every real portal client.
+      { field: 'portalVisible', operator: '==', value: true },
     ],
     skipTeamFilter: true,
     skipBusinessFilter: true,
   });
 
-  /** Published, client-facing, not deleted — mirroring the Firestore rule exactly. */
+  /** Belt-and-braces client-side mirror of the flag's definition. */
   const reports = useMemo(() => (rawReports || [])
     .filter(r => PUBLISHED_STATUSES.has(r.status))
     .filter(r => isClientFacingKind(r.kind))
@@ -160,6 +164,10 @@ const PortalReportDetail: React.FC<{
     where: [
       { field: 'reportId', operator: '==', value: report.id },
       { field: 'internal', operator: '==', value: false },
+      // The rule's portal clause is `isPortalClientFor(customerId)` — the query
+      // must pin customerId or the listener is denied for every real client
+      // (customerId is denormalized onto comments for exactly this).
+      { field: 'customerId', operator: '==', value: customerId },
     ],
     skipTeamFilter: true,
     skipBusinessFilter: true,

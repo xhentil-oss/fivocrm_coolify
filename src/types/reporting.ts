@@ -284,6 +284,10 @@ export interface Report {
 
   /** Soft delete — reports tied to financial/legal records are never hard-deleted. */
   deletedAt?: Date | null;
+  /** Denormalized: published + client-facing + not deleted. The portal's list
+   *  query and the read rule key on this single provable equality. Recomputed
+   *  by transitionPatch/softDelete/restore; false at creation. */
+  portalVisible?: boolean;
   deletedByUserId?: string | null;
   /** Blocks hard deletion (invoice/contract linkage, client sign-off). */
   legalHold?: boolean;

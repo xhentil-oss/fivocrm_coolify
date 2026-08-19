@@ -57,19 +57,22 @@ const PortalProjectDetailView: React.FC = () => {
   const { data: project, loading: projectLoading } = useDocument<Project>('projects', projectId || '');
 
   // Fetch tasks for this project, scoped by customerId so the RLS rule
-  // (isPortalClientFor) holds for every returned doc.
+  // (isPortalClientFor) holds for every returned doc. `skip` until customerId
+  // resolves — the old projectId-only fallback was unprovable under the rule,
+  // so every portal project open started with a denied listener.
   const { data: rawTasks } = useCollection<Task>('tasks', {
-    where: customerId
-      ? [
-          { field: 'projectId', operator: '==', value: projectId || '' },
-          { field: 'customerId', operator: '==', value: customerId },
-        ]
-      : [{ field: 'projectId', operator: '==', value: projectId || '' }],
+    where: [
+      { field: 'projectId', operator: '==', value: projectId || '' },
+      { field: 'customerId', operator: '==', value: customerId || '' },
+    ],
     skipTeamFilter: true,
+    skip: !customerId,
   });
   const tasks = React.useMemo(() => {
     if (!rawTasks) return [];
-    return [...rawTasks].sort((a, b) => {
+    // Top-level only: subtasks are the agency's internal work breakdown — they
+    // inflated "Detyra Totale" vs the staff view and rendered flat to the client.
+    return rawTasks.filter(t => !t.parentTaskId).sort((a, b) => {
       const statusOrder: Record<string, number> = { 'In Progress': 0, 'Todo': 1, 'Review': 2, 'Done': 3 };
       return (statusOrder[a.status] ?? 4) - (statusOrder[b.status] ?? 4);
     });
@@ -93,15 +96,15 @@ const PortalProjectDetailView: React.FC = () => {
   }, [rawTaskComments, projectTaskIds]);
 
   // Project comments — scoped by projectId AND customerId so the RLS rule
-  // (isPortalClientFor) holds for every returned doc.
+  // (isPortalClientFor) holds for every returned doc. `skip` until customerId
+  // resolves (a projectId-only query is unprovable → denied listener).
   const { data: rawComments } = useCollection<ProjectComment>('projectComments', {
-    where: customerId
-      ? [
-          { field: 'projectId', operator: '==', value: projectId || '' },
-          { field: 'customerId', operator: '==', value: customerId },
-        ]
-      : [{ field: 'projectId', operator: '==', value: projectId || '' }],
+    where: [
+      { field: 'projectId', operator: '==', value: projectId || '' },
+      { field: 'customerId', operator: '==', value: customerId || '' },
+    ],
     skipTeamFilter: true,
+    skip: !customerId,
   });
   const comments = React.useMemo(() => {
     if (!rawComments) return [];
@@ -361,7 +364,10 @@ const PortalProjectDetailView: React.FC = () => {
         </Card>
       </div>
 
-      {/* Budget info */}
+      {/* Budget info — the agreed price ONLY. `project.spent` is the agency's
+          INTERNAL cost rollup (salaries + expenses, see project-spend-rollup);
+          rendering it here showed every client the agency's margin on them —
+          with a red bar whenever the agency was losing money on the retainer. */}
       {project.budget != null && project.budget > 0 && (
         <Card>
           <CardContent className="py-4">
@@ -370,18 +376,7 @@ const PortalProjectDetailView: React.FC = () => {
                 <DollarSign className="h-5 w-5 text-muted-foreground" />
                 <span className="text-sm font-medium">Buxheti</span>
               </div>
-              <div className="text-right">
-                <span className="font-semibold">{(project.spent || 0).toLocaleString()}</span>
-                <span className="text-muted-foreground"> / {project.budget.toLocaleString()} {currencySymbol(project.currency)}</span>
-              </div>
-            </div>
-            <div className="w-full h-2 bg-muted rounded-full overflow-hidden mt-2">
-              <div
-                className={`h-full rounded-full transition-all ${
-                  (project.spent || 0) > project.budget ? 'bg-red-500' : 'bg-primary'
-                }`}
-                style={{ width: `${Math.min(100, Math.round(((project.spent || 0) / project.budget) * 100))}%` }}
-              />
+              <span className="font-semibold">{project.budget.toLocaleString()} {currencySymbol(project.currency)}</span>
             </div>
           </CardContent>
         </Card>

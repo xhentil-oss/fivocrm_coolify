@@ -1027,3 +1027,107 @@ test('39c. task update may never move the task to another business', async () =>
   await assertFails(updateDoc(doc(alice, 'tasks', 'taskHop'), { businessId: VICTIM_BIZ }));
   await assertSucceeds(updateDoc(doc(alice, 'tasks', 'taskHop'), { status: 'InProgress', businessId: MY_BIZ }));
 });
+
+// 40. Deals & leadActivities — these two collections had NO rule at all
+// (default-deny killed the pipeline module for every non-super-admin), so the
+// new blocks must both work for tenant staff and hold the tenant boundary.
+test('40a. staff manage own-tenant deals; cross-tenant denied', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'deals', 'dealMine'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, title: 'Upsell', stage: 'Qualified', leadId: 'leadX',
+    });
+    await setDoc(doc(ctx.firestore(), 'deals', 'dealVictim'), {
+      businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, title: 'Victim deal', stage: 'Qualified',
+    });
+  });
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(getDoc(doc(alice, 'deals', 'dealMine')));
+  await assertSucceeds(updateDoc(doc(alice, 'deals', 'dealMine'), { stage: 'Won', businessId: MY_BIZ }));
+  await assertFails(getDoc(doc(alice, 'deals', 'dealVictim')));
+  await assertFails(updateDoc(doc(alice, 'deals', 'dealMine'), { businessId: VICTIM_BIZ }));
+  await assertFails(setDoc(doc(alice, 'deals', 'dealForged'), { businessId: VICTIM_BIZ, title: 'forged' }));
+});
+
+test('40b. leadActivities are readable/creatable in-tenant, append-only', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'leadActivities', 'actMine'), {
+      businessId: MY_BIZ, leadId: 'leadX', type: 'note', note: 'called them',
+    });
+    await setDoc(doc(ctx.firestore(), 'leadActivities', 'actVictim'), {
+      businessId: VICTIM_BIZ, leadId: 'leadV', type: 'note', note: 'secret',
+    });
+  });
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(getDoc(doc(alice, 'leadActivities', 'actMine')));
+  await assertSucceeds(setDoc(doc(alice, 'leadActivities', 'actNew'), {
+    businessId: MY_BIZ, leadId: 'leadX', type: 'note', note: 'follow-up',
+  }));
+  await assertFails(getDoc(doc(alice, 'leadActivities', 'actVictim')));
+  // Append-only: history can't be rewritten or erased from the client.
+  await assertFails(updateDoc(doc(alice, 'leadActivities', 'actMine'), { note: 'rewritten' }));
+  await assertFails(deleteDoc(doc(alice, 'leadActivities', 'actMine')));
+});
+
+// 41. teamMembers identity self-heal: a LEGACY row keyed by the signer's email
+// may re-point userId to their own uid (and nothing else) — the old self-branch
+// required userId == uid, false for exactly the rows needing repair.
+test('41. email-keyed member row can self-heal to own uid, nothing more', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'teamMembers', `${MY_TEAM}_dora@mine.com`), {
+      userId: 'dora@mine.com', email: 'dora@mine.com',
+      teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active',
+    });
+  });
+  const dora = testEnv.authenticatedContext('doraUid', { email: 'dora@mine.com' }).firestore();
+  // The legitimate repair: userId → own uid.
+  await assertSucceeds(updateDoc(doc(dora, 'teamMembers', `${MY_TEAM}_dora@mine.com`), {
+    userId: 'doraUid',
+  }));
+  // A different email cannot hijack the row.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'teamMembers', `${MY_TEAM}_eda@mine.com`), {
+      userId: 'eda@mine.com', email: 'eda@mine.com',
+      teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active',
+    });
+  });
+  await assertFails(updateDoc(doc(dora, 'teamMembers', `${MY_TEAM}_eda@mine.com`), {
+    userId: 'doraUid',
+  }));
+  // The self-heal cannot smuggle a role change alongside.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'teamMembers', `${MY_TEAM}_fisnik@mine.com`), {
+      userId: 'fisnik@mine.com', email: 'fisnik@mine.com',
+      teamId: MY_TEAM, businessId: MY_BIZ, role: 'Member', status: 'Active',
+    });
+  });
+  const fisnik = testEnv.authenticatedContext('fisnikUid', { email: 'fisnik@mine.com' }).firestore();
+  await assertFails(updateDoc(doc(fisnik, 'teamMembers', `${MY_TEAM}_fisnik@mine.com`), {
+    userId: 'fisnikUid', role: 'Admin',
+  }));
+});
+
+// 42. Reports portal visibility keys on the denormalized portalVisible flag.
+test('42. portal client reads only portalVisible reports of their own customer', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'reports', 'repVisible'), {
+      businessId: MY_BIZ, customerId: 'cust1', kind: 'client-monthly',
+      status: 'published', portalVisible: true, title: 'Raporti mujor',
+    });
+    await setDoc(doc(ctx.firestore(), 'reports', 'repDraft'), {
+      businessId: MY_BIZ, customerId: 'cust1', kind: 'client-monthly',
+      status: 'draft', portalVisible: false, title: 'Draft i brendshëm',
+    });
+    await setDoc(doc(ctx.firestore(), 'reports', 'repLegacy'), {
+      businessId: MY_BIZ, customerId: 'cust1', kind: 'client-monthly',
+      status: 'published', title: 'Pa flamur (para backfill-it)',
+    });
+  });
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+  await assertSucceeds(getDoc(doc(carol, 'reports', 'repVisible')));
+  await assertFails(getDoc(doc(carol, 'reports', 'repDraft')));
+  // Missing flag = not visible (fail-closed until the backfill stamps it).
+  await assertFails(getDoc(doc(carol, 'reports', 'repLegacy')));
+  // Staff of the tenant still read everything.
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(getDoc(doc(alice, 'reports', 'repDraft')));
+});

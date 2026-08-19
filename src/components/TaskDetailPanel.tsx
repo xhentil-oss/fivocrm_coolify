@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { TaskLabels, LabelEditor } from './TaskLabels';
 import { useCollection, useMutation } from '../hooks/useFirestore';
-import { completeTask, addFrequency, recurrenceDayOfWeek, recurrenceDayOfMonth } from '../lib/recurringUtils';
+import { completeTask, addFrequency, recurrenceDayOfWeek, recurrenceDayOfMonth, hasLiveSeriesSibling } from '../lib/recurringUtils';
 import { deleteTaskCascade } from '../lib/deleteCascade';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { entryDurationMinutes, totalTrackedMinutes } from '../lib/timeTracking';
@@ -139,7 +139,7 @@ interface TaskDetailPanelProps {
   comments: TaskComment[];
   /** Returns the created comment (with its id) when the caller can provide it —
    *  that id becomes the deep link carried by the comment notifications. */
-  onAddComment: (taskId: string, content: string) => void | Promise<any>;
+  onAddComment: (taskId: string, content: string, opts?: { visibleToClient?: boolean }) => void | Promise<any>;
   /** Comment to scroll to + flash, set when arriving from a notification. */
   focusCommentId?: string | null;
   onEditComment?: (commentId: string, content: string) => void | Promise<any>;
@@ -199,6 +199,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     }
   };
   const [commentText, setCommentText] = useState('');
+  // Per-comment client visibility (opt-in; resets after every send).
+  const [commentVisibleToClient, setCommentVisibleToClient] = useState(false);
   const [mentionMap, setMentionMap] = useState<Record<string, string>>({}); // displayName → uid
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentText, setEditingCommentText] = useState('');
@@ -278,7 +280,16 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     const dow = recurrenceDayOfWeek(base);
     const dom = recurrenceDayOfMonth(base);
     const defaultDays = [1, 2, 3, 4, 5];
-    const next = addFrequency(base, freq, dow, dom, 1, defaultDays);
+    // Seed the next occurrence in the FUTURE: for an old/Done tip the naive
+    // (base + frequency) lands in the past, and the cron backstop would spawn
+    // immediately — forking a second series next to the already-spawned child.
+    const rawNext = addFrequency(base, freq, dow, dom, 1, defaultDays);
+    const next = rawNext.getTime() < Date.now()
+      ? addFrequency(new Date(), freq, dow, dom, 1, defaultDays)
+      : rawNext;
+    // Re-arm the spawn flag only when the series has no live occurrence —
+    // same guard as re-opening (see hasLiveSeriesSibling).
+    const mayRearm = task.status !== 'Done' || !hasLiveSeriesSibling(task, allTasks);
     await onUpdate(task.id, {
       isRecurring: true,
       recurringFrequency: freq,
@@ -292,9 +303,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       ...(task.endDate ? {} : { endDate: base }),
       ...(task.startDate ? {} : { startDate: base }),
       nextRecurringDate: next,
-      // Re-arming recurrence on a previously-completed-and-spawned tip must
-      // clear the spawn flag, or the next completion silently creates nothing.
-      nextCycleCreated: false,
+      ...(mayRearm ? { nextCycleCreated: false } : {}),
     } as any);
   };
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -670,6 +679,11 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     await timeEntryMutation.create({
       userId: user.uid,
       taskId: task.id,
+      // EXPLICIT null, never omitted: Firestore's `where('endTime','==',null)`
+      // matches only documents that HAVE the field as null — a missing field is
+      // invisible to it, which silently disabled the single-timer enforcement,
+      // the "Duke punuar" badge and the running-timer views for every entry.
+      endTime: null,
       projectId: task.projectId,
       description: `Working on: ${task.title}`,
       startTime: new Date(),
@@ -779,12 +793,15 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       // Save comment first — then notify. The created id (when the parent hands it
       // back) turns every notification below into a link to THIS comment, not just
       // to the task.
-      const created = await onAddComment(task.id, finalText);
+      const created = await onAddComment(task.id, finalText, {
+        visibleToClient: commentVisibleToClient && !!(task as any).customerId,
+      });
       const newCommentId: string | undefined = (created as any)?.id;
       const commentLink = taskDeepLink(task.id, task.projectId, newCommentId);
       const taskLabel = task.projectId ? 'Shiko Detyrën' : 'Shiko Detyrat';
       setCommentText('');
       setMentionMap({});
+      setCommentVisibleToClient(false);
       playFrogSound();
 
       const mentionedArray = [...mentionedUids].filter(uid => uid !== user?.uid);
@@ -997,6 +1014,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
   const timeStr = (d?: Date) => d ? `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '';
 
+  // A moved deadline RE-ARMS the due/overdue alerts: the cron marks
+  // dueNotificationSent/overdueNotificationSent once and skips flagged tasks, so
+  // without this reset a postponed task never alerted again — the new deadline
+  // came and went in silence.
+  const rearmDeadlineAlerts: Partial<Task> = { dueNotificationSent: false, overdueNotificationSent: false };
+
   // Auto-adjust instead of silently blocking, so intra-day edits always apply
   // (Asana-style): if start moves past end, end follows; if end moves before
   // start, start follows.
@@ -1006,7 +1029,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     nd.setHours(startDate.getHours(), startDate.getMinutes(), 0, 0);
     setStartDate(nd);
     const patch: Partial<Task> = { startDate: nd };
-    if (nd > endDate) { setEndDate(nd); patch.endDate = nd; }
+    if (nd > endDate) { setEndDate(nd); Object.assign(patch, { endDate: nd }, rearmDeadlineAlerts); }
     await onUpdate(task.id, patch);
   };
 
@@ -1015,7 +1038,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     const nd = new Date(date);
     nd.setHours(endDate.getHours(), endDate.getMinutes(), 0, 0);
     setEndDate(nd);
-    const patch: Partial<Task> = { endDate: nd };
+    const patch: Partial<Task> = { endDate: nd, ...rearmDeadlineAlerts };
     if (nd < startDate) { setStartDate(nd); patch.startDate = nd; }
     await onUpdate(task.id, patch);
   };
@@ -1026,14 +1049,14 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     const nd = new Date(startDate); nd.setHours(h || 0, m || 0, 0, 0);
     setStartDate(nd);
     const patch: Partial<Task> = { startDate: nd };
-    if (nd > endDate) { setEndDate(nd); patch.endDate = nd; }
+    if (nd > endDate) { setEndDate(nd); Object.assign(patch, { endDate: nd }, rearmDeadlineAlerts); }
     await onUpdate(task.id, patch);
   };
   const handleEndTimeChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const [h, m] = e.target.value.split(':').map(Number);
     const nd = new Date(endDate); nd.setHours(h || 0, m || 0, 0, 0);
     setEndDate(nd);
-    const patch: Partial<Task> = { endDate: nd };
+    const patch: Partial<Task> = { endDate: nd, ...rearmDeadlineAlerts };
     if (nd < startDate) { setStartDate(nd); patch.startDate = nd; }
     await onUpdate(task.id, patch);
   };
@@ -1109,9 +1132,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           return;
       }
     }
-    // Re-opening a Done recurring tip re-arms it, so a series whose child was
-    // deleted by mistake can be revived by completing the tip again.
-    const reopening = task.status === 'Done' && task.isRecurring;
+    // Re-opening a Done recurring tip re-arms it ONLY when the series has no
+    // live occurrence left (child deleted by mistake → revive); re-arming while
+    // the child is alive would double the series on re-complete.
+    const reopening = task.status === 'Done' && task.isRecurring && !hasLiveSeriesSibling(task, allTasks);
     await onUpdate(task.id, { status: newStatus as Task['status'], ...(reopening ? { nextCycleCreated: false } : {}) });
     const labels: Record<string, string> = { Todo: 'Për të bërë', 'In Progress': 'Në progres', Review: 'Rishikim', Done: 'Përfunduar' };
     toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${labels[newStatus] ?? newStatus}` });
@@ -1165,7 +1189,14 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     // '' (not undefined — the mutation layer strips undefined) clears it when
     // the new project has no customer or the task leaves projects altogether.
     const newProject = pid ? projects.find(p => p.id === pid) : undefined;
-    await onUpdate(task.id, { projectId: pid || null, customerId: (newProject as any)?.customerId || '' } as any);
+    const patch = { projectId: pid || null, customerId: (newProject as any)?.customerId || '' };
+    await onUpdate(task.id, patch as any);
+    // Subtasks ride along: they carry the parent's projectId/customerId, and
+    // leaving them behind keeps the OLD client's portal read access alive (and
+    // deleting the old project later would cascade-delete them).
+    await Promise.allSettled(
+      (subtasks || []).map(st => taskMutation.update(st.id, patch as any)),
+    );
   };
 
   // Assignee load: open tasks per person — colours match the create form's bars.
@@ -2580,6 +2611,21 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                   </button>
                 )}
               </div>
+              {/* Client visibility is OPT-IN per comment: comments are internal
+                  by default; checking this stamps customerId, which is what the
+                  portal's query (and the rules) key client access on. */}
+              {!!(task as any).customerId && !isGuestMode && (
+                <label className="mt-1.5 flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    checked={commentVisibleToClient}
+                    onChange={(e) => setCommentVisibleToClient(e.target.checked)}
+                    className="h-3 w-3 accent-primary"
+                  />
+                  Dukshëm për klientin në portal
+                  {commentVisibleToClient && <span className="font-semibold text-amber-600">— klienti do ta lexojë</span>}
+                </label>
+              )}
               {showMentionSuggestions && mentionSuggestions.length > 0 && (
                 <div className="absolute bottom-full left-0 right-0 mb-1 bg-popover border rounded-lg shadow-lg z-50">
                   <div className="p-1">

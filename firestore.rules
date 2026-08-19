@@ -454,6 +454,26 @@ service cloud.firestore {
       allow update, delete: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
     }
 
+    // Qualified opportunities (the Marrëveshjet module). This block was MISSING
+    // entirely, so default-deny made the whole pipeline dead for every non-
+    // super-admin — reads, kanban stage moves and the lead→deal sync all failed
+    // silently. Staff-only; the portal has no deal surface.
+    match /deals/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+
+    // Lead activity timeline (notes, calls, campaign touches). Also had NO rule
+    // — the CRM timeline never loaded for normal staff. Append-only from the
+    // client: editing history would let anyone rewrite the audit trail.
+    match /leadActivities/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update, delete: if isSuperAdmin();
+    }
+
     match /services/{docId} {
       // WAS `read: if isAuth()` — every tenant's service catalogue + pricing was
       // readable by any signed-in user, including portal clients of other tenants.
@@ -565,11 +585,17 @@ service cloud.firestore {
                         'client_approved', 'client_rejected'];
     }
 
+    // The portal's LIST query must prove this clause from its own `where`
+    // filters ("rules are not filters"), and the old conjunction — published
+    // status AND client-facing kind AND deletedAt == null — is unprovable by
+    // any legal query (one `in` filter max; a missing deletedAt never matches
+    // `== null`), so /portal/reports was denied for every real client.
+    // `portalVisible` is the denormalized AND of those three, maintained by
+    // src/lib/reporting/workflow.ts (transitionPatch/softDelete/restore) and
+    // stamped false at creation; the query pins customerId + portalVisible.
     function portalMayReadReport() {
       return isPortalClientFor(resource.data.get('customerId', ''))
-        && reportIsPublished(resource.data.get('status', ''))
-        && reportKindIsClientFacing(resource.data.get('kind', ''))
-        && resource.data.get('deletedAt', null) == null;
+        && resource.data.get('portalVisible', false) == true;
     }
 
     // May the caller edit THIS report? `canManageBusinessDoc()` alone was too broad:
@@ -1205,6 +1231,18 @@ service cloud.firestore {
          request.resource.data.get('role', '') == resource.data.get('role', '') &&
          request.resource.data.diff(resource.data).affectedKeys()
            .hasOnly(['displayName', 'email', 'position', 'updatedAt'])) ||
+        // Identity self-heal: a LEGACY row keyed by EMAIL (created before the uid
+        // was known) may be re-pointed to the signer's own uid — and nothing else.
+        // The old self-branch above required userId == uid, which is false for
+        // exactly the rows that need repairing, so the auto-link in
+        // usePermissions was denied every session and email-keyed members stayed
+        // broken (empty "Detyrat e mia", reports flagged missing daily, ...).
+        (request.auth.token.email != null &&
+         resource.data.get('email', '') == request.auth.token.email.lower() &&
+         resource.data.get('userId', '') != request.auth.uid &&
+         request.resource.data.get('userId', '') == request.auth.uid &&
+         request.resource.data.diff(resource.data).affectedKeys()
+           .hasOnly(['userId', 'updatedAt'])) ||
         // Managing a member (incl. role changes) requires roster authority — see
         // canManageMembers(): the team's creator, a server-minted owner/admin
         // claim, or the platform operator.

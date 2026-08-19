@@ -1,4 +1,4 @@
-import { useCollection, useDocument, setGlobalTeamId, setGlobalBusinessId } from './useFirestore';
+import { useCollection, useDocument, setGlobalTeamId, setGlobalBusinessId, getGlobalBusinessId } from './useFirestore';
 import { ensureTenantClaims } from '../lib/tenantClaims';
 import { useTenantOverride } from '../lib/platformContext';
 // Reporting capabilities are resolved in ONE place so every role branch below
@@ -561,15 +561,26 @@ export function usePermissions(): UserPermissions {
 
     normalizedRef.current = true;
 
-    // Update the teamMember record to use the actual Firebase Auth UID
+    // Update the teamMember record to use the actual Firebase Auth UID.
+    // (The rules now carry a dedicated self-heal branch: an email-keyed row whose
+    // email matches the signer may re-point userId to their own uid — the old
+    // self-branch required userId == uid, false for exactly these rows, so this
+    // repair was denied every session for the members who needed it.)
     (async () => {
       try {
         const memberRef = doc(db, 'teamMembers', emailMember.id);
         await updateDoc(memberRef, { userId: user.uid, updatedAt: Timestamp.now() });
 
-        // Also update any tasks assigned to the old email-based userId
+        // Also update any tasks assigned to the old email-based userId.
+        // businessId makes the query PROVABLE under the tasks read rule — the
+        // email-only filter was denied for every non-super-admin.
+        const bid = (emailMember as any).businessId || getGlobalBusinessId();
         const tasksSnap = await getDocs(
-          query(collection(db, 'tasks'), where('assignedToUserId', '==', user.email))
+          query(
+            collection(db, 'tasks'),
+            ...(bid ? [where('businessId', '==', bid)] : []),
+            where('assignedToUserId', '==', user.email),
+          )
         );
         if (!tasksSnap.empty) {
           const batch = writeBatch(db);

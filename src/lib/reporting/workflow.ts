@@ -303,6 +303,25 @@ export function sideOfKind(kind: Report['kind']): ReportSide {
   return isClientFacingKind(kind) ? 'client' : 'internal';
 }
 
+/**
+ * Denormalized portal-visibility flag, stamped on the report document.
+ *
+ * The portal's Firestore list query must PROVE the read rule from its own
+ * `where` clauses ("rules are not filters"), and the old rule's conjunction —
+ * published status AND client-facing kind AND not soft-deleted — cannot be
+ * proven by any legal query (two `in` filters are not allowed, and a missing
+ * `deletedAt` field never matches `== null`). One boolean, recomputed on every
+ * transition/create/soft-delete/restore, makes the rule a single provable
+ * equality: `portalVisible == true`.
+ */
+export function computePortalVisible(
+  r: Pick<Report, 'status' | 'kind'> & { deletedAt?: Date | null },
+): boolean {
+  return PUBLISHED_STATUSES.has(r.status)
+    && isClientFacingKind(r.kind)
+    && !r.deletedAt;
+}
+
 export const SIDE_META: Record<ReportSide, {
   label: string;
   short: string;
@@ -447,6 +466,14 @@ export function transitionPatch(
     default:
       break;
   }
+
+  // Keep the denormalized portal flag in step with every status change — it is
+  // what the portal's provable list query (and the read rule) key on.
+  patch.portalVisible = computePortalVisible({
+    status: to,
+    kind: (report as Report).kind,
+    deletedAt: (report as Report).deletedAt ?? null,
+  });
 
   return patch;
 }

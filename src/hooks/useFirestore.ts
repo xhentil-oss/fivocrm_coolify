@@ -634,9 +634,13 @@ export function useMutation<T = DocumentData>(collectionName: string) {
             derivedCustomerId = (await getDoc(doc(db, 'invoices', d.invoiceId))).data()?.customerId;
           } else if ((collectionName === 'tasks' || collectionName === 'projectComments') && d.projectId) {
             derivedCustomerId = (await getDoc(doc(db, 'projects', d.projectId))).data()?.customerId;
-          } else if (collectionName === 'taskComments' && d.taskId) {
-            derivedCustomerId = (await getDoc(doc(db, 'tasks', d.taskId))).data()?.customerId;
           }
+          // taskComments are deliberately NOT auto-derived: customerId on a task
+          // comment IS the client-visibility switch (the portal reads
+          // `customerId == mine` and the rule grants it), and auto-stamping it
+          // published every internal staff comment on a client task to the
+          // portal. Staff comments stay internal unless the composer explicitly
+          // marks them client-visible; portal-authored comments set their own.
         } catch { /* parent missing/unreadable — leave customerId unset, backfill covers it */ }
       }
 

@@ -31,6 +31,7 @@ import {
   canTransition,
   transitionPatch,
   canEditContent,
+  computePortalVisible,
   PUBLISHED_STATUSES,
   STATUS_LABELS,
   type TransitionActor,
@@ -306,7 +307,10 @@ export function useReports(options: UseReportsOptions = {}) {
       approverUserId: args.approverUserId ?? null,
     });
 
-    const created = await reportsApi.create(body as any) as unknown as Report;
+    // New reports start as drafts — never portal-visible. EXPLICIT false, so
+    // the portal's provable query (`portalVisible == true`) has a field to key
+    // on for every document from birth.
+    const created = await reportsApi.create({ ...(body as any), portalVisible: false }) as unknown as Report;
     await logEvent(created as any, 'created');
     // Template usage is a product signal (which templates are actually used).
     try {
@@ -456,13 +460,19 @@ export function useReports(options: UseReportsOptions = {}) {
     await reportsApi.update(report.id, {
       deletedAt: Timestamp.now() as any,
       deletedByUserId: user?.uid || null,
+      // A soft-deleted report leaves the portal immediately.
+      portalVisible: false,
     } as any);
     await logEvent(report, 'deleted');
   }, [reportsApi, logEvent, viewer, user]);
 
   const restore = useCallback(async (report: Report) => {
     if (!viewer.isManagement) throw new Error('Vetëm menaxhimi mund të riaktivizojë raporte.');
-    await reportsApi.update(report.id, { deletedAt: null, deletedByUserId: null } as any);
+    await reportsApi.update(report.id, {
+      deletedAt: null,
+      deletedByUserId: null,
+      portalVisible: computePortalVisible({ status: report.status, kind: report.kind, deletedAt: null }),
+    } as any);
     await logEvent(report, 'restored');
   }, [reportsApi, logEvent, viewer]);
 

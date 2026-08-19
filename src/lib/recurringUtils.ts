@@ -193,6 +193,27 @@ export function buildNextRecurringTask(task: Task): Omit<Task, 'id' | 'createdAt
   };
 }
 
+/**
+ * True when an OPEN occurrence of the same series (other than `task` itself)
+ * already exists. Used by the re-open paths: re-arming `nextCycleCreated` on a
+ * Done tip whose child is still alive would let the next completion spawn a
+ * SECOND identical child (the mis-click → undo → re-complete flow). Re-arm only
+ * when the series has no live occurrence — i.e. the child was deleted and the
+ * series would otherwise be dead.
+ */
+export function hasLiveSeriesSibling(task: Task, allTasks: Task[] | undefined | null): boolean {
+  if (!allTasks || !task.isRecurring) return false;
+  return allTasks.some(t =>
+    t.id !== task.id &&
+    t.status !== 'Done' &&
+    t.isRecurring === true &&
+    t.recurringFrequency === task.recurringFrequency &&
+    t.title === task.title &&
+    (t.assignedToUserId ?? '') === (task.assignedToUserId ?? '') &&
+    (t.projectId ?? '') === (task.projectId ?? ''),
+  );
+}
+
 /** Result of a completion attempt — lets each caller render the right toast
  *  while the actual logic (blockers, recurrence, flags) lives in one place. */
 export type CompleteTaskOutcome =

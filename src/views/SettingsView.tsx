@@ -45,7 +45,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Checkbox } from '../components/ui/checkbox';
 import { Badge } from '../components/ui/badge';
-import { useCollection, useMutation, setGlobalWaEnabled, useGlobalTeamId } from '../hooks/useFirestore';
+import { useCollection, useMutation, setGlobalWaEnabled, useGlobalTeamId, getGlobalBusinessId } from '../hooks/useFirestore';
 import { saveTeamSettings, useTeamSettingsData } from '../hooks/useTeamSettings';
 import { saveTenantSecrets } from '../lib/tenantSecrets';
 import { isBreakReminderEnabled, setBreakReminderEnabled } from '../hooks/useBreakReminder';
@@ -2430,8 +2430,15 @@ const RoleTemplatesSection: React.FC = () => {
     if (!canEdit) return;
     setApplying(prev => ({ ...prev, [role]: true }));
     try {
+      // businessId makes the query provable under the teamMembers read rule —
+      // a role-only list was denied for every non-super-admin admin.
+      const applyBid = getGlobalBusinessId();
       const snap = await getDocs(
-        query(collection(db, 'teamMembers'), where('role', '==', role))
+        query(
+          collection(db, 'teamMembers'),
+          ...(applyBid ? [where('businessId', '==', applyBid)] : []),
+          where('role', '==', role),
+        )
       );
       if (snap.empty) {
         toast({ title: 'Nuk ka anëtarë me këtë rol.' });

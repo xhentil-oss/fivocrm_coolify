@@ -4,7 +4,7 @@ import { DndContext, DragOverlay, closestCorners, MouseSensor, TouchSensor, useS
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { getTaskStatusLabel } from '../lib/statusColors';
-import { completeTask, addFrequency, startOfRecurrenceDay } from '../lib/recurringUtils';
+import { completeTask, addFrequency, startOfRecurrenceDay, hasLiveSeriesSibling } from '../lib/recurringUtils';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
@@ -303,7 +303,11 @@ const TasksView: React.FC = () => {
 
   const myTasks = React.useMemo(() => {
     if (!user || !allTasks) return [];
-    return allTasks.filter(t => t.assignedToUserId === user.uid && !t.parentTaskId);
+    // uid AND email: legacy teamMembers rows keyed by email leaked email values
+    // into assignedToUserId (useRoleFilteredData matches both for the same
+    // reason) — uid-only made "Detyrat e mia" empty for those members.
+    const myIds = new Set([user.uid, user.email].filter(Boolean) as string[]);
+    return allTasks.filter(t => !!t.assignedToUserId && myIds.has(t.assignedToUserId) && !t.parentTaskId);
   }, [allTasks, user]);
 
   // Task stats always computed from baseTasksForStats (NOT filtered by status)
@@ -576,12 +580,18 @@ const TasksView: React.FC = () => {
     await handleCreateTask(formData, { skipDateConflictCheck: true });
   };
 
-  const handleAddComment = async (taskId: string, content: string) => {
+  const handleAddComment = async (taskId: string, content: string, opts?: { visibleToClient?: boolean }) => {
     // Return the created doc — the panel needs its id to deep-link the notifications.
+    // customerId on a task comment IS the client-visibility switch (the portal
+    // reads `customerId == mine`), so it is stamped ONLY when the composer
+    // explicitly marked the comment client-visible.
+    const task = (rawTasks || []).find(t => t.id === taskId);
+    const customerId = opts?.visibleToClient ? (task as any)?.customerId : undefined;
     return commentMutation.create({
       taskId,
       content,
-    });
+      ...(customerId ? { customerId, senderType: 'team' } : {}),
+    } as any);
   };
 
   const handleEditComment = async (commentId: string, content: string) => {
@@ -712,10 +722,13 @@ const TasksView: React.FC = () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawTasks, taskMutation, user]);
 
-  // Re-opening a Done task: a recurring tip gets its spawn flag back, so a
-  // series whose child was deleted by mistake can be revived by re-completing.
+  // Re-opening a Done task: a recurring tip gets its spawn flag back ONLY when
+  // the series has no live occurrence left (child deleted by mistake → revive).
+  // Re-arming while the child is alive would double the series on re-complete.
   const reopenPatch = (task: Task, status: Task['status']): Partial<Task> =>
-    task.status === 'Done' && task.isRecurring ? { status, nextCycleCreated: false } : { status };
+    task.status === 'Done' && task.isRecurring && !hasLiveSeriesSibling(task, rawTasks)
+      ? { status, nextCycleCreated: false }
+      : { status };
 
   const columns = [
     { id: 'Todo', title: 'Për të bërë', status: 'Todo' },
@@ -1083,7 +1096,9 @@ const TasksView: React.FC = () => {
                 const nd = new Date(d);
                 const cur = task.endDate ? new Date(task.endDate) : null;
                 nd.setHours(cur?.getHours() ?? 9, cur?.getMinutes() ?? 0, 0, 0);
-                await taskMutation.update(task.id, { endDate: nd });
+                // A moved deadline re-arms the due/overdue alerts (the cron
+                // skips flagged tasks, so a postponed task never alerted again).
+                await taskMutation.update(task.id, { endDate: nd, dueNotificationSent: false, overdueNotificationSent: false });
               }}
             />
           </PopoverContent>
@@ -1643,7 +1658,10 @@ const TasksView: React.FC = () => {
             onDeleteComment={handleDeleteComment}
             onToggleReaction={handleToggleReaction}
             onUpdate={taskMutation.update}
-            onDelete={(id) => deleteTaskCascade(id)}
+            onDelete={(id) => deleteTaskCascade(id).catch(err => {
+              console.error('[Tasks] fshirja dështoi:', err);
+              toast({ title: 'Detyra nuk u fshi', description: err?.message, variant: 'destructive' });
+            })}
             projects={projects}
             projectsLoading={projectsLoading}
             // The FULL workspace list, not the role-filtered one: the blocker
@@ -1665,10 +1683,15 @@ const TasksView: React.FC = () => {
             <Button variant="outline" onClick={() => setDeleteConfirmId(null)}>Anulo</Button>
             <Button variant="destructive" onClick={async () => {
               if (deleteConfirmId) {
-                const s = await deleteTaskCascade(deleteConfirmId);
-                if (selectedTask?.id === deleteConfirmId) setSelectedTask(null);
-                const extra = s.tasks > 1 ? ` (${s.tasks - 1} nën-detyra u fshinë bashkë)` : '';
-                toast({ title: `Detyra u fshi${extra}` });
+                try {
+                  const s = await deleteTaskCascade(deleteConfirmId);
+                  if (selectedTask?.id === deleteConfirmId) setSelectedTask(null);
+                  const extra = s.tasks > 1 ? ` (${s.tasks - 1} nën-detyra u fshinë bashkë)` : '';
+                  toast({ title: `Detyra u fshi${extra}`, description: s.failed ? `${s.failed} veprime lidhëse dështuan` : undefined });
+                } catch (err: any) {
+                  console.error('[Tasks] fshirja dështoi:', err);
+                  toast({ title: 'Detyra nuk u fshi', description: err?.message, variant: 'destructive' });
+                }
               }
               setDeleteConfirmId(null);
             }}>Fshi, jam i sigurt</Button>
@@ -1752,6 +1775,18 @@ const CalendarView: React.FC<{
       let occ = new Date(anchor);
       if (isNaN(occ.getTime())) return;
       const recEndKey = t.recurringEndDate ? startOfRecurrenceDay(new Date(t.recurringEndDate)) : null;
+      // Fast-forward a stale anchor arithmetically (whole pattern-periods only,
+      // so the phase is preserved) — otherwise the 500-step walk below exhausts
+      // itself before ever reaching the viewed month for an old daily series.
+      const interval = Math.max(1, t.recurringInterval ?? 1);
+      const periodMs = t.recurringFrequency === 'daily' && interval === 1
+        ? 7 * 86400000
+        : t.recurringFrequency === 'weekly' ? interval * 7 * 86400000
+        : 0;
+      if (periodMs > 0) {
+        const behindMs = cellKeys[0] - periodMs - occ.getTime();
+        if (behindMs > 0) occ = new Date(occ.getTime() + Math.floor(behindMs / periodMs) * periodMs);
+      }
       // Walk the ACTUAL occurrence chain with the same engine that spawns the
       // cycles — pattern-matching cells by weekday/date ignored the interval,
       // so an "every 2 weeks" task painted phantom ghosts on every week.

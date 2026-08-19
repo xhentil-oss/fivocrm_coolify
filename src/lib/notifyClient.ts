@@ -1,5 +1,6 @@
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { db } from './firebase';
+import { getGlobalBusinessId } from '../hooks/useFirestore';
 
 /**
  * Resolve the portal-login user id (Firebase Auth uid) for a given customer.
@@ -14,8 +15,17 @@ import { db } from './firebase';
 export async function resolvePortalUserId(customerId?: string | null): Promise<string | null> {
   if (!customerId) return null;
   try {
+    // businessId makes the query provable for STAFF under the rules — a
+    // customerId-only list only proves the portal-client clause, so this lookup
+    // was silently denied for every normal staff member and the client
+    // notifications for new invoices/quotes/contracts never fired.
+    const activeBusinessId = getGlobalBusinessId();
     const snap = await getDocs(
-      query(collection(db, 'clientPortalAccess'), where('customerId', '==', customerId))
+      query(
+        collection(db, 'clientPortalAccess'),
+        ...(activeBusinessId ? [where('businessId', '==', activeBusinessId)] : []),
+        where('customerId', '==', customerId),
+      )
     );
     if (snap.empty) return null;
     // Prefer an Active record that actually carries a userId.

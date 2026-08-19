@@ -316,20 +316,20 @@ const DailyReportForm: React.FC<DailyReportFormProps> = ({
 
     setSubmitting(true);
     try {
-      const savedOutcomes = cleanOutcomesForSave(outcomes);
+      const rawOutcomes = cleanOutcomesForSave(outcomes);
 
       // Push the answers back onto the board, so the report and the tasks can never
       // tell two different stories about the same day.
-      const statusUpdates = taskStatusUpdates(savedOutcomes);
+      const statusUpdates = taskStatusUpdates(rawOutcomes);
       const taskById = new Map((myTasks || []).map(t => [t.id, t]));
+      const blockedTaskIds = new Set<string>();
       const statusResults = await Promise.allSettled(
         statusUpdates.map(u => {
           const t = taskById.get(u.taskId);
           // "Done" answers are completions — they must run the shared flow
           // (blocker guard + recurring next-cycle spawn). A raw status write
           // left recurring series to the cron backstop, which spawns late and
-          // strips the task's labels/column. A blocked task simply stays open;
-          // the report itself still saves.
+          // strips the task's labels/column.
           if (u.status === 'Done' && t && t.status !== 'Done') {
             return completeTask(t, {
               createTask: (data) => taskMutation.create(data as any),
@@ -337,12 +337,29 @@ const DailyReportForm: React.FC<DailyReportFormProps> = ({
               allTasks: myTasks || [],
               claimNextCycle: claimTaskNextCycle,
               releaseNextCycle: releaseTaskNextCycle,
+            }).then(outcome => {
+              if (outcome.kind === 'blocked') blockedTaskIds.add(u.taskId);
             });
           }
           return taskMutation.update(u.taskId, { status: u.status } as any);
         }),
       );
       const failedUpdates = statusResults.filter(r => r.status === 'rejected').length;
+
+      // A "done" answer whose completion was REFUSED by the blocker guard is
+      // downgraded before saving — otherwise the report says done while the
+      // board says open, the exact two-stories split this flow exists to stop.
+      const savedOutcomes = rawOutcomes.map(o =>
+        o.taskId && o.state === 'done' && blockedTaskIds.has(o.taskId)
+          ? { ...o, state: 'in_progress' as const, reason: o.reason || 'E bllokuar nga një varësi e pakryer — nuk u mbyll dot sot.' }
+          : o,
+      );
+      if (blockedTaskIds.size > 0) {
+        toast({
+          title: `${blockedTaskIds.size} detyra nuk u mbyllën`,
+          description: 'Kanë varësi të pakryera — në raport u shënuan "në progres".',
+        });
+      }
 
       const allCompletedIds = savedOutcomes
         .filter(o => o.state === 'done' && o.taskId)
