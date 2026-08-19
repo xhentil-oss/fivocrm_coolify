@@ -302,8 +302,12 @@ const ChatView: React.FC = () => {
   // Data
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', ACTIVE_MEMBERS_QUERY);
   const { data: rawPortalAccess } = useCollection<ClientPortalAccess>('clientPortalAccess', { ...ACTIVE_PORTAL_QUERY, skipTeamFilter: true });
-  const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
-  const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
+  // No skipTeamFilter: customers/projects are businessIsolatedAlways, so the flag
+  // never changed WHAT was read — it only fragmented the listener cache key, so
+  // chat opened its own full-collection streams instead of sharing the ones the
+  // CRM views already hold.
+  const { data: customers } = useCollection<Customer>('customers');
+  const { data: projects } = useCollection<Project>('projects');
   const { data: userProfiles } = useCollection<UserProfile>('userProfiles');
   // clientPortalAccess isn't business-scoped (portal users have no businessId), so the
   // chat "Klientët" list leaked other tenants' clients. customers IS business-scoped,
@@ -314,9 +318,13 @@ const ChatView: React.FC = () => {
     return rawPortalAccess.filter(a => a.customerId && ids.has(a.customerId));
   }, [rawPortalAccess, customers]);
   const { data: teams } = useCollection<Team>('teams');
+  // 200 newest, pushed server-side (teamScopedWhere) — the previous read pulled
+  // every request the business ever had, on every chat open. Composite index:
+  // clientRequests(businessId, createdAt DESC).
   const { data: requests, } = useCollection<ClientRequest>('clientRequests', {
     orderBy: { field: 'createdAt', direction: 'desc' },
-    skipTeamFilter: true,
+    limit: 200,
+    teamScopedWhere: true,
   });
   const requestMutation = useMutation<ClientRequest>('clientRequests');
   const permissions = usePermissions();
@@ -417,6 +425,10 @@ const ChatView: React.FC = () => {
   // the empty state and hide the composer.
   const channelHasNoSelection = chatMode === 'channel' && !isClientChannel && !isGroupChannel;
   const channelMsgQuery = useMemo(() => ({
+    // No conversation open → no query. Without this, the empty-selection mount
+    // ran a team-scoped read (where businessId only, everything else client-side)
+    // that downloaded the ENTIRE business message history just to render nothing.
+    skip: chatMode !== 'channel' || !activeChannel,
     where: [{ field: 'channelId', operator: '==', value: activeChannel }],
     // Order by time so the limit window is the NEWEST messages. Without this the
     // group/client path (skipTeamFilter) applied `limit` server-side with no
@@ -425,19 +437,27 @@ const ChatView: React.FC = () => {
     // Index messages(channelId, createdAt DESC) already exists.
     orderBy: { field: 'createdAt', direction: 'desc' as const },
     limit: channelLimit,
-    ...(usesServerLimit ? { skipTeamFilter: true } : {}),
-  }), [activeChannel, usesServerLimit, channelLimit]);
+    // Always the server-limited path: channelIds are globally unique (group doc
+    // ids / client-<customerId>), so the tenant predicate adds nothing here, and
+    // the team-scoped fallback (e.g. a group deep-link arriving before allGroups
+    // loads) silently ignored `limit` and pulled the whole business history.
+    skipTeamFilter: true,
+  }), [chatMode, activeChannel, channelLimit]);
   const { data: channelMessages, loading: channelPending, error: channelError } = useCollection<ChatMessage>('messages', channelMsgQuery);
 
-  // Background query: ALL unread client messages — drives per-channel unread badges
+  // Background query: unread client messages — drives per-channel unread badges.
+  // teamScopedWhere pushes the whole predicate server-side; without it the
+  // "team-scoped" default fetched EVERY message in the business and filtered
+  // client-side, with no limit at all (the top chat-load cost). Composite index:
+  // messages(businessId, senderType, isRead, createdAt DESC).
   const allUnreadClientQuery = useMemo(() => ({
     where: [
       { field: 'senderType', operator: '==' as const, value: 'client' },
       { field: 'isRead', operator: '==' as const, value: false },
     ],
-    // Team-scoped: only the active team's unread client messages drive the
-    // sidebar badge. (Equality-only query — served by single-field indexes,
-    // no composite index needed.)
+    orderBy: { field: 'createdAt', direction: 'desc' as const },
+    limit: 300,
+    teamScopedWhere: true,
   }), []);
   const { data: allUnreadClientMsgs } = useCollection<ChatMessage>('messages', allUnreadClientQuery);
 
@@ -449,9 +469,11 @@ const ChatView: React.FC = () => {
     where: [{ field: 'senderType', operator: '==' as const, value: 'client' }],
     orderBy: { field: 'createdAt', direction: 'desc' as const },
     limit: 200,
-    // Scope to the active business (server-side businessId only; senderType is
-    // filtered client-side) instead of spanning all tenants. NOT teamScopedWhere —
-    // that pushes senderType server-side too and would need a composite index.
+    // Push everything server-side: the businessId-only default IGNORES limit
+    // (useCollection applies it only under teamScopedWhere), so this "200 newest"
+    // read actually downloaded every message in the business. Composite index:
+    // messages(businessId, senderType, createdAt DESC).
+    teamScopedWhere: true,
   }), []);
   const { data: recentClientMsgs } = useCollection<ChatMessage>('messages', recentClientMsgsQuery);
 
@@ -508,12 +530,16 @@ const ChatView: React.FC = () => {
   }), [user?.uid]);
   const { data: bgSentDMs } = useCollection<ChatMessage>('messages', bgSentDMsQuery);
 
-  // Always-on background query: ALL unread team-channel messages (drives sidebar channel badges)
-  // Capped to 200 to avoid runaway reads on busy teams.
+  // Always-on background query: unread messages (drives sidebar channel badges).
+  // Capped to the 200 NEWEST — and the cap is real only with teamScopedWhere
+  // (the default businessId-only path ignores server limit and downloaded the
+  // whole message history). Composite index: messages(businessId, isRead, createdAt DESC).
   const allUnreadChannelQuery = useMemo(() => ({
     skip: !user?.uid,
     where: [{ field: 'isRead', operator: '==', value: false }],
+    orderBy: { field: 'createdAt', direction: 'desc' as const },
     limit: 200,
+    teamScopedWhere: true,
   }), [user?.uid]);
   const { data: allUnreadTeamMsgs } = useCollection<ChatMessage>('messages', allUnreadChannelQuery);
   const { data: bgReceivedDMs } = useCollection<ChatMessage>('messages', bgDmQuery);
@@ -1379,9 +1405,20 @@ const ChatView: React.FC = () => {
   }, [taskFromMsgSource, taskFromMsgTitle, taskFromMsgAssignee, taskFromMsgDueDate, taskFromMsgPriority, user?.uid, taskMutation, toast]);
 
 
-  // Typing indicators
+  // Typing indicators — scoped to the OPEN conversation only. The old unscoped
+  // read (skipTeamFilter, no where) streamed every typing doc across ALL tenants
+  // (typingIndicators is not business-isolated) and re-fired this component on
+  // every keystroke anywhere on the platform.
   const typingMutation = useMutation<any>('typingIndicators');
-  const { data: typingIndicators } = useCollection<any>('typingIndicators', { skipTeamFilter: true });
+  const typingConversationKey = chatMode === 'channel'
+    ? activeChannel
+    : (user?.uid && activeDirectUserId ? `dm-${[user.uid, activeDirectUserId].sort().join('-')}` : '');
+  const typingQuery = useMemo(() => ({
+    skip: !typingConversationKey,
+    where: [{ field: 'channelId', operator: '==' as const, value: typingConversationKey }],
+    skipTeamFilter: true,
+  }), [typingConversationKey]);
+  const { data: typingIndicators } = useCollection<any>('typingIndicators', typingQuery);
   const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const lastTypingWriteRef = useRef<number>(0);
   // Always-fresh view of typing docs so the switch/unmount cleanup removes MY
@@ -1443,16 +1480,18 @@ const ChatView: React.FC = () => {
     };
   }, [chatMode, activeChannel, activeDirectUserId]);
 
-  // Presence heartbeat — write lastSeen to my userProfile every 60 seconds
+  // Presence heartbeat — write lastSeen to my userProfile every 60 seconds.
+  // Direct updateDoc, NOT userProfileMutation: userProfiles is a static (TTL-cached)
+  // collection, and the mutation path invalidates that cache on every write — so the
+  // heartbeat forced a full userProfiles re-read across the app once a minute.
   useEffect(() => {
     if (!user || !userProfiles) return;
     const myProfile = userProfiles.find(p => p.userId === user.uid);
     if (!myProfile) return;
-    const profileId = myProfile.id;
-    userProfileMutation.update(profileId, { lastSeen: new Date() } as any).catch(() => {});
-    const interval = setInterval(() => {
-      userProfileMutation.update(profileId, { lastSeen: new Date() } as any).catch(() => {});
-    }, 60000);
+    const profileRef = doc(db, 'userProfiles', myProfile.id);
+    const beat = () => updateDoc(profileRef, { lastSeen: new Date() }).catch(() => {});
+    beat();
+    const interval = setInterval(beat, 60000);
     return () => clearInterval(interval);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [user?.uid, userProfiles?.length]);
