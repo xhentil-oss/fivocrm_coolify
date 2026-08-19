@@ -128,18 +128,151 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 /**
  * A paid Checkout session for a tenant-client invoice → mark it Paid.
  *
- * Guards, in order:
+ * ALL guards and writes run inside ONE transaction: two different sessions paying
+ * the same invoice within seconds used to both read `Pending`, both pass the
+ * guards and both commit — the double payment never escalated and the ledger
+ * double-counted. The transaction serialises them: the second one re-reads `Paid`
+ * and lands in the duplicate branch. Guard order:
  *  1. redelivery of the same session → no-op (no duplicate notification/WHMCS push);
  *  2. a DIFFERENT session paying an already-Paid invoice → double payment: never
  *     overwritten, recorded + escalated for a manual refund;
- *  3. paid amount ≠ current invoice total (invoice edited after the link was created)
+ *  3. paid amount ≠ current remainder (invoice edited after the link was created)
  *     → payment recorded but the invoice is NOT marked fully Paid; a human reconciles.
+ * Side effects (notifications, WHMCS) run AFTER the commit — a transaction may retry.
  */
 async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoiceId: string): Promise<void> {
   const invoiceRef = db.collection('invoices').doc(invoiceId);
-  const invoiceSnap = await invoiceRef.get();
-  if (!invoiceSnap.exists) return;
-  const invoiceData = invoiceSnap.data()!;
+  // Deterministic ledger id keyed on the session → redeliveries and retries
+  // overwrite the same row instead of double-counting a receipt.
+  const ledgerRef = db.collection('payments').doc(`${invoiceId}_stripe_${session.id}`);
+
+  const paidCents = session.amount_total ?? 0;
+  const payCurrency = String(session.currency || '').toLowerCase();
+  const fxRate = Number(session.metadata?.fxRate) || 1;
+  const snapCurrency = String(session.metadata?.invoiceCurrency || '').toLowerCase();
+
+  type Outcome =
+    | { kind: 'missing' }
+    | { kind: 'redelivery' }
+    | { kind: 'duplicate'; inv: Record<string, any> }
+    | { kind: 'mismatch'; inv: Record<string, any>; expectedCents: number }
+    | { kind: 'paid'; inv: Record<string, any>; invCurrency: string };
+
+  const outcome = await db.runTransaction<Outcome>(async (tx) => {
+    const snap = await tx.get(invoiceRef);
+    if (!snap.exists) return { kind: 'missing' };
+    const inv = snap.data()!;
+
+    // 1. Idempotency: Stripe redelivers events. If this exact session already marked
+    // the invoice Paid, do nothing — a second run would re-notify and re-push to WHMCS.
+    if (inv.status === 'Paid' && inv.stripeSessionId === session.id) {
+      return { kind: 'redelivery' };
+    }
+
+    // 2. A different payment on an already-Paid invoice is a DOUBLE PAYMENT (stale
+    // tab, a concurrent second session, or paid by bank in the meantime). Stripe took
+    // the money, so surface it loudly for a manual refund — never silently overwrite
+    // the original payment record.
+    if (inv.status === 'Paid') {
+      tx.update(invoiceRef, {
+        duplicateStripeSessionIds: admin.firestore.FieldValue.arrayUnion(session.id),
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return { kind: 'duplicate', inv };
+    }
+
+    // 3. The session snapshotted the invoice at link-creation time — including the
+    // ALL→EUR conversion rate for Lek invoices (metadata.fxRate; Stripe can't charge
+    // 'all') and the REMAINDER for partially-paid ones. Recompute what the CURRENT
+    // invoice should cost through that same rate: a difference means the invoice
+    // changed under the link — record the payment but leave the status alone so a
+    // human reconciles instead of closing a wrong total.
+    const invoiceTotal = Number(inv.total ?? inv.amount ?? 0);
+    const alreadyPaidRaw = Number(inv.paidAmount || 0);
+    const alreadyPaid = Number.isFinite(alreadyPaidRaw) && alreadyPaidRaw > 0 ? alreadyPaidRaw : 0;
+    const remainderNative = invoiceTotal - alreadyPaid;
+    const expectedCents = Math.round((remainderNative / fxRate) * 100);
+    const rawInvCurrency = String(inv.currency || '').toLowerCase();
+    // Same house-currency aliasing as checkout — older invoices carry 'LEK'/'Lekë'.
+    const invCurrency = rawInvCurrency === 'lek' || rawInvCurrency === 'lekë' ? 'all' : rawInvCurrency;
+    const currentCurrency = invCurrency || 'all'; // no currency set = Lek (house currency)
+    // A Lek invoice is LEGITIMATELY paid in EUR, so "currency changed" is judged
+    // against the invoice currency the server snapshotted at link creation, not the
+    // charge currency. Pre-metadata sessions fall back to the raw comparison,
+    // skipping 'all'/'' (the house currency, which always charges as EUR).
+    const currencyMismatch = snapCurrency
+      ? currentCurrency !== snapCurrency
+      : (currentCurrency !== 'all' && !!payCurrency && currentCurrency !== payCurrency);
+    if (paidCents !== expectedCents || currencyMismatch) {
+      tx.update(invoiceRef, {
+        stripeSessionId: session.id,
+        stripePaymentIntentId: (session.payment_intent as string) || null,
+        stripePaymentMismatch: {
+          paidCents,
+          expectedCents,
+          fxRate,
+          paidCurrency: payCurrency || null,
+          invoiceCurrency: currentCurrency,
+          at: admin.firestore.Timestamp.now(),
+        },
+        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      return { kind: 'mismatch', inv, expectedCents };
+    }
+
+    // Mark Paid AND mirror into the payment ledger (arkëtime) atomically: staff
+    // instalments write a `payments` row, so online payments must too or the ledger
+    // under-reports — and a retry can never mark Paid without the row.
+    const nowTs = admin.firestore.Timestamp.now();
+    const hasInstalments = alreadyPaid > 0 || Array.isArray(inv.partialPayments);
+    tx.update(invoiceRef, {
+      status: 'Paid',
+      paidAt: admin.firestore.FieldValue.serverTimestamp(),
+      paymentMethod: 'Stripe',
+      stripeSessionId: session.id,
+      stripePaymentIntentId: session.payment_intent as string,
+      // A partially-paid invoice closes: bring its instalment bookkeeping up to date
+      // so `paidAmount` never reads less than a Paid invoice's total.
+      ...(hasInstalments ? {
+        paidAmount: invoiceTotal,
+        partialPayments: admin.firestore.FieldValue.arrayUnion({
+          amount: remainderNative,
+          method: 'Stripe',
+          note: 'Stripe Checkout',
+          paidAt: nowTs,
+        }),
+      } : {}),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    tx.set(ledgerRef, {
+      invoiceId,
+      invoiceNumber: inv.invoiceNumber || null,
+      customerId: inv.customerId ?? null,
+      amount: remainderNative,
+      currency: inv.currency || 'ALL',
+      method: 'Stripe',
+      paidAt: nowTs,
+      teamId: inv.teamId ?? null,
+      businessId: inv.businessId ?? null,
+      source: 'stripe',
+      sourceKey: `${invoiceId}#stripe:${session.id}`,
+      stripeSessionId: session.id,
+      stripePaymentIntentId: (session.payment_intent as string) || null,
+      chargedCents: paidCents,
+      chargedCurrency: payCurrency || null,
+    }, { merge: true });
+    return { kind: 'paid', inv, invCurrency };
+  });
+
+  if (outcome.kind === 'missing') return;
+  if (outcome.kind === 'redelivery') {
+    console.log(`[Stripe Webhook] invoice ${invoiceId} already paid by session ${session.id}; skipping redelivery.`);
+    return;
+  }
+
+  const invoiceData = outcome.inv;
+  const invoiceLabel = invoiceData.invoiceNumber || invoiceId.slice(0, 8);
+  const paidPretty = formatAmount(paidCents, session.currency);
 
   const notifyCreator = async (title: string, message: string) => {
     if (!invoiceData.createdByUserId) return;
@@ -156,26 +289,8 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
     }).catch(err => console.error('[Stripe Webhook] notification dërgim dështoi:', err));
   };
 
-  const invoiceLabel = invoiceData.invoiceNumber || invoiceId.slice(0, 8);
-  const paidCents = session.amount_total ?? 0;
-  const paidPretty = formatAmount(paidCents, session.currency);
-
-  // 1. Idempotency: Stripe redelivers events. If this exact session already marked
-  // the invoice Paid, do nothing — a second run would re-notify and re-push to WHMCS.
-  if (invoiceData.status === 'Paid' && invoiceData.stripeSessionId === session.id) {
-    console.log(`[Stripe Webhook] invoice ${invoiceId} already paid by session ${session.id}; skipping redelivery.`);
-    return;
-  }
-
-  // 2. A different payment on an already-Paid invoice is a DOUBLE PAYMENT (stale tab,
-  // or paid by bank in the meantime). Stripe took the money, so surface it loudly for
-  // a manual refund — never silently overwrite the original payment record.
-  if (invoiceData.status === 'Paid') {
+  if (outcome.kind === 'duplicate') {
     console.error(`[Stripe Webhook] DOUBLE PAYMENT: invoice ${invoiceId} already Paid (session ${invoiceData.stripeSessionId || '?'}) but session ${session.id} paid it again.`);
-    await invoiceRef.update({
-      duplicateStripeSessionIds: admin.firestore.FieldValue.arrayUnion(session.id),
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
     await notifyCreator(
       'Pagesë e dyfishtë ⚠️',
       `Fatura ${invoiceLabel} ishte tashmë e paguar, por u pagua sërish me Stripe (${paidPretty}). Nevojitet rimbursim manual nga Stripe Dashboard.`,
@@ -183,103 +298,16 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
     return;
   }
 
-  // 3. The session's amount was snapshotted from the invoice when the link was created —
-  // including the ALL→EUR conversion rate for Lek invoices (metadata.fxRate; Stripe
-  // can't charge 'all'). Recompute what the CURRENT invoice should cost through that
-  // same rate: a difference means the invoice was edited after the link was created —
-  // record the payment but leave the status alone so a human reconciles instead of
-  // closing a wrong total.
-  const fxRate = Number(session.metadata?.fxRate) || 1;
-  const invoiceTotal = Number(invoiceData.total ?? invoiceData.amount ?? 0);
-  const alreadyPaidRaw = Number(invoiceData.paidAmount || 0);
-  const alreadyPaid = Number.isFinite(alreadyPaidRaw) && alreadyPaidRaw > 0 ? alreadyPaidRaw : 0;
-  // What the link charges is the REMAINDER (checkout subtracts recorded instalments);
-  // an instalment recorded AFTER the link was created changes the remainder and is
-  // caught here as a mismatch — exactly the "invoice changed under the link" case.
-  const remainderNative = invoiceTotal - alreadyPaid;
-  const expectedCents = Math.round((remainderNative / fxRate) * 100);
-  const rawInvCurrency = String(invoiceData.currency || '').toLowerCase();
-  // Same house-currency aliasing as checkout — older invoices carry 'LEK'/'Lekë'.
-  const invCurrency = rawInvCurrency === 'lek' || rawInvCurrency === 'lekë' ? 'all' : rawInvCurrency;
-  const payCurrency = String(session.currency || '').toLowerCase();
-  // A Lek invoice is LEGITIMATELY paid in EUR, so "currency changed" is judged against
-  // the invoice currency the server snapshotted at link creation, not against the
-  // charge currency. Sessions from before this metadata existed fall back to the raw
-  // comparison, skipping 'all'/'' (the house currency, which always charges as EUR).
-  const snapCurrency = String(session.metadata?.invoiceCurrency || '').toLowerCase();
-  const currentCurrency = invCurrency || 'all'; // no currency set = Lek (house currency)
-  const currencyMismatch = snapCurrency
-    ? currentCurrency !== snapCurrency
-    : (currentCurrency !== 'all' && !!payCurrency && currentCurrency !== payCurrency);
-  if (paidCents !== expectedCents || currencyMismatch) {
-    console.error(`[Stripe Webhook] AMOUNT MISMATCH on invoice ${invoiceId}: paid ${paidCents} ${payCurrency || '?'}, expected ${expectedCents} (fxRate=${fxRate}, invoice currency ${currentCurrency}); not marking Paid.`);
-    await invoiceRef.update({
-      stripeSessionId: session.id,
-      stripePaymentIntentId: (session.payment_intent as string) || null,
-      stripePaymentMismatch: {
-        paidCents,
-        expectedCents,
-        fxRate,
-        paidCurrency: payCurrency || null,
-        invoiceCurrency: currentCurrency,
-        at: admin.firestore.Timestamp.now(),
-      },
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
+  if (outcome.kind === 'mismatch') {
+    console.error(`[Stripe Webhook] AMOUNT MISMATCH on invoice ${invoiceId}: paid ${paidCents} ${payCurrency || '?'}, expected ${outcome.expectedCents} (fxRate=${fxRate}); not marking Paid.`);
     await notifyCreator(
       'Pagesë me shumë të ndryshuar ⚠️',
-      `Fatura ${invoiceLabel} u pagua me Stripe (${paidPretty}), por totali aktual i faturës nuk përputhet me shumën e paguar (${formatAmount(expectedCents, payCurrency)} e pritur). Fatura NUK u shënua e paguar — kontrolloje manualisht.`,
+      `Fatura ${invoiceLabel} u pagua me Stripe (${paidPretty}), por totali aktual i faturës nuk përputhet me shumën e paguar (${formatAmount(outcome.expectedCents, payCurrency)} e pritur). Fatura NUK u shënua e paguar — kontrolloje manualisht.`,
     );
     return;
   }
 
-  const nowTs = admin.firestore.Timestamp.now();
-  const hasInstalments = alreadyPaid > 0 || Array.isArray(invoiceData.partialPayments);
-
-  // Mark Paid AND mirror into the payment ledger (arkëtime) in ONE batch: staff
-  // instalments write a `payments` row, so online payments must too or the ledger
-  // under-reports. Atomic, so a webhook retry can never mark Paid without the row
-  // (the redelivery guard would then skip the ledger forever).
-  const batch = db.batch();
-  batch.update(invoiceRef, {
-    status: 'Paid',
-    paidAt: admin.firestore.FieldValue.serverTimestamp(),
-    paymentMethod: 'Stripe',
-    stripeSessionId: session.id,
-    stripePaymentIntentId: session.payment_intent as string,
-    // A partially-paid invoice closes: bring its instalment bookkeeping up to date
-    // so `paidAmount` never reads less than a Paid invoice's total.
-    ...(hasInstalments ? {
-      paidAmount: invoiceTotal,
-      partialPayments: admin.firestore.FieldValue.arrayUnion({
-        amount: remainderNative,
-        method: 'Stripe',
-        note: 'Stripe Checkout',
-        paidAt: nowTs,
-      }),
-    } : {}),
-    updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-  });
-  // Deterministic id keyed on the session → redeliveries and retries overwrite the
-  // same row instead of double-counting a receipt.
-  batch.set(db.collection('payments').doc(`${invoiceId}_stripe_${session.id}`), {
-    invoiceId,
-    invoiceNumber: invoiceData.invoiceNumber || null,
-    customerId: invoiceData.customerId ?? null,
-    amount: remainderNative,
-    currency: invoiceData.currency || 'ALL',
-    method: 'Stripe',
-    paidAt: nowTs,
-    teamId: invoiceData.teamId ?? null,
-    businessId: invoiceData.businessId ?? null,
-    source: 'stripe',
-    sourceKey: `${invoiceId}#stripe:${session.id}`,
-    stripeSessionId: session.id,
-    stripePaymentIntentId: (session.payment_intent as string) || null,
-    chargedCents: paidCents,
-    chargedCurrency: payCurrency || null,
-  }, { merge: true });
-  await batch.commit();
+  const invCurrency = outcome.invCurrency;
 
   await notifyCreator(
     'Pagesë e Pranuar ✓',

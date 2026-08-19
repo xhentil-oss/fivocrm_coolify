@@ -165,6 +165,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (invoiceData.status === 'Cancelled') {
       return res.status(409).json({ error: 'Fatura është anuluar dhe nuk mund të paguhet.' });
     }
+    // The staff UI never offers payment on a draft ("financial guard, not just UX"),
+    // but the guard has to live HERE: the portal lists a client's drafts too, and a
+    // direct API call could otherwise pay an unsent, still-being-edited invoice.
+    if (invoiceData.status === 'Draft') {
+      return res.status(409).json({ error: 'Fatura është ende draft — dërgojeni para se të pranohet pagesë.' });
+    }
 
     // Use server-side amount — never trust client-supplied amount. A partially-paid
     // invoice (staff records cash instalments as `paidAmount`/`partialPayments`)
