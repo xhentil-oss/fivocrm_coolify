@@ -181,6 +181,9 @@ const QuickTaskForm: React.FC<{
   const [recInterval, setRecInterval] = useState(2);
   const [recUnit, setRecUnit] = useState<'dite' | 'jave' | 'muaj'>('jave');
   const [recDays, setRecDays] = useState<number[]>([1]);
+  // "Përsërit deri" (YYYY-MM-DD) — the engine, cron and the create handler all
+  // support recurringEndDate; this form just never offered it.
+  const [recUntil, setRecUntil] = useState('');
   const [createMore, setCreateMore] = useState(false);
   const [savedMsg, setSavedMsg] = useState('');
   const [saving, setSaving] = useState(false);
@@ -235,11 +238,17 @@ const QuickTaskForm: React.FC<{
 
   const unitLabels = { dite: 'ditë', jave: 'javë', muaj: 'muaj' } as const;
   const pickedDayNames = [1, 2, 3, 4, 5, 6, 0].filter(d => recDays.includes(d)).map(d => SQ_DOW[d]);
+  // The engine can express "several days EVERY week" (daily + days-of-week) or
+  // "one day every N weeks" (weekly + interval) — but not both. The summary must
+  // describe what will actually be stored, not what was clicked (it used to show
+  // every picked day while only the first one survived).
+  const multiDayDropped = rec === 'custom' && recUnit === 'jave' && recInterval > 1 && recDays.length > 1;
+  const effectiveDayNames = multiDayDropped ? pickedDayNames.slice(0, 1) : pickedDayNames;
   const recSummary =
     rec === 'weekly' ? 'çdo javë, ditën e zgjedhur'
     : rec === 'monthly' ? 'çdo muaj, në të njëjtën datë'
     : rec === 'custom'
-      ? `çdo ${recInterval > 1 ? `${recInterval} ` : ''}${unitLabels[recUnit]}${recUnit === 'jave' && pickedDayNames.length ? ` (${pickedDayNames.join(', ')})` : ''}`
+      ? `çdo ${recInterval > 1 ? `${recInterval} ` : ''}${unitLabels[recUnit]}${recUnit === 'jave' && effectiveDayNames.length ? ` (${effectiveDayNames.join(', ')})` : ''}${multiDayDropped ? ' — me interval >1 javë mbahet vetëm dita e parë' : ''}`
       : '';
 
   const canCreate = title.trim().length > 0;
@@ -293,6 +302,7 @@ const QuickTaskForm: React.FC<{
         fd.set('recurringInterval', String(recInterval));
         fd.set('recurringDayOfMonth', String(selDay.getDate()));
       }
+      if (recUntil) fd.set('recurringEndDate', recUntil);
     }
     setSaving(true);
     try {
@@ -627,6 +637,20 @@ const QuickTaskForm: React.FC<{
             {rec === 'custom' && recUnit === 'jave' && (
               <div className="mt-2 grid grid-cols-7 gap-1.5">{dayPills('lg')}</div>
             )}
+            {rec !== 'never' && (
+              <div className="mt-2 flex items-center gap-2">
+                <span className="text-[11.5px] font-semibold text-muted-foreground">Përsërit deri</span>
+                <input
+                  type="date"
+                  value={recUntil}
+                  onChange={e => setRecUntil(e.target.value)}
+                  className="h-9 rounded-lg border border-border bg-background px-2 text-xs"
+                />
+                {recUntil && (
+                  <button type="button" onClick={() => setRecUntil('')} className="text-xs font-bold text-muted-foreground hover:text-foreground">✕</button>
+                )}
+              </div>
+            )}
             {recSummary && (
               <div className="mt-2 text-[11.5px] font-semibold text-muted-foreground">{recSummary}</div>
             )}
@@ -772,6 +796,20 @@ const QuickTaskForm: React.FC<{
             )}
             {rec === 'custom' && recUnit === 'jave' && (
               <div className="flex items-center gap-1">{dayPills('sm')}</div>
+            )}
+            {rec !== 'never' && (
+              <span className="ml-0.5 flex items-center gap-1.5 border-l pl-3">
+                <span className="text-xs font-bold text-muted-foreground">deri</span>
+                <input
+                  type="date"
+                  value={recUntil}
+                  onChange={e => setRecUntil(e.target.value)}
+                  className="h-7 rounded-lg border border-border bg-background px-1.5 text-[11px]"
+                />
+                {recUntil && (
+                  <button type="button" onClick={() => setRecUntil('')} className="text-xs font-bold text-muted-foreground hover:text-foreground">✕</button>
+                )}
+              </span>
             )}
             {recSummary && (
               <span className="text-[11.5px] font-semibold text-muted-foreground/80">→ {recSummary}</span>

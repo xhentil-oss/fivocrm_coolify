@@ -569,9 +569,14 @@ async function runRecurringTasks() {
     if (task.status !== 'Done') continue;
     const nextRecurringDate: Date = task.nextRecurringDate?.toDate ? task.nextRecurringDate.toDate() : new Date(task.nextRecurringDate);
     if (isNaN(nextRecurringDate.getTime()) || nextRecurringDate > now) continue;
-    if (!task.startDate || !task.endDate) continue;
-    const startDate: Date = task.startDate?.toDate ? task.startDate.toDate() : new Date(task.startDate);
-    const endDate: Date = task.endDate?.toDate ? task.endDate.toDate() : new Date(task.endDate);
+    // Tolerate a missing date anchor the way the UI does (parseDate falls back):
+    // a tip with only one of startDate/endDate used to be skipped here forever —
+    // a silently dead series the user could never see or fix.
+    if (!task.startDate && !task.endDate) continue;
+    const rawStart: Date = task.startDate?.toDate ? task.startDate.toDate() : new Date(task.startDate ?? NaN);
+    const rawEnd: Date = task.endDate?.toDate ? task.endDate.toDate() : new Date(task.endDate ?? NaN);
+    const startDate: Date = !isNaN(rawStart.getTime()) ? rawStart : rawEnd;
+    const endDate: Date = !isNaN(rawEnd.getTime()) ? rawEnd : rawStart;
     if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) continue;
 
     // MIRRORS src/lib/recurringUtils.ts buildNextRecurringTask — keep in sync.
@@ -620,7 +625,11 @@ async function runRecurringTasks() {
 
     // Create new task ref first so we can reference its ID in the notification
     const newTaskRef = db.collection('tasks').doc();
-    ops.push(newTaskRef.set({ title: task.title, description: task.description ?? null, status: 'Todo', priority: task.priority ?? null, projectId: task.projectId ?? null, assignedToUserId: task.assignedToUserId ?? null, startDate: admin.firestore.Timestamp.fromDate(newStart), endDate: admin.firestore.Timestamp.fromDate(newEnd), isRecurring: true, recurringFrequency: task.recurringFrequency, recurringInterval: task.recurringInterval ?? 1, recurringDayOfWeek: task.recurringDayOfWeek ?? null, recurringDayOfMonth: task.recurringDayOfMonth ?? null, recurringDaysOfWeek: task.recurringDaysOfWeek ?? null, recurringEndDate: recEnd ? admin.firestore.Timestamp.fromDate(recEnd) : null, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), nextCycleCreated: false, dueNotificationSent: false, parentTaskId: task.parentTaskId ?? null, createdByUserId: task.createdByUserId ?? null, teamId: task.teamId ?? null, businessId: task.businessId ?? null, customerId: task.customerId ?? null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
+    // MIRRORS buildNextRecurringTask's payload — keep in sync. The backstop's
+    // child used to drop labels/section/collaborators/estimate/blockers, so a
+    // series degraded (lost its board column, capacity estimate, 🔒 deps)
+    // whenever THIS engine spawned the cycle instead of the UI.
+    ops.push(newTaskRef.set({ title: task.title, description: task.description ?? null, status: 'Todo', priority: task.priority ?? null, projectId: task.projectId ?? null, assignedToUserId: task.assignedToUserId ?? null, labels: task.labels ?? null, section: task.section ?? null, collaboratorIds: task.collaboratorIds ?? null, estimatedHours: task.estimatedHours ?? null, dependsOn: task.dependsOn ?? null, startDate: admin.firestore.Timestamp.fromDate(newStart), endDate: admin.firestore.Timestamp.fromDate(newEnd), isRecurring: true, recurringFrequency: task.recurringFrequency, recurringInterval: task.recurringInterval ?? 1, recurringDayOfWeek: task.recurringDayOfWeek ?? null, recurringDayOfMonth: task.recurringDayOfMonth ?? null, recurringDaysOfWeek: task.recurringDaysOfWeek ?? null, recurringEndDate: recEnd ? admin.firestore.Timestamp.fromDate(recEnd) : null, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), nextCycleCreated: false, dueNotificationSent: false, parentTaskId: task.parentTaskId ?? null, createdByUserId: task.createdByUserId ?? null, teamId: task.teamId ?? null, businessId: task.businessId ?? null, customerId: task.customerId ?? null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
     ops.push(doc.ref.update({ nextCycleCreated: true, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), updatedAt: admin.firestore.Timestamp.now() }));
     const notifRecipient = task.assignedToUserId || task.createdByUserId;
     if (notifRecipient) {

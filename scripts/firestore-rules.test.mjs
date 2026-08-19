@@ -976,3 +976,54 @@ test('37. portal client cannot mark own invoice Paid or delete it', async () => 
   const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
   await assertSucceeds(updateDoc(doc(alice, 'invoices', 'invCarol'), { status: 'Paid' }));
 });
+
+// 39. Tasks are STAFF-ONLY writes. The portal client may read their own project's
+// tasks (customerId derived from the parent project) but must never complete,
+// edit or delete internal work items; and no signed-in user may create a task
+// stamped into a foreign tenant (the old isSelfCreate clause allowed exactly that).
+test('39a. portal client reads own task but cannot write or delete it', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'tasks', 'taskCarol'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1',
+      title: 'Internal work item', status: 'Todo', assignedToUserId: 'alice',
+    });
+  });
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+
+  await assertSucceeds(getDoc(doc(carol, 'tasks', 'taskCarol')));
+  await assertFails(updateDoc(doc(carol, 'tasks', 'taskCarol'), { status: 'Done' }));
+  await assertFails(deleteDoc(doc(carol, 'tasks', 'taskCarol')));
+  await assertFails(setDoc(doc(carol, 'tasks', 'taskInjected'), {
+    businessId: MY_BIZ, customerId: 'cust1', title: 'injected', createdByUserId: 'carol',
+  }));
+
+  // Staff of the tenant still manage it normally.
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(updateDoc(doc(alice, 'tasks', 'taskCarol'), { status: 'Done' }));
+});
+
+test('39b. cross-tenant task create/read/write are denied', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'tasks', 'taskVictim'), {
+      businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, title: 'Victim task', status: 'Todo',
+    });
+  });
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(getDoc(doc(alice, 'tasks', 'taskVictim')));
+  await assertFails(updateDoc(doc(alice, 'tasks', 'taskVictim'), { status: 'Done' }));
+  // Forging a task INTO the victim tenant (isSelfCreate used to allow this).
+  await assertFails(setDoc(doc(alice, 'tasks', 'taskForged'), {
+    businessId: VICTIM_BIZ, title: 'forged', createdByUserId: 'alice',
+  }));
+});
+
+test('39c. task update may never move the task to another business', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'tasks', 'taskHop'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, title: 'Hop attempt', status: 'Todo',
+    });
+  });
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(updateDoc(doc(alice, 'tasks', 'taskHop'), { businessId: VICTIM_BIZ }));
+  await assertSucceeds(updateDoc(doc(alice, 'tasks', 'taskHop'), { status: 'InProgress', businessId: MY_BIZ }));
+});

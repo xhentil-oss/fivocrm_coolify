@@ -728,6 +728,13 @@ export interface Task {
   status: 'Todo' | 'In Progress' | 'Review' | 'Done';
   priority?: 'low' | 'medium' | 'high' | 'urgent';
   teamId?: string;
+  /** Tenant key — stamped on create; a task without it falls outside the
+   *  business-scoped query and "disappears" from list & calendar. */
+  businessId?: string;
+  /** Derived from the parent project's customer; grants the portal client READ
+   *  access to the task (rules) — re-derived whenever projectId or the
+   *  project's customer changes. */
+  customerId?: string;
   projectId?: string;
   assignedToUserId?: string;
   /** Optional label identifying which service this customer purchased */

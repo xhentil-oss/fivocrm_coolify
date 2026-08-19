@@ -35,6 +35,8 @@ import type {
   Activity, Goal, DailyReport, Notification
 } from '../types';
 import { taskCompletedNotifications } from '../lib/taskNotifications';
+import { completeTask } from '../lib/recurringUtils';
+import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { useFilteredTasks, useFilteredProjects, useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import MomentumWidget from '../components/MomentumWidget';
 
@@ -457,18 +459,32 @@ const StaffDashboard: React.FC = () => {
   const displayName = user?.displayName || user?.email?.split('@')[0] || 'Përdorues';
   const tasksToShow = showAllMyTasks ? prioritizedTasks : prioritizedTasks.slice(0, 6);
 
-  // Quick complete task
+  // Quick complete task — MUST go through completeTask(): a raw status write
+  // bypassed the blocker guard and silently killed recurring series (the next
+  // cycle only appeared hours later via the cron backstop, stripped of its
+  // labels/column).
   const handleQuickComplete = async (taskId: string, e: React.MouseEvent) => {
     e.stopPropagation();
-    await taskMutation.update(taskId, { status: 'Done' });
+    const closed = (rawTasks || []).find(t => t.id === taskId) || (myTasks || []).find(t => t.id === taskId);
+    if (!closed) return;
+    const outcome = await completeTask(closed, {
+      createTask: (data) => taskMutation.create(data as any),
+      updateTask: (id, data) => taskMutation.update(id, data),
+      allTasks: rawTasks || [],
+      claimNextCycle: claimTaskNextCycle,
+      releaseNextCycle: releaseTaskNextCycle,
+    });
+    if (outcome.kind === 'blocked') {
+      toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
+      return;
+    }
     // Closing a task is not a private act — creator/collaborators hear about it
     // (the actor is excluded inside the builder).
-    const closed = (myTasks || []).find(t => t.id === taskId);
-    if (closed && user?.uid) {
+    if (user?.uid) {
       taskCompletedNotifications(closed, user.uid, user.displayName || undefined).forEach(n =>
         notificationMutation.create(n as any).catch(err => console.error('[Notifications] task_completed dërgim dështoi:', err)));
     }
-    toast({ title: '✅ Detyrë e përfunduar!' });
+    toast({ title: outcome.kind === 'recurring-created' ? '✅ Detyrë e kryer + cikli i ri!' : '✅ Detyrë e përfunduar!' });
   };
 
   return (

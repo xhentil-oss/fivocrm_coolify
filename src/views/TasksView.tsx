@@ -4,7 +4,7 @@ import { DndContext, DragOverlay, closestCorners, MouseSensor, TouchSensor, useS
 import { SortableContext, verticalListSortingStrategy, useSortable, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { getTaskStatusLabel } from '../lib/statusColors';
-import { completeTask } from '../lib/recurringUtils';
+import { completeTask, addFrequency, startOfRecurrenceDay } from '../lib/recurringUtils';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
@@ -36,6 +36,7 @@ import {
   Trash2,
   AlertTriangle,
   GripVertical,
+  Tag as TagIcon,
 } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -60,6 +61,8 @@ import TaskDetailPanel from '../components/TaskDetailPanel';
 import QuickTaskForm, { QUICK_TASK_DIALOG_CLASS } from '../components/QuickTaskForm';
 import TaskDateConflictDialog from '../components/TaskDateConflictDialog';
 import { findSameDayTasks } from '../lib/taskConflicts';
+import { deleteTaskCascade } from '../lib/deleteCascade';
+import { applyValuedTaskSideEffects } from '../lib/finance/taskValue';
 import { taskDeepLink } from '../lib/deepLinks';
 import { taskCompletedNotifications } from '../lib/taskNotifications';
 import SmartSuggestions from '../components/SmartSuggestions';
@@ -98,6 +101,10 @@ const TasksView: React.FC = () => {
   // exactly what Elton has to do, including on the calendar.
   const [filterAssignee, setFilterAssignee] = useState<string>(() => localStorage.getItem('tasks_filterAssignee') || 'all');
   const [groupBy, setGroupBy] = useState<'none' | 'assignee' | 'priority' | 'project' | 'dueDate'>(() => (localStorage.getItem('tasks_groupBy') as any) || 'none');
+  // Label filter ('all' = off) — `allLabels` powered an autocomplete but no
+  // filter existed anywhere, despite its own comment claiming one.
+  const [filterLabel, setFilterLabel] = useState<string>(() => localStorage.getItem('tasks_filterLabel') || 'all');
+  useEffect(() => { localStorage.setItem('tasks_filterLabel', filterLabel); }, [filterLabel]);
   useEffect(() => {
     localStorage.setItem('tasks_viewMode', viewMode);
     localStorage.setItem('tasks_filterStatus', filterStatus);
@@ -161,7 +168,8 @@ const TasksView: React.FC = () => {
   const { data: customers } = useCollection<Customer>('customers');
   const { data: invoices } = useCollection<Invoice>('invoices');
   const { data: comments } = useCollection<TaskComment>('taskComments');
-  const { data: collaborators } = useCollection<TaskCollaborator>('taskCollaborators');
+  // (No full `taskCollaborators` listener here — it was a live subscription over
+  // an entire collection whose data was never read.)
   const { data: userProfiles } = useCollection<UserProfile>('userProfiles');
   const { data: teamMembers } = useCollection<any>('teamMembers', {
     where: [{ field: 'status', operator: '==', value: 'Active' }],
@@ -208,11 +216,14 @@ const TasksView: React.FC = () => {
     return counts;
   }, [allTasks]);
 
-  // Compute which tasks are blocked (have unfinished dependsOn)
+  // Compute which tasks are blocked (have unfinished dependsOn).
+  // The blocker lookup uses the UNFILTERED workspace list: for Member/Viewer the
+  // role filter hides a colleague's blocker, which would make the blocked task
+  // look free (no 🔒) even though completing it is refused by the guard.
   const blockedTaskIds = useMemo(() => {
     if (!allTasks) return new Set<string>();
     const blocked = new Set<string>();
-    const taskMap = new Map(allTasks.map(t => [t.id, t]));
+    const taskMap = new Map((rawTasks || allTasks).map(t => [t.id, t]));
     for (const t of allTasks) {
       if (t.dependsOn?.length && t.status !== 'Done') {
         const hasUnfinished = t.dependsOn.some(depId => {
@@ -223,7 +234,7 @@ const TasksView: React.FC = () => {
       }
     }
     return blocked;
-  }, [allTasks]);
+  }, [allTasks, rawTasks]);
 
   // Helper: get project name
   const getProjectName = React.useCallback((projectId?: string) => {
@@ -250,15 +261,21 @@ const TasksView: React.FC = () => {
         ? filtered.filter(t => !t.assignedToUserId)
         : filtered.filter(t => t.assignedToUserId === filterAssignee);
     }
+    if (filterLabel !== 'all') {
+      filtered = filtered.filter(t => ((t as any).labels as string[] | undefined)?.includes(filterLabel));
+    }
     if (searchQuery.trim()) {
       const query = searchQuery.toLowerCase();
+      // Search matches labels and the project name too, not just title/description.
       filtered = filtered.filter(t =>
         t.title.toLowerCase().includes(query) ||
-        t.description?.toLowerCase().includes(query)
+        t.description?.toLowerCase().includes(query) ||
+        ((t as any).labels as string[] | undefined)?.some(l => l.toLowerCase().includes(query)) ||
+        (getProjectName(t.projectId) || '').toLowerCase().includes(query)
       );
     }
     return filtered;
-  }, [allTasks, searchQuery, filterAssignee]);
+  }, [allTasks, searchQuery, filterAssignee, filterLabel, getProjectName]);
 
   // Final tasks list: additionally filtered by status for the displayed list.
   // 'overdue' is a computed pseudo-status (past due date and not yet Done).
@@ -464,6 +481,34 @@ const TasksView: React.FC = () => {
       dependsOn: dependsOn.length > 0 ? dependsOn : undefined,
     });
 
+    // A priced task means the SAME thing from every surface: draft invoice +
+    // budget increment only on one-time projects (src/lib/finance/taskValue.ts).
+    // This path used to store `value` with none of the side-effects, leaving it
+    // to a manual backfill script with different behaviour.
+    const createdValue = Number((newTask as any).value) || (valueRaw ? parseFloat(valueRaw) : 0) || 0;
+    if (createdValue > 0) {
+      try {
+        const proj = projectId ? (projects || []).find(p => p.id === projectId) : undefined;
+        const result = await applyValuedTaskSideEffects({
+          taskId: (newTask as any).id,
+          taskTitle: title,
+          value: createdValue,
+          project: proj ? ({ ...(proj as any), id: proj.id }) : null,
+        });
+        if (!result.skipped) {
+          toast({
+            title: 'Faturë Draft për detyrën ✓',
+            description: result.appliedToBudget
+              ? `${result.invoiceNumber} për ${createdValue.toLocaleString()} · buxheti i projektit u rrit.`
+              : `${result.invoiceNumber} për ${createdValue.toLocaleString()}${proj ? ' · tarifa periodike nuk u prek' : ''}.`,
+          });
+        }
+      } catch (err: any) {
+        console.error('[Tasks] draft invoice for valued task failed:', err);
+        toast({ title: 'Detyra u ruajt, fatura jo', description: err?.message, variant: 'destructive' });
+      }
+    }
+
     // Create collaborator records in parallel
     await Promise.all(
       collaboratorIds.map(collabId =>
@@ -588,6 +633,9 @@ const TasksView: React.FC = () => {
 
   const handleDragEnd = async (event: DragEndEvent) => {
     setActiveTaskId(null);
+    // Read-only roles: dragging must not write (reorder is team-shared state,
+    // and a board drop is a status mutation).
+    if (!permissions.canEdit) return;
     const { active, over } = event;
     if (!over) return;
     const taskId = String(active.id);
@@ -610,9 +658,14 @@ const TasksView: React.FC = () => {
 
     const task = tasks.find(t => t.id === taskId);
     if (task && task.status !== targetStatus) {
-      await taskMutation.update(taskId, { status: targetStatus });
-      // Dragging a card into "Përfunduar" closes it — tell its followers.
-      if (targetStatus === 'Done') notifyTaskClosed(task);
+      if (targetStatus === 'Done') {
+        // Dropping a card into "Përfunduar" IS a completion — it must run the
+        // blocker guard and spawn the next recurring cycle, not just flip the
+        // status (a raw status write silently killed recurring series).
+        await markTaskDone(task);
+      } else {
+        await taskMutation.update(taskId, reopenPatch(task, targetStatus as Task['status']));
+      }
     }
   };
 
@@ -624,6 +677,45 @@ const TasksView: React.FC = () => {
     taskCompletedNotifications(task, user.uid, user.displayName || undefined).forEach(n =>
       notificationMutation.create(n as any).catch(err => console.error('[Notifications] task_completed dërgim dështoi:', err)));
   };
+
+  // Single completion entry point for this view: every surface that can close a
+  // task (checkbox, quick-action, kanban drag, bulk bar) must go through here so
+  // the blocker guard, the recurring next-cycle spawn and follower notifications
+  // can never be skipped. Returns true when the task actually closed.
+  const markTaskDone = React.useCallback(async (task: Task, opts?: { silent?: boolean }) => {
+    const outcome = await completeTask(task, {
+      createTask: (data) => taskMutation.create(data as any),
+      updateTask: (id, data) => taskMutation.update(id, data),
+      // The blocker guard must see the FULL workspace (rawTasks): the role
+      // filter narrows Member/Viewer to their own tasks, so a blocker assigned
+      // to a colleague would look "missing" — i.e. closed — to the guard.
+      allTasks: rawTasks || [],
+      claimNextCycle: claimTaskNextCycle,
+      releaseNextCycle: releaseTaskNextCycle,
+    });
+    if (outcome.kind === 'blocked') {
+      toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
+      return false;
+    }
+    notifyTaskClosed(task);
+    if (!opts?.silent) {
+      if (outcome.kind === 'recurring-created') {
+        toast({ title: '✅ Detyrë e kryer + cikli i ri!', description: `"${task.title}" u rigjenerua automatikisht.` });
+      } else if (outcome.kind === 'recurring-ended') {
+        toast({ title: '✅ Detyrë e kryer', description: 'Cikli i fundit i përsëritjes — nuk u krijua tjetër.' });
+      } else {
+        toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
+      }
+    }
+    logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
+    return true;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawTasks, taskMutation, user]);
+
+  // Re-opening a Done task: a recurring tip gets its spawn flag back, so a
+  // series whose child was deleted by mistake can be revived by re-completing.
+  const reopenPatch = (task: Task, status: Task['status']): Partial<Task> =>
+    task.status === 'Done' && task.isRecurring ? { status, nextCycleCreated: false } : { status };
 
   const columns = [
     { id: 'Todo', title: 'Për të bërë', status: 'Todo' },
@@ -646,10 +738,30 @@ const TasksView: React.FC = () => {
   // Apply saved manual order for the list view
   const orderedTasks = useMemo(() => sortByOrder(tasks), [tasks, sortByOrder]);
 
+  // Board columns, memoized — filtering + sorting inline per column re-ran on
+  // every render for all four columns.
+  const boardColumns = useMemo(() => {
+    const map = new Map<string, Task[]>();
+    for (const c of ['Todo', 'In Progress', 'Review', 'Done']) {
+      map.set(c, sortByOrder(tasks.filter(t => t.status === c)));
+    }
+    return map;
+  }, [tasks, sortByOrder]);
+
+  // Comment counts per task, in one pass — `comments.filter(...)` inside every
+  // row render was O(rows × all comments) per render.
+  const commentCountByTask = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const c of comments || []) {
+      if (c.taskId) map.set(c.taskId, (map.get(c.taskId) || 0) + 1);
+    }
+    return map;
+  }, [comments]);
+
   // Page-based pagination (50 per page) — applies to both flat and grouped views.
   const totalPages = Math.max(1, Math.ceil(orderedTasks.length / PAGE_SIZE));
   // Reset to first page whenever the underlying set changes.
-  React.useEffect(() => { setPage(0); }, [filterStatus, filterAssignee, searchQuery, groupBy]);
+  React.useEffect(() => { setPage(0); }, [filterStatus, filterAssignee, filterLabel, searchQuery, groupBy]);
   // Clamp if the current page falls out of range (e.g. after deletions).
   React.useEffect(() => { if (page > totalPages - 1) setPage(totalPages - 1); }, [page, totalPages]);
   const visibleTasks = useMemo(
@@ -664,8 +776,9 @@ const TasksView: React.FC = () => {
     }
     const now = new Date();
     const taskDate = new Date(date);
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    const dateStr = `${months[taskDate.getMonth()]} ${taskDate.getDate()}`;
+    // Albanian month names — the UI is sq-AL, "May 5" amid Albanian labels was a leak.
+    const months = ['Jan', 'Shk', 'Mar', 'Pri', 'Maj', 'Qer', 'Kor', 'Gush', 'Sht', 'Tet', 'Nën', 'Dhj'];
+    const dateStr = `${taskDate.getDate()} ${months[taskDate.getMonth()]}`;
     // Compare CALENDAR days (ignore time-of-day) so a task due later today isn't
     // labeled "Nesër" — intra-day times made the hour-based diff round up.
     const sod = (d: Date) => { const n = new Date(d); n.setHours(0, 0, 0, 0); return n.getTime(); };
@@ -722,17 +835,38 @@ const TasksView: React.FC = () => {
   const bulkUpdate = async (patch: Partial<Task>) => {
     const ids = [...selectedIds];
     if (!ids.length) return;
-    const results = await Promise.allSettled(ids.map(id => taskMutation.update(id, patch)));
+    const byId = new Map((rawTasks || []).map(t => [t.id, t]));
+    let blocked = 0;
+    const results = await Promise.allSettled(ids.map(id => {
+      const t = byId.get(id);
+      // Bulk "Përfunduar" is a completion — route through the shared flow so
+      // blockers, recurrence and follower notifications aren't bypassed.
+      if (patch.status === 'Done' && t && t.status !== 'Done') {
+        return markTaskDone(t, { silent: true }).then(done => {
+          if (!done) { blocked++; throw new Error('blocked'); }
+        });
+      }
+      if (patch.status && patch.status !== 'Done' && t) {
+        return taskMutation.update(id, { ...patch, ...reopenPatch(t, patch.status) });
+      }
+      return taskMutation.update(id, patch);
+    }));
     const failed = results.filter(r => r.status === 'rejected').length;
     toast(failed
-      ? { title: `${ids.length - failed}/${ids.length} u përditësuan`, description: `${failed} dështuan`, variant: 'destructive' }
+      ? {
+          title: `${ids.length - failed}/${ids.length} u përditësuan`,
+          description: blocked ? `${blocked} të bllokuara nga varësi të pakryera` : `${failed} dështuan`,
+          variant: 'destructive',
+        }
       : { title: `${ids.length} detyra u përditësuan` });
     clearSelection();
   };
   const bulkDelete = async () => {
     const ids = [...selectedIds];
     if (!ids.length) return;
-    const results = await Promise.allSettled(ids.map(id => taskMutation.remove(id)));
+    // Cascade per task: subtasks, comments, collaborator records, draft invoice;
+    // logged hours are unlinked, never deleted (src/lib/deleteCascade.ts).
+    const results = await Promise.allSettled(ids.map(id => deleteTaskCascade(id)));
     const failed = results.filter(r => r.status === 'rejected').length;
     toast(failed
       ? { title: `${ids.length - failed}/${ids.length} u fshinë`, description: `${failed} dështuan`, variant: 'destructive' }
@@ -745,10 +879,19 @@ const TasksView: React.FC = () => {
     const isSelected = selectedTask?.id === task.id;
     const isOverdue = isOverdueDate(task.endDate) && task.status !== 'Done';
     const isBlocked = blockedTaskIds.has(task.id);
+    // Viewer (canEdit=false) is read-only: the rules currently accept any
+    // business member's write, so the UI must not advertise mutations the role
+    // isn't meant to have. Delete additionally requires manager rank or owning
+    // the task (creator/assignee).
+    const canEditRow = permissions.canEdit;
+    const canDeleteRow = canEditRow && (
+      permissions.isAdmin || permissions.isManager
+      || task.createdByUserId === user?.uid || task.assignedToUserId === user?.uid
+    );
     const projectName = getProjectName(task.projectId);
     const subtaskInfo = subtaskCounts[task.id];
     const isBeingWorkedOn = tasksBeingWorkedOn.has(task.id);
-    const commentCount = comments?.filter(c => c.taskId === task.id).length || 0;
+    const commentCount = commentCountByTask.get(task.id) || 0;
     const assigneeName = getUserName(task.assignedToUserId);
     const initials = assigneeName.slice(0, 2).toUpperCase();
     const initialsColor = hashColor(assigneeName);
@@ -763,8 +906,8 @@ const TasksView: React.FC = () => {
       <div
         className={`group relative rounded-[14px] bg-white dark:bg-card border shadow-sm cursor-pointer overflow-hidden transition-all duration-[180ms] ease-[cubic-bezier(.4,0,.2,1)] hover:-translate-y-0.5 hover:shadow-md ${
           isSelected
-            ? 'border-[rgba(124,58,237,0.5)] ring-1 ring-[rgba(124,58,237,0.3)]'
-            : 'border-black/5 dark:border-white/10 hover:border-[rgba(124,58,237,0.3)]'
+            ? 'border-[rgba(18,70,140,0.5)] ring-1 ring-[rgba(18,70,140,0.3)]'
+            : 'border-black/5 dark:border-white/10 hover:border-[rgba(18,70,140,0.3)]'
         }`}
         onClick={() => setSelectedTask(task)}
       >
@@ -776,12 +919,14 @@ const TasksView: React.FC = () => {
         />
         <div className={`flex items-start gap-3 pl-4 pr-3 py-3 ${isOverdue ? 'bg-destructive/5' : ''}`}>
         {/* Bulk-select checkbox — hover on desktop; hidden on touch unless a selection is active */}
-        <div
-          onClick={(e) => e.stopPropagation()}
-          className={`items-center pt-1 flex-shrink-0 transition-opacity ${selectedIds.size > 0 ? 'flex opacity-100' : 'hidden sm:flex opacity-0 group-hover:opacity-100'}`}
-        >
-          <Checkbox checked={selectedIds.has(task.id)} onCheckedChange={() => toggleSelect(task.id)} aria-label="Përzgjidh detyrën" />
-        </div>
+        {canEditRow && (
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className={`items-center pt-1 flex-shrink-0 transition-opacity ${selectedIds.size > 0 ? 'flex opacity-100' : 'hidden sm:flex opacity-0 group-hover:opacity-100'}`}
+          >
+            <Checkbox checked={selectedIds.has(task.id)} onCheckedChange={() => toggleSelect(task.id)} aria-label="Përzgjidh detyrën" />
+          </div>
+        )}
         {/* Drag handle */}
         <div className="mt-1.5 cursor-grab opacity-0 group-hover:opacity-30 hover:!opacity-70 text-muted-foreground flex-shrink-0 hidden sm:block">
           <GripVertical className="w-3.5 h-3.5" />
@@ -790,39 +935,20 @@ const TasksView: React.FC = () => {
             visual, comfortable tap area, satisfying fill-and-check on complete. */}
         <button
           type="button"
+          disabled={!canEditRow}
           aria-label={task.status === 'Done' ? 'Shëno si të pabërë' : 'Shëno si të përfunduar'}
           aria-pressed={task.status === 'Done'}
           onClick={async (e) => {
             e.stopPropagation();
+            if (!canEditRow) return;
             const checked = task.status !== 'Done';
             if (!checked) {
-              // Un-completing — just flip back to Todo.
-              await taskMutation.update(task.id, { status: 'Todo' });
+              // Un-completing — flip back to Todo (and re-arm a recurring tip).
+              await taskMutation.update(task.id, reopenPatch(task, 'Todo'));
               toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Për të bërë` });
               return;
             }
-            const outcome = await completeTask(task, {
-              createTask: (data) => taskMutation.create(data as any),
-              updateTask: (id, data) => taskMutation.update(id, data),
-              // Blocker guard must see the full workspace (all statuses + subtasks),
-              // not the status/assignee/search-filtered display list `tasks`.
-              allTasks,
-              claimNextCycle: claimTaskNextCycle,
-              releaseNextCycle: releaseTaskNextCycle,
-            });
-            if (outcome.kind === 'blocked') {
-              toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
-              return;
-            }
-            notifyTaskClosed(task);
-            if (outcome.kind === 'recurring-created') {
-              toast({ title: '✅ Detyrë e kryer + cikli i ri!', description: `"${task.title}" u rigjenerua automatikisht.` });
-            } else if (outcome.kind === 'recurring-ended') {
-              toast({ title: '✅ Detyrë e kryer', description: 'Cikli i fundit i përsëritjes — nuk u krijua tjetër.' });
-            } else {
-              toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
-            }
-            logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
+            await markTaskDone(task);
           }}
           className="group/check mt-0.5 -m-1 p-1 flex items-center justify-center shrink-0 active:scale-90 transition-transform"
         >
@@ -852,19 +978,23 @@ const TasksView: React.FC = () => {
         </button>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
-            {/* Priority flag — inline change */}
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <button onClick={(e) => e.stopPropagation()} title="Ndrysho prioritetin" className="flex-shrink-0 hover:opacity-70">
-                  <Flag className="w-3 h-3" style={{ color: priorityFlagColor }} />
-                </button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="start" onClick={(e) => e.stopPropagation()}>
-                {(([['urgent', 'Urgjent'], ['high', 'I lartë'], ['medium', 'Mesatar'], ['low', 'I ulët']]) as const).map(([p, label]) => (
-                  <DropdownMenuItem key={p} onClick={() => taskMutation.update(task.id, { priority: p })}>{label}</DropdownMenuItem>
-                ))}
-              </DropdownMenuContent>
-            </DropdownMenu>
+            {/* Priority flag — inline change (read-only roles just see the flag) */}
+            {canEditRow ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button onClick={(e) => e.stopPropagation()} title="Ndrysho prioritetin" className="flex-shrink-0 hover:opacity-70">
+                    <Flag className="w-3 h-3" style={{ color: priorityFlagColor }} />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="start" onClick={(e) => e.stopPropagation()}>
+                  {(([['urgent', 'Urgjent'], ['high', 'I lartë'], ['medium', 'Mesatar'], ['low', 'I ulët']]) as const).map(([p, label]) => (
+                    <DropdownMenuItem key={p} onClick={() => taskMutation.update(task.id, { priority: p })}>{label}</DropdownMenuItem>
+                  ))}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : (
+              <Flag className="w-3 h-3 flex-shrink-0" style={{ color: priorityFlagColor }} />
+            )}
             <span className={`text-sm font-medium ${task.status === 'Done' ? 'line-through text-muted-foreground' : ''}`}>
               {task.title}
             </span>
@@ -936,8 +1066,9 @@ const TasksView: React.FC = () => {
           <PopoverTrigger asChild>
             <button
               onClick={(e) => e.stopPropagation()}
-              title="Ndrysho afatin"
-              className={`flex items-center gap-1 text-xs whitespace-nowrap flex-shrink-0 mt-0.5 hover:bg-muted rounded px-1 py-0.5 transition-colors ${dateInfo.className}`}
+              disabled={!canEditRow}
+              title={canEditRow ? 'Ndrysho afatin' : undefined}
+              className={`flex items-center gap-1 text-xs whitespace-nowrap flex-shrink-0 mt-0.5 ${canEditRow ? 'hover:bg-muted' : ''} rounded px-1 py-0.5 transition-colors ${dateInfo.className}`}
             >
               {dateInfo.overdue && <AlertTriangle className="w-3 h-3" />}
               {dateInfo.text}
@@ -958,6 +1089,7 @@ const TasksView: React.FC = () => {
           </PopoverContent>
         </Popover>
         {/* Hover quick actions */}
+        {canEditRow && (
         <div
           className="absolute right-4 top-2.5 hidden group-hover:flex items-center gap-0.5 bg-background border border-border rounded-md shadow-sm px-0.5 py-0.5 z-10"
           onClick={(e) => e.stopPropagation()}
@@ -969,27 +1101,7 @@ const TasksView: React.FC = () => {
             onClick={async (e) => {
               e.stopPropagation();
               if (task.status === 'Done') return;
-              const outcome = await completeTask(task, {
-                createTask: (data) => taskMutation.create(data as any),
-                updateTask: (id, data) => taskMutation.update(id, data),
-                // Blocker guard must see the full workspace, not the filtered list.
-                allTasks,
-                claimNextCycle: claimTaskNextCycle,
-                releaseNextCycle: releaseTaskNextCycle,
-              });
-              if (outcome.kind === 'blocked') {
-                toast({ title: '⛔ Detyrë e Bllokuar', description: `Ka ${outcome.blockers} varësi të pakryera para se ta mbyllësh këtë.`, variant: 'destructive' });
-                return;
-              }
-              notifyTaskClosed(task);
-              if (outcome.kind === 'recurring-created') {
-                toast({ title: '✅ Detyrë e kryer + cikli i ri!', description: `"${task.title}" u rigjenerua automatikisht.` });
-              } else if (outcome.kind === 'recurring-ended') {
-                toast({ title: '✅ Detyrë e kryer', description: 'Cikli i fundit i përsëritjes — nuk u krijua tjetër.' });
-              } else {
-                toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → Përfunduar` });
-              }
-              logActivity('task_completed', `Detyrë e përfunduar: ${task.title}`, { entityType: 'task', entityId: task.id });
+              await markTaskDone(task);
             }}
           >
             <Check className="w-3.5 h-3.5" />
@@ -1011,22 +1123,32 @@ const TasksView: React.FC = () => {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="text-sm">
               <DropdownMenuItem onClick={async () => {
-                const { id, isRecurring, recurringFrequency, recurringDayOfWeek, recurringDayOfMonth, recurringDaysOfWeek, nextRecurringDate, dueNotificationSent, overdueNotificationSent, parentTaskId, dependsOn, attachments, ...rest } = task as any;
+                // Strip everything a copy must NOT inherit: recurrence & its
+                // bookkeeping (nextCycleCreated!), the billing idempotency flag
+                // (a copy's value was never invoiced/applied), collaborator ids
+                // (their taskCollaborators rows belong to the original), and
+                // notification flags.
+                const { id, isRecurring, recurringFrequency, recurringInterval, recurringDayOfWeek, recurringDayOfMonth, recurringDaysOfWeek, recurringEndDate, nextRecurringDate, nextCycleCreated, dueNotificationSent, overdueNotificationSent, parentTaskId, dependsOn, attachments, value, valueAppliedToBudget, collaboratorIds, ...rest } = task as any;
                 await taskMutation.create({ ...rest, title: rest.title + ' (kopje)', status: 'Todo' });
                 toast({ title: 'Detyrë u kopjua' });
               }}>
                 Kopjo
               </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                className="text-destructive"
-                onClick={() => setDeleteConfirmId(task.id)}
-              >
-                Fshi
-              </DropdownMenuItem>
+              {canDeleteRow && (
+                <>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    className="text-destructive"
+                    onClick={() => setDeleteConfirmId(task.id)}
+                  >
+                    Fshi
+                  </DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
+        )}
         </div>
       </div>
     );
@@ -1171,7 +1293,10 @@ const TasksView: React.FC = () => {
               { key: 'In Progress', label: 'Në progres', count: taskStats.inProgress, Icon: Play, on: 'bg-blue-500 text-white', off: 'bg-blue-50 text-blue-600 dark:bg-blue-950 dark:text-blue-300' },
               { key: 'Review', label: 'Rishikim', count: taskStats.review, Icon: Clock, on: 'bg-amber-500 text-white', off: 'bg-amber-50 text-amber-600 dark:bg-amber-950 dark:text-amber-300' },
               { key: 'Done', label: 'Përfunduar', count: taskStats.done, Icon: CheckCircle2, on: 'bg-emerald-500 text-white', off: 'bg-emerald-50 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-300' },
-              ...(taskStats.overdue > 0 ? [{ key: 'overdue', label: 'Vonuar', count: taskStats.overdue, Icon: AlertTriangle, on: 'bg-red-500 text-white', off: 'bg-red-50 text-red-600 dark:bg-red-950 dark:text-red-300' }] : []),
+              // Also shown when the persisted filter IS 'overdue' — otherwise, once
+              // the overdue tasks are cleared, the user is stranded inside an
+              // invisible filter ("Asnjë detyrë") with no active chip to click off.
+              ...(taskStats.overdue > 0 || filterStatus === 'overdue' ? [{ key: 'overdue', label: 'Vonuar', count: taskStats.overdue, Icon: AlertTriangle, on: 'bg-red-500 text-white', off: 'bg-red-50 text-red-600 dark:bg-red-950 dark:text-red-300' }] : []),
             ]).map(({ key, label, count, Icon, on, off }) => (
               <button
                 key={key}
@@ -1185,6 +1310,19 @@ const TasksView: React.FC = () => {
           </div>
           {/* Assignee + grouping */}
           <div className="flex items-center gap-2">
+            {/* One-tap "my tasks" (Asana's most-used filter) */}
+            {user?.uid && (
+              <button
+                onClick={() => setFilterAssignee(filterAssignee === user.uid ? 'all' : user.uid)}
+                className={`flex items-center gap-1 px-2.5 py-1.5 rounded-full text-xs font-medium whitespace-nowrap shrink-0 transition-colors ${
+                  filterAssignee === user.uid
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                <User className="w-3 h-3" />Të miat
+              </button>
+            )}
             <Select value={filterAssignee} onValueChange={setFilterAssignee}>
               <SelectTrigger className="h-9 text-xs flex-1 min-w-0">
                 <User className="w-3.5 h-3.5 mr-1 shrink-0 text-muted-foreground" />
@@ -1215,9 +1353,23 @@ const TasksView: React.FC = () => {
                 </SelectContent>
               </Select>
             )}
-            {filterAssignee !== 'all' && (
+            {allLabels.length > 0 && (
+              <Select value={filterLabel} onValueChange={setFilterLabel}>
+                <SelectTrigger className="h-9 text-xs flex-1 min-w-0">
+                  <TagIcon className="w-3.5 h-3.5 mr-1 shrink-0 text-muted-foreground" />
+                  <SelectValue placeholder="Të gjitha etiketat" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Të gjitha etiketat</SelectItem>
+                  {allLabels.map(l => (
+                    <SelectItem key={l} value={l}>{l}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {(filterAssignee !== 'all' || filterLabel !== 'all') && (
               <button
-                onClick={() => setFilterAssignee('all')}
+                onClick={() => { setFilterAssignee('all'); setFilterLabel('all'); }}
                 className="text-xs text-muted-foreground hover:text-foreground underline whitespace-nowrap shrink-0"
               >
                 Pastro
@@ -1337,7 +1489,7 @@ const TasksView: React.FC = () => {
             <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
               <div className="flex gap-3 sm:gap-4 p-3 sm:p-4 h-full overflow-x-auto pb-4">
                 {columns.map((column) => {
-                  const columnTasks = sortByOrder(tasks.filter(task => task.status === column.status));
+                  const columnTasks = boardColumns.get(column.status) || [];
                   const columnColor = column.status === 'Todo' ? 'bg-gray-400' : column.status === 'In Progress' ? 'bg-blue-500' : column.status === 'Review' ? 'bg-amber-500' : 'bg-emerald-500';
                   
                   return (
@@ -1491,10 +1643,12 @@ const TasksView: React.FC = () => {
             onDeleteComment={handleDeleteComment}
             onToggleReaction={handleToggleReaction}
             onUpdate={taskMutation.update}
-            onDelete={taskMutation.remove}
+            onDelete={(id) => deleteTaskCascade(id)}
             projects={projects}
             projectsLoading={projectsLoading}
-            allTasks={allTasks || []}
+            // The FULL workspace list, not the role-filtered one: the blocker
+            // guard and the dependency picker must see colleagues' tasks.
+            allTasks={rawTasks || []}
             onSelectSubtask={(subtask) => setSelectedTask(subtask)}
           />
         </div>
@@ -1511,9 +1665,10 @@ const TasksView: React.FC = () => {
             <Button variant="outline" onClick={() => setDeleteConfirmId(null)}>Anulo</Button>
             <Button variant="destructive" onClick={async () => {
               if (deleteConfirmId) {
-                await taskMutation.remove(deleteConfirmId);
+                const s = await deleteTaskCascade(deleteConfirmId);
                 if (selectedTask?.id === deleteConfirmId) setSelectedTask(null);
-                toast({ title: 'Detyra u fshi' });
+                const extra = s.tasks > 1 ? ` (${s.tasks - 1} nën-detyra u fshinë bashkë)` : '';
+                toast({ title: `Detyra u fshi${extra}` });
               }
               setDeleteConfirmId(null);
             }}>Fshi, jam i sigurt</Button>
@@ -1581,27 +1736,37 @@ const CalendarView: React.FC<{
   // so the same series doesn't render twice.
   const projectionsByDay = React.useMemo(() => {
     const map = new Map<number, Task[]>();
-    const daysInMo = new Date(currentDate.getFullYear(), currentDate.getMonth() + 1, 0).getDate();
+    const y = currentDate.getFullYear();
+    const mo = currentDate.getMonth();
+    const daysInMo = new Date(y, mo + 1, 0).getDate();
+    // Cell keys via the recurrence zone (noon-local can't flip across a day
+    // boundary for any real browser offset) — the old weekday/date matching ran
+    // on the MACHINE's zone, so ghosts shifted a day for non-Tirane browsers.
+    const cellKeys = Array.from({ length: daysInMo }, (_, i) => startOfRecurrenceDay(new Date(y, mo, i + 1, 12)));
+    const monthEndKey = cellKeys[daysInMo - 1];
     tasks.forEach((task) => {
       const t = task as any;
       if (!t.isRecurring || !t.recurringFrequency || t.nextCycleCreated === true) return;
       const anchor = task.endDate || task.startDate;
       if (!anchor) return;
-      const a = new Date(anchor);
-      const lower = task.startDate ? Math.min(sod(new Date(task.startDate)), sod(a)) : sod(a);
-      const recEnd = t.recurringEndDate ? sod(new Date(t.recurringEndDate)) : null;
-      const freq = t.recurringFrequency;
-      for (let day = 1; day <= daysInMo; day++) {
-        const cd = new Date(currentDate.getFullYear(), currentDate.getMonth(), day);
-        const cell = sod(cd);
-        if (cell < lower) continue;
-        if (recEnd && cell > recEnd) continue;
-        let hit = false;
-        if (freq === 'daily') { const ds = t.recurringDaysOfWeek; hit = Array.isArray(ds) && ds.length ? ds.includes(cd.getDay()) : true; }
-        else if (freq === 'weekly') hit = cd.getDay() === (t.recurringDayOfWeek ?? a.getDay());
-        else if (freq === 'monthly') hit = cd.getDate() === (t.recurringDayOfMonth ?? a.getDate());
-        else if (freq === 'yearly') hit = cd.getMonth() === a.getMonth() && cd.getDate() === a.getDate();
-        if (hit) { if (!map.has(day)) map.set(day, []); map.get(day)!.push(task); }
+      let occ = new Date(anchor);
+      if (isNaN(occ.getTime())) return;
+      const recEndKey = t.recurringEndDate ? startOfRecurrenceDay(new Date(t.recurringEndDate)) : null;
+      // Walk the ACTUAL occurrence chain with the same engine that spawns the
+      // cycles — pattern-matching cells by weekday/date ignored the interval,
+      // so an "every 2 weeks" task painted phantom ghosts on every week.
+      let guard = 0;
+      while (guard++ < 500) {
+        const key = startOfRecurrenceDay(occ);
+        if (recEndKey != null && key > recEndKey) break;
+        if (key > monthEndKey) break;
+        const dayIdx = cellKeys.indexOf(key);
+        if (dayIdx >= 0) {
+          const day = dayIdx + 1;
+          if (!map.has(day)) map.set(day, []);
+          map.get(day)!.push(task);
+        }
+        occ = addFrequency(occ, t.recurringFrequency, t.recurringDayOfWeek ?? null, t.recurringDayOfMonth ?? null, t.recurringInterval ?? 1, t.recurringDaysOfWeek ?? null);
       }
     });
     return map;

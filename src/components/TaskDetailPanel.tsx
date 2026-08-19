@@ -2,7 +2,8 @@ import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { TaskLabels, LabelEditor } from './TaskLabels';
 import { useCollection, useMutation } from '../hooks/useFirestore';
-import { completeTask, addFrequency } from '../lib/recurringUtils';
+import { completeTask, addFrequency, recurrenceDayOfWeek, recurrenceDayOfMonth } from '../lib/recurringUtils';
+import { deleteTaskCascade } from '../lib/deleteCascade';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { entryDurationMinutes, totalTrackedMinutes } from '../lib/timeTracking';
 import { useAuth } from '../contexts/AuthContext';
@@ -272,8 +273,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   // task's due date (or today) and seeds the day-of-week/month + next occurrence.
   const enableRecurring = async (freq: 'daily' | 'weekly' | 'monthly' | 'yearly') => {
     const base = task.endDate ? new Date(task.endDate) : new Date();
-    const dow = base.getDay();
-    const dom = base.getDate();
+    // Zone-explicit getters: a browser outside Europe/Tirane would otherwise
+    // store a weekday/day the recurrence engine disagrees with.
+    const dow = recurrenceDayOfWeek(base);
+    const dom = recurrenceDayOfMonth(base);
     const defaultDays = [1, 2, 3, 4, 5];
     const next = addFrequency(base, freq, dow, dom, 1, defaultDays);
     await onUpdate(task.id, {
@@ -283,8 +286,15 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       ...(freq === 'weekly' ? { recurringDayOfWeek: dow } : {}),
       ...(freq === 'monthly' ? { recurringDayOfMonth: dom } : {}),
       ...(freq === 'daily' ? { recurringDaysOfWeek: defaultDays } : {}),
-      ...(task.endDate ? {} : { endDate: base }), // recurrence needs a date anchor
+      // Recurrence needs BOTH date anchors: the cron backstop refuses a tip
+      // missing startDate or endDate, so backfilling only endDate produced
+      // series the cron could never rescue.
+      ...(task.endDate ? {} : { endDate: base }),
+      ...(task.startDate ? {} : { startDate: base }),
       nextRecurringDate: next,
+      // Re-arming recurrence on a previously-completed-and-spawned tip must
+      // clear the spawn flag, or the next completion silently creates nothing.
+      nextCycleCreated: false,
     } as any);
   };
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -509,6 +519,20 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [task.id]);
 
+  // Dates, unlike title/description, are NOT a typed draft — every date/time
+  // edit persists immediately — so they can safely follow live Firestore
+  // updates. Without this, a reschedule made elsewhere while the panel is open
+  // left these stale, and the next time-of-day tweak wrote the OLD date back
+  // over the fresh one. (Missing dates key as 0 so the parseDate "now" fallback
+  // can't retrigger the effect every render.)
+  const startDateKey = task.startDate ? parseDate(task.startDate).getTime() : 0;
+  const endDateKey = task.endDate ? parseDate(task.endDate).getTime() : 0;
+  useEffect(() => {
+    setStartDate(parseDate(task.startDate));
+    setEndDate(parseDate(task.endDate));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [startDateKey, endDateKey]);
+
   // Focus title input when editing
   useEffect(() => {
     if (isEditingTitle && titleInputRef.current) {
@@ -591,7 +615,9 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   };
 
   const handleDeleteSubtask = async (subtaskId: string) => {
-    await taskMutation.remove(subtaskId);
+    // Cascade: the subtask's comments/collaborator records go with it, and any
+    // logged hours are unlinked rather than left pointing at a dead id.
+    await deleteTaskCascade(subtaskId);
   };
 
   const startEditingSubtask = (subtask: any) => {
@@ -1029,10 +1055,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     }
   };
 
-  // Format date compactly
+  // Format date compactly (Albanian months — the rest of this panel is sq-AL).
   const formatDateCompact = (date: Date) => {
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return `${months[date.getMonth()]} ${date.getDate()}`;
+    const months = ['Jan', 'Shk', 'Mar', 'Pri', 'Maj', 'Qer', 'Kor', 'Gush', 'Sht', 'Tet', 'Nën', 'Dhj'];
+    return `${date.getDate()} ${months[date.getMonth()]}`;
   };
 
   // ── Redesign state: pill dropdowns + searchable pickers ──
@@ -1083,7 +1109,10 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
           return;
       }
     }
-    await onUpdate(task.id, { status: newStatus });
+    // Re-opening a Done recurring tip re-arms it, so a series whose child was
+    // deleted by mistake can be revived by completing the tip again.
+    const reopening = task.status === 'Done' && task.isRecurring;
+    await onUpdate(task.id, { status: newStatus as Task['status'], ...(reopening ? { nextCycleCreated: false } : {}) });
     const labels: Record<string, string> = { Todo: 'Për të bërë', 'In Progress': 'Në progres', Review: 'Rishikim', Done: 'Përfunduar' };
     toast({ title: 'Statusi u ndryshua ✓', description: `"${task.title}" → ${labels[newStatus] ?? newStatus}` });
   };
@@ -1130,7 +1159,13 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     setProjectOpen(false);
     setProjectQuery('');
     if ((task.projectId || '') === pid) return;
-    await onUpdate(task.id, { projectId: pid || null } as any);
+    // customerId RIDES on the project (it is what grants the portal client read
+    // access to the task) — it must be re-derived on every move, or the OLD
+    // project's client keeps seeing a task that now belongs to another client.
+    // '' (not undefined — the mutation layer strips undefined) clears it when
+    // the new project has no customer or the task leaves projects altogether.
+    const newProject = pid ? projects.find(p => p.id === pid) : undefined;
+    await onUpdate(task.id, { projectId: pid || null, customerId: (newProject as any)?.customerId || '' } as any);
   };
 
   // Assignee load: open tasks per person — colours match the create form's bars.
@@ -1810,7 +1845,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 {taskCollaborators.map(collab => (
                   <Badge key={collab.id} variant="secondary" className="text-xs">
                     <Users className="w-3 h-3 mr-1" />
-                    {collab.userId.slice(0, 8)}
+                    {getUserDisplayName(collab.userId)}
                   </Badge>
                 ))}
               </div>
@@ -2079,7 +2114,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                             <SelectContent>
                               {teamMembers?.map(member => (
                                 <SelectItem key={member.id} value={member.userId}>
-                                  {member.userId.slice(0, 12)}...
+                                  {getUserDisplayName(member.userId)}
                                 </SelectItem>
                               ))}
                             </SelectContent>
@@ -2571,7 +2606,12 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
 
         {/* Footer: Fshi · përmbledhja · Ruaj (design) */}
         <div className="flex items-center gap-2.5 border-t bg-muted/30 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-3.5">
-          {!isGuestMode ? (
+          {/* Delete: manager rank or owning the task (creator/assignee) — the
+              rules accept any member's delete, so the UI must not offer more
+              than the role is meant to have. */}
+          {!isGuestMode && permissions.canEdit
+            && (permissions.isAdmin || permissions.isManager
+                || task.createdByUserId === user?.uid || task.assignedToUserId === user?.uid) && (
             <button
               type="button"
               onClick={() => setDeleteConfirm(true)}
@@ -2579,7 +2619,8 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
             >
               <Trash2 className="h-3.5 w-3.5" /> Fshi
             </button>
-          ) : (
+          )}
+          {isGuestMode && (
             <span className="flex items-center gap-1 text-xs text-amber-600">
               <Eye className="h-3 w-3" />
               Vetëm shikimi + komente

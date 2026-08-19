@@ -26,6 +26,8 @@ import {
   unplannedOutcome,
 } from '../lib/productivity/dailyReportPlan';
 import { checkDailyReportQuality } from '../lib/productivity/dailyReportQuality';
+import { completeTask } from '../lib/recurringUtils';
+import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import type {
   Customer, DailyReport, DailyTaskOutcome, Project, Task, Lead,
   StandupEntry, TaskOutcomeState, TeamMember, Notification,
@@ -159,7 +161,7 @@ const DailyReportForm: React.FC<DailyReportFormProps> = ({
 
   // Always loaded, even when the projects picker is hidden: it is what maps a task
   // to the client it served, which is what the per-client questions are asked about.
-  const { data: projects } = useCollection<Project>('projects');
+  const { data: projects, loading: projectsLoading } = useCollection<Project>('projects');
 
   // Everything below is keyed on the TARGET, not the signed-in user — that is what
   // makes the preview honest: the admin sees the previewed person's real workload.
@@ -199,11 +201,21 @@ const DailyReportForm: React.FC<DailyReportFormProps> = ({
   // ── Seed the plan, once ──
   // Only once: re-seeding on every task snapshot would wipe the reason somebody is
   // halfway through typing the moment a colleague touches an unrelated task.
+  // Waits for `projects` too: tasks of an ARCHIVED or CANCELLED project are dead
+  // work — without this filter they appeared in the plan every single day, and
+  // because unfinished states require a reason, they blocked submission until
+  // the employee re-explained them daily, forever.
   useEffect(() => {
-    if (outcomesSeeded || !myTasks) return;
-    setOutcomes(buildPlannedOutcomes(myTasks, new Date(), { customerByProjectId }));
+    if (outcomesSeeded || !myTasks || projectsLoading) return;
+    const deadProjectIds = new Set(
+      (projects || [])
+        .filter(p => p.status === 'Archived' || p.status === 'Cancelled')
+        .map(p => p.id),
+    );
+    const liveTasks = myTasks.filter(t => !t.projectId || !deadProjectIds.has(t.projectId));
+    setOutcomes(buildPlannedOutcomes(liveTasks, new Date(), { customerByProjectId }));
     setOutcomesSeeded(true);
-  }, [myTasks, outcomesSeeded, customerByProjectId]);
+  }, [myTasks, projects, projectsLoading, outcomesSeeded, customerByProjectId]);
 
   const summary = useMemo(() => summariseOutcomes(outcomes), [outcomes]);
   const touchedCustomerIds = useMemo(() => customersTouched(outcomes), [outcomes]);
@@ -309,8 +321,26 @@ const DailyReportForm: React.FC<DailyReportFormProps> = ({
       // Push the answers back onto the board, so the report and the tasks can never
       // tell two different stories about the same day.
       const statusUpdates = taskStatusUpdates(savedOutcomes);
+      const taskById = new Map((myTasks || []).map(t => [t.id, t]));
       const statusResults = await Promise.allSettled(
-        statusUpdates.map(u => taskMutation.update(u.taskId, { status: u.status } as any)),
+        statusUpdates.map(u => {
+          const t = taskById.get(u.taskId);
+          // "Done" answers are completions — they must run the shared flow
+          // (blocker guard + recurring next-cycle spawn). A raw status write
+          // left recurring series to the cron backstop, which spawns late and
+          // strips the task's labels/column. A blocked task simply stays open;
+          // the report itself still saves.
+          if (u.status === 'Done' && t && t.status !== 'Done') {
+            return completeTask(t, {
+              createTask: (data) => taskMutation.create(data as any),
+              updateTask: (id, data) => taskMutation.update(id, data),
+              allTasks: myTasks || [],
+              claimNextCycle: claimTaskNextCycle,
+              releaseNextCycle: releaseTaskNextCycle,
+            });
+          }
+          return taskMutation.update(u.taskId, { status: u.status } as any);
+        }),
       );
       const failedUpdates = statusResults.filter(r => r.status === 'rejected').length;
 

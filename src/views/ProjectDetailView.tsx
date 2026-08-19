@@ -37,13 +37,13 @@ import { addFrequency, completeTask } from '../lib/recurringUtils';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { formatCurrency, formatCompactRange, toAll, canSeeFinancials, cn } from '../lib/utils';
 import { computeProjectLabor } from '../lib/finance/laborCost';
+import { applyValuedTaskSideEffects } from '../lib/finance/taskValue';
 import { getInvoiceTotalAll, getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
 import { getInquiryCompleteness } from '../lib/inquiryBrief';
 import { archiveProjectPatch, isProjectArchived, restoreProjectPatch } from '../lib/projectArchive';
+import { deleteProjectCascade, deleteTaskCascade, projectCascadeToastParts } from '../lib/deleteCascade';
 import { Receipt } from 'lucide-react';
-import type { Task, Project, Team, TeamMember, TimeEntry, Expense, Invoice, InvoiceItem, Customer, ServiceInquiry } from '../types';
-import { getNextInvoiceNumber } from '../lib/firebase';
-import { increment } from 'firebase/firestore';
+import type { Task, Project, Team, TeamMember, TimeEntry, Expense, Invoice, Customer, ServiceInquiry } from '../types';
 
 // ── Project page — rebuilt against the hifi reference "Projekti FivoCRM.dc.html" ──
 //
@@ -272,8 +272,6 @@ const ProjectDetailView: React.FC = () => {
 
   const projectMutation = useMutation<Project>('projects');
   const taskMutation = useMutation<Task>('tasks');
-  const invoiceMutation = useMutation<Invoice>('invoices');
-  const invoiceItemMutation = useMutation<InvoiceItem>('invoiceItems');
   const commentMutation = useMutation<any>('taskComments');
   const projectCommentMutation = useMutation<any>('projectComments');
   const notificationMutation = useMutation<any>('notifications');
@@ -613,6 +611,14 @@ const ProjectDetailView: React.FC = () => {
       taskData.isRecurring = true;
       taskData.recurringFrequency = recurringFrequency;
       taskData.recurringInterval = recurringInterval;
+      // "Përsërit deri" — the quick form sends YYYY-MM-DD (same as TasksView's
+      // handler; this one used to drop it, so repeat-until never stuck here).
+      const recurringEndDateRaw = formData.get('recurringEndDate') as string;
+      if (recurringEndDateRaw) {
+        const [ry, rm, rd] = recurringEndDateRaw.split('-').map(Number);
+        if (ry && rm && rd) taskData.recurringEndDate = new Date(ry, rm - 1, rd);
+      }
+      taskData.dueNotificationSent = false;
 
       // Calculate nextRecurringDate from the selected day-of-week / days-of-week
       const now = new Date();
@@ -641,8 +647,15 @@ const ProjectDetailView: React.FC = () => {
         taskData.nextRecurringDate = next;
       } else if (recurringFrequency === 'monthly' && recurringDayOfMonth !== undefined && !isNaN(recurringDayOfMonth)) {
         taskData.recurringDayOfMonth = recurringDayOfMonth;
-        let next = new Date(now.getFullYear(), now.getMonth(), recurringDayOfMonth, 9, 0, 0);
-        if (next <= now) next = new Date(now.getFullYear(), now.getMonth() + 1, recurringDayOfMonth, 9, 0, 0);
+        // Clamp to the month's last day (same as TasksView's buildMonthly) —
+        // `new Date(y, m, 31)` overflows into the NEXT month (Feb 31 → Mar 3),
+        // which pushed the cron's due-gate days late for day-29/30/31 series.
+        const buildMonthly = (year: number, month: number) => {
+          const lastDay = new Date(year, month + 1, 0).getDate();
+          return new Date(year, month, Math.min(recurringDayOfMonth, lastDay), 9, 0, 0);
+        };
+        let next = buildMonthly(now.getFullYear(), now.getMonth());
+        if (next <= now) next = buildMonthly(now.getFullYear(), now.getMonth() + 1);
         taskData.nextRecurringDate = next;
       } else {
         // yearly or fallback: use endDate
@@ -658,50 +671,21 @@ const ProjectDetailView: React.FC = () => {
     const taskValue = Number(taskData.value) || 0;
     if (taskValue > 0) {
       try {
-        const scopeId = (project as any)?.businessId || project?.teamId;
-        // No fallbackMax: the per-business counter is already seeded, so this
-        // avoids reading every invoice just to allocate one number.
-        const label = scopeId
-          ? await getNextInvoiceNumber(scopeId)
-          : `TASK-${Date.now().toString(36).toUpperCase()}`;
-        // Own timestamp: the `now` further up is scoped to the recurrence branch,
-        // so referencing it here threw "now is not defined" at runtime.
-        const issuedAt = new Date();
-        const due = new Date(issuedAt.getFullYear(), issuedAt.getMonth() + 1, 0, 23, 59, 59, 999);
-        const newInvoice = await invoiceMutation.create({
-          invoiceNumber: label,
-          projectId: projectId,
-          customerId: project?.customerId,
-          teamId: project?.teamId,
-          amount: taskValue,
-          subtotal: taskValue,
-          total: taskValue,
-          tax: 0,
-          currency: (project as any)?.currency || 'ALL',
-          status: 'Draft',
-          notes: `Faturë për detyrën "${title}" (projekti "${project?.name || ''}").`,
-          invoiceDate: issuedAt,
-          dueDate: due,
-          taskId: (newTask as any)?.id,
-        } as any);
-        await invoiceItemMutation.create({
-          invoiceId: (newInvoice as any).id,
-          description: title,
-          quantity: 1,
-          unitPrice: taskValue,
-          totalPrice: taskValue,
-          teamId: project?.teamId,
-        } as any);
-        // The task adds scope, so it adds value: grow the project budget by it.
-        // increment() is atomic — two tasks added at once both land, which a
-        // read-then-write of `project.budget` would silently lose.
-        await projectMutation.update(projectId!, { budget: increment(taskValue) } as any);
-        // Mark it counted so a later backfill can't add the same value twice.
-        await taskMutation.update((newTask as any).id, { valueAppliedToBudget: true } as any);
-
+        // Shared side-effects (src/lib/finance/taskValue.ts): draft invoice +
+        // line item, budget increment ONLY for one-time projects (a recurring
+        // project's budget is its per-period fee — growing it would raise every
+        // future auto-invoice and double-bill the same work), idempotency flag.
+        const result = await applyValuedTaskSideEffects({
+          taskId: (newTask as any).id,
+          taskTitle: title,
+          value: taskValue,
+          project: project ? { ...(project as any), id: projectId! } : null,
+        });
         toast({
           title: 'Detyra u krijua + faturë Draft ✓',
-          description: `${label} për ${taskValue.toLocaleString()} · buxheti i projektit u rrit me ${taskValue.toLocaleString()}.`,
+          description: result.appliedToBudget
+            ? `${result.invoiceNumber} për ${taskValue.toLocaleString()} · buxheti i projektit u rrit me ${taskValue.toLocaleString()}.`
+            : `${result.invoiceNumber} për ${taskValue.toLocaleString()} · tarifa periodike e projektit nuk u prek (faturohet vetëm një herë).`,
         });
       } catch (err: any) {
         console.error('[Tasks] draft invoice for valued task failed:', err);
@@ -1799,7 +1783,7 @@ const ProjectDetailView: React.FC = () => {
               onDeleteComment={handleDeleteComment}
               onToggleReaction={handleToggleReaction}
               onUpdate={handleTaskUpdate}
-              onDelete={taskMutation.remove}
+              onDelete={(id) => deleteTaskCascade(id)}
               projects={project ? [project] : undefined}
               onSelectSubtask={(subtask) => setSelectedTask(subtask)}
               isProjectGuest={isGuestOnProject}
@@ -1822,7 +1806,12 @@ const ProjectDetailView: React.FC = () => {
                 if (!projectId) return;
                 setDeletingProject(true);
                 try {
-                  await projectMutation.remove(projectId);
+                  // Same cascade as ProjectsView (src/lib/deleteCascade.ts): a
+                  // bare remove() left every task, comment and draft invoice
+                  // dangling on a project id that no longer exists.
+                  const summary = await deleteProjectCascade({ id: projectId, name: project?.name || '' });
+                  const parts = projectCascadeToastParts(summary);
+                  toast({ title: `Projekti u fshi`, description: parts.length ? parts.join(' · ') : undefined });
                   navigate('/app/projects');
                 } catch {
                   setDeletingProject(false);

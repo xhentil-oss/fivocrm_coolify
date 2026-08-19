@@ -58,6 +58,18 @@ export function startOfRecurrenceDay(x: Date): number {
   return z.getTime();
 }
 
+/** Weekday (0–6, Sunday=0) of an instant, read in the recurrence zone — use this
+ *  instead of `Date#getDay` when seeding `recurringDayOfWeek`, or a browser in
+ *  another zone stores a weekday the engine will disagree with. */
+export function recurrenceDayOfWeek(at: Date): number {
+  return toZoned(at, RECURRENCE_TIMEZONE).getUTCDay();
+}
+
+/** Day-of-month of an instant, read in the recurrence zone (see above). */
+export function recurrenceDayOfMonth(at: Date): number {
+  return toZoned(at, RECURRENCE_TIMEZONE).getUTCDate();
+}
+
 export function addFrequency(
   date: Date,
   frequency: string,

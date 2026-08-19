@@ -375,9 +375,16 @@ service cloud.firestore {
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
-      allow create: if canCreateBusinessDoc() || isSelfCreate();
-      allow update, delete: if canManageBusinessDoc()
-        || isPortalClientFor(resource.data.customerId);
+      // STAFF ONLY. The portal has no legitimate task write (it only reads its
+      // project's tasks; the sales follow-up task is minted server-side via
+      // /api/notify-staff with the Admin SDK), and the old `|| isSelfCreate()` /
+      // `|| isPortalClientFor(...)` clauses let any signed-in user create a task
+      // stamped into ANY tenant, and let a portal client complete or delete
+      // internal work items from the browser console — same hole class that was
+      // already closed for invoices.
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
     }
 
     // ── Phase 4.3b: crown-jewel CRM records — server-side tenant RLS.
@@ -902,7 +909,12 @@ service cloud.firestore {
         request.resource.data.teamId is string ||
         request.resource.data.senderType == 'client'
       );
-      allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
+      // Editing stays author-only; deleting is author OR tenant staff — the
+      // task-delete cascade removes the comments of a deleted task, and those
+      // are rarely all authored by whoever deletes the task.
+      allow update: if isAuth() && resource.data.createdByUserId == request.auth.uid;
+      allow delete: if (isAuth() && resource.data.createdByUserId == request.auth.uid)
+        || canManageBusinessDoc();
     }
 
     match /taskCollaborators/{docId} {
@@ -953,7 +965,11 @@ service cloud.firestore {
         || isSuperAdmin();
       // Portal clients create their own comments; staff carry their businessId.
       allow create: if canCreateBusinessDoc() || isSelfCreate();
-      allow update, delete: if isAuth() && resource.data.createdByUserId == request.auth.uid;
+      // Editing stays author-only; deleting is author OR tenant staff, so the
+      // project-delete cascade can actually remove the project's comments.
+      allow update: if isAuth() && resource.data.createdByUserId == request.auth.uid;
+      allow delete: if (isAuth() && resource.data.createdByUserId == request.auth.uid)
+        || canManageBusinessDoc();
     }
 
     match /serviceInquiries/{docId} {

@@ -402,31 +402,43 @@ const CustomersView: React.FC = () => {
   const handleDeleteCustomer = async (id: string) => {
     try {
       // 1) Read everything linked to the customer up front.
-      const [invoicesSnap, accessSnap, requestsSnap, projectsSnap, activitiesSnap, inquiriesSnap, quotesSnap, contractsSnap] = await Promise.all([
-        getDocs(query(collection(db, 'invoices'), where('customerId', '==', id))),
-        getDocs(query(collection(db, 'clientPortalAccess'), where('customerId', '==', id))),
-        getDocs(query(collection(db, 'clientRequests'), where('customerId', '==', id))),
-        getDocs(query(collection(db, 'projects'), where('customerId', '==', id))),
-        getDocs(query(collection(db, 'activities'), where('customerId', '==', id))),
-        getDocs(query(collection(db, 'serviceInquiries'), where('customerId', '==', id))),
-        getDocs(query(collection(db, 'quotes'), where('customerId', '==', id))),
-        getDocs(query(collection(db, 'contracts'), where('customerId', '==', id))),
+      // Every query carries businessId: the rules can only prove a read whose
+      // filters imply `isBusinessMember(resource.data.businessId)` — a
+      // customerId-only query is denied outright for non-super-admins, which is
+      // why this cascade used to fail with "Gabim gjatë fshirjes".
+      const byCustomer = (col: string) => activeBusinessId
+        ? query(collection(db, col), where('businessId', '==', activeBusinessId), where('customerId', '==', id))
+        : query(collection(db, col), where('customerId', '==', id));
+      const [invoicesSnap, accessSnap, requestsSnap, projectsSnap, inquiriesSnap, quotesSnap, contractsSnap] = await Promise.all([
+        getDocs(byCustomer('invoices')),
+        getDocs(byCustomer('clientPortalAccess')),
+        getDocs(byCustomer('clientRequests')),
+        getDocs(byCustomer('projects')),
+        getDocs(byCustomer('serviceInquiries')),
+        getDocs(byCustomer('quotes')),
+        getDocs(byCustomer('contracts')),
       ]);
       const invoiceIds = invoicesSnap.docs.map(d => d.id);
       const projectIds = projectsSnap.docs.map(d => d.id);
+      const scopedBy = (col: string, field: string, value: string) => activeBusinessId
+        ? query(collection(db, col), where('businessId', '==', activeBusinessId), where(field, '==', value))
+        : query(collection(db, col), where(field, '==', value));
       // Line items (per invoice) + project-linked tasks & time entries.
       const [itemSnapshots, taskSnapshots, timeSnapshots] = await Promise.all([
-        Promise.all(invoiceIds.map(invId => getDocs(query(collection(db, 'invoiceItems'), where('invoiceId', '==', invId))))),
-        Promise.all(projectIds.map(pid => getDocs(query(collection(db, 'tasks'), where('projectId', '==', pid))))),
-        Promise.all(projectIds.map(pid => getDocs(query(collection(db, 'timeEntries'), where('projectId', '==', pid))))),
+        Promise.all(invoiceIds.map(invId => getDocs(scopedBy('invoiceItems', 'invoiceId', invId)))),
+        Promise.all(projectIds.map(pid => getDocs(scopedBy('tasks', 'projectId', pid)))),
+        Promise.all(projectIds.map(pid => getDocs(scopedBy('timeEntries', 'projectId', pid)))),
       ]);
-      // 2) Delete all related docs.
-      await Promise.all([
+      // 2) Delete all related docs. allSettled, not all: one denied write must
+      // not abort the whole cascade. `activities` is deliberately NOT touched —
+      // it is append-only by rule (`update, delete: if false`), so the old
+      // deleteDoc calls on it failed every time and took the entire Promise.all
+      // (and the customer delete with it) down.
+      const results = await Promise.allSettled([
         ...invoicesSnap.docs.map(d => deleteDoc(doc(db, 'invoices', d.id))),
         ...accessSnap.docs.map(d => deleteDoc(doc(db, 'clientPortalAccess', d.id))),
         ...requestsSnap.docs.map(d => deleteDoc(doc(db, 'clientRequests', d.id))),
         ...projectsSnap.docs.map(d => deleteDoc(doc(db, 'projects', d.id))),
-        ...activitiesSnap.docs.map(d => deleteDoc(doc(db, 'activities', d.id))),
         ...inquiriesSnap.docs.map(d => deleteDoc(doc(db, 'serviceInquiries', d.id))),
         ...quotesSnap.docs.map(d => deleteDoc(doc(db, 'quotes', d.id))),
         ...contractsSnap.docs.map(d => deleteDoc(doc(db, 'contracts', d.id))),
@@ -434,6 +446,8 @@ const CustomersView: React.FC = () => {
         ...taskSnapshots.flatMap(snap => snap.docs.map(d => deleteDoc(doc(db, 'tasks', d.id)))),
         ...timeSnapshots.flatMap(snap => snap.docs.map(d => deleteDoc(doc(db, 'timeEntries', d.id)))),
       ]);
+      const failed = results.filter(r => r.status === 'rejected').length;
+      if (failed) console.warn(`[CustomersView] ${failed} veprime të kaskadës dështuan`);
       // 3) Delete the customer LAST — so a failure above doesn't leave a
       //    half-deleted graph with the customer already gone.
       await customerMutation.remove(id);
