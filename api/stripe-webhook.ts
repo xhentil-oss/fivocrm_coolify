@@ -9,9 +9,16 @@ import {
 import { writeAudit } from './_audit.js';
 import { notifyUser } from './_push.js';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2026-02-25.clover',
-});
+// Lazy init: constructing Stripe at MODULE LOAD with a missing STRIPE_SECRET_KEY
+// crashes the function on every request — Stripe's retries then hit a dead endpoint.
+let stripeSingleton: Stripe | null = null;
+function stripeClient(): Stripe {
+  if (!stripeSingleton) {
+    if (!process.env.STRIPE_SECRET_KEY) throw new Error('STRIPE_SECRET_KEY is not configured');
+    stripeSingleton = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2026-02-25.clover' });
+  }
+  return stripeSingleton;
+}
 
 // Disable body parsing — Stripe needs the raw body for signature verification
 export const config = {
@@ -46,7 +53,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   const sig = req.headers['stripe-signature'];
   const webhookSecret = process.env.STRIPE_WEBHOOK_SECRET;
 
-  if (!sig || !webhookSecret) {
+  if (!sig || !webhookSecret || !process.env.STRIPE_SECRET_KEY) {
+    console.error('[Stripe Webhook] missing configuration (signature/webhook secret/secret key)');
     return res.status(400).json({ error: 'Missing signature or webhook secret' });
   }
 
@@ -54,7 +62,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   try {
     const rawBody = await getRawBody(req);
-    event = stripe.webhooks.constructEvent(rawBody, sig, webhookSecret);
+    event = stripeClient().webhooks.constructEvent(rawBody, sig, webhookSecret);
   } catch (err: any) {
     console.error('Webhook signature verification failed:', err.message);
     return res.status(400).json({ error: 'Invalid signature' });
@@ -190,7 +198,9 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
   // caught here as a mismatch — exactly the "invoice changed under the link" case.
   const remainderNative = invoiceTotal - alreadyPaid;
   const expectedCents = Math.round((remainderNative / fxRate) * 100);
-  const invCurrency = String(invoiceData.currency || '').toLowerCase();
+  const rawInvCurrency = String(invoiceData.currency || '').toLowerCase();
+  // Same house-currency aliasing as checkout — older invoices carry 'LEK'/'Lekë'.
+  const invCurrency = rawInvCurrency === 'lek' || rawInvCurrency === 'lekë' ? 'all' : rawInvCurrency;
   const payCurrency = String(session.currency || '').toLowerCase();
   // A Lek invoice is LEGITIMATELY paid in EUR, so "currency changed" is judged against
   // the invoice currency the server snapshotted at link creation, not against the
@@ -415,7 +425,7 @@ async function handleSubscriptionEvent(event: Stripe.Event): Promise<void> {
     let money: ReturnType<typeof monthlyAmountCents> = null;
     let livemode: boolean | null = null;
     if (subscriptionId) {
-      const sub = await stripe.subscriptions.retrieve(subscriptionId);
+      const sub = await stripeClient().subscriptions.retrieve(subscriptionId);
       plan = planForPriceId(sub.items.data[0]?.price?.id) || (session.metadata?.plan as string) || null;
       periodEnd = subscriptionPeriodEnd(sub);
       stripeStatus = sub.status;

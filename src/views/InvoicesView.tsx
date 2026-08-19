@@ -3034,7 +3034,10 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
                     cancelUrl: appReturnUrl(`/app/invoices?payment=cancelled&invoice=${invoice.id}`),
                   }),
                 });
-                if (!response.ok) throw new Error('Gabim gjatë krijimit të sesionit');
+                if (!response.ok) {
+                  const errData = await response.json().catch(() => ({} as any));
+                  throw new Error(errData.error || 'Gabim gjatë krijimit të sesionit');
+                }
                 const { url } = await response.json();
                 if (url) {
                   try {

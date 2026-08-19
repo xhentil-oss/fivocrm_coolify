@@ -2,9 +2,17 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import Stripe from 'stripe';
 import { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 
-const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: '2026-02-25.clover',
-});
+// Lazy init (same pattern as api/_billing.ts): constructing Stripe at MODULE LOAD
+// with a missing STRIPE_SECRET_KEY crashes the whole function — every request,
+// even OPTIONS, then 500s with an empty body and no reachable error path.
+let stripeSingleton: Stripe | null = null;
+function stripeClient(): Stripe {
+  if (!stripeSingleton) {
+    if (!process.env.STRIPE_SECRET_KEY) throw new Error('STRIPE_SECRET_KEY is not configured');
+    stripeSingleton = new Stripe(process.env.STRIPE_SECRET_KEY, { apiVersion: '2026-02-25.clover' });
+  }
+  return stripeSingleton;
+}
 
 // Currencies this endpoint will forward to Stripe. ALL (Lek) is deliberately NOT
 // here: Stripe rejects it for this account (session creation 500s), so Lek
@@ -92,6 +100,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+  if (!process.env.STRIPE_SECRET_KEY) {
+    return res.status(503).json({ error: 'Pagesat online nuk janë konfiguruar (STRIPE_SECRET_KEY mungon në server).' });
+  }
+
   const uid = await verifyAuthToken(req.headers.authorization as string | undefined);
   if (!uid) return res.status(401).json({ error: 'Unauthorized' });
 
@@ -172,7 +184,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     // 120,000 L invoice as €120,000 (face value, unconverted). Stripe rejects 'all'
     // as a charge currency, so Lek invoices are charged in EUR, converted HERE with
     // the tenant's own rate — the client's pre-converted amount is never trusted.
-    const invoiceCurrency = ((invoiceData.currency as string | undefined) || 'all').toLowerCase();
+    const rawCurrency = ((invoiceData.currency as string | undefined) || 'all').toLowerCase();
+    // Data aliases for the house currency — older invoices carry 'LEK'/'Lekë'.
+    const invoiceCurrency = rawCurrency === 'lek' || rawCurrency === 'lekë' ? 'all' : rawCurrency;
     let chargeCurrency = invoiceCurrency;
     let chargeAmount = amount;
     let fxRate = 1;
@@ -224,10 +238,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
     if (customerEmail) sessionParams.customer_email = customerEmail;
 
-    const session = await stripe.checkout.sessions.create(sessionParams);
+    const session = await stripeClient().checkout.sessions.create(sessionParams);
     return res.status(200).json({ sessionId: session.id, url: session.url });
   } catch (err: any) {
     console.error('Stripe Checkout error:', err.message);
-    return res.status(500).json({ error: 'Failed to create checkout session' });
+    // Stripe's own rejections (bad currency, sub-minimum amount, key issues) carry
+    // the actionable detail — surface them; anything else stays generic.
+    const msg = typeof err?.type === 'string' && err.type.startsWith('Stripe')
+      ? `Stripe: ${err.message}`
+      : 'Failed to create checkout session';
+    return res.status(500).json({ error: msg });
   }
 }
