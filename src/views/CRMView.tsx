@@ -74,7 +74,16 @@ import MergeContactsDialog from '../components/MergeContactsDialog';
 import DuplicateContactsPanel from '../components/DuplicateContactsPanel';
 import { useLeadIntel } from '../hooks/useLeadIntel';
 import { useSavedSegments, type LeadSegment } from '../hooks/useSavedSegments';
+import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
 import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember, Quote, Deal } from '../types';
+
+// Built-in business categories. Custom ones typed in the lead form are merged in
+// from teamSettings.leadCategories + the categories already on existing leads.
+const DEFAULT_BUSINESS_CATEGORIES = [
+  'Teknologji', 'Tregti', 'Shërbime', 'Prodhim', 'Ndërtim', 'Arsim', 'Shëndetësi',
+  'Transport', 'Hoteleri & Turizëm', 'Bujqësi', 'Financa & Sigurime',
+  'Pasuri të Paluajtshme', 'Marketing & Media', 'Ushqim & Pije', 'Tjetër',
+];
 
 const CRMView: React.FC = () => {
   const navigate = useNavigate();
@@ -195,6 +204,38 @@ const CRMView: React.FC = () => {
   };
   const waTeamId = useGlobalTeamId();
   const waEnabled = useWhatsappEnabled();
+  const teamSettingsData = useTeamSettingsData();
+
+  // Dropdown i kategorive = lista bazë + kategoritë e ruajtura në teamSettings +
+  // çdo kategori që ekziston tashmë në leads (self-healing edhe kur shkrimi në
+  // teamSettings s'u lejua për rolin që e shtoi).
+  const categoryOptions = useMemo(() => {
+    const seen = new Set(DEFAULT_BUSINESS_CATEGORIES.map(c => c.toLowerCase()));
+    const custom: string[] = [];
+    const add = (c?: string) => {
+      const v = (c || '').trim();
+      if (!v || seen.has(v.toLowerCase())) return;
+      seen.add(v.toLowerCase());
+      custom.push(v);
+    };
+    (teamSettingsData?.leadCategories || []).forEach(add);
+    (scopedLeads || []).forEach((l: any) => add(l.businessCategory));
+    custom.sort((a, b) => a.localeCompare(b, 'sq'));
+    return [...DEFAULT_BUSINESS_CATEGORIES, ...custom];
+  }, [teamSettingsData?.leadCategories, scopedLeads]);
+
+  // Best-effort: shkrimi në teamSettings kërkon admin — nëse dështon, kategoria
+  // mbetet gjithsesi te vetë lead-i dhe rifutet në dropdown nga aty.
+  const persistLeadCategory = (cat: string) => {
+    const v = (cat || '').trim();
+    if (!v || !waTeamId) return;
+    const stored = teamSettingsData?.leadCategories || [];
+    const known = new Set(
+      [...DEFAULT_BUSINESS_CATEGORIES, ...stored].map(c => c.toLowerCase())
+    );
+    if (known.has(v.toLowerCase())) return;
+    saveTeamSettings(waTeamId, { leadCategories: [...stored, v] }).catch(() => {});
+  };
   const waQuery = useMemo(() => ({
     skip: !waEnabled || !waTeamId,
     where: waTeamId ? [{ field: 'teamId', operator: '==' as const, value: waTeamId }] : undefined,
@@ -309,6 +350,8 @@ const CRMView: React.FC = () => {
       toast({ title: 'Cakto një përgjegjës', description: 'Çdo lead duhet të ketë një person përgjegjës.', variant: 'destructive' });
       setSaving(false); return;
     }
+
+    persistLeadCategory(businessCategory);
 
     const parsedValue = estimatedValue && !isNaN(parseFloat(estimatedValue)) ? parseFloat(estimatedValue) : undefined;
     const payload: Record<string, any> = {
@@ -458,6 +501,8 @@ const CRMView: React.FC = () => {
         toast({ title: 'Cakto një përgjegjës', description: 'Çdo lead duhet të ketë një person përgjegjës.', variant: 'destructive' });
         setSaving(false); return;
       }
+
+      persistLeadCategory(businessCategory);
 
       await leadMutation.update(editLead.id, {
         name,
@@ -1297,7 +1342,7 @@ const CRMView: React.FC = () => {
               <DialogHeader>
                 <DialogTitle>Krijo Lead të Ri</DialogTitle>
               </DialogHeader>
-              <LeadForm onSubmit={(data) => { setDirty(false); handleCreateLead(data); }} disabled={saving} teamMembers={scopedMembers} getName={getName} onDirtyChange={setDirty} tagSuggestions={tagSuggestions} />
+              <LeadForm onSubmit={(data) => { setDirty(false); handleCreateLead(data); }} disabled={saving} teamMembers={scopedMembers} getName={getName} onDirtyChange={setDirty} tagSuggestions={tagSuggestions} categoryOptions={categoryOptions} currentUserId={user?.uid} />
             </DialogContent>
           </Dialog>
         )}
@@ -2598,6 +2643,7 @@ const CRMView: React.FC = () => {
               getName={getName}
               onDirtyChange={setDirty}
               tagSuggestions={tagSuggestions}
+              categoryOptions={categoryOptions}
             />
           )}
         </DialogContent>
@@ -2699,7 +2745,10 @@ const LeadForm: React.FC<{
   getName?: (userId: string | null | undefined, fallback?: string) => string;
   onDirtyChange?: (dirty: boolean) => void;
   tagSuggestions?: string[];
-}> = ({ onSubmit, initialData, disabled, teamMembers = [], getName, onDirtyChange, tagSuggestions = [] }) => {
+  categoryOptions?: string[];
+  /** Lead i ri asignohet automatikisht te personi i loguar (ndryshohet me dorë). */
+  currentUserId?: string;
+}> = ({ onSubmit, initialData, disabled, teamMembers = [], getName, onDirtyChange, tagSuggestions = [], categoryOptions = DEFAULT_BUSINESS_CATEGORIES, currentUserId }) => {
   // Split existing phoneNumber into prefix + local
   const PHONE_PREFIXES = ['+355','+383','+389','+381','+382','+385','+387','+386','+49','+43','+41','+39','+44','+1','+33','+34','+30','+90'];
   const parsePhone = (phone?: string) => {
@@ -2719,12 +2768,25 @@ const LeadForm: React.FC<{
     initialData?.lastFollowUpDate ? new Date(initialData.lastFollowUpDate) : undefined
   );
 
+  // Kategoria: listë + mundësi për të shtuar një të re me dorë. Kategoria e një
+  // lead-i ekzistues futet në listë edhe nëse s'është më ndër opsionet.
+  const [category, setCategory] = useState(initialData?.businessCategory || '');
+  const [customCategory, setCustomCategory] = useState(false);
+  const allCategories = useMemo(() => {
+    const initial = (initialData?.businessCategory || '').trim();
+    if (initial && !categoryOptions.some(c => c.toLowerCase() === initial.toLowerCase())) {
+      return [...categoryOptions, initial];
+    }
+    return categoryOptions;
+  }, [categoryOptions, initialData?.businessCategory]);
+
   const handleSubmit = (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
     const formData = new FormData(e.currentTarget);
     if (lastFollowUpDate) {
       formData.set('lastFollowUpDate', lastFollowUpDate.toISOString());
     }
+    formData.set('businessCategory', category.trim());
     // Combine prefix + local phone number
     const localPhone = (formData.get('phoneLocal') as string || '').trim();
     formData.delete('phoneLocal');
@@ -2784,28 +2846,56 @@ const LeadForm: React.FC<{
 
       <div>
         <Label htmlFor="businessCategory">Kategoria e Biznesit *</Label>
-        <Select name="businessCategory" required defaultValue={initialData?.businessCategory || ''}>
-          <SelectTrigger>
-            <SelectValue placeholder="Zgjidh kategorinë" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="Teknologji">Teknologji</SelectItem>
-            <SelectItem value="Tregti">Tregti</SelectItem>
-            <SelectItem value="Shërbime">Shërbime</SelectItem>
-            <SelectItem value="Prodhim">Prodhim</SelectItem>
-            <SelectItem value="Ndërtim">Ndërtim</SelectItem>
-            <SelectItem value="Arsim">Arsim</SelectItem>
-            <SelectItem value="Shëndetësi">Shëndetësi</SelectItem>
-            <SelectItem value="Transport">Transport</SelectItem>
-            <SelectItem value="Hoteleri & Turizëm">Hoteleri & Turizëm</SelectItem>
-            <SelectItem value="Bujqësi">Bujqësi</SelectItem>
-            <SelectItem value="Financa & Sigurime">Financa & Sigurime</SelectItem>
-            <SelectItem value="Pasuri të Paluajtshme">Pasuri të Paluajtshme</SelectItem>
-            <SelectItem value="Marketing & Media">Marketing & Media</SelectItem>
-            <SelectItem value="Ushqim & Pije">Ushqim & Pije</SelectItem>
-            <SelectItem value="Tjetër">Tjetër</SelectItem>
-          </SelectContent>
-        </Select>
+        {customCategory ? (
+          <>
+            <div className="flex gap-1">
+              <Input
+                id="businessCategory"
+                required
+                autoFocus
+                maxLength={60}
+                placeholder="Shkruaj kategorinë e re…"
+                value={category}
+                onChange={(e) => { setCategory(e.target.value); onDirtyChange?.(true); }}
+                className="flex-1"
+              />
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => { setCustomCategory(false); setCategory(initialData?.businessCategory || ''); }}
+                title="Kthehu te lista"
+              >
+                <X className="w-4 h-4" />
+              </Button>
+            </div>
+            <p className="text-xs text-muted-foreground mt-1">
+              Kategoria e re ruhet dhe do të shfaqet në listë herës tjetër.
+            </p>
+          </>
+        ) : (
+          <Select
+            required
+            value={category}
+            onValueChange={(v) => {
+              if (v === '__new__') { setCustomCategory(true); setCategory(''); }
+              else setCategory(v);
+              onDirtyChange?.(true);
+            }}
+          >
+            <SelectTrigger id="businessCategory">
+              <SelectValue placeholder="Zgjidh kategorinë" />
+            </SelectTrigger>
+            <SelectContent>
+              {allCategories.map(c => (
+                <SelectItem key={c} value={c}>{c}</SelectItem>
+              ))}
+              <SelectItem value="__new__" className="text-primary font-medium">
+                + Shto kategori të re…
+              </SelectItem>
+            </SelectContent>
+          </Select>
+        )}
       </div>
 
       <div>
@@ -2879,7 +2969,17 @@ const LeadForm: React.FC<{
       {teamMembers.length > 0 && (
         <div>
           <Label htmlFor="assignedToUserId">Asigno tek</Label>
-          <Select name="assignedToUserId" defaultValue={initialData?.assignedToUserId || 'unassigned'}>
+          {/* Lead i ri: parazgjedhja është vetë personi i loguar (nëse është në listë),
+              jo "Pa asignuar" — çdo lead duhet të ketë një përgjegjës gjithsesi. */}
+          <Select
+            name="assignedToUserId"
+            defaultValue={
+              initialData?.assignedToUserId
+                || (currentUserId && teamMembers.some(m => m.userId === currentUserId && m.status === 'Active')
+                  ? currentUserId
+                  : 'unassigned')
+            }
+          >
             <SelectTrigger>
               <SelectValue placeholder="Pa asignuar" />
             </SelectTrigger>
