@@ -2620,12 +2620,22 @@ const ChatView: React.FC = () => {
 
   // Dismiss the bell notification(s) tied to the conversation I just opened.
   // Chat notifications (client_message, @mention) carry linkTo = the channel id;
-  // opening that channel should clear them just like tapping them in the bell would.
+  // a direct_message carries NO linkTo — its sender is embedded in actionUrl —
+  // so DM threads are matched on that instead. Opening the conversation should
+  // clear them just like tapping them in the bell would.
   useEffect(() => {
-    if (chatMode !== 'channel' || !activeChannel || !myUnreadNotifs?.length) return;
-    const toClear = myUnreadNotifs.filter(
-      (n: any) => n.linkTo === activeChannel && !markedNotifReadRef.current.has(n.id),
-    );
+    if (!myUnreadNotifs?.length) return;
+    let toClear: any[] = [];
+    if (chatMode === 'channel' && activeChannel) {
+      toClear = myUnreadNotifs.filter(
+        (n: any) => n.linkTo === activeChannel && !markedNotifReadRef.current.has(n.id),
+      );
+    } else if (chatMode === 'direct' && activeDirectUserId) {
+      const dmUrl = `/app/chat?directUserId=${activeDirectUserId}`;
+      toClear = myUnreadNotifs.filter(
+        (n: any) => n.type === 'direct_message' && n.actionUrl === dmUrl && !markedNotifReadRef.current.has(n.id),
+      );
+    }
     if (toClear.length === 0) return;
     const ids = toClear.map((n: any) => n.id);
     ids.forEach((id: string) => markedNotifReadRef.current.add(id));
@@ -2635,7 +2645,7 @@ const ChatView: React.FC = () => {
       ids.forEach((id: string) => markedNotifReadRef.current.delete(id));
       console.error('[ChatView] dismiss chat notifications failed', err);
     });
-  }, [chatMode, activeChannel, myUnreadNotifs]);
+  }, [chatMode, activeChannel, activeDirectUserId, myUnreadNotifs]);
 
   // Auto-resize textarea + @mention detection
   const handleTextareaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {

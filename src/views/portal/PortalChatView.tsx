@@ -163,6 +163,38 @@ const PortalChatView: React.FC = () => {
   const messageMutation = useMutation<ChatMessage>('messages');
   // No notifications mutation: a portal client cannot write into `notifications`
   // (the rules deny it). Staff are notified server-side via /api/notify-staff.
+  // The one write the rules DO allow is marking my own notification as read
+  // (userId pinned, isRead/readAt only) — used below to auto-dismiss the bell
+  // entry for the conversation the client just opened.
+
+  // My unread bell notifications — a staff_message carries linkTo = this channel
+  // id, so opening the conversation should clear it just like tapping it in the
+  // bell would. Without this the badge lingered until manually tapped.
+  const { data: myUnreadNotifs } = useCollection<any>('notifications', {
+    skip: !user?.uid,
+    where: user?.uid ? [
+      { field: 'userId', operator: '==', value: user.uid },
+      { field: 'isRead', operator: '==', value: false },
+    ] : undefined,
+    limit: 200,
+    skipTeamFilter: true,
+  });
+  const markedNotifReadRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!channelId || !myUnreadNotifs?.length) return;
+    const toClear = myUnreadNotifs.filter(
+      (n: any) => n.type === 'staff_message' && n.linkTo === channelId && !markedNotifReadRef.current.has(n.id),
+    );
+    if (toClear.length === 0) return;
+    const ids = toClear.map((n: any) => n.id);
+    ids.forEach((id: string) => markedNotifReadRef.current.add(id));
+    const batch = writeBatch(db);
+    ids.forEach((id: string) => batch.update(doc(db, 'notifications', id), { isRead: true }));
+    batch.commit().catch((err) => {
+      ids.forEach((id: string) => markedNotifReadRef.current.delete(id));
+      console.error('[PortalChatView] dismiss chat notifications failed', err);
+    });
+  }, [channelId, myUnreadNotifs]);
   const { upload: uploadAttachment, uploading } = useFileUpload();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const composerRef = useRef<HTMLTextAreaElement | null>(null);
