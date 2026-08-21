@@ -116,6 +116,7 @@ const TransferLandingPage = lazyRetry(() => import('./views/landing/TransferLand
 const BakeryLandingPage = lazyRetry(() => import('./views/landing/BakeryLandingPage'));
 const ShopProduktLandingPage = lazyRetry(() => import('./views/landing/ShopProduktLandingPage'));
 const EngineeringLandingPage = lazyRetry(() => import('./views/landing/EngineeringLandingPage'));
+const RentACarSoftwareLandingPage = lazyRetry(() => import('./views/landing/RentACarSoftwareLandingPage'));
 const PriceCalculatorView = lazyRetry(() => import('./views/PriceCalculatorView'));
 const LandingPagesView = lazyRetry(() => import('./views/LandingPagesView'));
 const PrivacyPolicyView = lazyRetry(() => import('./views/PrivacyPolicyView'));
@@ -287,6 +288,7 @@ function AppContent() {
       <Route path="/bakery" element={<Suspense fallback={<LazyFallback />}><BakeryLandingPage /></Suspense>} />
       <Route path="/shop-produkte" element={<Suspense fallback={<LazyFallback />}><ShopProduktLandingPage /></Suspense>} />
       <Route path="/engineering" element={<Suspense fallback={<LazyFallback />}><EngineeringLandingPage /></Suspense>} />
+      <Route path="/rent-a-car" element={<Suspense fallback={<LazyFallback />}><RentACarSoftwareLandingPage /></Suspense>} />
       <Route path="/privacy" element={<Suspense fallback={<LazyFallback />}><PrivacyPolicyView /></Suspense>} />
       <Route path="/privatesia" element={<Suspense fallback={<LazyFallback />}><PrivacyPolicyView /></Suspense>} />
       <Route path="/delete-account" element={<Suspense fallback={<LazyFallback />}><DeleteAccountView /></Suspense>} />

@@ -236,6 +236,17 @@ const LANDING_PAGES: LandingPageEntry[] = [
     gradient: 'from-navy-700 to-sky-600',
     status: 'active',
   },
+  {
+    id: 'rent-a-car',
+    title: 'RENTOS — Software rent a car',
+    description: 'Faqe shitjeje për sistemin e menaxhimit të agjencive rent a car: faqe publike me rezervim online në 5 gjuhë + panel administrimi me 18 module (kalendar, çmime dinamike, flota, financa). Kalkulator komisionesh interaktiv. Start 149 €/muaj, Pro 249 €/muaj, White label 4.900 € një herë.',
+    path: '/rent-a-car',
+    category: 'Software',
+    icon: Car,
+    color: 'text-cyan-600',
+    gradient: 'from-cyan-600 to-teal-700',
+    status: 'active',
+  },
 ];
 
 const CATEGORIES = ['Të gjitha', ...Array.from(new Set(LANDING_PAGES.map((p) => p.category)))];
