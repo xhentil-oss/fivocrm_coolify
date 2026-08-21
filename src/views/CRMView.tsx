@@ -867,7 +867,7 @@ const CRMView: React.FC = () => {
       // Send notification to Admin + Sales (canAccessCRM) team members (best-effort)
       if (user && teamMembers) {
         const notifyPromises = scopedMembers
-          .filter(m => m.userId !== user.uid && (m.role === 'Admin' || m.canAccessCRM))
+          .filter(m => (m.status ?? 'Active') === 'Active' && m.userId !== user.uid && (m.role === 'Admin' || m.canAccessCRM))
           .map(m => notificationMutation.create({
             userId: m.userId,
             type: 'lead_converted',

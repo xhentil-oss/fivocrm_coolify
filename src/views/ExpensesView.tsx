@@ -136,9 +136,10 @@ const ExpensesView: React.FC = () => {
 
     logActivity('expense_added', `Shpenzim: ${title}`, { entityType: 'expense', description: `${amount} ${currencySymbol(currency)}` });
 
-    // Notify Admins and Managers about new expense (exclude submitter)
+    // Notify ACTIVE Admins and Managers about new expense (exclude submitter —
+    // off-boarded Inactive members must not keep receiving push/email)
     const adminManagers = (teamMembers || []).filter(m =>
-      m.userId !== user?.uid && (m.role === 'Admin' || m.role === 'Manager')
+      (m.status ?? 'Active') === 'Active' && m.userId !== user?.uid && (m.role === 'Admin' || m.role === 'Manager')
     );
     if (adminManagers.length > 0) {
       await Promise.all(adminManagers.map(m =>

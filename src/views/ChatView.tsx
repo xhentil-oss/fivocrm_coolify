@@ -2176,8 +2176,11 @@ const ChatView: React.FC = () => {
               if (portalUid) {
                 try { await notificationMutation.create({ userId: portalUid, type: 'staff_message', title, message: (effectiveText || '📎 Attachment').slice(0, 100), isRead: false, linkTo: targetChannel, actionUrl: '/portal/chat' } as any); } catch { /* skip */ }
               }
-              // Send email notification (rate-limited server-side)
-              if ((pa as any).email) {
+              // Direct email FALLBACK for a client with no portal login only: the
+              // notification above already emails the portal user via the choke
+              // point (respecting emailEnabled/DND/mutes), so sending this one too
+              // double-emailed every message — and this path bypasses those gates.
+              if (!portalUid && (pa as any).email) {
                 try {
                   const token = await auth.currentUser?.getIdToken();
                   if (token) {
@@ -2605,17 +2608,24 @@ const ChatView: React.FC = () => {
       ids.forEach(id => markedAsReadRef.current.delete(id));
       return;
     }
-    const batch = writeBatch(db);
-    ids.forEach(id => {
-      const patch: any = { isRead: true };
-      if (isGroupChannel) patch.readBy = arrayUnion(user.uid); // WhatsApp-style per-member read receipts
-      else if (isClientChannel) patch.readAt = new Date();
-      batch.update(doc(db, 'messages', id), patch);
-    });
-    batch.commit().catch((err) => {
-      ids.forEach(id => markedAsReadRef.current.delete(id));
-      console.error('[ChatView] markAsRead channel batch failed', err);
-    });
+    // Chunked: a group catch-up can exceed 500 updates (each carrying an arrayUnion
+    // field transform), and an oversized commit fails WHOLE — then the catch stripped
+    // the dedup ref and the effect retried and failed on every snapshot forever.
+    const CHUNK = 400;
+    for (let i = 0; i < ids.length; i += CHUNK) {
+      const chunk = ids.slice(i, i + CHUNK);
+      const batch = writeBatch(db);
+      chunk.forEach(id => {
+        const patch: any = { isRead: true };
+        if (isGroupChannel) patch.readBy = arrayUnion(user.uid); // WhatsApp-style per-member read receipts
+        else if (isClientChannel) patch.readAt = new Date();
+        batch.update(doc(db, 'messages', id), patch);
+      });
+      batch.commit().catch((err) => {
+        chunk.forEach(id => markedAsReadRef.current.delete(id));
+        console.error('[ChatView] markAsRead channel batch failed', err);
+      });
+    }
   }, [chatMode, channelMessages, allUnreadClientMsgs, allUnreadTeamMsgs, user, activeChannel, isClientChannel, isGroupChannel]);
 
   // Dismiss the bell notification(s) tied to the conversation I just opened.

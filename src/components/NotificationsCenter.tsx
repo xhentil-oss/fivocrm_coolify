@@ -13,7 +13,7 @@ import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
 import { Switch } from './ui/switch';
-import { writeBatch, doc, setDoc, getDoc } from 'firebase/firestore';
+import { writeBatch, doc, setDoc, getDoc, getDocs, collection, where, query as fsQuery, limit as fsLimit } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 import {
   DropdownMenu,
@@ -231,7 +231,10 @@ export function isInDndWindow(prefs: { dndEnabled?: boolean; dndStart?: string; 
   const [eh, em] = prefs.dndEnd.split(':').map(Number);
   const start = sh * 60 + sm;
   const end = eh * 60 + em;
-  return start <= end ? (cur >= start && cur < end) : (cur >= start || cur < end);
+  // Equal start/end reads as "the whole day" (the window has no outside), matching
+  // the server (api/_push.ts isDndActive) — `start <= end` alone made it never active.
+  if (start === end) return true;
+  return start < end ? (cur >= start && cur < end) : (cur >= start || cur < end);
 }
 
 // Is a notification type muted by the user's category preferences?
@@ -377,20 +380,31 @@ const NotificationsCenter: React.FC = () => {
   };
 
   const handleMarkAllAsRead = async () => {
-    // Deliberately over `notifications`, NOT `activeNotifications`: the latter hides
-    // muted categories, so those rows stayed unread forever — invisible in the bell
-    // yet still counted by the daily digest job. "Mark all read" now means all.
-    const unread = (notifications || []).filter(n => !n.isRead);
-    if (unread.length === 0) return;
-    // Firestore caps a batch at 500 writes; the query caps at 100, but chunk anyway
-    // so raising the limit later can't silently start failing.
+    if (!user) return;
+    // Deliberately unfiltered by category mutes: muted rows stayed unread forever —
+    // invisible in the bell yet still counted by the daily digest job.
+    // Queried fresh instead of using the live `notifications` result: that query is
+    // capped at the 100 newest, so unread rows OLDER than the newest 100 could never
+    // be marked read from any UI while still matching every isRead==false query.
     const CHUNK = 400;
-    for (let i = 0; i < unread.length; i += CHUNK) {
-      const batch = writeBatch(db);
-      for (const n of unread.slice(i, i + CHUNK)) {
-        batch.update(doc(db, 'notifications', n.id), { isRead: true });
+    const PAGE = 500;
+    // Bounded sweep (10 pages = 5000 rows) so a corrupt account can't loop forever.
+    for (let page = 0; page < 10; page++) {
+      const snap = await getDocs(fsQuery(
+        collection(db, 'notifications'),
+        where('userId', '==', user.uid),
+        where('isRead', '==', false),
+        fsLimit(PAGE),
+      ));
+      if (snap.empty) break;
+      for (let i = 0; i < snap.docs.length; i += CHUNK) {
+        const batch = writeBatch(db);
+        for (const d of snap.docs.slice(i, i + CHUNK)) {
+          batch.update(d.ref, { isRead: true });
+        }
+        await batch.commit();
       }
-      await batch.commit();
+      if (snap.docs.length < PAGE) break;
     }
   };
 
@@ -784,10 +798,14 @@ const NotificationItem: React.FC<{
   const handleAction = () => {
     if (!notification.isRead) onMarkAsRead(notification.id);
     onClose();
-    // An explicit actionUrl is the most specific target and now wins over the
-    // generic chat fallback — a `direct_message` carries actionUrl
-    // `/app/chat?directUserId=…` and used to be swallowed by the type check below.
-    if (notification.actionUrl?.startsWith('/')) {
+    // For a CHAT notification a channel-id linkTo is the most specific target:
+    // `client_message` arrives with BOTH linkTo (the channel) and a generic
+    // actionUrl ('/app/chat'), and letting actionUrl win landed staff on the bare
+    // chat page instead of the client's conversation. A `direct_message` carries
+    // no linkTo — its actionUrl (`/app/chat?directUserId=…`) still wins below.
+    if (isChatType && notification.linkTo && !notification.linkTo.startsWith('/')) {
+      navigate('/app/chat', { state: { channel: notification.linkTo } });
+    } else if (notification.actionUrl?.startsWith('/')) {
       navigate(notification.actionUrl);
     } else if (notification.linkTo) {
       if (notification.linkTo.startsWith('/')) navigate(notification.linkTo);

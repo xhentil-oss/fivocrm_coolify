@@ -715,7 +715,9 @@ const ProjectDetailView: React.FC = () => {
       const guestIds: string[] = project.guestUserIds || [];
       await Promise.all(
         guestIds
-          .filter(id => id !== user?.uid)
+          // Skip the assignee too — they already got task_assigned above, and a
+          // guest-assignee received two notifications for the same task.
+          .filter(id => id !== user?.uid && id !== assignedToUserId)
           .map(guestId =>
             notificationMutation.create({
               userId: guestId,

@@ -1,7 +1,7 @@
 import { useEffect, useRef } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { PushNotifications } from '@capacitor/push-notifications';
-import { doc, setDoc, deleteDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, setDoc, deleteDoc, deleteField, serverTimestamp } from 'firebase/firestore';
 import { db } from '../lib/firebase';
 
 /**
@@ -50,11 +50,21 @@ export async function clearPushToken(userId?: string | null): Promise<void> {
   if (!userId) return;
   let key: string | null = null;
   try { key = localStorage.getItem(LAST_TOKEN_KEY); } catch { /* noop */ }
-  if (!key) return;
+  if (key) {
+    try {
+      await deleteDoc(doc(db, 'userPushTokens', userId, 'tokens', key));
+    } catch { /* best-effort — a stale token is dropped server-side on first failure */ }
+    try { localStorage.removeItem(LAST_TOKEN_KEY); } catch { /* noop */ }
+  }
+  // The LEGACY single-token field on the parent doc is still a delivery target
+  // (listPushTokens reads it), and nothing else ever clears it — so a user who
+  // registered pre-migration kept receiving pushes on this device after logout,
+  // even for the NEXT account that signed in. Clear it unconditionally: if this
+  // device didn't own that token it belongs to an even older session of the same
+  // user, and the current device re-registers into the subcollection on login.
   try {
-    await deleteDoc(doc(db, 'userPushTokens', userId, 'tokens', key));
-  } catch { /* best-effort — a stale token is dropped server-side on first failure */ }
-  try { localStorage.removeItem(LAST_TOKEN_KEY); } catch { /* noop */ }
+    await setDoc(doc(db, 'userPushTokens', userId), { token: deleteField() }, { merge: true });
+  } catch { /* best-effort */ }
 }
 
 export function usePushNotifications(userId?: string) {

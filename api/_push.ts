@@ -79,7 +79,10 @@ export function isDndActive(prefs: any, now = new Date()): boolean {
   if (![sh, sm, eh, em].every(Number.isFinite)) return false;
   const s = sh * 60 + sm;
   const e = eh * 60 + em;
-  return s <= e ? (cur >= s && cur < e) : (cur >= s || cur < e); // overnight window
+  // Equal start/end = "the whole day" (the window has no outside). `s <= e` alone
+  // made e.g. 22:00–22:00 never active, delivering all day despite DND being on.
+  if (s === e) return true;
+  return s < e ? (cur >= s && cur < e) : (cur >= s || cur < e); // overnight window
 }
 
 /** Both shared gates in one call: Do-Not-Disturb and category mute. */

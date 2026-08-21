@@ -1,6 +1,6 @@
 import React, { useMemo, useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useCollection, useMutation } from '../hooks/useFirestore';
+import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import ActivationChecklist from '../components/ActivationChecklist';
@@ -219,9 +219,16 @@ const StaffDashboard: React.FC = () => {
   );
 
   // ── Unread client messages: count from notifications ──
+  // Scoped to the active business like the bell (NotificationsCenter): the raw
+  // userId-only query includes OTHER tenants' rows for a multi-business user, so
+  // the dashboard badge/toast fired for messages the bell showed as zero.
+  const activeBusinessId = useGlobalBusinessId();
   const unreadClientMsgs = useMemo(
-    () => allUserNotifs?.filter((n: any) => n.type === 'client_message' && !n.isRead).length || 0,
-    [allUserNotifs]
+    () => allUserNotifs?.filter((n: any) =>
+      n.type === 'client_message' && !n.isRead
+      && (!activeBusinessId || !n.businessId || n.businessId === activeBusinessId)
+    ).length || 0,
+    [allUserNotifs, activeBusinessId]
   );
 
   // ── Toast when new client message arrives ──

@@ -22,7 +22,7 @@ import {
 } from 'lucide-react';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
-import { useCollection } from '../hooks/useFirestore';
+import { useCollection, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useModules } from '../hooks/useModules';
 
 const MobileBottomNav: React.FC = () => {
@@ -33,32 +33,38 @@ const MobileBottomNav: React.FC = () => {
   // stayed reachable from the "Më shumë" drawer. Same registry as the sidebar now.
   const { isEnabled } = useModules();
 
-  // ── Unread chat badge (mirrors Sidebar logic) ──
+  // ── Unread chat badge (mirrors Sidebar logic — including the businessId scoping
+  // and the capped/teamScopedWhere query shapes; the mirror had dropped both, so
+  // mobile showed counts the scoped chat couldn't display and streamed the whole
+  // tenant message history to draw a badge) ──
+  const businessId = useGlobalBusinessId();
   const unreadDmQuery = useMemo(() => !user ? undefined : {
     where: [
       { field: 'receiverId', operator: '==', value: user.uid },
       { field: 'isRead', operator: '==', value: false },
     ],
     skipTeamFilter: true,
+    limit: 200,
   }, [user]);
   const { data: unreadDms } = useCollection<any>('messages', unreadDmQuery);
 
+  // Same shape as Sidebar/ChatView → shared listener + existing composite index
+  // messages(businessId, isRead, createdAt DESC). senderType filtered client-side.
   const unreadClientQuery = useMemo(() => !user ? undefined : {
-    where: [
-      { field: 'senderType', operator: '==', value: 'client' },
-      { field: 'isRead', operator: '==', value: false },
-    ],
-    // Scoped to the active business server-side (businessId only; senderType/isRead
-    // filtered client-side). NOT teamScopedWhere — that would need a composite index.
+    where: [{ field: 'isRead', operator: '==', value: false }],
+    orderBy: { field: 'createdAt', direction: 'desc' as const },
+    limit: 200,
+    teamScopedWhere: true,
   }, [user]);
   const { data: unreadClientMsgs } = useCollection<any>('messages', unreadClientQuery);
 
   const unreadChatCount = useMemo(() => {
     let c = 0;
-    if (unreadDms && user) c += unreadDms.filter((m: any) => m.senderId !== user.uid && !m.channelId).length;
-    if (unreadClientMsgs && user) c += unreadClientMsgs.filter((m: any) => m.senderId !== user.uid).length;
+    const inBusiness = (m: any) => !businessId || m.businessId === businessId;
+    if (unreadDms && user) c += unreadDms.filter((m: any) => m.senderId !== user.uid && !m.channelId && inBusiness(m)).length;
+    if (unreadClientMsgs && user) c += unreadClientMsgs.filter((m: any) => m.senderType === 'client' && m.senderId !== user.uid && inBusiness(m)).length;
     return c;
-  }, [unreadDms, unreadClientMsgs, user]);
+  }, [unreadDms, unreadClientMsgs, user, businessId]);
 
   const canAccess = (key: string) =>
     !permissions.isLoading && permissions[key as keyof typeof permissions] === true;

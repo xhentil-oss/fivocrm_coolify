@@ -2,6 +2,12 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import admin, { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 import { notifyUser } from './_push.js';
 import { NOTIFICATION_TYPE_CATEGORY } from './_notificationTypes.js';
+import { checkPersistentRateLimit } from './_rateLimit.js';
+
+// Each call fans out (doc + push to every device + email) to every Admin/Manager/
+// CRM-capable member of the tenant, and can create a task — so the ceiling is per
+// CALLER, not per recipient. A legitimately chatty client sends well under this.
+const NOTIFY_STAFF_PER_HOUR = 120;
 
 /**
  * POST /api/notify-staff
@@ -125,7 +131,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } = (req.body || {}) as Record<string, any>;
 
   if (!type || !title) return res.status(400).json({ error: 'Missing type/title' });
+
+  // This endpoint had NO rate limit: a hostile/buggy portal client could flood the
+  // whole management team with pushes/emails/tasks in a loop.
+  if (!(await checkPersistentRateLimit('notifyStaff', decoded.uid, NOTIFY_STAFF_PER_HOUR))) {
+    return res.status(429).json({ error: 'Rate limited', limitPerHour: NOTIFY_STAFF_PER_HOUR, retryAfterSeconds: 3600 });
+  }
+
   const clean = (v: any, max = 500) => (typeof v === 'string' ? v.slice(0, max) : undefined);
+
+  // actionUrl is CLIENT-supplied and lands in staff notifications, whose bell
+  // navigates to it on tap — allow only in-app staff paths. (The portal bell has the
+  // mirror check with '/portal'; every legitimate caller sends '/app/…'.)
+  const safeActionUrl = (() => {
+    const u = clean(actionUrl, 500);
+    return u && u.startsWith('/app/') && !u.startsWith('//') ? u : undefined;
+  })();
 
   // ── Resolve the caller's customer (portal identity) ──
   let customerId: string | null = null;
@@ -260,7 +281,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     type: safeType,
     title: clean(title, 200) || 'Njoftim i ri',
     message: clean(message, 1000) || '',
-    actionUrl: clean(actionUrl, 500) || undefined,
+    actionUrl: safeActionUrl,
     actionLabel: clean(actionLabel, 60) || undefined,
     linkTo: clean(linkTo, 200) || undefined,
     projectId: clean(projectId, 200) || undefined,

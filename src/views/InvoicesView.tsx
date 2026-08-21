@@ -492,7 +492,12 @@ const InvoicesView: React.FC = () => {
 
   const saveEdit = async (invoiceId: string, field: string) => {
     const updateData: any = {};
-    
+    // Re-saving an ALREADY-Paid invoice must not act like a fresh payment: it used
+    // to overwrite paidAt with today (destroying the original payment date) and
+    // re-notify the whole finance team on every touch.
+    const invoice = invoices?.find(i => i.id === invoiceId);
+    const becamePaid = field === 'status' && editValue === 'Paid' && invoice?.status !== 'Paid';
+
     if (field === 'total' || field === 'amount') {
       const parsed = parseFloat(editValue);
       if (isNaN(parsed) || parsed < 0) {
@@ -502,8 +507,8 @@ const InvoicesView: React.FC = () => {
       updateData[field] = parsed;
     } else {
       updateData[field] = editValue;
-      // When status is marked Paid, record paidAt from the user-selected date
-      if (field === 'status' && editValue === 'Paid') {
+      // When status BECOMES Paid, record paidAt from the user-selected date
+      if (becamePaid) {
         updateData.paidAt = paidAtDate ? new Date(paidAtDate + 'T12:00:00') : new Date();
       }
     }
@@ -511,9 +516,8 @@ const InvoicesView: React.FC = () => {
     await invoiceMutation.update(invoiceId, updateData);
 
     // Notify Admin/finance team when invoice marked Paid
-    if (field === 'status' && editValue === 'Paid') {
-      const invoice = invoices?.find(i => i.id === invoiceId);
-      const recipients = scopedMembers.filter((m: any) => m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices));
+    if (becamePaid) {
+      const recipients = scopedMembers.filter((m: any) => (m.status ?? 'Active') === 'Active' && m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices));
       await Promise.all(recipients.map((m: any) => notificationMutation.create({
         userId: m.userId,
         type: 'invoice_paid',
@@ -576,7 +580,7 @@ const InvoicesView: React.FC = () => {
         sourceKey: `${partialPaymentInvoice.id}#p${paymentIndex}`,
       } as any).catch((err) => console.error('[Payments] ledger write failed:', err));
       if (isFullyPaid) {
-        const recipients = scopedMembers.filter((m: any) => m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices));
+        const recipients = scopedMembers.filter((m: any) => (m.status ?? 'Active') === 'Active' && m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices));
         await Promise.all(recipients.map((m: any) => notificationMutation.create({
           userId: m.userId,
           type: 'invoice_paid',
@@ -2183,7 +2187,8 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       });
 
       // Notify Admin/finance members about the new invoice
-      const invoiceRecipients = scopedInvoiceMembers.filter((m: any) => m.userId !== currentUser?.uid && (m.role === 'Admin' || m.canAccessInvoices));
+      // Off-boarded (Inactive) members must not keep receiving push/email.
+      const invoiceRecipients = scopedInvoiceMembers.filter((m: any) => (m.status ?? 'Active') === 'Active' && m.userId !== currentUser?.uid && (m.role === 'Admin' || m.canAccessInvoices));
       await Promise.all(invoiceRecipients.map((m: any) => invoiceNotifMutation.create({
         userId: m.userId,
         type: 'invoice_created',

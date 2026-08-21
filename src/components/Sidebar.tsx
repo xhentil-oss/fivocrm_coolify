@@ -193,21 +193,26 @@ const Sidebar: React.FC<SidebarProps> = ({
         { field: 'isRead', operator: '==', value: false },
       ],
       skipTeamFilter: true,
+      // Badge only needs a count — cap the listener so an ignored inbox can't
+      // stream an unbounded number of docs forever.
+      limit: 200,
     };
   }, [user]);
 
   const { data: unreadMessages, loading: unreadDmLoading } = useCollection<any>('messages', unreadDmQuery);
 
-  // Unread client-channel messages (senderType == 'client', not read)
+  // Unread client-channel messages. Mirrors ChatView's allUnreadChannelQuery (same
+  // where/orderBy/limit → the two share one listener + the existing composite index
+  // messages(businessId, isRead, createdAt DESC)). The old shape (businessId-only
+  // server query, senderType/isRead filtered client-side) downloaded the tenant's
+  // ENTIRE message history just to draw a badge. senderType is filtered below.
   const unreadClientQuery = useMemo(() => {
     if (!user) return undefined;
     return {
-      where: [
-        { field: 'senderType', operator: '==', value: 'client' },
-        { field: 'isRead', operator: '==', value: false },
-      ],
-      // Scoped to the active business server-side (businessId only; senderType/isRead
-      // filtered client-side). NOT teamScopedWhere — that would need a composite index.
+      where: [{ field: 'isRead', operator: '==', value: false }],
+      orderBy: { field: 'createdAt', direction: 'desc' as const },
+      limit: 200,
+      teamScopedWhere: true,
     };
   }, [user]);
   const { data: unreadClientMessages, loading: unreadClientLoading } = useCollection<any>('messages', unreadClientQuery);
@@ -222,7 +227,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       count += unreadMessages.filter(m => m.senderId !== user.uid && !m.channelId && inBusiness(m)).length;
     }
     if (unreadClientMessages && user) {
-      count += unreadClientMessages.filter(m => m.senderId !== user.uid && inBusiness(m)).length;
+      count += unreadClientMessages.filter(m => m.senderType === 'client' && m.senderId !== user.uid && inBusiness(m)).length;
     }
     return count;
   }, [unreadMessages, unreadClientMessages, user, businessId]);

@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminAuth, adminDb } from './_firebaseAdmin.js';
 import { isTypeMutedByPrefs } from './_notificationTypes.js';
 import { getUserPrefs, isDndActive, sendPushToUser, sendNotificationEmail } from './_push.js';
+import { checkPersistentRateLimit } from './_rateLimit.js';
 
 // Simple in-memory per-caller rate limiter (best-effort; resets on cold start).
 // A fan-out (e.g. "goal achieved" → every active member) issues one call PER
@@ -49,8 +50,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   // Rate limited responses are explicit (429 + retryAfter) rather than a silent
-  // drop, so a caller that fans out too fast can be seen doing it.
-  if (!checkRateLimit(caller.uid)) {
+  // drop, so a caller that fans out too fast can be seen doing it. The in-memory
+  // check is only the fast local path — it is per-instance, so the Firestore-backed
+  // counter is what actually enforces the ceiling across instances.
+  if (!checkRateLimit(caller.uid) || !(await checkPersistentRateLimit('notifyEmail', caller.uid, RATE_LIMIT_PER_HOUR))) {
     return res.status(429).json({ error: 'Rate limited', limitPerHour: RATE_LIMIT_PER_HOUR, retryAfterSeconds: 3600 });
   }
 
@@ -62,21 +65,43 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   // Authorize: a caller may only notify a user in their OWN business — otherwise any
   // authenticated user could push/email arbitrary UIDs across tenants (spam/phishing).
-  // Resolved from users/{uid}.businessId, which both staff and portal clients carry.
-  // Best-effort: if either side's business can't be resolved (legacy record) we fall
-  // through rather than drop a legitimate notification; super-admins bypass.
+  // FAIL-CLOSED. The old check only blocked when BOTH sides' users/{uid}.businessId
+  // resolved — but that doc is user-writable and the rules allow saving it with the
+  // businessId field ABSENT, so a caller could strip their own and the check fell
+  // through to "allowed". The caller's business now comes from server-minted custom
+  // claims first (bid = staff, pbid = portal client — not client-writable), with the
+  // users doc only as a legacy-token fallback; a target with no users doc is accepted
+  // only on membership proof (teamMembers / clientPortalAccess) in the SAME business.
   if (caller.superAdmin !== true) {
     try {
-      const [callerSnap, targetSnap] = await Promise.all([
-        adminDb.collection('users').doc(caller.uid).get(),
-        adminDb.collection('users').doc(String(userId)).get(),
-      ]);
-      const callerBiz = callerSnap.exists ? (callerSnap.data() as any)?.businessId : undefined;
-      const targetBiz = targetSnap.exists ? (targetSnap.data() as any)?.businessId : undefined;
-      if (callerBiz && targetBiz && callerBiz !== targetBiz) {
-        return res.status(403).json({ error: 'Forbidden' });
+      let callerBiz: string | undefined =
+        (typeof (caller as any).bid === 'string' && (caller as any).bid) ||
+        (typeof (caller as any).pbid === 'string' && (caller as any).pbid) ||
+        undefined;
+      if (!callerBiz) {
+        const callerSnap = await adminDb.collection('users').doc(caller.uid).get();
+        callerBiz = callerSnap.exists ? (callerSnap.data() as any)?.businessId : undefined;
       }
-    } catch { /* best-effort: don't block a legitimate notification on a lookup error */ }
+      if (!callerBiz) return res.status(403).json({ error: 'Forbidden' });
+
+      const targetSnap = await adminDb.collection('users').doc(String(userId)).get();
+      let targetBiz: string | undefined = targetSnap.exists ? (targetSnap.data() as any)?.businessId : undefined;
+      if (!targetBiz) {
+        const [tm, pa] = await Promise.all([
+          adminDb.collection('teamMembers')
+            .where('userId', '==', String(userId)).where('businessId', '==', callerBiz).limit(1).get(),
+          adminDb.collection('clientPortalAccess')
+            .where('userId', '==', String(userId)).where('businessId', '==', callerBiz).limit(1).get(),
+        ]);
+        if (!tm.empty || !pa.empty) targetBiz = callerBiz;
+      }
+      if (targetBiz !== callerBiz) return res.status(403).json({ error: 'Forbidden' });
+    } catch {
+      // Fail closed: an authorization check that errors must not become a bypass.
+      // The in-app notification document is already written by the caller — only
+      // this delivery attempt is dropped, and the client logs the non-OK response.
+      return res.status(503).json({ error: 'Authorization check failed' });
+    }
   }
 
   // Load preferences once — they gate both channels.
