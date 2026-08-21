@@ -66,7 +66,27 @@ recurring rule into a once-per-contact-ever blast, silently, months later.
 | `dailyCap` | Max sends per run. Required for an evergreen rule. |
 
 These stack on top of the existing segment filters (audience, lead status, tags
-ANY/ALL, assignee, source, hasDomain), which are unchanged.
+ANY/ALL, business category, assignee, source, hasDomain).
+
+### Business category (`segment.categories`)
+
+The CRM's `Lead.businessCategory` ("Makina me qera", "Hoteleri & Turizëm", …),
+matched **ANY of the selected**, case-insensitively. The picker in the builder is
+the union of `teamSettings.leadCategories` (what the lead form has persisted) and
+every category already present on a lead/customer, so a category typed once is
+filterable immediately and an old one never disappears.
+
+Two rules that are easy to get wrong:
+
+- **A contact with no category is excluded.** The filter is a statement about
+  what the business *is*; "unknown" must not pass as a match.
+- **A customer inherits the category of the lead it was converted from.**
+  `Customer` has no category field, so `buildCategoryIndex()` maps
+  `lead.id` / `lead.customerId` / `customer.leadId` → category, and
+  `waSendBlockReason` falls back to it (`ctx.categoryByContactId`). Without it,
+  the filter silently dropped every existing client. The index is built ONLY when
+  the filter is on — and that is also why the cron loads leads for a
+  customers-only audience in that case.
 
 ### What counts as "contact"
 
@@ -149,7 +169,7 @@ is never overwritten, and a non-URL is returned untouched rather than throwing.
 `waSendBlockReason()` returns a **named reason** instead of a silent `continue`,
 and both the preview and the cron aggregate them:
 
-`no-phone`, `status-mismatch`, `tag-mismatch`, `assignee-mismatch`,
+`no-phone`, `status-mismatch`, `tag-mismatch`, `category-mismatch`, `assignee-mismatch`,
 `source-mismatch`, `domain-mismatch`, `never-contacted`,
 `contacted-too-recently`, `contact-too-old`, `no-notes`, `no-variant`,
 `already-sent`.

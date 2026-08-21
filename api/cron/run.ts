@@ -2101,6 +2101,19 @@ function waContactTags(e: any): string[] {
   return [];
 }
 
+/** Business category, with the aliases imported rows have written historically. */
+function waContactCategory(e: any): string {
+  const raw = e?.businessCategory ?? e?.category ?? e?.industry;
+  return String(raw ?? '').trim();
+}
+
+/** Case-insensitive membership — categories are free text typed by the user. */
+function waCategoryMatches(cat: string, want: string[]): boolean {
+  if (!cat) return false;
+  const c = cat.toLowerCase();
+  return want.some((w) => String(w || '').trim().toLowerCase() === c);
+}
+
 function waToDate(v: any): Date | null {
   if (!v) return null;
   if (v instanceof Date) return isNaN(v.getTime()) ? null : v;
@@ -2210,6 +2223,8 @@ function waBlockReason(
     lastMessageByPhone?: Map<string, Date>;
     sentPhones?: Set<string>;
     domainCustomerIds?: Set<string> | null;
+    /** contactId → category, for contacts whose own doc carries none (customers). */
+    categoryByContactId?: Map<string, string>;
   },
   variants?: any[],
 ): string | null {
@@ -2224,6 +2239,11 @@ function waBlockReason(
     const has = waContactTags(e);
     const ok = segment.tagMatch === 'all' ? wantTags.every((t) => has.includes(t)) : wantTags.some((t) => has.includes(t));
     if (!ok) return 'tag-mismatch';
+  }
+  const wantCategories: string[] = (segment?.categories || []).filter(Boolean);
+  if (wantCategories.length) {
+    const cat = waContactCategory(e) || ctx.categoryByContactId?.get(String(e.id)) || '';
+    if (!waCategoryMatches(cat, wantCategories)) return 'category-mismatch';
   }
   if (segment?.assignedToUserId && e.assignedToUserId !== segment.assignedToUserId) return 'assignee-mismatch';
   if (segment?.source && String(e.source || '') !== segment.source) return 'source-mismatch';
@@ -2466,10 +2486,39 @@ async function resolveWaCampaignTargets(
     return v;
   };
 
+  // The audience is materialised BEFORE the loop because the category filter is
+  // cross-record: the category lives on the LEAD, and a customer is filtered by
+  // the category of the lead it was converted from. Leads are therefore loaded
+  // for a customers-only audience too — but only when that filter is actually on.
+  const wantCategories: string[] = (seg.categories || []).filter(Boolean);
+  const needLeadDocs = audience.includes('leads') || (wantCategories.length > 0 && audience.includes('customers'));
+  const leadDocs = needLeadDocs ? await tenantScopedDocs('leads', audienceScope) : [];
+  const customerDocs = audience.includes('customers')
+    ? await tenantScopedDocs('customers', audienceScope)
+    : [];
+
+  // contactId → category (mirror of buildCategoryIndex in src/lib/marketing/waAutomation.ts)
+  let categoryByContactId: Map<string, string> | undefined;
+  if (wantCategories.length) {
+    categoryByContactId = new Map<string, string>();
+    for (const { id, data } of leadDocs) {
+      const cat = waContactCategory(data);
+      if (!cat) continue;
+      categoryByContactId.set(String(id), cat);
+      if ((data as any).customerId) categoryByContactId.set(String((data as any).customerId), cat);
+    }
+    for (const { id, data } of customerDocs) {
+      if (waContactCategory(data)) { categoryByContactId.set(String(id), waContactCategory(data)); continue; }
+      const leadId = (data as any).leadId;
+      const fromLead = leadId ? categoryByContactId.get(String(leadId)) : undefined;
+      if (fromLead) categoryByContactId.set(String(id), fromLead);
+    }
+  }
+
   const consider = (raw: any, id: string, kind: 'lead' | 'customer') => {
     considered++;
     const e = { ...raw, id };
-    const reason = waBlockReason(e, seg, conditions, { now, kind, lastMessageByPhone, sentPhones, domainCustomerIds }, variants);
+    const reason = waBlockReason(e, seg, conditions, { now, kind, lastMessageByPhone, sentPhones, domainCustomerIds, categoryByContactId }, variants);
     if (reason) { bump(reason); return; }
     const phone = normalizeWaPhone(e.phone || e.phoneNumber);
     if (byPhone.has(phone)) return;   // same person as lead AND customer → one chat
@@ -2484,10 +2533,10 @@ async function resolveWaCampaignTargets(
   };
 
   if (audience.includes('leads')) {
-    for (const { id, data } of await tenantScopedDocs('leads', audienceScope)) consider(data, id, 'lead');
+    for (const { id, data } of leadDocs) consider(data, id, 'lead');
   }
   if (audience.includes('customers')) {
-    for (const { id, data } of await tenantScopedDocs('customers', audienceScope)) consider(data, id, 'customer');
+    for (const { id, data } of customerDocs) consider(data, id, 'customer');
   }
 
   return { targets: Array.from(byPhone.values()), blocked, considered };

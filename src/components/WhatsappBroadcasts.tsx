@@ -9,7 +9,7 @@ import { Button } from './ui/button';
 import { Timestamp } from 'firebase/firestore';
 import type { WhatsAppBroadcast, WhatsAppTemplate, WhatsAppMessageVariant, Lead, Customer, TeamMember, WhatsAppAccount } from '../types';
 import {
-  contactTags as entityTags, evaluateWaSegment, validateWaCampaign, WA_BLOCK_LABELS,
+  contactTags as entityTags, contactCategory, evaluateWaSegment, validateWaCampaign, WA_BLOCK_LABELS,
   type WaConditions, type WaBlockReason,
 } from '../lib/marketing/waAutomation';
 
@@ -85,6 +85,7 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
   const [agentId, setAgentId] = useState('');
   const [statuses, setStatuses] = useState<string[]>([]);
   const [selectedTags, setSelectedTags] = useState<string[]>([]);
+  const [selectedCategories, setSelectedCategories] = useState<string[]>([]);
   const [tagMatch, setTagMatch] = useState<'any' | 'all'>('any');
   const [assignedTo, setAssignedTo] = useState('');
   const [source, setSource] = useState('');
@@ -99,6 +100,18 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
     (customers || []).forEach((c) => entityTags(c).forEach((t) => s.add(t)));
     return Array.from(s).sort((a, b) => a.localeCompare(b));
   }, [leads, customers]);
+
+  // Business categories to filter by (e.g. "Makina me qera"). The union of the
+  // custom ones the lead form persisted to teamSettings and whatever is already
+  // set on leads/customers — so a category typed once is filterable immediately,
+  // and one that only exists on old rows never disappears from the picker.
+  const allCategories = useMemo(() => {
+    const s = new Set<string>();
+    (settings?.leadCategories || []).forEach((c) => { const v = String(c || '').trim(); if (v) s.add(v); });
+    (leads || []).forEach((l) => { const v = contactCategory(l); if (v) s.add(v); });
+    (customers || []).forEach((c) => { const v = contactCategory(c); if (v) s.add(v); });
+    return Array.from(s).sort((a, b) => a.localeCompare(b));
+  }, [settings?.leadCategories, leads, customers]);
 
   // Distinct contact origins (Customer/Lead `source`) — powers the "Burimi"
   // filter, e.g. broadcast only to WHMCS-synced clients.
@@ -121,15 +134,18 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
 
   const toggleTag = (t: string) =>
     setSelectedTags((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
+  const toggleCategory = (c: string) =>
+    setSelectedCategories((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]));
 
   const segment = useMemo(() => ({
     audience,
     ...(statuses.length ? { statuses } : {}),
     ...(selectedTags.length ? { tags: selectedTags, tagMatch } : {}),
+    ...(selectedCategories.length ? { categories: selectedCategories } : {}),
     ...(assignedTo ? { assignedToUserId: assignedTo } : {}),
     ...(source ? { source } : {}),
     ...(hasDomain ? { hasDomain: true } : {}),
-  }), [audience, statuses, selectedTags, tagMatch, assignedTo, source, hasDomain]);
+  }), [audience, statuses, selectedTags, selectedCategories, tagMatch, assignedTo, source, hasDomain]);
 
   const activeTemplate = templates?.find((t) => t.id === templateId);
 
@@ -166,7 +182,8 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
     setAudience((prev) => (prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]));
 
   const resetForm = () => {
-    setName(''); setTemplateId(''); setStatuses([]); setSelectedTags([]); setAssignedTo(''); setSource(''); setHasDomain(false); setScheduledAt('');
+    setName(''); setTemplateId(''); setStatuses([]); setSelectedTags([]); setSelectedCategories([]);
+    setAssignedTo(''); setSource(''); setHasDomain(false); setScheduledAt('');
     setConditions({}); setVariants([]); setLandingUrl(''); setUtmCampaign(''); setTrigger('manual');
   };
 
@@ -437,6 +454,36 @@ const WhatsappBroadcasts: React.FC<Props> = ({ onClose }) => {
                     <option value="">Të gjitha burimet</option>
                     {allSources.map((s) => <option key={s} value={s}>{sourceLabel(s)}</option>)}
                   </select>
+                </div>
+              )}
+
+              {/* Business category (Lead.businessCategory) — e.g. only "Makina me qera" */}
+              {allCategories.length > 0 && (
+                <div>
+                  <div className="flex items-center justify-between mb-1">
+                    <label className="text-[11px] text-muted-foreground">Kategoria e biznesit (lër bosh = të gjitha)</label>
+                    {selectedCategories.length > 0 && (
+                      <button onClick={() => setSelectedCategories([])} className="text-[10px] text-muted-foreground hover:text-foreground">
+                        Hiq filtrin
+                      </button>
+                    )}
+                  </div>
+                  <div className="flex flex-wrap gap-1.5 max-h-24 overflow-y-auto">
+                    {allCategories.map((c) => {
+                      const on = selectedCategories.includes(c);
+                      return (
+                        <button key={c} onClick={() => toggleCategory(c)}
+                          className={`text-xs px-2 py-1 rounded-full border ${on ? 'bg-[#25D366] text-white border-[#25D366]' : 'border-border text-muted-foreground hover:bg-muted'}`}>
+                          {c}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {selectedCategories.length > 0 && (
+                    <p className="text-[10px] text-muted-foreground mt-1">
+                      Klienti pa kategori merr kategorinë e lead-it nga i cili u konvertua; kontaktet pa kategori përjashtohen.
+                    </p>
+                  )}
                 </div>
               )}
 

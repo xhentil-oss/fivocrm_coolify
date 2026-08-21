@@ -37,6 +37,7 @@ export interface WaContact {
   phoneNumber?: string;
   email?: string;
   tags?: unknown;                 // string[] (leads) or comma string (customers)
+  businessCategory?: string;      // lead's business category ("Makina me qera", …)
   notes?: string;
   status?: string;
   source?: string;
@@ -79,6 +80,8 @@ export interface WaSegment {
   tags?: string[];
   tagMatch?: 'any' | 'all';
   tag?: string;                   // @deprecated single-tag back-compat
+  /** Lead business categories (`Lead.businessCategory`) — ANY match. */
+  categories?: string[];
   assignedToUserId?: string;
   source?: string;
   hasDomain?: boolean;
@@ -88,6 +91,7 @@ export type WaBlockReason =
   | 'no-phone'
   | 'status-mismatch'
   | 'tag-mismatch'
+  | 'category-mismatch'
   | 'assignee-mismatch'
   | 'source-mismatch'
   | 'domain-mismatch'
@@ -103,6 +107,7 @@ export const WA_BLOCK_LABELS: Record<WaBlockReason, string> = {
   'no-phone': 'pa numër telefoni',
   'status-mismatch': 'status jashtë filtrit',
   'tag-mismatch': 'pa etiketën e kërkuar',
+  'category-mismatch': 'kategori tjetër biznesi',
   'assignee-mismatch': 'caktuar te tjetërkush',
   'source-mismatch': 'burim tjetër',
   'domain-mismatch': 'pa domain të regjistruar',
@@ -130,6 +135,54 @@ export function contactTags(e: unknown): string[] {
   if (Array.isArray(t)) return t.map((x) => String(x).trim()).filter(Boolean);
   if (typeof t === 'string') return t.split(',').map((s) => s.trim()).filter(Boolean);
   return [];
+}
+
+/**
+ * The contact's business category — the CRM's `Lead.businessCategory`
+ * ("Makina me qera", "Hoteleri & Turizëm", …).
+ *
+ * `category`/`industry` are read as aliases because imported and landing-form
+ * rows have historically written one of those instead; a customer row usually
+ * carries none at all, which is what `buildCategoryIndex` fills in.
+ */
+export function contactCategory(e: unknown): string {
+  const o = e as { businessCategory?: unknown; category?: unknown; industry?: unknown } | null | undefined;
+  const raw = o?.businessCategory ?? o?.category ?? o?.industry;
+  return String(raw ?? '').trim();
+}
+
+/** Case-insensitive membership — categories are free text typed by the user. */
+export function categoryMatches(cat: string, want: string[]): boolean {
+  if (!cat) return false;
+  const c = cat.toLowerCase();
+  return want.some((w) => String(w || '').trim().toLowerCase() === c);
+}
+
+/**
+ * contactId → business category, so a CUSTOMER can be filtered by the category
+ * of the lead it was converted from.
+ *
+ * The category lives on the lead only (`Customer` has no such field), yet the
+ * same person is usually both — without this, "kategoria = Makina me qera"
+ * silently dropped every existing client from the segment.
+ */
+export function buildCategoryIndex(leads: WaContact[] = [], customers: WaContact[] = []): Map<string, string> {
+  const index = new Map<string, string>();
+  for (const l of leads) {
+    const cat = contactCategory(l);
+    if (!cat) continue;
+    index.set(String(l.id), cat);
+    const linked = (l as { customerId?: unknown }).customerId;
+    if (linked) index.set(String(linked), cat);
+  }
+  for (const c of customers) {
+    const own = contactCategory(c);
+    if (own) { index.set(String(c.id), own); continue; }
+    const leadId = (c as { leadId?: unknown }).leadId;
+    const fromLead = leadId ? index.get(String(leadId)) : undefined;
+    if (fromLead) index.set(String(c.id), fromLead);
+  }
+  return index;
 }
 
 /** Digits-only phone, matching the cron's `normalizeWaPhone`. */
@@ -330,6 +383,8 @@ export interface WaEligibilityContext {
   domainCustomerIds?: Set<string> | null;
   /** Leads can never own a domain, so `hasDomain` excludes them wholesale. */
   kind: 'lead' | 'customer';
+  /** contactId → category, for contacts whose own doc carries none (customers). */
+  categoryByContactId?: Map<string, string>;
 }
 
 /**
@@ -359,6 +414,11 @@ export function waSendBlockReason(
       ? wantTags.every((t) => has.includes(t))
       : wantTags.some((t) => has.includes(t));
     if (!ok) return 'tag-mismatch';
+  }
+  const wantCategories = (segment.categories || []).filter(Boolean);
+  if (wantCategories.length) {
+    const cat = contactCategory(e) || ctx.categoryByContactId?.get(String(e.id)) || '';
+    if (!categoryMatches(cat, wantCategories)) return 'category-mismatch';
   }
   if (segment.assignedToUserId && e.assignedToUserId !== segment.assignedToUserId) return 'assignee-mismatch';
   if (segment.source && String(e.source || '') !== segment.source) return 'source-mismatch';
@@ -442,6 +502,8 @@ export interface WaEvaluateInput {
   lastMessageByPhone?: Map<string, Date>;
   sentPhones?: Set<string>;
   domainCustomerIds?: Set<string> | null;
+  /** Override the derived category index (the cron builds its own). */
+  categoryByContactId?: Map<string, string>;
 }
 
 /**
@@ -455,6 +517,10 @@ export function evaluateWaSegment(input: WaEvaluateInput): WaSegmentResult {
     segment, conditions = {}, variants, fallbackBody, defaultLandingUrl, utm, now,
     lastMessageByPhone, sentPhones, domainCustomerIds,
   } = input;
+  // Only pay for the lead↔customer category index when the filter is on.
+  const categoryByContactId = segment.categories?.length
+    ? (input.categoryByContactId || buildCategoryIndex(input.leads, input.customers))
+    : undefined;
   const audience = segment.audience?.length ? segment.audience : ['leads'];
   const blocked: Record<string, number> = {};
   const bump = (r: WaBlockReason) => { blocked[r] = (blocked[r] || 0) + 1; };
@@ -476,7 +542,7 @@ export function evaluateWaSegment(input: WaEvaluateInput): WaSegmentResult {
   const consider = (e: WaContact, kind: 'lead' | 'customer') => {
     considered++;
     const reason = waSendBlockReason(e, segment, conditions, {
-      now, lastMessageByPhone, sentPhones, domainCustomerIds, kind,
+      now, lastMessageByPhone, sentPhones, domainCustomerIds, kind, categoryByContactId,
     }, variants);
     if (reason) { bump(reason); return; }
 

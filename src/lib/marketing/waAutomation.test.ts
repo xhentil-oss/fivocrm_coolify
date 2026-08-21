@@ -4,6 +4,7 @@ import {
   resolveLastContactAt, daysSince, pickVariant, variantServiceLabel,
   withUtm, firstName, summarizeNotes, renderWaMessage,
   waSendBlockReason, evaluateWaSegment, validateWaCampaign,
+  contactCategory, categoryMatches, buildCategoryIndex,
   type WaContact, type WaMessageVariant,
 } from './waAutomation';
 
@@ -195,6 +196,27 @@ describe('waSendBlockReason — segment filters', () => {
     expect(waSendBlockReason(lead(), { source: 'whmcs' }, {}, ctx)).toBe('source-mismatch');
   });
 
+  it('filters by business category, case-insensitively', () => {
+    const l = lead({ businessCategory: 'Makina me qera' });
+    expect(waSendBlockReason(l, { categories: ['Makina me qera'] }, {}, ctx)).toBeNull();
+    expect(waSendBlockReason(l, { categories: ['makina me QERA'] }, {}, ctx)).toBeNull();
+    expect(waSendBlockReason(l, { categories: ['Hoteleri', 'Makina me qera'] }, {}, ctx)).toBeNull();
+    expect(waSendBlockReason(l, { categories: ['Hoteleri'] }, {}, ctx)).toBe('category-mismatch');
+    // A contact with no category at all is out — the filter is a statement about
+    // what the business IS, so "unknown" must never pass as a match.
+    expect(waSendBlockReason(lead(), { categories: ['Makina me qera'] }, {}, ctx)).toBe('category-mismatch');
+  });
+
+  it('lets a customer inherit the category of the lead it came from', () => {
+    const cust: WaContact = { id: 'c1', name: 'Rent Co', phone: '355691234567' };
+    const index = new Map([['c1', 'Makina me qera']]);
+    expect(waSendBlockReason(cust, { categories: ['Makina me qera'] }, {}, {
+      now: NOW, kind: 'customer', categoryByContactId: index,
+    })).toBeNull();
+    expect(waSendBlockReason(cust, { categories: ['Makina me qera'] }, {}, { now: NOW, kind: 'customer' }))
+      .toBe('category-mismatch');
+  });
+
   it('honours the deprecated single-tag field', () => {
     expect(waSendBlockReason(lead({ tags: ['SEO'] }), { tag: 'SEO' }, {}, ctx)).toBeNull();
     expect(waSendBlockReason(lead({ tags: ['SEO'] }), { tag: 'Ads' }, {}, ctx)).toBe('tag-mismatch');
@@ -358,6 +380,53 @@ describe('evaluateWaSegment', () => {
       defaultLandingUrl: 'https://fivocrm.com/info', now: NOW,
     });
     expect(res.targets[0].message).toBe('Ciao Ardit\n\nhttps://fivocrm.com/info');
+  });
+});
+
+describe('category index', () => {
+  it('reads the category from businessCategory and its legacy aliases', () => {
+    expect(contactCategory({ businessCategory: ' Makina me qera ' })).toBe('Makina me qera');
+    expect(contactCategory({ category: 'Hoteleri' })).toBe('Hoteleri');
+    expect(contactCategory({ industry: 'Ndërtim' })).toBe('Ndërtim');
+    expect(contactCategory({})).toBe('');
+    expect(contactCategory(null)).toBe('');
+    expect(categoryMatches('Makina me qera', ['makina me qera'])).toBe(true);
+    expect(categoryMatches('', ['makina me qera'])).toBe(false);
+  });
+
+  it('maps a converted customer to its lead category, both link directions', () => {
+    const leads = [
+      lead({ id: 'l1', businessCategory: 'Makina me qera', customerId: 'c1' }),
+      lead({ id: 'l2', businessCategory: 'Hoteleri' }),
+      lead({ id: 'l3' }),
+    ];
+    const customers: WaContact[] = [
+      { id: 'c1', name: 'A' },                             // linked from the lead side
+      { id: 'c2', name: 'B', leadId: 'l2' },               // linked from the customer side
+      { id: 'c3', name: 'C', businessCategory: 'Tregti' },  // its own category wins
+      { id: 'c4', name: 'D', leadId: 'l3' },               // lead has none → absent
+    ];
+    const index = buildCategoryIndex(leads, customers);
+    expect(index.get('l1')).toBe('Makina me qera');
+    expect(index.get('c1')).toBe('Makina me qera');
+    expect(index.get('c2')).toBe('Hoteleri');
+    expect(index.get('c3')).toBe('Tregti');
+    expect(index.has('c4')).toBe(false);
+  });
+
+  it('evaluateWaSegment derives the index so a converted client is not dropped', () => {
+    const r = evaluateWaSegment({
+      leads: [lead({ id: 'l1', businessCategory: 'Makina me qera', customerId: 'c1', phone: '355690000001' })],
+      customers: [
+        { id: 'c1', name: 'Rent Co', phone: '355690000002' },
+        { id: 'c9', name: 'Tjetër', phone: '355690000003' },
+      ],
+      segment: { audience: ['leads', 'customers'], categories: ['Makina me qera'] },
+      fallbackBody: 'Pershendetje {{name}}',
+      now: NOW,
+    });
+    expect(r.targets.map((t) => t.contact.id).sort()).toEqual(['c1', 'l1']);
+    expect(r.blocked['category-mismatch']).toBe(1);
   });
 });
 

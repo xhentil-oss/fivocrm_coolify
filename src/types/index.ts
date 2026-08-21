@@ -72,6 +72,8 @@ export interface WhatsAppBroadcast {
     tags?: string[];                  // tags on leads/customers
     tagMatch?: 'any' | 'all';         // match ANY (default) or ALL selected tags
     tag?: string;                     // @deprecated single-tag (back-compat)
+    categories?: string[];            // Lead.businessCategory values (ANY match); a customer
+                                      // inherits the category of the lead it came from
     assignedToUserId?: string;        // assignedToUserId (leads + customers)
     source?: string;                  // filter by origin (e.g. 'whmcs') — leads + customers
     hasDomain?: boolean;              // only customers with a registered WHMCS domain
