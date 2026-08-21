@@ -2651,7 +2651,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
       </ScrollArea>
 
         {/* Footer: Fshi · përmbledhja · Ruaj (design) */}
-        <div className="flex items-center gap-2.5 border-t bg-muted/30 px-4 py-3 pb-[max(0.75rem,env(safe-area-inset-bottom))] sm:px-6 sm:py-3.5">
+        <div className="flex items-center gap-2.5 border-t bg-muted/30 px-4 py-3 pb-[max(0.75rem,var(--safe-area-bottom))] sm:px-6 sm:py-3.5">
           {/* Delete: manager rank or owning the task (creator/assignee) — the
               rules accept any member's delete, so the UI must not offer more
               than the role is meant to have. */}

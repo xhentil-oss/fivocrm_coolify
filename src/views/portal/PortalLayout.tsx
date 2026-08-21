@@ -127,15 +127,15 @@ const PortalLayout: React.FC = () => {
 
   // When an admin previews the portal, a banner sits under the header; everything
   // below the header shifts down by its height so nothing is hidden.
-  const headerTop = 'calc(4rem + env(safe-area-inset-top))';
-  const headerPlusBanner = 'calc(4rem + env(safe-area-inset-top) + 40px)';
+  const headerTop = 'calc(4rem + var(--safe-area-top))';
+  const headerPlusBanner = 'calc(4rem + var(--safe-area-top) + 40px)';
   const contentTop = previewCustomerId ? headerPlusBanner : headerTop;
 
   return (
     <div className="min-h-screen bg-background text-foreground">
       {/* Top Bar — grows by the top safe-area inset so it clears the notch/status bar */}
       <header
-        style={{ height: 'calc(4rem + env(safe-area-inset-top))', paddingTop: 'env(safe-area-inset-top)' }}
+        style={{ height: 'calc(4rem + var(--safe-area-top))', paddingTop: 'var(--safe-area-top)' }}
         className="fixed top-0 left-0 right-0 z-50 border-b bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 flex items-center px-4 lg:px-6"
       >
         <Button
@@ -264,7 +264,7 @@ const PortalLayout: React.FC = () => {
       {/* Main content — top clears the (inset-grown) header, bottom clears the
           (inset-grown) mobile nav. */}
       <main className="lg:ml-[262px]" style={{ paddingTop: contentTop }}>
-        <div className="p-4 sm:p-6 lg:p-8" style={{ paddingBottom: 'calc(5rem + env(safe-area-inset-bottom))' }}>
+        <div className="p-4 sm:p-6 lg:p-8" style={{ paddingBottom: 'calc(5rem + var(--safe-area-bottom))' }}>
           <PortalPushPrompt />
           <Outlet />
         </div>
@@ -274,7 +274,7 @@ const PortalLayout: React.FC = () => {
       {/* Height grows by the bottom safe-area inset; padding lifts the tabs above the
           gesture bar / home indicator. */}
       <nav
-        style={{ height: 'calc(4rem + env(safe-area-inset-bottom))', paddingBottom: 'env(safe-area-inset-bottom)' }}
+        style={{ height: 'calc(4rem + var(--safe-area-bottom))', paddingBottom: 'var(--safe-area-bottom)' }}
         className="fixed bottom-0 left-0 right-0 z-40 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 border-t flex items-stretch lg:hidden"
       >
         {bottomNavItems.map(item => {

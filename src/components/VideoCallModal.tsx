@@ -38,7 +38,7 @@ const VideoCallModal: React.FC<{ roomUrl: string; userName?: string; onClose: ()
       <button
         onClick={onClose}
         className="absolute right-3 z-10 bg-black/60 hover:bg-black/80 text-white rounded-full p-2"
-        style={{ top: 'max(12px, env(safe-area-inset-top, 12px))' }}
+        style={{ top: 'max(12px, var(--safe-area-top))' }}
         aria-label="Mbyll thirrjen"
       >
         <X className="w-5 h-5" />

@@ -5,7 +5,7 @@ import App from './App';
 import './index.css';
 import { initSentry } from './lib/sentry';
 import { installNativeApiBase } from './lib/nativeApi';
-import { installExternalLinkHandler } from './lib/native';
+import { installExternalLinkHandler, applyAndroidSafeAreaFallback } from './lib/native';
 
 // On native, route relative /api/ calls to the deployed origin. Must run
 // before any module fires a fetch.
@@ -24,6 +24,9 @@ import { Keyboard } from '@capacitor/keyboard';
 
 if (Capacitor.isNativePlatform()) {
   const platform = Capacitor.getPlatform();
+  // Activates the native-only CSS in index.css (horizontal safe-area padding on
+  // <body>, no overscroll bounce) — nothing else adds this class.
+  document.documentElement.classList.add('plt-capacitor');
   // Each of these rejects on the platform that doesn't implement it, which would
   // surface as an unhandled promise rejection at startup — so guard and swallow.
   void StatusBar.setStyle({ style: Style.Dark }).catch(() => {});
@@ -31,6 +34,9 @@ if (Capacitor.isNativePlatform()) {
     // setBackgroundColor is Android-only; on iOS the status bar is transparent and
     // the WebView's own background shows through.
     void StatusBar.setBackgroundColor({ color: '#09090B' }).catch(() => {});
+    // Android ≤14: stamp --safe-area-inset-top when neither Capacitor's
+    // SystemBars injection (API 35+) nor env() provides it.
+    void applyAndroidSafeAreaFallback();
   }
   if (platform === 'ios') {
     // setAccessoryBarVisible is iOS-only — it throws "not implemented" on Android.

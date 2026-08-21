@@ -62,7 +62,7 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
           the status bar / notch on edge-to-edge Android/iOS. */}
       <header
         className="fixed top-0 left-0 right-0 z-50 bg-brand-navy border-b border-white/10"
-        style={{ height: 'calc(72px + env(safe-area-inset-top))', paddingTop: 'env(safe-area-inset-top)' }}
+        style={{ height: 'calc(72px + var(--safe-area-top))', paddingTop: 'var(--safe-area-top)' }}
       >
         <div className="h-full px-3 sm:px-4 lg:px-6 flex items-center justify-between">
         <div className="flex items-center gap-2 sm:gap-4">
@@ -238,7 +238,7 @@ const TopNavBar: React.FC<TopNavBarProps> = ({
     {isOwner && previewRole && (
       <div
         className="fixed left-0 right-0 z-40 flex items-center justify-between px-4 py-1.5 bg-yellow-400 text-yellow-900 text-sm font-medium"
-        style={{ top: 'calc(72px + env(safe-area-inset-top))' }}
+        style={{ top: 'calc(72px + var(--safe-area-top))' }}
       >
         <span>
           <Eye className="inline w-4 h-4 mr-1.5 mb-0.5" />

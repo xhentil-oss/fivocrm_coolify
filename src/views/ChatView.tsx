@@ -3991,7 +3991,7 @@ const ChatView: React.FC = () => {
                                   {/* Slide-up sheet */}
                                   <div
                                     className="fixed inset-x-0 bottom-0 z-[61] bg-popover border-t rounded-t-2xl shadow-2xl animate-in slide-in-from-bottom duration-200 motion-reduce:animate-none"
-                                    style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+                                    style={{ paddingBottom: 'var(--safe-area-bottom)' }}
                                   >
                                     {/* Grab handle */}
                                     <div className="flex justify-center pt-2 pb-1">
@@ -4157,7 +4157,7 @@ const ChatView: React.FC = () => {
 
             {/* Message Input — hidden when no group/conversation is selected */}
             {!channelHasNoSelection && (
-            <div className="px-4 pt-2 border-t bg-background" style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom, 12px))' }}>
+            <div className="px-4 pt-2 border-t bg-background" style={{ paddingBottom: 'max(12px, var(--safe-area-bottom))' }}>
               {showAttachmentInput && (
                 <div className="flex gap-2 items-center px-3 py-1.5 mb-2 bg-muted/30 rounded-xl border">
                   <Paperclip className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />

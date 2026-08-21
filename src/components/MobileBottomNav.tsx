@@ -106,7 +106,7 @@ const MobileBottomNav: React.FC = () => {
       {/* "Më shumë" slide-up drawer — sits directly above the bottom nav, whose
           height grows by the bottom safe-area inset. */}
       <div
-        style={{ bottom: 'calc(4rem + env(safe-area-inset-bottom))' }}
+        style={{ bottom: 'calc(4rem + var(--safe-area-bottom))' }}
         className={`fixed left-0 right-0 z-50 bg-card border-t rounded-t-2xl shadow-xl lg:hidden transition-all duration-300 ease-out ${
           showMore
             ? 'opacity-100 translate-y-0'
@@ -157,7 +157,7 @@ const MobileBottomNav: React.FC = () => {
           mismatch that previously pushed a fixed nav off-screen on the chat page.
           Height + padding reserve the bottom safe-area (home indicator). */}
       <nav
-        style={{ height: 'calc(4rem + env(safe-area-inset-bottom))', paddingBottom: 'env(safe-area-inset-bottom)' }}
+        style={{ height: 'calc(4rem + var(--safe-area-bottom))', paddingBottom: 'var(--safe-area-bottom)' }}
         className="shrink-0 w-full z-40 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 border-t flex items-stretch lg:hidden"
       >
         {primaryItems.map(item => {

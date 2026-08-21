@@ -842,7 +842,7 @@ const PortalChatView: React.FC = () => {
       )}
 
       {/* Message Input Area */}
-      <div className="border-t bg-background pt-2" style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom, 8px))' }}>
+      <div className="border-t bg-background pt-2" style={{ paddingBottom: 'max(8px, var(--safe-area-bottom))' }}>
         <input
           ref={fileInputRef}
           type="file"
@@ -914,7 +914,7 @@ const PortalChatView: React.FC = () => {
           <div className="fixed inset-0 z-[60] bg-black/50 animate-in fade-in duration-150 motion-reduce:animate-none" onClick={() => setLongPressMenuId(null)} />
           <div
             className="fixed inset-x-0 bottom-0 z-[61] bg-popover border-t rounded-t-2xl shadow-2xl animate-in slide-in-from-bottom duration-200 motion-reduce:animate-none"
-            style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}
+            style={{ paddingBottom: 'var(--safe-area-bottom)' }}
           >
             <div className="flex justify-center pt-2 pb-1"><div className="h-1 w-9 rounded-full bg-muted-foreground/25" /></div>
             <div className="flex justify-around px-3 py-2 border-b border-border/60">

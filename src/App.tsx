@@ -344,7 +344,7 @@ function AppContent() {
             // than the content uses (the svh/layout mismatch that hid it on mobile).
             className="h-[100dvh] flex flex-col overflow-hidden bg-background text-foreground"
             style={{
-              paddingTop: `calc(${isOwner && previewRole ? '108px' : '72px'} + env(safe-area-inset-top))`,
+              paddingTop: `calc(${isOwner && previewRole ? '108px' : '72px'} + var(--safe-area-top))`,
             }}
           >
             <TopNavBar

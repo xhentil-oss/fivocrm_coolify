@@ -44,6 +44,49 @@ export async function openExternal(url: string): Promise<void> {
   }
 }
 
+/**
+ * Android safe-area fallback. The layout reads var(--safe-area-*), which
+ * prefers the --safe-area-inset-* variables Capacitor's SystemBars plugin
+ * injects on Android 15+ and falls back to env(safe-area-inset-*). On
+ * Android ≤14 neither exists: SystemBars only injects on API 35+, and the
+ * Android WebView reports env() as 0 even though overlaysWebView draws the
+ * app under the status bar — so the fixed header sat half-hidden ("cut").
+ * Here we measure what env() really resolves to; when it yields 0 while the
+ * status bar overlays the WebView, we stamp the plugin-reported height as
+ * the same inline variable SystemBars would have injected. On Android 15+
+ * the variable is already (or later) injected natively and this is a no-op.
+ */
+export async function applyAndroidSafeAreaFallback(): Promise<void> {
+  if (Capacitor.getPlatform() !== 'android') return;
+  const root = document.documentElement;
+  if (root.style.getPropertyValue('--safe-area-inset-top')) return;
+
+  const probe = document.createElement('div');
+  probe.style.cssText =
+    'position:fixed;top:0;left:0;height:0;visibility:hidden;pointer-events:none;padding-top:env(safe-area-inset-top,0px)';
+  document.body.appendChild(probe);
+  const envTop = parseFloat(getComputedStyle(probe).paddingTop) || 0;
+  probe.remove();
+  if (envTop > 0) return; // env() works on this WebView — nothing to patch
+
+  try {
+    const { StatusBar } = await import('@capacitor/status-bar');
+    // Android returns `height` (dp) in getInfo(), but the shared TS type omits it.
+    const info = (await StatusBar.getInfo()) as { overlays?: boolean; height?: number };
+    // Re-check: SystemBars may have injected while we awaited.
+    if (
+      info.overlays &&
+      typeof info.height === 'number' &&
+      info.height > 0 &&
+      !root.style.getPropertyValue('--safe-area-inset-top')
+    ) {
+      root.style.setProperty('--safe-area-inset-top', `${info.height}px`);
+    }
+  } catch {
+    // leave the env() fallback in place
+  }
+}
+
 let linkHandlerInstalled = false;
 
 /**

@@ -428,8 +428,8 @@ const Sidebar: React.FC<SidebarProps> = ({
       <aside
         // Offset/height track the header, which grows by the top safe-area inset.
         style={{
-          top: 'calc(72px + env(safe-area-inset-top))',
-          height: 'calc(100vh - 72px - env(safe-area-inset-top))',
+          top: 'calc(72px + var(--safe-area-top))',
+          height: 'calc(100vh - 72px - var(--safe-area-top))',
         }}
         className={cn(
           'fixed left-0 bg-[#08183A] transition-all duration-300 z-40 flex flex-col',
