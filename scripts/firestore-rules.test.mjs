@@ -977,6 +977,50 @@ test('37. portal client cannot mark own invoice Paid or delete it', async () => 
   await assertSucceeds(updateDoc(doc(alice, 'invoices', 'invCarol'), { status: 'Paid' }));
 });
 
+// 37b. The SAME rule for the invoice's line items. `/invoiceItems` kept an
+// `isPortalClientFor(customerId)` clause on update/delete long after it was removed
+// from `/invoices`, so a client could rewrite or delete the itemisation of their own
+// invoice from the browser console. The itemisation is part of the accounting record.
+test('37b. portal client reads own invoice items but cannot rewrite or delete them', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'invoiceItems', 'itemCarol'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1',
+      invoiceId: 'invCarol', description: 'SEO retainer', quantity: 1,
+      unitPrice: 1000, totalPrice: 1000,
+    });
+  });
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+
+  // Readable — the client must be able to see what they are being billed for.
+  await assertSucceeds(getDoc(doc(carol, 'invoiceItems', 'itemCarol')));
+  // Never writable.
+  await assertFails(updateDoc(doc(carol, 'invoiceItems', 'itemCarol'), { totalPrice: 1 }));
+  await assertFails(updateDoc(doc(carol, 'invoiceItems', 'itemCarol'), { description: 'free' }));
+  await assertFails(deleteDoc(doc(carol, 'invoiceItems', 'itemCarol')));
+
+  // Staff of the tenant still manage it normally.
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(updateDoc(doc(alice, 'invoiceItems', 'itemCarol'), { quantity: 2 }));
+});
+
+// 37c. A line item written WITHOUT businessId/customerId is readable by nobody.
+// This is why the recurring-invoice cron must stamp both: it used to copy only
+// `teamId`, so every auto-generated invoice showed an empty items table to staff
+// and to the client while its total was correct.
+test('37c. line item with no tenant key is unreadable by staff and client alike', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'invoiceItems', 'itemOrphan'), {
+      teamId: MY_TEAM, invoiceId: 'invCarol', description: 'orphaned copy',
+      quantity: 1, unitPrice: 500, totalPrice: 500,
+    });
+  });
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+
+  await assertFails(getDoc(doc(alice, 'invoiceItems', 'itemOrphan')));
+  await assertFails(getDoc(doc(carol, 'invoiceItems', 'itemOrphan')));
+});
+
 // 39. Tasks are STAFF-ONLY writes. The portal client may read their own project's
 // tasks (customerId derived from the parent project) but must never complete,
 // edit or delete internal work items; and no signed-in user may create a task
@@ -1130,4 +1174,107 @@ test('42. portal client reads only portalVisible reports of their own customer',
   // Staff of the tenant still read everything.
   const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
   await assertSucceeds(getDoc(doc(alice, 'reports', 'repDraft')));
+});
+
+// ── Expenses: the approval workflow is a RULE, not just hidden buttons ──────
+// Before this, `allow update, delete: if canManageBusinessDoc()` meant any member
+// of the business (a Viewer included) could self-approve, silently raise an
+// approved amount, delete a colleague's booked cost, or move the row into
+// another tenant — the entire workflow lived in the UI.
+test('43. a Member cannot self-approve an expense (create or update)', async () => {
+  const bob = staffOf('bobM', MY_BIZ, MY_TEAM, ['member']);
+  // Creating one already approved is refused …
+  await assertFails(setDoc(doc(bob, 'expenses', 'expSelfApproveNew'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, title: 'Laptop', amount: 1200, currency: 'EUR',
+    category: 'Office', approvalStatus: 'Approved', createdByUserId: 'bobM',
+  }));
+  // … submitting one is fine.
+  await assertSucceeds(setDoc(doc(bob, 'expenses', 'expBobSubmitted'), {
+    businessId: MY_BIZ, teamId: MY_TEAM, title: 'Laptop', amount: 1200, currency: 'EUR',
+    category: 'Office', approvalStatus: 'Submitted', createdByUserId: 'bobM',
+  }));
+  // Flipping the verdict afterwards is not.
+  await assertFails(updateDoc(doc(bob, 'expenses', 'expBobSubmitted'), { approvalStatus: 'Approved' }));
+
+  // An Admin of the same tenant may do both.
+  const admin = staffOf('adminA', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(updateDoc(doc(admin, 'expenses', 'expBobSubmitted'), { approvalStatus: 'Approved' }));
+});
+
+test('44. raising an APPROVED amount requires sending it back for approval', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'expenses', 'expApproved'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, title: 'Qira', amount: 1000, currency: 'ALL',
+      category: 'Rent', approvalStatus: 'Approved', createdByUserId: 'bobM',
+    });
+  });
+  const bob = staffOf('bobM', MY_BIZ, MY_TEAM, ['member']);
+  // 1 000 → 100 000 while still reading "Aprovuar": denied.
+  await assertFails(updateDoc(doc(bob, 'expenses', 'expApproved'), { amount: 100000 }));
+  // Editing something the approval was not granted for is fine.
+  await assertSucceeds(updateDoc(doc(bob, 'expenses', 'expApproved'), { description: 'qira e zyrës' }));
+  // Changing the amount AND re-opening the approval is the supported path.
+  await assertSucceeds(updateDoc(doc(bob, 'expenses', 'expApproved'), {
+    amount: 100000, approvalStatus: 'Submitted',
+  }));
+});
+
+test('45. an expense can never be moved to another tenant, nor deleted once approved', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'expenses', 'expLocked'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, title: 'Hosting', amount: 50, currency: 'EUR',
+      category: 'Hosting', approvalStatus: 'Approved', createdByUserId: 'bobM',
+    });
+    await setDoc(doc(ctx.firestore(), 'expenses', 'expOthersDraft'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, title: 'Taksi', amount: 20, currency: 'EUR',
+      category: 'Travel', approvalStatus: 'Submitted', createdByUserId: 'someoneElse',
+    });
+    await setDoc(doc(ctx.firestore(), 'expenses', 'expBobOwnDraft'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, title: 'Bileta', amount: 15, currency: 'EUR',
+      category: 'Travel', approvalStatus: 'Submitted', createdByUserId: 'bobM',
+    });
+    await setDoc(doc(ctx.firestore(), 'expenses', 'expVictim'), {
+      businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, title: 'Victim rent', amount: 9999,
+      currency: 'EUR', category: 'Rent', approvalStatus: 'Approved', createdByUserId: 'vstaff',
+    });
+  });
+  const bob = staffOf('bobM', MY_BIZ, MY_TEAM, ['member']);
+  // keepsBusinessId(): no tenant-hopping via update.
+  await assertFails(updateDoc(doc(bob, 'expenses', 'expLocked'), { businessId: VICTIM_BIZ }));
+  // An approved, booked cost is not a Member's to delete …
+  await assertFails(deleteDoc(doc(bob, 'expenses', 'expLocked')));
+  // … nor is someone else's row, even unapproved.
+  await assertFails(deleteDoc(doc(bob, 'expenses', 'expOthersDraft')));
+  // Their own unapproved row is. (NOT expBobSubmitted — test 43 leaves that one
+  // Approved, which is exactly the case that must be refused.)
+  await assertSucceeds(deleteDoc(doc(bob, 'expenses', 'expBobOwnDraft')));
+  // Cross-tenant reads/writes stay closed.
+  await assertFails(getDoc(doc(bob, 'expenses', 'expVictim')));
+  await assertFails(updateDoc(doc(bob, 'expenses', 'expVictim'), { amount: 1 }));
+  // An Admin may delete an approved row of their own tenant.
+  const admin = staffOf('adminA', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(deleteDoc(doc(admin, 'expenses', 'expLocked')));
+});
+
+test('46. a Member may still edit a LEGACY approved expense that has no date field', async () => {
+  // Regression guard for the interaction between the new booking date and the
+  // new rule: stamping `date` on a legacy row flips null -> timestamp, which
+  // expenseValueUnchanged() reads as "what was approved changed". The client
+  // therefore leaves a missing `date` missing unless the user really moved it.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'expenses', 'expLegacyNoDate'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, title: 'Qira e vjetër', amount: 500,
+      currency: 'ALL', category: 'Rent', approvalStatus: 'Approved', createdByUserId: 'bobM',
+      // deliberately NO `date` — the state every row was in before the fix
+    });
+  });
+  const bob = staffOf('bobM', MY_BIZ, MY_TEAM, ['member']);
+  // Editing a non-material field must still work.
+  await assertSucceeds(updateDoc(doc(bob, 'expenses', 'expLegacyNoDate'), { description: 'sqarim' }));
+  // Re-booking it into another month without re-approval must not.
+  await assertFails(updateDoc(doc(bob, 'expenses', 'expLegacyNoDate'), { date: new Date(2020, 0, 1) }));
+  // With re-approval it is allowed.
+  await assertSucceeds(updateDoc(doc(bob, 'expenses', 'expLegacyNoDate'), {
+    date: new Date(2020, 0, 1), approvalStatus: 'Submitted',
+  }));
 });

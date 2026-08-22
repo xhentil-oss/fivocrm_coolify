@@ -776,10 +776,61 @@ service cloud.firestore {
     // Reads require the requester to belong to the doc's business (or be super-admin).
     // Legacy docs without businessId are simply not returned by the businessId-
     // filtered queries the client issues — no breakage.
+    // ── Expenses ────────────────────────────────────────────────────────────
+    // Hardened beyond plain membership, because an expense is an accounting
+    // record WITH an approval workflow — and the whole workflow used to live in
+    // the UI only. With `canManageBusinessDoc()` alone, any member of the
+    // business (a Viewer included) could, straight from the browser console:
+    //   · set `approvalStatus: 'Approved'` on their own expense;
+    //   · edit the amount of an already-approved expense and keep the approval;
+    //   · move the row into another tenant by rewriting `businessId`;
+    //   · delete someone else's booked cost.
+    //
+    // `isExpenseApprover` deliberately accepts the membership-document proof as
+    // well as the role claim: a token minted before the claims rollout carries
+    // no `roles`, and gating on the claim alone would lock a real Admin out of
+    // approving anything.
+    function isExpenseApprover(businessId, teamId) {
+      return isSuperAdmin()
+        || isBusinessAdmin(businessId)
+        || isTeamAdmin(teamId);
+    }
+    // Did this edit change WHAT the approval was granted for?
+    function expenseValueUnchanged() {
+      return request.resource.data.get('amount', 0) == resource.data.get('amount', 0)
+        && request.resource.data.get('currency', 'ALL') == resource.data.get('currency', 'ALL')
+        && request.resource.data.get('date', null) == resource.data.get('date', null);
+    }
+    function expenseApprovalUnchanged() {
+      return request.resource.data.get('approvalStatus', '') == resource.data.get('approvalStatus', '');
+    }
     match /expenses/{docId} {
       allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
-      allow create: if canCreateBusinessDoc();
-      allow update, delete: if canManageBusinessDoc();
+
+      // A non-approver may only submit; self-approving on the way in is refused.
+      allow create: if canCreateBusinessDoc()
+        && (isExpenseApprover(request.resource.data.businessId, request.resource.data.get('teamId', ''))
+            || request.resource.data.get('approvalStatus', 'Submitted') == 'Submitted');
+
+      allow update: if canManageBusinessDoc()
+        // The tenant key is immutable — no moving a cost into another business.
+        && keepsBusinessId()
+        && (
+          isExpenseApprover(resource.data.businessId, resource.data.get('teamId', ''))
+          // A non-approver may edit freely as long as the verdict and the thing
+          // it was granted for both stay put …
+          || (expenseApprovalUnchanged() && expenseValueUnchanged())
+          // … or may change amount/currency/date, but ONLY by sending the row
+          // back for approval. This is the guard that stops an approved 1 000
+          // from becoming 100 000 while still reading "Aprovuar".
+          || request.resource.data.get('approvalStatus', '') == 'Submitted'
+        );
+
+      // A booked, approved cost is not a member's to delete.
+      allow delete: if canManageBusinessDoc()
+        && (isExpenseApprover(resource.data.businessId, resource.data.get('teamId', ''))
+            || (resource.data.get('createdByUserId', '') == request.auth.uid
+                && resource.data.get('approvalStatus', '') != 'Approved'));
     }
 
     match /goals/{docId} {
@@ -920,8 +971,11 @@ service cloud.firestore {
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
       allow create: if canCreateBusinessDoc();
-      allow update, delete: if canManageBusinessDoc()
-        || isPortalClientFor(resource.data.customerId);
+      // STAFF ONLY — the same hole that was closed on /invoices was left open here:
+      // `isPortalClientFor(...)` let a client rewrite or delete the line items of
+      // their own invoice from the browser console. The itemisation is part of the
+      // accounting record; a portal client has no legitimate write to it.
+      allow update, delete: if canManageBusinessDoc();
     }
 
     match /taskComments/{docId} {
