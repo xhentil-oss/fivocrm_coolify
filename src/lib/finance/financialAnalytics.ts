@@ -92,16 +92,31 @@ export function getExpenseDate(exp: Expense): Date | null {
 export function getInvoiceCollectedBetween(inv: Invoice, start: Date, end?: Date): number {
   const inRange = (d: Date | null) => !!d && d >= start && (!end || d <= end);
   if (inv.status === 'Draft' || inv.status === 'Cancelled') return 0;
+
+  // Every recorded instalment is attributed to ITS OWN payment date, whatever the
+  // current status. The `Paid` branch used to credit the whole total to `paidAt`
+  // and ignore `partialPayments` entirely, so settling an invoice retroactively
+  // MOVED cash out of an already-reported month: 50k banked in June + 50k in
+  // August reported as 0 for June and 100k for August. Cash-basis figures for a
+  // closed month must not change when a later payment lands.
+  const instalments = inv.partialPayments?.length
+    ? inv.partialPayments.reduce((s, p) => (
+        inRange(parseDate(p.paidAt)) ? s + toAll(p.amount ?? 0, inv.currency) : s
+      ), 0)
+    : 0;
+
   if (inv.status === 'Paid') {
-    return inRange(getInvoicePaidDate(inv)) ? getInvoiceTotalAll(inv) : 0;
+    const total = getInvoiceTotalAll(inv);
+    const recorded = (inv.partialPayments || []).reduce(
+      (s, p) => s + toAll(p.amount ?? 0, inv.currency), 0);
+    // Whatever the instalments do not account for settled on `paidAt` (a Stripe
+    // payment, or an invoice simply marked Paid with no instalment history).
+    const remainder = Math.max(0, total - recorded);
+    return instalments + (inRange(getInvoicePaidDate(inv)) ? remainder : 0);
   }
-  // Partial/Overdue (and any Pending with recorded payments): attribute each
-  // recorded partial to its own payment date.
-  if (inv.partialPayments?.length) {
-    return inv.partialPayments.reduce((s, p) => {
-      return inRange(parseDate(p.paidAt)) ? s + toAll(p.amount ?? 0, inv.currency) : s;
-    }, 0);
-  }
+
+  // Pending/Partial/Overdue.
+  if (inv.partialPayments?.length) return instalments;
   return inRange(getInvoicePaidDate(inv)) ? toAll(inv.paidAmount ?? 0, inv.currency) : 0;
 }
 
@@ -133,13 +148,70 @@ export function expenseIsCountable(exp: Expense): boolean {
   return (exp as any).approvalStatus !== 'Rejected';
 }
 
+/** The one category that is NOT costed from the expense rows themselves —
+ *  payroll comes from `salaryHistory`/`monthlySalary`, so counting a
+ *  Salary-category row too would double-subtract it. */
+export const EXPENSE_CATEGORY_SALARY = 'Salary';
+
+/**
+ * A project-DIRECT cost: charged to exactly one project instead of the shared
+ * overhead pool.
+ *
+ * This predicate exists because five readers each had their own copy of it and
+ * one of them (ProjectDetailView's budget burn-down) had neither guard — so the
+ * project page's "Shpenzime" counted rejected rows and payroll, and disagreed
+ * with `project.spent` (written by the `project-spend-rollup` cron) and with
+ * `projectPnl.directCost` on the same screen's Financat. Mirrored in
+ * `api/cron/run.ts` — keep the two in sync.
+ */
+export function isProjectDirectExpense(exp: Expense): boolean {
+  return expenseIsCountable(exp)
+    && !!exp.projectId
+    && exp.category !== EXPENSE_CATEGORY_SALARY;
+}
+
+/** Total project-direct cost in ALL, optionally narrowed to one project. */
+export function sumProjectDirectExpenses(
+  expenses: Expense[] | undefined | null,
+  projectId?: string,
+): number {
+  return (expenses ?? []).reduce((s, e) => {
+    if (!isProjectDirectExpense(e)) return s;
+    if (projectId != null && e.projectId !== projectId) return s;
+    return s + toAll(e.amount ?? 0, e.currency);
+  }, 0);
+}
+
+/**
+ * Salary-category expenses recorded in [start, end], in ALL.
+ *
+ * NOT part of any expense total on purpose (see EXPENSE_CATEGORY_SALARY), but
+ * the form offers the category — complete with a staff-member picker — so the
+ * rows exist and users reasonably expect to see them somewhere. Returning the
+ * figure separately lets the UI say "tracked via payroll, not added here"
+ * instead of silently dropping it.
+ */
+export function calculateSalaryExpensesBetween(
+  expenses: Expense[] | undefined,
+  start: Date,
+  end?: Date,
+): number {
+  return (expenses ?? []).reduce((s, exp) => {
+    if (exp.category !== EXPENSE_CATEGORY_SALARY) return s;
+    if (!expenseIsCountable(exp)) return s;
+    const d = getExpenseDate(exp);
+    if (!d || d < start || (end && d > end)) return s;
+    return s + toAll(exp.amount ?? 0, exp.currency);
+  }, 0);
+}
+
 /** Total expenses (in ALL) with a date within [start, end].
  *  Excludes `category === 'Salary'` — salary is accounted for separately via the
  *  monthlySalary term, so counting it here too would double-subtract it —
  *  and excludes rejected expenses. */
 export function calculateExpensesBetween(expenses: Expense[] | undefined, start: Date, end?: Date): number {
   return (expenses ?? []).reduce((s, exp) => {
-    if (exp.category === 'Salary') return s;
+    if (exp.category === EXPENSE_CATEGORY_SALARY) return s;
     if (!expenseIsCountable(exp)) return s;
     const d = getExpenseDate(exp);
     if (!d) return s;
@@ -200,11 +272,50 @@ export function buildRevenueByMonth(invoices: Invoice[] | undefined, year: numbe
   });
 }
 
-export function buildExpensesByMonth(expenses: Expense[] | undefined, year: number, totalMonthlySalary = 0, monthLabels = MONTH_LABELS_SQ, now = new Date()): ExpenseMonthPoint[] {
+/**
+ * Payroll for the month ending at `monthEnd`.
+ *
+ * Passed in as a callback rather than read directly, because `salaryHistory.ts`
+ * imports `parseDate` from this module — importing it back would be a cycle.
+ * Callers hand in `(end) => totalSalaryForMonth(teamMembers, end)`.
+ */
+export type SalaryForMonth = (monthEnd: Date) => number;
+
+/** Resolve payroll for month `i` of `year`: history-aware when a resolver is
+ *  given, otherwise the flat figure. Future months cost nothing. */
+function monthSalary(
+  year: number,
+  i: number,
+  now: Date,
+  flat: number,
+  resolver?: SalaryForMonth,
+): number {
+  if (!monthHasOccurred(year, i, now)) return 0;
+  if (!resolver) return flat;
+  return resolver(new Date(year, i + 1, 0, 23, 59, 59, 999));
+}
+
+/**
+ * Expenses per month for `year`, with payroll folded in.
+ *
+ * Prefer passing `salaryForMonth`: without it every past month of every past
+ * year is charged TODAY's payroll, which fabricates history (a member hired
+ * last month appears to have been paid all of last year, and a raise rewrites
+ * every closed month). `salaryHistory.ts` exists precisely to answer this
+ * per-month; the flat parameter is kept only so existing callers still compile.
+ */
+export function buildExpensesByMonth(
+  expenses: Expense[] | undefined,
+  year: number,
+  totalMonthlySalary = 0,
+  monthLabels = MONTH_LABELS_SQ,
+  now = new Date(),
+  salaryForMonth?: SalaryForMonth,
+): ExpenseMonthPoint[] {
   return monthLabels.map((label, i) => {
     const monthExpenseTotal = (expenses ?? [])
       .filter(exp => {
-        if (exp.category === 'Salary') return false; // salary added separately below
+        if (exp.category === EXPENSE_CATEGORY_SALARY) return false; // salary added separately below
         if (!expenseIsCountable(exp)) return false;
         const d = getExpenseDate(exp);
         if (!d) return false;
@@ -212,13 +323,12 @@ export function buildExpensesByMonth(expenses: Expense[] | undefined, year: numb
       })
       .reduce((s, exp) => s + toAll(exp.amount ?? 0, exp.currency), 0);
 
-    // Salary only applies to months that have actually occurred (no salary
-    // cost for future months of the current year, or any month of a future year).
-    const salary = monthHasOccurred(year, i, now) ? totalMonthlySalary : 0;
-    return { label, value: monthExpenseTotal + salary };
+    return { label, value: monthExpenseTotal + monthSalary(year, i, now, totalMonthlySalary, salaryForMonth) };
   });
 }
 
+/** Cash in/out per month. `salaryForMonth` carries the same warning as
+ *  `buildExpensesByMonth`: without it, past months are charged today's payroll. */
 export function buildCashflowByMonth(
   invoices: Invoice[] | undefined,
   expenses: Expense[] | undefined,
@@ -226,6 +336,7 @@ export function buildCashflowByMonth(
   totalMonthlySalary = 0,
   monthLabels = MONTH_LABELS_SQ,
   now = new Date(),
+  salaryForMonth?: SalaryForMonth,
 ): CashflowMonthPoint[] {
   return monthLabels.map((label, i) => {
     const partialInflow = (invoices ?? [])
@@ -260,14 +371,14 @@ export function buildCashflowByMonth(
 
     const outflow = (expenses ?? [])
       .filter(exp => {
-        if (exp.category === 'Salary') return false; // salary added once via totalMonthlySalary below
+        if (exp.category === EXPENSE_CATEGORY_SALARY) return false; // salary added once below
         if (!expenseIsCountable(exp)) return false;
         const d = getExpenseDate(exp);
         if (!d) return false;
         return d.getMonth() === i && d.getFullYear() === year;
       })
       .reduce((s, exp) => s + toAll(exp.amount ?? 0, exp.currency), 0)
-      + (monthHasOccurred(year, i, now) ? totalMonthlySalary : 0);
+      + monthSalary(year, i, now, totalMonthlySalary, salaryForMonth);
 
     return { label, inflow, outflow, net: inflow - outflow };
   });
@@ -290,10 +401,19 @@ export function calculateProjectedRevenue(invoices?: Invoice[]): number {
   }, 0) || 0;
 }
 
+/**
+ * Expense rows + a payroll term.
+ *
+ * CAUTION on units: the expense side is every row given (typically all-time),
+ * while `totalMonthlySalary` is ONE month. Pass a payroll figure covering the
+ * same span as the rows — `totalSalaryForMonth(...) × months`, or 0 and add
+ * payroll yourself. Passing a single month against an all-time expense list
+ * understates payroll by a factor of the number of months.
+ */
 export function calculateTotalExpenses(expenses: Expense[] | undefined, totalMonthlySalary: number): number {
-  // Skip Salary-category (counted once via totalMonthlySalary) and rejected expenses.
+  // Skip Salary-category (counted once via the payroll term) and rejected expenses.
   return (expenses?.reduce((sum, exp) =>
-    (exp.category === 'Salary' || !expenseIsCountable(exp)) ? sum : sum + toAll(exp.amount ?? 0, exp.currency), 0) || 0)
+    (exp.category === EXPENSE_CATEGORY_SALARY || !expenseIsCountable(exp)) ? sum : sum + toAll(exp.amount ?? 0, exp.currency), 0) || 0)
     + totalMonthlySalary;
 }
 

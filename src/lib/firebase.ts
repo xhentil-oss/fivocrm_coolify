@@ -69,4 +69,93 @@ export async function getNextInvoiceNumber(scopeId: string, fallbackMax = 0): Pr
   return formatInvoiceNumber(next);
 }
 
+export interface InvoiceInstalment {
+  amount: number;
+  method?: string;
+  note?: string;
+  paidAt: Date;
+}
+
+export interface InvoiceInstalmentResult {
+  /** Index this instalment took in `partialPayments` — the ledger `sourceKey` suffix. */
+  index: number;
+  paidAmount: number;
+  remaining: number;
+  isFullyPaid: boolean;
+  status: string;
+}
+
+/**
+ * Record a cash instalment against an invoice — the ONLY way to do it.
+ *
+ * This has to be a transaction. The view used to read the invoice from a React
+ * snapshot and write `partialPayments: [...existingPayments, newPayment]` with
+ * `paidAmount: alreadyPaid + amount`, deriving the ledger key from
+ * `existingPayments.length`. Two people (or two tabs) recording a payment within
+ * the same snapshot window therefore: lost one instalment entirely, under-counted
+ * `paidAmount`, and wrote both ledger rows under the SAME `sourceKey` — silent
+ * money loss with no error anywhere.
+ *
+ * Amounts are compared in the invoice's NATIVE currency; `toAll()` is for display
+ * and aggregation only, never for payment logic. Over-payment is refused inside the
+ * transaction, so a stale "Mbetet" figure on screen cannot push an invoice past its
+ * total.
+ */
+export async function recordInvoicePartialPayment(
+  invoiceId: string,
+  instalment: InvoiceInstalment,
+): Promise<InvoiceInstalmentResult> {
+  const invoiceRef = doc(db, 'invoices', invoiceId);
+  return runTransaction(db, async (transaction) => {
+    const snap = await transaction.get(invoiceRef);
+    if (!snap.exists()) throw new Error('Fatura nuk u gjet.');
+    const inv = snap.data() as Record<string, any>;
+
+    const total = Number(inv.total ?? inv.amount ?? 0) || 0;
+    const existing: any[] = Array.isArray(inv.partialPayments) ? inv.partialPayments : [];
+    // Trust the recorded instalments over the denormalised `paidAmount` when they
+    // disagree (an older write path could leave the two out of step).
+    const recorded = existing.reduce((s, p) => s + (Number(p?.amount) || 0), 0);
+    const alreadyPaid = Math.max(Number(inv.paidAmount) || 0, recorded);
+    const remainingBefore = total - alreadyPaid;
+
+    if (!(instalment.amount > 0)) throw new Error('Shuma duhet të jetë pozitive.');
+    if (instalment.amount > remainingBefore + 0.005) {
+      const err = new Error(`Mbetet për t'u paguar vetëm ${remainingBefore.toLocaleString()}.`);
+      (err as any).code = 'amount-exceeds-remaining';
+      (err as any).remaining = remainingBefore;
+      throw err;
+    }
+
+    const paidAmount = alreadyPaid + instalment.amount;
+    // Tolerance, not `>=`: float arithmetic on Lek amounts can land a hair short.
+    const isFullyPaid = paidAmount >= total - 0.005;
+    const status = isFullyPaid ? 'Paid' : 'Partial';
+
+    const patch: Record<string, any> = {
+      partialPayments: [...existing, {
+        amount: instalment.amount,
+        paidAt: Timestamp.fromDate(instalment.paidAt),
+        ...(instalment.method ? { method: instalment.method } : {}),
+        ...(instalment.note ? { note: instalment.note } : {}),
+      }],
+      paidAmount,
+      status,
+      updatedAt: Timestamp.now(),
+    };
+    // `paidAt` is the settlement date, set once. The instalment history keeps the
+    // per-payment dates, so cash-basis reporting stays month-accurate.
+    if (isFullyPaid) patch.paidAt = Timestamp.fromDate(instalment.paidAt);
+    transaction.update(invoiceRef, patch);
+
+    return {
+      index: existing.length,
+      paidAmount,
+      remaining: Math.max(0, total - paidAmount),
+      isFullyPaid,
+      status,
+    };
+  });
+}
+
 export default app;

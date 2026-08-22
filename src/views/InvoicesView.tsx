@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
-import { getNextInvoiceNumber } from '../lib/firebase';
+import { getNextInvoiceNumber, recordInvoicePartialPayment } from '../lib/firebase';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useActivityLogger } from '../hooks/useActivityLogger';
@@ -62,6 +62,7 @@ import { toAll, getRateToAll, getTimestampMs, canSeeFinancials, currencySymbol }
 import { toast } from '../hooks/use-toast';
 import { getStatusColor, getInvoiceStatusLabel } from '../lib/statusColors';
 import { projectPickerLabel, sortArchivedLast } from '../lib/projectArchive';
+import { nextInvoiceOccurrence, projectAlsoBills } from '../lib/finance/recurringInvoices';
 import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../lib/native';
 import { resolvePortalUserId } from '../lib/notifyClient';
 
@@ -88,6 +89,16 @@ const statusPill = (status: string | null | undefined): StatusPill => {
   }
 };
 
+/** A bank account as stored in teamSettings / the legacy localStorage list. */
+type BankAccount = {
+  id?: string; bankName?: string; accountHolder?: string;
+  iban?: string; swift?: string; country?: string;
+};
+
+const FREQUENCY_LABELS: Record<string, string> = {
+  weekly: 'Javore', monthly: 'Mujore', quarterly: 'Tremujore', yearly: 'Vjetore',
+};
+
 // Initials for the client avatar (first + last word initial).
 const initialsOf = (name?: string | null): string => {
   if (!name) return '?';
@@ -105,9 +116,6 @@ const InvoicesView: React.FC = () => {
   const [editInvoice, setEditInvoice] = useState<Invoice | null>(null);
   const { setDirty, isDirtyRef, discardOpen, requestClose, confirmDiscard, cancelDiscard } = useUnsavedChanges();
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
-  const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
-  const [editingField, setEditingField] = useState<string | null>(null);
-  const [editValue, setEditValue] = useState<string>('');
   const [invoiceToDelete, setInvoiceToDelete] = useState<string | null>(null);
   // Quick project link straight from the list — the companion to the "Pa projekt"
   // filter, so fixing a batch of unlinked invoices doesn't mean opening the full
@@ -133,9 +141,14 @@ const InvoicesView: React.FC = () => {
   const [partialMethod, setPartialMethod] = useState('Cash');
   const [partialNote, setPartialNote] = useState('');
   const [partialSaving, setPartialSaving] = useState(false);
-  const [paidAtDate, setPaidAtDate] = useState('');
   const [triggeringRecurring, setTriggeringRecurring] = useState(false);
   const [showRecurringConfirm, setShowRecurringConfirm] = useState(false);
+  // Sending an invoice or a reminder mails the CLIENT. The menu entries used to be
+  // labelled "Shëno si Dërguar" / "Shëno Kujtesën" (mark as sent) while actually
+  // sending, so people triggered real client email believing they were setting a
+  // flag. Both are now named for what they do and confirmed before sending.
+  const [emailConfirm, setEmailConfirm] = useState<{ invoice: Invoice; kind: 'invoice' | 'reminder' } | null>(null);
+  const [emailSending, setEmailSending] = useState(false);
   // Recurring-aware delete: a parent opens a choice (stop / delete one / series).
   const [deleteMode, setDeleteMode] = useState<'stop' | 'one' | 'series'>('stop');
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -144,9 +157,9 @@ const InvoicesView: React.FC = () => {
   const [drawerInvoice, setDrawerInvoice] = useState<Invoice | null>(null);
   const [drawerCustomer, setDrawerCustomer] = useState('');
   const [drawerProject, setDrawerProject] = useState('');
-  const [drawerTotal, setDrawerTotal] = useState('');
   const [drawerDue, setDrawerDue] = useState('');
   const [drawerStatus, setDrawerStatus] = useState('');
+  const [drawerPaidAt, setDrawerPaidAt] = useState('');
   const [drawerSaving, setDrawerSaving] = useState(false);
 
   const { data: rawInvoices, loading: invoicesLoading } = useCollection<Invoice>('invoices', {
@@ -473,63 +486,34 @@ const InvoicesView: React.FC = () => {
     }
   };
 
-  const startEditing = (invoiceId: string, field: string, currentValue: any) => {
-    if (!permissions.canEdit) return;
-    setEditingInvoiceId(invoiceId);
-    setEditingField(field);
-    setEditValue(String(currentValue || ''));
-    if (field === 'status') {
-      // Pre-fill paidAt date with today
-      setPaidAtDate(new Date().toISOString().slice(0, 10));
-    }
+  // Notify Admin/finance when an invoice is settled. Shared by every path that can
+  // mark one Paid (inline edit, quick drawer, partial payment closing it out) — a
+  // path that skipped this was invisible to the finance team.
+  const notifyInvoicePaid = async (invoice: Invoice | null | undefined, title: string) => {
+    const recipients = scopedMembers.filter((m: any) => (m.status ?? 'Active') === 'Active' && m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices));
+    await Promise.all(recipients.map((m: any) => notificationMutation.create({
+      userId: m.userId,
+      type: 'invoice_paid',
+      title,
+      message: `Fatura${invoice?.invoiceNumber ? ` ${invoice.invoiceNumber}` : ''} u shënua si e paguar.`,
+      isRead: false,
+      actionUrl: '/app/invoices',
+      actionLabel: 'Shiko Faturat',
+    }))).catch(err => console.error('[Notifications] invoice_paid dërgim dështoi:', err));
   };
 
-  const cancelEditing = () => {
-    setEditingInvoiceId(null);
-    setEditingField(null);
-    setEditValue('');
-  };
-
-  const saveEdit = async (invoiceId: string, field: string) => {
-    const updateData: any = {};
-    // Re-saving an ALREADY-Paid invoice must not act like a fresh payment: it used
-    // to overwrite paidAt with today (destroying the original payment date) and
-    // re-notify the whole finance team on every touch.
-    const invoice = invoices?.find(i => i.id === invoiceId);
-    const becamePaid = field === 'status' && editValue === 'Paid' && invoice?.status !== 'Paid';
-
-    if (field === 'total' || field === 'amount') {
-      const parsed = parseFloat(editValue);
-      if (isNaN(parsed) || parsed < 0) {
-        toast({ title: 'Vlerë e pavlefshme', description: 'Shuma duhet të jetë një numër pozitiv.', variant: 'destructive' });
-        return;
-      }
-      updateData[field] = parsed;
-    } else {
-      updateData[field] = editValue;
-      // When status BECOMES Paid, record paidAt from the user-selected date
-      if (becamePaid) {
-        updateData.paidAt = paidAtDate ? new Date(paidAtDate + 'T12:00:00') : new Date();
-      }
-    }
-
-    await invoiceMutation.update(invoiceId, updateData);
-
-    // Notify Admin/finance team when invoice marked Paid
-    if (becamePaid) {
-      const recipients = scopedMembers.filter((m: any) => (m.status ?? 'Active') === 'Active' && m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices));
-      await Promise.all(recipients.map((m: any) => notificationMutation.create({
-        userId: m.userId,
-        type: 'invoice_paid',
-        title: 'Faturë e Paguar ✓',
-        message: `Fatura${invoice?.invoiceNumber ? ` ${invoice.invoiceNumber}` : ''} u shënua si e paguar.`,
-        isRead: false,
-        actionUrl: '/app/invoices',
-        actionLabel: 'Shiko Faturat',
-      }))).catch(err => console.error('[Notifications] invoice_paid dërgim dështoi:', err));
-    }
-
-    cancelEditing();
+  // The `paidAt` a status change should write, or undefined to leave it alone.
+  // Marking an invoice Paid WITHOUT paidAt is the bug this centralises away: the
+  // cash-basis helpers fall back to `createdAt`, so the revenue silently lands in
+  // the month the invoice was raised instead of the month it was paid.
+  const paidAtForStatusChange = (
+    invoice: Invoice | null | undefined,
+    nextStatus: string,
+    dateInput: string,
+  ): Date | undefined => {
+    if (nextStatus !== 'Paid') return undefined;
+    if (invoice?.status === 'Paid') return undefined; // already settled — keep the original date
+    return dateInput ? new Date(dateInput + 'T12:00:00') : new Date();
   };
 
   const handleRecordPartialPayment = async () => {
@@ -551,20 +535,20 @@ const InvoicesView: React.FC = () => {
     }
     setPartialSaving(true);
     try {
-      const newPayment = { amount, paidAt: new Date(), method: partialMethod, note: partialNote || undefined };
-      const existingPayments = partialPaymentInvoice.partialPayments ?? [];
-      const newPaidAmount = alreadyPaid + amount;
-      const isFullyPaid = newPaidAmount >= invoiceTotalNative;
-      const updateData: any = {
-        partialPayments: [...existingPayments, newPayment],
-        paidAmount: newPaidAmount,
-        status: isFullyPaid ? 'Paid' : 'Partial',
-      };
-      if (isFullyPaid) updateData.paidAt = new Date();
-      await invoiceMutation.update(partialPaymentInvoice.id, updateData);
+      const paidAt = new Date();
+      // Transactional: re-reads the invoice server-side, so two people recording a
+      // payment at once can neither lose an instalment nor collide on the ledger key.
+      // It also re-checks the remaining balance, so a stale figure on screen cannot
+      // push the invoice past its total.
+      const result = await recordInvoicePartialPayment(partialPaymentInvoice.id, {
+        amount,
+        paidAt,
+        method: partialMethod,
+        note: partialNote || undefined,
+      });
 
-      // Mirror into the payment ledger (same sourceKey scheme as the backfill).
-      const paymentIndex = existingPayments.length;
+      // Mirror into the payment ledger (same sourceKey scheme as the backfill). The
+      // index comes from the transaction, not from a client-side array length.
       await paymentMutation.create({
         invoiceId: partialPaymentInvoice.id,
         invoiceNumber: partialPaymentInvoice.invoiceNumber,
@@ -573,13 +557,13 @@ const InvoicesView: React.FC = () => {
         currency: invoiceCurrency,
         method: partialMethod,
         note: partialNote || undefined,
-        paidAt: newPayment.paidAt,
+        paidAt,
         teamId: partialPaymentInvoice.teamId,
         businessId: (partialPaymentInvoice as any).businessId,
         source: 'partial',
-        sourceKey: `${partialPaymentInvoice.id}#p${paymentIndex}`,
+        sourceKey: `${partialPaymentInvoice.id}#p${result.index}`,
       } as any).catch((err) => console.error('[Payments] ledger write failed:', err));
-      if (isFullyPaid) {
+      if (result.isFullyPaid) {
         const recipients = scopedMembers.filter((m: any) => (m.status ?? 'Active') === 'Active' && m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices));
         await Promise.all(recipients.map((m: any) => notificationMutation.create({
           userId: m.userId,
@@ -591,11 +575,20 @@ const InvoicesView: React.FC = () => {
           actionLabel: 'Shiko Faturat',
         }))).catch(() => {});
       }
-      toast({ title: isFullyPaid ? 'Fatura u pagua plotësisht! ✓' : `Pagesë e regjistruar: ${amount.toLocaleString()} ${invoiceCurrency}`, description: isFullyPaid ? undefined : `Mbetet: ${(invoiceTotalNative - newPaidAmount).toLocaleString()} ${invoiceCurrency}` });
+      toast({ title: result.isFullyPaid ? 'Fatura u pagua plotësisht! ✓' : `Pagesë e regjistruar: ${amount.toLocaleString()} ${invoiceCurrency}`, description: result.isFullyPaid ? undefined : `Mbetet: ${result.remaining.toLocaleString()} ${invoiceCurrency}` });
       setPartialPaymentInvoice(null);
       setPartialAmount('');
       setPartialNote('');
       setPartialMethod('Cash');
+    } catch (err: any) {
+      // A failed money write MUST be visible. With only try/finally the user saw
+      // nothing at all and submitted the payment again.
+      console.error('[InvoicesView] regjistrimi i pagesës dështoi:', err);
+      toast({
+        title: 'Pagesa nuk u regjistrua',
+        description: err?.message || 'Provo përsëri.',
+        variant: 'destructive',
+      });
     } finally {
       setPartialSaving(false);
     }
@@ -606,10 +599,13 @@ const InvoicesView: React.FC = () => {
     if (!drawerInvoice) return;
     setDrawerCustomer(drawerInvoice.customerId || '');
     setDrawerProject(drawerInvoice.projectId || '');
-    setDrawerTotal(String(drawerInvoice.total ?? drawerInvoice.amount ?? 0));
     const raw = drawerInvoice.dueDate ? new Date(drawerInvoice.dueDate) : null;
     setDrawerDue(raw && !isNaN(raw.getTime()) ? raw.toISOString().slice(0, 10) : '');
     setDrawerStatus(drawerInvoice.status || 'Pending');
+    const paid = drawerInvoice.paidAt ? new Date(drawerInvoice.paidAt) : null;
+    setDrawerPaidAt(paid && !isNaN(paid.getTime())
+      ? paid.toISOString().slice(0, 10)
+      : new Date().toISOString().slice(0, 10));
   }, [drawerInvoice]);
 
   // Close the drawer on Escape.
@@ -625,6 +621,12 @@ const InvoicesView: React.FC = () => {
     if (!drawerInvoice) return;
     setDrawerSaving(true);
     try {
+      // Marking Paid here goes through exactly the same bookkeeping as the inline
+      // edit and the full form. Without it this path wrote `status: 'Paid'` alone,
+      // and since row-click opens this drawer it was the most-used way to settle an
+      // invoice — leaving `paidAt` unset, so cash-basis revenue fell back to
+      // `createdAt` and landed in the wrong month, with no notification to finance.
+      const paidAt = paidAtForStatusChange(drawerInvoice, drawerStatus, drawerPaidAt);
       // Deliberately does NOT write `total`: the total is derived from the invoice's
       // services/line items, so editing it here would desync the composition. Amounts
       // and services are edited via the full invoice form (setEditInvoice).
@@ -633,21 +635,18 @@ const InvoicesView: React.FC = () => {
         projectId: drawerProject,
         dueDate: drawerDue ? new Date(drawerDue + 'T12:00:00') : null,
         status: drawerStatus,
+        ...(paidAt ? { paidAt } : {}),
       } as any);
+      if (paidAt) await notifyInvoicePaid(drawerInvoice, 'Faturë e Paguar ✓');
       toast({ title: 'Ndryshimet u ruajtën' });
       setDrawerInvoice(null);
-    } catch {
-      toast({ title: 'Gabim gjatë ruajtjes', variant: 'destructive' });
+    } catch (err: any) {
+      console.error('[InvoicesView] ruajtja e drawer-it dështoi:', err);
+      toast({ title: 'Gabim gjatë ruajtjes', description: err?.message, variant: 'destructive' });
     } finally {
       setDrawerSaving(false);
     }
   };
-
-  const totalRevenue = invoices?.reduce((sum, inv) => {
-    if (inv.status === 'Paid') return sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency);
-    if (inv.status === 'Partial') return sum + toAll(inv.paidAmount ?? 0, (inv as any).currency);
-    return sum;
-  }, 0) || 0;
 
   // Real month-over-month collected-revenue delta (was a hardcoded "+12%").
   const revenueMoM = useMemo(() => {
@@ -680,7 +679,6 @@ const InvoicesView: React.FC = () => {
   // "Të përfunduara" = fully paid only (a Partial invoice isn't completed).
   const paidInvoices = invoices?.filter(inv => inv.status === 'Paid').length || 0;
   const pendingAmount = invoices?.filter(inv => inv.status === 'Pending').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
-  const draftAmount = invoices?.filter(inv => inv.status === 'Draft').reduce((sum, inv) => sum + toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency), 0) || 0;
   const overdueAmount = invoices?.filter(inv => inv.status === 'Overdue').reduce((sum, inv) => sum + Math.max(0, toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency) - toAll(inv.paidAmount ?? 0, (inv as any).currency)), 0) || 0;
   const partialRemainingAmount = invoices?.filter(inv => inv.status === 'Partial').reduce((sum, inv) => sum + Math.max(0, toAll(inv.total ?? inv.amount ?? 0, (inv as any).currency) - toAll(inv.paidAmount ?? 0, (inv as any).currency)), 0) || 0;
   // Money genuinely owed to us: issued-but-unpaid (Pending), overdue balances,
@@ -1150,8 +1148,8 @@ const InvoicesView: React.FC = () => {
                   )}
                   <div className="flex items-center gap-3 mt-1.5">
                     <span className="text-sm font-semibold">{((invoice.total ?? invoice.amount ?? 0)).toLocaleString()} {currencySymbol((invoice as any).currency)}</span>
-                    {invoice.status === 'Partial' && invoice.paidAmount != null && (
-                      <span className="text-[10px] text-cyan-600 font-medium">Paguar: {invoice.paidAmount.toLocaleString()} {currencySymbol((invoice as any).currency)}</span>
+                    {invoice.status !== 'Paid' && (invoice.paidAmount ?? 0) > 0 && (
+                      <span className="text-[10px] text-cyan-600 font-medium">Paguar: {invoice.paidAmount!.toLocaleString()} {currencySymbol((invoice as any).currency)}</span>
                     )}
                     <span className="text-[10px] text-muted-foreground">Afati: {invoice.dueDate ? new Date(invoice.dueDate).toLocaleDateString() : 'Pa afat'}</span>
                     <Badge variant="outline" className="text-[10px] px-1.5 py-0">
@@ -1179,14 +1177,14 @@ const InvoicesView: React.FC = () => {
                         <Folder className="w-4 h-4 mr-2" /> {invoice.projectId ? 'Ndrysho projektin' : 'Lidh me projekt'}
                       </DropdownMenuItem>
                     )}
-                    {permissions.canEdit && !invoice.emailSent && (
-                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleSendEmail(invoice.id); }}>
-                        <Mail className="w-4 h-4 mr-2" /> Shëno si Dërguar
+                    {permissions.canEdit && (
+                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setEmailConfirm({ invoice, kind: 'invoice' }); }}>
+                        <Mail className="w-4 h-4 mr-2" /> Dërgo faturën me email
                       </DropdownMenuItem>
                     )}
-                    {permissions.canEdit && invoice.status === 'Pending' && !invoice.reminderSent && (
-                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); handleSendReminder(invoice.id); }}>
-                        <Send className="w-4 h-4 mr-2" /> Shëno Kujtesën
+                    {permissions.canEdit && invoice.status !== 'Paid' && invoice.status !== 'Draft' && invoice.status !== 'Cancelled' && (
+                      <DropdownMenuItem onClick={(e) => { e.stopPropagation(); setEmailConfirm({ invoice, kind: 'reminder' }); }}>
+                        <Send className="w-4 h-4 mr-2" /> Dërgo kujtesë pagese
                       </DropdownMenuItem>
                     )}
                     {invoice.status !== 'Paid' && invoice.status !== 'Draft' && (invoice.total ?? invoice.amount ?? 0) > 0 && (
@@ -1235,6 +1233,7 @@ const InvoicesView: React.FC = () => {
           { value: '__all__', label: 'Të gjitha' },
           { value: 'Pending', label: 'Në pritje' },
           { value: 'Overdue', label: 'Vonuar' },
+          { value: 'Partial', label: 'Pjesore' },
           { value: 'Paid', label: 'Paguar' },
           { value: 'Draft', label: 'Draft' },
           { value: 'Cancelled', label: 'Anuluar' },
@@ -1275,7 +1274,10 @@ const InvoicesView: React.FC = () => {
                 const pill = statusPill(invoice.status);
                 const total = invoice.total ?? invoice.amount ?? 0;
                 const cur = currencySymbol((invoice as any).currency);
-                const canPay = (invoice.status === 'Pending' || invoice.status === 'Overdue') && total > 0;
+                // Partial belongs here too: create-checkout-session charges the
+                // REMAINDER, so a half-paid invoice is still payable.
+                const canPay = (invoice.status === 'Pending' || invoice.status === 'Overdue' || invoice.status === 'Partial')
+                  && total - (invoice.paidAmount ?? 0) > 0;
                 const due = invoice.dueDate ? new Date(invoice.dueDate) : null;
                 let dueCtx: { text: string; cls: string } | null = null;
                 if (invoice.status === 'Draft') {
@@ -1334,9 +1336,9 @@ const InvoicesView: React.FC = () => {
                     {/* Totali */}
                     <td className="px-4 py-4 align-top text-right">
                       <div className="font-mono font-semibold text-body-sm">{total.toLocaleString()} {cur}</div>
-                      {invoice.status === 'Partial' && invoice.paidAmount != null && (
+                      {invoice.status !== 'Paid' && (invoice.paidAmount ?? 0) > 0 && (
                         <div className="text-[10px] text-cyan-600 font-medium">
-                          {invoice.paidAmount.toLocaleString()} / {total.toLocaleString()} {cur}
+                          {invoice.paidAmount!.toLocaleString()} / {total.toLocaleString()} {cur}
                         </div>
                       )}
                     </td>
@@ -1381,8 +1383,13 @@ const InvoicesView: React.FC = () => {
                               </DropdownMenuItem>
                             )}
                             {permissions.canEdit && (
-                              <DropdownMenuItem onClick={() => handleSendEmail(invoice.id)}>
+                              <DropdownMenuItem onClick={() => setEmailConfirm({ invoice, kind: 'invoice' })}>
                                 <Mail className="w-4 h-4 mr-2" /> Dërgo me email
+                              </DropdownMenuItem>
+                            )}
+                            {permissions.canEdit && invoice.status !== 'Paid' && invoice.status !== 'Draft' && invoice.status !== 'Cancelled' && (
+                              <DropdownMenuItem onClick={() => setEmailConfirm({ invoice, kind: 'reminder' })}>
+                                <Send className="w-4 h-4 mr-2" /> Dërgo kujtesë pagese
                               </DropdownMenuItem>
                             )}
                             {permissions.canEdit && invoice.status !== 'Paid' && invoice.status !== 'Draft' && (
@@ -1484,6 +1491,20 @@ const InvoicesView: React.FC = () => {
                 <select value={drawerStatus} onChange={(e) => setDrawerStatus(e.target.value)} disabled={!permissions.canEdit} className="mt-1 w-full h-9 px-2 border border-border rounded-md bg-background text-sm">
                   {['Draft', 'Pending', 'Partial', 'Paid', 'Overdue', 'Cancelled'].map((s) => <option key={s} value={s}>{getInvoiceStatusLabel(s)}</option>)}
                 </select>
+                {/* The payment DATE is what makes cash-basis reporting land in the
+                    right month — asked for here rather than defaulted silently. */}
+                {drawerStatus === 'Paid' && drawerInvoice.status !== 'Paid' && (
+                  <div className="mt-2">
+                    <label className="text-[11px] font-medium text-muted-foreground">Data e pagesës</label>
+                    <input
+                      type="date"
+                      value={drawerPaidAt}
+                      onChange={(e) => setDrawerPaidAt(e.target.value)}
+                      disabled={!permissions.canEdit}
+                      className="mt-1 w-full h-9 px-2 border border-border rounded-md bg-background text-sm"
+                    />
+                  </div>
+                )}
               </div>
               <div className="flex flex-wrap gap-2 pt-1">
                 <span className="inline-flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs text-muted-foreground">
@@ -1507,7 +1528,12 @@ const InvoicesView: React.FC = () => {
                     {drawerSaving ? 'Duke ruajtur…' : 'Ruaj ndryshimet'}
                   </Button>
                 )}
-                <Button variant="outline" className={permissions.canEdit ? '' : 'flex-1'} onClick={() => handleSendEmail(drawerInvoice.id)}>
+                {/* Sends a real email to the client — never on a single stray click. */}
+                <Button
+                  variant="outline"
+                  className={permissions.canEdit ? '' : 'flex-1'}
+                  onClick={() => setEmailConfirm({ invoice: drawerInvoice, kind: 'invoice' })}
+                >
                   <Mail className="w-4 h-4 mr-1" /> Dërgo
                 </Button>
               </div>
@@ -1789,7 +1815,7 @@ const InvoicesView: React.FC = () => {
                     <input type="radio" name="invdel" className="mt-1" checked={deleteMode === 'one'} onChange={() => setDeleteMode('one')} />
                     <div>
                       <div className="text-sm font-medium flex items-center gap-1.5"><Trash2 className="w-4 h-4" /> Fshi vet\u00ebm k\u00ebt\u00eb fatur\u00eb</div>
-                      <p className="text-xs text-muted-foreground mt-0.5">Fshihet vet\u00ebm kjo. {(target as any)?.isRecurring && 'P\u00ebrs\u00ebritja vazhdon dhe faturat e gjeneruara mbeten.'}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Faturat e gjeneruara ({kids}) mbeten. {(target as any)?.isRecurring && 'Kjo \u00ebsht\u00eb fatura-m\u00eb e seris\u00eb, ndaj p\u00ebrs\u00ebritja NDALON \u2014 nuk gjenerohet m\u00eb asnj\u00eb fatur\u00eb e re. P\u00ebr t\u2019i ruajtur, zgjidh \u201cNd\u00ebrprit p\u00ebrs\u00ebritjen\u201d.'}</p>
                     </div>
                   </label>
                   <label className={`flex gap-3 rounded-lg border p-3 cursor-pointer ${deleteMode === 'series' ? 'border-destructive bg-destructive/5' : ''}`}>
@@ -1831,6 +1857,47 @@ const InvoicesView: React.FC = () => {
               Hiq Ndryshimet
             </AlertDialogAction>
           </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      {/* Confirm before mailing the CLIENT — these actions leave the building. */}
+      <AlertDialog open={!!emailConfirm} onOpenChange={(open) => { if (!open && !emailSending) setEmailConfirm(null); }}>
+        <AlertDialogContent>
+          {emailConfirm && (() => {
+            const inv = emailConfirm.invoice;
+            const isReminder = emailConfirm.kind === 'reminder';
+            const client = customers?.find(c => c.id === inv.customerId);
+            const total = inv.total ?? inv.amount ?? 0;
+            const owed = Math.max(0, total - (inv.paidAmount ?? 0));
+            const cur = currencySymbol((inv as any).currency);
+            return (<>
+              <AlertDialogHeader>
+                <AlertDialogTitle>
+                  {isReminder ? 'Dërgo kujtesë pagese?' : 'Dërgo faturën me email?'}
+                </AlertDialogTitle>
+                <AlertDialogDescription>
+                  {client?.email
+                    ? <>Do dërgohet një email te <strong>{client.email}</strong> ({client.name || 'klienti'}) për faturën <strong>{inv.invoiceNumber || inv.id.slice(0, 8)}</strong>{isReminder ? <> — shuma e papaguar <strong>{owed.toLocaleString()} {cur}</strong>.</> : <> — <strong>{total.toLocaleString()} {cur}</strong>.</>}
+                        {inv.status === 'Draft' && !isReminder && <> Fatura është draft dhe do kalojë në “Në pritje”.</>}</>
+                    : <>Ky klient nuk ka email të regjistruar — dërgimi do dështojë. Shto adresën në kartelën e klientit.</>}
+                </AlertDialogDescription>
+              </AlertDialogHeader>
+              <AlertDialogFooter>
+                <AlertDialogCancel disabled={emailSending}>Anulo</AlertDialogCancel>
+                <AlertDialogAction
+                  disabled={emailSending}
+                  onClick={(e) => {
+                    e.preventDefault();
+                    setEmailSending(true);
+                    const run = isReminder ? handleSendReminder(inv.id) : handleSendEmail(inv.id);
+                    run.finally(() => { setEmailSending(false); setEmailConfirm(null); });
+                  }}
+                >
+                  {emailSending ? 'Duke dërguar…' : 'Dërgo'}
+                </AlertDialogAction>
+              </AlertDialogFooter>
+            </>);
+          })()}
         </AlertDialogContent>
       </AlertDialog>
 
@@ -1917,6 +1984,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     return raw?.toDate ? raw.toDate() : new Date(raw);
   });
   const [loadedExistingItems, setLoadedExistingItems] = useState(false);
+  // Nothing guarded submission before: no flag, no disabled button, no try/catch.
+  // A double click created TWO invoices carrying the SAME invoiceNumber (the number
+  // is reserved when the form opens, not when it is saved) — which is what
+  // scripts/fix-invoice-number-collisions.mjs exists to repair.
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   const teamId = useGlobalTeamId();
   const { data: rawFormCustomers } = useCollection<Customer>('customers', { skipTeamFilter: true });
@@ -2054,6 +2126,16 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
     }, 0);
   };
 
+  // The linked project when IT also bills this retainer on a cycle. Two engines
+  // must never overlap (`recurring-invoices` Part 1 drives recurring invoices,
+  // Part 2 drives recurring projects); the overlap silently double-billed the
+  // client and was only ever cleaned up by hand afterwards.
+  const billingProjectConflict = useMemo(() => {
+    if (!selectedProjectId) return null;
+    const p = (projects || []).find(x => x.id === selectedProjectId);
+    return p && projectAlsoBills(p as any) ? p : null;
+  }, [projects, selectedProjectId]);
+
   const calculateDiscountAmount = (subtotal: number) => {
     if (!discount || discount <= 0) return 0;
     if (discountType === 'percent') return subtotal * (Math.min(discount, 100) / 100);
@@ -2062,10 +2144,16 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
 
   const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    if (isSubmitting) return;
 
     // Validate paymentUrl — only allow http/https to prevent XSS via javascript: scheme
     if (paymentUrl && !/^https?:\/\//i.test(paymentUrl)) {
       toast({ title: 'URL e pagesës e pavlefshme', description: 'URL duhet të fillojë me http:// ose https://', variant: 'destructive' });
+      return;
+    }
+
+    if (!selectedCustomerId) {
+      toast({ title: 'Zgjidh klientin', description: 'Një faturë pa klient nuk mund të dërgohet ose paguhet.', variant: 'destructive' });
       return;
     }
 
@@ -2074,173 +2162,198 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       return;
     }
 
-    const subtotal = calculateSubtotal();
-    // When editing and items haven't loaded yet, preserve the original subtotal
-    // to avoid overwriting with 0 before line items are populated.
-    const resolvedSubtotal = (isEditing && !loadedExistingItems && subtotal === 0)
-      ? (editInvoice?.subtotal || editInvoice?.total || editInvoice?.amount || 0)
-      : subtotal;
-    const discountAmount = calculateDiscountAmount(resolvedSubtotal);
-    const total = resolvedSubtotal - discountAmount + tax;
-
-    // Default next-recurrence = ONE cycle after this (first) invoice's due date,
-    // so the mother covers period 1 and the first auto-generated child starts
-    // period 2 (instead of duplicating period 1). Explicit user value wins.
-    const defaultNextRecurring = () => {
-      const d = new Date(dueDate || invoiceDate || new Date());
-      if (recurringFrequency === 'weekly') d.setDate(d.getDate() + 7);
-      else if (recurringFrequency === 'quarterly') d.setMonth(d.getMonth() + 3);
-      else if (recurringFrequency === 'yearly') d.setFullYear(d.getFullYear() + 1);
-      else d.setMonth(d.getMonth() + 1); // monthly
-      return d;
-    };
-
-    const invoiceData: any = {
-      customerId: selectedCustomerId,
-      projectId: selectedProjectId || '',
-      invoiceNumber,
-      paymentMethod,
-      currency,
-      bankName: bankName || '',
-      bankIBAN: bankIBAN || '',
-      bankSWIFT: bankSWIFT || '',
-      bankAccountHolder: bankAccountHolder || '',
-      bankCountry: bankCountry || '',
-      status,
-      invoiceDate: invoiceDate || new Date(),
-      dueDate: dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
-      notes,
-      subtotal: resolvedSubtotal,
-      discount,
-      discountType,
-      tax,
-      total,
-      paymentUrl,
-      isRecurring,
-      isRecurringPaused: isRecurring ? isRecurringPaused : false,
-      recurringFrequency: isRecurring ? recurringFrequency : undefined,
-      // nextRecurringDate: user-set value takes priority; else default to one
-      // full cycle after the due date so the first child doesn't re-bill period 1.
-      nextRecurringDate: isRecurring
-        ? (nextRecurringDate || defaultNextRecurring())
-        : null,
-      // "Repeat until" — cleared when recurrence is off so a stale end-date can't linger.
-      recurringEndDate: isRecurring ? (recurringEndDate || null) : null,
-    };
-
-    if (isEditing) {
-      // Set paidAt when manually marking as Paid via the full edit form
-      if (status === 'Paid' && editInvoice?.status !== 'Paid') {
-        invoiceData.paidAt = paidAtDateForm ? new Date(paidAtDateForm + 'T12:00:00') : new Date();
-      } else if (status === 'Paid' && editInvoice?.status === 'Paid') {
-        // Keep existing paidAt but allow updating it via the date field
-        invoiceData.paidAt = paidAtDateForm ? new Date(paidAtDateForm + 'T12:00:00') : editInvoice.paidAt;
-      }
-      // Do NOT reset emailSent/reminderSent flags on edit — cron uses them to avoid duplicate sends
-
-      // Update existing invoice
-      await invoiceMutation.update(editInvoice!.id, invoiceData);
-
-      // Delete old line items and recreate
-      if (existingItems) {
-        for (const old of existingItems) {
-          await invoiceItemMutation.remove(old.id);
-        }
-      }
-
-      for (const item of lineItems) {
-        const service = services?.find(s => s.id === item.serviceId);
-        if (service) {
-          await invoiceItemMutation.create({
-            invoiceId: editInvoice!.id,
-            customerId: editInvoice!.customerId, // portal RLS (isPortalClientFor)
-            serviceId: item.serviceId,
-            quantity: item.quantity,
-            unitPrice: toInvoiceCurrency(service.price, service.currency),
-            totalPrice: toInvoiceCurrency(service.price * item.quantity, service.currency),
-          });
-        } else if (Number(item.unitPrice) > 0 || item.description) {
-          // Free-text line (task/budget invoice): keep it instead of dropping it.
-          await invoiceItemMutation.create({
-            invoiceId: editInvoice!.id,
-            customerId: editInvoice!.customerId,
-            description: item.description || '',
-            quantity: item.quantity,
-            unitPrice: Number(item.unitPrice) || 0,
-            totalPrice: (Number(item.unitPrice) || 0) * item.quantity,
-          } as any);
-        }
-      }
-    } else {
-      // Create new invoice — set email flags to false (not yet sent)
-      invoiceData.emailSent = false;
-      invoiceData.reminderSent = false;
-      invoiceData.reminder25Sent = false;
-      invoiceData.reminderLastDaySent = false;
-
-      const invoice = await invoiceMutation.create(invoiceData);
-
-      const customerName = customers?.find(c => c.id === selectedCustomerId)?.name || '';
-      logActivity('invoice_created', `Faturë e re: ${invoiceNumber || invoice.id.slice(0,8)}`, {
-        entityType: 'invoice', entityId: invoice.id, customerId: selectedCustomerId,
-        description: `${total.toLocaleString()} ALL — ${customerName}`
+    // One retainer, one engine. Letting both the invoice cycle and the linked
+    // project's own cycle run bills the same money twice — the exact condition
+    // scripts/stop-duplicate-invoice-engines.mjs was written to clean up.
+    if (isRecurring && billingProjectConflict) {
+      toast({
+        title: 'Faturim i dyfishtë',
+        description: `Projekti "${billingProjectConflict.name}" e fatura vetë këtë retainer periodikisht. Fik përsëritjen e faturës, ose hiq periodicitetin e projektit.`,
+        variant: 'destructive',
       });
-
-      // Notify Admin/finance members about the new invoice
-      // Off-boarded (Inactive) members must not keep receiving push/email.
-      const invoiceRecipients = scopedInvoiceMembers.filter((m: any) => (m.status ?? 'Active') === 'Active' && m.userId !== currentUser?.uid && (m.role === 'Admin' || m.canAccessInvoices));
-      await Promise.all(invoiceRecipients.map((m: any) => invoiceNotifMutation.create({
-        userId: m.userId,
-        type: 'invoice_created',
-        title: 'Faturë e Re',
-        message: `Faturë e re${invoiceNumber ? ` ${invoiceNumber}` : ''} për ${customerName || 'klient'} — ${total.toLocaleString()} ${currencySymbol(invoiceData.currency)}.`,
-        isRead: false,
-        actionUrl: '/app/invoices',
-        actionLabel: 'Shiko Faturat',
-      }))).catch(err => console.error('[Notifications] invoice_created dërgim dështoi:', err));
-
-      // Auto-create portal access for this customer if it doesn't exist
-      if (selectedCustomerId) {
-        const customer = customers?.find(c => c.id === selectedCustomerId);
-        const existingAccess = portalAccessList?.find(
-          a => a.customerId === selectedCustomerId && a.status === 'Active'
-        );
-        if (customer?.email && !existingAccess) {
-          await accessMutation.create({
-            customerId: selectedCustomerId,
-            userId: '',
-            email: customer.email.toLowerCase().trim(),
-            status: 'Active',
-          }).catch(() => { /* non-blocking */ });
-        }
-      }
-
-      for (const item of lineItems) {
-        const service = services?.find(s => s.id === item.serviceId);
-        if (service) {
-          await invoiceItemMutation.create({
-            invoiceId: invoice.id,
-            customerId: selectedCustomerId, // portal RLS (isPortalClientFor)
-            serviceId: item.serviceId,
-            quantity: item.quantity,
-            unitPrice: toInvoiceCurrency(service.price, service.currency),
-            totalPrice: toInvoiceCurrency(service.price * item.quantity, service.currency),
-          });
-        } else if (Number(item.unitPrice) > 0 || item.description) {
-          await invoiceItemMutation.create({
-            invoiceId: invoice.id,
-            customerId: selectedCustomerId,
-            description: item.description || '',
-            quantity: item.quantity,
-            unitPrice: Number(item.unitPrice) || 0,
-            totalPrice: (Number(item.unitPrice) || 0) * item.quantity,
-          } as any);
-        }
-      }
+      return;
     }
 
-    onDirtyChange?.(false);
-    onClose();
+    setIsSubmitting(true);
+    try {
+      const subtotal = calculateSubtotal();
+      // When editing and items haven't loaded yet, preserve the original subtotal
+      // to avoid overwriting with 0 before line items are populated.
+      const resolvedSubtotal = (isEditing && !loadedExistingItems && subtotal === 0)
+        ? (editInvoice?.subtotal || editInvoice?.total || editInvoice?.amount || 0)
+        : subtotal;
+      const discountAmount = calculateDiscountAmount(resolvedSubtotal);
+      const total = resolvedSubtotal - discountAmount + tax;
+
+      // Default next-recurrence = ONE cycle after this (first) invoice's due date,
+      // so the mother covers period 1 and the first auto-generated child starts
+      // period 2 (instead of duplicating period 1). Explicit user value wins.
+      //
+      // Uses the SHARED clamped helper. Hand-rolled `setMonth(+1)` here made a
+      // 31 Jan retainer next bill on 3 March — February gone for good — while the
+      // cron used a correctly-clamped helper, so the two disagreed.
+      const defaultNextRecurring = () =>
+        nextInvoiceOccurrence(new Date(dueDate || invoiceDate || new Date()), recurringFrequency);
+
+      const invoiceData: any = {
+        customerId: selectedCustomerId,
+        projectId: selectedProjectId || '',
+        invoiceNumber,
+        paymentMethod,
+        currency,
+        bankName: bankName || '',
+        bankIBAN: bankIBAN || '',
+        bankSWIFT: bankSWIFT || '',
+        bankAccountHolder: bankAccountHolder || '',
+        bankCountry: bankCountry || '',
+        status,
+        invoiceDate: invoiceDate || new Date(),
+        dueDate: dueDate || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000),
+        notes,
+        subtotal: resolvedSubtotal,
+        discount,
+        discountType,
+        tax,
+        total,
+        paymentUrl,
+        isRecurring,
+        isRecurringPaused: isRecurring ? isRecurringPaused : false,
+        recurringFrequency: isRecurring ? recurringFrequency : undefined,
+        // nextRecurringDate: user-set value takes priority; else default to one
+        // full cycle after the due date so the first child doesn't re-bill period 1.
+        nextRecurringDate: isRecurring
+          ? (nextRecurringDate || defaultNextRecurring())
+          : null,
+        // "Repeat until" — cleared when recurrence is off so a stale end-date can't linger.
+        recurringEndDate: isRecurring ? (recurringEndDate || null) : null,
+      };
+
+      if (isEditing) {
+        // Set paidAt when manually marking as Paid via the full edit form
+        if (status === 'Paid' && editInvoice?.status !== 'Paid') {
+          invoiceData.paidAt = paidAtDateForm ? new Date(paidAtDateForm + 'T12:00:00') : new Date();
+        } else if (status === 'Paid' && editInvoice?.status === 'Paid') {
+          // Keep existing paidAt but allow updating it via the date field
+          invoiceData.paidAt = paidAtDateForm ? new Date(paidAtDateForm + 'T12:00:00') : editInvoice.paidAt;
+        }
+        // Do NOT reset emailSent/reminderSent flags on edit — cron uses them to avoid duplicate sends
+
+        // Update existing invoice
+        await invoiceMutation.update(editInvoice!.id, invoiceData);
+
+        // Delete old line items and recreate
+        if (existingItems) {
+          for (const old of existingItems) {
+            await invoiceItemMutation.remove(old.id);
+          }
+        }
+
+        for (const item of lineItems) {
+          const service = services?.find(s => s.id === item.serviceId);
+          if (service) {
+            await invoiceItemMutation.create({
+              invoiceId: editInvoice!.id,
+              customerId: editInvoice!.customerId, // portal RLS (isPortalClientFor)
+              serviceId: item.serviceId,
+              quantity: item.quantity,
+              unitPrice: toInvoiceCurrency(service.price, service.currency),
+              totalPrice: toInvoiceCurrency(service.price * item.quantity, service.currency),
+            });
+          } else if (Number(item.unitPrice) > 0 || item.description || item.serviceId) {
+            // Free-text line (task/budget invoice), OR a line whose catalogue service
+            // was DELETED: keep the price AND the serviceId, so the analytics link
+            // survives the service disappearing from the catalogue.
+            await invoiceItemMutation.create({
+              invoiceId: editInvoice!.id,
+              customerId: editInvoice!.customerId,
+              ...(item.serviceId ? { serviceId: item.serviceId } : {}),
+              description: item.description || '',
+              quantity: item.quantity,
+              unitPrice: Number(item.unitPrice) || 0,
+              totalPrice: (Number(item.unitPrice) || 0) * item.quantity,
+            } as any);
+          }
+        }
+      } else {
+        // Create new invoice — set email flags to false (not yet sent)
+        invoiceData.emailSent = false;
+        invoiceData.reminderSent = false;
+        invoiceData.reminder25Sent = false;
+        invoiceData.reminderLastDaySent = false;
+
+        const invoice = await invoiceMutation.create(invoiceData);
+
+        const customerName = customers?.find(c => c.id === selectedCustomerId)?.name || '';
+        logActivity('invoice_created', `Faturë e re: ${invoiceNumber || invoice.id.slice(0,8)}`, {
+          entityType: 'invoice', entityId: invoice.id, customerId: selectedCustomerId,
+          description: `${total.toLocaleString()} ALL — ${customerName}`
+        });
+
+        // Notify Admin/finance members about the new invoice
+        // Off-boarded (Inactive) members must not keep receiving push/email.
+        const invoiceRecipients = scopedInvoiceMembers.filter((m: any) => (m.status ?? 'Active') === 'Active' && m.userId !== currentUser?.uid && (m.role === 'Admin' || m.canAccessInvoices));
+        await Promise.all(invoiceRecipients.map((m: any) => invoiceNotifMutation.create({
+          userId: m.userId,
+          type: 'invoice_created',
+          title: 'Faturë e Re',
+          message: `Faturë e re${invoiceNumber ? ` ${invoiceNumber}` : ''} për ${customerName || 'klient'} — ${total.toLocaleString()} ${currencySymbol(invoiceData.currency)}.`,
+          isRead: false,
+          actionUrl: '/app/invoices',
+          actionLabel: 'Shiko Faturat',
+        }))).catch(err => console.error('[Notifications] invoice_created dërgim dështoi:', err));
+
+        // Auto-create portal access for this customer if it doesn't exist
+        if (selectedCustomerId) {
+          const customer = customers?.find(c => c.id === selectedCustomerId);
+          const existingAccess = portalAccessList?.find(
+            a => a.customerId === selectedCustomerId && a.status === 'Active'
+          );
+          if (customer?.email && !existingAccess) {
+            await accessMutation.create({
+              customerId: selectedCustomerId,
+              userId: '',
+              email: customer.email.toLowerCase().trim(),
+              status: 'Active',
+            }).catch(() => { /* non-blocking */ });
+          }
+        }
+
+        for (const item of lineItems) {
+          const service = services?.find(s => s.id === item.serviceId);
+          if (service) {
+            await invoiceItemMutation.create({
+              invoiceId: invoice.id,
+              customerId: selectedCustomerId, // portal RLS (isPortalClientFor)
+              serviceId: item.serviceId,
+              quantity: item.quantity,
+              unitPrice: toInvoiceCurrency(service.price, service.currency),
+              totalPrice: toInvoiceCurrency(service.price * item.quantity, service.currency),
+            });
+          } else if (Number(item.unitPrice) > 0 || item.description || item.serviceId) {
+            await invoiceItemMutation.create({
+              invoiceId: invoice.id,
+              customerId: selectedCustomerId,
+              ...(item.serviceId ? { serviceId: item.serviceId } : {}),
+              description: item.description || '',
+              quantity: item.quantity,
+              unitPrice: Number(item.unitPrice) || 0,
+              totalPrice: (Number(item.unitPrice) || 0) * item.quantity,
+            } as any);
+          }
+        }
+      }
+
+      onDirtyChange?.(false);
+      onClose();
+    } catch (err: any) {
+      // Without this the promise rejected unhandled: the dialog stayed open,
+      // nothing was saved, and the user saw no error at all — so they clicked
+      // "Krijo" again.
+      console.error('[InvoiceForm] ruajtja e faturës dështoi:', err);
+      toast({ title: isEditing ? 'Ruajtja dështoi' : 'Krijimi i faturës dështoi', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
+    } finally {
+      setIsSubmitting(false);
+    }
   };
 
   return (
@@ -2438,6 +2551,13 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
                     </SelectContent>
                   </Select>
                 )}
+                {/* A serviceId whose service no longer exists must not read as
+                    "nothing selected" — the line keeps its saved price. */}
+                {item.serviceId && services && !services.some(sv => sv.id === item.serviceId) && (
+                  <p className="text-[11px] text-amber-600 mt-1">
+                    ⚠ Shërbimi i lidhur nuk ekziston më — çmimi i ruajtur ({(Number(item.unitPrice) || 0).toFixed(2)} {currencySymbol(currency)}) mbetet. Zgjidh një shërbim tjetër për ta rilidhur.
+                  </p>
+                )}
               </div>
               <div className="flex items-center gap-2">
                 <div className="w-20 sm:w-24">
@@ -2496,15 +2616,17 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
 
         <div>
           <Label htmlFor="status">Statusi</Label>
-          <Select name="status" value={status} onValueChange={setStatus}>
+          <Select name="status" value={status} onValueChange={(v) => setStatus(v as Invoice['status'])}>
             <SelectTrigger>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="Draft">{getInvoiceStatusLabel('Draft')}</SelectItem>
               <SelectItem value="Pending">{getInvoiceStatusLabel('Pending')}</SelectItem>
+              <SelectItem value="Partial">{getInvoiceStatusLabel('Partial')}</SelectItem>
               <SelectItem value="Paid">{getInvoiceStatusLabel('Paid')}</SelectItem>
               <SelectItem value="Overdue">{getInvoiceStatusLabel('Overdue')}</SelectItem>
+              <SelectItem value="Cancelled">{getInvoiceStatusLabel('Cancelled')}</SelectItem>
             </SelectContent>
           </Select>
           {status === 'Paid' && (
@@ -2531,7 +2653,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
             </h4>
             {savedBankAccounts.length > 1 && (
               <Select onValueChange={(bankId) => {
-                const bank = savedBankAccounts.find(b => b.id === bankId);
+                const bank = savedBankAccounts.find((b: BankAccount) => b.id === bankId);
                 if (bank) {
                   setBankName(bank.bankName);
                   setBankIBAN(bank.iban);
@@ -2544,11 +2666,13 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
                   <SelectValue placeholder="Zgjidh bankën" />
                 </SelectTrigger>
                 <SelectContent>
-                  {savedBankAccounts.map(b => (
-                    <SelectItem key={b.id} value={b.id}>
-                      {b.bankName || b.iban.slice(0, 12)}
-                    </SelectItem>
-                  ))}
+                  {savedBankAccounts
+                    .filter((b: BankAccount) => !!b.id)
+                    .map((b: BankAccount) => (
+                      <SelectItem key={b.id} value={b.id!}>
+                        {b.bankName || (b.iban ? b.iban.slice(0, 12) : 'Bankë')}
+                      </SelectItem>
+                    ))}
                 </SelectContent>
               </Select>
             )}
@@ -2610,17 +2734,26 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
       </div>
 
       {/* Recurring Invoice */}
+      {billingProjectConflict && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 p-2.5 text-xs text-amber-900 dark:text-amber-200">
+          <strong>Projekti “{billingProjectConflict.name}” faturohet vetë periodikisht.</strong>{' '}
+          Periodiciteti i faturës është i çaktivizuar për këtë faturë, sepse dy motorët do faturonin
+          të njëjtën shumë dyfish. Për të faturuar nga fatura, hiq periodicitetin e projektit.
+        </div>
+      )}
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <div className="flex items-center justify-between p-3 border rounded-lg">
           <div>
             <Label>Faturë Periodike</Label>
-            <p className="text-xs text-muted-foreground">Gjenero automatikisht</p>
+            <p className="text-xs text-muted-foreground">
+              {billingProjectConflict ? 'Projekti e fatura vetë' : 'Gjenero automatikisht'}
+            </p>
           </div>
-          <input type="checkbox" checked={isRecurring} onChange={e => {
+          <input type="checkbox" checked={isRecurring} disabled={!!billingProjectConflict} onChange={e => {
             setIsRecurring(e.target.checked);
             if (e.target.checked && !nextRecurringDate) setNextRecurringDate(dueDate || undefined);
             onDirtyChange?.(true);
-          }} className="h-4 w-4 accent-primary" />
+          }} className="h-4 w-4 accent-primary disabled:opacity-40" />
         </div>
         {isRecurring && (
           <div>
@@ -2683,7 +2816,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
             </div>
             <button
               type="button"
-              onClick={() => { setIsRecurringPaused(p => !p); onDirtyChange?.(true); }}
+              onClick={() => { setIsRecurringPaused((p: boolean) => !p); onDirtyChange?.(true); }}
               className={`px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${isRecurringPaused ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-green-100 text-green-700 hover:bg-green-200'}`}
             >
               {isRecurringPaused ? 'Rifillo' : 'Ndalo'}
@@ -2776,8 +2909,10 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
         </div>
       </div>
 
-      <Button type="submit" className="w-full">
-        {isEditing ? 'Ruaj Ndryshimet' : 'Krijo Faturën'}
+      <Button type="submit" className="w-full" disabled={isSubmitting}>
+        {isSubmitting
+          ? <><Loader2 className="w-4 h-4 mr-2 animate-spin" /> Duke ruajtur…</>
+          : isEditing ? 'Ruaj Ndryshimet' : 'Krijo Faturën'}
       </Button>
     </form>
   );
@@ -2785,6 +2920,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
 
 const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
   const { user } = useAuth();
+  const detailInvoiceMutation = useMutation<Invoice>('invoices');
   const { data: allCustomers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const customer = allCustomers?.find(c => c.id === invoice.customerId);
   const { data: invoiceItems } = useCollection<InvoiceItem>('invoiceItems', {
@@ -2799,6 +2935,47 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
   }, [allServices]);
 
   const cur = currencySymbol((invoice as any).currency);
+  const teamSettings = useTeamSettingsData();
+
+  /**
+   * The bank account(s) to show for THIS invoice.
+   *
+   * The invoice document is the authority: it stores the bank it was issued with,
+   * and that is what the client already received by email. This used to read
+   * `localStorage.bank_accounts` FIRST and fall back to the invoice only when the
+   * browser happened to have none — so the same invoice showed a different IBAN on
+   * a different machine, printed EVERY configured account, and could contradict the
+   * emailed copy. Settings are now a fallback for legacy invoices that stored no
+   * bank at all, never an override.
+   */
+  const banks = React.useMemo(() => {
+    const own = (invoice as any).bankIBAN
+      ? [{
+          bankName: (invoice as any).bankName,
+          accountHolder: (invoice as any).bankAccountHolder,
+          iban: (invoice as any).bankIBAN,
+          swift: (invoice as any).bankSWIFT,
+          country: (invoice as any).bankCountry,
+        }]
+      : [];
+    if (own.length) return own;
+    // Legacy invoice with no bank of its own: fall back to tenant settings
+    // (Firestore, shared) before the browser-local copy.
+    const fromSettings = teamSettings?.bankAccounts;
+    if (Array.isArray(fromSettings) && fromSettings.length) return fromSettings.filter((b: any) => b?.iban);
+    try {
+      const local = JSON.parse(localStorage.getItem('bank_accounts') || '[]');
+      return Array.isArray(local) ? local.filter((b: any) => b?.iban) : [];
+    } catch { return []; }
+  }, [invoice, teamSettings]);
+
+  /** What a line item is called. A free-text line (raised from a task or a project
+   *  budget) carries no serviceId, so keying only on the service catalogue left it
+   *  reading "Duke ngarkuar..." forever — and printing a generic "Shërbim" in the PDF. */
+  const itemLabel = (item: InvoiceItem): string => {
+    const svc = item.serviceId ? services[item.serviceId] : undefined;
+    return svc?.title || (svc as any)?.name || item.description || 'Artikull';
+  };
 
   // Never offer payment on a draft or a zero/negative invoice (auto-created project
   // drafts can have no line items and a 0.00 total). Financial guard, not just UX.
@@ -2833,7 +3010,7 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
               <>
                 <div className="mt-2 pt-2 border-t border-dashed">
                   <p className="text-xs font-semibold text-green-700 mb-1">↻ Faturë Periodike</p>
-                  <p><span className="text-muted-foreground">Frekuenca:</span> {{ weekly: 'Javore', monthly: 'Mujore', quarterly: 'Tremujore', yearly: 'Vjetore' }[(invoice as any).recurringFrequency] || (invoice as any).recurringFrequency}</p>
+                  <p><span className="text-muted-foreground">Frekuenca:</span> {FREQUENCY_LABELS[(invoice as any).recurringFrequency as string] || (invoice as any).recurringFrequency}</p>
                   {(invoice as any).nextRecurringDate && <p><span className="text-muted-foreground">Gjenerimi tjetër:</span> {new Date((invoice as any).nextRecurringDate?.toDate ? (invoice as any).nextRecurringDate.toDate() : (invoice as any).nextRecurringDate).toLocaleDateString('sq-AL')}</p>}
                   <p><span className="text-muted-foreground">Statusi:</span> {(invoice as any).isRecurringPaused ? <span className="text-amber-600 font-medium">⏸ Ndërprerë</span> : <span className="text-green-600 font-medium">▶ Aktive</span>}</p>
                 </div>
@@ -2851,15 +3028,6 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
 
       {/* Bank Details — all accounts configured in Settings (falls back to the invoice's own bank) */}
       {(() => {
-        let banks: { bankName?: string; accountHolder?: string; iban?: string; swift?: string; country?: string }[] = [];
-        try { banks = JSON.parse(localStorage.getItem('bank_accounts') || '[]'); } catch { banks = []; }
-        banks = banks.filter(b => b.iban);
-        if (banks.length === 0 && (invoice as any).bankIBAN) {
-          banks = [{
-            bankName: (invoice as any).bankName, accountHolder: (invoice as any).bankAccountHolder,
-            iban: (invoice as any).bankIBAN, swift: (invoice as any).bankSWIFT, country: (invoice as any).bankCountry,
-          }];
-        }
         if (banks.length === 0) return null;
         return (
           <div className="p-4 border border-dashed border-border rounded-lg bg-muted/30">
@@ -2909,7 +3077,7 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
         <div className="sm:hidden space-y-2">
           {invoiceItems?.map((item) => (
             <div key={item.id} className="p-3 bg-muted/50 rounded-lg">
-              <p className="text-sm font-medium">{services[item.serviceId]?.title || 'Duke ngarkuar...'}</p>
+              <p className="text-sm font-medium">{itemLabel(item)}</p>
               <div className="flex items-center justify-between mt-1.5 text-xs text-muted-foreground">
                 <span>Sasia: {item.quantity} × {(item.unitPrice ?? 0).toFixed(2)} {cur}</span>
                 <span className="font-semibold text-foreground text-sm">{(item.totalPrice ?? 0).toFixed(2)} {cur}</span>
@@ -2931,7 +3099,7 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             <tbody className="divide-y">
               {invoiceItems?.map((item) => (
                 <tr key={item.id}>
-                  <td className="px-4 py-2">{services[item.serviceId]?.title || 'Duke ngarkuar...'}</td>
+                  <td className="px-4 py-2">{itemLabel(item)}</td>
                   <td className="px-4 py-2 text-right">{item.quantity}</td>
                   <td className="px-4 py-2 text-right">{(item.unitPrice ?? 0).toFixed(2)} {cur}</td>
                   <td className="px-4 py-2 text-right font-medium">{(item.totalPrice ?? 0).toFixed(2)} {cur}</td>
@@ -3067,6 +3235,33 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             Paguaj me Stripe
           </Button>
         )}
+        {canPay && (
+          <Button
+            className="w-full"
+            variant="outline"
+            onClick={async () => {
+              try {
+                // The token IS the authorization for /pay — mint it once, reuse after.
+                let payToken = (invoice as any).publicPayToken as string | undefined;
+                if (!payToken || payToken.length < 32) {
+                  const bytes = new Uint8Array(24);
+                  crypto.getRandomValues(bytes);
+                  payToken = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+                  await detailInvoiceMutation.update(invoice.id, { publicPayToken: payToken } as any);
+                  (invoice as any).publicPayToken = payToken;
+                }
+                const url = `${window.location.origin}/pay/${invoice.id}?t=${payToken}`;
+                await navigator.clipboard.writeText(url);
+                toast({ title: 'Linku i pagesës u kopjua ✓', description: 'Dërgojani klientit — hapet dhe paguhet pa login.' });
+              } catch (err: any) {
+                toast({ title: 'Linku nuk u krijua dot', description: err?.message, variant: 'destructive' });
+              }
+            }}
+          >
+            <ExternalLink className="w-4 h-4 mr-2" />
+            Kopjo linkun publik të pagesës
+          </Button>
+        )}
 
         {invoice.status === 'Paid' && (
           <div className="flex items-center justify-center gap-2 p-3 bg-success/10 border border-success/20 rounded-lg text-success">
@@ -3100,7 +3295,7 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             doc.text('FATURË', margin, y);
 
             // Issuer name below title
-            const pdfBankHolder = (invoice as any).bankAccountHolder || localStorage.getItem('default_bank_holder') || '';
+            const pdfBankHolder = (invoice as any).bankAccountHolder || banks[0]?.accountHolder || localStorage.getItem('default_bank_holder') || '';
             if (pdfBankHolder) {
               doc.setFontSize(10);
               doc.setFont('helvetica', 'normal');
@@ -3160,16 +3355,18 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             if (customer?.address) { doc.text(customer.address, margin, y); y += 5; }
 
             // Bank info — right column: show ALL bank accounts configured in Settings.
-            let pdfBanks: { bankName?: string; accountHolder?: string; iban?: string; swift?: string }[] = [];
-            try { pdfBanks = JSON.parse(localStorage.getItem('bank_accounts') || '[]'); } catch { pdfBanks = []; }
-            // Legacy fallback: a single default bank (or the invoice's own bank fields).
+            // The SAME resolver the detail panel uses: the bank stored on the invoice
+            // wins, settings are only a fallback for legacy invoices that stored none.
+            // Reading localStorage first meant the printed IBAN could differ from the
+            // one the client was emailed, and differ again on another machine.
+            let pdfBanks: { bankName?: string; accountHolder?: string; iban?: string; swift?: string }[] = banks;
             if (pdfBanks.length === 0) {
-              const legacyIban = (invoice as any).bankIBAN || localStorage.getItem('default_bank_iban') || '';
+              const legacyIban = localStorage.getItem('default_bank_iban') || '';
               if (legacyIban) pdfBanks = [{
-                bankName: (invoice as any).bankName || localStorage.getItem('default_bank_name') || '',
+                bankName: localStorage.getItem('default_bank_name') || '',
                 accountHolder: pdfBankHolder,
                 iban: legacyIban,
-                swift: (invoice as any).bankSWIFT || localStorage.getItem('default_bank_swift') || '',
+                swift: localStorage.getItem('default_bank_swift') || '',
               }];
             }
             let by = y - (5 * ([customer?.name, customer?.company, customer?.email, customer?.phone, customer?.address].filter(Boolean).length));
@@ -3213,11 +3410,39 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             doc.setFont('helvetica', 'normal');
             doc.setFontSize(9);
             let rowAlt = false;
+            // Rows used to advance `y` unbounded, so an invoice with ~15+ items simply
+            // ran off the page (and the footer always claimed "Faqe 1 / 1").
+            const BOTTOM_LIMIT = h - 34;   // leaves room for the totals box + footer
+            const drawItemsHeader = () => {
+              doc.setFillColor(13, 148, 136);
+              doc.rect(margin, y, w - margin * 2, 8, 'F');
+              doc.setFont('helvetica', 'bold');
+              doc.setFontSize(9);
+              doc.setTextColor(255, 255, 255);
+              doc.text('Shërbimi', margin + 3, y + 5.5);
+              doc.text('Sasia', w - margin - 58, y + 5.5, { align: 'right' });
+              doc.text('Çmimi', w - margin - 28, y + 5.5, { align: 'right' });
+              doc.text('Totali', w - margin - 2, y + 5.5, { align: 'right' });
+              y += 10;
+              doc.setFont('helvetica', 'normal');
+              doc.setFontSize(9);
+            };
             for (const item of invoiceItems || []) {
-              const svc = services[item.serviceId];
+              if (y > BOTTOM_LIMIT) {
+                doc.addPage();
+                doc.setFillColor(13, 148, 136);
+                doc.rect(0, 0, w, 5, 'F');
+                y = 18;
+                drawItemsHeader();
+                rowAlt = false;
+              }
+              const svc = item.serviceId ? services[item.serviceId] : undefined;
               if (rowAlt) { doc.setFillColor(245, 253, 251); doc.rect(margin, y - 1, w - margin * 2, 9, 'F'); }
               doc.setTextColor(30, 30, 30);
-              doc.text(svc?.title || svc?.name || 'Shërbim', margin + 3, y + 5);
+              // A free-text line (task/budget invoice) has no catalogue service —
+              // printing 'Shërbim' erased what the client is actually being billed for.
+              const label = svc?.title || svc?.name || (item as any).description || 'Artikull';
+              doc.text(doc.splitTextToSize(String(label), w - margin * 2 - 68)[0], margin + 3, y + 5);
               doc.text(String(item.quantity), w - margin - 58, y + 5, { align: 'right' });
               doc.text(fmt(item.unitPrice ?? 0), w - margin - 28, y + 5, { align: 'right' });
               doc.setFont('helvetica', 'bold');
@@ -3227,6 +3452,13 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
               doc.line(margin, y + 8, w - margin, y + 8);
               y += 9;
               rowAlt = !rowAlt;
+            }
+            // Keep the totals box whole rather than splitting it across the break.
+            if (y > h - 70) {
+              doc.addPage();
+              doc.setFillColor(13, 148, 136);
+              doc.rect(0, 0, w, 5, 'F');
+              y = 18;
             }
 
             // ── Totals box ───────────────────────────────────────────────────
@@ -3242,10 +3474,17 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             const totalVal = invoice.total || 0;
 
             // Calculate box height
+            // Already settled (cash instalments and/or a partial Stripe payment). A PDF
+            // that only ever showed the gross total told a half-paid client nothing.
+            const paidSoFar = Math.max(0, Number(invoice.paidAmount) || 0);
+            const showSettlement = paidSoFar > 0 && paidSoFar < totalVal;
+            const remainingVal = Math.max(0, totalVal - paidSoFar);
+
             let boxLines = 1; // subtotal
             if (discAmt > 0) boxLines++;
             if (taxAmt > 0) boxLines++;
             boxLines++; // total
+            if (showSettlement) boxLines += 2; // paid + remaining
             const boxH = boxLines * 8 + 8;
 
             doc.setFillColor(240, 253, 250);
@@ -3289,6 +3528,20 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             doc.text('TOTALI:', totBoxX + 4, ty + 4);
             doc.text(fmt(totalVal), totBoxX + totBoxW - 4, ty + 4, { align: 'right' });
 
+            if (showSettlement) {
+              ty += 8;
+              doc.setFont('helvetica', 'normal');
+              doc.setFontSize(9);
+              doc.setTextColor(22, 163, 74);
+              doc.text('Paguar:', totBoxX + 4, ty + 4);
+              doc.text(fmt(paidSoFar), totBoxX + totBoxW - 4, ty + 4, { align: 'right' });
+              ty += 7;
+              doc.setFont('helvetica', 'bold');
+              doc.setTextColor(180, 83, 9);
+              doc.text('MBETET:', totBoxX + 4, ty + 4);
+              doc.text(fmt(remainingVal), totBoxX + totBoxW - 4, ty + 4, { align: 'right' });
+            }
+
             // ── Notes ────────────────────────────────────────────────────────
             if (invoice.notes) {
               y = ty + 16;
@@ -3304,26 +3557,29 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
             }
 
             // ── Footer ───────────────────────────────────────────────────────
+            // Stamped on EVERY page with the real page count — it used to be
+            // hardcoded "Faqe 1 / 1" on a document that could not paginate at all.
             const footerY = h - 18;
-            doc.setDrawColor(13, 148, 136);
-            doc.setLineWidth(0.3);
-            doc.line(margin, footerY - 4, w - margin, footerY - 4);
-            doc.setLineWidth(0.2);
-            doc.setFontSize(8);
-            doc.setFont('helvetica', 'italic');
-            doc.setTextColor(100, 100, 100);
-            doc.text('Faleminderit për besimin tuaj!', w / 2, footerY, { align: 'center' });
-            if (invoice.paymentMethod) {
-              const payLabel = invoice.paymentMethod === 'Bank' ? 'Transfer Bankar' : invoice.paymentMethod === 'Cash' ? 'Kesh' : invoice.paymentMethod;
+            const pageCount = doc.getNumberOfPages();
+            const payLabel = invoice.paymentMethod === 'Bank' ? 'Transfer Bankar'
+              : invoice.paymentMethod === 'Cash' ? 'Kesh' : invoice.paymentMethod;
+            for (let page = 1; page <= pageCount; page++) {
+              doc.setPage(page);
+              doc.setDrawColor(13, 148, 136);
+              doc.setLineWidth(0.3);
+              doc.line(margin, footerY - 4, w - margin, footerY - 4);
+              doc.setLineWidth(0.2);
+              doc.setFontSize(8);
+              doc.setFont('helvetica', 'italic');
+              doc.setTextColor(100, 100, 100);
+              doc.text('Faleminderit për besimin tuaj!', w / 2, footerY, { align: 'center' });
               doc.setFont('helvetica', 'normal');
-              doc.text(`Mënyra e pagesës: ${payLabel}`, margin, footerY);
+              if (payLabel) doc.text(`Mënyra e pagesës: ${payLabel}`, margin, footerY);
+              doc.text(`Faqe ${page} / ${pageCount}`, w - margin, footerY, { align: 'right' });
+              // Bottom accent bar
+              doc.setFillColor(13, 148, 136);
+              doc.rect(0, h - 4, w, 4, 'F');
             }
-            doc.setFont('helvetica', 'normal');
-            doc.text(`Faqe 1 / 1`, w - margin, footerY, { align: 'right' });
-
-            // Bottom accent bar
-            doc.setFillColor(13, 148, 136);
-            doc.rect(0, h - 4, w, 4, 'F');
 
             const fileName = `Fatura-${invoice.invoiceNumber || invoice.id.slice(0, 8)}.pdf`;
             await saveOrShareFile(doc.output('blob'), fileName, { shareTitle: fileName });

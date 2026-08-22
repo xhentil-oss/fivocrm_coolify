@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { useCollection, useDocument } from '../../hooks/useFirestore';
 import { useAuth } from '../../contexts/AuthContext';
@@ -11,7 +11,8 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../../componen
 import { Separator } from '../../components/ui/separator';
 import { FileText, Search, Eye, DollarSign, Calendar, CreditCard, Check, ExternalLink, Building2, Download } from 'lucide-react';
 import { useToast } from '../../hooks/use-toast';
-import { toAll, currencySymbol } from '../../lib/utils';
+import { currencySymbol } from '../../lib/utils';
+import { getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../../lib/finance/financialAnalytics';
 import { StatCardsSkeleton, ListCardSkeleton } from './PortalSkeletons';
 import type { Invoice, InvoiceItem, Service, Customer } from '../../types';
 import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../../lib/native';
@@ -44,6 +45,30 @@ const PortalInvoicesView: React.FC = () => {
     where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
     skipTeamFilter: true,
   });
+
+  // Deep link from the invoice email's "Paguaj Tani" button: ?invoice=<id> opens
+  // that invoice's detail dialog (with its payment buttons) as soon as the list
+  // loads, then drops the param so refresh/back doesn't re-open it.
+  const deepLinkDoneRef = useRef(false);
+  useEffect(() => {
+    if (deepLinkDoneRef.current) return;
+    const params = new URLSearchParams(window.location.search);
+    const target = params.get('invoice');
+    if (!target) { deepLinkDoneRef.current = true; return; }
+    const inv = rawInvoices?.find(i => i.id === target);
+    if (inv) {
+      setSelectedInvoice(inv);
+    } else if (loading || !rawInvoices) {
+      return; // list still loading — retry on the next snapshot
+    }
+    // Found (opened) or definitively absent (someone else's/deleted invoice —
+    // the query only returns this client's own): stop and clean the param,
+    // keeping any other params (e.g. ?payment=) intact.
+    deepLinkDoneRef.current = true;
+    params.delete('invoice');
+    const qs = params.toString();
+    window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : ''));
+  }, [rawInvoices, loading]);
 
   // Sort client-side (avoids Firestore composite index requirement)
   const invoices = React.useMemo(() => {
@@ -150,9 +175,17 @@ const PortalInvoicesView: React.FC = () => {
     }
   };
 
+  // An invoice only exists for the client once it has been ISSUED. A Draft is still
+  // being written (and auto-created project drafts start at 0 L), so it must never
+  // reach the portal — the same rule the quote flow already applies to Draft quotes.
+  // Payment of a draft is refused server-side too; this stops it being seen at all.
+  const clientVisibleInvoices = React.useMemo(
+    () => (invoices || []).filter(inv => inv.status !== 'Draft'),
+    [invoices],
+  );
+
   const filteredInvoices = React.useMemo(() => {
-    if (!invoices) return [];
-    return invoices.filter(inv => {
+    return clientVisibleInvoices.filter(inv => {
       if (statusFilter !== '__all__' && inv.status !== statusFilter) return false;
       if (searchQuery) {
         const q = searchQuery.toLowerCase();
@@ -161,7 +194,7 @@ const PortalInvoicesView: React.FC = () => {
       }
       return true;
     });
-  }, [invoices, statusFilter, searchQuery]);
+  }, [clientVisibleInvoices, statusFilter, searchQuery]);
 
   // Reset the visible window whenever the filter/search changes.
   useEffect(() => { setVisibleCount(PAGE_SIZE); }, [statusFilter, searchQuery]);
@@ -170,16 +203,21 @@ const PortalInvoicesView: React.FC = () => {
 
   const selectedItems = invoiceItems?.filter(item => item.invoiceId === selectedInvoice?.id) || [];
 
-  const getServiceName = (serviceId?: string) => {
-    if (!serviceId) return 'Shërbim';
-    const service = services?.find(s => s.id === serviceId);
-    return service?.title || service?.name || 'Shërbim';
+  // `description` is the label for a free-text line (an invoice raised from a task
+  // or a project budget carries no catalogue serviceId) — falling straight through
+  // to 'Shërbim' hid what the client was actually billed for.
+  const getServiceName = (serviceId?: string, description?: string) => {
+    const service = serviceId ? services?.find(s => s.id === serviceId) : undefined;
+    return service?.title || service?.name || description || 'Shërbim';
   };
 
   // Normalize each invoice to ALL before summing — invoices can be EUR or ALL, and
   // the summary cards render a fixed "ALL" label, so a raw mixed-currency sum lied.
-  const totalPaid = invoices?.filter(i => i.status === 'Paid').reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0) || 0;
-  const totalPending = invoices?.filter(i => i.status === 'Pending' || i.status === 'Overdue').reduce((s, i) => s + toAll(i.total ?? i.amount ?? 0, (i as any).currency), 0) || 0;
+  // Both sides use the canonical helpers, so a partially-paid invoice contributes
+  // its settled part to "paid" and only its REMAINDER to "owed". Summing full totals
+  // told a client who had already paid half that they still owed everything.
+  const totalPaid = clientVisibleInvoices.reduce((s, i) => s + getInvoiceCollectedAll(i), 0);
+  const totalPending = clientVisibleInvoices.reduce((s, i) => s + getInvoiceOutstandingAll(i), 0);
 
   if (loading) {
     return (
@@ -266,7 +304,7 @@ const PortalInvoicesView: React.FC = () => {
             <SelectItem value="Paid">E Paguar</SelectItem>
             <SelectItem value="Pending">Në Pritje</SelectItem>
             <SelectItem value="Overdue">E Vonuar</SelectItem>
-            <SelectItem value="Draft">Skicë</SelectItem>
+            <SelectItem value="Partial">Pjesërisht e Paguar</SelectItem>
           </SelectContent>
         </Select>
       </div>
@@ -417,7 +455,7 @@ const PortalInvoicesView: React.FC = () => {
                       {selectedItems.map(item => (
                         <div key={item.id} className="flex items-center justify-between text-sm py-1.5 border-b last:border-0">
                           <div>
-                            <p className="font-medium">{item.description || getServiceName(item.serviceId)}</p>
+                            <p className="font-medium">{getServiceName(item.serviceId, item.description)}</p>
                             <p className="text-muted-foreground">
                               {item.quantity} × {item.unitPrice.toLocaleString()} {currencySymbol((selectedInvoice as any)?.currency)}
                             </p>
@@ -562,7 +600,7 @@ const PortalInvoicesView: React.FC = () => {
 
                   doc.setFont('helvetica', 'normal');
                   for (const item of selectedItems) {
-                    doc.text(item.description || getServiceName(item.serviceId), margin + 2, y + 4);
+                    doc.text(getServiceName(item.serviceId, item.description), margin + 2, y + 4);
                     doc.text(String(item.quantity), w - margin - 60, y + 4, { align: 'right' });
                     doc.text(`${(item.unitPrice ?? 0).toFixed(2)} ${cur}`, w - margin - 30, y + 4, { align: 'right' });
                     doc.text(`${(item.totalPrice ?? 0).toFixed(2)} ${cur}`, w - margin - 2,  y + 4, { align: 'right' });

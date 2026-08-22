@@ -19,6 +19,26 @@ Rules:
 <!-- Add tasks here only when there are real next steps. -->
 
 <todo>
+Deploy the invoice-module audit fixes
+Rules deploy (invoiceItems is now staff-only write), VPS cron restart for the new period-key recurrence engine, then `node scripts/fix-orphan-invoice-items.mjs --apply`. Full checklist: workspace/INVOICES_AUDIT_2026_08.md.
+</todo>
+
+<todo>
+Scope the cron's invoice reads per tenant
+`invoice-reminders`, `overdue-reminders` and `recurring-invoices` still read `invoices` cross-tenant (`where('status','==',…)`, `where('isRecurring','==',true)`), against the documented per-tenant cost rule. Belongs with the `tenantScopedDocs()` rollout — backlog #24 in the audit.
+</todo>
+
+<todo>
+Deploy Expense Rules + Indexes
+Rules tests pass 96/96 in the emulator. Deploy: firebase deploy --only firestore:rules,firestore:indexes (expenses rule now enforces keepsBusinessId, approver-only approvalStatus, re-approval on amount/date edit; indexes moved teamId -> businessId). See workspace/EXPENSES_AUDIT_2026_08.md.
+</todo>
+
+<todo>
+Scope Expense Reads Per Role
+Close the read half of finding #8: a Member can still read colleagues' Salary expenses from the console. Needs a per-role query (teamScopedWhere + createdByUserId), a (businessId, createdByUserId) index, and a fix for ProjectDetailView's burn-down read. Verify with real roles before deploying.
+</todo>
+
+<todo>
 Standup History View
 Add a dedicated view (or tab in DailyReportsView) to browse past morning standups by date/member.
 </todo>
@@ -28,8 +48,4 @@ Workload Reassign
 From WorkloadView, allow drag-and-drop or quick-assign to move tasks between team members.
 </todo>
 
-<todo>
-Blocked Task Notifications
-When a dependency task gets marked Done, automatically notify the blocker's assignee that they are now unblocked.
-</todo>
 

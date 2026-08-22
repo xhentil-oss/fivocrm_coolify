@@ -15,6 +15,9 @@ import {
   calculateRevenueBetween,
   calculateTotalExpenses,
   calculateExpensesBetween,
+  calculateSalaryExpensesBetween,
+  isProjectDirectExpense,
+  sumProjectDirectExpenses,
   getInvoiceCollectedBetween,
   monthHasOccurred,
   monthsElapsedInYear,
@@ -381,6 +384,51 @@ describe('ERP-grade accounting helpers (accrual + AR)', () => {
     expect(getInvoiceCollectedBetween(partial, start, end)).toBe(500);
   });
 
+  it('keeps an instalment in ITS OWN month after the invoice is fully settled', () => {
+    // REGRESSION: the `Paid` branch used to credit the whole total to `paidAt` and
+    // ignore partialPayments, so settling in August retroactively emptied June —
+    // cash-basis revenue of a closed, already-reported month changed by itself.
+    const june = [new Date('2026-06-01T00:00:00Z'), new Date('2026-06-30T23:59:59Z')] as const;
+    const august = [new Date('2026-08-01T00:00:00Z'), new Date('2026-08-31T23:59:59Z')] as const;
+    const settled = mkInvoice({
+      status: 'Paid', total: 100_000, currency: 'ALL',
+      paidAt: new Date('2026-08-20T10:00:00Z'),
+      partialPayments: [
+        { amount: 50_000, paidAt: new Date('2026-06-10T10:00:00Z') },
+        { amount: 50_000, paidAt: new Date('2026-08-20T10:00:00Z') },
+      ],
+    });
+    expect(getInvoiceCollectedBetween(settled, june[0], june[1])).toBe(50_000);
+    expect(getInvoiceCollectedBetween(settled, august[0], august[1])).toBe(50_000);
+    // And the year still totals the invoice exactly once.
+    expect(getInvoiceCollectedBetween(settled, new Date('2026-01-01'), new Date('2026-12-31T23:59:59')))
+      .toBe(100_000);
+  });
+
+  it('credits the un-instalmented remainder on paidAt', () => {
+    // Half recorded as cash in June, the rest closed by Stripe in August: the
+    // webhook writes paidAmount/status but no partialPayments entry.
+    const mixed = mkInvoice({
+      status: 'Paid', total: 100_000, currency: 'ALL',
+      paidAt: new Date('2026-08-20T10:00:00Z'),
+      partialPayments: [{ amount: 40_000, paidAt: new Date('2026-06-10T10:00:00Z') }],
+    });
+    expect(getInvoiceCollectedBetween(mixed, new Date('2026-06-01'), new Date('2026-06-30T23:59:59')))
+      .toBe(40_000);
+    expect(getInvoiceCollectedBetween(mixed, new Date('2026-08-01'), new Date('2026-08-31T23:59:59')))
+      .toBe(60_000);
+  });
+
+  it('never double-counts when instalments already cover the total', () => {
+    const exact = mkInvoice({
+      status: 'Paid', total: 1000, currency: 'ALL',
+      paidAt: new Date('2026-03-01T10:00:00Z'),
+      partialPayments: [{ amount: 1000, paidAt: new Date('2026-03-01T10:00:00Z') }],
+    });
+    expect(getInvoiceCollectedBetween(exact, new Date('2026-01-01'), new Date('2026-12-31T23:59:59')))
+      .toBe(1000);
+  });
+
   it('calculates accrual revenue in a date range', () => {
     const invoices: Invoice[] = [
       mkInvoice({
@@ -411,5 +459,54 @@ describe('ERP-grade accounting helpers (accrual + AR)', () => {
       new Date('2026-04-30T23:59:59Z'),
     );
     expect(total).toBe(500);
+  });
+});
+
+// ── Aug 2026 audit: one predicate for "what did this project cost" ─────────
+describe('isProjectDirectExpense / sumProjectDirectExpenses', () => {
+  const e = (o: any) => ({
+    id: o.id, title: o.id, amount: o.amount, currency: o.currency ?? 'ALL',
+    category: o.category ?? 'Office', projectId: o.projectId,
+    approvalStatus: o.approvalStatus, date: new Date(2026, 6, 1),
+  } as any);
+
+  it('needs a project, a non-Salary category and a non-rejected verdict', () => {
+    expect(isProjectDirectExpense(e({ id: 'a', amount: 10, projectId: 'P' }))).toBe(true);
+    expect(isProjectDirectExpense(e({ id: 'b', amount: 10 }))).toBe(false);                       // no project
+    expect(isProjectDirectExpense(e({ id: 'c', amount: 10, projectId: 'P', category: 'Salary' }))).toBe(false);
+    expect(isProjectDirectExpense(e({ id: 'd', amount: 10, projectId: 'P', approvalStatus: 'Rejected' }))).toBe(false);
+    // Submitted still hits the books — only Rejected does not.
+    expect(isProjectDirectExpense(e({ id: 'f', amount: 10, projectId: 'P', approvalStatus: 'Submitted' }))).toBe(true);
+  });
+
+  it('sums in ALL and can narrow to one project', () => {
+    // The project page used a bare reduce with NEITHER guard, so it disagreed
+    // with project.spent (the cron) and with projectPnl.directCost.
+    const rows = [
+      e({ id: '1', amount: 100, projectId: 'P1' }),
+      e({ id: '2', amount: 50, projectId: 'P2' }),
+      e({ id: '3', amount: 999, projectId: 'P1', approvalStatus: 'Rejected' }),
+      e({ id: '4', amount: 999, projectId: 'P1', category: 'Salary' }),
+    ];
+    expect(sumProjectDirectExpenses(rows)).toBe(150);
+    expect(sumProjectDirectExpenses(rows, 'P1')).toBe(100);
+    expect(sumProjectDirectExpenses(undefined)).toBe(0);
+  });
+});
+
+describe('calculateSalaryExpensesBetween', () => {
+  it('reports Salary rows separately — they are in no expense total', () => {
+    // The form offers the Salary category with a staff picker, but payroll is
+    // costed from salaryHistory, so the rows are excluded everywhere. Returning
+    // the figure is what lets the UI say so instead of appearing to lose it.
+    const rows = [
+      { id: 's1', title: 'Paga', amount: 70_000, currency: 'ALL', category: 'Salary', date: new Date(2026, 6, 5) },
+      { id: 's2', title: 'Paga', amount: 30_000, currency: 'ALL', category: 'Salary', date: new Date(2026, 6, 6), approvalStatus: 'Rejected' },
+      { id: 'o1', title: 'Qira', amount: 10_000, currency: 'ALL', category: 'Rent', date: new Date(2026, 6, 5) },
+    ] as any[];
+    const start = new Date(2026, 6, 1);
+    const end = new Date(2026, 6, 31, 23, 59, 59);
+    expect(calculateSalaryExpensesBetween(rows, start, end)).toBe(70_000);
+    expect(calculateExpensesBetween(rows, start, end)).toBe(10_000);   // salary excluded here
   });
 });

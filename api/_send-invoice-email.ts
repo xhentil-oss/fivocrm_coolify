@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
-import { buildInvoiceEmail } from './_invoiceEmail.js';
+import { buildInvoiceEmail, publicInvoicePayUrl } from './_invoiceEmail.js';
 import admin, { adminDb as db } from './_firebaseAdmin.js';
 import { tenantEmailIdentity } from './_tenantConfig.js';
 
@@ -43,6 +43,13 @@ async function callerIsStaff(
 // In-memory rate limit for client chat notifications: 1 email per (email+channelId) per 10 min
 const notifyRateLimit = new Map<string, number>();
 const NOTIFY_RATE_MS = 10 * 60 * 1000;
+
+// Same guard for the invoice path: one send per (invoice + kind) per 2 minutes.
+// A double-clicked "Dërgo" or a retry loop otherwise mails the client repeatedly,
+// and unlike the cron reminders nothing here is flag-gated. Per-instance and
+// best-effort — it exists to stop accidents, not a determined actor.
+const invoiceMailRateLimit = new Map<string, number>();
+const INVOICE_MAIL_RATE_MS = 2 * 60 * 1000;
 
 /**
  * POST /api/send-invoice-email
@@ -189,6 +196,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(422).json({ error: 'Customer has no valid email address' });
   }
 
+  // Debounce: a double-clicked "Dërgo" must not mail the client twice.
+  const mailKey = `${invoiceId}:${requestType === 'reminder' ? 'reminder' : 'initial'}`;
+  const lastInvoiceMail = invoiceMailRateLimit.get(mailKey) || 0;
+  if (Date.now() - lastInvoiceMail < INVOICE_MAIL_RATE_MS) {
+    return res.status(200).json({ success: true, skipped: true, reason: 'rate-limited' });
+  }
+  invoiceMailRateLimit.set(mailKey, Date.now());
+
   // Fetch project name for the email body
   let projectName = 'Shërbim';
   if (invoice.projectId) {
@@ -204,6 +219,10 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     customerName: customer.name || 'Klient',
     invoiceNumber: invoice.invoiceNumber || invoiceId.slice(0, 8).toUpperCase(),
     amount: invoice.total || invoice.amount || 0,
+    // A reminder must ask for what is still owed, not the gross total: staff record
+    // cash instalments as `paidAmount`, and the email labelled the figure
+    // "Shuma e papaguar" while showing the whole invoice.
+    paidAmount: invoice.paidAmount || 0,
     dueDate,
     projectName,
     type: requestType === 'reminder' ? 'reminder1' : 'initial',
@@ -214,6 +233,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     bankSWIFT: invoice.bankSWIFT,
     bankAccountHolder: invoice.bankAccountHolder,
     bankCountry: invoice.bankCountry,
+    payUrl: await publicInvoicePayUrl(invoiceId, invoice),
   });
 
   const transporter = nodemailer.createTransport({

@@ -1,0 +1,212 @@
+import { describe, it, expect } from 'vitest';
+import {
+  invoiceBillingPeriodKey,
+  nextInvoiceOccurrence,
+  billingDateFor,
+  periodsSkipped,
+  projectAlsoBills,
+  invoiceBillingBlockReason,
+  periodAlreadyCovered,
+  PERMANENT_INVOICE_BLOCKS,
+} from './recurringInvoices';
+
+const d = (s: string) => new Date(s + 'T12:00:00');
+
+describe('invoiceBillingPeriodKey', () => {
+  it('keys monthly by calendar month', () => {
+    expect(invoiceBillingPeriodKey('monthly', d('2026-08-01'))).toBe('2026-08');
+    expect(invoiceBillingPeriodKey('monthly', d('2026-08-31'))).toBe('2026-08');
+    expect(invoiceBillingPeriodKey('monthly', d('2026-09-01'))).toBe('2026-09');
+  });
+
+  it('keys weekly by the Monday of that week', () => {
+    // 2026-08-17 is a Monday; the whole week shares its key.
+    expect(invoiceBillingPeriodKey('weekly', d('2026-08-17'))).toBe('W2026-08-17');
+    expect(invoiceBillingPeriodKey('weekly', d('2026-08-23'))).toBe('W2026-08-17'); // Sunday
+    expect(invoiceBillingPeriodKey('weekly', d('2026-08-24'))).toBe('W2026-08-24');
+  });
+
+  it('keys quarterly and yearly', () => {
+    expect(invoiceBillingPeriodKey('quarterly', d('2026-01-15'))).toBe('Q2026-1');
+    expect(invoiceBillingPeriodKey('quarterly', d('2026-08-22'))).toBe('Q2026-3');
+    expect(invoiceBillingPeriodKey('quarterly', d('2026-12-31'))).toBe('Q2026-4');
+    expect(invoiceBillingPeriodKey('yearly', d('2026-03-01'))).toBe('Y2026');
+  });
+
+  it('pads single-digit months and days', () => {
+    expect(invoiceBillingPeriodKey('monthly', d('2026-01-05'))).toBe('2026-01');
+    expect(invoiceBillingPeriodKey('weekly', d('2026-01-05'))).toBe('W2026-01-05');
+  });
+});
+
+describe('nextInvoiceOccurrence', () => {
+  it('never overflows a month-end into the month after next', () => {
+    // The whole point: setMonth(+1) on Jan 31 gives March 3.
+    expect(nextInvoiceOccurrence(d('2026-01-31'), 'monthly').toISOString().slice(0, 10))
+      .toBe('2026-02-28');
+    expect(nextInvoiceOccurrence(d('2026-03-31'), 'monthly').toISOString().slice(0, 10))
+      .toBe('2026-04-30');
+  });
+
+  it('restores the anchor day after a clamped month', () => {
+    // Jan 31 → Feb 28 → (anchored on 31) March 31, not March 28.
+    const feb = nextInvoiceOccurrence(d('2026-01-31'), 'monthly');
+    expect(nextInvoiceOccurrence(feb, 'monthly', 31).toISOString().slice(0, 10))
+      .toBe('2026-03-31');
+  });
+
+  it('adds 7 days for weekly', () => {
+    expect(nextInvoiceOccurrence(d('2026-08-17'), 'weekly').toISOString().slice(0, 10))
+      .toBe('2026-08-24');
+  });
+
+  it('adds 3 months for quarterly, clamped', () => {
+    expect(nextInvoiceOccurrence(d('2026-11-30'), 'quarterly').toISOString().slice(0, 10))
+      .toBe('2027-02-28');
+  });
+
+  it('handles Feb 29 on a yearly cycle', () => {
+    expect(nextInvoiceOccurrence(d('2028-02-29'), 'yearly').toISOString().slice(0, 10))
+      .toBe('2029-02-28');
+  });
+});
+
+describe('billingDateFor', () => {
+  it('keeps the scheduled date when the cron merely ran late inside the period', () => {
+    const scheduled = d('2026-08-01');
+    expect(billingDateFor(scheduled, 'monthly', d('2026-08-04'))).toBe(scheduled);
+  });
+
+  it('bills the CURRENT period when the series lagged whole periods', () => {
+    const now = d('2026-08-22');
+    // A January schedule must not produce a back-dated January invoice in August.
+    expect(billingDateFor(d('2026-01-31'), 'monthly', now)).toBe(now);
+  });
+});
+
+describe('periodsSkipped', () => {
+  it('is 0 for a series on schedule', () => {
+    expect(periodsSkipped(d('2026-08-01'), 'monthly', d('2026-08-04'))).toBe(0);
+    expect(periodsSkipped(d('2026-09-01'), 'monthly', d('2026-08-04'))).toBe(0);
+  });
+
+  it('counts whole periods missed between the schedule and now', () => {
+    // Feb..Jul are missed; August is the one being billed.
+    expect(periodsSkipped(d('2026-01-15'), 'monthly', d('2026-08-15'))).toBe(6);
+  });
+
+  it('terminates on absurdly stale data instead of hanging', () => {
+    expect(periodsSkipped(d('1990-01-01'), 'weekly', d('2026-08-22'))).toBeLessThanOrEqual(600);
+  });
+});
+
+describe('projectAlsoBills', () => {
+  it('is false without a project', () => {
+    expect(projectAlsoBills(null)).toBe(false);
+    expect(projectAlsoBills(undefined)).toBe(false);
+    expect(projectAlsoBills({})).toBe(false);
+  });
+
+  it('is true for a live recurring retainer', () => {
+    expect(projectAlsoBills({ isRecurring: true, status: 'Active' })).toBe(true);
+  });
+
+  it('is false when the project engine is not actually billing', () => {
+    expect(projectAlsoBills({ isRecurring: true, isRecurringPaused: true })).toBe(false);
+    expect(projectAlsoBills({ isRecurring: true, status: 'Cancelled' })).toBe(false);
+    expect(projectAlsoBills({ isRecurring: true, status: 'Archived' })).toBe(false);
+    expect(projectAlsoBills({ isRecurring: true, billingType: 'one-time' })).toBe(false);
+  });
+});
+
+describe('invoiceBillingBlockReason', () => {
+  const now = d('2026-08-22');
+  const due = {
+    isRecurring: true,
+    recurringFrequency: 'monthly',
+    nextRecurringDate: d('2026-08-01'),
+  };
+
+  it('returns null when the series is due', () => {
+    expect(invoiceBillingBlockReason(due, now)).toBeNull();
+  });
+
+  it('names each blocking condition', () => {
+    expect(invoiceBillingBlockReason({ ...due, isRecurring: false }, now)).toBe('not-recurring');
+    expect(invoiceBillingBlockReason({ ...due, autoGenerated: true }, now)).toBe('auto-generated');
+    expect(invoiceBillingBlockReason({ ...due, isRecurringPaused: true }, now)).toBe('paused');
+    expect(invoiceBillingBlockReason({ ...due, recurringFrequency: 'daily' }, now)).toBe('unsupported-frequency');
+    expect(invoiceBillingBlockReason({ ...due, recurringFrequency: undefined }, now)).toBe('unsupported-frequency');
+    expect(invoiceBillingBlockReason({ ...due, nextRecurringDate: null }, now)).toBe('no-next-date');
+    expect(invoiceBillingBlockReason({ ...due, nextRecurringDate: d('2026-09-01') }, now)).toBe('not-due');
+  });
+
+  it('stops a series past its end date', () => {
+    expect(invoiceBillingBlockReason({ ...due, recurringEndDate: d('2026-07-31') }, now))
+      .toBe('series-ended');
+  });
+
+  it('still bills on the last period before the end date', () => {
+    expect(invoiceBillingBlockReason({ ...due, recurringEndDate: d('2026-08-31') }, now))
+      .toBeNull();
+  });
+
+  it('is idempotent within a period via the period key', () => {
+    expect(invoiceBillingBlockReason({ ...due, lastGeneratedPeriodKey: '2026-08' }, now))
+      .toBe('already-generated');
+    // A key from a previous period does NOT block.
+    expect(invoiceBillingBlockReason({ ...due, lastGeneratedPeriodKey: '2026-07' }, now))
+      .toBeNull();
+  });
+
+  it('REGRESSION: a series that lagged a cycle still bills', () => {
+    // The old guard compared the newest child's createdAt ("now") against every
+    // remaining past due date and stayed true forever. With a period key, a
+    // January schedule seen in August bills August and moves on.
+    const lagging = { ...due, nextRecurringDate: d('2026-01-31'), lastGeneratedPeriodKey: '2026-01' };
+    expect(invoiceBillingBlockReason(lagging, now)).toBeNull();
+  });
+
+  it('REGRESSION: does not bill twice for one period after a catch-up', () => {
+    const caughtUp = { ...due, nextRecurringDate: d('2026-01-31'), lastGeneratedPeriodKey: '2026-08' };
+    expect(invoiceBillingBlockReason(caughtUp, now)).toBe('already-generated');
+  });
+
+  it('refuses to bill when the linked project bills the same retainer', () => {
+    expect(invoiceBillingBlockReason(due, now, { isRecurring: true, status: 'Active' }))
+      .toBe('project-also-bills');
+    // Reported even while paused, so resuming cannot quietly resume the overlap.
+    expect(invoiceBillingBlockReason({ ...due, isRecurringPaused: true }, now, { isRecurring: true }))
+      .toBe('project-also-bills');
+  });
+
+  it('classifies unrecoverable blocks as permanent', () => {
+    expect(PERMANENT_INVOICE_BLOCKS).toContain('series-ended');
+    expect(PERMANENT_INVOICE_BLOCKS).toContain('project-also-bills');
+    expect(PERMANENT_INVOICE_BLOCKS).not.toContain('paused');
+    expect(PERMANENT_INVOICE_BLOCKS).not.toContain('not-due');
+  });
+
+  it('accepts Firestore Timestamp-shaped dates', () => {
+    const ts = { toDate: () => d('2026-08-01') };
+    expect(invoiceBillingBlockReason({ ...due, nextRecurringDate: ts }, now)).toBeNull();
+    const secs = { seconds: Math.floor(d('2026-09-05').getTime() / 1000) };
+    expect(invoiceBillingBlockReason({ ...due, nextRecurringDate: secs }, now)).toBe('not-due');
+  });
+});
+
+describe('periodAlreadyCovered', () => {
+  it('matches on an explicit periodKey', () => {
+    expect(periodAlreadyCovered('monthly', '2026-08', [{ periodKey: '2026-08' }])).toBe(true);
+    expect(periodAlreadyCovered('monthly', '2026-08', [{ periodKey: '2026-07' }])).toBe(false);
+  });
+
+  it('falls back to the occurrence date for pre-migration children', () => {
+    expect(periodAlreadyCovered('monthly', '2026-08', [{ invoiceDate: d('2026-08-03') }])).toBe(true);
+    expect(periodAlreadyCovered('monthly', '2026-08', [{ createdAt: d('2026-07-03') }])).toBe(false);
+  });
+
+  it('is false with no children at all', () => {
+    expect(periodAlreadyCovered('monthly', '2026-08', [])).toBe(false);
+  });
+});
