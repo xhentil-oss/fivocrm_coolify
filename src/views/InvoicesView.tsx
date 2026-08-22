@@ -2785,6 +2785,7 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
 
 const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
   const { user } = useAuth();
+  const detailInvoiceMutation = useMutation<Invoice>('invoices');
   const { data: allCustomers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const customer = allCustomers?.find(c => c.id === invoice.customerId);
   const { data: invoiceItems } = useCollection<InvoiceItem>('invoiceItems', {
@@ -3065,6 +3066,33 @@ const InvoiceDetails: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
               <path d="M59.64 14.28h-8.06c.19 1.93 1.6 2.55 3.2 2.55 1.64 0 2.96-.37 4.05-.95v3.32a8.33 8.33 0 0 1-4.56 1.1c-4.01 0-6.83-2.5-6.83-7.48 0-4.19 2.39-7.52 6.3-7.52 3.92 0 5.96 3.28 5.96 7.5 0 .4-.02 1.04-.06 1.48zm-3.67-3.14c0-1.25-.5-2.7-2.1-2.7-1.52 0-2.22 1.38-2.32 2.7h4.42z"/>
             </svg>
             Paguaj me Stripe
+          </Button>
+        )}
+        {canPay && (
+          <Button
+            className="w-full"
+            variant="outline"
+            onClick={async () => {
+              try {
+                // The token IS the authorization for /pay — mint it once, reuse after.
+                let payToken = (invoice as any).publicPayToken as string | undefined;
+                if (!payToken || payToken.length < 32) {
+                  const bytes = new Uint8Array(24);
+                  crypto.getRandomValues(bytes);
+                  payToken = Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+                  await detailInvoiceMutation.update(invoice.id, { publicPayToken: payToken } as any);
+                  (invoice as any).publicPayToken = payToken;
+                }
+                const url = `${window.location.origin}/pay/${invoice.id}?t=${payToken}`;
+                await navigator.clipboard.writeText(url);
+                toast({ title: 'Linku i pagesës u kopjua ✓', description: 'Dërgojani klientit — hapet dhe paguhet pa login.' });
+              } catch (err: any) {
+                toast({ title: 'Linku nuk u krijua dot', description: err?.message, variant: 'destructive' });
+              }
+            }}
+          >
+            <ExternalLink className="w-4 h-4 mr-2" />
+            Kopjo linkun publik të pagesës
           </Button>
         )}
 

@@ -104,26 +104,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(503).json({ error: 'Pagesat online nuk janë konfiguruar (STRIPE_SECRET_KEY mungon në server).' });
   }
 
+  // Auth is OPTIONAL here: a request may instead carry a `payToken` matching the
+  // invoice's `publicPayToken` — the shareable "pay without logging in" link. The
+  // token is minted by staff (random 48 hex chars, stored on the invoice), so
+  // possession of the link is the authorization, exactly like a Stripe invoice link.
   const uid = await verifyAuthToken(req.headers.authorization as string | undefined);
-  if (!uid) return res.status(401).json({ error: 'Unauthorized' });
 
   try {
     // NOTE: the client also sends `amount` and `currency`; both are deliberately
     // ignored — the invoice document is the only authority on what is charged.
-    const { invoiceId, invoiceNumber, customerEmail, customerName, successUrl, cancelUrl } = req.body;
+    const { invoiceId, invoiceNumber, customerEmail, customerName, successUrl, cancelUrl, payToken, info } = req.body;
+    const wantsInfo = info === true;
 
-    if (!invoiceId || !successUrl || !cancelUrl) {
+    if (!invoiceId || (!wantsInfo && (!successUrl || !cancelUrl))) {
       return res.status(400).json({ error: 'Missing required fields: invoiceId, successUrl, cancelUrl' });
     }
 
-    try {
-      const successParsed = new URL(successUrl);
-      const cancelParsed = new URL(cancelUrl);
-      if (!['http:', 'https:'].includes(successParsed.protocol) || !['http:', 'https:'].includes(cancelParsed.protocol)) {
+    if (!wantsInfo) {
+      try {
+        const successParsed = new URL(successUrl);
+        const cancelParsed = new URL(cancelUrl);
+        if (!['http:', 'https:'].includes(successParsed.protocol) || !['http:', 'https:'].includes(cancelParsed.protocol)) {
+          return res.status(400).json({ error: 'Invalid redirect URLs' });
+        }
+      } catch {
         return res.status(400).json({ error: 'Invalid redirect URLs' });
       }
-    } catch {
-      return res.status(400).json({ error: 'Invalid redirect URLs' });
     }
 
     // Load invoice from Firestore — amount is authoritative here, never from the client
@@ -134,11 +140,21 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     const invoiceTeamId = invoiceData.teamId as string | undefined;
     const invoiceBusinessId = invoiceData.businessId as string | undefined;
 
-    // Authorize: staff member of the invoice's team/business OR the portal client for
-    // this invoice's customer. Fail closed — an invoice scoped to neither a team nor a
-    // business (and not owned by the calling portal client) is rejected, never skipped.
-    // Recurring/legacy invoices set teamId=null but still carry businessId.
-    {
+    // Public-link authorization: an unguessable token minted by staff and stored on
+    // THIS invoice. Length-gated so an empty/short token in the data can never match.
+    const publicOk = typeof payToken === 'string'
+      && payToken.length >= 32
+      && typeof invoiceData.publicPayToken === 'string'
+      && invoiceData.publicPayToken.length >= 32
+      && payToken === invoiceData.publicPayToken;
+
+    // Authorize: valid public pay link, OR staff member of the invoice's team/business,
+    // OR the portal client for this invoice's customer. Fail closed — an invoice scoped
+    // to neither a team nor a business (and not owned by the calling portal client) is
+    // rejected, never skipped. Recurring/legacy invoices set teamId=null but still
+    // carry businessId.
+    if (!publicOk) {
+      if (!uid) return res.status(401).json({ error: 'Unauthorized' });
       const [teamSnap, bizSnap, portalSnap] = await Promise.all([
         invoiceTeamId
           ? db.collection('teamMembers').where('teamId', '==', invoiceTeamId).where('userId', '==', uid).limit(1).get()
@@ -153,6 +169,32 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (teamSnap.empty && bizSnap.empty && portalSnap.empty) {
         return res.status(403).json({ error: 'Forbidden' });
       }
+    }
+
+    // Info mode: the public /pay page asks what to render BEFORE offering payment.
+    // Returns only the fields that belong on a payment receipt — never the full
+    // invoice document — and reports paid/cancelled states instead of 409-ing, so
+    // the page can show "e paguar" rather than an error.
+    if (wantsInfo) {
+      const infoTotal = Number(invoiceData.total ?? invoiceData.amount ?? 0) || 0;
+      const infoPaidRaw = Number(invoiceData.paidAmount || 0);
+      const infoPaid = Number.isFinite(infoPaidRaw) && infoPaidRaw > 0 ? infoPaidRaw : 0;
+      const remainder = Math.max(0, infoTotal - infoPaid);
+      let businessName: string | null = null;
+      if (invoiceBusinessId) {
+        const biz = await db.collection('businesses').doc(invoiceBusinessId).get().catch(() => null);
+        businessName = (biz?.data() as any)?.name || null;
+      }
+      const status = (invoiceData.status as string) || 'Pending';
+      return res.status(200).json({
+        invoiceNumber: invoiceData.invoiceNumber || invoiceId.slice(0, 8),
+        status,
+        currency: (invoiceData.currency as string) || 'ALL',
+        total: infoTotal,
+        remainder,
+        businessName,
+        payable: status !== 'Paid' && status !== 'Cancelled' && status !== 'Draft' && remainder > 0,
+      });
     }
 
     // An invoice that is already settled or voided must never be payable again —
@@ -231,7 +273,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       metadata: {
         invoiceId,
         invoiceNumber: invoiceNumber || invoiceData.invoiceNumber || '',
-        requestedByUid: uid,
+        requestedByUid: uid || 'public-link',
         // Conversion snapshot: lets the webhook recompute what the CURRENT invoice
         // should cost through the SAME rate, so its amount-mismatch guard doesn't
         // misfire on Lek invoices legitimately charged in EUR.

@@ -61,6 +61,7 @@ const ClientHealthView = lazyRetry(() => import('./views/ClientHealthView'));
 const GoalsView = lazyRetry(() => import('./views/GoalsView'));
 const TeamsView = lazyRetry(() => import('./views/TeamsView'));
 const InvoicesView = lazyRetry(() => import('./views/InvoicesView'));
+const PublicPayView = lazyRetry(() => import('./views/PublicPayView'));
 const PaymentsView = lazyRetry(() => import('./views/PaymentsView'));
 const ChatView = lazyRetry(() => import('./views/ChatView'));
 const WhatsappInboxView = lazyRetry(() => import('./views/WhatsappInboxView'));
@@ -289,6 +290,8 @@ function AppContent() {
       <Route path="/shop-produkte" element={<Suspense fallback={<LazyFallback />}><ShopProduktLandingPage /></Suspense>} />
       <Route path="/engineering" element={<Suspense fallback={<LazyFallback />}><EngineeringLandingPage /></Suspense>} />
       <Route path="/rent-a-car" element={<Suspense fallback={<LazyFallback />}><RentACarSoftwareLandingPage /></Suspense>} />
+      {/* Public invoice payment — the token in the link is the authorization */}
+      <Route path="/pay/:invoiceId" element={<Suspense fallback={<LazyFallback />}><PublicPayView /></Suspense>} />
       <Route path="/privacy" element={<Suspense fallback={<LazyFallback />}><PrivacyPolicyView /></Suspense>} />
       <Route path="/privatesia" element={<Suspense fallback={<LazyFallback />}><PrivacyPolicyView /></Suspense>} />
       <Route path="/delete-account" element={<Suspense fallback={<LazyFallback />}><DeleteAccountView /></Suspense>} />
