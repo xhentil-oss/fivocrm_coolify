@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
-import { buildInvoiceEmail } from '../_invoiceEmail.js';
+import { buildInvoiceEmail, publicInvoicePayUrl } from '../_invoiceEmail.js';
 import admin, { adminDb as db, adminAuth } from '../_firebaseAdmin.js';
 import { runWhmcsSync, runWhmcsClientSync } from '../_whmcsSync.js';
 import { sendBulkEmail, renderMergeTokens } from '../_mailer.js';
@@ -410,7 +410,7 @@ async function runInvoiceReminders() {
       let projectName = 'Shërbim';
       if (invoice.projectId) { const pd = await db.collection('projects').doc(invoice.projectId).get(); if (pd.exists) projectName = pd.data()?.name || projectName; }
       const dueDate: Date = invoice.dueDate?.toDate ? invoice.dueDate.toDate() : invoice.dueDate ? new Date(invoice.dueDate) : now;
-      const { subject, html } = buildInvoiceEmail({ customerName: customer.name || 'Klient', invoiceNumber: invoiceLabel, amount: invoice.total || invoice.amount || 0, dueDate, projectName, type, currency: invoice.currency || 'ALL', paymentMethod: invoice.paymentMethod, bankName: invoice.bankName, bankIBAN: invoice.bankIBAN, bankSWIFT: invoice.bankSWIFT, bankAccountHolder: invoice.bankAccountHolder, bankCountry: invoice.bankCountry });
+      const { subject, html } = buildInvoiceEmail({ customerName: customer.name || 'Klient', invoiceNumber: invoiceLabel, amount: invoice.total || invoice.amount || 0, dueDate, projectName, type, currency: invoice.currency || 'ALL', paymentMethod: invoice.paymentMethod, bankName: invoice.bankName, bankIBAN: invoice.bankIBAN, bankSWIFT: invoice.bankSWIFT, bankAccountHolder: invoice.bankAccountHolder, bankCountry: invoice.bankCountry, payUrl: await publicInvoicePayUrl(doc.id, invoice) });
       if (transporter && smtpUser) reminderOps.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject, html }).then(() => doc.ref.update({ [flagField]: true, updatedAt: admin.firestore.Timestamp.now() })));
       // The type used to be assembled as `invoice_${type}_sent`, producing values no
       // table knew about: no icon, no category, impossible to mute. The variant now
@@ -486,6 +486,7 @@ async function runOverdueReminders() {
         currency: inv.currency || 'ALL', paymentMethod: inv.paymentMethod,
         bankName: inv.bankName, bankIBAN: inv.bankIBAN, bankSWIFT: inv.bankSWIFT,
         bankAccountHolder: inv.bankAccountHolder, bankCountry: inv.bankCountry,
+        payUrl: await publicInvoicePayUrl(doc.id, inv),
       });
       ops.push(
         transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject: `⚠️ Faturë e papaguar #${invoiceLabel} (${daysOverdue} ditë vonesë)`, html })
@@ -506,7 +507,10 @@ async function runOverdueReminders() {
         const channels: any[] = settings.metaChannels || [];
         const channel = channels.find((c) => c.phoneNumberId === settings.waOverdueChannelPhoneNumberId) || channels[0];
         if (tpl && channel?.accessToken && channel?.phoneNumberId) {
-          const ctx: Record<string, any> = { name: customer.name, invoiceNumber: invoiceLabel, amount: inv.total || inv.amount || 0, total: inv.total || inv.amount || 0, daysOverdue };
+          // `link` = the "Paguaj Tani" portal deep link — a template param mapped to
+          // it puts the pay URL in the message body (Meta buttons can't be added at
+          // send time, only in the approved template definition).
+          const ctx: Record<string, any> = { name: customer.name, invoiceNumber: invoiceLabel, amount: inv.total || inv.amount || 0, total: inv.total || inv.amount || 0, daysOverdue, link: await publicInvoicePayUrl(doc.id, inv) };
           const params: string[] = (tpl.paramFields || []).map((f: string) => f && f !== 'custom' && ctx[f] != null ? String(ctx[f]) : '');
           ops.push(
             sendMetaBroadcastMessage(channel, normalizeWaPhone(customer.phone), tpl, params, inv.teamId, null, { id: doc.id, name: customer.name })
@@ -914,6 +918,8 @@ async function runRecurringInvoices() {
             bankSWIFT: invoice.bankSWIFT,
             bankAccountHolder: invoice.bankAccountHolder,
             bankCountry: invoice.bankCountry,
+            // Fresh doc: pass null so the helper mints the token without re-reading.
+            payUrl: await publicInvoicePayUrl(newInvoiceRef.id, null),
           });
           ops.push(transporter.sendMail({
             from: `"FivoCRM" <${smtpUser}>`,
@@ -1052,7 +1058,7 @@ async function runRecurringInvoices() {
         const customerDoc = await db.collection('customers').doc(project.customerId).get();
         const customer = customerDoc.data();
         if (customer?.email) {
-          const { subject, html } = buildInvoiceEmail({ customerName: customer.name || 'Klient', invoiceNumber: invoiceLabel, amount: budget, dueDate: periodEnd, projectName: project.name, type: 'initial', currency, paymentMethod: project.paymentMethod, bankName: project.bankName, bankIBAN: project.bankIBAN, bankSWIFT: project.bankSWIFT, bankAccountHolder: project.bankAccountHolder, bankCountry: project.bankCountry });
+          const { subject, html } = buildInvoiceEmail({ customerName: customer.name || 'Klient', invoiceNumber: invoiceLabel, amount: budget, dueDate: periodEnd, projectName: project.name, type: 'initial', currency, paymentMethod: project.paymentMethod, bankName: project.bankName, bankIBAN: project.bankIBAN, bankSWIFT: project.bankSWIFT, bankAccountHolder: project.bankAccountHolder, bankCountry: project.bankCountry, payUrl: await publicInvoicePayUrl(invoiceRef.id, null) });
           legacyOps.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject, html }).then(() => invoiceRef.update({ emailSent: true, updatedAt: admin.firestore.Timestamp.now() })));
         }
       } catch { /* skip */ }

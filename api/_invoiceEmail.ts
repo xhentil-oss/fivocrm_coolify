@@ -4,6 +4,9 @@
  * NOT a Vercel route (underscore prefix is ignored by Vercel routing).
  */
 
+import { randomBytes } from 'node:crypto';
+import { adminDb as db } from './_firebaseAdmin.js';
+
 export interface InvoiceEmailData {
   customerName: string;
   invoiceNumber: string;
@@ -18,10 +21,61 @@ export interface InvoiceEmailData {
   bankSWIFT?: string;
   bankAccountHolder?: string;
   bankCountry?: string;
+  /** "Paguaj Tani" deep link into the client portal (login → this invoice). */
+  payUrl?: string;
+}
+
+/**
+ * Portal deep link for paying a specific invoice. The portal route auto-opens the
+ * invoice's detail dialog (with its Stripe "Paguaj" button); an unauthenticated
+ * client is bounced through /login, which preserves the redirect and lands them
+ * back on this exact invoice.
+ */
+export function invoicePayUrl(invoiceId: string): string {
+  const base = (process.env.VITE_APP_URL || process.env.APP_URL || process.env.PUBLIC_BASE_URL || 'https://fivocrm.vercel.app')
+    .replace(/\/$/, '');
+  return `${base}/portal/invoices?invoice=${encodeURIComponent(invoiceId)}`;
+}
+
+/**
+ * PUBLIC pay link — /pay/:id?t=<token> opens and pays WITHOUT login (the token is
+ * the authorization; create-checkout-session verifies it against the invoice's
+ * `publicPayToken`). Mints the token on first use with the Admin SDK and reuses it
+ * afterwards, so the link in every email for the same invoice stays stable.
+ *
+ * Pass the already-loaded invoice data when you have it (saves the read). Falls
+ * back to the login-gated portal link if the token can't be minted — an email with
+ * a working-but-gated link beats a failed send.
+ */
+export async function publicInvoicePayUrl(
+  invoiceId: string,
+  invoiceData?: Record<string, any> | null,
+): Promise<string> {
+  const base = (process.env.VITE_APP_URL || process.env.APP_URL || process.env.PUBLIC_BASE_URL || 'https://fivocrm.vercel.app')
+    .replace(/\/$/, '');
+  try {
+    let token: string | undefined =
+      typeof invoiceData?.publicPayToken === 'string' && invoiceData.publicPayToken.length >= 32
+        ? invoiceData.publicPayToken
+        : undefined;
+    if (!token && invoiceData === undefined) {
+      const snap = await db.collection('invoices').doc(invoiceId).get();
+      const t = (snap.data() as any)?.publicPayToken;
+      if (typeof t === 'string' && t.length >= 32) token = t;
+    }
+    if (!token) {
+      token = randomBytes(24).toString('hex');
+      await db.collection('invoices').doc(invoiceId).set({ publicPayToken: token }, { merge: true });
+    }
+    return `${base}/pay/${encodeURIComponent(invoiceId)}?t=${token}`;
+  } catch (err: any) {
+    console.error(`[publicInvoicePayUrl] token mint failed for ${invoiceId}:`, err?.message || err);
+    return invoicePayUrl(invoiceId);
+  }
 }
 
 export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; html: string } {
-  const { customerName, invoiceNumber, amount, dueDate, projectName, type, currency, paymentMethod, bankName, bankIBAN, bankSWIFT, bankAccountHolder, bankCountry } = data;
+  const { customerName, invoiceNumber, amount, dueDate, projectName, type, currency, paymentMethod, bankName, bankIBAN, bankSWIFT, bankAccountHolder, bankCountry, payUrl } = data;
   const currencySymbol = currency === 'EUR' ? '€' : 'L';
   const currencyLabel = currency === 'EUR' ? 'EUR' : 'ALL';
   const amountStr = amount.toLocaleString('sq-AL') + ' ' + currencySymbol;
@@ -40,6 +94,16 @@ export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; ht
                 <tr><td style="padding: 4px 0; color: #6b7280; font-size: 13px;">Monedha</td><td style="padding: 4px 0; color: #111827; font-size: 13px; font-weight: 500;">${currencyLabel}</td></tr>
               </table>
               <p style="color: #0369a1; font-size: 12px; margin: 8px 0 0 0;">Ju lutemi përdorni numrin e faturës <strong>#${escHtml(invoiceNumber)}</strong> si referencë pagese.</p>
+            </div>` : '';
+
+  // "Paguaj Tani" CTA (reused across email types) — normally the PUBLIC pay link
+  // (publicInvoicePayUrl: opens and pays by card without any login); falls back to
+  // the login-gated portal deep link only if token minting failed. payUrl is built
+  // server-side, never caller-supplied free text, but attribute-escape it anyway.
+  const payButtonHtml = payUrl ? `
+            <div style="text-align: center; margin: 24px 0 8px 0;">
+              <a href="${escHtml(payUrl)}" style="display: inline-block; background: #12468C; color: #ffffff; padding: 14px 36px; border-radius: 8px; text-decoration: none; font-weight: bold; font-size: 16px;">💳 Paguaj Tani</a>
+              <p style="color: #6b7280; font-size: 12px; margin: 10px 0 0 0;">Pagesë e sigurt online me kartë përmes Stripe.</p>
             </div>` : '';
 
   if (type === 'initial') {
@@ -72,6 +136,7 @@ export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; ht
               </tr>
             </table>
             ${bankDetailsHtml}
+            ${payButtonHtml}
             <p style="color: #374151;">Ju lutemi kryeni pagesën deri në datën e sipërpërmendur.</p>
             <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
             <p style="color: #9ca3af; font-size: 12px; margin: 0;">FivoCRM — Njoftime automatike &bull; Mos iu përgjigjeni këtij emaili direkt.</p>
@@ -103,6 +168,7 @@ export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; ht
               </tr>
             </table>
             ${bankDetailsHtml}
+            ${payButtonHtml}
             <p style="color: #374151;">Ju lutemi kryeni pagesën sa më shpejt për të shmangur kamatat e vonimit.</p>
             <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
             <p style="color: #9ca3af; font-size: 12px; margin: 0;">FivoCRM — Njoftime automatike &bull; Mos iu përgjigjeni këtij emaili direkt.</p>
@@ -134,6 +200,7 @@ export function buildInvoiceEmail(data: InvoiceEmailData): { subject: string; ht
             </tr>
           </table>
           ${bankDetailsHtml}
+          ${payButtonHtml}
           <p style="color: #dc2626; font-weight: bold;">Pagesa duhet të kryhet sot. Pas kësaj date fatura do të shënohet si e skalur.</p>
           <hr style="border: none; border-top: 1px solid #e5e7eb; margin: 20px 0;" />
           <p style="color: #9ca3af; font-size: 12px; margin: 0;">FivoCRM — Njoftime automatike &bull; Mos iu përgjigjeni këtij emaili direkt.</p>

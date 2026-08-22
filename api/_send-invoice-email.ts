@@ -1,6 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
-import { buildInvoiceEmail } from './_invoiceEmail.js';
+import { buildInvoiceEmail, publicInvoicePayUrl } from './_invoiceEmail.js';
 import admin, { adminDb as db } from './_firebaseAdmin.js';
 import { tenantEmailIdentity } from './_tenantConfig.js';
 
@@ -214,6 +214,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     bankSWIFT: invoice.bankSWIFT,
     bankAccountHolder: invoice.bankAccountHolder,
     bankCountry: invoice.bankCountry,
+    payUrl: await publicInvoicePayUrl(invoiceId, invoice),
   });
 
   const transporter = nodemailer.createTransport({
