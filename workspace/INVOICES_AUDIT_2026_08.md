@@ -113,8 +113,11 @@ New tests worth knowing about:
 
 1. **`firebase deploy --only firestore:rules`** — required for finding #10
    (`invoiceItems` update/delete is now staff-only). Run `npm run test:rules` first.
-2. **Restart the VPS cron** (`/root/fivocrm/vps`) so Part 1 picks up the period-key
-   engine. Until then the old timestamp guard keeps running.
+2. **No VPS restart is needed.** `vps/server.ts` only fires
+   `POST {CRM_BASE_URL}/api/cron/run?job=…` on a schedule — the job LOGIC lives on
+   Vercel, so the period-key engine ships with the normal push-triggered deploy.
+   A VPS restart is only required when `vps/server.ts` itself changes (e.g. adding
+   or re-timing a schedule), which this change did not.
 3. **`node scripts/fix-orphan-invoice-items.mjs`** (dry-run) then `--apply` — repairs the
    line items already written without tenant keys. Existing auto-generated invoices keep
    showing an empty items table until this runs.
