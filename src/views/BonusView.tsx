@@ -4,6 +4,11 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useUserNames } from '../hooks/useUserNames';
 import { toAll } from '../lib/utils';
+import {
+  getExpenseDate,
+  expenseIsCountable,
+  isProjectDirectExpense,
+} from '../lib/finance/financialAnalytics';
 import { Award, TrendingUp, DollarSign, Users, ChevronDown, ChevronUp, Info } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -168,13 +173,19 @@ const BonusView: React.FC = () => {
     // ── 0. Salary lookup from Expenses (category='Salary', memberId set) ─────
     // If an expense with category 'Salary' is linked to a member via memberId,
     // use that amount as their salary for this period instead of monthlySalary.
+    // `getExpenseDate()` — NOT `e.date`. This was the only place in the codebase
+    // reading `e.date` without the createdAt fallback, and since the form never
+    // wrote `date` at all, every manually-entered expense was silently skipped:
+    // this map stayed empty and `totalOfficeExpenses` below stayed 0, so bonus
+    // maths saw only cron-generated rows.
     const salaryFromExpenses = new Map<string, number>();
     (expenses || []).forEach(e => {
       if (e.category !== 'Salary') return;
-      const memberId = (e as any).memberId as string | undefined;
+      if (!expenseIsCountable(e)) return;
+      const memberId = e.memberId;
       if (!memberId) return;
-      const d = e.date ? new Date(e.date) : null;
-      if (!d || isNaN(d.getTime())) return;
+      const d = getExpenseDate(e);
+      if (!d) return;
       if (d.getMonth() !== month || d.getFullYear() !== year) return;
       salaryFromExpenses.set(memberId, (salaryFromExpenses.get(memberId) || 0) + toAll(e.amount || 0, e.currency));
     });
@@ -185,10 +196,11 @@ const BonusView: React.FC = () => {
     // ── 1. Office / general expenses for the selected period ─────────────────
     // Exclude Salary-category and project-specific expenses from office overhead.
     const totalOfficeExpenses = (expenses || []).reduce((sum, e) => {
-      if ((e as any).projectId) return sum; // project-specific → skip
+      if (e.projectId) return sum;             // project-specific → skip
       if (e.category === 'Salary') return sum; // salary is tracked separately
-      const d = e.date ? new Date(e.date) : null;
-      if (!d || isNaN(d.getTime())) return sum;
+      if (!expenseIsCountable(e)) return sum;  // rejected rows never hit the books
+      const d = getExpenseDate(e);
+      if (!d) return sum;
       if (d.getMonth() !== month || d.getFullYear() !== year) return sum;
       return sum + toAll(e.amount || 0, e.currency);
     }, 0);
@@ -214,8 +226,10 @@ const BonusView: React.FC = () => {
 
         const projectDetails = memberProjects.map(p => {
           // ── direct project expenses ─────────────────────────────────────
+          // Shared predicate: rejected rows and Salary-category rows are not
+          // project-direct cost anywhere else, and were counted here.
           const directExpenses = (expenses || [])
-            .filter(e => (e as any).projectId === p.id)
+            .filter(e => e.projectId === p.id && isProjectDirectExpense(e))
             .reduce((sum, e) => sum + toAll(e.amount || 0, e.currency), 0);
 
           // ── office expenses split EQUALLY across the period's projects ──

@@ -13,7 +13,7 @@
 
 import type { Project, TeamMember, Expense } from '../../types';
 import { toAll } from '../utils';
-import { parseDate } from './financialAnalytics';
+import { parseDate, isProjectDirectExpense } from './financialAnalytics';
 
 export interface StaffRevenueOptions {
   /** 'completed' counts only Completed (or recurring-completed) projects; 'all' counts every project with a value. */
@@ -140,14 +140,13 @@ export function computeStaffRevenue(
   };
 
   const expDate = (e: Expense) => parseDate((e as any).date) || parseDate((e as any).createdAt);
+  // `isProjectDirectExpense` is the SHARED predicate (salary excluded — it comes
+  // from salaryHistory — and rejected rows never hit the books). Every reader of
+  // "what did this project cost" now asks the same function instead of keeping a
+  // private copy that could drift.
   const directExpensesOf = (projectId: string): number =>
     (expenses ?? [])
-      // Match projectPnl: salary is not a project-direct cost, and rejected
-      // expenses never hit the books.
-      .filter(e => (e as any).projectId === projectId
-        && (e as any).category !== 'Salary'
-        && (e as any).approvalStatus !== 'Rejected'
-        && inYear(expDate(e)))
+      .filter(e => e.projectId === projectId && isProjectDirectExpense(e) && inYear(expDate(e)))
       .reduce((s, e) => s + toAll(e.amount || 0, (e as any).currency), 0);
 
   const memberKey = (m: TeamMember) => m.userId || (m as any).email || m.id;

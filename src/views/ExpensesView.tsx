@@ -25,7 +25,10 @@ import {
   firstGenerationDate,
   findDuplicateExpenseGroups,
   totalDuplicateWaste,
+  expenseGenerationBlockReason,
+  SUPPORTED_EXPENSE_FREQUENCIES,
 } from '../lib/finance/recurringExpenses';
+import { createValue, createDateValue, updateValue, updateDateValue } from '../lib/formValue';
 import type { Expense, Team, Project, TeamMember } from '../types';
 
 const ExpensesView: React.FC = () => {
@@ -42,8 +45,13 @@ const ExpensesView: React.FC = () => {
   const [deleteMode, setDeleteMode] = useState<'stop' | 'one' | 'series'>('stop');
   const [deleteBusy, setDeleteBusy] = useState(false);
 
+  // No `orderBy` on purpose. `useCollection` applies ordering CLIENT-side for a
+  // business-scoped collection anyway, and the module-level listener cache is
+  // keyed on the query options — so passing an orderBy here opened a SECOND
+  // live listener over the same documents that FinancesView/BonusView/
+  // ProjectDetailView already stream. `filteredExpenses` sorts these rows
+  // itself, so the option bought nothing and cost a full extra subscription.
   const { data: rawExpenses, loading: expensesLoading } = useCollection<Expense>('expenses', {
-    orderBy: { field: 'createdAt', direction: 'desc' },
     skipTeamFilter: true,
   });
   // Role-based filtering: Member/Viewer see only their own expenses
@@ -55,7 +63,31 @@ const ExpensesView: React.FC = () => {
   });
   const teamMembers = useUniqueTeamMembers(rawTeamMembers);
   const expenseMutation = useMutation<Expense>('expenses');
+  const projectMutation = useMutation<Project>('projects');
   const notificationMutation = useMutation<any>('notifications');
+
+  /**
+   * Ask the `project-spend-rollup` cron to recompute these projects.
+   *
+   * The cron finds work by scanning `expenses.updatedAt > lastRunAt`. A DELETED
+   * expense leaves no document, and a MOVED one only reveals its new project —
+   * so the project that lost the cost was never recomputed and its `spent`
+   * (shown in Reports, Customer360 and the project page) stayed inflated
+   * forever, until someone happened to run the job with `?full=1`.
+   *
+   * A flag on the project is the cheap fix: one extra equality query per run.
+   * Best-effort — the rollup is a cache, so a failure here must never block the
+   * delete/edit the user actually asked for.
+   */
+  const markProjectsForSpendRecompute = async (ids: Array<string | null | undefined>) => {
+    const unique = Array.from(new Set(ids.filter((v): v is string => !!v)));
+    if (!unique.length) return;
+    const results = await Promise.allSettled(
+      unique.map(id => projectMutation.update(id, { spendRollupDirty: true } as any)),
+    );
+    const failed = results.filter(r => r.status === 'rejected').length;
+    if (failed) console.warn(`[Expenses] spendRollupDirty: ${failed}/${unique.length} dështuan`);
+  };
 
   const handleCreateExpense = async (formData: FormData) => {
     const title = formData.get('title') as string;
@@ -71,23 +103,31 @@ const ExpensesView: React.FC = () => {
     }
     const currency = formData.get('currency') as string;
     const category = formData.get('category') as string;
-    const departmentId = formData.get('departmentId') as string;
     const isRecurring = formData.get('isRecurring') === 'true';
     const recurringFrequency = formData.get('recurringFrequency') as string;
     const nextRecurringDate = formData.get('nextRecurringDate') as string;
     const recurringEndDate = formData.get('recurringEndDate') as string;
     const status = formData.get('status') as string;
-    const paidDate = formData.get('paidDate') as string;
-    const projectId = formData.get('projectId') as string;
 
-    const memberId = formData.get('memberId') as string;
+    // THE booking date. Every P&L, monthly chart, cashflow alarm and forecast
+    // reads `date || createdAt`, so without this field an expense was always
+    // booked on the day it was TYPED — a July bill entered in August landed in
+    // August, with no way to correct it from the UI.
+    const expenseDate = createDateValue(formData.get('date')) ?? new Date();
 
-    // Same title + amount + currency already recorded this month? Likely a double
-    // entry — but we DON'T block the save with a native confirm() (unreliable in
-    // the mobile webview, and a false return silently dropped the expense). We save
-    // and warn; duplicates are also surfaced by the banner/badge/"Dublikatat" filter.
-    const now = new Date();
-    const thisPeriod = expensePeriodKey('monthly', now);
+    // Sentinel-safe: '__none__' must never reach Firestore, and on update the
+    // empty case must be an explicit null so the field is actually cleared.
+    const departmentId = createValue(formData.get('departmentId'));
+    const projectId = createValue(formData.get('projectId'));
+    const memberId = createValue(formData.get('memberId'));
+    const paidDate = createDateValue(formData.get('paidDate'));
+
+    // Same title + amount + currency already recorded in the booking month?
+    // Likely a double entry — but we DON'T block the save with a native
+    // confirm() (unreliable in the mobile webview, and a false return silently
+    // dropped the expense). We save and warn; duplicates are also surfaced by
+    // the banner/badge/"Dublikatat" filter.
+    const thisPeriod = expensePeriodKey('monthly', expenseDate);
     const clash = (rawExpenses || []).some(e => {
       if ((e as any).approvalStatus === 'Rejected') return false;
       if ((e.title || '').trim().toLowerCase() !== title.trim().toLowerCase()) return false;
@@ -99,34 +139,39 @@ const ExpensesView: React.FC = () => {
 
     // A recurring PARENT is itself a real row that counts in its own month, so the
     // first generated occurrence must land in the NEXT period — otherwise the cron
-    // adds a second row for a month that is already covered. The chosen day survives.
+    // adds a second row for a month that is already covered. The chosen day
+    // survives; a date in a PAST period is pulled forward rather than accepted,
+    // which is what stops the cron from back-filling closed books.
+    // Anchored on the BOOKING date, not on "now": a back-dated retainer must
+    // start generating after the period it was booked into.
     const freq = recurringFrequency || 'monthly';
-    const pickedNext = nextRecurringDate ? new Date(nextRecurringDate) : null;
-    const firstNext = isRecurring ? firstGenerationDate(now, freq, pickedNext) : null;
+    const pickedNext = createDateValue(nextRecurringDate) ?? null;
+    const firstNext = isRecurring ? firstGenerationDate(expenseDate, freq, pickedNext) : null;
 
     const isAdminOrManager = permissions.isAdmin || permissions.isManager || permissions.isOwner || permissions.isSuperAdmin;
     try {
       await expenseMutation.create({
         title,
-        description: description || undefined,
+        description: createValue(description),
         amount,
         currency: currency || 'ALL',
         category,
-        departmentId: departmentId || undefined,
+        date: expenseDate,
+        departmentId,
         isRecurring,
         recurringFrequency: isRecurring ? freq : undefined,
         nextRecurringDate: firstNext || undefined,
         recurringAnchorDay: firstNext ? firstNext.getDate() : undefined,
-        // This row IS the current period's expense — recording the key stops the cron
-        // from generating a second one for it.
-        lastGeneratedPeriodKey: isRecurring ? expensePeriodKey(freq, now) : undefined,
-        recurringEndDate: isRecurring && recurringEndDate ? new Date(recurringEndDate) : undefined,
+        // This row IS the booking period's expense — recording the key stops the
+        // cron from generating a second one for it.
+        lastGeneratedPeriodKey: isRecurring ? expensePeriodKey(freq, expenseDate) : undefined,
+        recurringEndDate: isRecurring ? createDateValue(recurringEndDate) : undefined,
         status: status || 'Active',
         approvalStatus: isAdminOrManager ? 'Approved' : 'Submitted',
         approvedByUserId: isAdminOrManager ? user?.uid : undefined,
-        paidDate: paidDate ? new Date(paidDate) : undefined,
-        projectId: projectId && projectId !== '__none__' ? projectId : undefined,
-        memberId: memberId && memberId !== '__none__' ? memberId : undefined,
+        paidDate,
+        projectId,
+        memberId,
       } as any);
     } catch (err: any) {
       console.error('[Expenses] create failed:', err);
@@ -142,7 +187,12 @@ const ExpensesView: React.FC = () => {
       (m.status ?? 'Active') === 'Active' && m.userId !== user?.uid && (m.role === 'Admin' || m.role === 'Manager')
     );
     if (adminManagers.length > 0) {
-      await Promise.all(adminManagers.map(m =>
+      // allSettled, not all: the expense is already saved by this point, so one
+      // failed recipient must not swallow the rest (and `.catch` chained after
+      // Promise.all did exactly that — the first rejection dropped every other
+      // notification). Never let a notification failure surface as a save error;
+      // users responded by submitting the expense a second time.
+      const results = await Promise.allSettled(adminManagers.map(m =>
         notificationMutation.create({
           userId: m.userId,
           type: 'expense_submitted',
@@ -151,8 +201,13 @@ const ExpensesView: React.FC = () => {
           isRead: false,
           actionUrl: '/app/expenses',
           actionLabel: 'Shiko Shpenzimet',
-        })
-      )).catch(err => console.error('[Notifications] expense_submitted dërgim dështoi:', err));
+        } as any)
+      ));
+      const failed = results.filter(r => r.status === 'rejected');
+      if (failed.length) {
+        console.error(`[Notifications] expense_submitted: ${failed.length}/${results.length} dështuan`,
+          (failed[0] as PromiseRejectedResult).reason);
+      }
     }
 
     setIsCreateDialogOpen(false);
@@ -178,51 +233,90 @@ const ExpensesView: React.FC = () => {
     }
     const currency = formData.get('currency') as string;
     const category = formData.get('category') as string;
-    const departmentId = formData.get('departmentId') as string;
     const isRecurring = formData.get('isRecurring') === 'true';
     const recurringFrequency = formData.get('recurringFrequency') as string;
     const nextRecurringDate = formData.get('nextRecurringDate') as string;
     const recurringEndDate = formData.get('recurringEndDate') as string;
     const status = formData.get('status') as string;
-    const paidDate = formData.get('paidDate') as string;
-    const projectId = formData.get('projectId') as string;
 
-    const memberId = formData.get('memberId') as string;
+    // `updateValue`/`updateDateValue` return NULL for "nothing selected", not
+    // undefined: `removeUndefined()` strips undefined by design, so an undefined
+    // here left the OLD value in place — which is why an expense could never be
+    // unlinked from its project and kept charging that project's P&L.
+    const departmentId = updateValue(formData.get('departmentId'));
+    const projectId = updateValue(formData.get('projectId'));
+    const memberId = updateValue(formData.get('memberId'));
+    const paidDate = updateDateValue(formData.get('paidDate'));
+
+    // The booking date needs care on a LEGACY row that has no `date` field yet
+    // (it was booked on `createdAt`). Stamping `date` unconditionally would flip
+    // `date: null → <timestamp>`, which the Firestore rule reads as "the thing
+    // the approval was granted for changed" — so a Member editing only the
+    // DESCRIPTION of an old approved expense would be denied outright. Write it
+    // only when the user actually moved the date, or when the row already has one.
+    const previousBooking = getExpenseDate(selectedExpense);
+    const ownDate = updateDateValue(formData.get('date')) || previousBooking || new Date();
+    const dateChanged = (previousBooking?.getTime() ?? null) !== ownDate.getTime();
+    const writeDate = dateChanged || selectedExpense.date != null;
 
     const freq = recurringFrequency || 'monthly';
-    const picked = nextRecurringDate ? new Date(nextRecurringDate) : null;
+    const picked = updateDateValue(nextRecurringDate);
     const wasRecurring = !!selectedExpense.isRecurring;
     // Turning recurrence ON behaves like creating one: the series starts in the
     // period AFTER the one this row already covers. An existing series keeps the
     // date the user typed — they are editing the schedule deliberately.
-    const ownDate = getExpenseDate(selectedExpense) || new Date();
     const nextDate = !isRecurring ? null
       : wasRecurring ? picked
       : firstGenerationDate(ownDate, freq, picked);
 
+    // Keep the ORIGINAL anchor day. Overwriting it with `nextDate.getDate()`
+    // degraded a month-end series for good: a 31st series pointing at 28 Feb
+    // became a 28th series the moment any field was edited — exactly the drift
+    // `addMonthsClamped(anchorDay)` exists to prevent.
+    const existingAnchor = selectedExpense.recurringAnchorDay;
+    const anchorDay = !isRecurring ? null : (existingAnchor || (nextDate ? nextDate.getDate() : null));
+
+    // Editing what the approval was GRANTED FOR re-opens it. Without this an
+    // approved 1 000 could be edited to 100 000 and stay "Aprovuar", because
+    // nothing in the update touched approvalStatus.
+    const materialChange =
+      Number(selectedExpense.amount) !== amount
+      || (selectedExpense.currency || 'ALL') !== (currency || 'ALL')
+      || dateChanged;
+    // Covers Rejected too: fixing a rejected expense and re-submitting it is the
+    // whole point of the workflow, and the Firestore rule only accepts
+    // 'Submitted' as the new verdict from a non-approver.
+    const reopenApproval = materialChange
+      && !isAdminOrManager
+      && (selectedExpense.approvalStatus ?? 'Submitted') !== 'Submitted';
+
     try {
       await expenseMutation.update(selectedExpense.id, {
         title,
-        description: description || undefined,
+        description: updateValue(description),
         amount,
         currency: currency || 'ALL',
         category,
-        departmentId: departmentId || undefined,
+        // `undefined` is stripped by removeUndefined(), which is exactly what we
+        // want here: leave a legacy row's missing `date` missing.
+        date: writeDate ? ownDate : undefined,
+        departmentId,
         isRecurring,
-        recurringFrequency: isRecurring ? freq : undefined,
+        recurringFrequency: isRecurring ? freq : null,
         nextRecurringDate: nextDate,
-        recurringAnchorDay: nextDate ? nextDate.getDate() : null,
+        recurringAnchorDay: anchorDay,
         lastGeneratedPeriodKey: isRecurring
-          ? ((selectedExpense as any).lastGeneratedPeriodKey || expensePeriodKey(freq, ownDate))
+          ? (selectedExpense.lastGeneratedPeriodKey || expensePeriodKey(freq, ownDate))
           : null,
         // Turning recurrence off clears the schedule fields so a stale end-date/pause
         // can't silently resurrect the series later.
-        recurringEndDate: isRecurring ? (recurringEndDate ? new Date(recurringEndDate) : null) : null,
-        isRecurringPaused: isRecurring ? ((selectedExpense as any).isRecurringPaused ?? false) : false,
+        recurringEndDate: isRecurring ? updateDateValue(recurringEndDate) : null,
+        isRecurringPaused: isRecurring ? (selectedExpense.isRecurringPaused ?? false) : false,
         status: status || 'Active',
-        paidDate: paidDate ? new Date(paidDate) : undefined,
-        projectId: projectId && projectId !== '__none__' ? projectId : undefined,
-        memberId: memberId && memberId !== '__none__' ? memberId : undefined,
+        paidDate,
+        projectId,
+        memberId,
+        ...(reopenApproval ? { approvalStatus: 'Submitted', approvedByUserId: null } : {}),
       } as any);
     } catch (err: any) {
       console.error('[Expenses] update failed:', err);
@@ -230,9 +324,17 @@ const ExpensesView: React.FC = () => {
       return;
     }
 
+    // A project that lost (or gained) this cost must have its rolled-up `spent`
+    // recomputed. The cron finds touched projects from `expenses.updatedAt`, so
+    // it sees the NEW project but never the one the cost moved AWAY from.
+    await markProjectsForSpendRecompute([selectedExpense.projectId, projectId ?? undefined]);
+
     setIsEditDialogOpen(false);
     setSelectedExpense(null);
-    toast({ title: 'Shpenzimi u përditësua ✓' });
+    toast({
+      title: 'Shpenzimi u përditësua ✓',
+      description: reopenApproval ? 'Shuma/data ndryshoi — shpenzimi kaloi përsëri në pritje miratimi.' : undefined,
+    });
   };
 
   // Pause/resume generation without ending the series.
@@ -265,7 +367,7 @@ const ExpensesView: React.FC = () => {
     (rawExpenses || []).filter(e => (e as any).parentExpenseId === parentId);
 
   const handleDeleteExpense = async (expense: Expense) => {
-    const isRecurringParent = expense.isRecurring && !(expense as any).autoGenerated;
+    const isRecurringParent = expense.isRecurring && !expense.autoGenerated;
     const hasChildren = childrenOf(expense.id).length > 0;
     // A recurring parent (or one that already spawned occurrences) needs the
     // choice dialog; a plain/one-off/child entry just confirms.
@@ -276,6 +378,7 @@ const ExpensesView: React.FC = () => {
     }
     if (confirm('Je i sigurt që dëshiron të fshish këtë shpenzim?')) {
       await expenseMutation.remove(expense.id);
+      await markProjectsForSpendRecompute([expense.projectId]);
     }
   };
 
@@ -287,13 +390,24 @@ const ExpensesView: React.FC = () => {
         // Interrupt only: keep the record + all past occurrences.
         await handleStopRecurrence(deleteTarget);
       } else if (deleteMode === 'one') {
-        // Remove just this record; past/future occurrences are untouched.
+        // Remove just this record; past/future occurrences are untouched — but
+        // they must not keep pointing at a parent that no longer exists, or the
+        // cron's belt-and-braces `parentExpenseId` query matches nothing and the
+        // rows read as "generated by" a missing series.
+        const orphans = childrenOf(deleteTarget.id);
+        await Promise.allSettled(orphans.map(k =>
+          expenseMutation.update(k.id, { parentExpenseId: null } as any)));
         await expenseMutation.remove(deleteTarget.id);
+        await markProjectsForSpendRecompute([deleteTarget.projectId]);
       } else {
         // Destructive: remove the parent AND every generated occurrence (history included).
         const kids = childrenOf(deleteTarget.id);
         await Promise.all(kids.map(k => expenseMutation.remove(k.id)));
         await expenseMutation.remove(deleteTarget.id);
+        await markProjectsForSpendRecompute([
+          deleteTarget.projectId,
+          ...kids.map(k => k.projectId),
+        ]);
       }
       setDeleteTarget(null);
     } finally {
@@ -495,40 +609,74 @@ const ExpensesView: React.FC = () => {
     recurringFilter, departmentFilter, projectFilter, monthFilter, yearFilter, minAmount, maxAmount, sortBy, duplicatesOnly]);
   const visibleExpenses = useMemo(() => filteredExpenses.slice(0, visibleCount), [filteredExpenses, visibleCount]);
 
-  const totalExpenses = filteredExpenses.reduce((sum, exp) => countable(exp) ? sum + toAll(exp.amount ?? 0, (exp as any).currency) : sum, 0);
-  const activeExpenses = filteredExpenses.filter(e => e.status === 'Active').length;
-  const recurringExpenses = filteredExpenses.filter(e => e.isRecurring).length;
+  // Every headline number here counts only what hits the books, so a rejected
+  // row can never inflate one. `activeExpenses`/`recurringExpenses` used to
+  // count rejected rows while the total next to them did not.
+  const countableExpenses = useMemo(() => filteredExpenses.filter(countable), [filteredExpenses]);
+  const totalExpenses = countableExpenses.reduce((sum, exp) => sum + toAll(exp.amount ?? 0, exp.currency), 0);
+  const activeExpenses = countableExpenses.filter(e => e.status === 'Active').length;
+  const recurringExpenses = countableExpenses.filter(e => e.isRecurring).length;
+  const rejectedCount = filteredExpenses.length - countableExpenses.length;
+
+  // Salary-category rows are NOT part of `totalExpenses`: payroll is costed from
+  // salaryHistory/monthlySalary, so adding the rows would double-charge it. The
+  // form offers the category (with a staff picker), so the money must be shown
+  // somewhere or it looks like the app simply lost it.
+  const salaryRowsTotal = useMemo(
+    () => countableExpenses
+      .filter(e => e.category === 'Salary')
+      .reduce((s, e) => s + toAll(e.amount ?? 0, e.currency), 0),
+    [countableExpenses],
+  );
+
+  // A recurring series the engine will never advance: an unsupported frequency,
+  // or no next date at all. Neither had any UI surface, so such a series simply
+  // stopped producing rows and nobody found out.
+  const stalledSeries = useMemo(() => {
+    const now = new Date();
+    return (expenses || []).filter(e => {
+      if (!e.isRecurring || e.autoGenerated) return false;
+      const reason = expenseGenerationBlockReason(e, now);
+      return reason === 'unsupported-frequency' || reason === 'no-next-date';
+    });
+  }, [expenses]);
 
   // Breakdown of the current selection — the answer to "ku po shkojnë paratë".
   const categoryBreakdown = useMemo(() => {
     const totals = new Map<string, number>();
-    filteredExpenses.forEach(exp => {
-      if (!countable(exp)) return;
+    countableExpenses.forEach(exp => {
       const key = exp.category || 'Other';
-      totals.set(key, (totals.get(key) || 0) + toAll(exp.amount ?? 0, (exp as any).currency));
+      totals.set(key, (totals.get(key) || 0) + toAll(exp.amount ?? 0, exp.currency));
     });
     return Array.from(totals.entries())
       .map(([category, value]) => ({ category, value }))
       .sort((a, b) => b.value - a.value);
-  }, [filteredExpenses]);
+  }, [countableExpenses]);
 
   const exportCsv = () => {
     const rows = [
-      ['Titulli', 'Kategoria', 'Shuma', 'Monedha', 'Shuma (ALL)', 'Departamenti', 'Projekti', 'Data', 'Periodike', 'Statusi', 'Miratimi'],
+      // "Numërohet" is explicit: the export contains rejected rows (and
+      // Salary-category rows, costed via payroll instead), so a spreadsheet SUM
+      // of the amount column does not equal the total shown in the app. Without
+      // the column that difference looked like a bug in the export.
+      ['Titulli', 'Kategoria', 'Shuma', 'Monedha', 'Shuma (ALL)', 'Numërohet',
+        'Departamenti', 'Projekti', 'Data', 'Periodike', 'Statusi', 'Miratimi'],
       ...filteredExpenses.map(e => {
         const d = getExpenseDate(e);
+        const counts = countable(e) && e.category !== 'Salary';
         return [
           e.title || '',
           getCategoryLabel(e.category || ''),
           String(e.amount ?? 0),
-          (e as any).currency || 'ALL',
-          String(Math.round(toAll(e.amount ?? 0, (e as any).currency))),
+          e.currency || 'ALL',
+          String(Math.round(toAll(e.amount ?? 0, e.currency))),
+          counts ? 'Po' : (countable(e) ? 'Përmes listës së pagave' : 'Refuzuar'),
           teams?.find(t => t.id === e.departmentId)?.name || '',
-          ((e as any).projectId ? projectById.get((e as any).projectId)?.name : '') || '',
+          (e.projectId ? projectById.get(e.projectId)?.name : '') || '',
           d ? d.toLocaleDateString('sq-AL') : '',
-          e.isRecurring ? getFreqLabel(e.recurringFrequency) : ((e as any).autoGenerated ? 'Auto' : 'Njëherësh'),
+          e.isRecurring ? getFreqLabel(e.recurringFrequency) : (e.autoGenerated ? 'Auto' : 'Njëherësh'),
           e.status || '',
-          (e as any).approvalStatus || '',
+          e.approvalStatus || '',
         ];
       }),
     ];
@@ -575,6 +723,9 @@ const ExpensesView: React.FC = () => {
             ) : (
               <>{expenses?.length || 0} shpenzime totale · {activeExpenses} aktive · {recurringExpenses} periodike</>
             )}
+            {rejectedCount > 0 && (
+              <span className="ml-2 text-muted-foreground">· {rejectedCount} të refuzuara (jashtë totaleve)</span>
+            )}
             {isAdminOrManager && pendingApprovalCount > 0 && (
               <span className="ml-2 inline-flex items-center gap-1 text-amber-600 font-medium">
                 <Clock className="w-3.5 h-3.5" />
@@ -595,7 +746,7 @@ const ExpensesView: React.FC = () => {
               <DialogHeader>
                 <DialogTitle>Krijo Shpenzim të Ri</DialogTitle>
               </DialogHeader>
-              <ExpenseForm onSubmit={handleCreateExpense} teams={teams || []} projects={projects || []} />
+              <ExpenseForm onSubmit={handleCreateExpense} teams={teams || []} projects={projects || []} allExpensesForCategoryCheck={rawExpenses || []} />
             </DialogContent>
           </Dialog>
         )}
@@ -620,6 +771,37 @@ const ExpensesView: React.FC = () => {
           >
             {duplicatesOnly ? 'Shfaq të gjitha' : 'Shiko dublikatat'}
           </button>
+        </div>
+      )}
+
+      {/* A series the engine will never advance produced nothing and said
+          nothing — an unsupported frequency or a missing next date had no UI
+          surface at all. Surface it; the cron self-heals a missing date FORWARD
+          only, so the months already skipped are the owner's call. */}
+      {stalledSeries.length > 0 && (
+        <div className="rounded-md border border-red-300 bg-red-50 dark:bg-red-950/20 p-3 text-sm flex items-start gap-2">
+          <CircleStop className="w-4 h-4 mt-0.5 shrink-0 text-red-600" />
+          <span className="text-red-900 dark:text-red-200">
+            <strong>{stalledSeries.length} shpenzime periodike nuk gjenerohen më.</strong>{' '}
+            Frekuenca e papërkrahur ose pa datë të ardhshme — hapi «Ndrysho» dhe zgjidh
+            frekuencën + datën e ardhshme:{' '}
+            {stalledSeries.slice(0, 4).map(e => e.title).join(', ')}
+            {stalledSeries.length > 4 && ` (+${stalledSeries.length - 4})`}
+          </span>
+        </div>
+      )}
+
+      {/* Salary rows exist but are costed from the payroll list, so they are not
+          in any expense total. Saying so beats looking like lost money. */}
+      {salaryRowsTotal > 0 && (
+        <div className="rounded-md border border-border bg-muted/40 p-3 text-sm flex items-start gap-2">
+          <DollarSign className="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
+          <span className="text-muted-foreground">
+            <strong className="text-foreground">{Math.round(salaryRowsTotal).toLocaleString()} ALL</strong>{' '}
+            në kategorinë «Paga» nuk numërohen në totalet e shpenzimeve — pagat kostohen
+            nga lista e pagave (Ekipi → rroga mujore), ndaj numërimi i dyfishtë do t'i
+            zbriste dy herë.
+          </span>
         </div>
       )}
 
@@ -1258,7 +1440,7 @@ const ExpensesView: React.FC = () => {
             <DialogHeader>
               <DialogTitle>Ndrysho Shpenzimin</DialogTitle>
             </DialogHeader>
-            <ExpenseForm onSubmit={handleUpdateExpense} teams={teams || []} projects={projects || []} initialData={selectedExpense} />
+            <ExpenseForm onSubmit={handleUpdateExpense} teams={teams || []} projects={projects || []} initialData={selectedExpense} allExpensesForCategoryCheck={rawExpenses || []} />
           </DialogContent>
         </Dialog>
       )}
@@ -1334,8 +1516,12 @@ const MONTH_NAMES_SQ = [
 const FREQ_LABELS: Record<string, string> = {
   weekly: 'Javore',
   monthly: 'Mujore',
+  quarterly: 'Tremujore',
   yearly: 'Vjetore',
 };
+/** Only frequencies the engine can generate — driven off the engine's own list so
+ *  the dropdown can never offer a cycle the cron will refuse. */
+const FREQ_OPTIONS = SUPPORTED_EXPENSE_FREQUENCIES.map(v => ({ value: v, label: FREQ_LABELS[v] || v }));
 const getFreqLabel = (f?: string) => (f ? (FREQ_LABELS[f] || f) : '');
 
 const DEFAULT_CATEGORIES: { value: string; label: string }[] = [
@@ -1354,7 +1540,12 @@ const ExpenseForm: React.FC<{
   teams: Team[];
   projects?: Project[];
   initialData?: Expense;
-}> = ({ onSubmit, teams, projects, initialData }) => {
+  /** The tenant's expenses, passed DOWN rather than subscribed again — a second
+   *  listener on the same collection doubled the read cost for no new data. Used
+   *  to refuse deleting a category that is still in use. */
+  allExpensesForCategoryCheck?: Expense[];
+}> = ({ onSubmit, teams, projects, initialData, allExpensesForCategoryCheck }) => {
+  const { toast } = useToast();
   const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
   // Without this, a second click while the create is in flight writes the expense twice.
   const [submitting, setSubmitting] = useState(false);
@@ -1383,13 +1574,65 @@ const ExpenseForm: React.FC<{
     if (!trimmed) return;
     const alreadyExists = allCategories.some(c => c.value.toLowerCase() === trimmed.toLowerCase());
     if (!alreadyExists) {
-      await categoryMutation.create({ label: trimmed });
+      try {
+        await categoryMutation.create({ label: trimmed });
+      } catch (err: any) {
+        // Used to fail completely silently: the dropdown closed, the category
+        // was selected, and the expense saved against a category that did not
+        // exist for anyone else on the team.
+        console.error('[Expenses] add category failed:', err);
+        toast({
+          title: 'Kategoria nuk u shtua',
+          description: err?.message || 'Ndodhi një gabim — provo përsëri.',
+          variant: 'destructive',
+        });
+        return;
+      }
     }
     setSelectedCategory(trimmed);
     setIsAddingCategory(false);
     setNewCategoryInput('');
   };
-  const [selectedProjectId, setSelectedProjectId] = useState<string>((initialData as any)?.projectId || '__none__');
+
+  /**
+   * Delete a custom category — only when nothing uses it.
+   *
+   * The category is stored BY LABEL and used as the value on every expense, so
+   * there is no rename: renaming the doc would orphan every row that already
+   * points at the old string. Deleting an unused one is the safe half, and it
+   * stops a typo from being permanent.
+   */
+  const handleDeleteCategory = async (label: string) => {
+    const doc = (customCategoryDocs || []).find(d => d.label === label);
+    if (!doc) return;
+    const inUse = (allExpensesForCategoryCheck || []).some(e => e.category === label);
+    if (inUse) {
+      toast({
+        title: 'Kategoria është në përdorim',
+        description: 'Ndrysho kategorinë e shpenzimeve që e përdorin, pastaj fshije.',
+        variant: 'destructive',
+      });
+      return;
+    }
+    try {
+      await categoryMutation.remove(doc.id);
+      if (selectedCategory === label) setSelectedCategory('Office');
+    } catch (err: any) {
+      toast({ title: 'Kategoria nuk u fshi', description: err?.message, variant: 'destructive' });
+    }
+  };
+  const [selectedProjectId, setSelectedProjectId] = useState<string>(initialData?.projectId || '__none__');
+  const [selectedDepartmentId, setSelectedDepartmentId] = useState<string>(initialData?.departmentId || '__none__');
+  // A frequency the engine no longer supports must not be silently re-submitted,
+  // or the series stays blocked with `unsupported-frequency` forever.
+  const freqDefault = SUPPORTED_EXPENSE_FREQUENCIES.includes(initialData?.recurringFrequency as any)
+    ? (initialData!.recurringFrequency as string)
+    : 'monthly';
+  // The BOOKING date — defaults to today for a new expense, so the common case
+  // is one click, while a back-dated bill is finally possible at all.
+  const [expenseDate, setExpenseDate] = useState<Date>(
+    (initialData && getExpenseDate(initialData)) || new Date()
+  );
   const [nextRecurringDate, setNextRecurringDate] = useState<Date | undefined>(
     initialData?.nextRecurringDate ? new Date(initialData.nextRecurringDate) : undefined
   );
@@ -1405,6 +1648,9 @@ const ExpenseForm: React.FC<{
     if (submitting) return;
     const formData = new FormData(e.currentTarget);
     formData.set('isRecurring', isRecurring.toString());
+    formData.set('date', expenseDate.toISOString());
+    // Only SET when present. Absent ⇒ the handler's `updateValue` yields null and
+    // clears the field, which is how "remove the end date" works at all.
     if (nextRecurringDate) {
       formData.set('nextRecurringDate', nextRecurringDate.toISOString());
     }
@@ -1440,7 +1686,21 @@ const ExpenseForm: React.FC<{
             </SelectTrigger>
             <SelectContent>
               {allCategories.map(cat => (
-                <SelectItem key={cat.value} value={cat.value}>{cat.label}</SelectItem>
+                <div key={cat.value} className="flex items-center group">
+                  <SelectItem value={cat.value} className="flex-1">{cat.label}</SelectItem>
+                  {/* Custom categories only — a default one has rows behind it
+                      everywhere and is not the tenant's to remove. */}
+                  {(customCategoryDocs || []).some(d => d.label === cat.value) && (
+                    <button
+                      type="button"
+                      aria-label={`Fshi kategorinë ${cat.label}`}
+                      className="px-2 opacity-0 group-hover:opacity-100 text-muted-foreground hover:text-destructive"
+                      onClick={e => { e.preventDefault(); e.stopPropagation(); handleDeleteCategory(cat.value); }}
+                    >
+                      <Trash2 className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
               ))}
               {/* Inline add new category */}
               <div className="border-t mt-1 pt-1">
@@ -1503,21 +1763,53 @@ const ExpenseForm: React.FC<{
         </div>
       </div>
 
-      <div>
-        <Label htmlFor="departmentId">Departamenti (Opsionale)</Label>
-        <Select name="departmentId" defaultValue={initialData?.departmentId}>
-          <SelectTrigger>
-            <SelectValue placeholder="Zgjidh departamentin" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="__none__">Asnjë</SelectItem>
-            {teams.map(team => (
-              <SelectItem key={team.id} value={team.id}>
-                {team.name} {team.department ? `(${team.department})` : ''}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          {/* THE booking date. Every P&L, chart, cashflow alarm and forecast
+              reads it (falling back to createdAt), so without this field an
+              expense was always booked on the day it was typed — a July bill
+              entered in August landed in August, uncorrectable from the UI. */}
+          <Label>Data e Shpenzimit *</Label>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button type="button" variant="outline" className="w-full justify-start">
+                <CalendarIcon className="mr-2 h-4 w-4" />
+                {expenseDate.toLocaleDateString('sq-AL')}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-auto p-0">
+              <Calendar
+                mode="single"
+                selected={expenseDate}
+                onSelect={d => { if (d) setExpenseDate(d); }}
+              />
+            </PopoverContent>
+          </Popover>
+          <p className="text-[11px] text-muted-foreground mt-1">
+            Muaji në të cilin libërzohet shpenzimi (P&amp;L, grafikët, parashikimi).
+          </p>
+        </div>
+
+        <div>
+          <Label htmlFor="departmentId">Departamenti (Opsionale)</Label>
+          {/* Hidden input so FormData always carries the value — a bare Radix
+              Select left it absent, and the '__none__' sentinel used to be
+              written to Firestore as a real department id. */}
+          <input type="hidden" name="departmentId" value={selectedDepartmentId} />
+          <Select value={selectedDepartmentId} onValueChange={setSelectedDepartmentId}>
+            <SelectTrigger>
+              <SelectValue placeholder="Zgjidh departamentin" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="__none__">Asnjë</SelectItem>
+              {teams.map(team => (
+                <SelectItem key={team.id} value={team.id}>
+                  {team.name} {team.department ? `(${team.department})` : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
       </div>
 
       {selectedCategory === 'Salary' && (
@@ -1532,7 +1824,9 @@ const ExpenseForm: React.FC<{
               <SelectItem value="__none__">Pa lidhje me anëtar</SelectItem>
               {(teamMembers || []).map(m => (
                 <SelectItem key={m.userId} value={m.userId}>
-                  {m.name || m.email || m.userId}
+                  {/* `displayName`, not `name` — TeamMember has no `name`, so the
+                      picker always fell through to the email/uid. */}
+                  {m.displayName || m.email || m.userId}
                   {m.monthlySalary ? ` — ${m.monthlySalary.toLocaleString('sq-AL')} L/muaj` : ''}
                 </SelectItem>
               ))}
@@ -1593,16 +1887,22 @@ const ExpenseForm: React.FC<{
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <Label htmlFor="recurringFrequency">Frekuenca *</Label>
-            <Select name="recurringFrequency" defaultValue={initialData?.recurringFrequency || 'monthly'}>
+            <Select name="recurringFrequency" defaultValue={freqDefault}>
               <SelectTrigger>
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="weekly">Javore</SelectItem>
-                <SelectItem value="monthly">Mujore</SelectItem>
-                <SelectItem value="yearly">Vjetore</SelectItem>
+                {FREQ_OPTIONS.map(o => (
+                  <SelectItem key={o.value} value={o.value}>{o.label}</SelectItem>
+                ))}
               </SelectContent>
             </Select>
+            {initialData?.recurringFrequency && freqDefault !== initialData.recurringFrequency && (
+              <p className="text-[11px] text-red-600 mt-1">
+                Frekuenca e vjetër «{initialData.recurringFrequency}» nuk përkrahet —
+                zgjidh një nga listën, përndryshe seria nuk gjeneron.
+              </p>
+            )}
           </div>
 
           <div>
@@ -1615,13 +1915,22 @@ const ExpenseForm: React.FC<{
                 </Button>
               </PopoverTrigger>
               <PopoverContent className="w-auto p-0">
-                <Calendar mode="single" selected={nextRecurringDate} onSelect={setNextRecurringDate} />
+                {/* A date before the booking date is refused at the source. The
+                    engine also pulls such a date forward, but letting the user
+                    pick it made the intent look honoured while generation
+                    silently started in a different period. */}
+                <Calendar
+                  mode="single"
+                  selected={nextRecurringDate}
+                  onSelect={setNextRecurringDate}
+                  disabled={(d: Date) => d < expenseDate}
+                />
               </PopoverContent>
             </Popover>
             {!initialData && (
               <p className="text-[11px] text-muted-foreground mt-1">
-                Ky regjistrim vlen për periudhën aktuale. Gjenerimi automatik fillon nga
-                periudha pasardhëse — ndryshe muaji do të numërohej dy herë.
+                Ky regjistrim vlen për periudhën e datës së shpenzimit. Gjenerimi automatik
+                fillon nga periudha pasardhëse — ndryshe muaji do të numërohej dy herë.
               </p>
             )}
           </div>

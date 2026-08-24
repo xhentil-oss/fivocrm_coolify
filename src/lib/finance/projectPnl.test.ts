@@ -287,3 +287,51 @@ describe('computeProjectPnl', () => {
     });
   });
 });
+
+// ── Aug 2026 audit: cost must never evaporate ───────────────────────────────
+describe('a project-linked expense outside the period is pooled, not lost', () => {
+  const proj = (o: any) => ({
+    id: o.id, name: o.id, status: o.status ?? 'Active', budget: o.budget ?? 0, currency: 'ALL',
+    billingType: o.billingType ?? 'one-time', createdAt: o.createdAt, updatedAt: o.updatedAt,
+    lastCompletedAt: o.lastCompletedAt,
+  } as any);
+  const exp = (o: any) => ({
+    id: o.id, title: o.id, amount: o.amount, currency: 'ALL',
+    category: o.category ?? 'Office', projectId: o.projectId, date: o.date, createdAt: o.date,
+  } as any);
+
+  it('reconciles: directCost + otherFixed equals the period expenses', () => {
+    // Before the fix this cost landed in a per-project bucket that had no row
+    // (the project closed in 2025) and was not added to the pool either — so
+    // 500 ALL simply disappeared from every total on the page.
+    const projects = [
+      proj({ id: 'P2025', status: 'Completed', budget: 1000,
+        createdAt: new Date(2025, 0, 1), updatedAt: new Date(2025, 5, 1), lastCompletedAt: new Date(2025, 5, 1) }),
+      proj({ id: 'P2026', status: 'Completed', budget: 4000,
+        createdAt: new Date(2026, 0, 1), updatedAt: new Date(2026, 3, 1), lastCompletedAt: new Date(2026, 3, 1) }),
+    ];
+    const expenses = [
+      exp({ id: 'orphan', amount: 500, projectId: 'P2025', date: new Date(2026, 2, 10) }),
+      exp({ id: 'direct', amount: 200, projectId: 'P2026', date: new Date(2026, 2, 10) }),
+      exp({ id: 'rent', amount: 300, date: new Date(2026, 2, 10) }),
+    ];
+    const r = computeProjectPnl(projects, [], expenses, { year: 2026, mode: 'all', now: new Date(2026, 7, 22) });
+
+    expect(r.totals.directCost).toBe(200);
+    expect(r.fixedPool.otherFixed).toBe(800);           // 300 rent + the 500 orphan
+    expect(r.totals.directCost + r.fixedPool.otherFixed).toBe(1000);
+    // And the move is REPORTED, not silent: the money changed meaning from
+    // "project cost" to "shared overhead", which shifts every project's share.
+    expect(r.unallocatedDirect).toEqual({ count: 1, amount: 500 });
+  });
+
+  it('reports nothing when every tagged project is in the period', () => {
+    const projects = [proj({ id: 'P', status: 'Completed', budget: 1000,
+      createdAt: new Date(2026, 0, 1), updatedAt: new Date(2026, 1, 1), lastCompletedAt: new Date(2026, 1, 1) })];
+    const r = computeProjectPnl(projects, [],
+      [exp({ id: 'e', amount: 100, projectId: 'P', date: new Date(2026, 1, 2) })],
+      { year: 2026, mode: 'all', now: new Date(2026, 7, 22) });
+    expect(r.unallocatedDirect).toEqual({ count: 0, amount: 0 });
+    expect(r.totals.directCost).toBe(100);
+  });
+});

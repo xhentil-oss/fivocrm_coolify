@@ -38,7 +38,12 @@ import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceC
 import { formatCurrency, formatCompactRange, toAll, canSeeFinancials, cn } from '../lib/utils';
 import { computeProjectLabor } from '../lib/finance/laborCost';
 import { applyValuedTaskSideEffects } from '../lib/finance/taskValue';
-import { getInvoiceTotalAll, getInvoiceCollectedAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
+import {
+  getInvoiceTotalAll,
+  getInvoiceCollectedAll,
+  getInvoiceOutstandingAll,
+  sumProjectDirectExpenses,
+} from '../lib/finance/financialAnalytics';
 import { getInquiryCompleteness } from '../lib/inquiryBrief';
 import { archiveProjectPatch, isProjectArchived, restoreProjectPatch } from '../lib/projectArchive';
 import { deleteProjectCascade, deleteTaskCascade, projectCascadeToastParts } from '../lib/deleteCascade';
@@ -283,12 +288,16 @@ const ProjectDetailView: React.FC = () => {
     skipTeamFilter: true,
   });
 
-  // Project expenses (for budget burn-down = labor cost + expenses)
-  const { data: projectExpenses } = useCollection<Expense>('expenses', {
-    where: projectId ? [{ field: 'projectId', operator: '==', value: projectId }] : undefined,
-    skip: !projectId,
-    skipTeamFilter: true,
-  });
+  // Project expenses (for budget burn-down = labor cost + expenses).
+  // The `where` is applied CLIENT-side for a business-scoped collection, so it
+  // never reduced what was downloaded — it only gave this view its own cache key
+  // and therefore its own extra listener over the whole collection. Subscribe
+  // with the shared options and filter here instead.
+  const { data: allExpenses } = useCollection<Expense>('expenses', { skipTeamFilter: true });
+  const projectExpenses = React.useMemo(
+    () => (allExpenses || []).filter(e => e.projectId === projectId),
+    [allExpenses, projectId],
+  );
 
   // Invoices for this project. The view previously showed ONLY the cost side (labor
   // + expenses) — the revenue side was invisible here, so nothing ever surfaced that
@@ -334,7 +343,11 @@ const ProjectDetailView: React.FC = () => {
     const membersByUserId = new Map<string, TeamMember>();
     (teamMembers || []).forEach(m => { if (m.userId) membersByUserId.set(m.userId, m); });
     const labor = computeProjectLabor(timeEntries || [], membersByUserId);
-    const expensesTotal = (projectExpenses || []).reduce((s, e: any) => s + toAll(Number(e.amount) || 0, e.currency), 0);
+    // The SHARED predicate — a plain reduce here counted rejected rows and
+    // Salary-category rows, so this page disagreed with `project.spent` (written
+    // by the project-spend-rollup cron) and with projectPnl's directCost on the
+    // Financat screen: three different answers to "what did this project cost".
+    const expensesTotal = sumProjectDirectExpenses(projectExpenses, projectId);
     const spent = labor.cost + expensesTotal;
     const pct = budget > 0 ? Math.round((spent / budget) * 100) : 0;
     // Optional per-task pricing: when tasks carry a `value`, their sum is an

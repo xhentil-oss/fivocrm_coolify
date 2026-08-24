@@ -112,3 +112,61 @@ describe('buildDepartmentProfitTrend', () => {
     expect(t.deltas.Social.last).toBe(80_000);
   });
 });
+
+// ── Aug 2026 audit: expense.departmentId finally means something ────────────
+describe('department-tagged expenses (expense.departmentId)', () => {
+  it('charges a tagged cost to ONE department instead of splitting it across all', () => {
+    // `expense.departmentId` was write-only for its whole life: the form
+    // collected it, the list showed it, and no report read it — so the SEO
+    // team's tools were spread by revenue weight over Social as well.
+    const projects = [
+      mkP({ id: 'seo1', department: 'SEO', budget: 100_000, responsibleUserId: 'u1' }),
+      mkP({ id: 'soc1', department: 'Social', budget: 100_000, responsibleUserId: 'u2' }),
+    ];
+    const teams = [{ id: 'teamSeo', name: 'Ekipi SEO', department: 'SEO' }];
+    const expenses = [mkE({ id: 'ahrefs', amount: 20_000, departmentId: 'teamSeo' })];
+
+    const res = computeDepartmentPnl(projects, [mkM('u1', 0), mkM('u2', 0)], expenses, { ...OPTS, teams });
+    const seo = res.rows.find(r => r.department === 'SEO')!;
+    const social = res.rows.find(r => r.department === 'Social')!;
+
+    expect(res.departmentFixedPool).toEqual({ SEO: 20_000 });
+    expect(res.otherFixedPool).toBe(0);
+    expect(seo.departmentFixed).toBe(20_000);
+    expect(seo.overhead).toBe(20_000);
+    expect(social.departmentFixed).toBe(0);
+    expect(social.overhead).toBe(0);   // equal revenue, but not this cost
+  });
+
+  it('falls back to the business-wide pool when the team matches no department, and says so', () => {
+    const projects = [mkP({ id: 'soc1', department: 'Social', budget: 100_000, responsibleUserId: 'u1' })];
+    const teams = [{ id: 'teamGhost', name: 'Ekip i fshirë', department: 'Legal' }];
+    const expenses = [mkE({ id: 'x', amount: 5_000, departmentId: 'teamGhost' })];
+
+    const res = computeDepartmentPnl(projects, [mkM('u1', 0)], expenses, { ...OPTS, teams });
+    expect(res.otherFixedPool).toBe(5_000);
+    expect(res.departmentFixedPool).toEqual({});
+    // A silent fallback is indistinguishable from correct attribution.
+    expect(res.unmatchedDepartmentFixed).toEqual({ count: 1, amount: 5_000 });
+  });
+
+  it('behaves exactly as before when no teams list is supplied', () => {
+    const projects = [mkP({ id: 'soc1', department: 'Social', budget: 100_000, responsibleUserId: 'u1' })];
+    const expenses = [mkE({ id: 'x', amount: 5_000, departmentId: 'teamSeo' })];
+    const res = computeDepartmentPnl(projects, [mkM('u1', 0)], expenses, OPTS);
+    expect(res.otherFixedPool).toBe(5_000);
+    expect(res.unmatchedDepartmentFixed.count).toBe(1);
+  });
+
+  it('a cost tagged to a project outside the period is pooled and reported, not dropped', () => {
+    const projects = [mkP({ id: 'inP', department: 'Social', budget: 100_000, responsibleUserId: 'u1' })];
+    const expenses = [
+      mkE({ id: 'orphan', amount: 700, projectId: 'goneProject' }),
+      mkE({ id: 'direct', amount: 300, projectId: 'inP' }),
+    ];
+    const res = computeDepartmentPnl(projects, [mkM('u1', 0)], expenses, OPTS);
+    expect(res.totals.directCost).toBe(300);
+    expect(res.otherFixedPool).toBe(700);
+    expect(res.unallocatedDirect).toEqual({ count: 1, amount: 700 });
+  });
+});

@@ -271,6 +271,60 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   `scripts/dedupe-expenses.mjs` is the repair path (dry-run by default,
   `--archive` snapshots into `expenseDeduped`, a recurring parent is never
   deleted).
+- **`expense.date` is THE booking date** and the form must always write it
+  (defaulting to today). Every P&L, chart, cashflow alarm and forecast reads
+  `getExpenseDate()` = `date || createdAt`; while the form wrote no `date` at
+  all, a July bill entered in August was booked in August with no way to fix it.
+  Read it ONLY through `getExpenseDate()` — a bare `e.date` (BonusView did this)
+  silently drops every row that has none.
+- **`firstGenerationDate` always lands in a period AFTER the parent's.** A
+  `!==` comparison is not enough: a date typed in the PAST is also "a different
+  period", and the cron then generates one row per missed period — rewriting
+  closed books, which `seedNextRecurringDate` documents as the owner's call.
+- **Supported cycles are `weekly | monthly | quarterly | yearly`**, declared in
+  `SUPPORTED_EXPENSE_FREQUENCIES` and mirrored in `api/cron/run.ts`. Keep
+  `FREQ_TO_MONTHLY` a subset of it: `quarterly` used to live only in the table,
+  so the cash-flow alarm costed money the engine refused to generate. An
+  unknown frequency contributes 0 to the rate, never a default month.
+- **Never overwrite `recurringAnchorDay` on edit.** Setting it to
+  `nextDate.getDate()` degraded a 31st series to the 28th forever the first time
+  any field was touched — the exact drift `addMonthsClamped` exists to prevent.
+
+### Expense attribution & write hygiene
+
+- **`isProjectDirectExpense` / `sumProjectDirectExpenses`
+  (`financialAnalytics.ts`) are the ONLY answer to "what did this project
+  cost"** — used by `projectPnl`, `departmentPnl`, `staffRevenue`, BonusView,
+  ProjectDetailView's burn-down, and mirrored in the `project-spend-rollup`
+  cron. ProjectDetailView used a bare `reduce` with neither guard, so the
+  project page, `project.spent` and Financat gave three different numbers.
+- **A cost must never evaporate.** An expense tagged to a project outside the
+  period is POOLED as overhead (and reported via `unallocatedDirect`), never
+  dropped: it used to land in a per-project bucket with no row and vanish, so
+  `directCost + otherFixed` did not equal the period's expenses.
+- **`expense.departmentId` is a `teams` doc id; `project.department` is free
+  text.** `computeDepartmentPnl` needs `opts.teams` to join them, otherwise the
+  field is write-only (it was, for its whole life) and a department's own cost
+  is spread by revenue weight across every department. A team that matches no
+  department falls back to the shared pool and is reported
+  (`unmatchedDepartmentFixed`).
+- **Salary-category rows are in NO expense total** (payroll comes from
+  `salaryHistory`), so the UI must SAY so — `calculateSalaryExpensesBetween`
+  exists for that banner. Do not "fix" this by adding them to a total.
+- **Use `src/lib/formValue.ts` for every form write.** `'__none__'` is truthy,
+  so `x || undefined` wrote the sentinel as a real id; and `removeUndefined()`
+  strips `undefined` by design, so only an explicit `null` CLEARS a field —
+  which is why an expense could never be unlinked from its project.
+- **Deleting or re-pointing an expense must flag the project**
+  (`spendRollupDirty`). The rollup finds work via `expenses.updatedAt`, which
+  structurally cannot see a deleted document or the project a cost moved AWAY
+  from; a weekly full pass is the backstop.
+- **The approval workflow lives in the RULES, not the UI.** Only
+  `isExpenseApprover` (role claim OR membership doc) may write `approvalStatus`;
+  a non-approver changing amount/currency/date must send the row back to
+  `Submitted`; an approved row is not a member's to delete; `keepsBusinessId()`
+  is mandatory. Covered by tests 43–45 in `scripts/firestore-rules.test.mjs`.
+  Full audit + what was deliberately left: `workspace/EXPENSES_AUDIT_2026_08.md`.
 
 ### WhatsApp campaign automation (conditions + variants + evergreen rules)
 

@@ -6,10 +6,20 @@
 //   labor     = each participant's salary, split EQUALLY across the projects they
 //               work on in the period (no time-tracking needed)
 //   direct    = expenses tagged to the project (excl. Salary category / rejected)
-//   overhead  = non-project fixed expenses (rent, tools…) shared by revenue weight
+//   overhead  = business-wide fixed expenses shared by revenue weight, PLUS the
+//               department's own tagged expenses (`expense.departmentId`) spread
+//               only inside that department
 //   profit    = revenue − labor − direct − overhead
 // Salaries of people not on any project this period are reported separately as
 // "unallocated labor" so the totals still reconcile with the company P&L.
+//
+// Two ways cost used to leak out of this model, both now closed:
+//   · an expense tagged to a project OUTSIDE the period landed in a per-project
+//     bucket that had no row, and was not pooled either — the money vanished;
+//   · `expense.departmentId` was never read by anything, so a cost belonging to
+//     one department was spread by revenue weight across all of them.
+// Both are pooled honestly now and reported (`unallocatedDirect`,
+// `unmatchedDepartmentFixed`) rather than absorbed silently.
 
 import type { Project, TeamMember, Expense, Invoice } from '../../types';
 import { toAll } from '../utils';
@@ -25,6 +35,17 @@ export interface DepartmentPnlOptions {
   /** 'budget' (default) or 'invoiced' (actual billed invoices per project). */
   revenueBasis?: 'budget' | 'invoiced';
   invoices?: Invoice[] | null;
+  /**
+   * The tenant's teams, needed to make `expense.departmentId` mean something.
+   *
+   * A department here is the free-text `project.department`, while an expense
+   * carries a `teams` document id — two different key spaces. Without the teams
+   * list the two can never be joined, which is why `expense.departmentId` was
+   * write-only for its whole life: the form collected it, the list displayed it,
+   * and no report read it. Omit it and behaviour is exactly as before (every
+   * non-project expense is global overhead).
+   */
+  teams?: Array<{ id: string; name?: string; department?: string }> | null;
 }
 
 export interface DeptParticipant { userId: string; name: string; cost: number }
@@ -39,11 +60,25 @@ export interface DepartmentRow {
   revenue: number; directCost: number; labor: number; overhead: number;
   cost: number; profit: number; margin: number | null;
   projects: DeptProjectLine[];
+  /** The slice of `overhead` that came from expenses tagged to THIS department
+   *  (rather than from the business-wide pool split by revenue weight). */
+  departmentFixed: number;
 }
 export interface DepartmentPnlResult {
   rows: DepartmentRow[];
   unallocatedLabor: { total: number; members: { name: string; cost: number }[] };
+  /** Business-wide fixed expenses, split across projects by revenue weight. */
   otherFixedPool: number;
+  /** Fixed expenses charged to ONE department via `expense.departmentId`. */
+  departmentFixedPool: Record<string, number>;
+  /**
+   * Expenses whose `departmentId` matched no department that has projects in
+   * this period — they fall back to the business-wide pool. Surfaced because a
+   * silent fallback is indistinguishable from correct attribution.
+   */
+  unmatchedDepartmentFixed: { count: number; amount: number };
+  /** Expenses tagged to a project outside this period; pooled, not dropped. */
+  unallocatedDirect: { count: number; amount: number };
   totals: { revenue: number; directCost: number; labor: number; overhead: number; cost: number; profit: number };
 }
 
@@ -74,6 +109,9 @@ export function computeDepartmentPnl(
   const now = opts.now ?? new Date();
   const empty: DepartmentPnlResult = {
     rows: [], unallocatedLabor: { total: 0, members: [] }, otherFixedPool: 0,
+    departmentFixedPool: {},
+    unmatchedDepartmentFixed: { count: 0, amount: 0 },
+    unallocatedDirect: { count: 0, amount: 0 },
     totals: { revenue: 0, directCost: 0, labor: 0, overhead: 0, cost: 0, profit: 0 },
   };
   if (!projects) return empty;
@@ -159,10 +197,33 @@ export function computeDepartmentPnl(
     projectCountByMember.set(id, (projectCountByMember.get(id) || 0) + 1);
   }));
 
-  // ── Expenses: direct (per project) vs other fixed (pool) ──
+  // ── Which department does a project belong to? (free-text on the project) ──
+  const deptOfProject = (p: Project): string => ((p as any).department || '').trim() || NO_DEPT;
+  const departmentsInPeriod = new Set(periodProjects.map(deptOfProject));
+
+  // ── expense.departmentId (a `teams` doc id) → department label ──
+  // Prefer `team.department` (the same free-text field projects carry), fall
+  // back to `team.name`. Only a label that actually has projects in this period
+  // can absorb cost; anything else falls back to the business-wide pool and is
+  // reported rather than silently reattributed.
+  const deptLabelByTeamId = new Map<string, string>();
+  for (const t of opts.teams ?? []) {
+    const candidates = [(t.department || '').trim(), (t.name || '').trim()].filter(Boolean);
+    const match = candidates.find(c => departmentsInPeriod.has(c));
+    if (match) deptLabelByTeamId.set(t.id, match);
+  }
+
+  // ── Expenses: project-direct → department-fixed → business-wide pool ──
   const expDate = (e: Expense) => parseDate((e as any).date) || parseDate((e as any).createdAt);
   const expIn = (e: Expense) => (opts.allTime || (opts.year == null && !opts.range)) ? true : inPeriod(expDate(e));
+  // A cost tagged to a project OUTSIDE the period had no row to land on and was
+  // not pooled either, so it evaporated: directCost + otherFixedPool did not add
+  // up to the period's expenses. It is a real cost of the period — pool it.
+  const absorbable = new Set(periodProjects.map(p => p.id));
   const directByProject = new Map<string, number>();
+  const departmentFixedPool = new Map<string, number>();
+  const unmatchedDepartmentFixed = { count: 0, amount: 0 };
+  const unallocatedDirect = { count: 0, amount: 0 };
   let otherFixedPool = 0;
   for (const e of expenses ?? []) {
     if (!expIn(e)) continue;
@@ -170,8 +231,24 @@ export function computeDepartmentPnl(
     if ((e as any).category === CATEGORY_SALARY) continue;
     const amt = toAll(e.amount || 0, (e as any).currency);
     const pid = (e as any).projectId as string | undefined;
-    if (pid) directByProject.set(pid, (directByProject.get(pid) || 0) + amt);
-    else otherFixedPool += amt;
+    if (pid && absorbable.has(pid)) {
+      directByProject.set(pid, (directByProject.get(pid) || 0) + amt);
+      continue;
+    }
+    if (pid) {
+      unallocatedDirect.count += 1;
+      unallocatedDirect.amount += amt;
+      otherFixedPool += amt;
+      continue;
+    }
+    const deptId = (e as any).departmentId as string | undefined;
+    const label = deptId ? deptLabelByTeamId.get(deptId) : undefined;
+    if (label) {
+      departmentFixedPool.set(label, (departmentFixedPool.get(label) || 0) + amt);
+      continue;
+    }
+    if (deptId) { unmatchedDepartmentFixed.count += 1; unmatchedDepartmentFixed.amount += amt; }
+    otherFixedPool += amt;
   }
 
   // ── Revenue per project ──
@@ -200,7 +277,18 @@ export function computeDepartmentPnl(
     const m = memberById.get(id);
     return m ? (m.displayName || (m as any).email || 'Pa emër') : 'I panjohur';
   };
-  const projectLines: DeptProjectLine[] = periodProjects.map(p => {
+  // Revenue and project count per department — the weights a department-tagged
+  // expense is spread by inside its own department (equal split when the
+  // department earned nothing, mirroring the business-wide `allocationBasis`).
+  const deptRevenue = new Map<string, number>();
+  const deptProjectCount = new Map<string, number>();
+  for (const p of periodProjects) {
+    const d = deptOfProject(p);
+    deptRevenue.set(d, (deptRevenue.get(d) || 0) + (revenueByProject.get(p.id) || 0));
+    deptProjectCount.set(d, (deptProjectCount.get(d) || 0) + 1);
+  }
+
+  const projectLines: Array<DeptProjectLine & { departmentFixed: number }> = periodProjects.map(p => {
     const revenue = revenueByProject.get(p.id) || 0;
     const directCost = directByProject.get(p.id) || 0;
     const parts = participantsOf(p).map(id => {
@@ -209,7 +297,16 @@ export function computeDepartmentPnl(
       return { userId: id, name: memberName(id), cost: memberPeriodSalary(m) / cnt };
     });
     const labor = parts.reduce((s, x) => s + x.cost, 0);
-    const overhead = totalRevenue > 0 ? otherFixedPool * (revenue / totalRevenue) : 0;
+    // Two overhead components: the business-wide pool by revenue weight, plus
+    // this department's OWN tagged expenses spread only inside the department.
+    const globalOverhead = totalRevenue > 0 ? otherFixedPool * (revenue / totalRevenue) : 0;
+    const dept = deptOfProject(p);
+    const deptPool = departmentFixedPool.get(dept) || 0;
+    const dRev = deptRevenue.get(dept) || 0;
+    const departmentFixed = deptPool === 0 ? 0
+      : dRev > 0 ? deptPool * (revenue / dRev)
+      : deptPool / (deptProjectCount.get(dept) || 1);
+    const overhead = globalOverhead + departmentFixed;
     const cost = directCost + labor + overhead;
     const profit = revenue - cost;
     return {
@@ -217,6 +314,7 @@ export function computeDepartmentPnl(
       revenue, directCost, labor, overhead, cost, profit,
       margin: revenue > 0 ? profit / revenue : null,
       participants: parts.sort((a, b) => b.cost - a.cost),
+      departmentFixed,
     };
   });
 
@@ -224,12 +322,15 @@ export function computeDepartmentPnl(
   const deptMap = new Map<string, DepartmentRow>();
   const projectById = new Map(periodProjects.map(p => [p.id, p]));
   for (const line of projectLines) {
-    const dept = ((projectById.get(line.id) as any)?.department || '').trim() || NO_DEPT;
+    const proj = projectById.get(line.id);
+    const dept = proj ? deptOfProject(proj) : NO_DEPT;
     const row = deptMap.get(dept) || {
-      department: dept, revenue: 0, directCost: 0, labor: 0, overhead: 0, cost: 0, profit: 0, margin: null, projects: [],
+      department: dept, revenue: 0, directCost: 0, labor: 0, overhead: 0, cost: 0, profit: 0, margin: null,
+      projects: [], departmentFixed: 0,
     };
     row.revenue += line.revenue; row.directCost += line.directCost; row.labor += line.labor;
     row.overhead += line.overhead; row.cost += line.cost; row.profit += line.profit;
+    row.departmentFixed += line.departmentFixed;
     row.projects.push(line);
     deptMap.set(dept, row);
   }
@@ -256,6 +357,9 @@ export function computeDepartmentPnl(
     rows,
     unallocatedLabor: { total: unallocatedTotal, members: unallocatedMembers },
     otherFixedPool,
+    departmentFixedPool: Object.fromEntries(departmentFixedPool),
+    unmatchedDepartmentFixed,
+    unallocatedDirect,
     totals,
   };
 }
@@ -276,7 +380,11 @@ export function buildDepartmentProfitTrend(
   expenses: Expense[] | undefined | null,
   now: Date = new Date(),
   months = 6,
-  extra: { revenueBasis?: 'budget' | 'invoiced'; invoices?: Invoice[] | null } = {},
+  extra: {
+    revenueBasis?: 'budget' | 'invoiced';
+    invoices?: Invoice[] | null;
+    teams?: Array<{ id: string; name?: string; department?: string }> | null;
+  } = {},
 ): DepartmentTrend {
   const monthly: { label: string; byDept: Map<string, number> }[] = [];
   const totals = new Map<string, number>();
@@ -284,7 +392,10 @@ export function buildDepartmentProfitTrend(
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const start = new Date(d.getFullYear(), d.getMonth(), 1, 0, 0, 0, 0);
     const end = new Date(d.getFullYear(), d.getMonth() + 1, 0, 23, 59, 59, 999);
-    const res = computeDepartmentPnl(projects, teamMembers, expenses, { range: { start, end }, mode: 'all', now, revenueBasis: extra.revenueBasis, invoices: extra.invoices });
+    const res = computeDepartmentPnl(projects, teamMembers, expenses, {
+      range: { start, end }, mode: 'all', now,
+      revenueBasis: extra.revenueBasis, invoices: extra.invoices, teams: extra.teams,
+    });
     const byDept = new Map<string, number>();
     for (const row of res.rows) {
       byDept.set(row.department, row.profit);

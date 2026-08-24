@@ -13,7 +13,7 @@ import {
   ResponsiveContainer, ComposedChart, Area, Line, BarChart, Bar, XAxis, YAxis,
   Tooltip, CartesianGrid, ReferenceLine, LabelList,
 } from 'recharts';
-import type { Invoice, Expense, Customer, Project, TeamMember } from '../types';
+import type { Invoice, Expense, Customer, Project, TeamMember, Team } from '../types';
 import {
   getInvoiceCollectedBetween,
   getInvoiceCollectedAll,
@@ -145,6 +145,10 @@ const FinancesView: React.FC = () => {
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
+  // Needed to join `expense.departmentId` (a teams doc id) to the free-text
+  // `project.department` the P&L groups by — without it a cost tagged to one
+  // department is spread by revenue weight across all of them.
+  const { data: teams } = useCollection<Team>('teams');
 
   const now = useMemo(() => new Date(), []);
   const [tab, setTab] = useState('overview');
@@ -411,8 +415,8 @@ const FinancesView: React.FC = () => {
   // ── Department (service-line) P&L — real profit per Social/SEO/Web… ──
   const [expandedDept, setExpandedDept] = useState<string | null>(null);
   const departmentPnl = useMemo(
-    () => computeDepartmentPnl(projects, teamMembers, expenses, { ...periodOpts, revenueBasis, invoices }),
-    [projects, teamMembers, expenses, invoices, periodOpts, revenueBasis],
+    () => computeDepartmentPnl(projects, teamMembers, expenses, { ...periodOpts, revenueBasis, invoices, teams }),
+    [projects, teamMembers, expenses, invoices, periodOpts, revenueBasis, teams],
   );
 
   /**
@@ -433,7 +437,8 @@ const FinancesView: React.FC = () => {
       if (byKey.has(dept)) continue;
       byKey.set(dept, {
         department: dept, revenue: 0, directCost: 0, labor: 0, overhead: 0,
-        cost: 0, profit: 0, margin: null, projects: [], collected: amount,
+        cost: 0, profit: 0, margin: null, projects: [], departmentFixed: 0,
+        collected: amount,
       } as Row);
     }
     // Sorted by revenue now that the panel leads with revenue, not profit.
@@ -452,8 +457,8 @@ const FinancesView: React.FC = () => {
 
   // Monthly profit trend per department (last 6 months) — is Social growing or not?
   const departmentTrend = useMemo(
-    () => buildDepartmentProfitTrend(projects, teamMembers, expenses, now, 6, { revenueBasis, invoices }),
-    [projects, teamMembers, expenses, invoices, revenueBasis, now],
+    () => buildDepartmentProfitTrend(projects, teamMembers, expenses, now, 6, { revenueBasis, invoices, teams }),
+    [projects, teamMembers, expenses, invoices, revenueBasis, now, teams],
   );
 
   const customerNameById = useMemo(
@@ -987,6 +992,21 @@ const FinancesView: React.FC = () => {
               <div className="px-5 pb-1 pt-5 sm:px-6">
                 <h2 className={cn('text-base font-extrabold', INK_NAVY)}>Fitimi sipas departamentit</h2>
                 <p className={cn('mt-0.5 text-[12.5px]', INK_MUTED)}>Kliko një rresht për projektet e tij.</p>
+                {/* `expense.departmentId` is finally read by this table. When a
+                    tagged team matches no department that has projects here, the
+                    cost silently becomes business-wide overhead — say so, or the
+                    fallback is indistinguishable from correct attribution. */}
+                {departmentPnl.unmatchedDepartmentFixed.count > 0 && (
+                  <div className="mt-2">
+                    <Notice tone="neutral">
+                      <strong>{departmentPnl.unmatchedDepartmentFixed.count} shpenzim</strong> me departament
+                      që nuk përputhet me asnjë departament projektesh në këtë periudhë
+                      (<strong className={NUM}>{formatALL(departmentPnl.unmatchedDepartmentFixed.amount)}</strong>)
+                      {' '}u ndanë si kosto e përbashkët. Emri i departamentit te ekipi duhet të përputhet
+                      me fushën «Departamenti» te projektet.
+                    </Notice>
+                  </div>
+                )}
               </div>
 
               {departmentRows.rows.length === 0 ? (
@@ -1225,6 +1245,17 @@ const FinancesView: React.FC = () => {
                       {revenueBasis === 'invoiced'
                         ? ' Kjo vlerë NUK numërohet si e ardhur më poshtë, ndërsa kostot fikse ndahen plotësisht — ndaj fitimi duket më i vogël se realiteti.'
                         : ' Nuk prek llogaritjen mbi bazën "Buxhet", por do të mungojë nëse kalon te "Paguar".'}
+                    </Notice>
+                  )}
+                  {/* A cost tagged to a project OUTSIDE this period. It used to
+                      vanish from every total (neither charged nor pooled); it is
+                      now overhead, which changes each project's absorbed share —
+                      so it has to be said out loud. */}
+                  {projectPnl.unallocatedDirect.count > 0 && (
+                    <Notice tone="neutral">
+                      <strong>{projectPnl.unallocatedDirect.count} shpenzim</strong> i lidhur me projekte
+                      jashtë kësaj periudhe (<strong className={NUM}>{formatALL(projectPnl.unallocatedDirect.amount)}</strong>)
+                      {' '}u llogarit si kosto fikse e përbashkët, sepse asnjë projekt i periudhës nuk mund t'i mbajë.
                     </Notice>
                   )}
                   {projectPnl.missingBudget.count > 0 && (

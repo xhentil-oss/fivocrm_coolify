@@ -5,14 +5,27 @@
 //                monthly fee that will bill again next month)
 //   new        = budget of one-time projects whose startDate falls in the
 //                forecast month (a project kicking off next month)
-// Costs stay grounded:
+// Costs stay grounded, and are split by how KNOWABLE they are:
 //   salary     = next month's payroll (history-aware, exact)
-//   other      = trailing 3-month average of non-salary expenses
-//   profit     = revenue − salary − other
+//   recurring  = the known commitment rate of active recurring expense series
+//                (the SAME number the cash-flow gap alarm uses — the two cards
+//                used to predict the same month by two different methods and so
+//                disagreed by construction)
+//   one-off    = trailing 3-month average of expenses NOT in a recurring series
+//   profit     = revenue − salary − recurring − one-off
 
 import type { Expense, TeamMember, Project, Invoice } from '../../types';
-import { parseDate, calculateExpensesBetween, getInvoiceTotalAll } from './financialAnalytics';
+import {
+  parseDate,
+  calculateExpensesBetween,
+  getInvoiceTotalAll,
+} from './financialAnalytics';
 import { totalSalaryForMonth } from './salaryHistory';
+import {
+  FREQ_TO_MONTHLY,
+  monthlyRecurringExpenseRate,
+  belongsToRecurringSeries,
+} from './recurringExpenses';
 import { toAll } from '../utils';
 
 export interface NextMonthForecast {
@@ -23,14 +36,14 @@ export interface NextMonthForecast {
   newProjectRevenue: number;   // one-time projects starting next month
   predictedRevenue: number;    // recurring + new
   predictedSalary: number;
+  /** recurringExpenseCommitment + averaged one-offs — what the UI shows. */
   predictedOtherExpenses: number;
+  /** Known commitment from active recurring series, per month. */
+  recurringExpenseCommitment: number;
+  /** Trailing average of expenses that are NOT part of a recurring series. */
+  predictedOneOffExpenses: number;
   predictedProfit: number;
 }
-
-// Frequency → per-month multiplier (matches cashflowAlarms).
-const FREQ_TO_MONTHLY: Record<string, number> = {
-  weekly: 52 / 12, monthly: 1, quarterly: 1 / 3, yearly: 1 / 12,
-};
 
 function monthWindow(base: Date, offset: number) {
   const d = new Date(base.getFullYear(), base.getMonth() + offset, 1);
@@ -108,15 +121,22 @@ export function forecastNextMonth(
 
   const predictedRevenue = recurringRevenue + newProjectRevenue;
 
-  // Trailing 3 full months of non-salary expenses (offsets -1, -2, -3).
-  const OFFSETS = [-1, -2, -3];
-  const otherExp = OFFSETS.map(off => {
-    const w = monthWindow(now, off);
-    return calculateExpensesBetween(exp, w.start, w.end); // excludes Salary category
-  });
-  const basisMonths = OFFSETS.length;
-  const predictedOtherExpenses = otherExp.reduce((a, b) => a + b, 0) / basisMonths;
+  // ── Expenses, split by how knowable they are ──
+  // A recurring series is a COMMITMENT, not a statistic: take it from the same
+  // rate the cash-flow gap alarm uses. Only genuinely irregular spending is
+  // averaged — and those rows are excluded from the average, or a retainer would
+  // be counted twice (once as commitment, once inside its own trailing months).
+  const recurringExpenseCommitment = monthlyRecurringExpenseRate(exp);
+  const oneOffs = exp.filter(e => !belongsToRecurringSeries(e));
 
+  const OFFSETS = [-1, -2, -3];
+  const basisMonths = OFFSETS.length;
+  const predictedOneOffExpenses = OFFSETS.reduce((sum, off) => {
+    const w = monthWindow(now, off);
+    return sum + calculateExpensesBetween(oneOffs, w.start, w.end); // excludes Salary category
+  }, 0) / basisMonths;
+
+  const predictedOtherExpenses = recurringExpenseCommitment + predictedOneOffExpenses;
   const predictedSalary = totalSalaryForMonth(teamMembers, next.end);
   const predictedProfit = predictedRevenue - predictedSalary - predictedOtherExpenses;
 
@@ -129,6 +149,8 @@ export function forecastNextMonth(
     predictedRevenue,
     predictedSalary,
     predictedOtherExpenses,
+    recurringExpenseCommitment,
+    predictedOneOffExpenses,
     predictedProfit,
   };
 }

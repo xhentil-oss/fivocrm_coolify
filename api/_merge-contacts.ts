@@ -56,6 +56,11 @@ const CUSTOMER_REFS: RefSpec[] = [
   { collection: 'taskComments', field: 'customerId' },
   { collection: 'milestones', field: 'customerId' },
   { collection: 'timeEntries', field: 'customerId' },
+  // `expenses` has no customerId field today (a cost is attributed via
+  // projectId/departmentId). Kept deliberately, not by accident: the standing
+  // rule is that a collection referencing customerId MUST be listed here or a
+  // merge silently orphans its rows, and the query simply matches nothing until
+  // the day someone adds the field.
   { collection: 'expenses', field: 'customerId' },
   { collection: 'activities', field: 'customerId' },
   { collection: 'deals', field: 'customerId' },

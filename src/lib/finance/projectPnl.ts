@@ -88,6 +88,14 @@ export interface ProjectPnlResult {
    * Only populated when `invoices` are supplied.
    */
   unlinkedInvoices: { count: number; amount: number };
+  /**
+   * Expenses tagged to a project that is NOT in this period's set (closed in an
+   * earlier year, archived, or excluded by `mode: 'completed'`). They are real
+   * costs of the period, so they are pooled as overhead rather than dropped —
+   * but the user needs to know the money moved from "project cost" to "shared
+   * overhead", because it changes every project's allocated share.
+   */
+  unallocatedDirect: { count: number; amount: number };
 }
 
 function isCompleted(p: Project): boolean {
@@ -127,6 +135,7 @@ export function computeProjectPnl(
     missingBudget: { count: 0, names: [] },
     revenueBasis: resolvedBasis,
     unlinkedInvoices: { count: 0, amount: 0 },
+    unallocatedDirect: { count: 0, amount: 0 },
   };
   if (!projects) return empty;
 
@@ -236,18 +245,29 @@ export function computeProjectPnl(
   const expDate = (e: Expense) => parseDate((e as any).date) || parseDate((e as any).createdAt);
   const expInPeriod = (e: Expense) => (opts.allTime || (opts.year == null && !opts.range)) ? true : inPeriod(expDate(e));
 
+  // Which projects can actually absorb a direct cost in this period? A cost
+  // tagged to a project OUTSIDE the period (closed in an earlier year, archived,
+  // or filtered out by mode:'completed') used to land in `directByProject` under
+  // a key that no row exists for — and was not added to the pool either, so the
+  // money simply evaporated: `directCost + otherFixed` did not equal the
+  // period's expenses. Such a cost is real and belongs to the period; with no
+  // project of its own to carry it, it is overhead.
+  const absorbable = new Set(periodProjects.map(p => p.id));
+
   let otherFixed = 0;
   const directByProject = new Map<string, number>();
+  const unallocatedDirect = { count: 0, amount: 0 };
   for (const e of expenses ?? []) {
     if (!expInPeriod(e)) continue;
     if ((e as any).approvalStatus === 'Rejected') continue; // rejected expenses never hit the books
+    const isSalary = (e as any).category === CATEGORY_SALARY;
+    if (isSalary) continue; // salary handled via monthlySalary/salaryHistory, never from rows
     const amt = toAll(e.amount || 0, (e as any).currency);
     const pid = (e as any).projectId as string | undefined;
-    const isSalary = (e as any).category === CATEGORY_SALARY;
-    if (pid) {
-      if (isSalary) continue; // salary handled via monthlySalary, never as project-direct
+    if (pid && absorbable.has(pid)) {
       directByProject.set(pid, (directByProject.get(pid) || 0) + amt);
-    } else if (!isSalary) {
+    } else {
+      if (pid) { unallocatedDirect.count += 1; unallocatedDirect.amount += amt; }
       otherFixed += amt;
     }
   }
@@ -340,5 +360,6 @@ export function computeProjectPnl(
     missingBudget,
     revenueBasis: resolvedBasis,
     unlinkedInvoices,
+    unallocatedDirect,
   };
 }
