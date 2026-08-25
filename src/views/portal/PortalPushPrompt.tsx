@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Capacitor } from '@capacitor/core';
 import { Bell, X } from 'lucide-react';
+import { isCanonicalPushHost } from '../../hooks/usePushNotifications';
 
 const DISMISS_KEY = 'portal_push_prompt_dismissed';
 
@@ -19,6 +20,9 @@ const PortalPushPrompt: React.FC = () => {
   useEffect(() => {
     if (Capacitor.isNativePlatform()) return;
     if (typeof window === 'undefined' || !('Notification' in window)) return;
+    // Non-canonical origin (e.g. the .vercel.app alias) never mints web tokens —
+    // prompting here would grant a permission that registers nothing.
+    if (!isCanonicalPushHost()) return;
     if (Notification.permission !== 'default') return;
     try {
       if (localStorage.getItem(DISMISS_KEY) === '1') return;

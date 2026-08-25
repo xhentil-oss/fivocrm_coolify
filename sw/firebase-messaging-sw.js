@@ -32,11 +32,19 @@ var FIREBASE_CONFIG = __FIREBASE_CONFIG__;
     var messaging = firebase.messaging(app);
 
     messaging.onBackgroundMessage(function (payload) {
-      var title = (payload.notification && payload.notification.title) || 'FivoCRM';
-      var body = (payload.notification && payload.notification.body) || '';
-      var url = (payload.data && payload.data.url) || '/';
-      var image = (payload.notification && payload.notification.image)
-        || (payload.data && payload.data.image);
+      // A payload that carries a `notification` block is displayed by the Firebase
+      // SDK ITSELF before this handler runs (its own push handler shows it, then
+      // dispatches here) — so showing it again here stacked two identical rows in
+      // the tray for every message. The SDK's auto-notification also handles its
+      // own click via webpush.fcmOptions.link. Manual display is only for
+      // data-only pushes, which the SDK does not display.
+      if (payload.notification) return;
+
+      var data = payload.data || {};
+      var title = data.title || 'FivoCRM';
+      var body = data.body || '';
+      var url = data.url || '/';
+      var image = data.image;
 
       self.registration.showNotification(title, {
         body: body,

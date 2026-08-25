@@ -45,8 +45,12 @@ async function saveToken(userId: string, token: string, platform: string) {
 /**
  * Remove THIS device's push token. Call before signing out, otherwise the device
  * keeps receiving the previous user's notifications after someone else logs in.
+ *
+ * `opts.legacy: false` limits the cleanup to this origin's own subcollection row —
+ * used by the canonical-host gate below, which must not touch the shared legacy
+ * token (it could still be an old NATIVE device's only delivery target).
  */
-export async function clearPushToken(userId?: string | null): Promise<void> {
+export async function clearPushToken(userId?: string | null, opts?: { legacy?: boolean }): Promise<void> {
   if (!userId) return;
   let key: string | null = null;
   try { key = localStorage.getItem(LAST_TOKEN_KEY); } catch { /* noop */ }
@@ -56,6 +60,7 @@ export async function clearPushToken(userId?: string | null): Promise<void> {
     } catch { /* best-effort — a stale token is dropped server-side on first failure */ }
     try { localStorage.removeItem(LAST_TOKEN_KEY); } catch { /* noop */ }
   }
+  if (opts?.legacy === false) return;
   // The LEGACY single-token field on the parent doc is still a delivery target
   // (listPushTokens reads it), and nothing else ever clears it — so a user who
   // registered pre-migration kept receiving pushes on this device after logout,
@@ -65,6 +70,21 @@ export async function clearPushToken(userId?: string | null): Promise<void> {
   try {
     await setDoc(doc(db, 'userPushTokens', userId), { token: deleteField() }, { merge: true });
   } catch { /* best-effort */ }
+}
+
+// Web push is PER-ORIGIN: a token minted on fivocrm.vercel.app and one minted on
+// fivocrm.com are two independent subscriptions for the same person, and the server
+// pushes to every stored token — so anyone who had visited both domains received
+// every notification once per domain. Only the canonical production host may mint
+// web tokens; any other host (the .vercel.app alias, preview deployments) instead
+// deletes the token it may have registered before this gate existed. localhost
+// stays allowed for development. Native (Capacitor) registration is not origin-
+// bound and is unaffected.
+const CANONICAL_PUSH_HOSTS = new Set(['fivocrm.com', 'www.fivocrm.com', 'localhost', '127.0.0.1']);
+
+/** True when this origin is allowed to mint web push tokens (see above). */
+export function isCanonicalPushHost(): boolean {
+  return typeof window !== 'undefined' && CANONICAL_PUSH_HOSTS.has(window.location.hostname);
 }
 
 export function usePushNotifications(userId?: string) {
@@ -123,6 +143,14 @@ export function usePushNotifications(userId?: string) {
     let mounted = true;
 
     const registerWeb = async () => {
+      // Non-canonical origin: never mint a token here (it would double every push),
+      // and drop the one this origin registered before the gate — otherwise
+      // fivocrm.vercel.app keeps ringing alongside fivocrm.com until FCM happens
+      // to expire its token.
+      if (!isCanonicalPushHost()) {
+        void clearPushToken(userIdRef.current, { legacy: false });
+        return;
+      }
       if (!('Notification' in window) || !('serviceWorker' in navigator)) return;
 
       // Never re-prompt a denial (browsers punish repeat prompts from the origin).
