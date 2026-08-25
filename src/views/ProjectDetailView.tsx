@@ -30,6 +30,7 @@ import ProjectClientBrief from '../components/ProjectClientBrief';
 import { useFilteredTasks, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
 import { useCommentFocus, COMMENT_FLASH_CLASS } from '../hooks/useCommentFocus';
+import { useBackDismiss } from '../hooks/useBackDismiss';
 import { portalProjectCommentDeepLink, taskDeepLink } from '../lib/deepLinks';
 import { taskCompletedNotifications } from '../lib/taskNotifications';
 import { resolvePortalUserId } from '../lib/notifyClient';
@@ -455,6 +456,14 @@ const ProjectDetailView: React.FC = () => {
     }
     setSearchParams({}, { replace: true });
   }, [searchParams, allTasks, rawProjectTasks, setSearchParams]);
+
+  // Closing the task drawer. Back must land on the project's task list, not on
+  // whatever page came before the project — see useBackDismiss.
+  const closeSelectedTask = React.useCallback(() => {
+    setSelectedTask(null);
+    setFocusComment(null);
+  }, []);
+  useBackDismiss(!!selectedTask, closeSelectedTask);
 
   // Keep selectedTask in sync with live Firestore data
   useEffect(() => {
@@ -1793,7 +1802,7 @@ const ProjectDetailView: React.FC = () => {
       {selectedTask && (
         <div
           className="fixed inset-0 z-50 flex flex-col justify-end bg-brand-navy/20 lg:flex-row lg:justify-end"
-          onClick={() => { setSelectedTask(null); setFocusComment(null); }}
+          onClick={closeSelectedTask}
         >
           <div
             className="flex h-[88dvh] w-full flex-col overflow-hidden rounded-t-[22px] bg-background shadow-2xl lg:h-full lg:w-[620px] lg:rounded-none lg:border-l"
@@ -1802,7 +1811,7 @@ const ProjectDetailView: React.FC = () => {
             <TaskDetailPanel
               key={selectedTask.id}
               task={selectedTask}
-              onClose={() => { setSelectedTask(null); setFocusComment(null); }}
+              onClose={closeSelectedTask}
               comments={comments?.filter(c => c.taskId === selectedTask.id) || []}
               onAddComment={handleAddComment}
               focusCommentId={focusComment?.taskId === selectedTask.id ? focusComment.commentId : null}
