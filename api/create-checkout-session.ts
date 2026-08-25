@@ -59,7 +59,10 @@ async function eurToAllRate(teamId?: string, businessId?: string): Promise<numbe
 // Same host allowlist convention used by the email endpoints (ALLOWED_HOSTS).
 // We echo the request Origin only when its host is allowed — never a blanket
 // `*`, which combined with credentials:true is a CORS misconfiguration.
-const ALLOWED_HOSTS = (process.env.ALLOWED_HOSTS || 'fivoo.net,fivocrm.vercel.app,localhost,vercel.app')
+// NOTE: fivocrm.com is the PRIMARY domain — the public /pay page lives there, and
+// its success/cancel redirects go through the host allowlist below. Leaving it out
+// 400'd ("Invalid redirect URLs") every public-link payment.
+const ALLOWED_HOSTS = (process.env.ALLOWED_HOSTS || 'fivocrm.com,fivoo.net,fivocrm.vercel.app,localhost,vercel.app')
   .split(',')
   .map(h => h.trim())
   .filter(Boolean);
