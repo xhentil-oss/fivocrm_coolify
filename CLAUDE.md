@@ -498,13 +498,31 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
 - `cap sync` on Windows writes Windows paths into `ios/App/CapApp-SPM/Package.swift`,
   which are invalid Swift escapes and break every plugin. The configure script fixes
   them; do not "clean up" that step.
+- **Every `android/` setting lives in `scripts/android-configure.cjs`**, the exact
+  mirror of the iOS one: release signing wiring, R8 + proguard keep/dontwarn rules,
+  manifest (`allowBackup=false`, FCM notification icon/colour, POST_NOTIFICATIONS,
+  RECORD_AUDIO), `ic_stat_notify` + `notification_color`, `rgcfaIncludeGoogle`, and
+  the **versionCode/versionName** — which are the script's constants, not
+  build.gradle's, because a version that lives only in a gitignored file resets to 1
+  on regeneration and Play then rejects the upload. Idempotent; `npm run
+  android:sync` / `android:aab` run it for you. Only `google-services.json`, the
+  keystore and `keystore.properties` stay outside it (secrets/console downloads) —
+  the script checks for them and says how to restore each.
 - A platform-only API must be branched on `Capacitor.getPlatform()`
   (`StatusBar.setBackgroundColor` = Android-only, `Keyboard.setAccessoryBarVisible`
   = iOS-only) — an unguarded call rejects and surfaces as a startup error.
+- **`Keyboard.resizeOnFullScreen` must stay `false`.** While it was on, showing the
+  keyboard pinned a fixed pixel height on the activity's content view that only the
+  insets *animation* callback restores — so a keyboard dismissed without that
+  animation left the WebView a keyboard-height short FOREVER (the app rendered
+  correctly inside a viewport ending mid-screen). It is for immersive-fullscreen
+  apps; we are edge-to-edge, and Capacitor 8's `SystemBars` already handles the IME
+  inset. `resize` is iOS-only — Android's `KeyboardPlugin.java` never reads it.
 - iOS builds/archives need macOS: `.github/workflows/ios.yml` (manual, `verify` =
   unsigned simulator build, `testflight` = signed upload). Full runbook, Apple
   account steps and the App Store IAP/`Sign in with Apple` decisions:
-  `workspace/IOS_BUILD.md`.
+  `workspace/IOS_BUILD.md`. Android build, signing, JDK 21 toolchain and the
+  Play/Google-Sign-In fingerprint trap: `workspace/ANDROID_BUILD.md`.
 
 ### Notifications (bell + push + email)
 

@@ -38,8 +38,23 @@ const config: CapacitorConfig = {
       overlaysWebView: true,
     },
     Keyboard: {
-      resize: 'body',
-      resizeOnFullScreen: true,
+      // iOS only (Android ignores `resize` entirely — see KeyboardPlugin.java).
+      // 'native' resizes the WKWebView itself, so `100dvh` shrinks with the
+      // keyboard and the app shell (App.tsx) follows. 'body' only set a pixel
+      // height on <body>, which a viewport-unit layout never reads.
+      resize: 'native',
+      // MUST stay false. This is the legacy immersive-fullscreen hack: while the
+      // keyboard is up it pins a FIXED PIXEL height on the activity's content
+      // view (Keyboard.java → possiblyResizeChildOfContent), and the only code
+      // that restores it is the WindowInsetsAnimation callback — the inset
+      // LISTENER never resets it. If the keyboard goes away without that
+      // animation firing (app backgrounded mid-typing, Google sign-in, Samsung's
+      // dismiss gesture), the WebView stays a keyboard-height short FOREVER: the
+      // app renders correctly inside a viewport that ends mid-screen, with the
+      // bottom nav floating above a blank strip. We are edge-to-edge, not
+      // fullscreen, and Capacitor 8's own SystemBars already handles the IME
+      // inset — this only fought it.
+      resizeOnFullScreen: false,
     },
   },
 };
