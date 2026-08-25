@@ -1,5 +1,5 @@
 import React, { useState, useMemo } from 'react';
-import { NavLink, Outlet, useNavigate, Navigate } from 'react-router-dom';
+import { NavLink, Outlet, useNavigate, Navigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { usePermissions } from '../../contexts/PermissionsContext';
@@ -41,6 +41,7 @@ const PortalLayout: React.FC = () => {
   const permissions = usePermissions();
   const { isClient, isLoading, businessId } = useClientPortal();
   const navigate = useNavigate();
+  const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
 
   // ── Unread staff messages badge ──
@@ -103,7 +104,11 @@ const PortalLayout: React.FC = () => {
   }
 
   if (!user) {
-    return <Navigate to="/login?redirect=/portal" replace />;
+    // Preserve the FULL destination (path + query), not a fixed '/portal': the
+    // invoice email's "Paguaj Tani" button lands on /portal/invoices?invoice=<id>,
+    // and login must bring the client back to that exact invoice. LoginView
+    // validates the redirect as a safe relative path.
+    return <Navigate to={`/login?redirect=${encodeURIComponent(location.pathname + location.search)}`} replace />;
   }
 
   if (!isClient) {
