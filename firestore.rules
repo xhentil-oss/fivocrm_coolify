@@ -989,10 +989,27 @@ service cloud.firestore {
         request.resource.data.teamId is string ||
         request.resource.data.senderType == 'client'
       );
-      // Editing stays author-only; deleting is author OR tenant staff — the
-      // task-delete cascade removes the comments of a deleted task, and those
-      // are rarely all authored by whoever deletes the task.
-      allow update: if isAuth() && resource.data.createdByUserId == request.auth.uid;
+      // Editing stays AUTHOR-only. A reaction is not an edit: it is a
+      // collaborative action, so anyone who can already READ the comment may
+      // toggle their own emoji — the diff must touch nothing but the reaction
+      // map (plus the `updatedAt` that useMutation stamps automatically).
+      // Without this branch every reaction on someone ELSE's comment was
+      // denied by the rules and failed silently in the UI.
+      allow update: if isAuth() && (
+        resource.data.createdByUserId == request.auth.uid
+        || (
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['reactions', 'updatedAt'])
+          && (
+            isBusinessMember(resource.data.businessId)
+            || isPortalClientFor(resource.data.customerId)
+            || isSuperAdmin()
+          )
+        )
+      );
+      // Deleting is author OR tenant staff — the task-delete cascade removes the
+      // comments of a deleted task, and those are rarely all authored by whoever
+      // deletes the task.
       allow delete: if (isAuth() && resource.data.createdByUserId == request.auth.uid)
         || canManageBusinessDoc();
     }
@@ -1045,9 +1062,26 @@ service cloud.firestore {
         || isSuperAdmin();
       // Portal clients create their own comments; staff carry their businessId.
       allow create: if canCreateBusinessDoc() || isSelfCreate();
-      // Editing stays author-only; deleting is author OR tenant staff, so the
-      // project-delete cascade can actually remove the project's comments.
-      allow update: if isAuth() && resource.data.createdByUserId == request.auth.uid;
+      // Editing stays AUTHOR-only. A reaction is not an edit: it is a
+      // collaborative action, so anyone who can already READ the comment may
+      // toggle their own emoji — the diff must touch nothing but the reaction
+      // map (plus the `updatedAt` that useMutation stamps automatically).
+      // Without this branch every reaction on someone ELSE's comment was
+      // denied by the rules and failed silently in the UI.
+      allow update: if isAuth() && (
+        resource.data.createdByUserId == request.auth.uid
+        || (
+          request.resource.data.diff(resource.data).affectedKeys()
+            .hasOnly(['reactions', 'updatedAt'])
+          && (
+            isBusinessMember(resource.data.businessId)
+            || isPortalClientFor(resource.data.customerId)
+            || isSuperAdmin()
+          )
+        )
+      );
+      // Deleting is author OR tenant staff, so the project-delete cascade can
+      // actually remove the project's comments.
       allow delete: if (isAuth() && resource.data.createdByUserId == request.auth.uid)
         || canManageBusinessDoc();
     }

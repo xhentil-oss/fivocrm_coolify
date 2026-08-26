@@ -610,7 +610,14 @@ const TasksView: React.FC = () => {
     const i = arr.indexOf(user.uid);
     if (i >= 0) arr.splice(i, 1); else arr.push(user.uid);
     if (arr.length) current[emoji] = arr; else delete current[emoji];
-    await commentMutation.update(commentId, { reactions: current } as any);
+    // Never fail silently: a reaction on someone else's comment is a rules-level
+    // write (see the `reactions`-only branch on taskComments), so a stale rules
+    // deploy shows up as nothing happening at all unless we say so.
+    try {
+      await commentMutation.update(commentId, { reactions: current } as any);
+    } catch (err: any) {
+      toast({ title: 'Reagimi nuk u ruajt', description: err?.message || 'Provo përsëri.', variant: 'destructive' });
+    }
   };
 
   // --- @dnd-kit drag-and-drop for kanban ---

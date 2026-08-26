@@ -1278,3 +1278,60 @@ test('46. a Member may still edit a LEGACY approved expense that has no date fie
     date: new Date(2020, 0, 1), approvalStatus: 'Submitted',
   }));
 });
+
+test('47. a colleague may react to a comment but not rewrite it', async () => {
+  // Reactions on task/project comments were denied for everyone but the author
+  // (`allow update: createdByUserId == uid`), so the emoji picker silently did
+  // nothing on anyone else's comment. The fix is a reactions-only diff branch.
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    const db = ctx.firestore();
+    await setDoc(doc(db, 'taskComments', 'tcMine'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, taskId: 'task1',
+      content: 'Kjo detyrë është gati', createdByUserId: 'zoe',
+    });
+    await setDoc(doc(db, 'taskComments', 'tcClientVisible'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, taskId: 'task1', customerId: 'cust1',
+      content: 'Faleminderit', createdByUserId: 'zoe',
+    });
+    await setDoc(doc(db, 'taskComments', 'tcVictim'), {
+      businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, taskId: 'taskV',
+      content: 'Victim comment', createdByUserId: 'vstaff',
+    });
+    await setDoc(doc(db, 'projectComments', 'pcMine'), {
+      businessId: MY_BIZ, teamId: MY_TEAM, projectId: 'proj1',
+      content: 'Nisim javën tjetër', createdByUserId: 'zoe',
+    });
+  });
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  // The write the UI actually sends: the reaction map + useMutation's updatedAt.
+  await assertSucceeds(updateDoc(doc(alice, 'taskComments', 'tcMine'), {
+    reactions: { '👍': ['alice'] }, updatedAt: new Date(),
+  }));
+  await assertSucceeds(updateDoc(doc(alice, 'projectComments', 'pcMine'), {
+    reactions: { '🔥': ['alice'] }, updatedAt: new Date(),
+  }));
+  // Un-reacting (the map goes empty) must work too.
+  await assertSucceeds(updateDoc(doc(alice, 'taskComments', 'tcMine'), {
+    reactions: {}, updatedAt: new Date(),
+  }));
+  // Editing stays author-only — a reaction must not become a licence to rewrite.
+  await assertFails(updateDoc(doc(alice, 'taskComments', 'tcMine'), {
+    reactions: { '👍': ['alice'] }, content: 'kjo nuk është ajo që shkrova', updatedAt: new Date(),
+  }));
+  // Nor to move the comment into another tenant.
+  await assertFails(updateDoc(doc(alice, 'taskComments', 'tcMine'), {
+    reactions: { '👍': ['alice'] }, businessId: VICTIM_BIZ,
+  }));
+  // Cross-tenant: reacting by doc id stays closed.
+  await assertFails(updateDoc(doc(alice, 'taskComments', 'tcVictim'), {
+    reactions: { '👍': ['alice'] }, updatedAt: new Date(),
+  }));
+  // A portal client may react on a comment shared with them, and only on that one.
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+  await assertSucceeds(updateDoc(doc(carol, 'taskComments', 'tcClientVisible'), {
+    reactions: { '❤️': ['carol'] }, updatedAt: new Date(),
+  }));
+  await assertFails(updateDoc(doc(carol, 'taskComments', 'tcMine'), {
+    reactions: { '❤️': ['carol'] }, updatedAt: new Date(),
+  }));
+});
