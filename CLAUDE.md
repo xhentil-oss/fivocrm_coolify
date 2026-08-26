@@ -565,6 +565,12 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   `restrictedPermissions`, every role branch in `usePermissions.ts`, `simulateRole` in
   `PermissionsContext.tsx`, `MODULES`/`DEFAULT_TEMPLATES` in `SettingsView.tsx`,
   `TeamMember`/`TeamInvite` types, TeamsView checkboxes, and `createTenant.ts`.
+- `canAssignTasks` ("may hand work to a colleague") is role-derived for
+  Admin/Manager/SalesAgent, and a **per-member override** for Member/Sales:
+  `teamMembers.canAssignTasks`, set from Ekipet → Ndrysho Lejet (or Cilësimet →
+  Rolet → Apliko te të gjithë). A Viewer can never have it. Without it the
+  assignee picker in QuickTaskForm/TaskDetailPanel is filtered to the user
+  themselves — the reason a Member sees "no other users" when assigning.
 - Client portal users are separate — they use `clientPortalAccess` collection.
 
 ---

@@ -284,6 +284,10 @@ const TeamsView: React.FC = () => {
     const canAccessProducts = formData.get('canAccessProducts') === 'on';
     const canAccessExpenses = formData.get('canAccessExpenses') === 'on';
     const canAccessProfile = formData.get('canAccessProfile') === 'on';
+    // NOT a module gate: this one lets the person assign work to COLLEAGUES.
+    // Admin/Manager/SalesAgent have it from their role; for Member/Sales it is
+    // this checkbox or nothing (see usePermissions).
+    const canAssignTasks = formData.get('canAssignTasks') === 'on';
 
     // Prevent duplicate pending invite for same email + team (case-insensitive)
     const normalizedEmail = email.toLowerCase().trim();
@@ -335,6 +339,7 @@ const TeamsView: React.FC = () => {
       canAccessProducts,
       canAccessExpenses,
       canAccessProfile,
+      canAssignTasks,
       status: 'Pending',
     });
 
@@ -400,6 +405,7 @@ const TeamsView: React.FC = () => {
     const canAccessProducts = formData.get('canAccessProducts') === 'on';
     const canAccessExpenses = formData.get('canAccessExpenses') === 'on';
     const canAccessProfile = formData.get('canAccessProfile') === 'on';
+    const canAssignTasks = formData.get('canAssignTasks') === 'on';
 
     await memberMutation.create({
       userId,
@@ -420,6 +426,7 @@ const TeamsView: React.FC = () => {
       canAccessProducts,
       canAccessExpenses,
       canAccessProfile,
+      canAssignTasks,
       invitedByUserId: user.uid,
       invitedAt: new Date(),
       status: 'Active',
@@ -1183,6 +1190,17 @@ const AddMemberForm: React.FC<{
         </div>
       </div>
 
+      <div className="space-y-3">
+        <Label>Lejet e Punës</Label>
+        <div className="flex items-start gap-2">
+          <Checkbox id="addCanAssignTasks" name="canAssignTasks" className="mt-0.5" />
+          <div>
+            <Label htmlFor="addCanAssignTasks" className="font-normal">Cakto detyra te të tjerët</Label>
+            <p className="text-xs text-muted-foreground">Pa këtë, anëtari krijon detyra vetëm për vete. Admin, Manager dhe Agjent Shitje e kanë gjithmonë.</p>
+          </div>
+        </div>
+      </div>
+
       <Button type="submit" className="w-full">
         <UserPlus className="w-4 h-4 mr-2" />
         Shto Anëtarin
@@ -1299,6 +1317,17 @@ const InviteMemberForm: React.FC<{
         </div>
       </div>
 
+      <div className="space-y-3">
+        <Label>Lejet e Punës</Label>
+        <div className="flex items-start gap-2">
+          <Checkbox id="inviteCanAssignTasks" name="canAssignTasks" className="mt-0.5" />
+          <div>
+            <Label htmlFor="inviteCanAssignTasks" className="font-normal">Cakto detyra te të tjerët</Label>
+            <p className="text-xs text-muted-foreground">Pa këtë, anëtari krijon detyra vetëm për vete. Admin, Manager dhe Agjent Shitje e kanë gjithmonë.</p>
+          </div>
+        </div>
+      </div>
+
       <Button type="submit" className="w-full">
         <Mail className="w-4 h-4 mr-2" />
         Dërgo Ftesën
@@ -1322,6 +1351,9 @@ const EditMemberForm: React.FC<{
   const [canAccessInvoices, setCanAccessInvoices] = useState(member.canAccessInvoices ?? false);
   const [canAccessReports, setCanAccessReports] = useState(member.canAccessReports ?? false);
   const [canAccessSettings, setCanAccessSettings] = useState(member.canAccessSettings ?? false);
+  // Capability, not a module: "may hand work to a colleague". Admin/Manager/
+  // SalesAgent get it from the role itself; Member and Sales only from here.
+  const [canAssignTasks, setCanAssignTasks] = useState(member.canAssignTasks ?? false);
   const [status, setStatus] = useState(member.status);
   const [monthlySalary, setMonthlySalary] = useState(member.monthlySalary?.toString() || '');
   // Salary-history: date a salary change takes effect (used only when the salary
@@ -1350,6 +1382,10 @@ const EditMemberForm: React.FC<{
     [svcForLines]
   );
 
+  // Roles whose default already includes assigning work — the checkbox is then
+  // shown ticked and locked, so nobody thinks unticking it takes the right away.
+  const roleGrantsAssign = role === 'Admin' || role === 'Manager' || role === 'SalesAgent';
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const newSalary = monthlySalary ? parseFloat(monthlySalary) : undefined;
@@ -1376,6 +1412,7 @@ const EditMemberForm: React.FC<{
       canAccessInvoices,
       canAccessReports,
       canAccessSettings,
+      canAssignTasks,
       status,
       displayName: displayName.trim() || undefined,
       email: email.trim() || undefined,
@@ -1547,6 +1584,32 @@ const EditMemberForm: React.FC<{
               disabled={role === 'Admin'}
             />
             <Label htmlFor="editCanAccessSettings" className="font-normal">Cilësimet</Label>
+          </div>
+        </div>
+      </div>
+
+      {/* Work capabilities — deliberately separate from the module list above:
+          these do not open a page, they change what the person may do to OTHER
+          people's work. */}
+      <div className="space-y-3">
+        <Label>Lejet e Punës</Label>
+        <div className="flex items-start gap-2">
+          <Checkbox
+            id="editCanAssignTasks"
+            checked={roleGrantsAssign || canAssignTasks}
+            onCheckedChange={(checked) => setCanAssignTasks(checked as boolean)}
+            disabled={roleGrantsAssign || role === 'Viewer'}
+            className="mt-0.5"
+          />
+          <div>
+            <Label htmlFor="editCanAssignTasks" className="font-normal">Cakto detyra te të tjerët</Label>
+            <p className="text-xs text-muted-foreground">
+              {roleGrantsAssign
+                ? `Roli "${role}" e jep automatikisht këtë leje.`
+                : role === 'Viewer'
+                  ? 'Shikuesi është vetëm-lexim — nuk mund të caktojë detyra.'
+                  : 'Pa këtë, anëtari krijon detyra vetëm për vete.'}
+            </p>
           </div>
         </div>
       </div>

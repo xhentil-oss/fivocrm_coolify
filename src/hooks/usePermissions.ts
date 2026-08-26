@@ -411,7 +411,10 @@ export function usePermissions(): UserPermissions {
         canAccessTimeTracking: membership.canAccessTasks === true,
         canEdit: true,
         canComment: true,
-        canAssignTasks: false,
+        // Per-member override: the role default is "assign only to yourself", but an
+        // owner/admin can lift one person above it from Ekipet → Ndrysho Lejet
+        // (teamMembers.canAssignTasks) without promoting them to Manager.
+        canAssignTasks: membership.canAssignTasks === true,
         canManageMembers: false,
         // Reporting capabilities: role defaults + per-member overrides, resolved in
         // one place. Spread AFTER the literals so an override always wins.
@@ -530,7 +533,11 @@ export function usePermissions(): UserPermissions {
       canAccessTimeTracking: !isViewer ? true : membership.canAccessTasks === true,
       canEdit: !isViewer,
       canComment: true,
-      canAssignTasks: false,
+      // Per-member override (see the Sales branch): a Member may be granted the
+      // right to assign work to colleagues without becoming a Manager. A Viewer
+      // never can — the whole role is read-only, so assigning would contradict
+      // `canEdit: false`.
+      canAssignTasks: !isViewer && membership.canAssignTasks === true,
       canManageMembers: false,
       // Reporting capabilities: role defaults + per-member overrides, resolved in
       // one place. Spread AFTER the literals so an override always wins.

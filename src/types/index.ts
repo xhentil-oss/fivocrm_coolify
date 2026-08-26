@@ -687,6 +687,13 @@ export interface TeamMember {
   canAccessProducts?: boolean;
   canAccessExpenses?: boolean;
   canAccessProfile?: boolean;
+  /**
+   * Per-member override of "may assign a task to someone else". Role defaults
+   * (Admin/Manager/SalesAgent = yes, Member/Sales = no) live in usePermissions;
+   * this flag lifts a single person above their role's default without promoting
+   * them. Undefined = use the role default, so it can never silently revoke.
+   */
+  canAssignTasks?: boolean;
   monthlySalary?: number;
   /** Effective-dated salary changes, so historical months use the salary that
    *  applied then (not today's). Each entry = the monthly salary in effect from
@@ -1820,6 +1827,8 @@ export interface TeamInvite {
   canAccessProducts?: boolean;
   canAccessExpenses?: boolean;
   canAccessProfile?: boolean;
+  /** Carried onto the membership when the invite is accepted — see TeamMember. */
+  canAssignTasks?: boolean;
   status: 'Pending' | 'Accepted' | 'Rejected' | 'Cancelled';
   createdAt: Date;
   updatedAt: Date;

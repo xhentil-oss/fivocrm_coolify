@@ -184,6 +184,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         canAccessServices: invite.canAccessServices ?? false,
         canAccessExpenses: invite.canAccessExpenses ?? false,
         canAccessProfile: invite.canAccessProfile ?? false,
+        // Capability, not a module gate — carried across so an invite that
+        // granted "may assign work to colleagues" still means that after accept.
+        canAssignTasks: invite.canAssignTasks ?? false,
         invitedByUserId: invite.invitedByUserId || null,
         invitedAt: now,
         status: 'Active',

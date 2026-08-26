@@ -2302,6 +2302,10 @@ const MODULES: { key: string; label: string }[] = [
   { key: 'canManageReportTemplates',  label: '↳ Menaxho template & KPI' },
   { key: 'canViewFinancialMetrics',   label: '↳ Metrika financiare' },
   { key: 'canAccessTimeTracking',label: 'Orari' },
+  // Not a module gate: this one decides whether the person may hand a task to a
+  // COLLEAGUE. Admin/Manager/SalesAgent have it from the role; for Member and
+  // Sales it is this flag (or the per-member checkbox in Ekipet) or nothing.
+  { key: 'canAssignTasks',       label: 'Cakto detyra te të tjerët' },
   { key: 'canAccessChat',        label: 'Chat' },
   { key: 'canAccessWhatsapp',    label: 'WhatsApp' },
   { key: 'canAccessSettings',    label: 'Cilësimet' },
@@ -2346,6 +2350,7 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
     // Reporting defaults come from the module's own resolver, so the template shown
     // here can never drift from what usePermissions actually grants.
+    canAssignTasks: false,
     ...reportingCapabilitiesFor('Sales'),
   },
   SalesAgent: {
@@ -2353,6 +2358,7 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
     canAccessCRM: true, canAccessCustomers: true, canAccessInvoices: true,
     canAccessServices: true, canAccessProducts: true, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
+    canAssignTasks: true,
     ...reportingCapabilitiesFor('SalesAgent'),
   },
   Manager: {
@@ -2360,6 +2366,7 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
     canAccessServices: false, canAccessProducts: false, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
+    canAssignTasks: true,
     ...reportingCapabilitiesFor('Manager'),
   },
   Member: {
@@ -2367,6 +2374,7 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
     canAccessServices: false, canAccessProducts: false, canAccessExpenses: false,
     canAccessTimeTracking: true, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
+    canAssignTasks: false,
     ...reportingCapabilitiesFor('Member'),
   },
   Viewer: {
@@ -2374,6 +2382,7 @@ const DEFAULT_TEMPLATES: Record<RoleKey, TemplateMap> = {
     canAccessCRM: false, canAccessCustomers: false, canAccessInvoices: false,
     canAccessServices: false, canAccessProducts: false, canAccessExpenses: false,
     canAccessTimeTracking: false, canAccessChat: true, canAccessWhatsapp: true, canAccessSettings: false,
+    canAssignTasks: false,
     ...reportingCapabilitiesFor('Viewer'),
   },
 };

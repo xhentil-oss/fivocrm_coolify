@@ -48,8 +48,8 @@ const NOTIFY_ICON = path.join(RES, 'drawable', 'ic_stat_notify.xml');
  * folder is regenerated, and Play then rejects the upload as a duplicate
  * versionCode. Bump VERSION_CODE by 1 for every upload.
  */
-const VERSION_CODE = 28;
-const VERSION_NAME = '1.8.1';
+const VERSION_CODE = 29;
+const VERSION_NAME = '1.8.2';
 
 const done = [];
 const warnings = [];
