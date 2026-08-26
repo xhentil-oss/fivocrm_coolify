@@ -508,6 +508,13 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   android:sync` / `android:aab` run it for you. Only `google-services.json`, the
   keystore and `keystore.properties` stay outside it (secrets/console downloads) —
   the script checks for them and says how to restore each.
+- **`@capacitor/core`, `cli`, `android` and `ios` are pinned EXACTLY** (no `^`) and
+  must always share one version — the JS bridge and the native bridge are two halves
+  of the same thing. With carets npm resolved them apart (`core@8.4.2` vs
+  `cli/android@8.2.0`) and the only signal was one grey `[warn]` inside `cap sync`.
+  `scripts/capacitor-versions.cjs` is called first by both configure scripts: a
+  minor/major split FAILS the run, a patch split warns. Upgrade all four together.
+  Plugins version independently (peer `core >=8.0.0`) and need not match.
 - A platform-only API must be branched on `Capacitor.getPlatform()`
   (`StatusBar.setBackgroundColor` = Android-only, `Keyboard.setAccessoryBarVisible`
   = iOS-only) — an unguarded call rejects and surfaces as a startup error.

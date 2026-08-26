@@ -26,6 +26,7 @@
 const fs = require('fs');
 const path = require('path');
 const { generate: generateAssets } = require('./ios-brand-assets.cjs');
+const { checkCapacitorVersions } = require('./capacitor-versions.cjs');
 
 const ROOT = path.resolve(__dirname, '..');
 const IOS = path.join(ROOT, 'ios');
@@ -416,7 +417,26 @@ ${buildableRef}      </BuildableProductRunnable>
 }
 
 // ── run ──────────────────────────────────────────────────────────────────────
+
+// ── Capacitor version parity ─────────────────────────────────────────────────
+// Runs FIRST: configuring (or building) a native project whose native bridge is
+// a different Capacitor generation than the JS one is not worth doing. The
+// mismatch is otherwise a single grey `[warn]` line inside `cap sync` output.
+function checkVersionParity(platform) {
+  const { fatal, warnings: warns } = checkCapacitorVersions(platform);
+  if (fatal.length) {
+    console.error('');
+    console.error('Capacitor version mismatch');
+    console.error('');
+    for (const f of fatal) console.error(`  - ${f}`);
+    console.error('');
+    process.exit(1);
+  }
+  for (const w of warns) warnings.push(w);
+}
+
 function main() {
+  checkVersionParity('ios');
   if (!fs.existsSync(PBXPROJ)) {
     console.error('ios/ project not found. Run:\n  npm i && npx cap add ios && npm run ios:configure');
     process.exit(1);

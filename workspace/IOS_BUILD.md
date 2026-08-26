@@ -124,6 +124,13 @@ includes macOS minutes and reads `ios/App/App.xcodeproj` directly.
 `npm run ios:sync` — the iOS equivalent of `npm run android:sync`. Both are needed
 when both platforms are live.
 
+### Capacitor version parity
+`@capacitor/core`, `@capacitor/cli` and `@capacitor/ios` must be the SAME version,
+so they are pinned exactly (no `^`) in `package.json`. `ios-configure.cjs` calls
+`scripts/capacitor-versions.cjs` before anything else and stops the run on a
+minor/major split — see *Capacitor version parity* in
+`workspace/ANDROID_BUILD.md` for why, and for the four-package upgrade command.
+
 ---
 
 ## 4. App Store review — the two real blockers

@@ -86,6 +86,49 @@ cd android && ./gradlew.bat bundleRelease \
 
 Output: `android/app/build/outputs/bundle/release/app-release.aab`.
 
+### `npm install` here can silently delete the toolchain
+
+`NODE_ENV=production` is set in some shells on this machine, and npm reads it:
+`npm i <pkg>` then prunes every devDependency as a side effect (*"removed 391
+packages"*), taking `vite`, `vitest` and `typescript` with it — so the next
+`npm run android:sync` fails with a missing `vite`, nowhere near the install that
+caused it. Install with the flag spelled out:
+
+```bash
+NODE_ENV=development npm install --include=dev
+```
+
+---
+
+## Capacitor version parity (checked automatically)
+
+`@capacitor/core`, `@capacitor/cli` and `@capacitor/android` / `@capacitor/ios`
+must all be the **same version** — the JS bridge and the native bridge are two
+halves of one thing.
+
+They are therefore pinned **exactly** in `package.json` (no `^`). That is the
+fix, not a style choice: with carets, npm resolved them independently and the
+lockfile drifted to `core@8.4.2` against `cli/android@8.2.0`. `cap sync` does say
+so, but as one grey `[warn]` line in the middle of the plugin list — a mismatch
+that reaches a Play upload shows up as a plugin failing on real devices while
+everything builds clean.
+
+`scripts/capacitor-versions.cjs` is the tripwire, called first by both configure
+scripts (so by `android:sync`, `ios:sync` and `android:aab`):
+
+- differing **minor/major** → the build stops, printing the exact `npm i` line;
+- differing **patch** → a warning in the "Before building a release" block.
+
+To move Capacitor up, move all four together and re-run the platform sync:
+
+```bash
+npm i --save-exact @capacitor/core@X.Y.Z @capacitor/cli@X.Y.Z                    @capacitor/android@X.Y.Z @capacitor/ios@X.Y.Z
+npm run android:sync
+```
+
+Plugins (`@capacitor/app`, `keyboard`, …) are versioned separately and only
+peer-depend on `core >=8.0.0`, so they do **not** need to match.
+
 ---
 
 ## Google Sign-In after the first Play upload
