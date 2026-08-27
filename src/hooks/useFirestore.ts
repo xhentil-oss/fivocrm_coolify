@@ -19,6 +19,7 @@ import {
   DocumentData
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
+import { reportFirestoreError } from '../lib/firestoreRecovery';
 import { useAuth } from '../contexts/AuthContext';
 
 // Types for query options
@@ -468,6 +469,7 @@ export function useCollection<T = DocumentData>(
           })
           .catch((err) => {
             console.error(`Error fetching ${collectionName}:`, err);
+            reportFirestoreError(err);
             if (!cancelled) { setError(err as Error); setLoading(false); }
           });
       };
@@ -494,10 +496,13 @@ export function useCollection<T = DocumentData>(
         setError(null);
       }, (err) => {
         console.error(`Error fetching ${collectionName}:`, err);
+        reportFirestoreError(err);
         setError(err);
         setLoading(false);
       });
-    }).catch(() => { setData([]); setLoading(false); });
+      // A poisoned Firestore client makes `onSnapshot` THROW synchronously — the
+      // catch below would otherwise turn that into a silently empty screen.
+    }).catch((err) => { reportFirestoreError(err); setData([]); setLoading(false); });
 
     return () => {
       cancelled = true;
@@ -548,6 +553,7 @@ export function useDocument<T = DocumentData>(
       },
       (err) => {
         console.error(`Error fetching document:`, err);
+        reportFirestoreError(err);
         setError(err);
         setLoading(false);
       }
@@ -714,6 +720,11 @@ export function useMutation<T = DocumentData>(collectionName: string) {
                 actionLabel: (docData as any).actionLabel,
                 // Sender avatar → shown in the push (WhatsApp/Airbnb style). Optional.
                 imageUrl: (docData as any).imageUrl ?? (docData as any).avatarUrl,
+                // Chat only: which conversation this belongs to. The server skips
+                // push + email (never the document) when the recipient is provably
+                // reading that very thread, so a live back-and-forth stops buzzing
+                // their phone. Absent for everything else → always delivered.
+                conversationKey: (docData as any).conversationKey,
               }),
             });
             // Still non-blocking, but never SILENT: a 429/500 here means the doc

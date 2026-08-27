@@ -26,3 +26,48 @@ export function dndZoneStamp(): { dndTimeZone: string; dndUtcOffsetMinutes: numb
     dndUtcOffsetMinutes: -new Date().getTimezoneOffset(),
   };
 }
+
+// ── Do-Not-Disturb evaluation (client side) ───────────────────────────────────
+
+/** True when the current LOCAL time falls inside the user's Do-Not-Disturb window. */
+export function isInDndWindow(
+  prefs: { dndEnabled?: boolean; dndStart?: string; dndEnd?: string } | null | undefined,
+  now: Date = new Date(),
+): boolean {
+  if (!prefs?.dndEnabled || !prefs.dndStart || !prefs.dndEnd) return false;
+  const cur = now.getHours() * 60 + now.getMinutes();
+  const [sh, sm] = String(prefs.dndStart).split(':').map(Number);
+  const [eh, em] = String(prefs.dndEnd).split(':').map(Number);
+  if (![sh, sm, eh, em].every(Number.isFinite)) return false;
+  const start = sh * 60 + sm;
+  const end = eh * 60 + em;
+  // Equal start/end reads as "the whole day" (the window has no outside), matching
+  // the server (api/_push.ts isDndActive) — `start <= end` alone made it never active.
+  if (start === end) return true;
+  return start < end ? (cur >= start && cur < end) : (cur >= start || cur < end);
+}
+
+// ── Presence: "is this person looking at that conversation right now" ─────────
+//
+// The key is stamped onto `userPreferences/{uid}` — the SAME document the delivery
+// path already reads for pushEnabled/DND/mutes — so a presence check costs the
+// server nothing extra. Every chat notification carries the key of the conversation
+// it belongs to; `api/_push.ts` compares the two and skips push + email (never the
+// bell document) while the recipient is demonstrably reading that thread.
+
+/** A stamp older than this is stale — deliver normally (fail OPEN, never silence). */
+export const PRESENCE_FRESH_MS = 2 * 60 * 1000;
+
+/** Conversation key for a channel (group or client-portal channel). */
+export function channelConversationKey(channelId: string): string {
+  return `ch:${channelId}`;
+}
+
+/**
+ * Conversation key for a 1:1 DM, from the point of view of the person who has it
+ * OPEN — i.e. keyed on the OTHER participant. The sender must therefore stamp the
+ * notification with their OWN uid, which is the peer for the recipient.
+ */
+export function dmConversationKey(peerUserId: string): string {
+  return `dm:${peerUserId}`;
+}

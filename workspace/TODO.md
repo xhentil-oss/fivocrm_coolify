@@ -19,6 +19,12 @@ Rules:
 <!-- Add tasks here only when there are real next steps. -->
 
 <todo>
+Verify the chat-notification fixes on real devices
+All 9 are implemented (workspace/CHAT_NOTIFICATIONS_AUDIT_2026_08.md). Left to confirm in production: a web push tap now lands on the conversation (the SW fix only applies after a deploy), a group-channel message reaches every member's bell/push exactly once, and DND/Tingull actually silence the chat chirp. The notificationThrottle rule rides along with the next firestore:rules deploy.
+</todo>
+
+
+<todo>
 Deploy the invoice-module audit fixes
 Rules deploy (invoiceItems is now staff-only write), VPS cron restart for the new period-key recurrence engine, then `node scripts/fix-orphan-invoice-items.mjs --apply`. Full checklist: workspace/INVOICES_AUDIT_2026_08.md.
 </todo>

@@ -33,6 +33,8 @@ import { useToast } from '../hooks/use-toast';
 import { ToastAction } from '../components/ui/toast';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { getTimestampMs } from '../lib/utils';
+import { useNotificationPrefs, useConversationPresence } from '../hooks/useNotificationPrefs';
+import { channelConversationKey, dmConversationKey } from '../lib/notificationPrefs';
 import { auth, db } from '../lib/firebase';
 import { writeBatch, doc, updateDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import type { ChatMessage, UserProfile, Customer, ClientPortalAccess, Project, TeamMember, ClientRequest, Team, Task, Channel } from '../types';
@@ -62,6 +64,13 @@ interface AIMessage {
 // product decision — chat now uses dynamic groups + DMs only. Kept as an (empty)
 // typed list so the shared lookup/badge helpers that iterate it stay valid.
 const CHANNELS: { id: string; name: string; icon: typeof Hash; description: string }[] = [];
+
+// Fan-out ceiling for a group-channel notification. Each recipient costs one
+// notification document plus one delivery relay call, and the relay is rate limited
+// per caller (300/h) — an unbounded fan-out in a 100-person channel would exhaust it
+// and start dropping notifications for everything else. A truncated fan-out is
+// LOGGED, never silent.
+const MAX_CHANNEL_NOTIFY = 25;
 
 const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥', '🎉', '💯', '✅', '🙏', '😎', '🤔'];
 
@@ -547,16 +556,21 @@ const ChatView: React.FC = () => {
   // My unread bell notifications — used to auto-dismiss a chat notification (client
   // message / @mention) the moment I open its linked conversation. Without this the
   // message badge cleared but the bell count lingered until manually tapped.
-  const myUnreadNotifQuery = useMemo(() => ({
+  // EXACTLY the shape NotificationsCenter uses (userId + createdAt desc + limit 100),
+  // for two reasons. (1) The old query was `userId + isRead` with `limit: 200` and NO
+  // orderBy — Firestore then returns 200 documents by __name__, an arbitrary subset,
+  // so past 200 unread rows opening a conversation no longer cleared its bell entry.
+  // (2) The module-level listener cache keys on the query shape, so matching the bell
+  // means SHARING its listener instead of opening a second one. `isRead` is filtered
+  // client-side, and the existing notifications(userId, createdAt DESC) index covers it.
+  const myNotifQuery = useMemo(() => ({
     skip: !user?.uid,
-    where: user?.uid ? [
-      { field: 'userId', operator: '==' as const, value: user.uid },
-      { field: 'isRead', operator: '==' as const, value: false },
-    ] : undefined,
-    // Bounded: only used to auto-dismiss the bell entry for the channel just opened.
-    limit: 200,
+    where: user?.uid ? [{ field: 'userId', operator: '==' as const, value: user.uid }] : undefined,
+    orderBy: { field: 'createdAt', direction: 'desc' as const },
+    limit: 100,
   }), [user?.uid]);
-  const { data: myUnreadNotifs } = useCollection<any>('notifications', myUnreadNotifQuery);
+  const { data: myNotifs } = useCollection<any>('notifications', myNotifQuery);
+  const myUnreadNotifs = useMemo(() => (myNotifs || []).filter((n: any) => !n.isRead), [myNotifs]);
 
   const { data: sentDirectMessages, loading: sentPending } = useCollection<ChatMessage>('messages', directMsgQuery);
   const { data: receivedDirectMessages, loading: receivedPending } = useCollection<ChatMessage>('messages', directMsgReceivedQuery);
@@ -749,6 +763,23 @@ const ChatView: React.FC = () => {
     });
   }, [teamMembers, user?.uid]);
 
+  // Who is legitimately IN a conversation — i.e. the only people a notification
+  // about it may reach. A group channel carries an explicit `members` array; a
+  // client-portal channel is staff-side (the portal client is notified separately).
+  // Returns null when the audience cannot be resolved, and callers then fall back to
+  // "notify nobody new" rather than guessing — a mention that reaches a non-member
+  // ships 100 characters of the message to someone the Firestore rules would refuse
+  // to let open the channel.
+  const channelMemberIds = useCallback((channelId: string): string[] | null => {
+    if (!channelId) return null;
+    const group = (allGroups || []).find(g => g.id === channelId && (g as any).isGroup);
+    if (group) return Array.isArray((group as any).members) ? (group as any).members.filter(Boolean) : [];
+    if (channelId.startsWith('client-')) {
+      return (teamMembers || []).map((m: any) => m.userId).filter(Boolean);
+    }
+    return null;
+  }, [allGroups, teamMembers]);
+
   // Members matching the "start a new DM" search box (by display name).
   const dmSearchResults = useMemo(() => {
     const q = dmSearch.trim().toLowerCase();
@@ -760,6 +791,10 @@ const ChatView: React.FC = () => {
 
   const messageMutation = useMutation<ChatMessage>('messages');
   const notificationMutation = useMutation<any>('notifications');
+  // The ONE gate for every in-chat alert (chirp + toast). Cilësimet → Tingull, the
+  // DND window and a muted "Mesazhe" category were all invisible to this view, so
+  // chat rang through a mute and through DND.
+  const { canPlaySound, canAlert } = useNotificationPrefs();
   const userProfileMutation = useMutation<UserProfile>('userProfiles');
   const taskMutation = useMutation<Task>('tasks');
   const bookmarkMutation = useMutation<any>('chatBookmarks');
@@ -1512,6 +1547,17 @@ const ChatView: React.FC = () => {
     };
   }, [chatMode, activeChannel, activeDirectUserId]);
 
+  // Which conversation I am reading right now, published for the SENDER's benefit:
+  // a notification stamped with the same key is delivered to the bell but NOT pushed
+  // or emailed, so a colleague's message no longer buzzes a phone that is already
+  // showing it. The DM key is the PEER's uid, which is what the sender stamps.
+  const activeConversationKey = useMemo(() => {
+    if (chatMode === 'channel') return activeChannel ? channelConversationKey(activeChannel) : null;
+    if (chatMode === 'direct') return activeDirectUserId ? dmConversationKey(activeDirectUserId) : null;
+    return null;
+  }, [chatMode, activeChannel, activeDirectUserId]);
+  useConversationPresence(activeConversationKey);
+
   // Presence heartbeat — write lastSeen to my userProfile every 60 seconds.
   // Direct updateDoc, NOT userProfileMutation: userProfiles is a static (TTL-cached)
   // collection, and the mutation path invalidates that cache on every write — so the
@@ -1661,11 +1707,14 @@ const ChatView: React.FC = () => {
     const genuinelyNew = newIncoming.filter(
       m => getTimestampMs(m.createdAt) > mountTimeRef.current.getTime()
     );
-    if (genuinelyNew.length > 0) {
+    // Respect the user's own settings: the Tingull switch, the DND window and a muted
+    // "Mesazhe" category. This view read none of them, so chat was the one surface
+    // that rang anyway.
+    if (genuinelyNew.length > 0 && canPlaySound(chatMode === 'direct' ? 'direct_message' : 'channel_message')) {
       playBirdChirp();
     }
     filteredMessages.forEach(m => prevSeenMsgIdsRef.current.add(m.id));
-  }, [filteredMessages, user, playBirdChirp]);
+  }, [filteredMessages, user, playBirdChirp, canPlaySound, chatMode]);
 
   // Helpers
   // (displayNameCache + getUserDisplayName hoisted above near profileMap to fix TDZ.)
@@ -1944,8 +1993,10 @@ const ChatView: React.FC = () => {
       const notifyDMs = newDMs.filter(
         m => !(chatMode === 'direct' && activeDirectUserId === m.senderId)
       );
-      if (notifyDMs.length > 0) {
-        playBirdChirp();
+      // Same gates as every other surface — DND / mute silence the toast too, and
+      // the chirp additionally obeys the Tingull switch.
+      if (notifyDMs.length > 0 && canAlert('direct_message')) {
+        if (canPlaySound('direct_message')) playBirdChirp();
         notifyDMs.forEach(dm => {
           const senderName = getUserDisplayName(dm.senderId);
           const senderId = dm.senderId;
@@ -1965,7 +2016,7 @@ const ChatView: React.FC = () => {
       }
     }
     bgReceivedDMs.forEach(m => prevBgDmIdsRef.current.add(m.id));
-  }, [bgReceivedDMs, user, chatMode, activeDirectUserId, playBirdChirp, toast, getUserDisplayName]);
+  }, [bgReceivedDMs, user, chatMode, activeDirectUserId, playBirdChirp, toast, getUserDisplayName, canAlert, canPlaySound]);
 
   const formatDate = (date: any) => {
     if (!date) return '';
@@ -2125,7 +2176,12 @@ const ChatView: React.FC = () => {
       }
 
       if (targetMode === 'channel') {
-        await messageMutation.create({ ...baseMessage, channelId: targetChannel } as Omit<ChatMessage, 'id'>);
+        // The id is kept: every chat notification carries `messageId` so the reader
+        // can dismiss it when the message is later deleted (the sender cannot — the
+        // rules let only the recipient write a notification).
+        const createdMsg = await messageMutation.create({ ...baseMessage, channelId: targetChannel } as Omit<ChatMessage, 'id'>);
+        const messageId = (createdMsg as any)?.id as string | undefined;
+        const convKey = channelConversationKey(targetChannel);
 
         // Denormalize last-activity so the sidebar can sort conversations by
         // recency (WhatsApp-style). Fire-and-forget — never block the send.
@@ -2138,18 +2194,79 @@ const ChatView: React.FC = () => {
         }
 
         // Notify mentioned staff (mention highlighting existed but no notification was created)
+        const audience = channelMemberIds(targetChannel);
+        const notifiedMentions = new Set<string>();
         if (mentions.length > 0) {
-          mentions.filter(uid => uid !== user.uid).forEach(uid => {
-            notificationMutation.create({
-              userId: uid,
-              type: 'mention',
-              title: `${getUserDisplayName(user.uid)} ju përmendi`,
-              message: (finalText || '📎 Attachment').slice(0, 100),
-              isRead: false,
-              linkTo: targetChannel,
-              imageUrl: getUserAvatar(user.uid),
-            } as any).catch(() => { /* non-blocking */ });
-          });
+          mentions
+            .filter(uid => uid !== user.uid)
+            // A mention must never reach someone outside the conversation: the
+            // notification ships 100 characters of the message and a linkTo that the
+            // rules would refuse them. The picker is filtered too; this is the guard
+            // for a hand-typed name and for a member removed after the draft started.
+            .filter(uid => !audience || audience.includes(uid))
+            .forEach(uid => {
+              notifiedMentions.add(uid);
+              notificationMutation.create({
+                userId: uid,
+                type: 'mention',
+                title: `${getUserDisplayName(user.uid)} ju përmendi`,
+                message: (finalText || '📎 Attachment').slice(0, 100),
+                isRead: false,
+                linkTo: targetChannel,
+                imageUrl: getUserAvatar(user.uid),
+                conversationKey: convKey,
+                ...(messageId ? { messageId } : {}),
+              } as any).catch(() => { /* non-blocking */ });
+            });
+        }
+
+        // A message in a team/group channel used to notify NOBODY — no bell row, no
+        // push, no email, and the Sidebar badge did not count it either, so the whole
+        // conversation was invisible the moment the chat page was closed. Members are
+        // the channel's own `members` array, minus the sender and minus anyone the
+        // mention pass above already notified (two rows for one message otherwise).
+        const isGroupTarget = (allGroups || []).some(g => g.id === targetChannel && (g as any).isGroup);
+        if (isGroupTarget && audience) {
+          const eligible = audience.filter(uid => uid && uid !== user.uid && !notifiedMentions.has(uid));
+          const recipients = eligible.slice(0, MAX_CHANNEL_NOTIFY);
+          if (eligible.length > recipients.length) {
+            console.warn(`[ChatView] channel_message fan-out capped at ${MAX_CHANNEL_NOTIFY}: ${eligible.length - recipients.length} member(s) of ${targetChannel} were not notified`);
+          }
+          const channelName = (allGroups || []).find(g => g.id === targetChannel)?.name || 'Kanali';
+          if (recipients.length > 0) {
+            // ONE server call, not one per member. The usual browser path (a
+            // notification document per recipient through the mutation choke point)
+            // relays once per document, and that relay is rate limited per CALLER —
+            // a chatty group would have burned this user's whole hourly budget and
+            // silently dropped their task/invoice notifications with it. The server
+            // writes the documents itself (notifyUser) and re-checks membership
+            // against the channel document, which is also the stricter check.
+            void (async () => {
+              try {
+                const token = await auth.currentUser?.getIdToken();
+                if (!token) return;
+                const res = await fetch('/api/send-notification-email', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+                  body: JSON.stringify({
+                    channelFanout: {
+                      channelId: targetChannel,
+                      userIds: recipients,
+                      type: 'channel_message',
+                      title: `${getUserDisplayName(user.uid)} · ${channelName}`,
+                      message: (finalText || '📎 Attachment').slice(0, 100),
+                      imageUrl: getUserAvatar(user.uid),
+                      conversationKey: convKey,
+                      ...(messageId ? { messageId } : {}),
+                    },
+                  }),
+                });
+                if (!res.ok) console.warn(`[ChatView] channel_message fan-out failed (${res.status}) — members were not notified`);
+              } catch (err) {
+                console.warn('[ChatView] channel_message fan-out unreachable — members were not notified', err);
+              }
+            })();
+          }
         }
 
         if (isClientChannel) {
@@ -2174,7 +2291,24 @@ const ChatView: React.FC = () => {
               // still goes out, so a client without a portal login is not left out.
               const portalUid = (pa as any).userId;
               if (portalUid) {
-                try { await notificationMutation.create({ userId: portalUid, type: 'staff_message', title, message: (effectiveText || '📎 Attachment').slice(0, 100), isRead: false, linkTo: targetChannel, actionUrl: '/portal/chat' } as any); } catch { /* skip */ }
+                // actionUrl carries the PROJECT: the choke point prefers actionUrl over
+                // linkTo, so a bare '/portal/chat' landed every push about a project
+                // thread on the client's default conversation. PortalChatView reads
+                // ?project= on arrival and selects that channel.
+                const portalUrl = projId ? `/portal/chat?project=${encodeURIComponent(projId)}` : '/portal/chat';
+                try {
+                  await notificationMutation.create({
+                    userId: portalUid,
+                    type: 'staff_message',
+                    title,
+                    message: (finalText || '📎 Attachment').slice(0, 100),
+                    isRead: false,
+                    linkTo: targetChannel,
+                    actionUrl: portalUrl,
+                    conversationKey: convKey,
+                    ...(messageId ? { messageId } : {}),
+                  } as any);
+                } catch { /* skip */ }
               }
               // Direct email FALLBACK for a client with no portal login only: the
               // notification above already emails the portal user via the choke
@@ -2203,7 +2337,8 @@ const ChatView: React.FC = () => {
           }
         }
       } else if (targetDirectUserId) {
-        await messageMutation.create({ ...baseMessage, receiverId: targetDirectUserId } as Omit<ChatMessage, 'id'>);
+        const createdDm = await messageMutation.create({ ...baseMessage, receiverId: targetDirectUserId } as Omit<ChatMessage, 'id'>);
+        const dmMessageId = (createdDm as any)?.id as string | undefined;
         // Notify the recipient (push + email, arrives even when the app is closed).
         // DMs previously created no notification, so recipients missed messages while
         // away. Title = sender's name, imageUrl = their avatar (WhatsApp/Airbnb style).
@@ -2216,6 +2351,11 @@ const ChatView: React.FC = () => {
           isRead: false,
           actionUrl: `/app/chat?directUserId=${user.uid}`,
           imageUrl: getUserAvatar(user.uid),
+          // From the RECIPIENT's side this thread is keyed on me, the sender — that
+          // is the key their ChatView publishes while reading it, and the server
+          // uses the match to skip push+email (never the bell row).
+          conversationKey: dmConversationKey(user.uid),
+          ...(dmMessageId ? { messageId: dmMessageId } : {}),
         } as any).catch(() => { /* non-blocking */ });
       }
 
@@ -2657,6 +2797,34 @@ const ChatView: React.FC = () => {
     });
   }, [chatMode, activeChannel, activeDirectUserId, myUnreadNotifs]);
 
+  // A deleted message must not keep a bell row alive quoting text that no longer
+  // exists. Only the RECIPIENT may write a notification (rules: userId pinned,
+  // isRead/readAt only), so the sender structurally cannot clean up after
+  // handleDeleteMessage — this pass does it from the reader's side, using the
+  // `messageId` every chat notification now carries.
+  useEffect(() => {
+    if (!myUnreadNotifs?.length) return;
+    const deleted = new Set<string>();
+    const scan = (list: any[] | null | undefined) =>
+      (list || []).forEach(m => { if (m?.deletedAt && m.id) deleted.add(m.id); });
+    scan(channelMessages as any);
+    scan(allUnreadTeamMsgs as any);
+    scan(allUnreadClientMsgs as any);
+    scan(bgReceivedDMs as any);
+    if (deleted.size === 0) return;
+    const ids = myUnreadNotifs
+      .filter((n: any) => n.messageId && deleted.has(n.messageId) && !markedNotifReadRef.current.has(n.id))
+      .map((n: any) => n.id);
+    if (ids.length === 0) return;
+    ids.forEach((id: string) => markedNotifReadRef.current.add(id));
+    const batch = writeBatch(db);
+    ids.forEach((id: string) => batch.update(doc(db, 'notifications', id), { isRead: true }));
+    batch.commit().catch((err) => {
+      ids.forEach((id: string) => markedNotifReadRef.current.delete(id));
+      console.error('[ChatView] dismiss notifications of deleted messages failed', err);
+    });
+  }, [myUnreadNotifs, channelMessages, allUnreadTeamMsgs, allUnreadClientMsgs, bgReceivedDMs]);
+
   // Auto-resize textarea + @mention detection
   const handleTextareaInput = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
     const v = e.target.value;
@@ -2707,9 +2875,15 @@ const ChatView: React.FC = () => {
         .filter(c => c.name);
       return all.filter(c => c.name.toLowerCase().includes(q)).slice(0, 6);
     }
-    const all = (otherMembers || []).map(m => ({ uid: m.userId, name: getUserDisplayName(m.userId), kind: 'user' as const }));
+    // Only people who are actually in this conversation. Offering the whole business
+    // let you mention a non-member of a private group, who then got a push with the
+    // message text and a link to a channel the rules forbid them to read.
+    const audience = chatMode === 'channel' ? channelMemberIds(activeChannel) : null;
+    const all = (otherMembers || [])
+      .filter(m => !audience || audience.includes(m.userId))
+      .map(m => ({ uid: m.userId, name: getUserDisplayName(m.userId), kind: 'user' as const }));
     return all.filter(c => c.name.toLowerCase().includes(q)).slice(0, 6);
-  }, [mentionOpen, mentionQuery, mentionKind, otherMembers, getUserDisplayName, customers]);
+  }, [mentionOpen, mentionQuery, mentionKind, otherMembers, getUserDisplayName, customers, chatMode, activeChannel, channelMemberIds]);
 
   const insertMention = useCallback((name: string) => {
     const prefixLen = mentionKind === 'customer' ? 2 : 1;

@@ -1,7 +1,10 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminAuth, adminDb } from './_firebaseAdmin.js';
 import { isTypeMutedByPrefs } from './_notificationTypes.js';
-import { getUserPrefs, isDndActive, sendPushToUser, sendNotificationEmail } from './_push.js';
+import {
+  getUserPrefs, isDndActive, sendPushToUser, sendNotificationEmail,
+  isViewingConversation, shouldThrottleCategoryEmail, notifyUser,
+} from './_push.js';
 import { checkPersistentRateLimit } from './_rateLimit.js';
 
 // Simple in-memory per-caller rate limiter (best-effort; resets on cold start).
@@ -57,7 +60,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(429).json({ error: 'Rate limited', limitPerHour: RATE_LIMIT_PER_HOUR, retryAfterSeconds: 3600 });
   }
 
-  const { userId, type, title, message, actionUrl, actionLabel, imageUrl } = req.body || {};
+  const { userId, type, title, message, actionUrl, actionLabel, imageUrl, conversationKey, channelFanout } = req.body || {};
+
+  // ── Group-channel fan-out ───────────────────────────────────────────────────
+  // The documented browser path is one notification document per recipient through
+  // `useMutation('notifications')`, which relays once PER document. For a group
+  // channel that is one relay call per member per message, and the rate limit above
+  // is per CALLER — a chatty 25-person channel would exhaust a user's whole hourly
+  // budget and then silently drop their task/invoice notifications too. So a channel
+  // fan-out is ONE call: the server writes every document (notifyUser) and delivers
+  // it, counting as a single rate-limit unit.
+  //
+  // It is also the safer half: membership is verified HERE against the channel
+  // document, so a caller cannot address a channel they are not in, nor a member
+  // list they made up.
+  if (channelFanout) {
+    return handleChannelFanout(req, res, caller);
+  }
+
   if (!userId || !title) return res.status(400).json({ error: 'Missing userId or title' });
 
   // Don't notify someone about their own action.
@@ -113,6 +133,13 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (isDndActive(prefs)) return res.status(200).json({ skipped: 'dnd' });
   if (isTypeMutedByPrefs(type, prefs)) return res.status(200).json({ skipped: 'category-muted' });
 
+  // The recipient is reading this very conversation (chat views stamp it onto the
+  // same preferences document, so this is free). The in-app row already exists —
+  // written by the caller before this relay — so nothing is lost by staying quiet.
+  if (isViewingConversation(prefs, typeof conversationKey === 'string' ? conversationKey : null)) {
+    return res.status(200).json({ skipped: 'recipient-in-conversation' });
+  }
+
   const url = actionUrl ? String(actionUrl) : '/';
 
   // Both transports run even if one fails — they are independent channels.
@@ -125,14 +152,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       imageUrl: typeof imageUrl === 'string' ? imageUrl : undefined,
       prefs,
     }),
-    sendNotificationEmail(String(userId), {
-      title: String(title),
-      message: message ? String(message) : undefined,
-      actionUrl: url,
-      actionLabel: actionLabel ? String(actionLabel) : undefined,
-      type: type ? String(type) : undefined,
-      prefs,
-    }),
+    // Chat categories are email-throttled (see shouldThrottleCategoryEmail): a live
+    // conversation used to send one email per message, which also burned the relay's
+    // hourly budget. The push above is never throttled.
+    shouldThrottleCategoryEmail(String(userId), type ? String(type) : undefined).then(throttled =>
+      throttled ? 'throttled' as const : sendNotificationEmail(String(userId), {
+        title: String(title),
+        message: message ? String(message) : undefined,
+        actionUrl: url,
+        actionLabel: actionLabel ? String(actionLabel) : undefined,
+        type: type ? String(type) : undefined,
+        prefs,
+      })),
   ]);
 
   return res.status(200).json({
@@ -140,4 +171,71 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     push: push.skipped ?? `sent:${push.sent}${push.removed ? ` removed:${push.removed}` : ''}`,
     email,
   });
+}
+
+/** Max recipients per fan-out call — mirrors MAX_CHANNEL_NOTIFY in ChatView. */
+const MAX_FANOUT = 25;
+
+/**
+ * Notify the members of a chat channel about one message.
+ *
+ * Trust model: the CHANNEL is the authority, not the request. The caller must be a
+ * member, every target must be a member, and the tenant comes from the channel
+ * document — so the worst a malicious body can do is notify people who are already
+ * in a conversation with the caller.
+ */
+async function handleChannelFanout(req: VercelRequest, res: VercelResponse, caller: any) {
+  const f = req.body.channelFanout || {};
+  const channelId = typeof f.channelId === 'string' ? f.channelId : '';
+  const title = typeof f.title === 'string' ? f.title.slice(0, 200) : '';
+  if (!channelId || !title) return res.status(400).json({ error: 'Missing channelId or title' });
+  if (!Array.isArray(f.userIds) || f.userIds.length === 0) {
+    return res.status(400).json({ error: 'Missing userIds' });
+  }
+
+  let channel: any;
+  try {
+    const snap = await adminDb.collection('channels').doc(channelId).get();
+    if (!snap.exists) return res.status(404).json({ error: 'Channel not found' });
+    channel = snap.data();
+  } catch {
+    return res.status(503).json({ error: 'Channel lookup failed' }); // fail closed
+  }
+
+  const members: string[] = Array.isArray(channel.members) ? channel.members.filter((m: any) => typeof m === 'string') : [];
+  if (caller.superAdmin !== true && !members.includes(caller.uid)) {
+    return res.status(403).json({ error: 'Not a member of this channel' });
+  }
+
+  // Intersect with the real member list and drop the sender. A target the channel
+  // does not contain is silently dropped rather than notified — that is the whole
+  // point of resolving the audience server-side.
+  const requested = f.userIds.filter((u: any) => typeof u === 'string');
+  const targets = requested
+    .filter((uid: string) => uid !== caller.uid && members.includes(uid))
+    .slice(0, MAX_FANOUT);
+  const dropped = requested.length - targets.length;
+  if (targets.length === 0) return res.status(200).json({ success: true, notified: 0, dropped });
+
+  const results = await Promise.allSettled(targets.map((uid: string) => notifyUser({
+    userId: uid,
+    type: typeof f.type === 'string' ? f.type : 'channel_message',
+    title,
+    message: typeof f.message === 'string' ? f.message.slice(0, 500) : undefined,
+    linkTo: channelId,
+    imageUrl: typeof f.imageUrl === 'string' ? f.imageUrl : undefined,
+    conversationKey: typeof f.conversationKey === 'string' ? f.conversationKey : undefined,
+    messageId: typeof f.messageId === 'string' ? f.messageId : undefined,
+    // The tenant stamp comes from the CHANNEL, never from the request body — a wrong
+    // businessId would hide the row from GDPR export/delete.
+    businessId: channel.businessId || null,
+    teamId: channel.teamId || null,
+    actorUserId: caller.uid,
+  })));
+
+  const notified = results.filter(r => r.status === 'fulfilled' && (r.value as any)?.written).length;
+  results.forEach(r => {
+    if (r.status === 'rejected') console.error('[fanout] notifyUser failed:', r.reason);
+  });
+  return res.status(200).json({ success: true, notified, dropped });
 }

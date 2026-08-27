@@ -16,6 +16,9 @@ import { useVideoCall } from '../../hooks/useVideoCall';
 import VideoCallModal from '../../components/VideoCallModal';
 import type { ChatMessage, Project } from '../../types';
 import { notifyStaff } from '../../lib/notifyStaff';
+import { useLocation, useNavigate } from 'react-router-dom';
+import { useConversationPresence } from '../../hooks/useNotificationPrefs';
+import { channelConversationKey } from '../../lib/notificationPrefs';
 
 const EMOJI_REACTIONS = ['👍', '❤️', '😂', '😮', '😢', '🔥'];
 
@@ -104,6 +107,23 @@ const PortalChatView: React.FC = () => {
       : `client-${customerId}`)
     : '';
 
+  // Arrive from a push/bell deep-link on the RIGHT thread. A staff_message about a
+  // project channel used to carry a bare '/portal/chat' actionUrl (which the delivery
+  // choke point prefers over linkTo), so every such notification opened the default
+  // conversation. The param is stripped afterwards so a reload doesn't re-trigger it.
+  const location = useLocation();
+  const navigate = useNavigate();
+  useEffect(() => {
+    const projectParam = new URLSearchParams(location.search).get('project');
+    if (!projectParam) return;
+    setSelectedProjectId(projectParam);
+    navigate(location.pathname, { replace: true });
+  }, [location.search]);
+
+  // Tell the delivery path which conversation I am reading, so staff replies land in
+  // the bell without also pushing my phone while I am looking at them.
+  useConversationPresence(channelId ? channelConversationKey(channelId) : null);
+
   // Windowed message loading: fetch only the most recent `messageLimit` messages
   // (newest-first server-side), then sort ascending for display. "Load older"
   // grows the window. Portal client has no businessId → this query is not
@@ -170,15 +190,19 @@ const PortalChatView: React.FC = () => {
   // My unread bell notifications — a staff_message carries linkTo = this channel
   // id, so opening the conversation should clear it just like tapping it in the
   // bell would. Without this the badge lingered until manually tapped.
-  const { data: myUnreadNotifs } = useCollection<any>('notifications', {
+  // Same shape as PortalNotificationsBell (userId + createdAt desc + limit 50), so
+  // this SHARES its cached listener instead of opening a second one — and, unlike the
+  // old `userId + isRead` with a bare `limit: 200`, it actually returns the NEWEST
+  // rows: without an orderBy Firestore picks 200 by __name__, an arbitrary subset, so
+  // past 200 unread rows opening the chat no longer cleared its bell entry.
+  const { data: myNotifs } = useCollection<any>('notifications', {
     skip: !user?.uid,
-    where: user?.uid ? [
-      { field: 'userId', operator: '==', value: user.uid },
-      { field: 'isRead', operator: '==', value: false },
-    ] : undefined,
-    limit: 200,
+    where: user?.uid ? [{ field: 'userId', operator: '==', value: user.uid }] : undefined,
+    orderBy: { field: 'createdAt', direction: 'desc' },
+    limit: 50,
     skipTeamFilter: true,
   });
+  const myUnreadNotifs = React.useMemo(() => (myNotifs || []).filter((n: any) => !n.isRead), [myNotifs]);
   const markedNotifReadRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!channelId || !myUnreadNotifs?.length) return;

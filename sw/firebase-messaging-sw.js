@@ -65,8 +65,21 @@ var FIREBASE_CONFIG = __FIREBASE_CONFIG__;
 })();
 
 self.addEventListener('notificationclick', function (event) {
+  // ONLY the data-only notifications shown above belong to this handler.
+  //
+  // A payload with a `notification` block is displayed by the Firebase SDK itself,
+  // and `firebase.messaging(app)` (called in the IIFE above, i.e. BEFORE this line)
+  // installs the SDK's OWN notificationclick listener, which navigates to
+  // webpush.fcmOptions.link. The SDK stores its payload under the FCM_MSG key, so
+  // `data.url` is undefined for those — this handler fell through to its '/'
+  // fallback and the two listeners then RACED: the deep-link vs the dashboard. With
+  // no window open both called openWindow and two tabs appeared. Bail out and let
+  // the SDK route its own notifications.
+  var data = event.notification.data || {};
+  if (data.FCM_MSG || !data.url) return;
+
   event.notification.close();
-  var url = (event.notification.data && event.notification.data.url) || '/';
+  var url = data.url;
 
   event.waitUntil(
     clients.matchAll({ type: 'window', includeUncontrolled: true }).then(function (windowClients) {

@@ -34,6 +34,7 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   client_message: 'messages',
   staff_message: 'messages',
   direct_message: 'messages',
+  channel_message: 'messages',
   mention: 'messages',
   project_comment: 'messages',
   client_request: 'messages',

@@ -565,6 +565,43 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   `limit`). Index requirements live in `firestore.indexes.json`; the retention sweep
   needs `(isRead, createdAt)` and without it nothing was ever purged.
 
+### Chat notifications (the three surfaces + presence)
+
+Full audit: `workspace/CHAT_NOTIFICATIONS_AUDIT_2026_08.md`.
+
+- **Every message type notifies.** A DM → `direct_message`, an @mention → `mention`,
+  a group-channel message → `channel_message`, a client-portal message →
+  `staff_message` / `client_message`. A group message used to notify NOBODY (and was
+  in no badge) — if a new conversation kind appears, it needs its own registered type.
+- **The audience is the channel, never the business.** `channelMemberIds()` resolves
+  it and BOTH the mention picker and the notifier use it: a mention that reaches a
+  non-member ships message text plus a link the rules refuse to open.
+- **A channel fan-out is ONE server call** (`channelFanout` →
+  `api/_send-notification-email.ts` → `notifyUser()` per member), the single
+  documented exception to the browser choke point. The relay is rate limited per
+  CALLER (300/h) and fires once per notification DOCUMENT, so a per-member fan-out
+  from the browser would burn a chatty user's whole budget and silently drop their
+  task/invoice notifications with it. The endpoint re-derives members, `businessId`
+  and `teamId` from the CHANNEL document — never from the request body.
+- **Sound ownership is decided by the ROUTE, not the type.** On `/app/chat` the
+  ChatView chirp owns it; anywhere else the bell chime does. Suppressing chat types
+  in the bell instead (the old rule) meant an @mention made no sound at all whenever
+  the chat page was closed. Every surface gates on `useNotificationPrefs()` —
+  `soundEnabled`, DND and category mute were invisible to ChatView and the Sidebar.
+- **Presence lives in `userPreferences/{uid}`** (`activeConversationKey` +
+  `activeConversationAt`, heartbeat via `useConversationPresence`) because the
+  delivery path already reads that document — so skipping push+email for someone who
+  is looking at the message costs no extra read. It is stamped only while the tab is
+  VISIBLE, and a stale stamp fails OPEN (`PRESENCE_FRESH_MS`, mirrored in
+  `api/_push.ts` and guarded by a test). The bell row is ALWAYS written.
+- **The `messages` category is email-throttled, not muted** (15 min per recipient,
+  `notificationThrottle/{uid}`, server-only). Push and the bell are never throttled —
+  chat is realtime, and one email per message both spammed the recipient and burned
+  the relay budget.
+- **Chat notifications carry `conversationKey` + `messageId`.** The rules let only the
+  RECIPIENT write a notification, so the sender cannot clean up after deleting a
+  message — the reader's ChatView dismisses rows whose `messageId` is deleted.
+
 ### Roles & Permissions
 - Roles: `Admin`, `Manager`, `Sales`, `SalesAgent`, `Member`, `Viewer`
 - Permission checks via `usePermissions()` hook and `<PermissionGate>` component.

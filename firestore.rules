@@ -1788,6 +1788,18 @@ service cloud.firestore {
       allow read, write: if isAuth() && request.auth.uid == userId;
     }
 
+    // ── notificationThrottle: server-only email coalescing state ──
+    // One doc per user holding "when did we last EMAIL them about this category".
+    // Chat is realtime, so a live conversation used to produce one email per message
+    // (and burn the relay's hourly budget with it) — api/_push.ts
+    // shouldThrottleCategoryEmail coalesces the `messages` category to one email per
+    // 15 minutes. Push and the bell row are never throttled.
+    // Written only by the Admin SDK; nothing client-side reads it, so it is closed
+    // outright rather than left to the default deny.
+    match /notificationThrottle/{userId} {
+      allow read, write: if false;
+    }
+
     // ── userPushTokens: FCM push tokens per user ──
     // The parent doc is the LEGACY single-token record (one device per user, which is
     // why registering on a second device silently killed push on the first). Devices

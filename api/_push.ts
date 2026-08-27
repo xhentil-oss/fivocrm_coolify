@@ -90,6 +90,73 @@ export function isSilenced(prefs: any, type?: string | null, now = new Date()): 
   return isDndActive(prefs, now) || isTypeMutedByPrefs(type, prefs);
 }
 
+// ── Presence: don't buzz a phone that is already showing the message ──────────
+//
+// The chat views stamp `activeConversationKey` + `activeConversationAt` onto
+// `userPreferences/{uid}` — the document this file already loads for every send — so
+// the check costs no extra read. It suppresses PUSH and EMAIL only; the in-app
+// notification document is always written, because the reader may walk away a second
+// later. Keep in sync with src/lib/notificationPrefs.ts.
+
+/** A stamp older than this is stale: deliver normally (fail OPEN, never silence). */
+export const PRESENCE_FRESH_MS = 2 * 60 * 1000;
+
+function toMillis(value: any): number | null {
+  if (!value) return null;
+  if (typeof value?.toMillis === 'function') return value.toMillis();
+  if (value instanceof Date) return value.getTime();
+  if (typeof value?.seconds === 'number') return value.seconds * 1000;
+  const parsed = new Date(value).getTime();
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+/**
+ * True when the recipient is demonstrably reading `conversationKey` right now.
+ *
+ * Fail-open by construction: no key on the notification, no stamp on the prefs, a
+ * different conversation or a stale heartbeat all return false → deliver.
+ */
+export function isViewingConversation(prefs: any, conversationKey?: string | null, now = Date.now()): boolean {
+  if (!conversationKey || typeof conversationKey !== 'string') return false;
+  if (prefs?.activeConversationKey !== conversationKey) return false;
+  const at = toMillis(prefs?.activeConversationAt);
+  if (at === null) return false;
+  return now - at < PRESENCE_FRESH_MS;
+}
+
+// ── Email throttle for the `messages` category ────────────────────────────────
+//
+// `emailEnabled` is all-or-nothing and a category mute silences push too, so a
+// 30-message conversation meant 30 emails — and it burned the 300/hour relay budget,
+// after which everything else was dropped with only a console warning. Chat is
+// realtime: push is the right channel, and one email is enough to tell someone who
+// is away that they have messages waiting.
+//
+// PUSH and the bell row are never throttled — only the email.
+
+export const MESSAGES_EMAIL_THROTTLE_MS = 15 * 60 * 1000;
+const THROTTLED_CATEGORIES = new Set(['messages']);
+
+/**
+ * Consume one email slot for (user, category). Returns true when the email should be
+ * SKIPPED. Best-effort and fail-open: any read/write error sends the email.
+ */
+export async function shouldThrottleCategoryEmail(userId: string, type?: string | null): Promise<boolean> {
+  const category = type ? NOTIFICATION_TYPE_CATEGORY[String(type)] : undefined;
+  if (!category || !THROTTLED_CATEGORIES.has(category)) return false;
+  const ref = db.collection('notificationThrottle').doc(String(userId));
+  try {
+    const snap = await ref.get();
+    const last = toMillis(snap.exists ? (snap.data() as any)?.[`${category}EmailAt`] : null);
+    const now = Date.now();
+    if (last !== null && now - last < MESSAGES_EMAIL_THROTTLE_MS) return true;
+    await ref.set({ [`${category}EmailAt`]: new Date(now) }, { merge: true });
+    return false;
+  } catch {
+    return false; // never let a bookkeeping failure swallow a notification
+  }
+}
+
 // ── Push tokens (multi-device) ────────────────────────────────────────────────
 
 interface TokenEntry {
@@ -350,6 +417,18 @@ export interface NotifyUserInput {
   push?: boolean;
   /** Set false when the caller already sends its own, richer email. */
   email?: boolean;
+  /**
+   * Chat only: which conversation this notification belongs to (see
+   * isViewingConversation). When the recipient is provably reading that thread the
+   * push and the email are skipped — the bell row is still written.
+   */
+  conversationKey?: string | null;
+  /**
+   * Chat only: the message this notification is about. The reader uses it to dismiss
+   * the row when the message is later deleted — the sender cannot, since the rules
+   * let only the recipient write a notification.
+   */
+  messageId?: string | null;
 }
 
 export interface NotifyUserResult {
@@ -357,6 +436,8 @@ export interface NotifyUserResult {
   push?: PushResult;
   email?: string;
   skipped?: 'no-user' | 'self';
+  /** The recipient was reading this very conversation → push + email suppressed. */
+  inConversation?: boolean;
 }
 
 /**
@@ -414,6 +495,8 @@ export async function notifyUser(input: NotifyUserInput): Promise<NotifyUserResu
   if (input.teamId) doc.teamId = input.teamId;
   if (input.customerId) doc.customerId = input.customerId;
   if (input.projectId) doc.projectId = input.projectId;
+  if (input.conversationKey) doc.conversationKey = input.conversationKey;
+  if (input.messageId) doc.messageId = input.messageId;
 
   await db.collection('notifications').add(doc);
 
@@ -427,6 +510,13 @@ export async function notifyUser(input: NotifyUserInput): Promise<NotifyUserResu
     ? (String(rawLink).startsWith('/') ? String(rawLink) : `/app/chat?channel=${encodeURIComponent(String(rawLink))}`)
     : '/';
 
+  // Reading it right now → the bell row above is enough; do not buzz the phone or
+  // send an email about a message the person is looking at.
+  if (isViewingConversation(prefs, input.conversationKey)) {
+    result.inConversation = true;
+    return result;
+  }
+
   if (input.push !== false) {
     result.push = await sendPushToUser(userId, {
       title: input.title,
@@ -439,14 +529,18 @@ export async function notifyUser(input: NotifyUserInput): Promise<NotifyUserResu
   }
 
   if (input.email !== false) {
-    result.email = await sendNotificationEmail(userId, {
-      title: input.title,
-      message: input.message,
-      actionUrl: url,
-      actionLabel: input.actionLabel,
-      type: input.type,
-      prefs,
-    });
+    // Chat categories are throttled so a live conversation cannot turn into one email
+    // per message. Push above is untouched — only the email is coalesced.
+    result.email = (await shouldThrottleCategoryEmail(userId, input.type))
+      ? 'throttled'
+      : await sendNotificationEmail(userId, {
+        title: input.title,
+        message: input.message,
+        actionUrl: url,
+        actionLabel: input.actionLabel,
+        type: input.type,
+        prefs,
+      });
   }
 
   return result;

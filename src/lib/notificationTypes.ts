@@ -56,6 +56,9 @@ export const NOTIFICATION_TYPES = {
   client_message:           { category: 'messages', priority: 'info',     groupLabel: 'mesazhe klienti', portal: true },
   staff_message:            { category: 'messages', priority: 'info',     groupLabel: 'mesazhe stafi',   portal: true },
   direct_message:           { category: 'messages', priority: 'info',     groupLabel: 'mesazhe direkte' },
+  // Message in a team/group channel. Sent to `channels.members` minus the sender —
+  // before this existed a group message produced no bell row, no push and no email.
+  channel_message:          { category: 'messages', priority: 'info',     groupLabel: 'mesazhe kanali' },
   mention:                  { category: 'messages', priority: 'info',     groupLabel: 'përmendje në chat' },
   project_comment:          { category: 'messages', priority: 'info',     groupLabel: 'komente projekti', portal: true },
   client_request:           { category: 'messages', priority: 'info',     groupLabel: 'kërkesa klientësh' },

@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useEffect, useRef, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useLocation } from 'react-router-dom';
 import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { toast } from '../hooks/use-toast';
@@ -33,7 +33,7 @@ import {
   type NotificationCategory,
   type NotificationPriority,
 } from '../lib/notificationTypes';
-import { dndZoneStamp } from '../lib/notificationPrefs';
+import { dndZoneStamp, isInDndWindow as isInDndWindowShared } from '../lib/notificationPrefs';
 
 // ── Presentation ───────────────────────────────────────────────────────────────
 // Priority, category and group label now come from the SHARED registry
@@ -81,6 +81,7 @@ const TYPE_ICON: Record<string, React.ReactNode> = {
   client_message:           <MessageSquare className="w-4 h-4 text-emerald-500" />,
   staff_message:            <MessageSquare className="w-4 h-4 text-blue-500" />,
   direct_message:           <MessageSquare className="w-4 h-4 text-blue-500" />,
+  channel_message:          <MessageSquare className="w-4 h-4 text-sky-500" />,
   mention:                  <MessageSquare className="w-4 h-4 text-primary" />,
   project_comment:          <MessageSquare className="w-4 h-4 text-blue-500" />,
   client_request:           <MessageSquare className="w-4 h-4 text-emerald-500" />,
@@ -223,19 +224,9 @@ function withDndZone(prefs: NotifPrefs): NotifPrefs {
 }
 
 // True when the current local time falls inside the user's Do-Not-Disturb window.
-export function isInDndWindow(prefs: { dndEnabled?: boolean; dndStart?: string; dndEnd?: string }): boolean {
-  if (!prefs.dndEnabled || !prefs.dndStart || !prefs.dndEnd) return false;
-  const now = new Date();
-  const cur = now.getHours() * 60 + now.getMinutes();
-  const [sh, sm] = prefs.dndStart.split(':').map(Number);
-  const [eh, em] = prefs.dndEnd.split(':').map(Number);
-  const start = sh * 60 + sm;
-  const end = eh * 60 + em;
-  // Equal start/end reads as "the whole day" (the window has no outside), matching
-  // the server (api/_push.ts isDndActive) — `start <= end` alone made it never active.
-  if (start === end) return true;
-  return start < end ? (cur >= start && cur < end) : (cur >= start || cur < end);
-}
+// The implementation lives in lib/notificationPrefs so the bell, ChatView and the
+// Sidebar cannot drift apart on what "DND" means; re-exported for existing callers.
+export const isInDndWindow = isInDndWindowShared;
 
 // Is a notification type muted by the user's category preferences?
 // Delegates to the shared registry so client and server mute identically.
@@ -248,6 +239,8 @@ const LOAD_STEP = 30;
 // ── Main component ─────────────────────────────────────────────────────────────
 const NotificationsCenter: React.FC = () => {
   const { user } = useAuth();
+  // Only used to decide who owns the arrival sound (see the alert effect below).
+  const chimeLocation = useLocation();
   const [open, setOpen] = useState(false);
   const [displayLimit, setDisplayLimit] = useState(LOAD_STEP);
   const [category, setCategory] = useState<Category>('all');
@@ -336,12 +329,14 @@ const NotificationsCenter: React.FC = () => {
     if (isInDndWindow(localPrefs)) return;
     if (isTypeMuted(newest.type, localPrefs)) return;
     toast({ title: newest.title, description: newest.message });
-    // Chat messages already get their own sound from the chat UI (Sidebar chime /
-    // ChatView chirp). Skip the chime here for those types to avoid a double sound
-    // on message arrival; keep it for all other notifications.
-    const CHAT_MSG_TYPES = new Set(['client_message', 'staff_message', 'direct_message', 'mention']);
-    if (localPrefs.soundEnabled !== false && !CHAT_MSG_TYPES.has(newest.type || '')) playChime();
-  }, [notifications, localPrefs, playChime]);
+    // Sound ownership is keyed on the ROUTE, not on the type. Suppressing every chat
+    // type here assumed some chat surface would cover them — but the ChatView chirp
+    // only exists while /app/chat is open and the Sidebar chime counts DMs and client
+    // messages only, so an @mention (and now a channel message) made no sound
+    // ANYWHERE. On the chat page the chirp owns it; everywhere else this does.
+    const onChatPage = chimeLocation.pathname.startsWith('/app/chat');
+    if (localPrefs.soundEnabled !== false && !onChatPage) playChime();
+  }, [notifications, localPrefs, playChime, chimeLocation.pathname]);
 
   // Tenant boundary + muted categories. The query is by userId only, so a user who
   // is staff in TWO businesses (or a super-admin inside a tenant) saw the other
@@ -790,7 +785,7 @@ const NotificationItem: React.FC<{
     return new Date(date).toLocaleDateString('sq-AL');
   };
 
-  const CHAT_TYPES = new Set(['client_message', 'staff_message', 'direct_message', 'mention']);
+  const CHAT_TYPES = new Set(['client_message', 'staff_message', 'direct_message', 'channel_message', 'mention']);
   const isChatType = CHAT_TYPES.has(notification.type || '');
 
   const hasAction = !!notification.linkTo || !!notification.actionUrl || isChatType;

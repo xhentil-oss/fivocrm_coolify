@@ -1,5 +1,6 @@
 import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
+import { useNotificationPrefs } from '../hooks/useNotificationPrefs';
 import {
   FolderKanban,
   Users,
@@ -217,6 +218,18 @@ const Sidebar: React.FC<SidebarProps> = ({
   }, [user]);
   const { data: unreadClientMessages, loading: unreadClientLoading } = useCollection<any>('messages', unreadClientQuery);
 
+  // Group channels I belong to — needed to count their unread messages. A group
+  // message was in NO badge before: this query counts unread `messages` and the DM
+  // pass below only looks at rows WITHOUT a channelId.
+  const { data: myChannels } = useCollection<any>('channels', { skipTeamFilter: true });
+  const myGroupIds = useMemo(() => {
+    const ids = new Set<string>();
+    (myChannels || []).forEach((c: any) => {
+      if (c?.isGroup && Array.isArray(c.members) && user?.uid && c.members.includes(user.uid)) ids.add(c.id);
+    });
+    return ids;
+  }, [myChannels, user?.uid]);
+
   const unreadChatCount = useMemo(() => {
     let count = 0;
     // Scope to the active business: only count messages belonging to this tenant
@@ -228,9 +241,14 @@ const Sidebar: React.FC<SidebarProps> = ({
     }
     if (unreadClientMessages && user) {
       count += unreadClientMessages.filter(m => m.senderType === 'client' && m.senderId !== user.uid && inBusiness(m)).length;
+      // Group-channel messages. Read state for a group is per-member (`readBy`), not
+      // the shared `isRead` flag, so "unread for me" = my uid is not in readBy.
+      count += unreadClientMessages.filter(m =>
+        m.channelId && myGroupIds.has(m.channelId) && m.senderId !== user.uid && inBusiness(m)
+        && !(Array.isArray(m.readBy) && m.readBy.includes(user.uid))).length;
     }
     return count;
-  }, [unreadMessages, unreadClientMessages, user, businessId]);
+  }, [unreadMessages, unreadClientMessages, user, businessId, myGroupIds]);
 
   // Play notification sound when unread count increases
   const prevUnreadRef = useRef(unreadChatCount);
@@ -264,6 +282,13 @@ const Sidebar: React.FC<SidebarProps> = ({
   // silently. Otherwise a page refresh (count goes 0 → N as data arrives) is read
   // as an "increase" and beeps on every reload.
   const chimeArmedRef = useRef(false);
+  // Sound ownership is decided by the ROUTE, not by the notification type: on
+  // /app/chat the ChatView chirp owns it (this chime would double it), anywhere else
+  // this one does. And it now obeys the same prefs as every other surface — the
+  // Tingull switch, the DND window and a muted "Mesazhe" category were all invisible
+  // to it, so it rang through all three.
+  const chimeLocation = useLocation();
+  const { canPlaySound: canPlayChatSound } = useNotificationPrefs();
   useEffect(() => {
     // useCollection initializes data to [] (count 0) and only flips loading=false
     // once real data arrives. Wait for BOTH queries to finish loading before arming,
@@ -274,11 +299,13 @@ const Sidebar: React.FC<SidebarProps> = ({
       prevUnreadRef.current = unreadChatCount; // baseline, no sound on initial load
       return;
     }
-    if (unreadChatCount > prevUnreadRef.current) {
+    if (unreadChatCount > prevUnreadRef.current
+      && !chimeLocation.pathname.startsWith('/app/chat')
+      && canPlayChatSound('direct_message')) {
       playNotificationSound();
     }
     prevUnreadRef.current = unreadChatCount;
-  }, [unreadChatCount, unreadDmLoading, unreadClientLoading, playNotificationSound]);
+  }, [unreadChatCount, unreadDmLoading, unreadClientLoading, playNotificationSound, chimeLocation.pathname, canPlayChatSound]);
 
   // Filter nav items based on user permissions.
   // While loading, show only profile to avoid unauthorized flicker.
