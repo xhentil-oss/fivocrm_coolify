@@ -1,8 +1,9 @@
 import { initializeApp } from 'firebase/app';
 import { getAuth, GoogleAuthProvider } from 'firebase/auth';
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, runTransaction, doc, Timestamp } from 'firebase/firestore';
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, memoryLocalCache, runTransaction, doc, Timestamp } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 import { formatInvoiceNumber } from './invoiceNumber';
+import { installFirestoreCrashGuard, shouldUseMemoryCache } from './firestoreRecovery';
 
 const firebaseConfig = {
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -28,10 +29,21 @@ export const auth = getAuth(app);
 // listeners look "dead" until a full page refresh reopens the channel (real-time chat + live
 // notification clearing appeared broken for exactly this reason). Forced long-polling keeps a
 // held-open channel that delivers updates in real time and works reliably everywhere.
+//
+// Cache: IndexedDB, shared across tabs — EXCEPT while recovering from an SDK crash.
+// The multi-tab code path can kill the whole client (see firestoreRecovery.ts), and
+// the last rung of that recovery is to run without IndexedDB for a day: the app then
+// works normally, it just re-reads from the server instead of the local cache.
 export const db = initializeFirestore(app, {
-  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
+  localCache: shouldUseMemoryCache()
+    ? memoryLocalCache()
+    : persistentLocalCache({ tabManager: persistentMultipleTabManager() }),
   experimentalForceLongPolling: true,
 });
+
+// A poisoned Firestore client throws on every call for the rest of the page's life,
+// and our hooks swallow that — so detect it and reload instead of showing empty screens.
+installFirestoreCrashGuard(db);
 
 export const storage = getStorage(app);
 export const googleProvider = new GoogleAuthProvider();
