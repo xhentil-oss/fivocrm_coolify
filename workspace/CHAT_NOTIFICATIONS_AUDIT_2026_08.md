@@ -171,3 +171,72 @@ path.
 - Not done (deliberate): batching several chat notifications into ONE bell row, and a
   digest email for the `messages` category. #6 throttles instead, which keeps every
   push while cutting the email storm.
+
+---
+
+# Second pass — after the nine fixes shipped
+
+Re-audited the same path once the fixes were live. One regression the fixes
+themselves introduced, and one older bug they exposed.
+
+| # | Bug | Status |
+|---|---|---|
+| 10 | Two chimes for one DM — the fixes created a second sound owner | ✅ fixed |
+| 11 | A group channel's unread badge is wrong for everyone but the first reader | ⬜ OPEN |
+| 12 | `/api/notify-staff` does not pass `conversationKey` | ⬜ open (minor) |
+
+## 10. Two chimes for one DM (regression from fix #3)
+
+Fix #3 had to stop the bell from suppressing chat types — an `@mention` made no
+sound anywhere while the chat page was closed. But `Sidebar` still chimed on every
+increase of `unreadChatCount`, so off `/app/chat` a DM or client message fired BOTH
+chimes, from the same Firestore snapshot burst, in near-identical two-tone voices.
+
+**Fix**: the Sidebar chime is gone; the badge stays. Sound now has exactly one owner
+per route — the ChatView chirp on `/app/chat`, the bell everywhere else. The bell is
+the better trigger anyway: it fires on the notification DOCUMENT, which the server has
+already filtered through `pushEnabled`/DND/mutes and the presence check. A badge with
+no notification behind it is exactly the case where the system chose not to interrupt.
+
+The bell's chime gate also moved to LIVE preferences (`useNotificationPrefs`); its
+`localPrefs` is a one-time `getDoc` that backs the preferences panel, so as the sole
+sound owner a `soundEnabled` toggled in Cilësimet would not have taken effect until a
+reload.
+
+## 11. A group channel's unread badge is wrong for everyone but the first reader — OPEN
+
+`markAsRead` writes `{ isRead: true }` unconditionally for a channel message, and
+`readBy: arrayUnion(uid)` only in addition to it (`ChatView`, the channel branch). But
+`isRead` is a SINGLE shared flag on a document read by many people, so the first member
+to open a group channel flips it for everyone — and the row then leaves the
+`isRead == false` query that every badge is built on:
+
+- `channelUnreadMap` (ChatView, pre-existing) — counts `allUnreadTeamMsgs` without
+  looking at `readBy` at all, so it both loses rows this way AND counts rows the user
+  has already read.
+- the Sidebar group count added in fix #2 — filters on `readBy` correctly, but cannot
+  see a row the query has already dropped.
+
+So `channel_message` notifications now arrive correctly (fix #2) while the badge beside
+them can read 0. Two candidate fixes, and the choice is a real trade-off:
+
+- **Cheap**: stop writing `isRead` for group channels (`readBy` becomes the only read
+  state) and teach `channelUnreadMap` to filter on `readBy`. Correct per member, but
+  those rows then stay `isRead == false` forever, and the badge queries are capped at
+  the 200 newest unread — in a busy tenant, already-read group messages would crowd out
+  DM and client rows and under-count those badges instead.
+- **Correct**: per-user `lastReadAt` per channel (a `channelReads/{uid}_{channelId}`
+  doc), counting messages newer than it. No shared flag, no cap problem, and it is the
+  model the read-receipt UI already implies — but it is a data-model change with its own
+  migration and touches every unread reader.
+
+Not chosen unilaterally: the cheap fix trades one wrong badge for another, and the
+correct one is a design decision.
+
+## 12. `/api/notify-staff` does not pass `conversationKey` — open (minor)
+
+The client → staff path (`api/_notify-staff.ts`) calls `notifyUser()` with `linkTo` but
+no `conversationKey`, so fix #5's presence check cannot apply: a staff member reading a
+portal conversation still gets pushed for the client's next message. The key is
+`ch:<channelId>` and the endpoint already has the channel id — a one-line change, left
+out here only because it is a different endpoint from the ones this pass touched.

@@ -34,6 +34,7 @@ import {
   type NotificationPriority,
 } from '../lib/notificationTypes';
 import { dndZoneStamp, isInDndWindow as isInDndWindowShared } from '../lib/notificationPrefs';
+import { useNotificationPrefs } from '../hooks/useNotificationPrefs';
 
 // ── Presentation ───────────────────────────────────────────────────────────────
 // Priority, category and group label now come from the SHARED registry
@@ -241,6 +242,11 @@ const NotificationsCenter: React.FC = () => {
   const { user } = useAuth();
   // Only used to decide who owns the arrival sound (see the alert effect below).
   const chimeLocation = useLocation();
+  // LIVE preferences, for the chime only. `localPrefs` below is a one-time getDoc
+  // that also backs the preferences panel; now that this component is the sole owner
+  // of the arrival sound, a `soundEnabled` toggled in Cilësimet had to take effect
+  // without a reload.
+  const { prefs: livePrefs } = useNotificationPrefs();
   const [open, setOpen] = useState(false);
   const [displayLimit, setDisplayLimit] = useState(LOAD_STEP);
   const [category, setCategory] = useState<Category>('all');
@@ -335,8 +341,8 @@ const NotificationsCenter: React.FC = () => {
     // messages only, so an @mention (and now a channel message) made no sound
     // ANYWHERE. On the chat page the chirp owns it; everywhere else this does.
     const onChatPage = chimeLocation.pathname.startsWith('/app/chat');
-    if (localPrefs.soundEnabled !== false && !onChatPage) playChime();
-  }, [notifications, localPrefs, playChime, chimeLocation.pathname]);
+    if (livePrefs.soundEnabled !== false && !onChatPage) playChime();
+  }, [notifications, localPrefs, livePrefs.soundEnabled, playChime, chimeLocation.pathname]);
 
   // Tenant boundary + muted categories. The query is by userId only, so a user who
   // is staff in TWO businesses (or a super-admin inside a tenant) saw the other

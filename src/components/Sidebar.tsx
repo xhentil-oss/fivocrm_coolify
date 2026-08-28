@@ -1,6 +1,5 @@
-import React, { useMemo, useEffect, useRef, useCallback, useState } from 'react';
+import React, { useMemo, useCallback, useState } from 'react';
 import { NavLink, useLocation } from 'react-router-dom';
-import { useNotificationPrefs } from '../hooks/useNotificationPrefs';
 import {
   FolderKanban,
   Users,
@@ -200,7 +199,7 @@ const Sidebar: React.FC<SidebarProps> = ({
     };
   }, [user]);
 
-  const { data: unreadMessages, loading: unreadDmLoading } = useCollection<any>('messages', unreadDmQuery);
+  const { data: unreadMessages } = useCollection<any>('messages', unreadDmQuery);
 
   // Unread client-channel messages. Mirrors ChatView's allUnreadChannelQuery (same
   // where/orderBy/limit → the two share one listener + the existing composite index
@@ -216,7 +215,7 @@ const Sidebar: React.FC<SidebarProps> = ({
       teamScopedWhere: true,
     };
   }, [user]);
-  const { data: unreadClientMessages, loading: unreadClientLoading } = useCollection<any>('messages', unreadClientQuery);
+  const { data: unreadClientMessages } = useCollection<any>('messages', unreadClientQuery);
 
   // Group channels I belong to — needed to count their unread messages. A group
   // message was in NO badge before: this query counts unread `messages` and the DM
@@ -250,62 +249,19 @@ const Sidebar: React.FC<SidebarProps> = ({
     return count;
   }, [unreadMessages, unreadClientMessages, user, businessId, myGroupIds]);
 
-  // Play notification sound when unread count increases
-  const prevUnreadRef = useRef(unreadChatCount);
-  const audioContextRef = useRef<AudioContext | null>(null);
-
-  const playNotificationSound = useCallback(() => {
-    try {
-      if (!audioContextRef.current) {
-        audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-      }
-      const ctx = audioContextRef.current;
-      if (ctx.state === 'suspended') ctx.resume();
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-      osc.type = 'sine';
-      // Two-tone chime
-      osc.frequency.setValueAtTime(880, ctx.currentTime);
-      osc.frequency.setValueAtTime(1320, ctx.currentTime + 0.1);
-      gain.gain.setValueAtTime(0.15, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
-      osc.start(ctx.currentTime);
-      osc.stop(ctx.currentTime + 0.3);
-    } catch {
-      // Audio not supported or blocked — ignore silently
-    }
-  }, []);
-
-  // Arm the chime only AFTER the unread queries have loaded, setting the baseline
-  // silently. Otherwise a page refresh (count goes 0 → N as data arrives) is read
-  // as an "increase" and beeps on every reload.
-  const chimeArmedRef = useRef(false);
-  // Sound ownership is decided by the ROUTE, not by the notification type: on
-  // /app/chat the ChatView chirp owns it (this chime would double it), anywhere else
-  // this one does. And it now obeys the same prefs as every other surface — the
-  // Tingull switch, the DND window and a muted "Mesazhe" category were all invisible
-  // to it, so it rang through all three.
-  const chimeLocation = useLocation();
-  const { canPlaySound: canPlayChatSound } = useNotificationPrefs();
-  useEffect(() => {
-    // useCollection initializes data to [] (count 0) and only flips loading=false
-    // once real data arrives. Wait for BOTH queries to finish loading before arming,
-    // otherwise the 0 → N transition on a page refresh is heard as an "increase".
-    if (unreadDmLoading || unreadClientLoading) return;
-    if (!chimeArmedRef.current) {
-      chimeArmedRef.current = true;
-      prevUnreadRef.current = unreadChatCount; // baseline, no sound on initial load
-      return;
-    }
-    if (unreadChatCount > prevUnreadRef.current
-      && !chimeLocation.pathname.startsWith('/app/chat')
-      && canPlayChatSound('direct_message')) {
-      playNotificationSound();
-    }
-    prevUnreadRef.current = unreadChatCount;
-  }, [unreadChatCount, unreadDmLoading, unreadClientLoading, playNotificationSound, chimeLocation.pathname, canPlayChatSound]);
+  // NO chime here. The unread badge above is this component's job; the SOUND belongs
+  // to exactly one owner, and that is the bell (NotificationsCenter) when off the chat
+  // page, the ChatView chirp when on it.
+  //
+  // This used to be a second owner, and once the bell stopped suppressing chat types
+  // (it had to — an @mention made no sound anywhere while chat was closed) every DM
+  // and client message rang TWICE, from two near-identical two-tone chimes fired by
+  // the same Firestore snapshot burst.
+  //
+  // The notification document is the better trigger anyway: it is what the server
+  // already filtered through pushEnabled/DND/mutes and the "is he reading it right
+  // now" presence check. A badge with no notification behind it is precisely the case
+  // where the system decided not to interrupt — so staying silent is correct.
 
   // Filter nav items based on user permissions.
   // While loading, show only profile to avoid unauthorized flicker.
