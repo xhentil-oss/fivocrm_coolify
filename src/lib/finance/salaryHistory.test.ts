@@ -19,6 +19,27 @@ describe('memberSalaryForMonth', () => {
     expect(memberSalaryForMonth(m, end(2026, 0))).toBe(50_000);
   });
 
+  it('charges nothing for a month that ended before the member existed', () => {
+    // Without this the fallback billed today's salary back to the beginning of
+    // time: a 2026 year-to-date P&L charged 8 months of payroll to a team whose
+    // first member record was created on 19 March.
+    const m = mkMember({ monthlySalary: 50_000, createdAt: new Date(2026, 2, 19) });
+    expect(memberSalaryForMonth(m, end(2026, 0))).toBe(0);      // January
+    expect(memberSalaryForMonth(m, end(2026, 1))).toBe(0);      // February
+    expect(memberSalaryForMonth(m, end(2026, 2))).toBe(50_000); // joined mid-March
+    expect(memberSalaryForMonth(m, end(2026, 3))).toBe(50_000);
+  });
+
+  it('prefers an explicit hiredAt over createdAt', () => {
+    // Someone employed before the app was adopted.
+    const m = mkMember({
+      monthlySalary: 50_000,
+      createdAt: new Date(2026, 2, 19),
+      hiredAt: new Date(2025, 0, 1),
+    });
+    expect(memberSalaryForMonth(m, end(2026, 0))).toBe(50_000);
+  });
+
   it('returns 0 for inactive members without history', () => {
     const m = mkMember({ monthlySalary: 50_000, status: 'Inactive' });
     expect(memberSalaryForMonth(m, end(2026, 0))).toBe(0);

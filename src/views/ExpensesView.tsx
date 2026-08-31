@@ -618,13 +618,39 @@ const ExpensesView: React.FC = () => {
   const recurringExpenses = countableExpenses.filter(e => e.isRecurring).length;
   const rejectedCount = filteredExpenses.length - countableExpenses.length;
 
-  // Salary-category rows are NOT part of `totalExpenses`: payroll is costed from
-  // salaryHistory/monthlySalary, so adding the rows would double-charge it. The
-  // form offers the category (with a staff picker), so the money must be shown
-  // somewhere or it looks like the app simply lost it.
+  // `totalExpenses` is ALL money out, Salary-category rows included — this page
+  // is the ledger. Financat splits the same money over two lines ("Rrogat" =
+  // these Salary rows, "Shpenzime të tjera" = the rest), so the two pages agree
+  // on the sum. See lib/finance/payroll.ts: the banner used to claim these rows
+  // were in no total while this very number counted them, and Financat charged
+  // the member-profile figure instead — so the pages disagreed by the whole
+  // payroll and money paid to non-employees appeared nowhere.
   const salaryRowsTotal = useMemo(
     () => countableExpenses
       .filter(e => e.category === 'Salary')
+      .reduce((s, e) => s + toAll(e.amount ?? 0, e.currency), 0),
+    [countableExpenses],
+  );
+  const nonSalaryTotal = totalExpenses - salaryRowsTotal;
+
+  // The reconciliation banner sits ABOVE the filter panel, so it must describe
+  // the whole ledger — not whatever the list is currently narrowed to. (The KPI
+  // card below the filters is the one that follows them.)
+  const ledgerSplit = useMemo(() => {
+    let salary = 0, other = 0;
+    for (const e of expenses || []) {
+      if (!countable(e)) continue;
+      const amt = toAll(e.amount ?? 0, e.currency);
+      if (e.category === 'Salary') salary += amt; else other += amt;
+    }
+    return { salary, other };
+  }, [expenses]);
+
+  // Rows awaiting approval are counted in every total (the cost exists), but the
+  // amount riding on an unapproved row must be visible next to the total.
+  const pendingApprovalAmount = useMemo(
+    () => countableExpenses
+      .filter(e => ((e as any).approvalStatus || '') === 'Submitted')
       .reduce((s, e) => s + toAll(e.amount ?? 0, e.currency), 0),
     [countableExpenses],
   );
@@ -655,22 +681,23 @@ const ExpensesView: React.FC = () => {
 
   const exportCsv = () => {
     const rows = [
-      // "Numërohet" is explicit: the export contains rejected rows (and
-      // Salary-category rows, costed via payroll instead), so a spreadsheet SUM
-      // of the amount column does not equal the total shown in the app. Without
-      // the column that difference looked like a bug in the export.
+      // "Numërohet" is explicit: the export contains rejected rows, which are in
+      // no total, so a plain spreadsheet SUM of the amount column does not equal
+      // the figure shown in the app. Salary-category rows DO count (they are the
+      // recorded payroll) — the column used to say otherwise, which is exactly
+      // the contradiction that hid 2.96M ALL between this page and Financat.
       ['Titulli', 'Kategoria', 'Shuma', 'Monedha', 'Shuma (ALL)', 'Numërohet',
         'Departamenti', 'Projekti', 'Data', 'Periodike', 'Statusi', 'Miratimi'],
       ...filteredExpenses.map(e => {
         const d = getExpenseDate(e);
-        const counts = countable(e) && e.category !== 'Salary';
+        const counts = countable(e);
         return [
           e.title || '',
           getCategoryLabel(e.category || ''),
           String(e.amount ?? 0),
           e.currency || 'ALL',
           String(Math.round(toAll(e.amount ?? 0, e.currency))),
-          counts ? 'Po' : (countable(e) ? 'Përmes listës së pagave' : 'Refuzuar'),
+          counts ? 'Po' : 'Refuzuar',
           teams?.find(t => t.id === e.departmentId)?.name || '',
           (e.projectId ? projectById.get(e.projectId)?.name : '') || '',
           d ? d.toLocaleDateString('sq-AL') : '',
@@ -791,16 +818,18 @@ const ExpensesView: React.FC = () => {
         </div>
       )}
 
-      {/* Salary rows exist but are costed from the payroll list, so they are not
-          in any expense total. Saying so beats looking like lost money. */}
-      {salaryRowsTotal > 0 && (
+      {/* How this page's total maps onto the two Financat lines. Without it the
+          same money looks like two different numbers on two screens. */}
+      {ledgerSplit.salary > 0 && (
         <div className="rounded-md border border-border bg-muted/40 p-3 text-sm flex items-start gap-2">
           <DollarSign className="w-4 h-4 mt-0.5 shrink-0 text-muted-foreground" />
           <span className="text-muted-foreground">
-            <strong className="text-foreground">{Math.round(salaryRowsTotal).toLocaleString()} ALL</strong>{' '}
-            në kategorinë «Paga» nuk numërohen në totalet e shpenzimeve — pagat kostohen
-            nga lista e pagave (Ekipi → rroga mujore), ndaj numërimi i dyfishtë do t'i
-            zbriste dy herë.
+            <strong className="text-foreground">{Math.round(ledgerSplit.salary).toLocaleString()} ALL</strong>{' '}
+            në kategorinë «Paga» numërohen në totalin e kësaj faqeje. Te Financat i njëjti
+            total ndahet në dy rreshta: «Rrogat» ({Math.round(ledgerSplit.salary).toLocaleString()} ALL)
+            dhe «Shpenzime të tjera» ({Math.round(ledgerSplit.other).toLocaleString()} ALL) —
+            asgjë nuk numërohet dy herë. Për një muaj pa pagesa të regjistruara, Financat
+            e zë pagën nga lista e pagave (Ekipi → rroga mujore) dhe e thotë kjo në atë rresht.
           </span>
         </div>
       )}
@@ -998,8 +1027,18 @@ const ExpensesView: React.FC = () => {
             <DollarSign className="w-4 h-4 sm:w-5 sm:h-5 text-error" />
           </div>
           <p className="text-lg sm:text-h2 text-foreground font-medium">
-            {totalExpenses.toLocaleString()} ALL
+            {Math.round(totalExpenses).toLocaleString()} ALL
           </p>
+          {/* What the total is made of. A headline that silently mixes payroll,
+              approved and not-yet-approved rows is the reason two screens could
+              show two different "expenses" numbers without either being wrong. */}
+          {(salaryRowsTotal > 0 || pendingApprovalAmount > 0) && (
+            <p className="text-[10.5px] leading-snug text-muted-foreground">
+              {salaryRowsTotal > 0 && <>paga {Math.round(salaryRowsTotal).toLocaleString()} · të tjera {Math.round(nonSalaryTotal).toLocaleString()}</>}
+              {salaryRowsTotal > 0 && pendingApprovalAmount > 0 && <br />}
+              {pendingApprovalAmount > 0 && <>{Math.round(pendingApprovalAmount).toLocaleString()} ALL në pritje aprovimi</>}
+            </p>
+          )}
         </Card>
 
         <Card className="p-3 sm:p-6 space-y-1 sm:space-y-2">

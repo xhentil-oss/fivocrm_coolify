@@ -24,7 +24,11 @@ import {
   MONTH_LABELS_SQ,
 } from '../lib/finance/financialAnalytics';
 import { computeProjectPnl, type ProjectPnlOptions } from '../lib/finance/projectPnl';
-import { totalSalaryForMonth } from '../lib/finance/salaryHistory';
+import {
+  payrollForMonth,
+  payrollBasisLabel,
+  type MonthPayroll,
+} from '../lib/finance/payroll';
 import { computeCashflowHealth } from '../lib/finance/cashflowAlarms';
 import { forecastNextMonth } from '../lib/finance/forecast';
 import { computeDepartmentPnl, buildDepartmentProfitTrend } from '../lib/finance/departmentPnl';
@@ -100,18 +104,41 @@ function monthWindow(base: Date, offset: number) {
   return { start, end, monthIndex: d.getMonth(), year: d.getFullYear() };
 }
 
-/** One financial snapshot for a month: money in − money out. */
+/**
+ * One financial snapshot for a month: money in − money out.
+ *
+ * `payroll` comes from `payrollForMonth` — the salaries ACTUALLY recorded for
+ * the month when there are any, otherwise the figure on the member profiles.
+ * `otherExpenses` excludes Salary-category rows (they are the recorded payroll),
+ * so the two lines partition every expense row exactly once and the total
+ * agrees with the Shpenzimet page.
+ */
 function monthProfit(
   invoices: Invoice[],
   expenses: Expense[],
-  monthlySalary: number,
+  payroll: MonthPayroll,
   start: Date,
   end: Date,
 ) {
   const collected = invoices.reduce((s, inv) => s + getInvoiceCollectedBetween(inv, start, end), 0);
   const otherExpenses = calculateExpensesBetween(expenses, start, end);
-  const profit = collected - otherExpenses - monthlySalary;
-  return { collected, otherExpenses, salary: monthlySalary, profit };
+  const profit = collected - otherExpenses - payroll.total;
+  return {
+    collected,
+    otherExpenses,
+    salary: payroll.total,
+    salaryBasis: payroll.basis,
+    salaryPlan: payroll.profile,
+    profit,
+  };
+}
+
+/** Prorate a payroll figure to the elapsed part of a month — but only when it
+ *  is the PLAN. A recorded payment is what left the bank; scaling it by "days
+ *  elapsed" would invent a number that was never paid. */
+function proratedPayroll(p: MonthPayroll, fraction: number): MonthPayroll {
+  if (p.basis !== 'profile' || fraction >= 1) return p;
+  return { ...p, total: p.total * fraction };
 }
 
 function initialsOf(name: string): string {
@@ -156,11 +183,12 @@ const FinancesView: React.FC = () => {
   const usePrev = monthMode === 'auto' ? now.getDate() < 15 : monthMode === 'prev';
 
   // ── Month snapshots ──
-  // Salary is resolved per month via history, so past months use the salary that
-  // applied then. The CURRENT month is month-to-date, so its salary is prorated
-  // to elapsed days — otherwise a full month's payroll against a few days of
-  // collections shows a false loss early each month. `prevToDate` prorates the
-  // same way, giving the month-to-date hero a like-for-like baseline.
+  // Payroll per month comes from `payrollForMonth`: the salaries actually
+  // recorded as expenses for that month, or the member profiles when the month
+  // has none. Only the PROFILE figure is prorated to elapsed days (otherwise a
+  // whole month's plan against a few days of collections shows a false loss
+  // early each month) — a recorded payment is charged as paid. `prevToDate`
+  // resolves the same way, giving the month-to-date hero a like-for-like base.
   const snapshots = useMemo(() => {
     const inv = invoices || [];
     const exp = expenses || [];
@@ -171,19 +199,29 @@ const FinancesView: React.FC = () => {
     const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
     const elapsedDay = now.getDate();
     const elapsedFraction = Math.min(1, elapsedDay / daysInMonth);
-    const curSalary = totalSalaryForMonth(teamMembers, cur.end) * elapsedFraction;
+    // The recorded window is the WHOLE month, matching `otherExpenses` in
+    // monthProfit: a salary row dated the 30th is as real as a rent row dated
+    // the 30th, and counting one but not the other split the same month across
+    // two bases.
+    const curPay = proratedPayroll(
+      payrollForMonth(teamMembers, exp, cur.start, cur.end),
+      elapsedFraction,
+    );
 
     const prevDays = new Date(now.getFullYear(), now.getMonth(), 0).getDate();
     const prevDay = Math.min(elapsedDay, prevDays);
     const prevToDateEnd = new Date(prev.start.getFullYear(), prev.start.getMonth(), prevDay, 23, 59, 59, 999);
-    const prevSalaryToDate = totalSalaryForMonth(teamMembers, prev.end) * Math.min(1, prevDay / prevDays);
+    const prevPayToDate = proratedPayroll(
+      payrollForMonth(teamMembers, exp, prev.start, prevToDateEnd, prev.end),
+      Math.min(1, prevDay / prevDays),
+    );
 
     return {
       cur, prev, prev2,
-      current: monthProfit(inv, exp, curSalary, cur.start, cur.end),
-      prevFull: monthProfit(inv, exp, totalSalaryForMonth(teamMembers, prev.end), prev.start, prev.end),
-      prevToDate: monthProfit(inv, exp, prevSalaryToDate, prev.start, prevToDateEnd),
-      prev2Full: monthProfit(inv, exp, totalSalaryForMonth(teamMembers, prev2.end), prev2.start, prev2.end),
+      current: monthProfit(inv, exp, curPay, cur.start, cur.end),
+      prevFull: monthProfit(inv, exp, payrollForMonth(teamMembers, exp, prev.start, prev.end), prev.start, prev.end),
+      prevToDate: monthProfit(inv, exp, prevPayToDate, prev.start, prevToDateEnd),
+      prev2Full: monthProfit(inv, exp, payrollForMonth(teamMembers, exp, prev2.start, prev2.end), prev2.start, prev2.end),
     };
   }, [invoices, expenses, teamMembers, now]);
 
@@ -242,10 +280,14 @@ const FinancesView: React.FC = () => {
     const out: { label: string; profit: number }[] = [];
     for (let i = 5; i >= 0; i--) {
       const w = monthWindow(now, -i);
-      // The current month (i===0) is month-to-date → prorate its salary just like
-      // the hero, so the last trend point equals the headline number.
-      const salary = totalSalaryForMonth(teamMembers, w.end) * (i === 0 ? elapsedFraction : 1);
-      const p = monthProfit(inv, exp, salary, w.start, w.end);
+      // The current month (i===0) is month-to-date → prorate its payroll just
+      // like the hero (and only when it is the plan), so the last trend point
+      // equals the headline number.
+      const pay = proratedPayroll(
+        payrollForMonth(teamMembers, exp, w.start, w.end),
+        i === 0 ? elapsedFraction : 1,
+      );
+      const p = monthProfit(inv, exp, pay, w.start, w.end);
       out.push({ label: MONTH_LABELS_SQ[w.monthIndex], profit: Math.round(p.profit) });
     }
     return out;
@@ -619,8 +661,9 @@ const FinancesView: React.FC = () => {
       ['Financat', hero.title, hero.closed ? 'muaj i mbyllur' : 'deri sot'],
       [],
       ['Para që hyri (arkëtuar)', Math.round(hero.collected)],
-      ['Rrogat', -Math.round(hero.salary)],
+      ['Rrogat', -Math.round(hero.salary), payrollBasisLabel(hero.salaryBasis)],
       ['Shpenzime të tjera', -Math.round(hero.otherExpenses)],
+      ['Gjithsej dalje', -Math.round(hero.salary + hero.otherExpenses)],
       ['Fitimi neto', Math.round(hero.profit)],
       ['Marzhi %', hero.marginPct],
       ['Të pambledhura', Math.round(receivables.outstanding)],
@@ -752,9 +795,29 @@ const FinancesView: React.FC = () => {
 
             <div className="mt-auto flex flex-col gap-2.5 pt-6">
               <HeroRow label="Para që hyri (arkëtuar)" amount={hero.collected} tone="pos" />
-              <HeroRow label="− Rrogat" amount={-hero.salary} tone="neg" rule />
+              <HeroRow
+                label="− Rrogat"
+                amount={-hero.salary}
+                tone="neg"
+                rule
+                note={hero.salaryBasis === 'profile' && hero.salaryPlan > 0
+                  ? 'nga lista e pagave — pa pagesa të regjistruara për këtë muaj'
+                  : payrollBasisLabel(hero.salaryBasis)}
+              />
               <HeroRow label="− Shpenzime të tjera" amount={-hero.otherExpenses} tone="neg" rule />
               <HeroRow label="= Fitimi neto" amount={hero.profit} tone="total" rule strong />
+
+              {/* The reconciliation line. "Rrogat + Shpenzime të tjera" is
+                  exactly what the Shpenzimet page totals for the same month —
+                  unless this month's payroll is the PLAN, which is the one case
+                  where the two pages legitimately differ. Saying which case it
+                  is here is the whole point: the gap used to be silent. */}
+              <p className="pt-1 text-[10.5px] font-medium leading-snug text-[#8fa3c4]">
+                Gjithsej dalje {formatALL(hero.salary + hero.otherExpenses)}
+                {hero.salaryBasis === 'profile' && hero.salaryPlan > 0
+                  ? ` · faqja Shpenzimet tregon ${formatALL(hero.otherExpenses)} për këtë muaj, sepse pagat nuk janë regjistruar ende si shpenzim.`
+                  : ' · e njëjta shifër që tregon faqja Shpenzimet për këtë muaj.'}
+              </p>
             </div>
           </div>
 
@@ -1563,7 +1626,11 @@ const HeroRow: React.FC<{
   tone: 'pos' | 'neg' | 'total';
   rule?: boolean;
   strong?: boolean;
-}> = ({ label, amount, tone, rule, strong }) => (
+  /** Where the figure came from — shown under the label, because a payroll line
+   *  read off the member profiles and one read off recorded payments are not the
+   *  same claim and the difference used to be invisible. */
+  note?: string;
+}> = ({ label, amount, tone, rule, strong, note }) => (
   <div className={cn(
     'flex items-center justify-between gap-3.5',
     rule && 'border-t pt-2.5',
@@ -1574,6 +1641,7 @@ const HeroRow: React.FC<{
       strong ? 'text-white' : 'text-[#c3d1e8]',
     )}>
       {label}
+      {note && <span className="block text-[10.5px] font-medium text-[#8fa3c4]">{note}</span>}
     </span>
     <span className={cn(
       'shrink-0 whitespace-nowrap text-[12.5px] font-bold',
@@ -1957,11 +2025,29 @@ const ProjectPnlBlock: React.FC<{
   pnl: ReturnType<typeof computeProjectPnl>;
   customerNameById: Map<string, string>;
 }> = ({ pnl, customerNameById }) => {
-  if (pnl.rows.length === 0) {
-    return <EmptyState text="Ende pa projekte për këtë periudhë." />;
-  }
-
   const { fixedPool, totals, allocationBasis } = pnl;
+
+  // No projects in the period does NOT mean no cost: payroll and overhead were
+  // still paid. Returning an empty state here hid the whole fixed pool, so the
+  // period read as if nothing had been spent.
+  if (pnl.rows.length === 0) {
+    return (
+      <div className="space-y-3">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+          <PoolTile label="Të ardhura" value={0} />
+          <PoolTile label="Kosto direkte" value={0} tone="neg" />
+          <PoolTile
+            label="Kosto fikse"
+            value={fixedPool.total}
+            tone="neg"
+            hint={`rroga ${formatALL(fixedPool.salaries)} + fikse ${formatALL(fixedPool.otherFixed)}`}
+          />
+          <PoolTile label="Fitimi total" value={-fixedPool.total} tone="neg" bold />
+        </div>
+        <EmptyState text="Ende pa projekte për këtë periudhë — kostot fikse mbeten të pandara." />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-3">
@@ -1972,7 +2058,10 @@ const ProjectPnlBlock: React.FC<{
           label="Kosto fikse"
           value={fixedPool.total}
           tone="neg"
-          hint={`rroga ${formatALL(fixedPool.salaries)} + fikse ${formatALL(fixedPool.otherFixed)}`}
+          hint={`rroga ${formatALL(fixedPool.salaries)} + fikse ${formatALL(fixedPool.otherFixed)}`
+            + (fixedPool.payrollFallbackMonths > 0
+              ? ` · ${fixedPool.payrollFallbackMonths} muaj pa pagesa të regjistruara (nga lista e pagave)`
+              : '')}
         />
         <PoolTile label="Fitimi total" value={totals.profit} tone={totals.profit >= 0 ? 'pos' : 'neg'} bold />
       </div>

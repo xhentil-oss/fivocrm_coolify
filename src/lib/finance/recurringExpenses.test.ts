@@ -108,6 +108,11 @@ describe('expenseGenerationBlockReason', () => {
 
   it('allows a due series', () => {
     expect(expenseGenerationBlockReason(base, now)).toBeNull();
+    expect(expenseGenerationBlockReason({ ...base, status: 'Active' }, now)).toBeNull();
+  });
+
+  it('blocks a series switched off with status Inactive', () => {
+    expect(expenseGenerationBlockReason({ ...base, status: 'Inactive' }, now)).toBe('inactive');
   });
 
   it('blocks non-recurring, children and paused series', () => {
@@ -273,6 +278,17 @@ describe('monthlyRecurringExpenseRate', () => {
     expect(monthlyRecurringExpenseRate([parent({ amount: 100, freq: 'monthly', auto: true })])).toBe(0);
     expect(monthlyRecurringExpenseRate([parent({ amount: 100, freq: 'monthly', approval: 'Rejected' })])).toBe(0);
     expect(monthlyRecurringExpenseRate([parent({ amount: 100, freq: 'monthly', category: 'Salary' })])).toBe(0);
+  });
+
+  it('skips a series switched off with status Inactive', () => {
+    // The switch used to change nothing: an "off" series still fed the gap alarm
+    // and the profit forecast with money nobody intended to spend.
+    expect(monthlyRecurringExpenseRate([
+      { ...parent({ amount: 100, freq: 'monthly' }), status: 'Inactive' },
+    ])).toBe(0);
+    expect(monthlyRecurringExpenseRate([
+      { ...parent({ amount: 100, freq: 'monthly' }), status: 'Active' },
+    ])).toBe(100);
   });
 });
 

@@ -20,7 +20,7 @@ import {
   calculateExpensesBetween,
   getInvoiceTotalAll,
 } from './financialAnalytics';
-import { totalSalaryForMonth } from './salaryHistory';
+import { forwardPayrollEstimate } from './payroll';
 import {
   FREQ_TO_MONTHLY,
   monthlyRecurringExpenseRate,
@@ -137,7 +137,9 @@ export function forecastNextMonth(
   }, 0) / basisMonths;
 
   const predictedOtherExpenses = recurringExpenseCommitment + predictedOneOffExpenses;
-  const predictedSalary = totalSalaryForMonth(teamMembers, next.end);
+  // Same forward basis as the cash-flow gap alarm: the plan, or what was
+  // actually paid recently when no plan is recorded.
+  const predictedSalary = forwardPayrollEstimate(teamMembers, exp, now).amount;
   const predictedProfit = predictedRevenue - predictedSalary - predictedOtherExpenses;
 
   return {

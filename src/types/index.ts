@@ -695,6 +695,14 @@ export interface TeamMember {
    */
   canAssignTasks?: boolean;
   monthlySalary?: number;
+  /**
+   * First day on payroll. Optional: when unset, `createdAt` is used instead
+   * (see `memberStartDate` in lib/finance/salaryHistory.ts). It exists because
+   * payroll used to be charged into every month back to the beginning of time,
+   * inventing cost for months before the person was hired. Set it when someone
+   * was employed BEFORE their record was created in the app.
+   */
+  hiredAt?: Date;
   /** Effective-dated salary changes, so historical months use the salary that
    *  applied then (not today's). Each entry = the monthly salary in effect from
    *  `effectiveFrom` until the next entry. When empty, `monthlySalary` is used

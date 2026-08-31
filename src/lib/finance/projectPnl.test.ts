@@ -335,3 +335,55 @@ describe('a project-linked expense outside the period is pooled, not lost', () =
     expect(r.totals.directCost).toBe(100);
   });
 });
+
+describe('computeProjectPnl — payroll in the fixed pool', () => {
+  const projects = [mkProject({ id: 'a', name: 'A', budget: 1_000_000,
+    createdAt: new Date(2026, 2, 1), updatedAt: new Date(2026, 2, 15), lastCompletedAt: new Date(2026, 2, 15) })];
+
+  it('costs a month from its RECORDED salary payments, not the profile figure', () => {
+    const members = [mkMember({ monthlySalary: 100_000 })];
+    const expenses = [
+      mkExpense({ id: 's1', amount: 62_000, category: 'Salary', date: new Date(2026, 2, 30) }),
+      mkExpense({ id: 's2', amount: 5_000, category: 'Salary', date: new Date(2026, 2, 30) }),
+    ];
+    const r = computeProjectPnl(projects, members, expenses, {
+      range: { start: new Date(2026, 2, 1), end: new Date(2026, 2, 31, 23, 59, 59, 999) },
+      mode: 'all', now: new Date(2026, 2, 31),
+    });
+    expect(r.fixedPool.salaries).toBe(67_000);
+    // The Salary rows are NOT also counted as expenses — that would double-charge.
+    expect(r.fixedPool.otherFixed).toBe(0);
+    expect(r.fixedPool.payrollFallbackMonths).toBe(0);
+  });
+
+  it('falls back to the profile figure for a month with no recorded payment, and says so', () => {
+    const members = [mkMember({ monthlySalary: 100_000 })];
+    const r = computeProjectPnl(projects, members, [], {
+      range: { start: new Date(2026, 2, 1), end: new Date(2026, 2, 31, 23, 59, 59, 999) },
+      mode: 'all', now: new Date(2026, 2, 31),
+    });
+    expect(r.fixedPool.salaries).toBe(100_000);
+    expect(r.fixedPool.payrollFallbackMonths).toBe(1);
+  });
+
+  it('charges nobody for months that ended before the member existed', () => {
+    // The live bug: a year-to-date pool billed 8 months of payroll to a team
+    // whose first member record was created in March.
+    const members = [mkMember({ monthlySalary: 100_000, createdAt: new Date(2026, 2, 19) })];
+    const r = computeProjectPnl(projects, members, [], {
+      range: { start: new Date(2026, 0, 1), end: new Date(2026, 3, 30, 23, 59, 59, 999) },
+      mode: 'all', now: new Date(2026, 3, 30),
+    });
+    expect(r.fixedPool.salaries).toBe(200_000); // March + April only
+  });
+
+  it('counts payroll paid to someone who is not a team member at all', () => {
+    const expenses = [mkExpense({ id: 'f', amount: 5_000, category: 'Salary',
+      title: 'Modele Lugina', date: new Date(2026, 2, 20) })];
+    const r = computeProjectPnl(projects, [], expenses, {
+      range: { start: new Date(2026, 2, 1), end: new Date(2026, 2, 31, 23, 59, 59, 999) },
+      mode: 'all', now: new Date(2026, 2, 31),
+    });
+    expect(r.fixedPool.salaries).toBe(5_000);
+  });
+});

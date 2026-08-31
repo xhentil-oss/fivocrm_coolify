@@ -258,8 +258,13 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
 - All of it lives in `src/lib/finance/recurringExpenses.ts` (unit-tested) and is
   **mirrored** in `runRecurringExpenses` / `expenseGenerationBlockReason` in
   `api/cron/run.ts` — keep the two in sync. Blocks: `not-recurring`,
-  `auto-generated`, `paused`, `unsupported-frequency`, `no-next-date`,
+  `auto-generated`, `paused`, `inactive`, `unsupported-frequency`, `no-next-date`,
   `not-due`, `series-ended`, `already-generated`.
+- **`status: 'Inactive'` stops a series like a pause** — in the engine AND in
+  `isActiveRecurringParent` (the monthly commitment rate). The form's own on/off
+  switch used to change nothing at all, so a series the owner had switched off
+  kept generating rows every month and kept feeding the cash-flow gap. It never
+  touches occurrences already booked: a bill that was paid stays paid.
 - **Never `setMonth(+1)` on a date.** The 31st overflows into the month after
   next, silently skipping a month; use `addMonthsClamped` with the anchor day.
 - **The cron self-heals a series with no `nextRecurringDate` FORWARD only.**
@@ -308,9 +313,11 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   is spread by revenue weight across every department. A team that matches no
   department falls back to the shared pool and is reported
   (`unmatchedDepartmentFixed`).
-- **Salary-category rows are in NO expense total** (payroll comes from
-  `salaryHistory`), so the UI must SAY so — `calculateSalaryExpensesBetween`
-  exists for that banner. Do not "fix" this by adding them to a total.
+- **Salary-category rows are in NO expense-ROW total** (`calculateExpensesBetween`,
+  `isProjectDirectExpense`, `buildExpensesByMonth`, the `otherFixed` pool). They
+  are not "excluded", they are counted ONCE — as payroll, by
+  `src/lib/finance/payroll.ts`. Adding them to an expense total AND the payroll
+  term is the double-charge every one of those filters exists to prevent.
 - **Use `src/lib/formValue.ts` for every form write.** `'__none__'` is truthy,
   so `x || undefined` wrote the sentinel as a real id; and `removeUndefined()`
   strips `undefined` by design, so only an explicit `null` CLEARS a field —
@@ -325,6 +332,40 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   `Submitted`; an approved row is not a member's to delete; `keepsBusinessId()`
   is mandatory. Covered by tests 43–45 in `scripts/firestore-rules.test.mjs`.
   Full audit + what was deliberately left: `workspace/EXPENSES_AUDIT_2026_08.md`.
+
+### Payroll: one figure, two possible sources
+
+- **`src/lib/finance/payroll.ts` is the ONLY answer to "what did the salaries
+  cost"**: `payrollForMonth` / `payrollBetween` / `forwardPayrollEstimate`. Every
+  consumer goes through it — FinancesView's hero + trend, `projectPnl`'s fixed
+  pool, `departmentPnl`'s labour, `cashflowAlarms`, `forecast`.
+- **A month with recorded salary payments is costed from those rows; a month with
+  none falls back to `monthlySalary`/`salaryHistory`.** Recorded rows win because
+  they are what left the bank — including payments to people who are NOT team
+  members (freelancers, models), which the plan can never account for. Before
+  this, Financat charged the plan into every month while every expense total
+  filtered the rows out, so the money appeared on NO Financat line and the
+  Shpenzimet page counted it: the two pages disagreed by the whole payroll
+  (2.96M ALL, 87% of the tenant's expenses) and the year P&L invented 2.78M.
+- **`basis` is returned, never hidden.** `'recorded' | 'profile' | 'none'` is the
+  only reason the two pages can still differ, so every surface says which it is
+  (hero row note, the reconciliation line under it, `fixedPool.payrollFallbackMonths`).
+  A silent fallback reads as a bug — it is a missing data entry.
+- **Nobody is charged for a month that ended before they existed.**
+  `memberStartDate` = `hiredAt ?? startDate ?? createdAt`; unknown never blocks.
+  Without it the plan fallback billed today's salary back to the beginning of
+  time (8 months of payroll for a team hired in March).
+- **Only the PLAN may be prorated.** `proratedPayroll` scales a month-to-date
+  figure only when `basis === 'profile'` — scaling a recorded payment by "days
+  elapsed" invents a number nobody paid.
+- `departmentPnl` splits the ACTUAL payroll across members using the plan
+  salaries as weights (a recorded row identifies its person only when `memberId`
+  is set, and most carry just a name), so its labour total always equals
+  `projectPnl`'s pool.
+- Reconciliation invariant, worth re-checking after any change here:
+  **Financat "Rrogat" + "Shpenzime të tjera" == the Shpenzimet page total for the
+  same month**, except in a `profile`-basis month. `scripts/audit-expense-totals*.mjs`
+  verify it against live data (read-only).
 
 ### WhatsApp campaign automation (conditions + variants + evergreen rules)
 

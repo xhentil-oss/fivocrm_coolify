@@ -9,9 +9,29 @@
 //   - Without history: fall back to the current monthlySalary for Active members
 //     (0 for Inactive) — identical to the pre-history behavior, so numbers only
 //     change once the owner records an actual change.
+//   - Either way, nobody is charged for a month that ENDED before they existed
+//     (see `memberStartDate`): the fallback used to bill today's salary back to
+//     the beginning of time, so a year-to-date P&L charged 8 months of payroll
+//     for a team hired in March. That is fabricated cost, not conservatism.
 
 import type { TeamMember } from '../../types';
 import { parseDate } from './financialAnalytics';
+
+/**
+ * The earliest month this member can cost anything.
+ *
+ * `hiredAt`/`startDate` when the owner recorded one, else `createdAt` — the day
+ * the member record entered the system, which is the only employment signal the
+ * data actually carries. `null` = unknown, and an unknown start never blocks a
+ * charge (a member fixture with no dates behaves exactly as before).
+ */
+export function memberStartDate(member: Pick<TeamMember, 'createdAt'> & {
+  hiredAt?: unknown; startDate?: unknown;
+}): Date | null {
+  return parseDate((member as any).hiredAt)
+    || parseDate((member as any).startDate)
+    || parseDate(member.createdAt);
+}
 
 /** Monthly salary in effect for `member` during the month ending at `monthEnd`. */
 export function memberSalaryForMonth(member: TeamMember, monthEnd: Date): number {
@@ -19,6 +39,12 @@ export function memberSalaryForMonth(member: TeamMember, monthEnd: Date): number
   // which only pool Active members. Prevents a departed employee (whose history
   // never drops to 0) from being charged into current/future months.
   if (member.status !== 'Active') return 0;
+
+  // Not yet employed in this month → no cost. Compared against monthEnd so
+  // someone who joined mid-month still costs that whole month (their salary is
+  // recorded monthly, not pro-rated).
+  const start = memberStartDate(member);
+  if (start && start.getTime() > monthEnd.getTime()) return 0;
 
   const hist = (member.salaryHistory || [])
     .map(e => ({ monthlySalary: Number(e.monthlySalary) || 0, from: parseDate(e.effectiveFrom) }))

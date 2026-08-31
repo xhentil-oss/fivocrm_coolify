@@ -1429,6 +1429,10 @@ function expenseGenerationBlockReason(expense: any, now: Date): string | null {
   if (endDate && !isNaN(endDate.getTime()) && nextDate > endDate) return 'series-ended';
 
   if (expense.isRecurringPaused) return 'paused';
+  // Mirrors src/lib/finance/recurringExpenses.ts: the form's Active/Inactive
+  // switch stops the series like a pause. It used to change nothing, so a
+  // series the owner had switched off kept producing rows every month.
+  if (expense.status && expense.status !== 'Active') return 'inactive';
   if (nextDate > now) return 'not-due';
   if (expense.lastGeneratedPeriodKey === expensePeriodKey(frequency, nextDate)) return 'already-generated';
   return null;

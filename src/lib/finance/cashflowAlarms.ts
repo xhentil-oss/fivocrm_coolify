@@ -18,7 +18,7 @@ import {
   expenseIsCountable,
   EXPENSE_CATEGORY_SALARY,
 } from './financialAnalytics';
-import { totalSalaryForMonth } from './salaryHistory';
+import { forwardPayrollEstimate } from './payroll';
 import { monthlyRecurringRevenue } from './forecast';
 import { monthlyRecurringExpenseRate } from './recurringExpenses';
 
@@ -69,8 +69,13 @@ export function computeCashflowHealth(
   // retainer modelled as a monthly project doesn't trigger a false gap alarm.
   const monthlyInflow = monthlyRecurringRevenue(projects, invoices);
 
-  // ── Monthly fixed outflow: salaries (history-aware) + recurring expenses.
-  const salaries = totalSalaryForMonth(teamMembers, monthEnd(now, 1)); // next month
+  // ── Monthly fixed outflow: payroll + recurring expenses.
+  // Payroll for a month that has not happened yet is the PLAN — but a tenant who
+  // records salaries only as expense rows has no plan, and used to get a gap
+  // alarm with no payroll in it at all. `forwardPayrollEstimate` falls back to
+  // what was actually paid in recent months. Recurring Salary-category rows are
+  // excluded from `monthlyRecurringExpenseRate`, so nothing is counted twice.
+  const salaries = forwardPayrollEstimate(teamMembers, exp, now).amount; // next month
   const recurringExpenses = monthlyRecurringExpenseRate(exp);
   const monthlyOutflow = salaries + recurringExpenses;
 

@@ -10,22 +10,28 @@
 //  - DIRECT (variable) COSTS = expenses linked to the project (`projectId`),
 //    entered manually as they happen. Salary-category expenses are excluded here
 //    to avoid double-counting fixed salary (which comes from monthlySalary below).
-//  - FIXED COSTS (the "overhead pool") = staff salaries (Σ active member
-//    monthlySalary × months) + every other expense NOT tied to a specific
-//    project (rent, utilities, hosting, marketing, …) in the period.
+//  - FIXED COSTS (the "overhead pool") = payroll for the period + every other
+//    expense NOT tied to a specific project (rent, utilities, hosting,
+//    marketing, …) in the period. Payroll comes from `payrollBetween()`
+//    (lib/finance/payroll.ts): the salaries actually RECORDED for each month,
+//    falling back to the member profiles only for months with none. Charging
+//    the profile figure into every month regardless used to bill a full year of
+//    payroll to a team hired mid-year, and ignored every payment made to
+//    someone who is not on the member list.
 //  - The fixed pool is ALLOCATED across projects by REVENUE weight
 //    (full-absorption costing): a project earning 60% of total revenue absorbs
 //    60% of overhead. If total revenue is 0, the pool is split equally instead.
 //  - PROFIT per project = revenue − direct cost − allocated overhead.
 //
-// This mirrors the salary/expense conventions in financialAnalytics.ts
-// (salary sourced from monthlySalary, Salary-category expenses excluded) and is
-// the single source of truth for per-project profitability.
+// This mirrors the expense conventions in financialAnalytics.ts (Salary-category
+// rows never counted as an expense — they ARE the recorded payroll, added once
+// via payroll.ts) and is the single source of truth for per-project
+// profitability.
 
 import type { Project, TeamMember, Expense, Invoice } from '../../types';
 import { toAll } from '../utils';
 import { parseDate, monthsElapsedInYear, getInvoiceCollectedBetween } from './financialAnalytics';
-import { totalSalaryForMonth } from './salaryHistory';
+import { payrollBetween } from './payroll';
 
 export interface ProjectPnlOptions {
   /** 'completed' counts only Completed (or recurring-completed) projects; 'all' counts every project. */
@@ -66,7 +72,15 @@ export interface ProjectPnlRow {
 
 export interface ProjectPnlResult {
   rows: ProjectPnlRow[];
-  fixedPool: { salaries: number; otherFixed: number; total: number };
+  fixedPool: {
+    salaries: number;
+    otherFixed: number;
+    total: number;
+    /** Months inside the period whose payroll came from the member profiles
+     *  because no salary payment was recorded for them. > 0 is exactly when the
+     *  pool and the Shpenzimet page disagree, so the UI can say why. */
+    payrollFallbackMonths: number;
+  };
   allocationBasis: 'revenue' | 'equal';
   totals: {
     revenue: number;
@@ -129,7 +143,7 @@ export function computeProjectPnl(
   const resolvedBasis: 'budget' | 'invoiced' = opts.revenueBasis === 'invoiced' ? 'invoiced' : 'budget';
   const empty: ProjectPnlResult = {
     rows: [],
-    fixedPool: { salaries: 0, otherFixed: 0, total: 0 },
+    fixedPool: { salaries: 0, otherFixed: 0, total: 0, payrollFallbackMonths: 0 },
     allocationBasis: 'revenue',
     totals: { revenue: 0, directCost: 0, overhead: 0, cost: 0, profit: 0 },
     missingBudget: { count: 0, names: [] },
@@ -225,21 +239,19 @@ export function computeProjectPnl(
   // months. Otherwise sum the HISTORY-AWARE payroll for each calendar month in
   // the period, so a mid-period raise is reflected in the pool.
   let salaries: number;
+  let payrollFallbackMonths = 0;
   if (opts.months != null) {
     salaries = (teamMembers ?? [])
       .filter(m => m.status === 'Active')
       .reduce((s, m) => s + (m.monthlySalary || 0), 0) * months;
   } else {
-    salaries = 0;
-    const cur = new Date(periodStart.getFullYear(), periodStart.getMonth(), 1);
-    const last = new Date(periodEnd.getFullYear(), periodEnd.getMonth(), 1);
-    let guard = 0;
-    while (cur.getTime() <= last.getTime() && guard < 600) {
-      const monthEnd = new Date(cur.getFullYear(), cur.getMonth() + 1, 0, 23, 59, 59, 999);
-      salaries += totalSalaryForMonth(teamMembers, monthEnd);
-      cur.setMonth(cur.getMonth() + 1);
-      guard++;
-    }
+    // Recorded salary payments per month, plan only where a month has none —
+    // see lib/finance/payroll.ts. Charging the plan into every month regardless
+    // billed 8 months of payroll to a team hired in March, and hid every
+    // payment made to someone who is not on the member list.
+    const pay = payrollBetween(teamMembers, expenses, periodStart, periodEnd);
+    salaries = pay.total;
+    payrollFallbackMonths = pay.monthsProfile;
   }
 
   const expDate = (e: Expense) => parseDate((e as any).date) || parseDate((e as any).createdAt);
@@ -354,7 +366,7 @@ export function computeProjectPnl(
 
   return {
     rows,
-    fixedPool: { salaries, otherFixed, total: poolTotal },
+    fixedPool: { salaries, otherFixed, total: poolTotal, payrollFallbackMonths },
     allocationBasis,
     totals,
     missingBudget,

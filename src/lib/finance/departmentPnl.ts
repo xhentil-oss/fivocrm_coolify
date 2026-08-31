@@ -25,6 +25,7 @@ import type { Project, TeamMember, Expense, Invoice } from '../../types';
 import { toAll } from '../utils';
 import { parseDate, monthsElapsedInYear, MONTH_LABELS_SQ, getInvoiceCollectedBetween } from './financialAnalytics';
 import { memberSalaryForMonth } from './salaryHistory';
+import { payrollBetween } from './payroll';
 
 export interface DepartmentPnlOptions {
   mode?: 'all' | 'completed';
@@ -169,7 +170,9 @@ export function computeDepartmentPnl(
   const memberById = new Map<string, TeamMember>();
   activeMembers.forEach(m => { if (m.userId) memberById.set(norm(m.userId), m); });
 
-  const memberPeriodSalary = (m: TeamMember): number => {
+  /** What the member PROFILES say this member costs over the period. Used as an
+   *  allocation weight, not as the amount — see `memberPeriodSalary`. */
+  const memberPlanSalary = (m: TeamMember): number => {
     let sum = 0;
     const cur = new Date(periodStart.getFullYear(), periodStart.getMonth(), 1);
     const last = new Date(periodEnd.getFullYear(), periodEnd.getMonth(), 1);
@@ -182,6 +185,26 @@ export function computeDepartmentPnl(
     }
     return sum;
   };
+
+  // ── Labour cost = the ACTUAL payroll of the period, split across members by
+  // their plan salary.
+  //
+  // The period's payroll comes from `payrollBetween()` (recorded salary
+  // payments, plan only for months with none) — the same figure projectPnl
+  // charges into its fixed pool, so the two panels on Financat can no longer
+  // disagree. It is not read per member because a recorded row identifies its
+  // person only when `memberId` is set (most carry just a name in the title),
+  // so the plan salaries are used as WEIGHTS and scaled to the real total.
+  // With no plan at all, the payroll is split equally across active members —
+  // otherwise recorded payroll would vanish from every department.
+  const planTotal = activeMembers.reduce((s, m) => s + memberPlanSalary(m), 0);
+  const actualPayroll = payrollBetween(teamMembers, expenses, periodStart, periodEnd).total;
+  const payrollScale = planTotal > 0 ? actualPayroll / planTotal : 0;
+  const equalShare = activeMembers.length > 0 ? actualPayroll / activeMembers.length : 0;
+
+  const memberPeriodSalary = (m: TeamMember): number => (
+    planTotal > 0 ? memberPlanSalary(m) * payrollScale : equalShare
+  );
 
   const participantsOf = (p: Project): string[] => {
     const ids = new Set<string>();
