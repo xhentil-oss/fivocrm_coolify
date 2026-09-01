@@ -510,3 +510,66 @@ describe('calculateSalaryExpensesBetween', () => {
     expect(calculateExpensesBetween(rows, start, end)).toBe(10_000);   // salary excluded here
   });
 });
+
+
+describe('a cancelled invoice is not a receivable', () => {
+  const cancelled = mkInvoice({
+    id: 'void', status: 'Cancelled', total: 500_000, currency: 'ALL',
+    invoiceDate: new Date('2026-01-10T12:00:00Z'),
+    dueDate: new Date('2026-01-20T12:00:00Z'),
+  });
+  const live = mkInvoice({
+    id: 'live', status: 'Overdue', total: 100_000, currency: 'ALL',
+    invoiceDate: new Date('2026-01-10T12:00:00Z'),
+    dueDate: new Date('2026-01-20T12:00:00Z'),
+  });
+
+  it('owes nothing', () => {
+    expect(getInvoiceOutstandingAll(cancelled)).toBe(0);
+  });
+
+  it('stays out of the AR total', () => {
+    expect(calculateAccountsReceivable([cancelled, live])).toBe(100_000);
+  });
+
+  it('stays out of the aging report — where a void invoice only gets louder', () => {
+    const aging = buildARAging([cancelled, live], new Date('2026-06-01T12:00:00Z'));
+    expect(aging['90+']).toBe(100_000);
+  });
+});
+
+describe('calculateRevenueBetween matches the canonical collected helper', () => {
+  const june = new Date('2026-06-01T00:00:00Z');
+  const juneEnd = new Date('2026-06-30T23:59:59Z');
+
+  it('keeps a June instalment in June after the invoice settles in August', () => {
+    const inv = mkInvoice({
+      status: 'Paid', total: 100_000, currency: 'ALL',
+      paidAt: new Date('2026-08-05T12:00:00Z'),
+      partialPayments: [
+        { amount: 50_000, paidAt: new Date('2026-06-10T12:00:00Z') },
+        { amount: 50_000, paidAt: new Date('2026-08-05T12:00:00Z') },
+      ],
+    });
+    expect(calculateRevenueBetween([inv], june, juneEnd)).toBe(50_000);
+  });
+
+  it('still counts instalments after the cron flips Partial → Overdue', () => {
+    const inv = mkInvoice({
+      status: 'Overdue', total: 100_000, currency: 'ALL',
+      partialPayments: [{ amount: 30_000, paidAt: new Date('2026-06-15T12:00:00Z') }],
+    });
+    expect(calculateRevenueBetween([inv], june, juneEnd)).toBe(30_000);
+  });
+
+  it('agrees with the cash-flow chart for the same month', () => {
+    const inv = mkInvoice({
+      status: 'Overdue', total: 100_000, currency: 'ALL',
+      partialPayments: [{ amount: 30_000, paidAt: new Date('2026-06-15T12:00:00Z') }],
+    });
+    const cash = buildCashflowByMonth([inv], [], 2026, 0, MONTH_LABELS_SQ, new Date('2026-12-31T12:00:00Z'));
+    const revenue = buildRevenueByMonth([inv], 2026);
+    expect(cash[5].inflow).toBe(30_000);
+    expect(cash[5].inflow).toBe(revenue[5].paid);
+  });
+});

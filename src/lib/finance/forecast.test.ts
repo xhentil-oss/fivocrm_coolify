@@ -20,16 +20,41 @@ function mkMember(salary: number): TeamMember {
 }
 
 describe('forecastNextMonth (project-based revenue)', () => {
-  it('sums active monthly project fees as recurring revenue', () => {
+  it('counts every monthly project the billing engine will actually bill', () => {
     const projects = [
       mkProject({ id: 'a', budget: 30_000, billingType: 'monthly', status: 'Active' }),
       mkProject({ id: 'b', budget: 20_000, billingType: 'monthly', status: 'On Hold' }),
-      mkProject({ id: 'done', budget: 99_000, billingType: 'monthly', status: 'Completed' }), // excluded
+      // A COMPLETED retainer still bills — for a retainer, "Completed" means this
+      // cycle's work is done, and projectBillingBlockReason lets it through. The
+      // old status allow-list dropped it, so real MRR was under-reported.
+      mkProject({ id: 'done', budget: 99_000, billingType: 'monthly', status: 'Completed' }),
     ];
     const f = forecastNextMonth(projects, [], [], [], NOW);
-    expect(f.recurringRevenue).toBe(50_000);
+    expect(f.recurringRevenue).toBe(149_000);
     expect(f.newProjectRevenue).toBe(0);
     expect(f.monthIndex).toBe(7); // August
+  });
+
+  it('drops retainers that will NOT bill: paused, terminal, or past their end date', () => {
+    const projects = [
+      mkProject({ id: 'live', budget: 30_000, billingType: 'monthly', status: 'Active' }),
+      mkProject({ id: 'paused', budget: 40_000, billingType: 'monthly', status: 'Active', isRecurringPaused: true } as any),
+      mkProject({ id: 'cancelled', budget: 50_000, billingType: 'monthly', status: 'Cancelled' }),
+      mkProject({ id: 'archived', budget: 60_000, billingType: 'monthly', status: 'Archived' }),
+      // "Repeat until" already passed before the forecast month starts.
+      mkProject({ id: 'ended', budget: 70_000, billingType: 'monthly', status: 'Active', recurringEndDate: new Date('2026-07-20') } as any),
+    ];
+    const f = forecastNextMonth(projects, [], [], [], NOW);
+    expect(f.recurringRevenue).toBe(30_000);
+  });
+
+  it('drops a recurring invoice series past its end date', () => {
+    const invoices: Invoice[] = [
+      { id: 'live', total: 10_000, status: 'Pending', isRecurring: true, recurringFrequency: 'monthly', createdAt: new Date('2026-01-01') } as Invoice,
+      { id: 'ended', total: 90_000, status: 'Pending', isRecurring: true, recurringFrequency: 'monthly', recurringEndDate: new Date('2026-07-01'), createdAt: new Date('2026-01-01') } as any,
+    ];
+    const f = forecastNextMonth([], invoices, [], [], NOW);
+    expect(f.recurringRevenue).toBe(10_000);
   });
 
   it('counts a one-time project only when it starts in the forecast month', () => {

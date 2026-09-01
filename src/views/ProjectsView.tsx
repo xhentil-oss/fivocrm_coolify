@@ -356,7 +356,13 @@ const ProjectsView: React.FC = () => {
         total: billableTotal,
         currency,
         tax: 0,
-        status: 'Draft',
+        // ISSUED, like every later occurrence the cron writes. As a Draft, period
+        // 1 of a retainer was in no revenue figure (Draft is excluded from both
+        // the accrual and the cash basis) and invisible in the client portal,
+        // while periods 2..n were issued AND emailed — so the first month of
+        // every retainer quietly fell out of the books. It is not auto-emailed:
+        // the owner sends it with "Dërgo" once they have checked it.
+        status: 'Pending',
         notes: `Faturë e gjeneruar automatikisht për projektin periodik "${name}".`,
         // Issue date: accrual revenue is recognised on invoiceDate; without it the
         // engines fall back to createdAt and the UI shows an empty "Data" column.

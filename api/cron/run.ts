@@ -83,6 +83,34 @@ async function callerUid(req: VercelRequest): Promise<string | null> {
   }
 }
 
+/**
+ * The tenant a manual trigger belongs to, from the server-minted `bid` claim
+ * (falling back to a membership lookup for tokens that predate the rollout).
+ *
+ * Money jobs must be scoped to it. `recurring-invoices` iterated `invoices` and
+ * `projects` across EVERY tenant, so one tenant's Admin pressing "Gjenero
+ * Periodike" generated — and emailed — invoices to every other tenant's
+ * customers, at a moment those tenants never chose.
+ */
+async function callerBusinessId(req: VercelRequest): Promise<string | null> {
+  const authHeader = req.headers.authorization as string | undefined;
+  if (!authHeader?.startsWith('Bearer ')) return null;
+  try {
+    const decoded = await adminAuth.verifyIdToken(authHeader.slice(7));
+    const bid = (decoded as any).bid;
+    if (typeof bid === 'string' && bid) return bid;
+    const snap = await db.collection('teamMembers')
+      .where('userId', '==', decoded.uid).limit(10).get();
+    for (const d of snap.docs) {
+      const b = d.data().businessId;
+      if (typeof b === 'string' && b) return b;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
 async function callerIsSuperAdmin(req: VercelRequest): Promise<boolean> {
   const authHeader = req.headers.authorization as string;
   if (!authHeader?.startsWith('Bearer ')) return false;
@@ -686,6 +714,18 @@ function addInvoiceMonthsClamped(from: Date, months: number, anchorDay?: number)
   return out;
 }
 
+/**
+ * The day-of-month the series bills on: the stored anchor, else the day of the
+ * occurrence we advance from. Deriving it from the occurrence every time made one
+ * February clamp permanent — 31 Jan → 28 Feb → 28 Mar → … — so a retainer billed
+ * three days early for the rest of its life. Mirrors `resolveInvoiceAnchorDay`.
+ */
+function resolveInvoiceAnchorDay(invoice: any, scheduled: Date): number {
+  const n = Math.round(Number(invoice?.recurringAnchorDay));
+  if (Number.isFinite(n) && n >= 1 && n <= 31) return n;
+  return scheduled.getDate();
+}
+
 /** The due date one full cycle after `fromDate`. Never `setMonth(+1)`. */
 function nextInvoiceDueDate(fromDate: Date, frequency: string, anchorDay?: number): Date {
   if (frequency === 'weekly') {
@@ -731,17 +771,42 @@ function invoiceBillingDateFor(scheduled: Date, frequency: string, now: Date): D
 }
 
 /** How many whole periods the series fell behind (0 when on schedule). */
-function invoicePeriodsSkipped(scheduled: Date, frequency: string, now: Date): number {
+function invoicePeriodsSkipped(scheduled: Date, frequency: string, now: Date, anchorDay?: number): number {
   if (scheduled >= now) return 0;
   let count = 0;
   let cursor = new Date(scheduled);
-  const anchor = scheduled.getDate();
+  const anchor = anchorDay ?? scheduled.getDate();
   const nowKey = invoiceBillingPeriodKey(frequency, now);
   while (invoiceBillingPeriodKey(frequency, cursor) !== nowKey && count < 600) {
     cursor = nextInvoiceDueDate(cursor, frequency, anchor);
     count++;
   }
   return Math.max(0, count - 1);
+}
+
+/**
+ * True when a `.create()` failed because the document already exists.
+ *
+ * That is the whole point of the deterministic occurrence id: a second run — or a
+ * concurrent one, or a manual trigger racing the scheduled cron — cannot write a
+ * duplicate invoice, it gets this error instead. Idempotency stops being "two
+ * writes we hope both land" and becomes a property of the key.
+ */
+function isAlreadyExists(err: any): boolean {
+  return err?.code === 6 || /ALREADY_EXISTS/i.test(String(err?.message || err?.details || ''));
+}
+
+/**
+ * Document id of the occurrence covering `periodKey` of a series.
+ *
+ * Deterministic ON PURPOSE. The period key was already the idempotency token, but
+ * it was only ever CHECKED — the occurrence itself went to a random id and the
+ * claim was a separate, unordered write. If that claim failed (or the run died
+ * between the two), the next pass billed the period again and emailed the client
+ * a second invoice. With the key in the id, the database refuses the duplicate.
+ */
+function recurringOccurrenceId(prefix: 'rec' | 'auto', parentId: string, periodKey: string): string {
+  return `${prefix}_${parentId}_${periodKey}`;
 }
 
 /** True when the linked project's OWN recurrence bills this retainer as well. */
@@ -829,6 +894,24 @@ function projectBillingPeriodEnd(frequency: string, at: Date): Date {
   return new Date(at.getFullYear(), at.getMonth() + 1, 0, 23, 59, 59, 999);
 }
 
+/**
+ * Whole billing periods missed between `lastPeriodKey` and the period containing
+ * `now`. Mirrors `projectPeriodsSkipped` in src/lib/finance/recurringBilling.ts.
+ * Reports only — backfilling closed months is the owner's call.
+ */
+function projectPeriodsSkipped(frequency: string, lastPeriodKey: string | undefined | null, now: Date, maxLookback = 24): number {
+  if (!lastPeriodKey) return 0;
+  if (projectBillingPeriodKey(frequency, now) === lastPeriodKey) return 0;
+  let cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  for (let i = 0; i < maxLookback; i++) {
+    cursor = frequency === 'weekly'
+      ? new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() - 7)
+      : new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
+    if (projectBillingPeriodKey(frequency, cursor) === lastPeriodKey) return i;
+  }
+  return 0;
+}
+
 /** Why this project may not bill for the period containing `now`, or null when due. */
 function projectBillingBlockReason(project: any, now: Date): string | null {
   if (!project.isRecurring) return 'not-recurring';
@@ -866,29 +949,62 @@ function projectBillingBlockReason(project: any, now: Date): string | null {
 }
 
 // ── JOB: recurring-invoices ──────────────────────────────────────────────────
-async function runRecurringInvoices() {
+async function runRecurringInvoices(opts?: { businessId?: string | null }) {
   const transporter = makeTransporter();
   const smtpUser = process.env.SMTP_USER;
   const now = new Date();
   let created = 0, skipped = 0;
   const ops: Promise<any>[] = [];
 
+  // A manual run is scoped to the caller's tenant: this job SENDS EMAIL to
+  // customers, so an unscoped manual trigger let any tenant Admin bill every
+  // other tenant's clients. The scheduled run stays unscoped (it is the platform
+  // acting for everyone, and legacy rows with no businessId must still bill).
+  const scopeId = opts?.businessId || null;
+  const scoped = <T extends FirebaseFirestore.Query>(q: T): T =>
+    (scopeId ? q.where('businessId', '==', scopeId) : q) as T;
+
+  // A SUSPENDED tenant must not keep invoicing its customers. `tenantActive()` in
+  // firestore.rules blocks their writes, but the cron runs on the Admin SDK, which
+  // bypasses rules entirely — so an unpaid tenant kept generating invoices and
+  // emailing them to their clients in our name, for as long as the data existed.
+  const suspendedBusinessIds = new Set<string>();
+  try {
+    const suspSnap = await db.collection('businesses').where('status', '==', 'suspended').get();
+    suspSnap.docs.forEach(d => suspendedBusinessIds.add(d.id));
+  } catch { /* a failed lookup must not stop billing for everyone else */ }
+  let suspendedSkipped = 0;
+
   // ── Part 1: Invoice-based recurrence (user-created recurring invoices) ──────
-  const invoicesSnap = await db.collection('invoices').where('isRecurring', '==', true).get();
+  const invoicesSnap = await scoped(db.collection('invoices').where('isRecurring', '==', true)).get();
   const blockedReasons: Record<string, number> = {};
+
+  // Linked projects in ONE round trip instead of one per series. Each is needed
+  // by `projectAlsoBills` before the cheap blocks can even be evaluated, so this
+  // used to be a guaranteed N+1: 200 retainers = 200 sequential reads before a
+  // single invoice was written.
+  const linkedProjects = new Map<string, any>();
+  const projectIds = Array.from(new Set(
+    invoicesSnap.docs.map(d => d.data().projectId).filter((x): x is string => typeof x === 'string' && !!x),
+  ));
+  for (let i = 0; i < projectIds.length; i += 300) {
+    const refs = projectIds.slice(i, i + 300).map(id => db.collection('projects').doc(id));
+    const got = await db.getAll(...refs).catch(() => [] as FirebaseFirestore.DocumentSnapshot[]);
+    got.forEach(snapDoc => { if (snapDoc.exists) linkedProjects.set(snapDoc.id, snapDoc.data()); });
+  }
 
   for (const doc of invoicesSnap.docs) {
     const invoice = doc.data();
 
+    if (invoice.businessId && suspendedBusinessIds.has(invoice.businessId)) {
+      suspendedSkipped++; skipped++; continue;
+    }
+
     // One retainer, one engine. An invoice-driven series whose PROJECT bills its
     // own fee would double-bill the same money (Part 2 below does that project);
     // `scripts/stop-duplicate-invoice-engines.mjs` existed only to clean this up
-    // by hand. Resolve the project first so the block reason can see it.
-    let linkedProject: any = null;
-    if (invoice.projectId) {
-      const pd = await db.collection('projects').doc(invoice.projectId).get().catch(() => null);
-      if (pd?.exists) linkedProject = pd.data();
-    }
+    // by hand. The block reason needs the project, hence the bulk prefetch above.
+    const linkedProject: any = invoice.projectId ? (linkedProjects.get(invoice.projectId) ?? null) : null;
 
     const block = invoiceBillingBlockReason(invoice, now, linkedProject);
     if (block) {
@@ -930,24 +1046,30 @@ async function runRecurringInvoices() {
     // the invoice never lands in a closed, already-reported month.
     const billingDate = invoiceBillingDateFor(scheduled, freq, now);
     const periodKey = invoiceBillingPeriodKey(freq, billingDate);
-    const skippedPeriods = invoicePeriodsSkipped(scheduled, freq, now);
+    const skippedPeriods = invoicePeriodsSkipped(scheduled, freq, now, resolveInvoiceAnchorDay(invoice, scheduled));
 
     // Back-compat for parents that predate `lastGeneratedPeriodKey`: derive
     // coverage from the occurrences that exist, so the first run after deploy
     // does not bill every live series a second time.
-    const existingChildSnap = await db.collection('invoices')
-      .where('parentInvoiceId', '==', doc.id)
-      .where('autoGenerated', '==', true)
-      .get();
-    if (!invoice.lastGeneratedPeriodKey
-        && invoicePeriodAlreadyCovered(freq, periodKey, existingChildSnap.docs.map(d => d.data()))) {
+    //
+    // Only for those parents: once the claim exists it is the authority, and this
+    // query used to run for EVERY series on EVERY pass — reading the whole child
+    // history of a two-year retainer just to re-derive a fact already stored.
+    if (!invoice.lastGeneratedPeriodKey) {
+      const existingChildSnap = await db.collection('invoices')
+        .where('parentInvoiceId', '==', doc.id)
+        .where('autoGenerated', '==', true)
+        .get();
+      if (invoicePeriodAlreadyCovered(freq, periodKey, existingChildSnap.docs.map(d => d.data()))) {
       // Record the key so the derivation runs once, not on every future run.
-      ops.push(doc.ref.update({ lastGeneratedPeriodKey: periodKey, updatedAt: admin.firestore.Timestamp.now() }));
-      blockedReasons['already-generated'] = (blockedReasons['already-generated'] || 0) + 1;
-      skipped++; continue;
+        ops.push(doc.ref.update({ lastGeneratedPeriodKey: periodKey, updatedAt: admin.firestore.Timestamp.now() }));
+        blockedReasons['already-generated'] = (blockedReasons['already-generated'] || 0) + 1;
+        skipped++; continue;
+      }
     }
 
-    const anchorDay = scheduled.getDate();
+    // The anchor is a property of the SERIES, not of the last (clamped) occurrence.
+    const anchorDay = resolveInvoiceAnchorDay(invoice, scheduled);
     const newDueDate = nextInvoiceDueDate(billingDate, freq, anchorDay);
     // Next trigger = newDueDate (i.e. generate again when that period ends). Since
     // billingDate is inside the current period, this is always in the future —
@@ -961,9 +1083,16 @@ async function runRecurringInvoices() {
     // Include the day so sub-monthly (weekly) children in the same month get
     // distinct numbers instead of colliding on REC-YYYY-MM-<parent>.
     const invoiceNumber = `REC-${scheduledYear}-${String(scheduledMonth + 1).padStart(2, '0')}-${String(scheduledDay).padStart(2, '0')}-${doc.id.slice(0, 6).toUpperCase()}`;
-    const newInvoiceRef = db.collection('invoices').doc();
+    // One occurrence per (parent, period) — enforced by the KEY, not by a check.
+    const newInvoiceRef = db.collection('invoices').doc(recurringOccurrenceId('rec', doc.id, periodKey));
 
-    ops.push(newInvoiceRef.set({
+    // Awaited, and `create()` not `set()`: the database itself now refuses a
+    // second invoice for this period. Everything after this line may assume the
+    // occurrence is ours and exists — including the `emailSent` flag, which used
+    // to be an `update()` racing an unordered `set()` in the same ops array (a
+    // NOT_FOUND there left the invoice marked un-emailed, so the 25th/last-day
+    // reminder job mailed the client all over again).
+    const occurrence = {
       invoiceNumber,
       customerId: invoice.customerId || null,
       projectId: invoice.projectId || null,
@@ -1008,7 +1137,22 @@ async function runRecurringInvoices() {
       createdByUserId: invoice.createdByUserId || null,
       createdAt: admin.firestore.Timestamp.now(),
       updatedAt: admin.firestore.Timestamp.now(),
-    }));
+    };
+    try {
+      await newInvoiceRef.create(occurrence);
+    } catch (err) {
+      if (!isAlreadyExists(err)) throw err;
+      // Someone (a concurrent run, a retried invocation) already billed this
+      // period. Record the claim so the parent stops re-evaluating it, and move
+      // on — never a second invoice, never a second email.
+      ops.push(doc.ref.update({
+        lastGeneratedPeriodKey: periodKey,
+        recurringAnchorDay: invoice.recurringAnchorDay ?? anchorDay,
+        updatedAt: admin.firestore.Timestamp.now(),
+      }));
+      blockedReasons['already-generated'] = (blockedReasons['already-generated'] || 0) + 1;
+      skipped++; continue;
+    }
 
     // Copy line items from parent (preserve serviceId so analytics stay linked).
     //
@@ -1045,6 +1189,10 @@ async function runRecurringInvoices() {
       lastGeneratedPeriodKey: periodKey,
       lastGeneratedAt: admin.firestore.Timestamp.now(),
       nextRecurringDate: admin.firestore.Timestamp.fromDate(nextTrigger),
+      // Backfill for series created before the anchor existed. Written ONCE (the
+      // `??` never overwrites a stored anchor) — rewriting it from a clamped
+      // occurrence is the drift this field exists to stop.
+      recurringAnchorDay: invoice.recurringAnchorDay ?? anchorDay,
       // Surfaced, never backfilled — rewriting closed books is the owner's call.
       ...(skippedPeriods > 0
         ? {
@@ -1075,11 +1223,9 @@ async function runRecurringInvoices() {
         const customerDoc = await db.collection('customers').doc(invoice.customerId).get();
         const customer = customerDoc.data();
         if (customer?.email) {
-          let projectName = 'Shërbim';
-          if (invoice.projectId) {
-            const projDoc = await db.collection('projects').doc(invoice.projectId).get();
-            if (projDoc.exists) projectName = projDoc.data()?.name || projectName;
-          }
+          // The linked project is already in hand from the bulk prefetch — this
+          // used to be a THIRD read of the same document in one iteration.
+          const projectName = linkedProject?.name || 'Shërbim';
           const { subject, html } = buildInvoiceEmail({
             customerName: customer.name || 'Klient',
             invoiceNumber,
@@ -1135,12 +1281,16 @@ async function runRecurringInvoices() {
   // first invoice the UI creates at project-creation time.
   const legacyOps: Promise<any>[] = [];
 
-  const projectsSnap = await db.collection('projects').where('isRecurring', '==', true).get();
+  const projectsSnap = await scoped(db.collection('projects').where('isRecurring', '==', true)).get();
   let legacyCreated = 0;
   let zeroBudget = 0;
+  let projectPeriodsMissed = 0;
 
   for (const projectDoc of projectsSnap.docs) {
     const project = projectDoc.data();
+    if (project.businessId && suspendedBusinessIds.has(project.businessId)) {
+      suspendedSkipped++; skipped++; continue;
+    }
     const frequency: string = project.recurringFrequency || 'monthly';
 
     const block = projectBillingBlockReason(project, now);
@@ -1224,9 +1374,22 @@ async function runRecurringInvoices() {
     const currency: 'ALL' | 'EUR' = project.currency === 'EUR' ? 'EUR' : 'ALL';
     // Period key in the number so weekly children in the same month never collide.
     const invoiceLabel = `AUTO-${periodKey}-${projectDoc.id.slice(0, 6).toUpperCase()}`;
-    const invoiceRef = db.collection('invoices').doc();
+    // One invoice per (project, period), enforced by the id — see Part 1.
+    const invoiceRef = db.collection('invoices').doc(recurringOccurrenceId('auto', projectDoc.id, periodKey));
 
-    legacyOps.push(invoiceRef.set({ invoiceNumber: invoiceLabel, projectId: projectDoc.id, customerId: project.customerId || null, teamId: project.teamId || null, businessId: project.businessId || null, amount: budget, subtotal: budget, total: budget, tax: 0, discount: 0, discountType: 'fixed', currency, status: 'Pending', notes: `Faturë e gjeneruar automatikisht për projektin periodik "${project.name}" – ${periodLabel}.`, invoiceDate: admin.firestore.Timestamp.now(), dueDate: admin.firestore.Timestamp.fromDate(periodEnd), isRecurring: false, autoGenerated: true, billingPeriodKey: periodKey, emailSent: false, reminderSent: false, reminder25Sent: false, reminderLastDaySent: false, createdByUserId: project.createdByUserId || null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
+    const projectOccurrence = { invoiceNumber: invoiceLabel, projectId: projectDoc.id, customerId: project.customerId || null, teamId: project.teamId || null, businessId: project.businessId || null, amount: budget, subtotal: budget, total: budget, tax: 0, discount: 0, discountType: 'fixed', currency, status: 'Pending', notes: `Faturë e gjeneruar automatikisht për projektin periodik "${project.name}" – ${periodLabel}.`, invoiceDate: admin.firestore.Timestamp.now(), dueDate: admin.firestore.Timestamp.fromDate(periodEnd), isRecurring: false, autoGenerated: true, billingPeriodKey: periodKey, emailSent: false, reminderSent: false, reminder25Sent: false, reminderLastDaySent: false, createdByUserId: project.createdByUserId || null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() };
+    try {
+      await invoiceRef.create(projectOccurrence);
+    } catch (err) {
+      if (!isAlreadyExists(err)) throw err;
+      // Already billed for this period (a concurrent run, or the invoice the UI
+      // creates at project-creation time). Claim the period and move on.
+      legacyOps.push(projectDoc.ref.update({
+        lastInvoicePeriodKey: periodKey,
+        updatedAt: admin.firestore.Timestamp.now(),
+      }));
+      skipped++; continue;
+    }
     // businessId + customerId are mandatory: `invoiceItems` is business-isolated and
     // read by the portal via `isPortalClientFor(customerId)`. Without them the line
     // is unreadable by staff AND client — see the Part 1 copy above.
@@ -1238,13 +1401,45 @@ async function runRecurringInvoices() {
         const customer = customerDoc.data();
         if (customer?.email) {
           const { subject, html } = buildInvoiceEmail({ customerName: customer.name || 'Klient', invoiceNumber: invoiceLabel, amount: budget, dueDate: periodEnd, projectName: project.name, type: 'initial', currency, paymentMethod: project.paymentMethod, bankName: project.bankName, bankIBAN: project.bankIBAN, bankSWIFT: project.bankSWIFT, bankAccountHolder: project.bankAccountHolder, bankCountry: project.bankCountry, payUrl: await publicInvoicePayUrl(invoiceRef.id, null) });
-          legacyOps.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject, html }).then(() => invoiceRef.update({ emailSent: true, updatedAt: admin.firestore.Timestamp.now() })));
+          legacyOps.push(transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject, html })
+            .then(() => invoiceRef.update({ emailSent: true, updatedAt: admin.firestore.Timestamp.now() })));
         }
       } catch { /* skip */ }
     }
 
+    // Periods this retainer never billed (cron downtime, a late deploy). The
+    // invoice engine has always reported its gap; the project engine derives
+    // everything from `now`, so a missed month simply vanished — the owner found
+    // out, if at all, from an annual report.
+    const missedPeriods = projectPeriodsSkipped(frequency, project.lastInvoicePeriodKey, now);
+
     // Record the period so no later run (and no UI action) bills it twice.
-    legacyOps.push(projectDoc.ref.update({ lastInvoicePeriodKey: periodKey, lastInvoiceGeneratedAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
+    legacyOps.push(projectDoc.ref.update({
+      lastInvoicePeriodKey: periodKey,
+      lastInvoiceGeneratedAt: admin.firestore.Timestamp.now(),
+      ...(missedPeriods > 0
+        ? { billingPeriodsSkipped: missedPeriods, billingPeriodsSkippedAt: admin.firestore.Timestamp.now() }
+        : {}),
+      updatedAt: admin.firestore.Timestamp.now(),
+    }));
+    if (missedPeriods > 0) {
+      projectPeriodsMissed += missedPeriods;
+      const missUid = project.responsibleUserId || project.createdByUserId;
+      if (missUid) {
+        legacyOps.push(notifyUser({
+          userId: missUid,
+          type: 'auto_invoice_created',
+          title: `⚠️ ${missedPeriods} periudhë pa faturë: ${project.name}`,
+          message: `Retaineri kishte mbetur pas — u faturua vetëm periudha aktuale. ${missedPeriods} periudhë të mëparshme NUK u faturuan; faturoji manualisht nëse duhen.`,
+          actionUrl: `/app/projects/${projectDoc.id}`,
+          actionLabel: 'Hap Projektin',
+          businessId: project.businessId ?? null,
+          teamId: project.teamId ?? null,
+          customerId: project.customerId ?? null,
+          projectId: projectDoc.id,
+        }));
+      }
+    }
     const notifyUid = project.responsibleUserId || project.createdByUserId;
     if (notifyUid) legacyOps.push(notifyUser({ userId: notifyUid, type: 'auto_invoice_created', title: `🧾 Faturë e re automatike: ${project.name}`, message: `Fatura #${invoiceLabel} (${budget.toLocaleString('sq-AL')} ${currency}) u gjenerua automatikisht.`, actionUrl: '/app/invoices', actionLabel: 'Shiko Faturat', businessId: project.businessId ?? null, teamId: project.teamId ?? null, customerId: project.customerId ?? null, projectId: projectDoc.id }));
 
@@ -1255,7 +1450,7 @@ async function runRecurringInvoices() {
   // `blocked` is what the manual "Gjenero Periodike" run reports back: a named
   // reason per skipped series instead of an opaque count, so "0 created" is
   // explainable ("3 already-generated, 1 paused") rather than alarming.
-  return { created, legacyCreated, skipped, zeroBudget, blocked: blockedReasons };
+  return { created, legacyCreated, skipped, zeroBudget, blocked: blockedReasons, projectPeriodsMissed, suspendedSkipped, businessId: scopeId };
 }
 
 // ── JOB: project-completion-reminder ─────────────────────────────────────────
@@ -4815,9 +5010,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'recurring-tasks':
         result = await runRecurringTasks();
         break;
-      case 'recurring-invoices':
-        result = await runRecurringInvoices();
+      case 'recurring-invoices': {
+        // Manual = one tenant's Admin pressing the button: scope it to their
+        // business unless they are a platform super-admin. The scheduled cron
+        // (no Authorization header) keeps running for everyone.
+        let scopeId: string | null = null;
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          scopeId = await callerBusinessId(req);
+          if (!scopeId) {
+            return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — gjenerimi manual u ndal.' });
+          }
+        }
+        result = await runRecurringInvoices({ businessId: scopeId });
         break;
+      }
       case 'backfill-businessid':
         result = await runBackfillBusinessId({ reset: req.query.reset === '1' });
         break;

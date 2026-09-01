@@ -207,6 +207,43 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
 - **The cron never emails a 0-value invoice.** A retainer with no `budget` (priced
   only via attached services) gets a notification to the responsible user instead;
   a contradictory `one-time` + `isRecurring` setup notifies too, never fails silently.
+- **The billing ANCHOR is a property of the series, not of the last occurrence.**
+  `invoice.recurringAnchorDay` is written once and read through
+  `resolveInvoiceAnchorDay()` (mirrored in the cron). Computing the next due date
+  from `nextRecurringDate.getDate()` re-anchors the series on every clamp: a 31st
+  retainer went 31 Jan → 28 Feb → 28 Mar → … and billed three days early for the
+  rest of the contract. Same law as `recurringAnchorDay` for expenses; never
+  overwrite it on edit unless the user changed the date themselves.
+- **A recurring invoice IS the first occurrence of its own series**, so the form
+  stamps `lastGeneratedPeriodKey` for its own `invoiceDate` period at creation.
+  Without that claim, a user-chosen "generate again" date inside the invoice's own
+  month produced a SECOND invoice for that month and emailed it. A frequency
+  change must RE-EXPRESS the claim in the new frequency, never keep it — keys of
+  different frequencies are never equal, so a kept claim guards nothing.
+- **The occurrence's document id IS the idempotency guarantee.**
+  `recurringOccurrenceId('rec'|'auto', parentId, periodKey)` + `create()` (never
+  `set()`): the database refuses a second invoice for the same period, so a failed
+  claim write, a died run or a manual trigger racing the cron can no longer produce
+  a duplicate. `ALREADY_EXISTS` = record the claim and move on, never a second email.
+- **A SUSPENDED tenant must not be billed for, or billed by, the cron.**
+  `tenantActive()` in the rules does not protect anything the cron does — the Admin
+  SDK bypasses rules — so money jobs must exclude `businesses.status == 'suspended'`
+  themselves.
+- **Both engines report the periods they missed, and never backfill them**:
+  Part 1 `recurringPeriodsSkipped`, Part 2 `billingPeriodsSkipped` (via
+  `projectPeriodsSkipped`). Reported in the UI too — a notification alone is
+  swallowed when `createdByUserId` is null.
+- **A manual money job runs inside ONE tenant.** `?job=recurring-invoices&manual=1`
+  is scoped to the caller's `bid` claim (super-admin excepted): `authorizeManual`
+  accepts any Admin of any team, so an unscoped run let one tenant generate — and
+  SMTP-send — invoices to every other tenant's customers. Any job that *sends*
+  something must be scoped the same way.
+- **"Will this bill?" has one answer.** MRR / the cash-flow gap / the forecast ask
+  the billing engine's predicate, not a hand-written status allow-list — the old
+  one dropped `Completed` retainers (which do bill) and kept paused ones.
+- **A cancelled invoice owes nothing** (`getInvoiceOutstandingAll`), and
+  `getInvoiceCollectedBetween` is the ONLY definition of "cash collected in a
+  window". Full audit: `workspace/FINANCE_AUDIT_2026_09.md`.
 - **`projectId` on an invoice is optional but consequential**: on the `'invoiced'`
   revenue basis `computeProjectPnl` drops unlinked invoices from revenue while still
   allocating the FULL fixed pool, so unlinked invoices read as loss. That is why the
@@ -802,6 +839,7 @@ META_ACCESS_TOKEN        — Meta WhatsApp API
 - `workspace/CHANGELOG.md` — History of changes
 - `workspace/DEBUGGING.md` — Debugging notes
 - `workspace/REPORTING_MODULE.md` — Reporting & accountability module (ERD, security, runbook)
+- `workspace/FINANCE_AUDIT_2026_09.md` — Finance/recurring-billing audit (anchor drift, period claims, tenant scoping)
 
 ---
 

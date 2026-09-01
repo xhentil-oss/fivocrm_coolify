@@ -7,6 +7,7 @@ import {
   projectBillingBlockReason,
   isPermanentBillingBlock,
   billingDayForMonth,
+  projectPeriodsSkipped,
 } from './recurringBilling';
 
 describe('startOfBillingWeek', () => {
@@ -223,5 +224,34 @@ describe('isPermanentBillingBlock', () => {
     expect(isPermanentBillingBlock('paused')).toBe(false);
     expect(isPermanentBillingBlock('already-billed')).toBe(false);
     expect(isPermanentBillingBlock(null)).toBe(false);
+  });
+});
+
+
+describe('projectPeriodsSkipped', () => {
+  const at = (iso: string) => new Date(iso + 'T12:00:00');
+
+  it('is 0 when the retainer billed the previous period', () => {
+    expect(projectPeriodsSkipped('monthly', '2026-07', at('2026-08-03'))).toBe(0);
+    expect(projectPeriodsSkipped('weekly', 'W2026-07-27', at('2026-08-05'))).toBe(0);
+  });
+
+  it('is 0 when this period is already billed', () => {
+    expect(projectPeriodsSkipped('monthly', '2026-08', at('2026-08-03'))).toBe(0);
+  });
+
+  it('counts the whole months a retainer never billed', () => {
+    // Last billed June, billing now in September → July and August were lost.
+    expect(projectPeriodsSkipped('monthly', '2026-06', at('2026-09-01'))).toBe(2);
+  });
+
+  it('steps back from the 31st without skipping a short month', () => {
+    expect(projectPeriodsSkipped('monthly', '2026-01', at('2026-03-31'))).toBe(1); // February
+  });
+
+  it('never guesses: no key, or a key older than the window, reports nothing', () => {
+    expect(projectPeriodsSkipped('monthly', undefined, at('2026-09-01'))).toBe(0);
+    expect(projectPeriodsSkipped('monthly', '2015-01', at('2026-09-01'))).toBe(0);
+    expect(projectPeriodsSkipped('monthly', 'W2026-07-27', at('2026-09-01'))).toBe(0);
   });
 });

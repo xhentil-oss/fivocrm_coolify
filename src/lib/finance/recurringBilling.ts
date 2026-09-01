@@ -175,6 +175,38 @@ export function projectBillingBlockReason(
   return null;
 }
 
+/**
+ * How many whole billing periods a retainer missed between `lastPeriodKey` and the
+ * period containing `now` (0 when on schedule, or when the gap cannot be resolved).
+ *
+ * Project-driven billing derives everything from `now`, so a period the cron never
+ * ran in is simply never billed — silently. The invoice engine already reports its
+ * gap (`recurringPeriodsSkipped`); a retainer losing a whole month of revenue with
+ * no signal at all is the same fault, on the side that carries the recurring money.
+ *
+ * Like the invoice engine, this only REPORTS. Backfilling closed months is the
+ * owner's call.
+ */
+export function projectPeriodsSkipped(
+  frequency: string,
+  lastPeriodKey: string | undefined | null,
+  now: Date,
+  maxLookback = 24,
+): number {
+  if (!lastPeriodKey) return 0;
+  if (projectBillingPeriodKey(frequency, now) === lastPeriodKey) return 0;
+  let cursor = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  for (let i = 0; i < maxLookback; i++) {
+    cursor = frequency === 'weekly'
+      ? new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() - 7)
+      // The 1st, so stepping back from the 31st cannot skip a short month.
+      : new Date(cursor.getFullYear(), cursor.getMonth() - 1, 1);
+    if (projectBillingPeriodKey(frequency, cursor) === lastPeriodKey) return i;
+  }
+  // Older than the window (or a key from another frequency) — don't invent a number.
+  return 0;
+}
+
 /** True when the block reason means the series is over (clear `isRecurring`). */
 export function isPermanentBillingBlock(reason: ProjectBillingBlock | null): boolean {
   return !!reason && PERMANENT_BILLING_BLOCKS.includes(reason);

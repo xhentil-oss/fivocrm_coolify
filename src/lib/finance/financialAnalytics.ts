@@ -77,9 +77,15 @@ export function getInvoiceCollectedAll(inv: Invoice): number {
   return toAll(inv.paidAmount ?? 0, inv.currency);
 }
 
-/** Amount still outstanding on an invoice (Accounts Receivable contribution), in ALL. */
+/** Amount still outstanding on an invoice (Accounts Receivable contribution), in ALL.
+ *
+ *  `Cancelled` owes nothing. It was missing from this guard while
+ *  `getInvoiceCollectedAll` DID return 0 for it — so a cancelled invoice reported
+ *  its full value as money owed, in the AR total, in the aging report, and in the
+ *  ">60 ditë" cash alarm, which is where a voided invoice is most misleading:
+ *  the older it gets, the louder it shouts. */
 export function getInvoiceOutstandingAll(inv: Invoice): number {
-  if (inv.status === 'Paid' || inv.status === 'Draft') return 0;
+  if (inv.status === 'Paid' || inv.status === 'Draft' || inv.status === 'Cancelled') return 0;
   return Math.max(0, getInvoiceTotalAll(inv) - getInvoiceCollectedAll(inv));
 }
 
@@ -254,11 +260,15 @@ export function buildRevenueByMonth(invoices: Invoice[] | undefined, year: numbe
       return pd.getMonth() === i && pd.getFullYear() === year;
     });
 
+    // Bucketed by the ISSUE date, like every other series in the finance module.
+    // This one read `createdAt`, so one chart carried three different date bases
+    // (payment date, creation date, invoice date) and a back-dated invoice landed
+    // in the month it was typed rather than the month it belongs to.
     const pendingInvs = invoices.filter(inv => {
       if (inv.status !== 'Pending' && inv.status !== 'Overdue') return false;
-      const cd = parseDate(inv.createdAt);
-      if (!cd) return false;
-      return cd.getMonth() === i && cd.getFullYear() === year;
+      const rd = getInvoiceRecognitionDate(inv);
+      if (!rd) return false;
+      return rd.getMonth() === i && rd.getFullYear() === year;
     });
 
     // Cash collected in this month — status-robust via the canonical helper, so a
@@ -339,35 +349,14 @@ export function buildCashflowByMonth(
   salaryForMonth?: SalaryForMonth,
 ): CashflowMonthPoint[] {
   return monthLabels.map((label, i) => {
-    const partialInflow = (invoices ?? [])
-      .filter(inv => inv.status === 'Partial')
-      .reduce((s, inv) => {
-        if (inv.partialPayments?.length) {
-          const monthPartials = inv.partialPayments.filter(p => {
-            const pd = parseDate(p.paidAt);
-            if (!pd) return false;
-            return pd.getMonth() === i && pd.getFullYear() === year;
-          });
-          return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, inv.currency), 0);
-        }
-        if (inv.paidAmount && inv.paidAmount > 0) {
-          const pd = getInvoicePaidDate(inv);
-          if (pd && pd.getMonth() === i && pd.getFullYear() === year) {
-            return s + toAll(inv.paidAmount, inv.currency);
-          }
-        }
-        return s;
-      }, 0);
-
-    const inflow = (invoices ?? [])
-      .filter(inv => {
-        if (inv.status !== 'Paid') return false;
-        const pd = getInvoicePaidDate(inv);
-        if (!pd) return false;
-        return pd.getMonth() === i && pd.getFullYear() === year;
-      })
-      .reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, inv.currency), 0)
-      + partialInflow;
+    const mStart = new Date(year, i, 1, 0, 0, 0, 0);
+    const mEnd = new Date(year, i + 1, 0, 23, 59, 59, 999);
+    // One definition of "cash in", shared with buildRevenueByMonth. Inflow used to
+    // be computed here from scratch (full total on `paidAt`, instalments only while
+    // the status was literally `Partial`), so the cash-flow chart and the revenue
+    // chart disagreed about the same month by construction.
+    const inflow = (invoices ?? []).reduce(
+      (s, inv) => s + getInvoiceCollectedBetween(inv, mStart, mEnd), 0);
 
     const outflow = (expenses ?? [])
       .filter(exp => {
@@ -417,30 +406,19 @@ export function calculateTotalExpenses(expenses: Expense[] | undefined, totalMon
     + totalMonthlySalary;
 }
 
+/**
+ * Cash collected in [start, end], in ALL.
+ *
+ * Delegates to `getInvoiceCollectedBetween` — it used to re-implement the same
+ * question and get two things wrong that the canonical helper had already fixed:
+ * it credited a `Paid` invoice's WHOLE total to `paidAt` (so settling in August
+ * moved June's instalment into August, mutating a closed month), and it counted
+ * instalments only while the status was still `Partial`, dropping them the moment
+ * the cron flipped the invoice to `Overdue`.
+ */
 export function calculateRevenueBetween(invoices: Invoice[] | undefined, start: Date, end?: Date): number {
   if (!invoices) return 0;
-
-  const paidTotal = invoices
-    .filter(inv => {
-      if (inv.status !== 'Paid') return false;
-      const d = getInvoicePaidDate(inv);
-      if (!d) return false;
-      return end ? d >= start && d <= end : d >= start;
-    })
-    .reduce((s, inv) => s + toAll(inv.total ?? inv.amount ?? 0, inv.currency), 0);
-
-  const partialTotal = invoices
-    .filter(inv => inv.status === 'Partial' && inv.partialPayments?.length)
-    .reduce((s, inv) => {
-      const monthPartials = (inv.partialPayments ?? []).filter(p => {
-        const pd = parseDate(p.paidAt);
-        if (!pd) return false;
-        return end ? pd >= start && pd <= end : pd >= start;
-      });
-      return s + monthPartials.reduce((ms, p) => ms + toAll(p.amount, inv.currency), 0);
-    }, 0);
-
-  return paidTotal + partialTotal;
+  return invoices.reduce((s, inv) => s + getInvoiceCollectedBetween(inv, start, end), 0);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

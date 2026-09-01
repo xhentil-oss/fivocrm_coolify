@@ -7,6 +7,8 @@ import {
   projectAlsoBills,
   invoiceBillingBlockReason,
   periodAlreadyCovered,
+  resolveInvoiceAnchorDay,
+  recurringOccurrenceId,
   PERMANENT_INVOICE_BLOCKS,
 } from './recurringInvoices';
 
@@ -208,5 +210,103 @@ describe('periodAlreadyCovered', () => {
 
   it('is false with no children at all', () => {
     expect(periodAlreadyCovered('monthly', '2026-08', [])).toBe(false);
+  });
+});
+
+
+describe('recurringAnchorDay (the 31st must stay the 31st)', () => {
+  it('keeps the stored anchor instead of the last, already-clamped occurrence', () => {
+    expect(resolveInvoiceAnchorDay({ recurringAnchorDay: 31 }, d('2026-02-28'))).toBe(31);
+  });
+
+  it('falls back to the occurrence when the series has no anchor', () => {
+    expect(resolveInvoiceAnchorDay({}, d('2026-02-28'))).toBe(28);
+    expect(resolveInvoiceAnchorDay({ recurringAnchorDay: 0 }, d('2026-02-28'))).toBe(28);
+    expect(resolveInvoiceAnchorDay({ recurringAnchorDay: 99 }, d('2026-02-28'))).toBe(28);
+    expect(resolveInvoiceAnchorDay({ recurringAnchorDay: null }, d('2026-03-15'))).toBe(15);
+  });
+
+  it('REGRESSION: a 31st series does not drift to the 28th after February', () => {
+    // What the engine used to do: re-derive the anchor from each occurrence.
+    let drifting = d('2026-01-31');
+    const drifted: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      drifting = nextInvoiceOccurrence(drifting, 'monthly', drifting.getDate());
+      drifted.push(drifting.getDate());
+    }
+    expect(drifted).toEqual([28, 28, 28, 28]); // February clamped the series for good
+
+    // With a stored anchor, February is the only short month affected.
+    const series = { recurringAnchorDay: 31 };
+    let anchored = d('2026-01-31');
+    const days: number[] = [];
+    for (let i = 0; i < 4; i++) {
+      anchored = nextInvoiceOccurrence(anchored, 'monthly', resolveInvoiceAnchorDay(series, anchored));
+      days.push(anchored.getDate());
+    }
+    expect(days).toEqual([28, 31, 30, 31]); // Feb, Mar, Apr, May
+  });
+
+  it('applies to quarterly and yearly series too', () => {
+    expect(nextInvoiceOccurrence(d('2026-02-28'), 'quarterly', 31).getDate()).toBe(31); // May
+    expect(nextInvoiceOccurrence(d('2028-02-29'), 'yearly', 29).getDate()).toBe(28);    // 2029, not leap
+  });
+
+  it('periodsSkipped walks the series on its anchor, not the clamped date', () => {
+    // Scheduled 28 Feb (a clamped 31st), now 30 April: March was missed.
+    expect(periodsSkipped(d('2026-02-28'), 'monthly', d('2026-04-30'), 31)).toBe(1);
+  });
+});
+
+describe('the parent invoice covers its own period', () => {
+  const now = d('2026-09-20');
+
+  it('BUG: without a period claim, a next-date inside the parent month re-bills it', () => {
+    // Invoice issued 5 Sept, user picks "generate again on the 20th".
+    const parent = {
+      isRecurring: true,
+      recurringFrequency: 'monthly',
+      nextRecurringDate: d('2026-09-20'),
+    };
+    expect(invoiceBillingBlockReason(parent, now)).toBeNull(); // → a SECOND September invoice
+  });
+
+  it('claiming the parent period blocks it, and October still bills', () => {
+    const parent = {
+      isRecurring: true,
+      recurringFrequency: 'monthly',
+      nextRecurringDate: d('2026-09-20'),
+      // What the form now stamps at creation: the period the invoice itself covers.
+      lastGeneratedPeriodKey: invoiceBillingPeriodKey('monthly', d('2026-09-05')),
+    };
+    expect(invoiceBillingBlockReason(parent, now)).toBe('already-generated');
+    // Once the month rolls over the series resumes normally — no period is lost.
+    expect(invoiceBillingBlockReason(parent, d('2026-10-01'))).toBeNull();
+    // ...and that catch-up is not reported as a missed period.
+    expect(periodsSkipped(d('2026-09-20'), 'monthly', d('2026-10-01'), 20)).toBe(0);
+  });
+});
+
+
+describe('recurringOccurrenceId (a duplicate must be impossible, not unlikely)', () => {
+  it('is stable for the same series and period', () => {
+    expect(recurringOccurrenceId('rec', 'abc123', '2026-09'))
+      .toBe(recurringOccurrenceId('rec', 'abc123', '2026-09'));
+  });
+
+  it('differs per period, per parent and per engine', () => {
+    const a = recurringOccurrenceId('rec', 'abc123', '2026-09');
+    expect(a).not.toBe(recurringOccurrenceId('rec', 'abc123', '2026-10'));
+    expect(a).not.toBe(recurringOccurrenceId('rec', 'zzz999', '2026-09'));
+    expect(a).not.toBe(recurringOccurrenceId('auto', 'abc123', '2026-09'));
+  });
+
+  it('produces a legal Firestore document id for every period key shape', () => {
+    for (const key of ['2026-09', 'W2026-08-03', 'Q2026-3', 'Y2026']) {
+      const id = recurringOccurrenceId('rec', 'aBcDeF1234567890xyz', key);
+      expect(id).not.toContain('/');   // '/' would make it a subcollection path
+      expect(id).not.toMatch(/^\.\.?$/);
+      expect(id.length).toBeLessThan(1500);
+    }
   });
 });

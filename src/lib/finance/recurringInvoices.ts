@@ -60,6 +60,17 @@ export interface RecurringInvoiceLike {
   recurringEndDate?: unknown;
   /** Period key of the last occurrence this series generated — the idempotency token. */
   lastGeneratedPeriodKey?: string | null;
+  /**
+   * Day-of-month the series bills on, fixed for the life of the series.
+   *
+   * Without it the next due date was computed from `nextRecurringDate.getDate()`,
+   * i.e. from the PREVIOUS occurrence — which is already clamped. A 31 Jan
+   * retainer therefore went 31 Jan → 28 Feb → 28 Mar → 28 Apr … and never
+   * returned to the 31st: one clamp in February silently re-anchored the whole
+   * series three days early, forever. This is the same drift
+   * `recurringAnchorDay` prevents for recurring expenses.
+   */
+  recurringAnchorDay?: number | null;
 }
 
 /** Firestore Timestamp | Date | ISO string | millis → Date, or null. */
@@ -104,6 +115,24 @@ export function invoiceBillingPeriodKey(frequency: string, at: Date): string {
 }
 
 /**
+ * The day-of-month this series bills on: the stored anchor when the series has
+ * one, else the day of the occurrence we are advancing from.
+ *
+ * NEVER derive it from the occurrence when an anchor exists, and never write it
+ * back from a clamped date — that is exactly how a 31st series degrades to the
+ * 28th (see `recurringAnchorDay`).
+ */
+export function resolveInvoiceAnchorDay(
+  invoice: Pick<RecurringInvoiceLike, 'recurringAnchorDay'>,
+  scheduled: Date,
+): number {
+  const raw = invoice.recurringAnchorDay;
+  const n = typeof raw === 'number' ? Math.round(raw) : NaN;
+  if (Number.isFinite(n) && n >= 1 && n <= 31) return n;
+  return scheduled.getDate();
+}
+
+/**
  * The due date one full cycle after `from`, preserving the day-of-month and
  * clamping (never `setMonth(+1)`, which overflows a 31st into the month after
  * next and silently skips a month).
@@ -143,11 +172,16 @@ export function billingDateFor(scheduled: Date, frequency: string, now: Date): D
  * the parent so the UI can say "3 periudha u kapërcyen" instead of the owner
  * discovering the gap in an annual report.
  */
-export function periodsSkipped(scheduled: Date, frequency: string, now: Date): number {
+export function periodsSkipped(
+  scheduled: Date,
+  frequency: string,
+  now: Date,
+  anchorDay?: number,
+): number {
   if (scheduled >= now) return 0;
   let count = 0;
   let cursor = new Date(scheduled);
-  const anchor = scheduled.getDate();
+  const anchor = anchorDay ?? scheduled.getDate();
   const nowKey = invoiceBillingPeriodKey(frequency, now);
   // Bounded: a decade of weeks is the worst realistic drift, and the loop must
   // never be able to hang the cron on corrupt data.
@@ -156,6 +190,28 @@ export function periodsSkipped(scheduled: Date, frequency: string, now: Date): n
     count++;
   }
   return Math.max(0, count - 1);
+}
+
+/**
+ * Document id of the occurrence covering `periodKey` of a series.
+ *
+ * Deterministic ON PURPOSE, and mirrored in `api/cron/run.ts`. The period key was
+ * already the idempotency token, but it was only ever CHECKED: the occurrence went
+ * to a random id and the parent's claim was a separate, unordered write. If that
+ * claim failed — or the run died between the two, or a manual trigger raced the
+ * scheduled cron — the next pass billed the period again and emailed the client a
+ * second invoice. With the key IN the id, a `create()` makes the duplicate
+ * impossible instead of merely unlikely.
+ *
+ * `prefix` separates the two engines: 'rec' = invoice-driven (parent = invoice id),
+ * 'auto' = project-driven (parent = project id).
+ */
+export function recurringOccurrenceId(
+  prefix: 'rec' | 'auto',
+  parentId: string,
+  periodKey: string,
+): string {
+  return `${prefix}_${parentId}_${periodKey}`;
 }
 
 /** A linked project that bills its OWN fee on a cycle — the other engine. */

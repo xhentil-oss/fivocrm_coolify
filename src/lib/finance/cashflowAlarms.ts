@@ -67,7 +67,7 @@ export function computeCashflowHealth(
   // ── Monthly recurring inflow — SAME definition as the forecast card (monthly
   // projects + active recurring invoices, deduped) so the two cards agree and a
   // retainer modelled as a monthly project doesn't trigger a false gap alarm.
-  const monthlyInflow = monthlyRecurringRevenue(projects, invoices);
+  const monthlyInflow = monthlyRecurringRevenue(projects, invoices, now);
 
   // ── Monthly fixed outflow: payroll + recurring expenses.
   // Payroll for a month that has not happened yet is the PLAN — but a tenant who
