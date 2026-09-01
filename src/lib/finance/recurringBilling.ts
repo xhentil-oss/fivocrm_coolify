@@ -207,6 +207,39 @@ export function projectPeriodsSkipped(
   return 0;
 }
 
+// ── Billing controls (pause / stop) ─────────────────────────────────────────
+// The three ways a human stops a retainer's automatic invoicing, as PATCHES —
+// same law as projectArchive.ts: nothing writes these fields by hand, because a
+// hand-written stop leaves contradictions (isRecurring off but paused on, no
+// stopped-reason, a stale end date) that the engine then has to guess around.
+// Before these existed the ONLY ways to stop billing a live client were to
+// archive the project or cancel it — and the edit form's own switch silently
+// did nothing (`isRecurring || undefined` is stripped by the write layer).
+
+/** Temporarily halt automatic invoicing; the series stays configured. */
+export function pauseProjectBillingPatch(): Partial<Project> {
+  return { isRecurringPaused: true };
+}
+
+/** Resume a paused series. */
+export function resumeProjectBillingPatch(): Partial<Project> {
+  return { isRecurringPaused: false };
+}
+
+/**
+ * End the series for good, keeping the project alive (unlike archive/cancel).
+ * Every issued invoice stays. `recurringFrequency` is kept so switching the
+ * series back on later remembers its cycle.
+ */
+export function stopProjectBillingPatch(at: Date = new Date()): Partial<Project> {
+  return {
+    isRecurring: false,
+    isRecurringPaused: false,
+    recurringBillingStoppedReason: 'manual',
+    recurringBillingStoppedAt: at,
+  };
+}
+
 /** True when the block reason means the series is over (clear `isRecurring`). */
 export function isPermanentBillingBlock(reason: ProjectBillingBlock | null): boolean {
   return !!reason && PERMANENT_BILLING_BLOCKS.includes(reason);

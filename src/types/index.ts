@@ -493,8 +493,10 @@ export interface Project {
    *  period can never be billed twice. */
   lastInvoicePeriodKey?: string;
   lastInvoiceGeneratedAt?: Date;
-  /** Why the cron switched automatic billing off (terminal status / series ended). */
+  /** Why automatic billing was switched off ('manual' = the owner, from the UI;
+   *  'terminal-status' / 'series-ended' = the cron; 'archived' = the archive). */
   recurringBillingStoppedReason?: string;
+  recurringBillingStoppedAt?: Date;
   /** Debounce for the "recurring project has no budget" warning (one per period). */
   zeroBudgetNoticePeriodKey?: string;
   /** Debounce for the "billing settings contradict each other" warning. */

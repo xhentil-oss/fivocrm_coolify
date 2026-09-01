@@ -6,7 +6,7 @@ import { getNextInvoiceNumber } from '../lib/firebase';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { canSeeFinancials, toAll, fromAll, currencySymbol } from '../lib/utils';
-import { projectBillingPeriodKey, projectBillingPeriodEnd } from '../lib/finance/recurringBilling';
+import { projectBillingPeriodKey, projectBillingPeriodEnd, stopProjectBillingPatch } from '../lib/finance/recurringBilling';
 import { archiveConsequences, archiveProjectPatch, isProjectArchived, restoreProjectPatch } from '../lib/projectArchive';
 import { deleteProjectCascade, projectCascadeToastParts } from '../lib/deleteCascade';
 import { projectTaskProgress } from '../lib/projectProgress';
@@ -241,6 +241,10 @@ const ProjectsView: React.FC = () => {
     const responsibleUserId = formData.get('responsibleUserId') as string;
     const isRecurring = formData.get('isRecurring') === 'true';
     const recurringFrequency = formData.get('recurringFrequency') as string;
+    const isRecurringPaused = formData.get('isRecurringPaused') === 'true';
+    const recurringEndStr = formData.get('recurringEndDate') as string;
+    // End of that day, so "deri më 30 shtator" still bills September's own cycle.
+    const recurringEndDate = recurringEndStr ? new Date(recurringEndStr + 'T23:59:59') : undefined;
     const billingType = formData.get('billingType') === 'monthly' ? 'monthly' : 'one-time';
     const startDateStr = formData.get('startDate') as string;
     const startDate = startDateStr ? new Date(startDateStr + 'T12:00:00') : undefined;
@@ -297,6 +301,8 @@ const ProjectsView: React.FC = () => {
       responsibleUserId: resolvedResponsible,
       isRecurring: isRecurring || undefined,
       recurringFrequency: isRecurring && recurringFrequency ? recurringFrequency as any : undefined,
+      isRecurringPaused: isRecurring && isRecurringPaused ? true : undefined,
+      recurringEndDate: isRecurring ? recurringEndDate : undefined,
       memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
       serviceIds: selectedServiceIds && selectedServiceIds.length > 0 ? selectedServiceIds : undefined,
       profitSplit: profitSplit && profitSplit.length > 0 ? profitSplit : undefined,
@@ -613,6 +619,10 @@ const ProjectsView: React.FC = () => {
     const responsibleUserId = formData.get('responsibleUserId') as string;
     const isRecurring = formData.get('isRecurring') === 'true';
     const recurringFrequency = formData.get('recurringFrequency') as string;
+    const isRecurringPaused = formData.get('isRecurringPaused') === 'true';
+    const recurringEndStr = formData.get('recurringEndDate') as string;
+    // End of that day, so "deri më 30 shtator" still bills September's own cycle.
+    const recurringEndDate = recurringEndStr ? new Date(recurringEndStr + 'T23:59:59') : undefined;
     const billingType = formData.get('billingType') === 'monthly' ? 'monthly' : 'one-time';
     const startDateStr = formData.get('startDate') as string;
     const startDate = startDateStr ? new Date(startDateStr + 'T12:00:00') : undefined;
@@ -689,8 +699,24 @@ const ProjectsView: React.FC = () => {
       // access to the project and its tasks.
       customerId: custId && custId !== '__none__' ? custId : '',
       responsibleUserId: resolvedResponsible,
-      isRecurring: isRecurring || undefined,
-      recurringFrequency: isRecurring && recurringFrequency ? recurringFrequency as any : undefined,
+      // `isRecurring || undefined` was the whole bug: the write layer strips
+      // undefined (src/lib/formValue.ts), so switching "Projekt Periodik" OFF
+      // wrote NOTHING and the retainer kept billing — the owner's only real
+      // levers were archiving or cancelling the client. Off now goes through
+      // stopProjectBillingPatch, the same one-module law as the archive.
+      ...(isRecurring
+        ? {
+            isRecurring: true,
+            recurringFrequency: (recurringFrequency || 'monthly') as any,
+            isRecurringPaused,
+            // null CLEARS a removed end date; undefined would silently keep it.
+            recurringEndDate: recurringEndDate ?? null,
+            // Re-enabling a stopped series wipes the stop record.
+            ...(projectToEdit.isRecurring ? {} : { recurringBillingStoppedReason: null, recurringBillingStoppedAt: null }),
+          }
+        : (projectToEdit.isRecurring
+            ? { ...stopProjectBillingPatch(), recurringEndDate: null }
+            : { isRecurring: false })),
       memberUserIds: memberUserIds && memberUserIds.length > 0 ? memberUserIds : undefined,
       serviceIds: selectedServiceIds && selectedServiceIds.length > 0 ? selectedServiceIds : undefined,
       // Write [] (not undefined) so clearing a manual split resets to the default
@@ -1353,6 +1379,11 @@ const ProjectForm: React.FC<{
   const [responsibleUserId, setResponsibleUserId] = useState(initialData?.responsibleUserId || '__none__');
   const [isRecurring, setIsRecurring] = useState(initialData?.isRecurring || false);
   const [recurringFrequency, setRecurringFrequency] = useState(initialData?.recurringFrequency || 'monthly');
+  const [isRecurringPaused, setIsRecurringPaused] = useState(!!(initialData as any)?.isRecurringPaused);
+  const [recurringEndInput, setRecurringEndInput] = useState(() => {
+    const d = (initialData as any)?.recurringEndDate ? new Date((initialData as any).recurringEndDate) : null;
+    return d && !isNaN(d.getTime()) ? d.toISOString().slice(0, 10) : '';
+  });
   const [memberUserIds, setMemberUserIds] = useState<string[]>(initialData?.memberUserIds || []);
   const [selectedServiceIds, setSelectedServiceIds] = useState<string[]>([]);
   const [budgetInput, setBudgetInput] = useState(initialData?.budget ? String(initialData.budget) : '');
@@ -1425,6 +1456,8 @@ const ProjectForm: React.FC<{
     }
     formData.set('isRecurring', isRecurring ? 'true' : 'false');
     if (isRecurring) formData.set('recurringFrequency', recurringFrequency);
+    formData.set('isRecurringPaused', isRecurring && isRecurringPaused ? 'true' : 'false');
+    if (isRecurring && recurringEndInput) formData.set('recurringEndDate', recurringEndInput);
     formData.set('billingType', billingType);
     if (startDateInput) formData.set('startDate', startDateInput);
     if (department && department !== '__none__') formData.set('department', department);
@@ -1831,6 +1864,41 @@ const ProjectForm: React.FC<{
           }`} />
         </button>
       </div>
+
+      {isRecurring && (
+        <div className="flex items-center justify-between py-2 px-3 rounded-lg bg-muted/40">
+          <div>
+            <p className="text-sm font-medium">{isRecurringPaused ? '⏸ Faturimi në pauzë' : '▶ Faturimi aktiv'}</p>
+            <p className="text-xs text-muted-foreground">
+              {isRecurringPaused
+                ? 'Nuk gjenerohet asnjë faturë derisa ta rifillosh — seria ruhet.'
+                : 'Fatura gjenerohet automatikisht çdo periudhë.'}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => setIsRecurringPaused(v => !v)}
+            className={`px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${isRecurringPaused ? 'bg-amber-100 text-amber-700 hover:bg-amber-200' : 'bg-green-100 text-green-700 hover:bg-green-200'}`}
+          >
+            {isRecurringPaused ? 'Rifillo' : 'Pauzo'}
+          </button>
+        </div>
+      )}
+
+      {isRecurring && (
+        <div>
+          <Label htmlFor="recurringEndInput">Fatura deri më (opsionale)</Label>
+          <Input
+            id="recurringEndInput"
+            type="date"
+            value={recurringEndInput}
+            onChange={(e) => setRecurringEndInput(e.target.value)}
+          />
+          <p className="text-xs text-muted-foreground mt-1">
+            Pas kësaj date seria mbyllet vetë — asnjë faturë e re, të lëshuarat mbeten. Bosh = pa fund.
+          </p>
+        </div>
+      )}
 
       {isRecurring && (
         <div>

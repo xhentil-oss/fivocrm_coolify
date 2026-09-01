@@ -8,6 +8,9 @@ import {
   isPermanentBillingBlock,
   billingDayForMonth,
   projectPeriodsSkipped,
+  pauseProjectBillingPatch,
+  resumeProjectBillingPatch,
+  stopProjectBillingPatch,
 } from './recurringBilling';
 
 describe('startOfBillingWeek', () => {
@@ -253,5 +256,35 @@ describe('projectPeriodsSkipped', () => {
     expect(projectPeriodsSkipped('monthly', undefined, at('2026-09-01'))).toBe(0);
     expect(projectPeriodsSkipped('monthly', '2015-01', at('2026-09-01'))).toBe(0);
     expect(projectPeriodsSkipped('monthly', 'W2026-07-27', at('2026-09-01'))).toBe(0);
+  });
+});
+
+
+describe('billing control patches (pause / stop, without archiving the client)', () => {
+  it('pause halts invoicing without touching the series config', () => {
+    const patch = pauseProjectBillingPatch();
+    expect(patch).toEqual({ isRecurringPaused: true });
+    expect(projectBillingBlockReason(
+      { isRecurring: true, recurringFrequency: 'monthly', ...patch },
+      new Date('2026-09-26T12:00:00'),
+    )).toBe('paused');
+  });
+
+  it('resume lifts exactly the pause', () => {
+    expect(resumeProjectBillingPatch()).toEqual({ isRecurringPaused: false });
+  });
+
+  it('stop ends the series, records who and keeps the frequency for a restart', () => {
+    const at = new Date('2026-09-01T10:00:00');
+    const patch = stopProjectBillingPatch(at);
+    expect(patch.isRecurring).toBe(false);
+    expect(patch.isRecurringPaused).toBe(false); // no leftover pause under a stopped series
+    expect(patch.recurringBillingStoppedReason).toBe('manual');
+    expect(patch.recurringBillingStoppedAt).toBe(at);
+    expect('recurringFrequency' in patch).toBe(false); // kept, so re-enabling remembers the cycle
+    expect(projectBillingBlockReason(
+      { recurringFrequency: 'monthly', ...patch },
+      new Date('2026-09-26T12:00:00'),
+    )).toBe('not-recurring');
   });
 });

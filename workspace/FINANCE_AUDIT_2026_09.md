@@ -55,6 +55,15 @@ Status: ✅ fixed · 📋 backlog (reason given)
 | 17 | **Tri baza datash në një grafik.** Seria `pending` e `buildRevenueByMonth` grupohej sipas `createdAt`, ndërsa `value`/`paid` sipas datës së pagesës dhe pamja accrual sipas `invoiceDate` — pra një faturë e prapa-datuar shfaqej në muajin kur u shkrua, jo në atë ku bën pjesë. Tani grupohet sipas datës së lëshimit, si gjithçka tjetër. | ✅ |
 | 18 | **Nuk kishte si ta gjeje "nënën" e një fature periodike.** Fatura-bijë tregonte 8 shkronja të id-së së prindit, pa link; nuk kishte as filtër për seritë. Tani: butoni **↻ Periodike (nënat)** në filtrat e listës, dhe në detajet e së bijës një link i klikueshëm me NUMRIN e faturës-nënë (+ periudha që mbulon). Prindi tregon sa okurenca ka gjeneruar. | ✅ |
 
+## Raundi 3 — "pse del vetëm 1 periodike?" (posedimi i serive)
+
+| # | Finding | Status |
+|---|---|---|
+| 19 | **Filtri "Periodike" tregonte 1 rresht një pronari me 24 klientë mujorë.** Ata 24 faturohen nga motori 2 (retainer projekti) dhe s'kanë faturë-nënë fare — cikli rri te projekti. Tani filtri numëron të dy motorët dhe hap panelin "Retainer-ë projektesh": emri, klienti, shuma/muaj, dita e faturimit, periudha e fundit e faturuar, statusi, me veprime **Pauzo / Rifillo / Ndërprit / Faturat →** për çdo seri. | ✅ |
+| 20 | **Fikja e çelësit "Projekt Periodik" në formën e editimit nuk bënte ASGJË.** `isRecurring: isRecurring \|\| undefined` — dhe shtresa e shkrimit heq `undefined` (ligji i `formValue.ts`), pra projekti mbetej periodik në Firestore dhe vazhdonte të faturonte. Mjetet e vetme reale ishin arkivimi ose anulimi i klientit. Off tani kalon nga `stopProjectBillingPatch()` (moduli një-vendor, si arkiva), on rikthen serinë dhe fshin shënimin e ndalimit. | ✅ |
+| 21 | **Deadlock te fatura-nënë e lidhur me projekt periodik:** checkbox-i "Faturë Periodike" ishte `disabled` sa herë kishte konflikt dyfaturimi — edhe kur ishte NDEZUR — dhe ruajtja me të ndezur bllokohej nga guard-i me të njëjtin mesazh që të thotë "fike". Formë nga e cila nuk dilje dot. Tani `disabled` vetëm kundër NDEZJES; fikja lejohet gjithmonë. | ✅ |
+| 22 | Projektet fituan **Pauzo faturimin / Ndërprit faturimin / "Fatura deri më"** — kontrolet që munguan plotësisht (motori i lexonte `isRecurringPaused`/`recurringEndDate` prej kohësh, por asgjë në UI s'i shkruante). Patch-e të pastra e të testuara në `recurringBilling.ts`: `pauseProjectBillingPatch` / `resumeProjectBillingPatch` / `stopProjectBillingPatch` ('manual', mban frekuencën për rindezje). Në formën e projektit: çelësi pauzë + data e fundit; në Faturat: paneli i serive. Mobile mori edhe "Ndërprit përsëritjen" për faturat-nënë (ishte vetëm në desktop + brenda dialogut "Fshi"). | ✅ |
+
 ### Ende me qëllim jashtë fushës
 
 - **Cron-i i planifikuar mbetet kryq-tenant.** Kjo është natyra e tij: ai vepron për
@@ -105,8 +114,8 @@ Status: ✅ fixed · 📋 backlog (reason given)
 
 | Gate | Result |
 |---|---|
-| `npx vitest run src/lib/finance` | **249 passed / 12 files** (was 226; +23 new) |
-| `npx vitest run` (full) | **1128 passed / 57 files**, 0 failed |
+| `npx vitest run src/lib/finance` | **252 passed / 12 files** (was 226; +26 new) |
+| `npx vitest run` (full) | **1131 passed / 57 files**, 0 failed |
 | `npm run typecheck:api` | **clean (0)** — kept at 0 |
 | `npm run typecheck` (app) | **216 errors, identical to the pre-change baseline** (0 new; the one `recurringBilling.ts` error is pre-existing) |
 | `npm run build` | ✓ built |
