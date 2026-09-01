@@ -22,6 +22,7 @@ interface PayInfo {
   total: number;
   remainder: number;
   businessName: string | null;
+  items?: Array<{ name: string; quantity: number; totalPrice: number }>;
   payable: boolean;
 }
 
@@ -141,6 +142,21 @@ const PublicPayView: React.FC = () => {
                     <Badge className="bg-amber-100 text-amber-800">Në pritje</Badge>
                   )}
                 </div>
+
+                {(info.items?.length ?? 0) > 0 && (
+                  <div className="rounded-xl border border-slate-200 divide-y divide-slate-100">
+                    {info.items!.map((it, idx) => (
+                      <div key={idx} className="flex items-center justify-between gap-3 px-4 py-2.5 text-sm">
+                        <span className="text-slate-700">
+                          {it.quantity > 1 ? `${it.quantity} × ` : ''}{it.name}
+                        </span>
+                        <span className="font-medium text-slate-900 whitespace-nowrap">
+                          {it.totalPrice.toLocaleString()} {cur}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
 
                 <div className="rounded-xl bg-slate-100 p-4 text-center">
                   <p className="text-xs text-slate-500 mb-1">

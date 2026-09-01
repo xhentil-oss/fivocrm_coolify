@@ -181,6 +181,28 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
     }
 
+    // Line items — used by BOTH the info payload (the /pay page lists them) and
+    // Stripe Checkout (real per-article lines instead of one opaque total). Names
+    // resolve like the portal does: free-text description, else the catalogue
+    // service's title.
+    const itemsSnap = await db.collection('invoiceItems')
+      .where('invoiceId', '==', invoiceId).limit(50).get().catch(() => null);
+    const rawItems = (itemsSnap?.docs || []).map(d => d.data() as any);
+    const serviceIds: string[] = [...new Set(
+      rawItems.filter(it => !String(it.description || '').trim() && it.serviceId).map(it => String(it.serviceId)),
+    )].slice(0, 20);
+    const serviceNames = new Map<string, string>();
+    await Promise.all(serviceIds.map(async (sid) => {
+      const s = await db.collection('services').doc(sid).get().catch(() => null);
+      const nm = (s?.data() as any)?.title || (s?.data() as any)?.name;
+      if (nm) serviceNames.set(sid, String(nm));
+    }));
+    const lineItems = rawItems.map(it => ({
+      name: String(String(it.description || '').trim() || serviceNames.get(String(it.serviceId)) || 'Shërbim').slice(0, 200),
+      quantity: Number(it.quantity) > 0 ? Number(it.quantity) : 1,
+      totalPrice: Number(it.totalPrice) || 0,
+    }));
+
     // Info mode: the public /pay page asks what to render BEFORE offering payment.
     // Returns only the fields that belong on a payment receipt — never the full
     // invoice document — and reports paid/cancelled states instead of 409-ing, so
@@ -203,6 +225,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         total: infoTotal,
         remainder,
         businessName,
+        items: lineItems,
         payable: status !== 'Paid' && status !== 'Cancelled' && status !== 'Draft' && remainder > 0,
       });
     }
@@ -264,22 +287,53 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       return res.status(400).json({ error: 'Shuma e mbetur është nën minimumin e pagesës online (0.50).' });
     }
 
-    const sessionParams: Stripe.Checkout.SessionCreateParams = {
-      payment_method_types: ['card'],
-      mode: 'payment',
-      line_items: [
+    // ── Stripe line items ────────────────────────────────────────────────────
+    // Show the client WHAT they're paying for: one Stripe line per invoice article.
+    // Only when the articles sum EXACTLY to the invoice total (no discount/tax gap)
+    // and nothing was pre-paid — the webhook's amount guard compares the session
+    // total to the cent, so per-line conversion rounding is pinned onto the last
+    // line to keep the sum identical to the authoritative unitAmount.
+    let stripeLineItems: Stripe.Checkout.SessionCreateParams.LineItem[] | null = null;
+    const itemsSum = lineItems.reduce((s, it) => s + it.totalPrice, 0);
+    if (alreadyPaid === 0
+      && lineItems.length > 0 && lineItems.length <= 20
+      && Math.abs(itemsSum - invoiceTotal) < 0.01) {
+      const centsPerLine = lineItems.map(it => Math.round((it.totalPrice / fxRate) * 100));
+      centsPerLine[centsPerLine.length - 1] += unitAmount - centsPerLine.reduce((s, c) => s + c, 0);
+      if (centsPerLine.every(c => c > 0)) {
+        stripeLineItems = lineItems.map((it, i) => ({
+          price_data: {
+            currency: chargeCurrency,
+            product_data: { name: it.quantity > 1 ? `${it.quantity} × ${it.name}` : it.name },
+            unit_amount: centsPerLine[i],
+          },
+          quantity: 1,
+        }));
+      }
+    }
+    if (!stripeLineItems) {
+      // Fallback: one line for the whole (remaining) amount. Listing the article
+      // names in the description still tells the client what this is for.
+      const itemNames = lineItems.slice(0, 4).map(it => it.name).join(', ');
+      stripeLineItems = [
         {
           price_data: {
             currency: chargeCurrency,
             product_data: {
               name: `Fatura ${invoiceNumber || invoiceData.invoiceNumber || invoiceId.slice(0, 8)}`,
-              description: customerName ? `Pagesë nga ${customerName}` : undefined,
+              description: (itemNames || (customerName ? `Pagesë nga ${customerName}` : '')).slice(0, 250) || undefined,
             },
             unit_amount: unitAmount,
           },
           quantity: 1,
         },
-      ],
+      ];
+    }
+
+    const sessionParams: Stripe.Checkout.SessionCreateParams = {
+      payment_method_types: ['card'],
+      mode: 'payment',
+      line_items: stripeLineItems,
       metadata: {
         invoiceId,
         invoiceNumber: invoiceNumber || invoiceData.invoiceNumber || '',
