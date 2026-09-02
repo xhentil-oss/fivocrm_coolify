@@ -11,7 +11,18 @@
       "Bash(git checkout *)",
       "Bash(git pull *)",
       "Bash(firebase deploy *)",
-      "Bash(node scripts/count-wa-targets.cjs)"
+      "Bash(node scripts/count-wa-targets.cjs)",
+      "PowerShell($env:JAVA_HOME = \"C:\\\\Program Files\\\\Android\\\\Android Studio\\\\jbr\"; npm run android:aab)",
+      "Bash(git reset *)",
+      "Bash(node -e \"const p=require\\('./package.json'\\); console.log\\(JSON.stringify\\({'android:aab':p.scripts['android:aab'],'android:sync':p.scripts['android:sync']},null,2\\)\\)\")",
+      "Bash(export JAVA_HOME=\"/c/Program Files/Android/Android Studio/jbr\")",
+      "Bash(./gradlew.bat bundleRelease)",
+      "PowerShell(npm run android:sync 2>&1)",
+      "PowerShell(git add src/views/landing/SocialMediaLandingPage.tsx)",
+      "PowerShell(git push origin main 2>&1)",
+      "PowerShell(git checkout f615f63 -- src/views/landing/SocialMediaLandingPage.tsx)",
+      "PowerShell(git add src/App.tsx src/views/LandingPagesView.tsx src/views/landing/BakeryLandingPage.tsx src/views/landing/ShopProduktLandingPage.tsx src/views/landing/SocialMediaLandingPage.tsx)",
+      "PowerShell(npm run android:aab 2>&1)"
     ]
   }
 }

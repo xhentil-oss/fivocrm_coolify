@@ -229,7 +229,18 @@ const PortalChatView: React.FC = () => {
     el.style.height = `${Math.min(el.scrollHeight, MAX_COMPOSER_PX)}px`;
   };
   const ALLOWED_IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-  const ALLOWED_DOC_TYPES = ['application/pdf'];
+  // Must stay a subset of the VPS ALLOWED_UPLOAD filter (vps/server.ts).
+  const ALLOWED_DOC_TYPES = [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.ms-excel',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'text/plain',
+    'text/csv',
+  ];
   const ALLOWED_ATTACHMENT_TYPES = [...ALLOWED_IMG_TYPES, ...ALLOWED_DOC_TYPES];
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
   const isImageUrl = (url: string) => /\.(jpg|jpeg|png|gif|webp|bmp)(\?.*)?$/i.test(url) || /image%2F/i.test(url);
@@ -443,7 +454,7 @@ const PortalChatView: React.FC = () => {
   // Upload an image and send it immediately (same flow as the admin chat).
   const handleFileSelect = async (file: File) => {
     if (!ALLOWED_ATTACHMENT_TYPES.includes(file.type)) {
-      toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP ose PDF.', variant: 'destructive' });
+      toast({ title: 'Format i pasaktë', description: 'Lejohen imazhe (PNG, JPG, GIF, WEBP), PDF, Word, Excel, PowerPoint, TXT ose CSV.', variant: 'destructive' });
       return;
     }
     if (file.size > MAX_ATTACHMENT_BYTES) {
@@ -870,7 +881,7 @@ const PortalChatView: React.FC = () => {
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
+          accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
           className="hidden"
           onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFileSelect(f); e.target.value = ''; }}
         />

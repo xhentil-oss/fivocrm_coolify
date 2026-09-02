@@ -52,3 +52,32 @@ CRITICAL: Keep this file under 300 lines. You are allowed to summarize, change t
 ## Resolved Issues
 
 <!-- Historical debugging records -->
+
+### [2026-08-26] — Firestore "INTERNAL ASSERTION FAILED (ID: b815)" kills the client
+
+**Status:** Fixed (mitigated — the SDK bug itself is upstream and still open in 12.18.0)
+**Symptoms:** In production (fivocrm.com):
+`FIRESTORE (12.11.0) INTERNAL ASSERTION FAILED: Unexpected state (ID: b815)
+CONTEXT: {"Pc":"TypeError: Cannot read properties of null (reading 'Te')" … getTargetData …}`
+After it, every screen renders empty — no error toast, no red state — until the user reloads.
+**Environment:** firebase 12.11.0 (@firebase/firestore 4.13.0), browser (multi-tab), `src/lib/firebase.ts`.
+**Root Cause:** Two layers.
+1. `0xb815 = 47125` is `AsyncQueue.verifyNotFailed()`. The Firestore SDK runs everything on ONE
+   queue; the first operation that throws is recorded and re-thrown for every call afterwards.
+   So b815 is the symptom — the real failure is the `CONTEXT.Pc` TypeError.
+2. That TypeError is an SDK bug on the MULTI-TAB path: when a tab becomes primary,
+   `synchronizeQueryViewsAndRaiseSnapshots()` passes `localStoreGetCachedTarget()`'s result
+   straight into `localStoreAllocateTarget()`, `null` included — and `null` is exactly what a
+   targetId that the shared (localStorage) client state still advertises returns once its row is
+   gone from the IndexedDB target cache (tab killed without cleanup, cache evicted/cleared).
+   `canonifyTarget(null)` then reads `.Te` off null. Same code in 4.17.1 — upgrading does not fix it.
+   Our own `useCollection` made it invisible: it swallows a synchronous `onSnapshot` throw.
+**Solution:** `src/lib/firestoreRecovery.ts` — detect the poisoned client (from the hooks' catch
+blocks and from `window` error/unhandledrejection) and escalate: reload → clear the local cache
+and reload → run on `memoryLocalCache()` for 24h → stop and report to Sentry (never a reload loop).
+`firebase.ts` reads that last flag before `initializeFirestore`.
+**Prevention:** Never swallow a Firestore error without passing it to `reportFirestoreError()`.
+If Sentry shows `firestore_recovery` stages 2+ recurring, drop `persistentMultipleTabManager()`
+for `persistentSingleTabManager()` — that removes the buggy code path entirely, at the cost of
+extra reads in secondary tabs (they fall back to a memory cache automatically).
+**Related:** `src/lib/firestoreRecovery.test.ts`, upstream firebase-js-sdk multi-tab target sync.

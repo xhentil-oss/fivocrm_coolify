@@ -2068,13 +2068,24 @@ const ChatView: React.FC = () => {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   // SVG removed — script injection vector. Use raster formats only.
   const ALLOWED_IMG_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
-  const ALLOWED_DOC_TYPES = ['application/pdf'];
+  // Must stay a subset of the VPS ALLOWED_UPLOAD filter (vps/server.ts).
+  const ALLOWED_DOC_TYPES = [
+    'application/pdf',
+    'application/msword',
+    'application/vnd.ms-excel',
+    'application/vnd.ms-powerpoint',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'text/plain',
+    'text/csv',
+  ];
   const ALLOWED_ATTACHMENT_TYPES = [...ALLOWED_IMG_TYPES, ...ALLOWED_DOC_TYPES];
   const MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024; // 10 MB
 
   const handleAttachmentUpload = async (file: File) => {
     if (!ALLOWED_ATTACHMENT_TYPES.includes(file.type)) {
-      toast({ title: 'Format i pasaktë', description: 'Lejohen vetëm PNG, JPG, GIF, WEBP ose PDF.', variant: 'destructive' });
+      toast({ title: 'Format i pasaktë', description: 'Lejohen imazhe (PNG, JPG, GIF, WEBP), PDF, Word, Excel, PowerPoint, TXT ose CSV.', variant: 'destructive' });
       return;
     }
     if (file.size > MAX_ATTACHMENT_BYTES) {
@@ -4579,7 +4590,7 @@ const ChatView: React.FC = () => {
                     <input
                       ref={fileInputRef}
                       type="file"
-                      accept="image/png,image/jpeg,image/gif,image/webp,application/pdf"
+                      accept="image/png,image/jpeg,image/gif,image/webp,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
                       className="hidden"
                       onChange={async (e) => {
                         const f = e.target.files?.[0];
