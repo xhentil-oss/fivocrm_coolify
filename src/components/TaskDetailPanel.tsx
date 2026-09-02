@@ -889,9 +889,21 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     }
   };
 
-  // Materials: images + PDF only, max 15 MB each.
+  // Materials: images, PDF and office docs (both Office generations), max 15 MB
+  // each. Must stay a subset of the VPS ALLOWED_UPLOAD filter (vps/server.ts) —
+  // the server is the real gate.
   const MAX_ATTACHMENT_BYTES = 15 * 1024 * 1024;
-  const isAllowedMaterial = (f: File) => f.type.startsWith('image/') || f.type === 'application/pdf';
+  const isAllowedMaterial = (f: File) =>
+    f.type.startsWith('image/')
+    || f.type === 'application/pdf'
+    || f.type.includes('officedocument')
+    || f.type === 'application/msword'
+    || f.type === 'application/vnd.ms-excel'
+    || f.type === 'application/vnd.ms-powerpoint'
+    || f.type === 'text/plain'
+    || f.type === 'text/csv'
+    // Some browsers report an empty mime for odd registrations — trust the extension.
+    || (!f.type && /\.(docx?|xlsx?|pptx?|pdf|txt|csv)$/i.test(f.name));
 
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = e.target.files;
@@ -902,7 +914,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     if (valid.length < picked.length) {
       toast({
         title: 'Skedar i papranuar',
-        description: 'Lejohen vetëm imazhe ose PDF, deri në 15 MB secili.',
+        description: 'Lejohen imazhe, PDF, Word, Excel, PowerPoint, TXT ose CSV, deri në 15 MB secili.',
         variant: 'destructive',
       });
     }
@@ -2205,7 +2217,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                       <Cloud className="w-4 h-4" />
                     </Button>
                   )}
-                  <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => fileInputRef.current?.click()} disabled={commentImageUploading} title="Bashkëngjit material (imazh ose PDF)" aria-label="Bashkëngjit material (imazh ose PDF)">
+                  <Button variant="ghost" size="sm" className="gap-1.5" onClick={() => fileInputRef.current?.click()} disabled={commentImageUploading} title="Bashkëngjit material (imazh, PDF, Word, Excel…)" aria-label="Bashkëngjit material (imazh, PDF, Word, Excel…)">
                     {commentImageUploading ? <Loader2 className="w-4 h-4 animate-spin motion-reduce:animate-none" /> : <Upload className="w-4 h-4" />}
                     <span className="hidden sm:inline text-xs">Shto material</span>
                   </Button>
@@ -2215,7 +2227,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 ref={fileInputRef}
                 type="file"
                 multiple
-                accept="image/*,application/pdf"
+                accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv"
                 className="hidden"
                 onChange={handleFileUpload}
               />
