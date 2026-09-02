@@ -18,6 +18,9 @@ service firebase.storage {
           || request.resource.contentType.matches('video/.*')
           || request.resource.contentType == 'application/pdf'
           || request.resource.contentType.matches('application/.*officedocument.*')
+          || request.resource.contentType == 'application/msword'
+          || request.resource.contentType == 'application/vnd.ms-excel'
+          || request.resource.contentType == 'application/vnd.ms-powerpoint'
           || request.resource.contentType == 'text/plain'
           || request.resource.contentType == 'text/csv'
         );

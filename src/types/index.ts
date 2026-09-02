@@ -1407,6 +1407,14 @@ export interface Milestone {
   updatedAt: Date;
 }
 
+/** An uploaded file reference (VPS-hosted) attached to a CRM record. */
+export interface FileAttachment {
+  url: string;
+  name: string;
+  size?: number;   // bytes
+  type?: string;   // mime type
+}
+
 export interface Lead {
   id: string;
   name: string;
@@ -1428,6 +1436,7 @@ export interface Lead {
   convertedAt?: Date;
   businessCategory?: string;
   notes?: string;
+  attachments?: FileAttachment[]; // documents uploaded from the lead drawer (tab "Dokumente")
   lastFollowUpDate?: Date;
   nextFollowUpDate?: Date;
   followUpNote?: string;
@@ -1489,6 +1498,7 @@ export interface LeadActivity {
   type: LeadActivityType;
   title: string;                 // short human summary
   body?: string;                 // note text / call summary / details
+  attachments?: FileAttachment[]; // files attached to this timeline entry
   meta?: Record<string, any>;    // { from, to, outcome, durationMin, channel }
   userId: string | null;         // actor
   userName?: string;

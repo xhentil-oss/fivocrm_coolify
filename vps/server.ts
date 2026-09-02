@@ -28,7 +28,10 @@ mkdirSync(UPLOAD_DIR, { recursive: true });
 app.use('/files', express.static(UPLOAD_DIR, { maxAge: '7d', immutable: true }));
 const uploadMw = multer({ storage: multer.memoryStorage(), limits: { fileSize: 15 * 1024 * 1024 } });
 // Mirror storage.rules: images / audio / video / pdf / office / text only.
-const ALLOWED_UPLOAD = /^(image\/(png|jpe?g|gif|webp)|audio\/.*|video\/.*|application\/pdf|application\/.*officedocument.*|text\/(plain|csv))$/;
+// Legacy Office (.doc/.xls/.ppt = msword / vnd.ms-excel / vnd.ms-powerpoint) is
+// allowed alongside the OOXML "officedocument" types — the CRM document upload
+// accepts both generations.
+const ALLOWED_UPLOAD = /^(image\/(png|jpe?g|gif|webp)|audio\/.*|video\/.*|application\/(pdf|msword|vnd\.ms-excel|vnd\.ms-powerpoint)|application\/.*officedocument.*|text\/(plain|csv))$/;
 
 // Verify a Firebase ID token (so clients never need the VPS API secret to upload).
 async function requireFirebaseAuth(req: any, res: any, next: any) {

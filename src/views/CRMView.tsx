@@ -58,6 +58,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Textarea } from '../components/ui/textarea';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
 import DetailDrawer from '../components/DetailDrawer';
+import { LeadDocumentsPanel } from '../components/LeadAttachments';
 import LeadTimeline, { logLeadActivity } from '../components/LeadTimeline';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../lib/firebase';
@@ -2527,6 +2528,21 @@ const CRMView: React.FC = () => {
                 </div>
               );
             })(),
+          },
+          {
+            value: 'dokumente',
+            label: (() => {
+              const live = (leads || []).find(l => l.id === selectedLead.id) || selectedLead;
+              const n = live.attachments?.length || 0;
+              return n ? `Dokumente (${n})` : 'Dokumente';
+            })(),
+            content: (
+              <LeadDocumentsPanel
+                key={selectedLead.id}
+                lead={(leads || []).find(l => l.id === selectedLead.id) || selectedLead}
+                canEdit={!!permissions.canEdit}
+              />
+            ),
           },
         ] : undefined}
       />

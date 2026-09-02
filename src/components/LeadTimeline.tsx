@@ -7,12 +7,13 @@ import { Textarea } from './ui/textarea';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from './ui/select';
 import { useToast } from '../hooks/use-toast';
 import { getTimestampMs } from '../lib/utils';
-import type { LeadActivity, LeadActivityType } from '../types';
+import { AttachmentChips, AttachmentPickerButton } from './LeadAttachments';
+import type { LeadActivity, LeadActivityType, FileAttachment } from '../types';
 
 /** Append a lead activity. Exposed so non-UI callers (CRM handlers) can reuse it. */
 export async function logLeadActivity(
   create: (data: any) => Promise<any>,
-  entry: { leadId: string; type: LeadActivityType; title: string; body?: string; meta?: Record<string, any>; userName?: string }
+  entry: { leadId: string; type: LeadActivityType; title: string; body?: string; attachments?: FileAttachment[]; meta?: Record<string, any>; userName?: string }
 ): Promise<void> {
   try {
     await create({
@@ -20,6 +21,7 @@ export async function logLeadActivity(
       type: entry.type,
       title: entry.title,
       body: entry.body || undefined,
+      attachments: entry.attachments?.length ? entry.attachments : undefined,
       meta: entry.meta || undefined,
       userName: entry.userName || undefined,
     });
@@ -68,6 +70,7 @@ const LeadTimeline: React.FC<{ leadId: string; onLogged?: (type: LeadActivityTyp
   const activityMutation = useMutation<LeadActivity>('leadActivities');
   const [composerType, setComposerType] = useState<LeadActivityType>('note');
   const [text, setText] = useState('');
+  const [pendingAttachments, setPendingAttachments] = useState<FileAttachment[]>([]);
   const [callOutcome, setCallOutcome] = useState(CALL_OUTCOMES[0]);
   const [saving, setSaving] = useState(false);
 
@@ -84,7 +87,7 @@ const LeadTimeline: React.FC<{ leadId: string; onLogged?: (type: LeadActivityTyp
   );
 
   const handleLog = async () => {
-    if (!text.trim() && composerType !== 'call') return;
+    if (!text.trim() && !pendingAttachments.length && composerType !== 'call') return;
     setSaving(true);
     try {
       const label = COMPOSER_TYPES.find(t => t.value === composerType)?.label || 'Shënim';
@@ -92,16 +95,19 @@ const LeadTimeline: React.FC<{ leadId: string; onLogged?: (type: LeadActivityTyp
         ? `Telefonatë — ${callOutcome}`
         : composerType === 'email' ? 'Email i dërguar'
         : composerType === 'meeting' ? 'Takim'
+        : pendingAttachments.length && !text.trim() ? 'Dokument u ngarkua'
         : 'Shënim';
       await logLeadActivity(activityMutation.create, {
         leadId,
         type: composerType,
         title,
         body: text.trim() || undefined,
+        attachments: pendingAttachments.length ? pendingAttachments : undefined,
         meta: composerType === 'call' ? { outcome: callOutcome } : undefined,
         userName: user?.displayName || user?.email || undefined,
       });
       setText('');
+      setPendingAttachments([]);
       onLogged?.(composerType);
       toast({ title: `${label} u regjistrua` });
     } finally {
@@ -136,8 +142,17 @@ const LeadTimeline: React.FC<{ leadId: string; onLogged?: (type: LeadActivityTyp
           rows={2}
           className="text-sm resize-none"
         />
-        <div className="flex justify-end">
-          <Button size="sm" onClick={handleLog} disabled={saving || (!text.trim() && composerType !== 'call')}>
+        <AttachmentChips
+          attachments={pendingAttachments}
+          onRemove={(i) => setPendingAttachments(prev => prev.filter((_, idx) => idx !== i))}
+        />
+        <div className="flex justify-between items-center gap-2">
+          <AttachmentPickerButton
+            className="h-8"
+            disabled={saving}
+            onUploaded={(atts) => setPendingAttachments(prev => [...prev, ...atts])}
+          />
+          <Button size="sm" onClick={handleLog} disabled={saving || (!text.trim() && !pendingAttachments.length && composerType !== 'call')}>
             <Plus className="w-3.5 h-3.5 mr-1" /> Regjistro
           </Button>
         </div>
@@ -163,6 +178,7 @@ const LeadTimeline: React.FC<{ leadId: string; onLogged?: (type: LeadActivityTyp
                   <div className="flex-1 min-w-0">
                     <p className="text-sm text-foreground font-medium">{a.title}</p>
                     {a.body && <p className="text-sm text-muted-foreground whitespace-pre-wrap mt-0.5">{a.body}</p>}
+                    {a.attachments && a.attachments.length > 0 && <AttachmentChips attachments={a.attachments} />}
                     <p className="text-[11px] text-muted-foreground mt-0.5">
                       {relativeTime(when)}{a.userName ? ` · ${a.userName}` : ''}
                     </p>
