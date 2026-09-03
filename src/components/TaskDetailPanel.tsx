@@ -204,6 +204,16 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const [mentionMap, setMentionMap] = useState<Record<string, string>>({}); // displayName → uid
   const [editingCommentId, setEditingCommentId] = useState<string | null>(null);
   const [editingCommentText, setEditingCommentText] = useState('');
+  const editCommentRef = useRef<HTMLTextAreaElement | null>(null);
+  // The inline editor must show the WHOLE comment: grow with the text (capped
+  // at ~half the viewport, then scroll) instead of a fixed two-row box.
+  useEffect(() => {
+    const el = editCommentRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    const cap = Math.max(160, Math.floor(window.innerHeight * 0.5));
+    el.style.height = `${Math.min(el.scrollHeight + 2, cap)}px`;
+  }, [editingCommentText, editingCommentId]);
   const [confirmDeleteCommentId, setConfirmDeleteCommentId] = useState<string | null>(null);
   // Which comment's emoji picker is open (WhatsApp/Slack-style reactions on comments).
   const [reactionPickerId, setReactionPickerId] = useState<string | null>(null);
@@ -2444,7 +2454,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                           )}
                         </div>
 
-                        <div className={`max-w-[75%] ${isCurrentUser ? 'items-end' : 'items-start'} flex flex-col gap-0.5`}>
+                        <div className={`${editingCommentId === comment.id ? 'w-full max-w-full flex-1' : 'max-w-[75%]'} ${isCurrentUser ? 'items-end' : 'items-start'} flex flex-col gap-0.5`}>
                           {showName && (
                             <span className={`text-[11px] font-medium text-muted-foreground px-1 flex items-center gap-1 ${isCurrentUser ? 'justify-end' : 'justify-start'}`}>
                               {isCurrentUser ? 'Ti' : commenterName}
@@ -2456,11 +2466,21 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                           {editingCommentId === comment.id ? (
                             <div className="w-full flex flex-col gap-1.5">
                               <Textarea
+                                ref={editCommentRef}
                                 value={editingCommentText}
                                 onChange={e => setEditingCommentText(e.target.value)}
-                                rows={2}
+                                rows={3}
                                 autoFocus
-                                className="text-sm min-h-[60px] resize-none"
+                                onFocus={e => {
+                                  // Put the caret at the end instead of selecting nothing at the top.
+                                  const len = e.currentTarget.value.length;
+                                  e.currentTarget.setSelectionRange(len, len);
+                                }}
+                                onKeyDown={e => {
+                                  if (e.key === 'Escape') { setEditingCommentId(null); setEditingCommentText(''); }
+                                  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); void saveEditComment(); }
+                                }}
+                                className="text-base sm:text-sm w-full min-h-[96px] resize-none overflow-y-auto leading-relaxed"
                               />
                               <div className={`flex gap-2 ${isCurrentUser ? 'justify-end' : 'justify-start'}`}>
                                 <Button size="sm" className="h-7 px-3" onClick={saveEditComment} disabled={!editingCommentText.trim()}>Ruaj</Button>
