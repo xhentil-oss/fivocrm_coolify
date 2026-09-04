@@ -35,7 +35,17 @@ import {
   Download,
   SmilePlus,
   Search,
+  Bell,
+  BellOff,
 } from 'lucide-react';
+import {
+  REMINDER_PRESETS,
+  setReminderPatch,
+  reminderPatchForDeadline,
+  activeReminderPreset,
+  describeReminder,
+  parseTaskDate,
+} from '../lib/taskReminders';
 import GoogleDrivePicker from './GoogleDrivePicker';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
@@ -348,8 +358,11 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
   
+  // Checklist order = creation order. Without orderBy the snapshot came back in
+  // document-id order (random auto-ids), so a new subtask landed anywhere.
   const { data: subtasks } = useCollection<Task>('tasks', {
-    where: [{ field: 'parentTaskId', operator: '==', value: task.id }]
+    where: [{ field: 'parentTaskId', operator: '==', value: task.id }],
+    orderBy: { field: 'createdAt', direction: 'asc' },
   });
   
   const { data: taskCollaborators } = useCollection<any>('taskCollaborators', {
@@ -1045,13 +1058,15 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
   // Auto-adjust instead of silently blocking, so intra-day edits always apply
   // (Asana-style): if start moves past end, end follows; if end moves before
   // start, start follows.
+  // A moved deadline also carries a RELATIVE reminder ("1 orë para") with it —
+  // see reminderPatchForDeadline. Every path that writes endDate spreads it.
   const handleStartDateChange = async (date: Date | undefined) => {
     if (!date) return;
     const nd = new Date(date);
     nd.setHours(startDate.getHours(), startDate.getMinutes(), 0, 0);
     setStartDate(nd);
     const patch: Partial<Task> = { startDate: nd };
-    if (nd > endDate) { setEndDate(nd); Object.assign(patch, { endDate: nd }, rearmDeadlineAlerts); }
+    if (nd > endDate) { setEndDate(nd); Object.assign(patch, { endDate: nd }, rearmDeadlineAlerts, reminderPatchForDeadline(task, nd)); }
     await onUpdate(task.id, patch);
   };
 
@@ -1060,7 +1075,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     const nd = new Date(date);
     nd.setHours(endDate.getHours(), endDate.getMinutes(), 0, 0);
     setEndDate(nd);
-    const patch: Partial<Task> = { endDate: nd, ...rearmDeadlineAlerts };
+    const patch: Partial<Task> = { endDate: nd, ...rearmDeadlineAlerts, ...reminderPatchForDeadline(task, nd) };
     if (nd < startDate) { setStartDate(nd); patch.startDate = nd; }
     await onUpdate(task.id, patch);
   };
@@ -1071,16 +1086,42 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
     const nd = new Date(startDate); nd.setHours(h || 0, m || 0, 0, 0);
     setStartDate(nd);
     const patch: Partial<Task> = { startDate: nd };
-    if (nd > endDate) { setEndDate(nd); Object.assign(patch, { endDate: nd }, rearmDeadlineAlerts); }
+    if (nd > endDate) { setEndDate(nd); Object.assign(patch, { endDate: nd }, rearmDeadlineAlerts, reminderPatchForDeadline(task, nd)); }
     await onUpdate(task.id, patch);
   };
   const handleEndTimeChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const [h, m] = e.target.value.split(':').map(Number);
     const nd = new Date(endDate); nd.setHours(h || 0, m || 0, 0, 0);
     setEndDate(nd);
-    const patch: Partial<Task> = { endDate: nd, ...rearmDeadlineAlerts };
+    const patch: Partial<Task> = { endDate: nd, ...rearmDeadlineAlerts, ...reminderPatchForDeadline(task, nd) };
     if (nd < startDate) { setStartDate(nd); patch.startDate = nd; }
     await onUpdate(task.id, patch);
+  };
+
+  // ── "Më kujto" (Asana/Salesforce-style reminder) ──
+  // Presets resolve against the deadline; a custom moment is absolute. All
+  // writes go through setReminderPatch so the three fields never disagree.
+  const reminderAt = parseTaskDate(task.reminderAt);
+  const reminderPreset = activeReminderPreset(task);
+  const reminderIsCustom = !!reminderAt && !reminderPreset;
+  const handleReminderPreset = async (minutes: number) => {
+    // Tapping the active preset clears it (chips toggle, like labels).
+    if (reminderPreset?.minutes === minutes) { await onUpdate(task.id, setReminderPatch(task, null)); return; }
+    await onUpdate(task.id, setReminderPatch({ endDate }, { offsetMinutes: minutes }));
+  };
+  const handleReminderClear = async () => { await onUpdate(task.id, setReminderPatch(task, null)); };
+  const handleReminderCustomDate = async (date: Date | undefined) => {
+    if (!date) return;
+    const at = new Date(date);
+    // Keep the time-of-day already chosen; default to 09:00 for a fresh pick.
+    if (reminderAt) at.setHours(reminderAt.getHours(), reminderAt.getMinutes(), 0, 0);
+    else at.setHours(9, 0, 0, 0);
+    await onUpdate(task.id, setReminderPatch(task, { at }));
+  };
+  const handleReminderCustomTime = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const [h, m] = e.target.value.split(':').map(Number);
+    const at = new Date(reminderAt ?? endDate); at.setHours(h || 0, m || 0, 0, 0);
+    await onUpdate(task.id, setReminderPatch(task, { at }));
   };
 
   const handleSendChatMessage = async () => {
@@ -1582,6 +1623,53 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                     onChange={handleEndTimeChange}
                     className="h-7 rounded border border-border/50 bg-muted/40 px-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
                   />
+                )}
+              </div>
+            </div>
+
+            {/* Kujtesë — "Më kujto" */}
+            <div className={rowCls}>
+              <span className={rowLabelCls}>Kujtesë</span>
+              <div className="flex flex-wrap items-center gap-1.5">
+                {REMINDER_PRESETS.map(p => (
+                  <button
+                    key={p.key}
+                    type="button"
+                    disabled={isGuestMode}
+                    onClick={() => handleReminderPreset(p.minutes)}
+                    className={chipCls(reminderPreset?.key === p.key)}
+                    title={p.minutes === 0 ? 'Njoftim në momentin e afatit' : `Njoftim ${p.label.toLowerCase()} afatit`}
+                  >
+                    {p.label}
+                  </button>
+                ))}
+                <Popover>
+                  <PopoverTrigger asChild>
+                    <button type="button" disabled={isGuestMode} className={chipCls(reminderIsCustom)} title="Zgjidh datën dhe orën e kujtesës">
+                      📅 {reminderIsCustom && reminderAt ? formatDateCompact(reminderAt) : 'Tjetër…'}
+                    </button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-auto p-0" align="start">
+                    <Calendar mode="single" selected={reminderAt ?? undefined} onSelect={handleReminderCustomDate} initialFocus />
+                  </PopoverContent>
+                </Popover>
+                {!isGuestMode && reminderAt && (
+                  <input
+                    type="time"
+                    value={timeStr(reminderAt)}
+                    onChange={handleReminderCustomTime}
+                    className="h-7 rounded border border-border/50 bg-muted/40 px-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-primary"
+                    title="Ora e kujtesës"
+                  />
+                )}
+                {reminderAt && (
+                  <span className={`inline-flex items-center gap-1 text-[11.5px] ${task.reminderSentAt ? 'text-muted-foreground' : 'text-primary'}`}>
+                    {task.reminderSentAt ? <BellOff className="h-3 w-3" /> : <Bell className="h-3 w-3" />}
+                    {describeReminder(task)}
+                  </span>
+                )}
+                {reminderAt && !isGuestMode && (
+                  <button type="button" onClick={handleReminderClear} className="text-xs font-bold text-muted-foreground hover:text-foreground" title="Hiq kujtesën">✕</button>
                 )}
               </div>
             </div>

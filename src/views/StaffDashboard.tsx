@@ -36,6 +36,7 @@ import type {
 } from '../types';
 import { taskCompletedNotifications } from '../lib/taskNotifications';
 import { completeTask } from '../lib/recurringUtils';
+import { taskDueMs, compareTasksByDue, compareTaskIds } from '../lib/taskSort';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { useFilteredTasks, useFilteredProjects, useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import MomentumWidget from '../components/MomentumWidget';
@@ -298,18 +299,16 @@ const StaffDashboard: React.FC = () => {
 
   const myDueThisWeek = useMemo(() => {
     const now = new Date();
+    // From the start of TODAY, not from this instant: a task due at 09:00 viewed
+    // at 15:00 is still "this week" (and still today's work), not vanished.
+    const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
     const weekEnd = new Date(now);
     weekEnd.setDate(weekEnd.getDate() + 7);
+    const weekEndMs = weekEnd.getTime();
     return myTasks.filter(t => {
-      const due = t.endDate || t.dueDate;
-      if (!due) return false;
-      const d = due instanceof Date ? due : new Date(due);
-      return d >= now && d <= weekEnd;
-    }).sort((a, b) => {
-      const da = (a.endDate || a.dueDate) as Date;
-      const db = (b.endDate || b.dueDate) as Date;
-      return (da?.getTime() || 0) - (db?.getTime() || 0);
-    });
+      const d = taskDueMs(t); // Date | Timestamp | string — one normaliser, never `.getTime()` on a raw value
+      return d !== null && d >= startOfToday && d <= weekEndMs;
+    }).sort(compareTasksByDue);
   }, [myTasks]);
 
   // Smart task prioritization
@@ -327,43 +326,29 @@ const StaffDashboard: React.FC = () => {
     const projectMap = new Map<string, Project & { id: string }>();
     projects?.forEach(p => projectMap.set(p.id, p));
 
-    return [...myTasks].sort((a, b) => {
-      let scoreA = 0, scoreB = 0;
-
-      // Priority weight
-      const pw: Record<string, number> = { urgent: 40, high: 30, medium: 15, low: 5 };
-      scoreA += pw[a.priority || 'medium'] || 15;
-      scoreB += pw[b.priority || 'medium'] || 15;
-
-      // Deadline proximity
-      const now = Date.now();
-      const dueA = (a.endDate || a.dueDate) as Date | undefined;
-      const dueB = (b.endDate || b.dueDate) as Date | undefined;
-      if (dueA) {
-        const days = (new Date(dueA).getTime() - now) / 86400000;
-        scoreA += days < 0 ? 35 : days < 1 ? 30 : days < 3 ? 20 : days < 7 ? 10 : 0;
+    // Score each task ONCE, with one clock reading. Scoring inside the comparator
+    // re-read Date.now() per comparison (a deadline could cross a bucket boundary
+    // mid-sort, breaking transitivity) and equal scores returned 0 with no
+    // tie-breaker, so the list reshuffled whenever any unrelated task updated.
+    const now = Date.now();
+    const pw: Record<string, number> = { urgent: 40, high: 30, medium: 15, low: 5 };
+    const scoreOf = (task: Task): number => {
+      let score = pw[task.priority || 'medium'] || 15;
+      const due = taskDueMs(task);
+      if (due !== null) {
+        const days = (due - now) / 86400000;
+        score += days < 0 ? 35 : days < 1 ? 30 : days < 3 ? 20 : days < 7 ? 10 : 0;
       }
-      if (dueB) {
-        const days = (new Date(dueB).getTime() - now) / 86400000;
-        scoreB += days < 0 ? 35 : days < 1 ? 30 : days < 3 ? 20 : days < 7 ? 10 : 0;
+      if (task.projectId) {
+        const proj = projectMap.get(task.projectId);
+        if (proj?.customerId) score += Math.min(15, (customerRevenue.get(proj.customerId) || 0) / 2000);
       }
-
-      // Client revenue value
-      if (a.projectId) {
-        const proj = projectMap.get(a.projectId);
-        if (proj?.customerId) scoreA += Math.min(15, (customerRevenue.get(proj.customerId) || 0) / 2000);
-      }
-      if (b.projectId) {
-        const proj = projectMap.get(b.projectId);
-        if (proj?.customerId) scoreB += Math.min(15, (customerRevenue.get(proj.customerId) || 0) / 2000);
-      }
-
-      // In Progress boost
-      if (a.status === 'In Progress') scoreA += 5;
-      if (b.status === 'In Progress') scoreB += 5;
-
-      return scoreB - scoreA;
-    });
+      if (task.status === 'In Progress') score += 5;
+      return score;
+    };
+    const scores = new Map(myTasks.map(task => [task.id, scoreOf(task)] as const));
+    return [...myTasks].sort((a, b) =>
+      (scores.get(b.id)! - scores.get(a.id)!) || compareTasksByDue(a, b) || compareTaskIds(a, b));
   }, [myTasks, invoices, projects]);
 
   // My active timer

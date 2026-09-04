@@ -43,6 +43,10 @@ export const NOTIFICATION_TYPES = {
   task_completed:           { category: 'tasks',    priority: 'success',  groupLabel: 'detyra të përfunduara' },
   task_overdue:             { category: 'tasks',    priority: 'critical', groupLabel: 'detyra të skaduara' },
   task_due_soon:            { category: 'tasks',    priority: 'warning',  groupLabel: 'detyra me afat' },
+  // "Më kujto" — the person's own reminder on a task, delivered at the moment
+  // they chose (task-reminders cron, every 5 min). Warning, not critical: it is
+  // a nudge they asked for, not a missed deadline.
+  task_reminder:            { category: 'tasks',    priority: 'warning',  groupLabel: 'kujtesa detyrash' },
   task_mention:             { category: 'tasks',    priority: 'info',     groupLabel: 'përmendje' },
   task_collaborator_added:  { category: 'tasks',    priority: 'info',     groupLabel: 'shtesa si bashkëpunëtor' },
   task_comment:             { category: 'tasks',    priority: 'info',     groupLabel: 'komente detyrash' },

@@ -33,6 +33,7 @@ import { useCommentFocus, COMMENT_FLASH_CLASS } from '../hooks/useCommentFocus';
 import { useBackDismiss } from '../hooks/useBackDismiss';
 import { portalProjectCommentDeepLink, taskDeepLink } from '../lib/deepLinks';
 import { taskCompletedNotifications } from '../lib/taskNotifications';
+import { compareTasksBySectionThenDue, compareTasksByPriorityThenDue } from '../lib/taskSort';
 import { resolvePortalUserId } from '../lib/notifyClient';
 import { addFrequency, completeTask } from '../lib/recurringUtils';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
@@ -413,6 +414,25 @@ const ProjectDetailView: React.FC = () => {
 
     return filtered;
   }, [allTasks, filterStatus, filterAssignee, searchQuery]);
+
+  // List: by section (unsectioned LAST — the old '~~~' sentinel collated before
+  // every letter and put them first), then deadline, then id. Memoised: the sort
+  // used to run inside the JSX on every render with no tie-breaker, so rows in
+  // one section reshuffled whenever any task updated.
+  const listTasks = React.useMemo(() => [...tasks].sort(compareTasksBySectionThenDue), [tasks]);
+  // Board: each column urgent-first, then earliest deadline. There is no
+  // persisted per-column order in a project, so the order has to MEAN something
+  // instead of being `createdAt desc`.
+  const boardColumnTasks = React.useMemo(() => {
+    const map = new Map<string, Task[]>();
+    for (const t of tasks) {
+      const arr = map.get(t.status) || [];
+      arr.push(t);
+      map.set(t.status, arr);
+    }
+    for (const arr of map.values()) arr.sort(compareTasksByPriorityThenDue);
+    return map;
+  }, [tasks]);
 
   const team = teams?.find(t => t.id === project?.teamId);
   // Respect explicit memberUserIds; fall back to full team
@@ -1476,11 +1496,10 @@ const ProjectDetailView: React.FC = () => {
                       <span className="text-right">Orë</span>
                     </div>
 
-                    {/* Sorted by section so related tasks stay adjacent; each row
-                        states its own section, which replaces the sticky group
-                        headers the old list used. */}
-                    {[...tasks]
-                      .sort((a, b) => ((a as any).section || '~~~').localeCompare((b as any).section || '~~~'))
+                    {/* Sorted by section so related tasks stay adjacent (see
+                        listTasks); each row states its own section, which
+                        replaces the sticky group headers the old list used. */}
+                    {listTasks
                       .map(task => {
                         const dateInfo = formatDateCompact(new Date(task.endDate));
                         const meta = TASK_STATUS_META[task.status] || TASK_STATUS_META['Todo'];
@@ -1564,7 +1583,7 @@ const ProjectDetailView: React.FC = () => {
             <DndContext sensors={sensors} collisionDetection={closestCorners} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
               <div className="flex items-start gap-3.5 overflow-x-auto pb-2 md:grid md:grid-cols-4 md:overflow-visible">
                 {columns.map((column) => {
-                  const columnTasks = tasks.filter(task => task.status === column.status);
+                  const columnTasks = boardColumnTasks.get(column.status) || [];
                   return (
                     <ProjectKanbanColumn key={column.id} id={column.status}>
                       <div className="flex min-w-[262px] flex-col gap-2.5 rounded-2xl bg-brand-board p-3 md:min-w-0">

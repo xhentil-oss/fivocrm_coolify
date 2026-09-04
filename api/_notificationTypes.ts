@@ -22,6 +22,7 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   task_completed: 'tasks',
   task_overdue: 'tasks',
   task_due_soon: 'tasks',
+  task_reminder: 'tasks',
   task_mention: 'tasks',
   task_collaborator_added: 'tasks',
   task_comment: 'tasks',

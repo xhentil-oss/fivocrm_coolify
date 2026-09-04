@@ -188,6 +188,15 @@ export function buildNextRecurringTask(task: Task): Omit<Task, 'id' | 'createdAt
     nextRecurringDate: newNext,
     nextCycleCreated: false,
     dueNotificationSent: false,
+    // A RELATIVE reminder ("1 orë para") is part of the series: the next cycle
+    // gets it re-resolved against its own deadline. A custom absolute reminder
+    // belongs to the occurrence it was set on and is not carried.
+    ...(task.reminderOffsetMinutes !== null && task.reminderOffsetMinutes !== undefined
+      ? {
+          reminderOffsetMinutes: task.reminderOffsetMinutes,
+          reminderAt: new Date(newEnd.getTime() - Math.max(0, task.reminderOffsetMinutes) * 60_000),
+        }
+      : {}),
     collaboratorIds: task.collaboratorIds ?? undefined,
     createdByUserId: task.createdByUserId,
   };

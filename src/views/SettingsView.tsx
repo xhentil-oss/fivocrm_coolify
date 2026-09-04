@@ -2194,6 +2194,19 @@ const SettingsView: React.FC = () => {
             lastRun={getLastRun('task_alerts')}
           />
 
+          {/* Task reminders ("Më kujto") */}
+          <CronJobCard
+            title="Kujtesa Detyrash (Më kujto)"
+            description="Çdo 5 minuta dërgon kujtesat që punonjësit kanë vendosur vetë te detyrat («Në afat», «1 orë para», datë/orë e zgjedhur) — push në telefon, zile në web dhe email. Çdo kujtesë dërgohet një herë të vetme."
+            schedule="Çdo 5 minuta (VPS)"
+            icon={<Clock className="w-5 h-5 text-primary" />}
+            enabled={cronSettings['task_reminders']?.enabled ?? true}
+            onToggle={(v) => handleToggleCron('task_reminders', v)}
+            status={cronRunStatus['task_reminders']}
+            onRun={() => handleRunCron('/api/cron/run?job=task-reminders', 'task_reminders')}
+            lastRun={getLastRun('task_reminders')}
+          />
+
           {/* Invoice Reminders */}
           <CronJobCard
             title="Kujtesa & Vonesa Faturash"

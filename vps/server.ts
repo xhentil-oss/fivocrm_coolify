@@ -936,6 +936,12 @@ function startCronSchedulers(): void {
   // collection scan each run — running them too often pins Firestore read quota.
   // whatsapp-broadcasts only reads queued broadcasts (tiny), so it stays frequent.
   setInterval(() => { void triggerCronJob('whatsapp-broadcasts'); }, 5 * MIN);
+  // Task reminders ("Më kujto") are a wall-clock promise to a person — "15:00"
+  // means 15:00, so this cannot ride the daily run-all. The job reads ONLY tasks
+  // whose reminderAt falls in [now − 48h, now] (same-field range, no composite
+  // index) and marks each one reminderSentAt, so a 5-minute cadence costs a few
+  // reads per run and a restart can never double-notify.
+  setInterval(() => { void triggerCronJob('task-reminders'); }, 5 * MIN);
   setInterval(() => { void triggerCronJob('lead-sla-stale-alerts'); }, 60 * MIN);
   // Google Reviews: hourly pull. The job reads ONLY connected gmbAccounts and
   // diffs reviews per location, so an hour with no new reviews costs a handful of

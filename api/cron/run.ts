@@ -369,6 +369,94 @@ async function runTaskDeadlineAlerts() {
   return { notified };
 }
 
+// ── JOB: task-reminders ("Më kujto") ─────────────────────────────────────────
+// Delivers the reminder a person set on their own task, at the moment they
+// chose — Asana/Salesforce style. Runs every 5 minutes from the VPS (NOT in
+// run-all: "15:00" is a wall-clock promise, a daily tick cannot keep it).
+//
+// Reads ONLY tasks whose reminderAt is inside [now − 48h, now]: a same-field
+// range, so no composite index and no per-tenant fan-out. Anything older than
+// the look-back was missed by a long outage and is stale, not owed — Salesforce
+// drops those too. Idempotent per task via `reminderSentAt`.
+//
+// MIRRORS taskReminderBlockReason() in src/lib/taskReminders.ts — keep in sync.
+const TASK_REMINDER_LOOKBACK_MS = 48 * 60 * 60 * 1000;
+
+function taskReminderBlockReason(task: any, now: Date): string | null {
+  if (task.reminderAt === null || task.reminderAt === undefined) return 'no-reminder';
+  const at: Date | null = task.reminderAt?.toDate ? task.reminderAt.toDate() : new Date(task.reminderAt);
+  if (!at || isNaN(at.getTime())) return 'invalid-date';
+  if (task.status === 'Done') return 'task-done';
+  if (task.reminderSentAt) return 'already-sent';
+  if (at.getTime() > now.getTime()) return 'not-yet';
+  return null;
+}
+
+async function runTaskReminders() {
+  const now = new Date();
+  const floor = new Date(now.getTime() - TASK_REMINDER_LOOKBACK_MS);
+  const snap = await db.collection('tasks')
+    .where('reminderAt', '>=', admin.firestore.Timestamp.fromDate(floor))
+    .where('reminderAt', '<=', admin.firestore.Timestamp.fromDate(now))
+    .get();
+
+  let sent = 0;
+  const blocked: Record<string, number> = {};
+  const ops: Promise<any>[] = [];
+  const sqMonths = ['jan', 'shk', 'mar', 'pri', 'maj', 'qer', 'kor', 'gus', 'sht', 'tet', 'nën', 'dhj'];
+
+  for (const doc of snap.docs) {
+    const task = doc.data();
+    const reason = taskReminderBlockReason(task, now);
+    if (reason) { blocked[reason] = (blocked[reason] || 0) + 1; continue; }
+
+    const recipientId = task.assignedToUserId || task.createdByUserId;
+    if (!recipientId) {
+      // Nobody to remind — mark it so the row leaves the window instead of being
+      // re-read every 5 minutes for two days.
+      ops.push(doc.ref.update({ reminderSentAt: admin.firestore.Timestamp.now() }));
+      blocked['no-recipient'] = (blocked['no-recipient'] || 0) + 1;
+      continue;
+    }
+
+    // The deadline, phrased in the recurrence zone (Europe/Tirane) — the server
+    // clock is UTC, and "skadon sot 15:00" must mean the office's 15:00.
+    const end: Date | null = task.endDate?.toDate ? task.endDate.toDate() : task.endDate ? new Date(task.endDate) : null;
+    let deadline = '';
+    if (end && !isNaN(end.getTime())) {
+      const parts = new Intl.DateTimeFormat('en-GB', {
+        timeZone: RECURRENCE_TIMEZONE, day: 'numeric', month: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+      }).formatToParts(end);
+      const get = (t: string) => parts.find(p => p.type === t)?.value || '';
+      const sameDay = startOfRecurrenceDay(end) === startOfRecurrenceDay(now);
+      const dayLabel = sameDay ? 'sot' : `${get('day')} ${sqMonths[Number(get('month')) - 1] || ''}`;
+      deadline = ` Afati: ${dayLabel} ${get('hour')}:${get('minute')}.`;
+    }
+
+    ops.push(notifyUser({
+      userId: recipientId,
+      type: 'task_reminder',
+      title: `🔔 Kujtesë: ${task.title}`,
+      message: `Ke kërkuar të të kujtojmë për këtë detyrë.${deadline}`,
+      actionUrl: task.projectId
+        ? `/app/projects/${task.projectId}?taskId=${doc.id}`
+        : `/app/tasks?taskId=${doc.id}`,
+      actionLabel: 'Hap Detyrën',
+      businessId: task.businessId ?? null,
+      teamId: task.teamId ?? null,
+      projectId: task.projectId ?? null,
+    }));
+    // Mark BEFORE the send settles: a reminder that fires twice is worse than one
+    // lost to a transient push failure (the bell row is still written by
+    // notifyUser, and the task still shows the reminder as sent).
+    ops.push(doc.ref.update({ reminderSentAt: admin.firestore.Timestamp.now() }));
+    sent++;
+  }
+
+  await settleAll(ops, 'task-reminders');
+  return { scanned: snap.size, sent, blocked };
+}
+
 // ── JOB: invoice-reminders ───────────────────────────────────────────────────
 async function runInvoiceReminders() {
   const transporter = makeTransporter();
@@ -676,7 +764,7 @@ async function runRecurringTasks() {
     // child used to drop labels/section/collaborators/estimate/blockers, so a
     // series degraded (lost its board column, capacity estimate, 🔒 deps)
     // whenever THIS engine spawned the cycle instead of the UI.
-    ops.push(newTaskRef.set({ title: task.title, description: task.description ?? null, status: 'Todo', priority: task.priority ?? null, projectId: task.projectId ?? null, assignedToUserId: task.assignedToUserId ?? null, labels: task.labels ?? null, section: task.section ?? null, collaboratorIds: task.collaboratorIds ?? null, estimatedHours: task.estimatedHours ?? null, dependsOn: task.dependsOn ?? null, startDate: admin.firestore.Timestamp.fromDate(newStart), endDate: admin.firestore.Timestamp.fromDate(newEnd), isRecurring: true, recurringFrequency: task.recurringFrequency, recurringInterval: task.recurringInterval ?? 1, recurringDayOfWeek: task.recurringDayOfWeek ?? null, recurringDayOfMonth: task.recurringDayOfMonth ?? null, recurringDaysOfWeek: task.recurringDaysOfWeek ?? null, recurringEndDate: recEnd ? admin.firestore.Timestamp.fromDate(recEnd) : null, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), nextCycleCreated: false, dueNotificationSent: false, parentTaskId: task.parentTaskId ?? null, createdByUserId: task.createdByUserId ?? null, teamId: task.teamId ?? null, businessId: task.businessId ?? null, customerId: task.customerId ?? null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
+    ops.push(newTaskRef.set({ title: task.title, description: task.description ?? null, status: 'Todo', priority: task.priority ?? null, projectId: task.projectId ?? null, assignedToUserId: task.assignedToUserId ?? null, labels: task.labels ?? null, section: task.section ?? null, collaboratorIds: task.collaboratorIds ?? null, estimatedHours: task.estimatedHours ?? null, dependsOn: task.dependsOn ?? null, startDate: admin.firestore.Timestamp.fromDate(newStart), endDate: admin.firestore.Timestamp.fromDate(newEnd), isRecurring: true, recurringFrequency: task.recurringFrequency, recurringInterval: task.recurringInterval ?? 1, recurringDayOfWeek: task.recurringDayOfWeek ?? null, recurringDayOfMonth: task.recurringDayOfMonth ?? null, recurringDaysOfWeek: task.recurringDaysOfWeek ?? null, recurringEndDate: recEnd ? admin.firestore.Timestamp.fromDate(recEnd) : null, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), nextCycleCreated: false, dueNotificationSent: false, ...(task.reminderOffsetMinutes !== null && task.reminderOffsetMinutes !== undefined ? { reminderOffsetMinutes: task.reminderOffsetMinutes, reminderAt: admin.firestore.Timestamp.fromDate(new Date(newEnd.getTime() - Math.max(0, Number(task.reminderOffsetMinutes)) * 60_000)), reminderSentAt: null } : {}), parentTaskId: task.parentTaskId ?? null, createdByUserId: task.createdByUserId ?? null, teamId: task.teamId ?? null, businessId: task.businessId ?? null, customerId: task.customerId ?? null, createdAt: admin.firestore.Timestamp.now(), updatedAt: admin.firestore.Timestamp.now() }));
     ops.push(doc.ref.update({ nextCycleCreated: true, nextRecurringDate: admin.firestore.Timestamp.fromDate(newNext), updatedAt: admin.firestore.Timestamp.now() }));
     const notifRecipient = task.assignedToUserId || task.createdByUserId;
     if (notifRecipient) {
@@ -5004,6 +5092,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'task-deadline-alerts':
         result = await runTaskDeadlineAlerts();
         break;
+      case 'task-reminders':
+        result = await runTaskReminders();
+        break;
       case 'invoice-reminders':
         result = await runInvoiceReminders();
         break;
@@ -5305,7 +5396,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, daily-report-check, whatsapp-broadcasts, whatsapp-automations, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social, gmb-sync` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, task-reminders, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, daily-report-check, whatsapp-broadcasts, whatsapp-automations, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social, gmb-sync` });
     }
 
     await recordJobRun({

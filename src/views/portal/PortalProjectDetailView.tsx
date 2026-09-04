@@ -21,6 +21,7 @@ import {
 import { useToast } from '../../hooks/use-toast';
 import type { Project, Task, TaskComment } from '../../types';
 import { notifyStaff } from '../../lib/notifyStaff';
+import { compareTasksByDue } from '../../lib/taskSort';
 import { useCommentFocus, COMMENT_FLASH_CLASS } from '../../hooks/useCommentFocus';
 import { taskDeepLink, projectCommentDeepLink } from '../../lib/deepLinks';
 import { currencySymbol } from '../../lib/utils';
@@ -72,9 +73,11 @@ const PortalProjectDetailView: React.FC = () => {
     if (!rawTasks) return [];
     // Top-level only: subtasks are the agency's internal work breakdown — they
     // inflated "Detyra Totale" vs the staff view and rendered flat to the client.
+    // Inside a status: earliest deadline first, then id — without the tie-breaker
+    // the client saw the order change on every snapshot.
     return rawTasks.filter(t => !t.parentTaskId).sort((a, b) => {
       const statusOrder: Record<string, number> = { 'In Progress': 0, 'Todo': 1, 'Review': 2, 'Done': 3 };
-      return (statusOrder[a.status] ?? 4) - (statusOrder[b.status] ?? 4);
+      return ((statusOrder[a.status] ?? 4) - (statusOrder[b.status] ?? 4)) || compareTasksByDue(a, b);
     });
   }, [rawTasks]);
 

@@ -4,6 +4,7 @@ import { Button } from './ui/button';
 import { DialogClose } from './ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from './ui/popover';
 import { projectPickerLabel, sortArchivedLast } from '../lib/projectArchive';
+import { REMINDER_PRESETS } from '../lib/taskReminders';
 import { useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import type { Task, Project } from '../types';
 
@@ -184,6 +185,9 @@ const QuickTaskForm: React.FC<{
   // "Përsërit deri" (YYYY-MM-DD) — the engine, cron and the create handler all
   // support recurringEndDate; this form just never offered it.
   const [recUntil, setRecUntil] = useState('');
+  // "Më kujto" — minutes before the deadline as a string ('' = no reminder).
+  // Resolved against the deadline by the create handler (src/lib/taskReminders.ts).
+  const [remind, setRemind] = useState('');
   const [createMore, setCreateMore] = useState(false);
   const [savedMsg, setSavedMsg] = useState('');
   const [saving, setSaving] = useState(false);
@@ -271,6 +275,7 @@ const QuickTaskForm: React.FC<{
     fd.set('estimatedHours', String(dur));
     if (projectId) fd.set('projectId', projectId);
     if (labels.length > 0) fd.set('labels', JSON.stringify(labels));
+    if (remind !== '') fd.set('reminderOffsetMinutes', remind);
     if (rec !== 'never') {
       fd.set('isRecurring', 'true');
       if (rec === 'weekly') {
@@ -656,6 +661,29 @@ const QuickTaskForm: React.FC<{
             )}
           </div>
 
+          <div>
+            <div className={`${sectionLabelCls} mb-2`}>Kujtesë</div>
+            <div className="grid grid-cols-5 gap-[7px]">
+              {[{ key: 'none', minutes: '', label: 'Jo' }, ...REMINDER_PRESETS.map(p => ({ key: p.key, minutes: String(p.minutes), label: p.label }))].map(o => (
+                <button
+                  key={o.key}
+                  type="button"
+                  onClick={() => setRemind(o.minutes)}
+                  className={`min-h-[44px] rounded-xl border-[1.5px] px-0.5 text-[11.5px] font-bold transition-colors ${
+                    remind === o.minutes ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background text-muted-foreground'
+                  }`}
+                >
+                  {o.label}
+                </button>
+              ))}
+            </div>
+            {remind !== '' && (
+              <div className="mt-2 text-[11.5px] font-semibold text-muted-foreground">
+                Njoftim në telefon dhe në web {Number(remind) === 0 ? 'në orën e mbarimit' : `${REMINDER_PRESETS.find(p => String(p.minutes) === remind)?.label.toLowerCase()} mbarimit`} ({fmtH(timeTo)} {dayName}).
+              </div>
+            )}
+          </div>
+
           <div className="pb-1">
             <div className={`${sectionLabelCls} mb-2`}>Projekti</div>
             {projectPicker('min-h-[44px] w-full rounded-xl py-2.5 pl-3.5 text-[13px]')}
@@ -814,6 +842,23 @@ const QuickTaskForm: React.FC<{
             {recSummary && (
               <span className="text-[11.5px] font-semibold text-muted-foreground/80">→ {recSummary}</span>
             )}
+          </div>
+
+          <div className="mt-3.5 flex flex-wrap items-center gap-2">
+            <span className="mr-0.5 text-xs font-bold text-muted-foreground">Kujtesë</span>
+            {[{ key: 'none', minutes: '', label: 'Jo' }, ...REMINDER_PRESETS.map(p => ({ key: p.key, minutes: String(p.minutes), label: p.label }))].map(o => (
+              <button
+                key={o.key}
+                type="button"
+                onClick={() => setRemind(o.minutes)}
+                title={o.minutes === '' ? 'Pa kujtesë' : 'Njoftim në telefon dhe në web'}
+                className={`rounded-lg border-[1.5px] px-3 py-1.5 text-xs font-bold transition-colors hover:border-primary ${
+                  remind === o.minutes ? 'border-primary bg-primary/10 text-primary' : 'border-border bg-background text-muted-foreground'
+                }`}
+              >
+                {o.label}
+              </button>
+            ))}
           </div>
 
           {warn && <div className="mt-3">{warnBanner(warn)}</div>}

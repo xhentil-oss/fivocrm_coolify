@@ -20,6 +20,12 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 <changelog>
 <!-- NEXT_ENTRY_HERE -->
 
+### [2026-09-03] — Task reminders ("Më kujto") + task-ordering audit fixes
+- `src/lib/taskReminders.ts` (+19 tests): `reminderAt` / `reminderOffsetMinutes` / `reminderSentAt` on Task; presets (Në afat, 30 min, 1 orë, 1 ditë para) + custom date/time; a moved deadline carries a relative reminder (`reminderPatchForDeadline`); recurring next cycle keeps the offset (`recurringUtils.ts` + cron mirror)
+- UI: TaskDetailPanel row "Kujtesë", QuickTaskForm section "Kujtesë" (both variants), TasksView row bell + create handler; SettingsView cron card. Cron `task-reminders` in `api/cron/run.ts` (every 5 min via `vps/server.ts`, NOT run-all; range on `reminderAt`, idempotent); type `task_reminder` registered in both registries
+- `src/lib/taskSort.ts` (+12 tests): one date normaliser + total-order comparators. Fixed: manual-order sentinel sank new tasks to last page (TasksView), grouping over the current page only + Done tasks under "Më vonë", project list `'~~~'` section sentinel sorted FIRST, kanban columns unsorted, subtasks in doc-id order, StaffDashboard comparator could throw on non-Date + excluded today's earlier tasks, `useFirestore` orderBy mixed Date/string + ignored `limit`, timeline/portal tie-breakers
+- Not persisted: same-column drag on the PROJECT board (no order field) — columns now sort urgent-first/earliest-deadline instead
+
 ### [2026-08-06] — Manual duplicate merge for customers & leads
 - `src/lib/contactMerge.ts` (+22 tests): duplicate grouping (email/phone/name, union-find, name match refused when emails contradict), field-by-field plan with data-preserving defaults (tags unioned, notes concatenated), allow-listed field resolution
 - `api/_merge-contacts.ts` (routed `?type=merge-contacts` + vercel.json rewrite, `api/email.ts` maxDuration 60): reassigns ~45 collection/field pairs (invoices, invoiceItems, payments, projects, tasks, quotes, contracts, deals, reports, portal access, `dailyReports.customerIds`, portal chat channel rename) onto the survivor; Admin/Manager + same-business only; archives the absorbed doc to `contactMerges` BEFORE writing; duplicate deleted last and never when truncated; cascades to the linked lead↔customer pair

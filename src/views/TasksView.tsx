@@ -61,6 +61,9 @@ import TaskDetailPanel from '../components/TaskDetailPanel';
 import QuickTaskForm, { QUICK_TASK_DIALOG_CLASS } from '../components/QuickTaskForm';
 import TaskDateConflictDialog from '../components/TaskDateConflictDialog';
 import { findSameDayTasks } from '../lib/taskConflicts';
+import { reminderPatchForDeadline, reminderAtFromOffset, parseTaskDate } from '../lib/taskReminders';
+import { sortByManualOrder, pruneManualOrder, compareTasksByDue, compareTasksByTimeOfDayThenPriority, taskDueMs } from '../lib/taskSort';
+import { Bell as ReminderBellIcon } from 'lucide-react';
 import { deleteTaskCascade } from '../lib/deleteCascade';
 import { applyValuedTaskSideEffects } from '../lib/finance/taskValue';
 import { taskDeepLink } from '../lib/deepLinks';
@@ -402,6 +405,12 @@ const TasksView: React.FC = () => {
     const estimatedHoursRaw = formData.get('estimatedHours') as string;
     const valueRaw = formData.get('value') as string;
     const dependsOnRaw = formData.get('dependsOn') as string;
+    // "Më kujto" preset, minutes before the deadline (QuickTaskForm). Resolved
+    // here against the deadline the form actually sent; no deadline → no reminder.
+    const reminderOffsetRaw = formData.get('reminderOffsetMinutes') as string;
+    const reminderOffsetMinutes = reminderOffsetRaw !== null && reminderOffsetRaw !== '' && !isNaN(Number(reminderOffsetRaw))
+      ? Math.max(0, Number(reminderOffsetRaw)) : undefined;
+    const reminderAt = reminderOffsetMinutes !== undefined && endDate ? reminderAtFromOffset(endDate, reminderOffsetMinutes) : undefined;
 
     let dependsOn: string[] = [];
     try { dependsOn = dependsOnRaw ? JSON.parse(dependsOnRaw) : []; } catch { dependsOn = []; }
@@ -480,6 +489,8 @@ const TasksView: React.FC = () => {
         ? (() => { const [y, mo, d] = recurringEndDateRaw.split('-').map(Number); return new Date(y, mo - 1, d); })()
         : undefined,
       nextRecurringDate,
+      reminderAt,
+      reminderOffsetMinutes: reminderAt ? reminderOffsetMinutes : undefined,
       estimatedHours: estimatedHoursRaw ? (v => !isNaN(v) ? v : undefined)(parseFloat(estimatedHoursRaw)) : undefined,
       value: valueRaw ? (v => !isNaN(v) && v >= 0 ? v : undefined)(parseFloat(valueRaw)) : undefined,
       dependsOn: dependsOn.length > 0 ? dependsOn : undefined,
@@ -642,7 +653,9 @@ const TasksView: React.FC = () => {
     const oldIndex = full.indexOf(taskId);
     const newIndex = full.indexOf(overId);
     if (oldIndex === -1 || newIndex === -1 || oldIndex === newIndex) return;
-    const reordered = arrayMove(full, oldIndex, newIndex);
+    // Drop ids of deleted tasks — the saved order only ever grew, and it is
+    // team-shared state written to teamSettings on every drag.
+    const reordered = pruneManualOrder(arrayMove(full, oldIndex, newIndex), allTasks);
     setListOrder(reordered);
     localStorage.setItem('tasks_list_order', JSON.stringify(reordered));
     if (teamId) saveTeamSettings(teamId, { taskListOrder: reordered });
@@ -746,14 +759,10 @@ const TasksView: React.FC = () => {
 
   // Shared manual-order map (used by both the list view and board columns).
   const orderMap = useMemo(() => new Map(listOrder.map((id, i) => [id, i])), [listOrder]);
-  const sortByOrder = React.useCallback((arr: Task[]) => {
-    if (!listOrder.length) return arr;
-    return [...arr].sort((a, b) => {
-      const ai = orderMap.has(a.id) ? orderMap.get(a.id)! : 99999;
-      const bi = orderMap.has(b.id) ? orderMap.get(b.id)! : 99999;
-      return ai - bi;
-    });
-  }, [listOrder, orderMap]);
+  // Tasks created AFTER the last drag are not in the map: they stay on top in
+  // their `createdAt desc` order (src/lib/taskSort.ts). The old 99999 sentinel
+  // sank every new task below all ordered ones — onto the last page.
+  const sortByOrder = React.useCallback((arr: Task[]) => sortByManualOrder(arr, orderMap), [orderMap]);
 
   // Apply saved manual order for the list view
   const orderedTasks = useMemo(() => sortByOrder(tasks), [tasks, sortByOrder]);
@@ -810,19 +819,24 @@ const TasksView: React.FC = () => {
   };
 
   // ── Group by (Jira/Asana style) — purely client-side over the loaded tasks ──
+  // Groups are built from the WHOLE ordered list, then the page window is applied
+  // to the grouped sequence. Grouping only the current page made "Të vonuara"
+  // show the overdue tasks that happened to sit in that window, and the same
+  // group re-appear on page 2 with different members and a different count.
   const taskGroups = useMemo(() => {
     if (groupBy === 'none') return [];
     const now = new Date();
     const startOfToday = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const PRIORITY_LABEL: Record<string, string> = { urgent: 'Urgjente', high: 'I lartë', medium: 'Mesatar', low: 'I ulët' };
     const PRIORITY_ORDER = ['urgent', 'high', 'medium', 'low'];
-    const groups = new Map<string, { key: string; label: string; sort: number; tasks: Task[] }>();
+    const groups = new Map<string, { key: string; label: string; sort: number; tasks: Task[]; total: number }>();
     const add = (key: string, label: string, sort: number, task: Task) => {
       let g = groups.get(key);
-      if (!g) { g = { key, label, sort, tasks: [] }; groups.set(key, g); }
+      if (!g) { g = { key, label, sort, tasks: [], total: 0 }; groups.set(key, g); }
       g.tasks.push(task);
+      g.total++;
     };
-    for (const task of visibleTasks) {
+    for (const task of orderedTasks) {
       if (groupBy === 'assignee') {
         const uid = task.assignedToUserId || '';
         add(uid || '__none__', uid ? getUserName(uid) : 'Pa caktuar', uid ? 0 : 1, task);
@@ -834,18 +848,33 @@ const TasksView: React.FC = () => {
         const pid = task.projectId || '';
         add(pid || '__none__', pid ? (getProjectName(pid) || 'Projekt pa emër') : 'Pa projekt', pid ? 0 : 1, task);
       } else if (groupBy === 'dueDate') {
-        const raw = task.endDate ? new Date(task.endDate) : null;
-        if (!raw || isNaN(raw.getTime())) { add('z_none', 'Pa afat', 5, task); continue; }
+        // `endDate || dueDate` (legacy rows), through one normaliser. A COMPLETED
+        // task is its own bucket: a Done task dated last month used to fail the
+        // overdue branch and fall through to "Më vonë".
+        const dueMs = taskDueMs(task);
+        if (task.status === 'Done') { add('e_done', 'Përfunduara', 4, task); continue; }
+        if (dueMs === null) { add('z_none', 'Pa afat', 5, task); continue; }
+        const raw = new Date(dueMs);
         const day = new Date(raw.getFullYear(), raw.getMonth(), raw.getDate());
         const diff = Math.round((day.getTime() - startOfToday.getTime()) / 86400000);
-        if (day < startOfToday && task.status !== 'Done') add('a_overdue', 'Të vonuara', 0, task);
+        if (day < startOfToday) add('a_overdue', 'Të vonuara', 0, task);
         else if (diff === 0) add('b_today', 'Sot', 1, task);
         else if (diff > 0 && diff <= 7) add('c_week', 'Këtë javë', 2, task);
         else add('d_later', 'Më vonë', 3, task);
       }
     }
-    return Array.from(groups.values()).sort((a, b) => a.sort - b.sort || a.label.localeCompare(b.label));
-  }, [groupBy, visibleTasks, getUserName, getProjectName]);
+    const sorted = Array.from(groups.values()).sort((a, b) => a.sort - b.sort || a.label.localeCompare(b.label));
+    // "Sipas afatit" orders INSIDE each bucket by deadline; the other groupings
+    // keep the manual/createdAt order the flat list has.
+    if (groupBy === 'dueDate') for (const g of sorted) g.tasks.sort(compareTasksByDue);
+    // Page window over the grouped sequence; `total` keeps the real group size.
+    const flat: Task[] = [];
+    for (const g of sorted) flat.push(...g.tasks);
+    const window = new Set(flat.slice(page * PAGE_SIZE, page * PAGE_SIZE + PAGE_SIZE).map(t => t.id));
+    return sorted
+      .map(g => ({ ...g, tasks: g.tasks.filter(t => window.has(t.id)) }))
+      .filter(g => g.tasks.length > 0);
+  }, [groupBy, orderedTasks, page, getUserName, getProjectName]);
 
   // Single task row — shared by the flat (drag-sortable) list and the grouped view.
   // Bulk multi-select (Asana/Monday) — list view.
@@ -1092,6 +1121,9 @@ const TasksView: React.FC = () => {
             >
               {dateInfo.overdue && <AlertTriangle className="w-3 h-3" />}
               {dateInfo.text}
+              {parseTaskDate(task.reminderAt) && !task.reminderSentAt && task.status !== 'Done' && (
+                <ReminderBellIcon className="w-3 h-3 text-primary" aria-label="Ka kujtesë" />
+              )}
             </button>
           </PopoverTrigger>
           <PopoverContent className="w-auto p-0" align="end" onClick={(e) => e.stopPropagation()}>
@@ -1104,8 +1136,9 @@ const TasksView: React.FC = () => {
                 const cur = task.endDate ? new Date(task.endDate) : null;
                 nd.setHours(cur?.getHours() ?? 9, cur?.getMinutes() ?? 0, 0, 0);
                 // A moved deadline re-arms the due/overdue alerts (the cron
-                // skips flagged tasks, so a postponed task never alerted again).
-                await taskMutation.update(task.id, { endDate: nd, dueNotificationSent: false, overdueNotificationSent: false });
+                // skips flagged tasks, so a postponed task never alerted again)
+                // and carries a relative "Më kujto" reminder with it.
+                await taskMutation.update(task.id, { endDate: nd, dueNotificationSent: false, overdueNotificationSent: false, ...reminderPatchForDeadline(task, nd) });
               }}
             />
           </PopoverContent>
@@ -1453,7 +1486,9 @@ const TasksView: React.FC = () => {
                   <div className="sticky top-0 z-[1] flex items-center gap-2 px-4 py-1.5 bg-muted/60 backdrop-blur border-b">
                     <ChevronDown className="w-3 h-3 text-muted-foreground" />
                     <span className="text-xs font-semibold text-foreground">{group.label}</span>
-                    <span className="text-xs text-muted-foreground">{group.tasks.length}</span>
+                    <span className="text-xs text-muted-foreground" title={group.tasks.length < group.total ? `${group.tasks.length} në këtë faqe nga ${group.total} gjithsej` : undefined}>
+                      {group.tasks.length < group.total ? `${group.tasks.length}/${group.total}` : group.total}
+                    </span>
                   </div>
                   <div className="space-y-2 p-3">
                     {group.tasks.map(task => (
@@ -1842,7 +1877,9 @@ const CalendarView: React.FC<{
       if (cell === lo || cell === hi) return true;
       if ((hi - lo) / 86400000 <= SPAN_CAP_DAYS) return cell > lo && cell < hi;
       return false;
-    });
+    // Earliest time-of-day first, then priority — the two visible per cell used
+    // to be whichever were created last (or last dragged), not the day's agenda.
+    }).sort(compareTasksByTimeOfDayThenPriority);
     const isToday = date.toDateString() === todayStr;
     // Projected recurring occurrences for this day (not real docs yet).
     const dayProjections = projectionsByDay.get(day) || [];

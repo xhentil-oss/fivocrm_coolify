@@ -680,6 +680,37 @@ Full audit: `workspace/CHAT_NOTIFICATIONS_AUDIT_2026_08.md`.
   RECIPIENT write a notification, so the sender cannot clean up after deleting a
   message — the reader's ChatView dismisses rows whose `messageId` is deleted.
 
+### Task reminders ("Më kujto") & task ordering
+
+- **One reminder per task, three fields that must agree**: `reminderAt` (absolute
+  instant, what the cron queries), `reminderOffsetMinutes` (set when chosen
+  relative to the deadline — "1 orë para"), `reminderSentAt` (delivery mark).
+  Every write goes through `setReminderPatch()` / `reminderPatchForDeadline()` in
+  `src/lib/taskReminders.ts` (unit-tested); clear with explicit `null`, never
+  `undefined` (`removeUndefined()` would strip it and clear nothing).
+- **A moved deadline carries a RELATIVE reminder with it and re-arms it** (Asana);
+  a custom absolute one stays put. Every path that writes `endDate`
+  (TaskDetailPanel's four handlers, TasksView's inline calendar) spreads
+  `reminderPatchForDeadline`. `buildNextRecurringTask` and its cron mirror carry
+  the offset into the next occurrence, never the absolute date.
+- **Delivery is `task-reminders`** in `api/cron/run.ts`, every 5 min from the VPS
+  (`vps/server.ts`), NOT in `run-all` — "15:00" is a wall-clock promise. It reads
+  only `reminderAt ∈ [now − 48h, now]` (same-field range, no index) and goes
+  through `notifyUser()` → bell + push + email, type `task_reminder`.
+  `taskReminderBlockReason()` is mirrored there — keep the two in sync.
+- **Every task list sorts through `src/lib/taskSort.ts`** (unit-tested): one date
+  normaliser (`taskDateMs`: Date | Timestamp | ISO | number → ms | null) and total
+  orders that end in the document id. Never `a.endDate - b.endDate`, never
+  `?.getTime()` on a raw field, missing dates go LAST. Manual drag order puts
+  UNKNOWN ids (tasks created after the last drag) FIRST — a 99999 sentinel sank
+  every new task onto the last page. `useCollection`'s client-side `orderBy`
+  normalises mixed Date/string values and honours `limit` on the business-scoped
+  path.
+- Grouping in TasksView is built from the WHOLE ordered list and paginated
+  afterwards (`group.total` vs on-page count); a Done task is its own bucket under
+  "Sipas afatit". Project board columns have no persisted order and sort
+  urgent-first then earliest deadline; a same-column drag is not persisted.
+
 ### Roles & Permissions
 - Roles: `Admin`, `Manager`, `Sales`, `SalesAgent`, `Member`, `Viewer`
 - Permission checks via `usePermissions()` hook and `<PermissionGate>` component.

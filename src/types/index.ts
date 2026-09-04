@@ -789,6 +789,16 @@ export interface Task {
   nextCycleCreated?: boolean;
   dueNotificationSent?: boolean;
   overdueNotificationSent?: boolean;
+  /**
+   * "Më kujto" (Asana/Salesforce-style reminder) — see src/lib/taskReminders.ts.
+   * `reminderAt` is the absolute instant the cron (`task-reminders`) notifies the
+   * assignee; `reminderOffsetMinutes` is set when it was chosen relative to the
+   * deadline ("1 orë para") so a moved deadline carries the reminder with it;
+   * `reminderSentAt` is the delivery idempotency mark. Cleared with explicit null.
+   */
+  reminderAt?: Date | null;
+  reminderOffsetMinutes?: number | null;
+  reminderSentAt?: Date | null;
   attachments?: string;
   collaboratorIds?: string[];
   createdAt: Date;

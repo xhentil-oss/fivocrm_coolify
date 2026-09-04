@@ -396,16 +396,38 @@ export function useCollection<T = DocumentData>(
         if (options?.orderBy) {
           const field = options.orderBy.field;
           const dir = options.orderBy.direction || 'asc';
+          // Normalise BOTH sides to the same type before comparing. Legacy rows
+          // carry the same field as a Date on one doc and an ISO string (or a raw
+          // Timestamp) on another; `number < string` is false both ways, so those
+          // pairs compared as "equal" and kept whatever order the snapshot had.
+          const norm = (v: any): number | string => {
+            if (v instanceof Date) return v.getTime();
+            if (v && typeof v.toMillis === 'function') return v.toMillis();
+            if (typeof v === 'number') return v;
+            return String(v);
+          };
           items = [...items].sort((a, b) => {
             const va = (a as any)[field]; const vb = (b as any)[field];
             if (va == null && vb == null) return 0;
             if (va == null) return 1; if (vb == null) return -1;
-            const ta = va instanceof Date ? va.getTime() : typeof va === 'string' ? va : Number(va);
-            const tb = vb instanceof Date ? vb.getTime() : typeof vb === 'string' ? vb : Number(vb);
+            let ta = norm(va), tb = norm(vb);
+            if (typeof ta !== typeof tb) {
+              // One is a time, the other a string: try the string as a date.
+              const pa = typeof ta === 'string' ? Date.parse(ta) : ta;
+              const pb = typeof tb === 'string' ? Date.parse(tb) : tb;
+              if (Number.isFinite(pa) && Number.isFinite(pb)) { ta = pa; tb = pb; }
+              else { ta = String(ta); tb = String(tb); }
+            }
             if (ta < tb) return dir === 'asc' ? -1 : 1;
             if (ta > tb) return dir === 'asc' ? 1 : -1;
-            return 0;
+            // Deterministic tie-breaker so equal keys never reshuffle between snapshots.
+            return String((a as any).id || '').localeCompare(String((b as any).id || ''));
           });
+        }
+        // `limit` is not pushed to the server on this (business-scoped) path, so
+        // honour it here — after the where/order shaping, exactly as Firestore would.
+        if (options?.limit && options.limit > 0 && items.length > options.limit) {
+          items = items.slice(0, options.limit);
         }
       }
       return items;

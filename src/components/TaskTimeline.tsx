@@ -1,5 +1,6 @@
 import React, { useMemo, useState, useEffect } from 'react';
 import type { Task } from '../types';
+import { taskDateMs, compareTaskIds } from '../lib/taskSort';
 
 // Lightweight Timeline / Gantt view (Jira/Monday/Asana Timeline-inspired).
 // Renders each task as a horizontal bar from startDate→endDate across a day grid.
@@ -42,13 +43,16 @@ const TaskTimeline: React.FC<Props> = ({ tasks, onTaskClick }) => {
   const labelW = useLabelWidth();
   const dated = useMemo(
     () => tasks
-      .filter(t => t.startDate || t.endDate)
       .map(t => {
-        const s = t.startDate ? new Date(t.startDate) : new Date(t.endDate!);
-        const e = t.endDate ? new Date(t.endDate) : new Date(t.startDate!);
+        // Normalise through taskDateMs: `new Date(timestampObject)` is Invalid
+        // Date, whose NaN getTime() made the comparator (and the grid range) undefined.
+        const sMs = taskDateMs(t.startDate), eMs = taskDateMs(t.endDate);
+        if (sMs === null && eMs === null) return null;
+        const s = new Date(sMs ?? eMs!), e = new Date(eMs ?? sMs!);
         return { task: t, start: s <= e ? s : e, end: e >= s ? e : s };
       })
-      .sort((a, b) => a.start.getTime() - b.start.getTime()),
+      .filter((d): d is { task: Task; start: Date; end: Date } => d !== null)
+      .sort((a, b) => a.start.getTime() - b.start.getTime() || a.end.getTime() - b.end.getTime() || compareTaskIds(a.task, b.task)),
     [tasks]
   );
 
