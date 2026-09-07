@@ -19,8 +19,8 @@ Rules:
 <!-- Add tasks here only when there are real next steps. -->
 
 <todo>
-Deploy the CRM automation rules (CRM → Automatizime)
-`firebase deploy --only firestore:rules,firestore:indexes` (crmAutomationRules/crmAutomationRuns + the run-history index), deploy the api, restart the VPS so the hourly `crm-automations` tick starts, then arm the first recipes in the app. Checklist + laws: workspace/CRM_AUTOMATION.md.
+Restart the VPS so the hourly `crm-automations` tick starts
+Rules + indexes deployed and code pushed on 2026-09-07 (Vercel deploys from main). Left: `pm2 restart` on the VPS (vps/server.ts schedules the job), then CRM → Automatizime → Receta → arm the first rules. Checklist: workspace/CRM_AUTOMATION.md.
 </todo>
 
 <todo>
