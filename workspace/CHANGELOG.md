@@ -20,6 +20,10 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 <changelog>
 <!-- NEXT_ENTRY_HERE -->
 
+### [2026-09-07] — Customers: ranking by revenue
+- `src/views/CustomersView.tsx`: sort "Sipas të ardhurave" (cash collected desc → billed → name, rank #N shown), column "Të ardhura" (arkëtuar / faturuar / hapur, header click toggles the sort), CSV gains the three ALL columns
+- Figures come from `getInvoiceCollectedAll / getInvoiceTotalAll / getInvoiceOutstandingAll` (financialAnalytics) so Draft/Cancelled count 0 and partials count what was banked; column hidden when the invoices read is denied
+
 ### [2026-09-07] — CRM automation rules engine (leads + customers)
 - `src/lib/crm/automationRules.ts` (+36 tests) = pure engine: 8 triggers, 13 condition fields, 7 actions, named block reasons, deterministic fire keys, `enrollExisting`, cooldown = window; `api/_crmAutomationEngine.ts` is a byte-identical copy guarded by the test
 - `api/_crmAutomationJob.ts` (`?job=crm-automations`, hourly in `vps/server.ts`, not run-all): per-tenant facts (leads/customers/invoices/projects), `crmAutomationRuns` created BEFORE actions (idempotency + audit), rule paused on error, manual run scoped to caller's tenant

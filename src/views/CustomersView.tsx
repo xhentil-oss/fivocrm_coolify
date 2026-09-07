@@ -2,7 +2,8 @@
 import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
-import { phoneKeyDown } from '../lib/utils';
+import { phoneKeyDown, formatCurrency } from '../lib/utils';
+import { getInvoiceCollectedAll, getInvoiceTotalAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
 import { findContactMatch, matchFieldLabel } from '../lib/contactIdentity';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -36,6 +37,7 @@ import {
   Download,
   Merge,
   Copy,
+  TrendingUp,
 } from 'lucide-react';
 import { Card, CardContent } from '../components/ui/card';
 import { SkeletonLoader } from '../components/PageSkeleton';
@@ -59,7 +61,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { useToast } from '../hooks/use-toast';
 import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
-import type { Customer, ClientPortalAccess, ClientRequest, Team, Lead, TeamMember } from '../types';
+import type { Customer, ClientPortalAccess, ClientRequest, Team, Lead, TeamMember, Invoice } from '../types';
 
 const STATUS_OPTIONS = [
   { value: 'Active', label: 'Aktiv', color: 'bg-success text-success-foreground', icon: CheckCircle2 },
@@ -91,7 +93,7 @@ const CustomersView: React.FC = () => {
   const [industryFilter, setIndustryFilter] = useState<string>('__all__');
   const [creditLimitFilter, setCreditLimitFilter] = useState<string>('__all__');
   const [tagFilter, setTagFilter] = useState<string>('__all__');
-  const [sortBy, setSortBy] = useState<'recent' | 'name'>('recent');
+  const [sortBy, setSortBy] = useState<'recent' | 'name' | 'revenue'>('recent');
   const [showFilters, setShowFilters] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // Manual duplicate merge (Admin/Manager only — the server re-checks the role).
@@ -120,6 +122,30 @@ const CustomersView: React.FC = () => {
   });
   // Role-based filtering: Member/Viewer see only customers they created
   const customers = useFilteredByOwner(rawCustomers);
+
+  // Revenue per customer, for the "Sipas të ardhurave" ranking and the column.
+  // Cash actually collected is the ranking key (what the customer BROUGHT IN);
+  // billed and outstanding are shown next to it. Same helpers as Financat, so a
+  // cancelled invoice counts for nothing and a partial payment counts what was
+  // banked. Amounts are normalised to ALL via toAll() inside the helpers.
+  const { data: invoices, error: invoicesError } = useCollection<Invoice>('invoices', { skipTeamFilter: true });
+  const revenueByCustomer = useMemo(() => {
+    const map = new Map<string, { collected: number; billed: number; outstanding: number; invoices: number }>();
+    for (const inv of invoices || []) {
+      const cid = (inv as any).customerId as string | undefined;
+      if (!cid || inv.status === 'Draft' || inv.status === 'Cancelled') continue;
+      const row = map.get(cid) || { collected: 0, billed: 0, outstanding: 0, invoices: 0 };
+      row.collected += getInvoiceCollectedAll(inv);
+      row.billed += getInvoiceTotalAll(inv);
+      row.outstanding += getInvoiceOutstandingAll(inv);
+      row.invoices += 1;
+      map.set(cid, row);
+    }
+    return map;
+  }, [invoices]);
+  const revenueOf = (id: string) => revenueByCustomer.get(id) || { collected: 0, billed: 0, outstanding: 0, invoices: 0 };
+  const showRevenue = !invoicesError;
+  const fmtAll = (n: number) => formatCurrency(Math.round(n), 'ALL');
   const { data: leads } = useCollection<Lead>('leads', { skipTeamFilter: true });
   // `leads` is read with skipTeamFilter, and a super-admin's read bypasses the
   // per-business rule — so scope to the active business before matching a lead
@@ -239,12 +265,22 @@ const CustomersView: React.FC = () => {
       }
       return true;
     });
-    // Sort: newest first (createdAt desc) or alphabetically by name.
+    // Sort: newest first (createdAt desc), alphabetically, or by revenue brought in
+    // (cash collected desc, then billed desc, then name — a total order).
     const ms = (d: any) => { const x = d?.toDate ? d.toDate() : d; const t = x instanceof Date ? x.getTime() : Date.parse(x); return isNaN(t) ? 0 : t; };
-    return [...list].sort((a, b) => sortBy === 'name'
-      ? (a.name || '').localeCompare(b.name || '')
-      : ms((b as any).createdAt) - ms((a as any).createdAt));
-  }, [customers, searchQuery, statusFilter, industryFilter, creditLimitFilter, tagFilter, sortBy]);
+    return [...list].sort((a, b) => {
+      if (sortBy === 'name') return (a.name || '').localeCompare(b.name || '');
+      if (sortBy === 'revenue') {
+        const ra = revenueByCustomer.get(a.id), rb = revenueByCustomer.get(b.id);
+        const dc = (rb?.collected || 0) - (ra?.collected || 0);
+        if (dc) return dc;
+        const dBilled = (rb?.billed || 0) - (ra?.billed || 0);
+        if (dBilled) return dBilled;
+        return (a.name || '').localeCompare(b.name || '');
+      }
+      return ms((b as any).createdAt) - ms((a as any).createdAt);
+    });
+  }, [customers, searchQuery, statusFilter, industryFilter, creditLimitFilter, tagFilter, sortBy, revenueByCustomer]);
 
   // Cap rendered rows so large customer lists don't mount hundreds of DOM nodes
   // at once (mobile jank). "Load more" reveals the rest of the filtered set.
@@ -285,8 +321,11 @@ const CustomersView: React.FC = () => {
     const rows = filteredCustomers;
     if (!rows.length) { toast({ title: 'Asnjë klient për të eksportuar' }); return; }
     const esc = (v: any) => { const s = String(v ?? ''); return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s; };
-    const headers = ['Emri', 'Email', 'Telefoni', 'Kompania', 'Industria', 'Statusi', 'Etiketat', 'NIPT'];
-    const lines = rows.map((c: any) => [c.name, c.email, c.phone, c.company, c.industry, c.status || 'Active', parseTags(c.tags).join('; '), c.taxId].map(esc).join(','));
+    const headers = ['Emri', 'Email', 'Telefoni', 'Kompania', 'Industria', 'Statusi', 'Etiketat', 'NIPT', 'Arkëtuar (ALL)', 'Faturuar (ALL)', 'Pa arkëtuar (ALL)'];
+    const lines = rows.map((c: any) => {
+      const r = revenueOf(c.id);
+      return [c.name, c.email, c.phone, c.company, c.industry, c.status || 'Active', parseTags(c.tags).join('; '), c.taxId, Math.round(r.collected), Math.round(r.billed), Math.round(r.outstanding)].map(esc).join(',');
+    });
     const csv = '﻿' + [headers.join(','), ...lines].join('\n'); // BOM for Excel UTF-8
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
@@ -812,10 +851,11 @@ const CustomersView: React.FC = () => {
                   )}
                 </Button>
                 <Select value={sortBy} onValueChange={(v) => setSortBy(v as any)}>
-                  <SelectTrigger className="w-[150px]"><SelectValue /></SelectTrigger>
+                  <SelectTrigger className="w-[170px]"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="recent">Më të rejat</SelectItem>
                     <SelectItem value="name">Sipas emrit (A–Z)</SelectItem>
+                    <SelectItem value="revenue">Sipas të ardhurave</SelectItem>
                   </SelectContent>
                 </Select>
                 <Button variant="outline" onClick={exportCsv} className="gap-2" title="Eksporto listën e filtruar në CSV">
@@ -926,11 +966,12 @@ const CustomersView: React.FC = () => {
                 </CardContent>
               </Card>
             ) : (
-              visibleCustomers.map((customer) => {
+              visibleCustomers.map((customer, idx) => {
                 const cust = customer as any;
                 const statusOpt = STATUS_OPTIONS.find(s => s.value === (cust.status || 'Active'));
                 const StatusIcon = statusOpt?.icon || CheckCircle2;
                 const portalAcc = getPortalAccessFor(customer.id);
+                const rev = revenueOf(customer.id);
                 return (
                   <Card key={customer.id} className={`p-4 space-y-3 ${selectedIds.has(customer.id) ? 'ring-1 ring-primary' : ''}`}>
                     <div className="flex items-start justify-between">
@@ -939,8 +980,18 @@ const CustomersView: React.FC = () => {
                           <Checkbox className="mt-0.5 flex-shrink-0" checked={selectedIds.has(customer.id)} onCheckedChange={() => toggleSelect(customer.id)} aria-label="Përzgjidh klientin" />
                         )}
                         <div className="flex-1 min-w-0">
-                          <p className="font-medium truncate">{customer.name}</p>
+                          <p className="font-medium truncate">
+                            {sortBy === 'revenue' && <span className="text-muted-foreground tabular-nums mr-1.5">#{idx + 1}</span>}
+                            {customer.name}
+                          </p>
                           {customer.company && <p className="text-sm text-muted-foreground">{customer.company}</p>}
+                          {showRevenue && (rev.invoices > 0 || sortBy === 'revenue') && (
+                            <p className="text-xs mt-0.5 flex items-center gap-1 tabular-nums">
+                              <TrendingUp className="w-3 h-3 text-emerald-600" />
+                              <span className="font-medium text-emerald-700 dark:text-emerald-400">{fmtAll(rev.collected)}</span>
+                              <span className="text-muted-foreground">arkëtuar{rev.outstanding > 0 ? ` · ${fmtAll(rev.outstanding)} pa arkëtuar` : ''}</span>
+                            </p>
+                          )}
                         </div>
                       </div>
                       <div className="flex items-center gap-2 shrink-0 ml-2">
@@ -1013,6 +1064,13 @@ const CustomersView: React.FC = () => {
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-sm font-medium">Klienti</th>
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-sm font-medium hidden md:table-cell">Kontakti</th>
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-sm font-medium hidden lg:table-cell">Info Kompanie</th>
+                    {showRevenue && (
+                      <th className="px-3 sm:px-6 py-3 sm:py-4 text-right text-sm font-medium">
+                        <button type="button" className={`inline-flex items-center gap-1 hover:text-foreground ${sortBy === 'revenue' ? 'text-primary' : ''}`} onClick={() => setSortBy(sortBy === 'revenue' ? 'recent' : 'revenue')} title="Rendit sipas të ardhurave">
+                          Të ardhura <TrendingUp className="w-3.5 h-3.5" />
+                        </button>
+                      </th>
+                    )}
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-sm font-medium">Statusi</th>
                     <th className="px-3 sm:px-6 py-3 sm:py-4 text-left text-sm font-medium">Veprime</th>
                   </tr>
@@ -1020,7 +1078,7 @@ const CustomersView: React.FC = () => {
                 <tbody className="divide-y divide-border">
                   {filteredCustomers.length === 0 ? (
                     <tr>
-                      <td colSpan={6} className="px-6 py-12 text-center">
+                      <td colSpan={7} className="px-6 py-12 text-center">
                         <Users className="w-12 h-12 mx-auto text-muted-foreground/50 mb-3" />
                         <p className="text-muted-foreground">
                           {hasActiveFilters ? 'Nuk u gjet asnje klient me keto filtra' : 'Nuk ka kliente ende'}
@@ -1031,11 +1089,12 @@ const CustomersView: React.FC = () => {
                       </td>
                     </tr>
                   ) : (
-                    visibleCustomers.map((customer) => {
+                    visibleCustomers.map((customer, idx) => {
                       const cust = customer as any;
                       const statusOpt = STATUS_OPTIONS.find(s => s.value === (cust.status || 'Active'));
                       const StatusIcon = statusOpt?.icon || CheckCircle2;
                       const portalAcc = getPortalAccessFor(customer.id);
+                      const rev = revenueOf(customer.id);
 
                       return (
                         <tr key={customer.id} className={`hover:bg-muted/50 transition-colors ${selectedIds.has(customer.id) ? 'bg-primary/5' : ''}`}>
@@ -1046,7 +1105,10 @@ const CustomersView: React.FC = () => {
                           )}
                           <td className="px-3 sm:px-6 py-3 sm:py-4">
                             <div className="space-y-1">
-                              <p className="font-medium truncate max-w-[120px] sm:max-w-none">{customer.name}</p>
+                              <p className="font-medium truncate max-w-[120px] sm:max-w-none">
+                                {sortBy === 'revenue' && <span className="text-muted-foreground tabular-nums mr-1.5">#{idx + 1}</span>}
+                                {customer.name}
+                              </p>
                               {cust.taxId && <p className="text-sm text-muted-foreground hidden sm:block">NIPT: {cust.taxId}</p>}
                               {cust.contactPerson && <p className="text-sm text-muted-foreground hidden sm:block">Kontakt: {cust.contactPerson}</p>}
                               <TaskLabels labels={parseTags(cust.tags)} max={4} />
@@ -1073,6 +1135,21 @@ const CustomersView: React.FC = () => {
                               )}
                             </div>
                           </td>
+                          {showRevenue && (
+                            <td className="px-3 sm:px-6 py-3 sm:py-4 text-right tabular-nums">
+                              {rev.invoices > 0 ? (
+                                <div className="space-y-0.5">
+                                  <p className="font-medium text-emerald-700 dark:text-emerald-400">{fmtAll(rev.collected)}</p>
+                                  <p className="text-xs text-muted-foreground">
+                                    {fmtAll(rev.billed)} faturuar
+                                    {rev.outstanding > 0 && <span className="text-amber-600 dark:text-amber-400"> · {fmtAll(rev.outstanding)} hapur</span>}
+                                  </p>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </td>
+                          )}
                           <td className="px-3 sm:px-6 py-3 sm:py-4">
                             <div className="flex flex-col items-start gap-1">
                               <Badge className={`${statusOpt?.color || 'bg-gray-100 text-gray-800'} gap-1`}>
