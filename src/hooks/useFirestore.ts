@@ -145,6 +145,7 @@ const teamScopedCollections = new Set([
   'roleTemplates', 'standups', 'quotes', 'contracts', 'dailyFocus', 'productivitySettings', 'weeklyReviews',
   'chatSnippets', 'whatsappAccounts', 'whatsappThreads', 'waTemplates', 'waBroadcasts',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments',
+  'crmAutomationRules', 'crmAutomationRuns',
   'socialAccounts', 'socialSnapshots',
   'gmbAccounts', 'gmbReviews', 'gmbPosts',
   // Reporting & accountability module. Portal reads (published client reports and
@@ -185,6 +186,7 @@ const businessIsolatedAlways = new Set<string>([
   'taskCollaborators', 'milestones', 'projectComments', 'clientRequests', 'serviceInquiries',
   'timeEntries', 'standups', 'dailyReports', 'dailyFocus', 'productivitySettings', 'weeklyReviews', 'customIndustries', 'activities',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments',
+  'crmAutomationRules', 'crmAutomationRuns',
   'socialAccounts', 'socialSnapshots',
   'gmbAccounts', 'gmbReviews', 'gmbPosts',
   // Reporting module. Reports carry client-facing AND internal content plus employee

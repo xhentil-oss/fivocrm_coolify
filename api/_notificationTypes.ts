@@ -52,6 +52,7 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   new_client: 'projects',
   lead_follow_up: 'projects',
   lead_cadence_step: 'projects',
+  crm_automation: 'projects',
   guest_project_invited: 'projects',
   guest_task_new: 'projects',
   guest_task_update: 'projects',

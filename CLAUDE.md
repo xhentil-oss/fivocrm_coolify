@@ -82,6 +82,7 @@
 | `reportComments` | Report discussion (`internal` = the client boundary) |
 | `contactMerges` | Duplicate-merge archive (full snapshot of the absorbed contact; read-only) |
 | `dailyReportMisses` | Who did not file a daily report, per tenant per day (cron-written, `write: if false`) |
+| `crmAutomationRules` / `crmAutomationRuns` | CRM automation rules (trigger → conditions → actions) + one doc per firing (idempotency + audit, `write: if false`) |
 | `reportTemplates` / `reportSchedules` / `reportKpis` / `reportMetrics` | Reporting config + metric values |
 | `clientHealthScores` / `employeeReportScores` | Health + accountability rollups |
 
@@ -455,6 +456,38 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
   jobs would message the same lead days apart. The two features coexist — the old
   one is a single team-wide rule, these are many per-service ones.
 
+### CRM automation rules (leads + customers: trigger → conditions → actions)
+
+- **`src/lib/crm/automationRules.ts` is the engine** (pure, 36 tests) and
+  `api/_crmAutomationEngine.ts` is a **byte-identical copy** — the test reads both
+  files and fails on any difference, so "keeping them in sync" means copying the
+  file. The cron (`api/_crmAutomationJob.ts`, `?job=crm-automations`, hourly from
+  `vps/server.ts`, NOT in `run-all`) only fetches facts and executes actions; it
+  never decides on its own whether something fires. Runbook:
+  `workspace/CRM_AUTOMATION.md`.
+- **Every non-firing is a named `AutomationBlockReason`** (`terminal-status`,
+  `not-due`, `predates-rule`, `already-fired`, `cooldown`, `condition-failed`,
+  `run-cap`), counted into `lastRunBlocked` and shown on the rule card. Never add a
+  silent `continue` to the job loop.
+- **The run doc is the idempotency guarantee**:
+  `crmAutomationRuns/{ruleId}_{entityId}_{fireKey}` via `create()` BEFORE actions
+  run; `ALREADY_EXISTS` = skip. The collection is `write: if false` (a client
+  delete would re-arm an occurrence, a create would silence it). Fire keys:
+  `created`, `stage:X`, `inactive:<day>`, `unassigned:<hour>`, `no-response`,
+  `invoice:<id>` (one per overdue invoice).
+- **The window is the cooldown** (same law as WA dormancy) and **nothing is
+  retroactive unless `enrollExisting`** — `predates-rule` blocks records born (or,
+  for `lead_stage`, last changed) before the rule existed. Recipes ship
+  `status: 'paused'`, `enrollExisting: false`.
+- Reads are per tenant and only for tenants with an active rule (invoices /
+  projects only when a trigger or condition needs them); suspended tenants skipped;
+  manual runs scoped to the caller's `bid`. A thrown rule is PAUSED with `error`;
+  a failed action is recorded on the run doc, never thrown.
+- Adding a trigger/condition/action? → the engine's union + `*_META` table +
+  `validateRule` + (actions) `executeAction` in the job + a test. The UI
+  (`AutomationRulesPanel`, CRM view toggle **Automatizime**) renders from the META
+  tables, so it needs no change for a new condition field.
+
 ### Daily staff report (mandatory, 16:50)
 
 - **One form, two mounts.** `DailyReportForm` is the ONLY place the daily questions
@@ -642,6 +675,29 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
 - Cron reads over `notifications` must be scoped and capped (`businessId` +
   `limit`). Index requirements live in `firestore.indexes.json`; the retention sweep
   needs `(isRead, createdAt)` and without it nothing was ever purged.
+
+### Email sender identity (From / Reply-To)
+
+- **Every From / Reply-To header goes through `api/_emailIdentity.ts`**
+  (`safeSenderName`, `safeSenderAddress`, `senderHeader`), mirrored in
+  `src/lib/emailIdentity.ts` (Settings + campaign form preview the exact From the
+  recipient will see; `emailIdentity.test.ts` fails the run if the two drift).
+  Gmail shows **"This message might be dangerous — the sender's email address uses
+  abnormal characters"** for HTML entities left by `escapeHtml` (`&#x27;`), emoji or
+  symbols (an en dash counts), invisible/format characters, mixed scripts, an `@`
+  inside the display name, or a sender ADDRESS that is not a plain ASCII mailbox (an
+  env value pasted with its quotes, a `Name <addr>` string, trailing whitespace).
+  One flagged mail and every invoice, invite and campaign from that sender is red.
+- A display name keeps Latin letters (ë, ç included), digits, space and a small
+  punctuation set; an empty result falls back to `FivoCRM`, never to `""`. An
+  address that fails validation is `undefined` so the caller falls through to the
+  next candidate (`emailFromEmail` → `MARKETING_FROM_EMAIL` → SMTP user). In
+  `_mailer.ts` a tenant SMTP LOGIN is passed raw (it need not be a mailbox); the
+  platform `SMTP_USER` is a mailbox and is read through `safeSenderAddress()`
+  everywhere, so a value pasted with quotes still logs in AND still sends.
+- Never `escapeHtml` a header value and never hand-write `"${name}" <${addr}>` —
+  use `senderHeader()` or nodemailer's `{ name, address }` form. Adding a new
+  sender? → read `SMTP_USER` through `safeSenderAddress()` like the others.
 
 ### Chat notifications (the three surfaces + presence)
 

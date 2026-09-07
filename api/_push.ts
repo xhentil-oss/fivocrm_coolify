@@ -27,6 +27,7 @@
  *     clients that have not re-registered yet, and is pruned when it goes stale.
  */
 
+import { safeSenderAddress } from './_emailIdentity.js';
 import admin, { adminDb as db, adminMessaging, adminAuth } from './_firebaseAdmin.js';
 import nodemailer from 'nodemailer';
 import { isTypeMutedByPrefs, NOTIFICATION_TYPE_CATEGORY } from './_notificationTypes.js';
@@ -297,7 +298,7 @@ export async function sendPushToUser(userId: string, input: PushInput): Promise<
 // ── Email ─────────────────────────────────────────────────────────────────────
 
 export function makeTransporter() {
-  const smtpUser = process.env.SMTP_USER;
+  const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const smtpPass = process.env.SMTP_PASS;
   if (!smtpUser || !smtpPass) return null;
   return nodemailer.createTransport({
@@ -366,7 +367,7 @@ export async function sendNotificationEmail(
   if (isSilenced(prefs, input.type)) return 'silenced';
 
   const transporter = makeTransporter();
-  const smtpUser = process.env.SMTP_USER;
+  const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   if (!transporter || !smtpUser) return 'smtp-not-configured';
 
   let email: string | undefined;

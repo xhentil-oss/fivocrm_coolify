@@ -85,6 +85,8 @@ export const NOTIFICATION_TYPES = {
   new_client:               { category: 'projects', priority: 'success',  groupLabel: 'klientë të rinj' },
   lead_follow_up:           { category: 'projects', priority: 'warning',  groupLabel: 'rikontaktime lead' },
   lead_cadence_step:        { category: 'projects', priority: 'warning',  groupLabel: 'hapa ndjekjeje' },
+  // Fired by a CRM automation rule (src/lib/crm/automationRules.ts → cron `crm-automations`).
+  crm_automation:           { category: 'projects', priority: 'info',     groupLabel: 'automatizime CRM' },
   guest_project_invited:    { category: 'projects', priority: 'info' },
   guest_task_new:           { category: 'projects', priority: 'neutral' },
   guest_task_update:        { category: 'projects', priority: 'neutral' },

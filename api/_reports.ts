@@ -1,3 +1,4 @@
+import { safeSenderAddress, senderHeader } from './_emailIdentity.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import admin, { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 import { writeAudit } from './_audit.js';
@@ -411,6 +412,8 @@ async function handleSendEmail(args: {
 
   const transporter = makeTransporter();
   if (!transporter) return res.status(503).json({ error: 'SMTP is not configured' });
+  const fromAddress = safeSenderAddress(process.env.SMTP_USER);
+  if (!fromAddress) return res.status(503).json({ error: 'SMTP_USER is not a valid sender address' });
 
   const config = await getTeamConfig(report.teamId || businessId).catch(() => ({} as any));
   const brand = (config as any)?.companyName || 'FivoCRM';
@@ -444,7 +447,7 @@ async function handleSendEmail(args: {
 
   try {
     await transporter.sendMail({
-      from: `"${brand}" <${process.env.SMTP_USER}>`,
+      from: senderHeader(brand, fromAddress),
       to: recipients.join(', '),
       ...(cc.length ? { cc: cc.join(', ') } : {}),
       subject,

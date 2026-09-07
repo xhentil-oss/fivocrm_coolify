@@ -9,6 +9,7 @@
 //   emailFromName, emailMailgunDomain, emailMailgunRegion, emailSmtp*.
 // Env fallback: RESEND_API_KEY | SENDGRID_API_KEY | MAILGUN_API_KEY+MAILGUN_DOMAIN
 //   | SMTP_HOST/PORT/USER/PASS, plus MARKETING_FROM_EMAIL / MARKETING_FROM_NAME.
+import { PLATFORM_SENDER_NAME, safeSenderAddress, safeSenderName, senderHeader } from './_emailIdentity.js';
 import nodemailer from 'nodemailer';
 
 export type MailProvider = 'resend' | 'sendgrid' | 'mailgun' | 'brevo' | 'smtp';
@@ -46,7 +47,7 @@ interface ResolvedMailer {
   fromName: string;
   mailgunDomain?: string;
   mailgunRegion: 'us' | 'eu';
-  smtp: { host: string; port: number; user?: string; pass?: string };
+  smtp: { host: string; port: number; user?: string; pass?: string; from: string };
 }
 
 const RESEND_BATCH_MAX = 100;
@@ -80,15 +81,21 @@ function resolveMailer(cfg: MailerConfig = {}, fromNameOverride?: string): Resol
     (provider === 'mailgun' ? process.env.MAILGUN_API_KEY : undefined) ||
     (provider === 'brevo' ? process.env.BREVO_API_KEY : undefined);
 
+  // Every candidate is VALIDATED: a tenant-typed address with a typo, or an env value
+  // pasted with its quotes, falls through to the next one instead of reaching a header.
+  // The SMTP LOGIN is whatever the host wants (it need not be a mailbox); the address
+  // that goes into the From header is the validated one.
+  const smtpLogin = cfg.emailSmtpUser || process.env.SMTP_USER;
+  const smtpFrom = safeSenderAddress(cfg.emailSmtpUser) || safeSenderAddress(process.env.SMTP_USER);
   const fromEmail =
-    cfg.emailFromEmail ||
-    process.env.MARKETING_FROM_EMAIL ||
-    cfg.emailSmtpUser ||
-    process.env.SMTP_USER ||
+    safeSenderAddress(cfg.emailFromEmail) ||
+    safeSenderAddress(process.env.MARKETING_FROM_EMAIL) ||
+    smtpFrom ||
     'onboarding@resend.dev';
 
-  const fromName = (fromNameOverride || cfg.emailFromName || process.env.MARKETING_FROM_NAME || 'FivoCRM')
-    .replace(/["<>]/g, '');
+  const fromName = safeSenderName(
+    fromNameOverride || cfg.emailFromName || process.env.MARKETING_FROM_NAME || PLATFORM_SENDER_NAME,
+  );
 
   return {
     provider,
@@ -100,14 +107,17 @@ function resolveMailer(cfg: MailerConfig = {}, fromNameOverride?: string): Resol
     smtp: {
       host: cfg.emailSmtpHost || process.env.SMTP_HOST || 'mail.fivoo.net',
       port: cfg.emailSmtpPort || Number(process.env.SMTP_PORT) || 465,
-      user: cfg.emailSmtpUser || process.env.SMTP_USER,
+      user: smtpLogin,
+      // Shared SMTP relays reject a From that is not the authenticated mailbox, so the
+      // login address wins over a tenant-typed fromEmail on this transport.
+      from: smtpFrom || fromEmail,
       pass: cfg.emailSmtpPass || process.env.SMTP_PASS,
     },
   };
 }
 
 function fromHeader(r: ResolvedMailer): string {
-  return `"${r.fromName}" <${r.fromEmail}>`;
+  return senderHeader(r.fromName, r.fromEmail);
 }
 
 // ── Resend (native batch) ────────────────────────────────────────────────────
@@ -230,7 +240,7 @@ async function sendViaSmtp(messages: MailMessage[], r: ResolvedMailer): Promise<
     secure: r.smtp.port === 465,
     auth: { user: r.smtp.user, pass: r.smtp.pass },
   });
-  const from = `"${r.fromName}" <${r.smtp.user}>`;
+  const from = senderHeader(r.fromName, r.smtp.from);
   const results: SendResult[] = [];
   // Sequential + tiny delay: shared SMTP can't handle a burst and we don't want
   // to trip rate limits that would also hurt invoices/invites.

@@ -1,3 +1,4 @@
+import { safeSenderAddress, senderHeader } from './_emailIdentity.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
 import { buildInvoiceEmail, publicInvoicePayUrl } from './_invoiceEmail.js';
@@ -131,7 +132,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     }
     notifyRateLimit.set(key, Date.now());
 
-    const smtpUser = process.env.SMTP_USER;
+    const smtpUser = safeSenderAddress(process.env.SMTP_USER);
     if (!smtpUser || !process.env.SMTP_PASS) {
       return res.status(500).json({ error: 'SMTP not configured' });
     }
@@ -164,7 +165,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'Missing invoiceId' });
   }
 
-  const smtpUser = process.env.SMTP_USER;
+  const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   if (!smtpUser || !process.env.SMTP_PASS) {
     return res.status(500).json({ error: 'SMTP not configured' });
   }
@@ -248,7 +249,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // unless the tenant configured its own verified sending address.
   const identity = await tenantEmailIdentity(invoice.teamId, invoice.businessId);
   await transporter.sendMail({
-    from: `"${identity.fromName}" <${identity.fromEmail || smtpUser}>`,
+    from: senderHeader(identity.fromName, identity.fromEmail || smtpUser),
     ...(identity.replyTo ? { replyTo: identity.replyTo } : {}),
     to: customer.email,
     subject,

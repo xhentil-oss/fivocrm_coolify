@@ -13,6 +13,7 @@ import { Checkbox } from '../components/ui/checkbox';
 import { PipelineBoard } from './crm/PipelineBoard';
 import { LeadFiltersBar } from './crm/LeadFiltersBar';
 import LeadAnalytics from './crm/LeadAnalytics';
+import AutomationRulesPanel from './crm/AutomationRulesPanel';
 import ExportButton from '../components/ExportButton';
 import LeadImportDialog from '../components/LeadImportDialog';
 import {
@@ -130,9 +131,9 @@ const CRMView: React.FC = () => {
   const [mergeOpen, setMergeOpen] = useState(false);
   const [mergePair, setMergePair] = useState<{ primaryId?: string; duplicateId?: string }>({});
   // View mode (table | pipeline | analytics | duplicates) — persisted
-  const [viewMode, setViewMode] = useState<'table' | 'pipeline' | 'analytics' | 'duplicates'>(() => {
+  const [viewMode, setViewMode] = useState<'table' | 'pipeline' | 'analytics' | 'duplicates' | 'automations'>(() => {
     if (typeof window === 'undefined') return 'table';
-    return (window.localStorage.getItem('crm_view_mode') as 'table' | 'pipeline' | 'analytics' | 'duplicates') || 'table';
+    return (window.localStorage.getItem('crm_view_mode') as 'table' | 'pipeline' | 'analytics' | 'duplicates' | 'automations') || 'table';
   });
   useEffect(() => {
     if (typeof window !== 'undefined') window.localStorage.setItem('crm_view_mode', viewMode);
@@ -1300,6 +1301,16 @@ const CRMView: React.FC = () => {
                 Dublikatë{duplicateLeadGroups.length > 0 ? ` (${duplicateLeadGroups.length})` : ''}
               </button>
             )}
+            {canMerge && (
+              <button
+                type="button"
+                onClick={() => setViewMode('automations')}
+                className={`px-3 py-1 text-xs font-medium rounded transition-colors ${viewMode === 'automations' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:text-foreground'}`}
+                aria-pressed={viewMode === 'automations'}
+              >
+                Automatizime
+              </button>
+            )}
           </div>
           <div className="hidden sm:block">
             <ExportButton
@@ -1523,6 +1534,14 @@ const CRMView: React.FC = () => {
               Bashko dy lead manualisht
             </Button>
           }
+        />
+      ) : viewMode === 'automations' && canMerge ? (
+        <AutomationRulesPanel
+          leads={scopedLeads as any}
+          customers={scopedCustomers as any}
+          teamMembers={scopedMembers as any}
+          getName={getName}
+          canManage={canMerge}
         />
       ) : viewMode === 'analytics' ? (
         <LeadAnalytics leads={leads || []} teamMembers={teamMembers || []} getName={getName} />

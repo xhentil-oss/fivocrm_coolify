@@ -1,3 +1,4 @@
+import { safeSenderAddress, senderHeader } from './_emailIdentity.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
 import admin, { adminDb as db } from './_firebaseAdmin.js';
@@ -64,7 +65,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (!leadId || typeof leadId !== 'string') return res.status(400).json({ error: 'Missing leadId' });
   if (!message || typeof message !== 'string' || !message.trim()) return res.status(400).json({ error: 'Missing message' });
 
-  const smtpUser = process.env.SMTP_USER;
+  const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   if (!smtpUser || !process.env.SMTP_PASS) return res.status(500).json({ error: 'SMTP not configured' });
 
   const leadDoc = await db.collection('leads').doc(leadId).get();
@@ -109,7 +110,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   });
 
   await transporter.sendMail({
-    from: `"${senderName} via FivoCRM" <${smtpUser}>`,
+    from: senderHeader(`${senderName} via FivoCRM`, smtpUser),
     to: lead.email,
     subject: emailSubject,
     html,

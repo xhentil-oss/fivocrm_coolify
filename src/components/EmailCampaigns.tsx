@@ -7,6 +7,7 @@ import { Send, Loader2, Clock, Mail, Zap, Users, Play, Pause, ShoppingCart, Plus
 import { Button } from './ui/button';
 import { Timestamp } from 'firebase/firestore';
 import type { EmailCampaign, EmailTemplate, Lead, Customer, TeamMember, Service } from '../types';
+import { safeSenderName, senderNameIssue } from '../lib/emailIdentity';
 
 // Normalize tags from either an array (leads) or a comma string (customers).
 function entityTags(e: { tags?: unknown }): string[] {
@@ -165,7 +166,7 @@ const EmailCampaigns: React.FC = () => {
   const buildManualPayload = (status: EmailCampaign['status']) => ({
     name: name.trim(),
     subject: subject.trim() || selectedTpl?.subject || '',
-    fromName: fromName.trim() || undefined,
+    fromName: fromName.trim() ? safeSenderName(fromName) : undefined,
     ...(templateId ? { templateId } : { htmlBody }),
     trigger: 'manual' as const,
     segment: {
@@ -193,7 +194,7 @@ const EmailCampaigns: React.FC = () => {
     return {
       name: name.trim(),
       subject: (first?.subject.trim() || templates?.find((t) => t.id === first?.templateId)?.subject || name.trim()),
-      fromName: fromName.trim() || undefined,
+      fromName: fromName.trim() ? safeSenderName(fromName) : undefined,
       ...(first?.templateId ? { templateId: first.templateId } : first?.htmlBody.trim() ? { htmlBody: first.htmlBody } : {}),
       trigger: 'purchase' as const,
       triggerServiceIds,
@@ -313,6 +314,11 @@ const EmailCampaigns: React.FC = () => {
             <label className="text-xs font-medium block mb-1">Emri i dërguesit</label>
             <input value={fromName} onChange={(e) => setFromName(e.target.value)} placeholder="p.sh. Ekipi FivoCRM"
               className="w-full px-3 py-2 bg-muted rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/40" />
+            {senderNameIssue(fromName) === 'altered' && (
+              <p className="text-[11px] text-amber-600 mt-1">
+                Emoji, simbolet dhe @ &lt; &gt; " hiqen (Gmail i shënon si "karaktere jonormale"). Dërgohet si: <strong>{safeSenderName(fromName)}</strong>
+              </p>
+            )}
           </div>
         </div>
 

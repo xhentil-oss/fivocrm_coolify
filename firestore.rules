@@ -1660,6 +1660,26 @@ service cloud.firestore {
       allow update, delete: if canManageBusinessDoc() || isTeamMember(resource.data.teamId);
     }
 
+    // ── CRM automation rules (CRM → Automatizime) ──
+    // A rule assigns, emails and creates tasks inside its tenant, so only the
+    // tenant's elevated roles may author one; every member may read them (the
+    // builder shows who set what up). The tenant key is immutable.
+    match /crmAutomationRules/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if isSuperAdmin()
+        || (isBusinessAdmin(request.resource.data.businessId) && tenantActive(request.resource.data.businessId));
+      allow update: if isSuperAdmin()
+        || (isBusinessAdmin(resource.data.businessId) && tenantActive(resource.data.businessId) && keepsBusinessId());
+      allow delete: if isSuperAdmin() || isBusinessAdmin(resource.data.businessId);
+    }
+    // One document per firing — the idempotency record AND the audit trail. Written
+    // ONLY by the cron (Admin SDK): a client that could write here could either
+    // re-fire an occurrence (delete) or silence one forever (create).
+    match /crmAutomationRuns/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow write: if false;
+    }
+
     match /campaignEnrollments/{docId} {
       // Per-recipient drip-sequence progress. Created + advanced by the cron
       // (Admin SDK); clients read their business's for reporting. teamId fallback

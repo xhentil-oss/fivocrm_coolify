@@ -1497,6 +1497,10 @@ export interface Deal {
 }
 
 // ── Lead activity / audit timeline ──────────────────────────────────────────
+// CRM automation rules (trigger → conditions → actions). The model lives with its
+// pure engine so the api mirror stays self-contained; re-exported here for consumers.
+export type { AutomationRule as CrmAutomationRule, AutomationRun as CrmAutomationRun } from '../lib/crm/automationRules';
+
 export type LeadActivityType =
   | 'created' | 'status_changed' | 'assigned' | 'note' | 'call' | 'email'
   | 'whatsapp' | 'meeting' | 'followup_scheduled' | 'converted' | 'lost' | 'field_updated';

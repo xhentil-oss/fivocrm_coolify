@@ -1335,3 +1335,43 @@ test('47. a colleague may react to a comment but not rewrite it', async () => {
     reactions: { '❤️': ['carol'] }, updatedAt: new Date(),
   }));
 });
+
+// ── CRM automation rules: authored by the tenant's elevated roles, fired only by the cron ──
+test('48a. only a tenant admin/manager authors an automation rule, and only inside their own tenant', async () => {
+  const ruleBody = {
+    businessId: MY_BIZ, teamId: MY_TEAM, name: 'Lead i ri → cakto', entity: 'lead', status: 'paused',
+    trigger: { kind: 'lead_created' }, conditions: [], actions: [{ type: 'assign', mode: 'round_robin' }],
+    enrollExisting: false, createdByUserId: 'alice',
+  };
+  const admin = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(setDoc(doc(admin, 'crmAutomationRules', 'ruleMine'), ruleBody));
+  const manager = staffOf('mia', MY_BIZ, MY_TEAM, ['manager']);
+  await assertSucceeds(setDoc(doc(manager, 'crmAutomationRules', 'ruleMine2'), { ...ruleBody, createdByUserId: 'mia' }));
+  // A plain member reads the rules but cannot author or arm one.
+  const member = staffOf('bob', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(getDoc(doc(member, 'crmAutomationRules', 'ruleMine')));
+  await assertFails(setDoc(doc(member, 'crmAutomationRules', 'ruleBob'), { ...ruleBody, createdByUserId: 'bob' }));
+  await assertFails(updateDoc(doc(member, 'crmAutomationRules', 'ruleMine'), { status: 'active' }));
+  // The tenant key is immutable, and a rule can never be stamped for another tenant.
+  await assertFails(updateDoc(doc(admin, 'crmAutomationRules', 'ruleMine'), { businessId: VICTIM_BIZ }));
+  await assertFails(setDoc(doc(admin, 'crmAutomationRules', 'ruleForged'), { ...ruleBody, businessId: VICTIM_BIZ }));
+  // Cross-tenant read stays closed.
+  const mallory = outsider();
+  await assertFails(getDoc(doc(mallory, 'crmAutomationRules', 'ruleMine')));
+});
+
+test('48b. the firing log is readable by the tenant and writable by nobody', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'crmAutomationRuns', 'ruleMine_lead1_created'), {
+      businessId: MY_BIZ, ruleId: 'ruleMine', entity: 'lead', entityId: 'lead1', fireKey: 'created', results: [],
+    });
+  });
+  const admin = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(getDoc(doc(admin, 'crmAutomationRuns', 'ruleMine_lead1_created')));
+  // Deleting a run would re-arm the occurrence; creating one would silence it forever.
+  await assertFails(deleteDoc(doc(admin, 'crmAutomationRuns', 'ruleMine_lead1_created')));
+  await assertFails(setDoc(doc(admin, 'crmAutomationRuns', 'ruleMine_lead2_created'), { businessId: MY_BIZ, ruleId: 'ruleMine', entityId: 'lead2', fireKey: 'created' }));
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  await assertFails(setDoc(doc(sa, 'crmAutomationRuns', 'ruleMine_lead1_created'), { results: [] }, { merge: true }));
+  await assertFails(getDoc(doc(outsider(), 'crmAutomationRuns', 'ruleMine_lead1_created')));
+});

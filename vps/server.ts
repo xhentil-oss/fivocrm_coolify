@@ -943,6 +943,11 @@ function startCronSchedulers(): void {
   // reads per run and a restart can never double-notify.
   setInterval(() => { void triggerCronJob('task-reminders'); }, 5 * MIN);
   setInterval(() => { void triggerCronJob('lead-sla-stale-alerts'); }, 60 * MIN);
+  // CRM automation rules (CRM → Automatizime). Hourly: "pa pronar prej 2 orësh"
+  // must mean two hours, not "at tomorrow's run-all". The job reads ONLY tenants
+  // that have an active rule (leads/customers/invoices scoped by businessId) and
+  // every firing is keyed per (rule, record, occurrence), so a tick is idempotent.
+  setInterval(() => { void triggerCronJob('crm-automations'); }, 60 * MIN);
   // Google Reviews: hourly pull. The job reads ONLY connected gmbAccounts and
   // diffs reviews per location, so an hour with no new reviews costs a handful of
   // reads and zero writes. A tenant can opt out via teamSettings.gmbAutoSync.

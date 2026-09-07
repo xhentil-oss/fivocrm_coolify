@@ -1,3 +1,4 @@
+import { safeSenderAddress } from '../_emailIdentity.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
 import { buildInvoiceEmail, publicInvoicePayUrl } from '../_invoiceEmail.js';
@@ -15,6 +16,7 @@ import { writeAudit } from '../_audit.js';
 // Reporting module jobs. Kept in their own file: they are self-contained,
 // idempotent, and this file is already 3.4k lines.
 import { runReportSchedules, runReportReminders, runClientHealthRollup, runReportMetricsSocial } from '../_reportJobs.js';
+import { runCrmAutomations } from '../_crmAutomationJob.js';
 // One delivery path for every notification — see the header of api/_push.ts.
 import { notifyUser, getUserPrefs, isDndActive, isSilenced, escapeHtml, BASE_URL } from '../_push.js';
 import { isTypeMutedByPrefs } from '../_notificationTypes.js';
@@ -144,7 +146,7 @@ async function settleAll(ops: Promise<any>[], jobName: string): Promise<void> {
 
 // ── SMTP helper ───────────────────────────────────────────────────────────────
 function makeTransporter() {
-  const smtpUser = process.env.SMTP_USER;
+  const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const smtpPass = process.env.SMTP_PASS;
   if (!smtpUser || !smtpPass) return null;
   return nodemailer.createTransport({
@@ -270,7 +272,7 @@ async function tenantScopedDocs(
 // ── JOB: task-deadline-alerts ─────────────────────────────────────────────────
 async function runTaskDeadlineAlerts() {
   const transporter = makeTransporter();
-  const smtpUser = process.env.SMTP_USER;
+  const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const now = new Date();
   const alertThreshold = new Date(now);
   alertThreshold.setDate(alertThreshold.getDate() + 2);
@@ -460,7 +462,7 @@ async function runTaskReminders() {
 // ── JOB: invoice-reminders ───────────────────────────────────────────────────
 async function runInvoiceReminders() {
   const transporter = makeTransporter();
-  const smtpUser = process.env.SMTP_USER;
+  const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const now = new Date();
   const reminderThreshold = new Date(now);
   reminderThreshold.setDate(reminderThreshold.getDate() + 3);
@@ -550,7 +552,7 @@ async function runInvoiceReminders() {
 // more than waOverdueDays (default 60 ≈ 2 months) overdue.
 async function runOverdueReminders() {
   const transporter = makeTransporter();
-  const smtpUser = process.env.SMTP_USER;
+  const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const now = Date.now();
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
   const EMAIL_RENOTIFY_DAYS = 7;
@@ -1039,7 +1041,7 @@ function projectBillingBlockReason(project: any, now: Date): string | null {
 // ── JOB: recurring-invoices ──────────────────────────────────────────────────
 async function runRecurringInvoices(opts?: { businessId?: string | null }) {
   const transporter = makeTransporter();
-  const smtpUser = process.env.SMTP_USER;
+  const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const now = new Date();
   let created = 0, skipped = 0;
   const ops: Promise<any>[] = [];
@@ -1544,7 +1546,7 @@ async function runRecurringInvoices(opts?: { businessId?: string | null }) {
 // ── JOB: project-completion-reminder ─────────────────────────────────────────
 async function runProjectCompletionReminder() {
   const transporter = makeTransporter();
-  const smtpUser = process.env.SMTP_USER;
+  const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const now = new Date();
 
   const projectsSnap = await db.collection('projects').where('status', 'in', ['Active', 'Planning', 'On Hold']).get();
@@ -2380,7 +2382,7 @@ async function runDailyReportCheck(opts?: { stage?: 'remind' | 'escalate'; busin
 // same silence gates as the live channels.
 async function runNotificationDigest(opts?: { businessId?: string }) {
   const transporter = makeTransporter();
-  const smtpUser = process.env.SMTP_USER;
+  const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   if (!transporter || !smtpUser) return { sent: 0, skipped: 'no SMTP config' };
 
   const MIN_UNREAD = 3;              // below this it is noise, not a digest
@@ -3963,6 +3965,7 @@ const TENANT_DATA_COLLECTIONS = [
   'socialSnapshots', 'products', 'productCategories', 'productBrands', 'stockMovements',
   'shopOrders', 'conversations', 'auditLogs', 'notifications', 'dailyReportMisses',
   'gmbAccounts', 'gmbReviews', 'gmbPosts',
+  'crmAutomationRules', 'crmAutomationRuns',
   // Reporting module — client deliverables, internal commentary and per-employee
   // accountability scores; all businessId-stamped but previously missing here,
   // so "delete everything" reported complete while every report survived.
@@ -4650,7 +4653,7 @@ function buildInquiryMaterialsEmail(firstName: string, missingLabels: string[], 
 
 async function runInquiryMaterialsReminders() {
   const transporter = makeTransporter();
-  const smtpUser = process.env.SMTP_USER;
+  const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   if (!transporter || !smtpUser) return { sent: 0, skipped: 0 };
 
   const now = Date.now();
@@ -5285,6 +5288,25 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'lead-cadence-steps':
         result = await runLeadCadenceSteps();
         break;
+      case 'crm-automations': {
+        // CRM automation rules (CRM → Automatizime). Hourly from the VPS, NOT in
+        // run-all. A manual run ("Ekzekuto tani" in the builder) is scoped to the
+        // caller's tenant — the job assigns, emails and creates tasks, so an
+        // unscoped manual run would let one tenant's Admin act inside every other.
+        let scopeId: string | null = null;
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          scopeId = await callerBusinessId(req);
+          if (!scopeId) {
+            return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — ekzekutimi manual u ndal.' });
+          }
+        }
+        result = await runCrmAutomations({
+          businessId: scopeId,
+          ruleId: (req.query.ruleId as string) || null,
+          dryRun: req.query.dryRun === '1',
+        });
+        break;
+      }
       case 'report-schedules':
         // Generate draft reports from active schedules. Idempotent via generationKey.
         result = await runReportSchedules();

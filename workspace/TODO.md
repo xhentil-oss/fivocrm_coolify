@@ -19,6 +19,16 @@ Rules:
 <!-- Add tasks here only when there are real next steps. -->
 
 <todo>
+Deploy the CRM automation rules (CRM → Automatizime)
+`firebase deploy --only firestore:rules,firestore:indexes` (crmAutomationRules/crmAutomationRuns + the run-history index), deploy the api, restart the VPS so the hourly `crm-automations` tick starts, then arm the first recipes in the app. Checklist + laws: workspace/CRM_AUTOMATION.md.
+</todo>
+
+<todo>
+CRM enterprise roadmap — next after the rules engine
+(2) customer lifecycle: `lifecycleStage` (onboarding/active/at-risk/churned), `renewalDate`, `contractValue`, `accountOwner` on Customer + renewal/NPS triggers in the engine; (3) multi-step sequences per segment (email + WA + task) replacing the single team-wide `leadCadenceDays`; (4) behavioural scoring (WA reply, email open, portal login, quote viewed) with per-tenant weights + routing by capacity/service; (5) Lead/Deal split (phase 5). Assessment in the 2026-09-07 conversation; the rules engine is the foundation all four sit on.
+</todo>
+
+<todo>
 Decide the group-channel unread model (chat bug #11)
 markAsRead writes a SHARED `isRead: true` on a group message, so the first member to open the channel zeroes everyone else's badge — and channelUnreadMap ignores `readBy` entirely. channel_message notifications now arrive while the badge beside them can read 0. Cheap fix (stop writing isRead for groups) vs correct fix (per-user channelReads lastReadAt): trade-off written up in workspace/CHAT_NOTIFICATIONS_AUDIT_2026_08.md.
 </todo>

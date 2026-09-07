@@ -1,3 +1,4 @@
+import { safeSenderAddress, safeSenderName } from './_emailIdentity.js';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import nodemailer from 'nodemailer';
 import { adminAuth } from './_firebaseAdmin.js';
@@ -85,7 +86,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).json({ error: 'Invalid portal URL' });
   }
 
-  const smtpUser = process.env.SMTP_USER;
+  const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const smtpPass = process.env.SMTP_PASS;
   if (!smtpUser || !smtpPass) {
     return res.status(500).json({ error: 'SMTP not configured' });
@@ -104,7 +105,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   // Header-safe display name (NOT HTML-escaped — entities like &#x27; trip
   // Gmail's "abnormal characters" warning). Object form lets nodemailer
   // RFC-2047-encode non-ASCII names.
-  const fromName = String(teamName || 'FivoCRM').replace(/[\r\n"<>]/g, '').trim().slice(0, 120) || 'FivoCRM';
+  const fromName = safeSenderName(teamName);
 
   try {
     await transporter.sendMail({

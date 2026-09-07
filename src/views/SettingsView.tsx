@@ -56,6 +56,7 @@ import { db } from '../lib/firebase';
 import { dndZoneStamp } from '../lib/notificationPrefs';
 import { toast } from '../hooks/use-toast';
 import { reportingCapabilitiesFor } from '../lib/reporting/permissions';
+import { safeSenderName, safeSenderAddress, senderNameIssue } from '../lib/emailIdentity';
 
 // ─── CronJobCard sub-component ───────────────────────────────────────────────
 interface CronJobCardProps {
@@ -521,8 +522,10 @@ const SettingsView: React.FC = () => {
     if (!teamId) return;
     saveTeamSettings(teamId, {
       emailProvider,
-      emailFromEmail: emailFromEmail.trim(),
-      emailFromName: emailFromName.trim(),
+      // Stored exactly as the server will send it — anything Gmail flags as "abnormal
+      // characters" (emoji, entities, a name that looks like an address) never reaches a header.
+      emailFromEmail: safeSenderAddress(emailFromEmail) || '',
+      emailFromName: emailFromName.trim() ? safeSenderName(emailFromName) : '',
       emailMailgunDomain: emailMailgunDomain.trim(),
       emailMailgunRegion,
       emailSmtpHost: emailSmtpHost.trim(),
@@ -1255,12 +1258,21 @@ const SettingsView: React.FC = () => {
                   <label className="text-body-sm text-foreground font-medium">Email-i i dërguesit</label>
                   <input type="email" value={emailFromEmail} onChange={(e) => setEmailFromEmail(e.target.value)} placeholder="marketing@shembull.com"
                     className="w-full h-11 px-4 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
-                  <p className="text-xs text-muted-foreground">Duhet domain i verifikuar te ofruesi (SPF/DKIM).</p>
+                  {emailFromEmail.trim() && !safeSenderAddress(emailFromEmail) ? (
+                    <p className="text-xs text-amber-600">Adresë e pavlefshme — vetëm shkronja latine, pa hapësira (p.sh. marketing@shembull.com). Nuk do të ruhet.</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Duhet domain i verifikuar te ofruesi (SPF/DKIM).</p>
+                  )}
                 </div>
                 <div className="space-y-2">
                   <label className="text-body-sm text-foreground font-medium">Emri i dërguesit</label>
                   <input type="text" value={emailFromName} onChange={(e) => setEmailFromName(e.target.value)} placeholder="Ekipi FivoCRM"
                     className="w-full h-11 px-4 bg-background border border-border rounded-md text-sm focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary" />
+                  <p className={`text-xs ${senderNameIssue(emailFromName) === 'altered' ? 'text-amber-600' : 'text-muted-foreground'}`}>
+                    {senderNameIssue(emailFromName) === 'altered'
+                      ? <>Emoji, simbolet dhe shenjat @ &lt; &gt; " hiqen (Gmail i shënon si "karaktere jonormale"). Do të dërgohet si: <strong>{safeSenderName(emailFromName)}</strong></>
+                      : <>Marrësi do ta shohë si: <strong>"{emailFromName.trim() ? safeSenderName(emailFromName) : 'FivoCRM'}" &lt;{safeSenderAddress(emailFromEmail) || 'adresa e platformës'}&gt;</strong></>}
+                  </p>
                 </div>
               </div>
             </div>

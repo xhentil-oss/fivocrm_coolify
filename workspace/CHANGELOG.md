@@ -20,6 +20,11 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 <changelog>
 <!-- NEXT_ENTRY_HERE -->
 
+### [2026-09-07] — CRM automation rules engine (leads + customers)
+- `src/lib/crm/automationRules.ts` (+36 tests) = pure engine: 8 triggers, 13 condition fields, 7 actions, named block reasons, deterministic fire keys, `enrollExisting`, cooldown = window; `api/_crmAutomationEngine.ts` is a byte-identical copy guarded by the test
+- `api/_crmAutomationJob.ts` (`?job=crm-automations`, hourly in `vps/server.ts`, not run-all): per-tenant facts (leads/customers/invoices/projects), `crmAutomationRuns` created BEFORE actions (idempotency + audit), rule paused on error, manual run scoped to caller's tenant
+- UI `src/views/crm/AutomationRulesPanel.tsx` in CRMView toggle **Automatizime**: 7 recipes, builder with live preview via the same engine, run history, "Ekzekuto tani"; rules + tests 48a/48b, index, type `crm_automation`; runbook `workspace/CRM_AUTOMATION.md`
+
 ### [2026-09-03] — Task reminders ("Më kujto") + task-ordering audit fixes
 - `src/lib/taskReminders.ts` (+19 tests): `reminderAt` / `reminderOffsetMinutes` / `reminderSentAt` on Task; presets (Në afat, 30 min, 1 orë, 1 ditë para) + custom date/time; a moved deadline carries a relative reminder (`reminderPatchForDeadline`); recurring next cycle keeps the offset (`recurringUtils.ts` + cron mirror)
 - UI: TaskDetailPanel row "Kujtesë", QuickTaskForm section "Kujtesë" (both variants), TasksView row bell + create handler; SettingsView cron card. Cron `task-reminders` in `api/cron/run.ts` (every 5 min via `vps/server.ts`, NOT run-all; range on `reminderAt`, idempotent); type `task_reminder` registered in both registries

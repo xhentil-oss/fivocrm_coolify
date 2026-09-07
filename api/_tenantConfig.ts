@@ -1,3 +1,4 @@
+import { safeSenderAddress, safeSenderName } from './_emailIdentity.js';
 import admin, { adminDb as db } from './_firebaseAdmin.js';
 
 /**
@@ -105,13 +106,17 @@ export async function tenantEmailIdentity(
       const name = d.emailFromName || d.companyName;
       const reply = d.emailFromEmail || d.companyEmail;
       if (name || reply) {
-        return { fromName: name || fallback.fromName, replyTo: reply || undefined, fromEmail: d.emailFromEmail || undefined };
+        return {
+          fromName: safeSenderName(name),
+          replyTo: safeSenderAddress(reply),
+          fromEmail: safeSenderAddress(d.emailFromEmail),
+        };
       }
     }
     if (businessId) {
       const b = await db.collection('businesses').doc(businessId).get();
       const d = b.exists ? ((b.data() as any) || {}) : {};
-      if (d.name) return { fromName: d.name, replyTo: d.ownerEmail || undefined, fromEmail: undefined };
+      if (d.name) return { fromName: safeSenderName(d.name), replyTo: safeSenderAddress(d.ownerEmail), fromEmail: undefined };
     }
   } catch { /* fall through to the platform identity */ }
   return fallback;
