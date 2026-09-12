@@ -80,6 +80,7 @@ import { useSavedSegments, type LeadSegment } from '../hooks/useSavedSegments';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
 import { buildFollowUpQueue, dueState, touchContactPatch } from '../lib/crm/followUp';
 import { useFollowUpActions, targetFromLead } from '../hooks/useFollowUpActions';
+import { resolvePlaybooks, enrollPlaybookPatch, stopCadencePatch, nextPlaybookStep, currentPlaybookStep, withPlaybookTag } from '../lib/crm/playbooks';
 import FollowUpBadge from '../components/crm/FollowUpBadge';
 import NextStepPopover from '../components/crm/NextStepPopover';
 import SnoozeMenu from '../components/crm/SnoozeMenu';
@@ -964,6 +965,17 @@ const CRMView: React.FC = () => {
   };
 
   // Enroll / stop the automated follow-up cadence for a lead.
+  // Playbooks (label → steps → templates) from team settings; the default day list
+  // is the fallback when a lead is started without one.
+  const playbooks = useMemo(() => resolvePlaybooks(teamSettingsData), [teamSettingsData]);
+  const [playbookPick, setPlaybookPick] = useState<string>('');
+  const startPlaybook = async (lead: Lead, playbookId: string) => {
+    const pb = playbooks.find(p => p.id === playbookId);
+    if (!pb) return toggleCadence(lead);
+    await leadMutation.update(lead.id, { ...enrollPlaybookPatch(pb, new Date()), tags: withPlaybookTag(lead.tags, pb) } as any);
+    logLead(lead.id, 'field_updated', `Playbook ${pb.name} u aktivizua`, `${pb.steps.length} hapa · etiketa ${pb.tag}`);
+    toast({ title: `Playbook ${pb.name} u nis`, description: `Hapi 1 (dita ${pb.steps[0]?.day ?? 1}) krijohet automatikisht.` });
+  };
   const toggleCadence = async (lead: Lead) => {
     const active = !lead.cadenceActive;
     try {
@@ -2345,25 +2357,58 @@ const CRMView: React.FC = () => {
                     )}
                   </div>
 
-                  {/* ── Automated follow-up cadence ── */}
+                  {/* ── Playbook / cadence ── */}
                   <div className="border-t pt-4 space-y-2">
                     <div className="flex items-center gap-2">
                       <Bell className="w-4 h-4 text-primary" />
-                      <p className="text-sm font-semibold">Sekuencë Automatike Ndjekjeje</p>
+                      <p className="text-sm font-semibold">Playbook i ndjekjes</p>
                     </div>
-                    <p className="text-xs text-muted-foreground">
-                      Krijon automatikisht detyra rikontakti sipas ditëve të konfiguruara (parazgjedhje: 1, 3, 7, 14 ditë), derisa lead-i të mbyllet.
-                    </p>
-                    <Button
-                      size="sm"
-                      variant={selectedLead.cadenceActive ? 'outline' : 'default'}
-                      className={selectedLead.cadenceActive ? 'w-full text-destructive border-destructive/30' : 'w-full'}
-                      onClick={() => toggleCadence(selectedLead)}
-                    >
-                      {selectedLead.cadenceActive
-                        ? `Ndal sekuencën (hapi ${(selectedLead.cadenceStep || 0) + 1})`
-                        : 'Nis sekuencën e ndjekjes'}
-                    </Button>
+                    {(() => {
+                      const cur = currentPlaybookStep(lead, playbooks);
+                      const nxt = nextPlaybookStep(lead, playbooks);
+                      const pbName = playbooks.find(p => p.id === lead.playbookId)?.name;
+                      if (lead.cadenceActive) {
+                        return (
+                          <div className="space-y-2">
+                            <div className="rounded-md border bg-muted/40 p-2.5 text-xs space-y-1">
+                              <p className="font-medium">{pbName ? `Playbook ${pbName}` : 'Sekuencë standarde'} · aktiv</p>
+                              {cur && <p className="text-muted-foreground">Hapi aktual {cur.index + 1}/{cur.playbook.steps.length}: {cur.step.title}</p>}
+                              {nxt && <p className="text-muted-foreground">Hapi tjetër dita {nxt.step.day}: {nxt.step.title}</p>}
+                              {!pbName && <p className="text-muted-foreground">Hapi {(lead.cadenceStep || 0) + 1} sipas ditëve të konfiguruara.</p>}
+                            </div>
+                            <Button size="sm" variant="outline" className="w-full text-destructive border-destructive/30"
+                              onClick={() => leadMutation.update(lead.id, stopCadencePatch() as any).then(() => toast({ title: 'Sekuenca u ndal' }))}>
+                              Ndal sekuencën
+                            </Button>
+                          </div>
+                        );
+                      }
+                      return (
+                        <div className="space-y-2">
+                          <p className="text-xs text-muted-foreground">
+                            Zgjidh shërbimin: krijohen automatikisht hapat (thirrje, WhatsApp, email) me tekst të gatshëm sipas ditëve të playbook-ut.
+                          </p>
+                          <div className="flex gap-2">
+                            <Select value={playbookPick || (playbooks[0]?.id || '__default__')} onValueChange={setPlaybookPick}>
+                              <SelectTrigger className="h-9 text-sm flex-1"><SelectValue /></SelectTrigger>
+                              <SelectContent>
+                                {playbooks.map(p => <SelectItem key={p.id} value={p.id}>{p.name} · {p.steps.length} hapa</SelectItem>)}
+                                <SelectItem value="__default__">Sekuencë standarde (ditët e konfiguruara)</SelectItem>
+                              </SelectContent>
+                            </Select>
+                            <Button size="sm" className="h-9" onClick={() => {
+                              const pick = playbookPick || playbooks[0]?.id || '__default__';
+                              void (pick === '__default__' ? toggleCadence(lead) : startPlaybook(lead, pick));
+                            }}>
+                              Nis
+                            </Button>
+                          </div>
+                          {playbooks.length === 0 && (
+                            <p className="text-[11px] text-muted-foreground">Nuk ka playbook-e ende — krijoji te Cilësimet → Automatizime → Playbook-e.</p>
+                          )}
+                        </div>
+                      );
+                    })()}
                   </div>
 
                   {/* ── Send message now ── */}

@@ -14,6 +14,7 @@ import { getTeamConfig, SECRET_FIELDS, writeTeamSecrets } from '../_tenantConfig
 // Follow-up thresholds (SLA hours, stale days, cadence) — byte-identical mirror
 // of src/lib/crm/followUpConfig.ts; the UI resolves the same settings the same way.
 import { resolveFollowUpConfig } from '../_followUpConfig.js';
+import { resolvePlaybooks, nextPlaybookStep, renderPlaybookTemplate, type Playbook } from '../_playbooks.js';
 import { syncTenantClaims } from '../_tenantClaims.js';
 import { writeAudit } from '../_audit.js';
 // Reporting module jobs. Kept in their own file: they are self-contained,
@@ -4904,33 +4905,85 @@ async function runInquiryMaterialsReminders() {
 // follow-up task for the assigned rep at each configured day-offset (from
 // cadenceStartedAt), advancing cadenceStep. Stops when steps run out or the
 // lead reaches a terminal status (Won/Converted/Lost).
+//
+// Playbook-aware: a lead enrolled in a playbook (`lead.playbookId`, see
+// `_playbooks.ts` — the byte-identical mirror of src/lib/crm/playbooks.ts) fires
+// THAT playbook's steps (day offset, channel, title, rendered template) and sets
+// the lead's next step so the Ndjekjet queue shows the right primary action.
+// A lead without a playbook — or whose playbook was deleted/deactivated — falls
+// back to the team's default `leadCadenceDays`. After the last playbook step an
+// optional nurture reminder (`nurtureEveryDays`) re-surfaces the lead.
 async function runLeadCadenceSteps() {
   const now = Date.now();
+  const DAY = 86_400_000;
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
   const TERMINAL = ['Won', 'Converted', 'Lost'];
+  const CHANNEL_LABEL: Record<string, string> = {
+    call: 'Telefonatë', whatsapp: 'WhatsApp', email: 'Email', meeting: 'Takim', other: 'Tjetër',
+  };
 
-  // `leadCadenceDays` is validated by the shared resolver (sorted unique ints
-  // 1–90, ≤ 8 steps; anything invalid → the default [1, 3, 7, 14]) — the same
-  // rule the Settings chips enforce, so a stray 0 or 200 can no longer create a
-  // task "today" or never.
-  const tsCache = new Map<string, number[]>();
-  const cadenceDays = async (teamId: string): Promise<number[]> => {
-    if (!teamId) return resolveFollowUpConfig(null).leadCadenceDays;
+  // One teamSettings read per team: `leadCadenceDays` is validated by the shared
+  // resolver (sorted unique ints 1–90, ≤ 8 steps; anything invalid → the default
+  // [1, 3, 7, 14]) — the same rule the Settings chips enforce, so a stray 0 or 200
+  // can no longer create a task "today" or never. Playbooks come from the same
+  // document via `resolvePlaybooks` (invalid entries dropped).
+  type TeamCadence = { days: number[]; playbooks: Playbook[] };
+  const tsCache = new Map<string, TeamCadence>();
+  const teamCadence = async (teamId: string): Promise<TeamCadence> => {
+    if (!teamId) return { days: resolveFollowUpConfig(null).leadCadenceDays, playbooks: [] };
     if (tsCache.has(teamId)) return tsCache.get(teamId)!;
-    let days = resolveFollowUpConfig(null).leadCadenceDays;
+    let out: TeamCadence = { days: resolveFollowUpConfig(null).leadCadenceDays, playbooks: [] };
     try {
       const d = await db.collection('teamSettings').doc(teamId).get();
-      days = resolveFollowUpConfig(d.exists ? (d.data() as any) : null).leadCadenceDays;
+      const data = d.exists ? (d.data() as any) : null;
+      out = { days: resolveFollowUpConfig(data).leadCadenceDays, playbooks: resolvePlaybooks(data) };
     } catch { /* default */ }
-    tsCache.set(teamId, days);
-    return days;
+    tsCache.set(teamId, out);
+    return out;
+  };
+
+  // `{{staffName}}` in a template: one capped teamMembers read per business,
+  // only when a template actually asks for it.
+  const nameCache = new Map<string, Map<string, string>>();
+  const staffName = async (businessId: string, userId: string): Promise<string> => {
+    if (!businessId || !userId) return '';
+    if (!nameCache.has(businessId)) {
+      const names = new Map<string, string>();
+      try {
+        const snap = await db.collection('teamMembers').where('businessId', '==', businessId).limit(200).get();
+        snap.docs.forEach(d => {
+          const m = d.data() as any;
+          if (!m.userId) return;
+          const n = m.displayName || m.name || (m.email ? String(m.email).split('@')[0] : '');
+          if (n) names.set(String(m.userId), String(n));
+        });
+      } catch { /* empty */ }
+      nameCache.set(businessId, names);
+    }
+    return nameCache.get(businessId)!.get(userId) ?? '';
   };
 
   const snap = await db.collection('leads').where('cadenceActive', '==', true).get();
-  if (snap.empty) return { created: 0, completed: 0 };
+  if (snap.empty) return { created: 0, completed: 0, nurtured: 0, playbookSteps: 0, defaultSteps: 0 };
 
-  let created = 0, completed = 0;
+  let created = 0, completed = 0, nurtured = 0, playbookSteps = 0, defaultSteps = 0;
   const ops: Promise<any>[] = [];
+
+  const taskBase = (lead: any, leadId: string, due: admin.firestore.Timestamp, recipientId: string | null) => ({
+    status: 'Todo',
+    priority: 'medium',
+    assignedToUserId: recipientId,
+    createdByUserId: lead.createdByUserId || null,
+    teamId: lead.teamId || null,
+    businessId: lead.businessId || null,
+    startDate: due,
+    endDate: due,
+    dueDate: due,
+    dueNotificationSent: false,
+    relatedLeadId: leadId,
+    createdAt: admin.firestore.Timestamp.now(),
+    updatedAt: admin.firestore.Timestamp.now(),
+  });
 
   for (const doc of snap.docs) {
     const lead = doc.data();
@@ -4939,44 +4992,110 @@ async function runLeadCadenceSteps() {
       completed++;
       continue;
     }
-    const days = await cadenceDays(lead.teamId);
+    const { days, playbooks } = await teamCadence(lead.teamId);
     const step = Number(lead.cadenceStep) || 0;
+    const startedMs = ms(lead.cadenceStartedAt) || ms(lead.createdAt);
+    const recipientId: string | null = lead.assignedToUserId || lead.createdByUserId || null;
+    const leadName: string = lead.name || 'Lead';
+    const focusUrl = `/app/follow-ups?focus=lead:${doc.id}`;
+
+    // ── Playbook path ── (a missing / deactivated playbook falls through to the default cadence)
+    const pb = lead.playbookId ? playbooks.find(p => p.id === lead.playbookId && p.active) : undefined;
+    if (pb) {
+      const next = nextPlaybookStep(lead as any, playbooks);
+      if (!next || next.playbook.id !== pb.id) {
+        // Enrolled but every step already fired (or the playbook lost its steps).
+        ops.push(doc.ref.update({ cadenceActive: false, updatedAt: admin.firestore.Timestamp.now() }));
+        completed++;
+        continue;
+      }
+      const s = next.step;
+      const total = pb.steps.length;
+      const dueMs = startedMs + s.day * DAY;
+      if (now < dueMs) continue; // not due yet
+
+      const due = admin.firestore.Timestamp.fromDate(new Date(now));
+      const rendered = s.template
+        ? renderPlaybookTemplate(s.template, {
+            name: lead.name,
+            company: lead.company,
+            service: pb.name,
+            staffName: /\{\{\s*staffName\s*\}\}/i.test(s.template) && recipientId
+              ? await staffName(lead.businessId, recipientId)
+              : '',
+          })
+        : '';
+      const footer = `— Hapi ${step + 1}/${total} · Playbook ${pb.name} · Dërgo nga Ndjekjet`;
+      const description = `${rendered || 'Nuk ka template'}\n\n${footer}`;
+
+      ops.push(db.collection('tasks').add({
+        title: `${s.title}: ${leadName}`,
+        description,
+        ...taskBase(lead, doc.id, due, recipientId),
+      }));
+      if (recipientId) {
+        ops.push(notifyUser({
+          userId: recipientId,
+          type: 'lead_cadence_step',
+          title: `🔁 ${s.title}: ${leadName}`,
+          message: `Hapi ${step + 1}/${total} · Playbook ${pb.name} — ${CHANNEL_LABEL[s.channel] ?? s.channel}.`,
+          actionUrl: focusUrl,
+          actionLabel: 'Hap ndjekjen',
+          businessId: lead.businessId ?? null,
+          teamId: lead.teamId ?? null,
+          email: false,
+        }));
+      }
+      const nextStep = step + 1;
+      const finished = nextStep >= total;
+      const patch: Record<string, any> = {
+        cadenceStep: nextStep,
+        cadenceActive: !finished,
+        nextFollowUpDate: due,
+        nextFollowUpType: s.channel,
+        followUpNote: s.title,
+        updatedAt: admin.firestore.Timestamp.now(),
+      };
+      if (finished) {
+        completed++;
+        const nurtureDays = Number(pb.nurtureEveryDays) || 0;
+        if (nurtureDays > 0) {
+          // The playbook is over; re-surface the lead in the queue every N days.
+          patch.nextFollowUpDate = admin.firestore.Timestamp.fromMillis(now + nurtureDays * DAY);
+          patch.nextFollowUpType = 'whatsapp';
+          patch.followUpNote = `Nurture ${pb.name}`;
+          nurtured++;
+        }
+      }
+      ops.push(doc.ref.update(patch));
+      created++;
+      playbookSteps++;
+      continue;
+    }
+
+    // ── Default cadence path (team `leadCadenceDays`) ──
     if (step >= days.length) {
       ops.push(doc.ref.update({ cadenceActive: false, updatedAt: admin.firestore.Timestamp.now() }));
       completed++;
       continue;
     }
-    const startedMs = ms(lead.cadenceStartedAt) || ms(lead.createdAt);
-    const dueMs = startedMs + days[step] * 86_400_000;
+    const dueMs = startedMs + days[step] * DAY;
     if (now < dueMs) continue; // not due yet
 
-    const recipientId = lead.assignedToUserId || lead.createdByUserId;
     const due = admin.firestore.Timestamp.fromDate(new Date(now));
     ops.push(db.collection('tasks').add({
-      title: `Ndjekje ${step + 1}: ${lead.name || 'Lead'}`,
+      title: `Ndjekje ${step + 1}: ${leadName}`,
       description: `Hapi ${step + 1}/${days.length} i sekuencës së ndjekjes. Rikontakto lead-in.`,
-      status: 'Todo',
-      priority: 'medium',
-      assignedToUserId: recipientId || null,
-      createdByUserId: lead.createdByUserId || null,
-      teamId: lead.teamId || null,
-      businessId: lead.businessId || null,
-      startDate: due,
-      endDate: due,
-      dueDate: due,
-      dueNotificationSent: false,
-      relatedLeadId: doc.id,
-      createdAt: admin.firestore.Timestamp.now(),
-      updatedAt: admin.firestore.Timestamp.now(),
+      ...taskBase(lead, doc.id, due, recipientId),
     }));
     if (recipientId) {
       ops.push(notifyUser({
         userId: recipientId,
         type: 'lead_cadence_step',
-        title: `🔁 Ndjekje: ${lead.name || 'Lead'}`,
+        title: `🔁 Ndjekje: ${leadName}`,
         message: `Hapi ${step + 1}/${days.length} i sekuencës — koha për rikontakt.`,
-        actionUrl: '/app/crm',
-        actionLabel: 'Shiko CRM',
+        actionUrl: focusUrl,
+        actionLabel: 'Hap ndjekjen',
         businessId: lead.businessId ?? null,
         teamId: lead.teamId ?? null,
         email: false,
@@ -4987,14 +5106,17 @@ async function runLeadCadenceSteps() {
       cadenceStep: nextStep,
       cadenceActive: nextStep < days.length,
       nextFollowUpDate: due,
+      nextFollowUpType: 'call',
+      followUpNote: `Ndjekje ${step + 1}`,
       updatedAt: admin.firestore.Timestamp.now(),
     }));
     created++;
+    defaultSteps++;
     if (nextStep >= days.length) completed++;
   }
 
   await settleAll(ops, 'lead-cadence-steps');
-  return { created, completed };
+  return { created, completed, nurtured, playbookSteps, defaultSteps };
 }
 
 // ── JOB: project-spend-rollup ────────────────────────────────────────────────

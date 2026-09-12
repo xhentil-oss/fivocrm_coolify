@@ -66,12 +66,31 @@ nga SERVERI vetëm për `contact-email` (dërgimi ndodh në server) — kurrë t
 - Cilësimet: `FollowUpSettingsPanel` (Cilësimet → Automatizime) — cadence, SLA, stale, auto-reply
   v2, AI, rikujtues, lead i ri nga WA. Pragjet: `src/lib/crm/followUpConfig.ts` + `api/_followUpConfig.ts`.
 
+## Playbook-e sipas shërbimit (label → hapa → template)
+
+`src/lib/crm/playbooks.ts` (pure, 10 teste) + pasqyra byte-identical `api/_playbooks.ts`. Një playbook =
+`{ id, name, tag, keywords[], steps[{day, channel, title, template}], active, nurtureEveryDays }`, ruhet në
+`teamSettings.followUpPlaybooks`, editohet te Cilësimet → Automatizime → "Playbook-e sipas shërbimit"
+(`PlaybookEditor`, receta SEO / Ads / Social / Web).
+
+- **Regjistrim automatik**: `_waInbound` (hapi 2b) — mesazh hyrës me fjalëkyç (whole-word, pa theksa; fjalët ≥5
+  shkronja pranojnë prapashtesa: "reklama" → "reklamat") ose etiketë ekzistuese → lead-i merr `tags + tag`,
+  `playbookId`, `cadenceActive/Step/StartedAt`, `serviceInterest`, + rresht timeline "Playbook X u aktivizua".
+  Vetëm leads, kurrë klientë; kurrë lead me status terminal.
+- **Kadenca** (`lead-cadence-steps`, ditore në run-all): me `playbookId` → detyra `"<titulli>: <emri>"` me tekstin
+  e renderuar në përshkrim, lead-i marrë `nextFollowUpDate/Type = step.channel`, `followUpNote = step.title`;
+  njoftim `lead_cadence_step` → `/app/follow-ups?focus=lead:<id>`. Pas hapit të fundit me `nurtureEveryDays` →
+  ri-shfaqet në radhë si "Nurture X". Pa playbook → lista e ditëve `leadCadenceDays` si më parë.
+- **UI**: kartela e lead-it (tab Rikontakto) — zgjedh playbook-un dhe "Nis", shfaq hapin aktual/tjetër, "Ndal";
+  Ndjekjet — filtër label-ash (chips), chip "SEO · hapi 2/7" në rresht, butoni WhatsApp hap panelin me tekstin e
+  hapit **të gatshëm** (`initialText`), stafi e dërgon.
+
 ## Deploy
 
 1. `firebase deploy --only firestore:indexes`
 2. teste rregullash (emulator, JDK 21) → `firebase deploy --only firestore:rules`
 3. Vercel (push) **para** VPS-it
-4. VPS: `git pull && npm run build && pm2 restart`
+4. VPS: `cd /root/fivocrm && git pull && (cd vps && npm install) && pm2 restart server` — ts-node, pa `npm run build`
 
 ## Qëllimisht jo
 

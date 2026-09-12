@@ -141,6 +141,9 @@ export interface TeamSettings {
   // Automated lead follow-up cadence: day-offsets (from enrollment) at which a
   // follow-up task is auto-created. Default [1, 3, 7, 14].
   leadCadenceDays?: number[];
+  // Follow-up playbooks: label (service interest) → cadence steps with templates.
+  // Validated by src/lib/crm/playbooks.ts (`resolvePlaybooks`); mirror api/_playbooks.ts.
+  followUpPlaybooks?: import('../lib/crm/playbooks').Playbook[];
   // Custom business categories typed in the lead form, merged with the built-in
   // list. Best-effort write (only admins may write teamSettings) — the category
   // also lives on the lead itself, so the dropdown re-derives it either way.

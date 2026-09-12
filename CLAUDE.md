@@ -776,6 +776,12 @@ Full runbook: `workspace/FOLLOW_UP.md`.
   `followUpStaleDays`, `waResponseSlaMinutes`, `leadCadenceDays`) come from
   `src/lib/crm/followUpConfig.ts` / `api/_followUpConfig.ts`, edited in Cilësimet →
   Automatizime (`FollowUpSettingsPanel`). The automation engine is untouched.
+- **Playbooks** (`src/lib/crm/playbooks.ts`, byte-identical `api/_playbooks.ts`): label →
+  steps (day, channel, title, template) in `teamSettings.followUpPlaybooks`. The inbound
+  WhatsApp handler auto-enrols a lead by keyword/tag (`playbookId` + the cadence fields +
+  `serviceInterest`); `lead-cadence-steps` then creates each step's task WITH the rendered
+  text and sets the lead's next step, so the queue shows the right action and the WhatsApp
+  panel opens pre-filled (`initialText`). Never auto-sends. Recipes SEO/Ads/Social/Web.
 - Rules: the portal client may edit their own `customers` doc but the follow-up
   fields + `assignedToUserId/status/tags` are denied (tests 50a/50b). Badges/widget
   need indexes `(businessId, nextFollowUpDate)` and `(businessId, awaitingReply)` on

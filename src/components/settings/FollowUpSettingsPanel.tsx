@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
-import { BellRing, Bot, Clock, Loader2, MessageSquareReply, Plus, Sparkles, UserPlus, X, Zap } from 'lucide-react';
+import { BellRing, Bot, BookOpen, Clock, Loader2, MessageSquareReply, Plus, Sparkles, UserPlus, X, Zap } from 'lucide-react';
 import { Card } from '../ui/card';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -12,6 +12,8 @@ import { useCollection } from '../../hooks/useFirestore';
 import { saveTeamSettings, type TeamSettings } from '../../hooks/useTeamSettings';
 import { useToast } from '../../hooks/use-toast';
 import { FOLLOW_UP_LIMITS, normalizeCadenceDays, resolveFollowUpConfig } from '../../lib/crm/followUpConfig';
+import { resolvePlaybooks } from '../../lib/crm/playbooks';
+import PlaybookEditor from './PlaybookEditor';
 import type { WhatsAppTemplate } from '../../types';
 
 /**
@@ -40,6 +42,7 @@ const SECTION_KEYS = {
     'waAutoReminderDays', 'waAutoReminderStatuses', 'waAutoReminderTemplateId', 'waAutoReminderChannelPhoneNumberId',
     'waOverdueEnabled', 'waOverdueDays', 'waOverdueTemplateId', 'waOverdueChannelPhoneNumberId'],
   newLead: ['waAutoCreateLead', 'waAutoCreateLeadDailyCap'],
+  playbooks: ['followUpPlaybooks'],
 } as const satisfies Record<string, readonly (keyof TeamSettings)[]>;
 type SectionId = keyof typeof SECTION_KEYS;
 
@@ -93,6 +96,7 @@ function draftFrom(s: TeamSettings | null): Draft {
     waOverdueChannelPhoneNumberId: s?.waOverdueChannelPhoneNumberId || '',
     waAutoCreateLead: s?.waAutoCreateLead !== false,
     waAutoCreateLeadDailyCap: s?.waAutoCreateLeadDailyCap ?? 50,
+    followUpPlaybooks: resolvePlaybooks(s),
   };
 }
 
@@ -260,6 +264,12 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
         patch.waAutoReplyText = String(draft.waAutoReplyText || '').trim();
       }
       if (id === 'ai') patch.waAiContext = String(draft.waAiContext || '').trim();
+      if (id === 'playbooks') {
+        // Same validator the cron + inbound handler read with (api/_playbooks.ts).
+        const valid = resolvePlaybooks(draft);
+        if (valid.length !== (draft.followUpPlaybooks || []).length) toast({ title: 'Disa playbook-e të paplota nuk u ruajtën', description: 'Emri, etiketa dhe të paktën një hap me titull janë të detyrueshëm.' });
+        patch.followUpPlaybooks = valid;
+      }
       await saveTeamSettings(teamId, patch as Partial<TeamSettings>);
       setTouched((t) => { const n = new Set(t); SECTION_KEYS[id].forEach((k) => n.delete(k)); return n; });
       toast({ title: 'U ruajt' });
@@ -437,6 +447,12 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
       </SectionCard>
 
       {/* 5 · Lead i ri nga WhatsApp */}
+      {/* 6 · Playbook-e */}
+      <SectionCard icon={<BookOpen className="w-5 h-5 text-primary" />} title="Playbook-e sipas shërbimit"
+        description="Etiketa (SEO, Ads, Social…) → hapat e ndjekjes me ditë, kanal dhe tekst të gatshëm. Një mesazh WhatsApp hyrës me fjalëkyçet e playbook-ut e regjistron lead-in automatikisht; hapat krijohen si detyra dhe shfaqen te Ndjekjet me tekstin gati për dërgim." {...sectionProps('playbooks')}>
+        <PlaybookEditor value={draft.followUpPlaybooks || []} onChange={(v) => set('followUpPlaybooks', v)} disabled={ro} />
+      </SectionCard>
+
       <SectionCard icon={<UserPlus className="w-5 h-5 text-primary" />} title="Lead i ri nga WhatsApp"
         description="Një numër i panjohur që na shkruan bëhet automatikisht lead (burimi: whatsapp), i caktuar te agjenti i kanalit." {...sectionProps('newLead')}>
         <ToggleRow label="Krijo lead për numra të panjohur" checked={draft.waAutoCreateLead !== false} onChange={(v) => set('waAutoCreateLead', v)} disabled={ro}

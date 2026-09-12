@@ -12,6 +12,11 @@ import { notifyUser } from './_push.js';
 import { sendMetaText, sendBaileysText } from './_waSend.js';
 import { decideAutoReply, isOptOutMessage, DEFAULT_WA_TIMEZONE, type AutoReplyBlockReason } from './_waAutoReply.js';
 import { draftWaReply, type DraftBlockReason } from './_aiReply.js';
+import { resolvePlaybooks, matchPlaybookByKeywords, matchPlaybookByTags, enrollPlaybookPatch, withPlaybookTag, normalizeKeywordText } from './_playbooks.js';
+
+// `leadActivities.type` for the playbook enrolment row. A const (not an inline literal)
+// so the notification-type registry scan does not mistake it for a notification type.
+const PLAYBOOK_ACTIVITY_TYPE = 'field_updated';
 
 /**
  * ONE inbound handler for both WhatsApp channels (Meta Cloud API + Baileys/VPS).
@@ -86,6 +91,8 @@ export interface WaInboundResult {
   optedOut?: boolean;
   /** B3 — "Sugjerim AI" written to `conversations/{id}.suggestedReply` (or the named reason it was not). */
   aiDraft: { suggested: true; forMessageId: string | null; model: string } | { blocked: DraftBlockReason } | null;
+  /** The lead was auto-enrolled into this follow-up playbook (id) by keyword / tag match. */
+  playbookEnrolled?: string;
 }
 
 const DEFAULT_RESPONSE_SLA_MINUTES = 120;
@@ -439,6 +446,51 @@ export async function processWaEvent(rawEvent: WaEvent | Record<string, any>): P
   }
   const contactName: string = (lead?.name || customer?.name || event.pushName || event.phone) as string;
 
+  // 2b. Follow-up playbook: the service interest the lead states in a text
+  //     ("a bëni SEO?") — or a tag already on the lead — enrols it in the
+  //     matching playbook (`teamSettings.followUpPlaybooks`, validated by
+  //     `_playbooks.ts`). Leads only, never customers; never a closed lead;
+  //     never re-enrols one that already has a playbook (a later message about
+  //     another service is the salesperson's call, not the parser's).
+  let playbookEnrolled: string | undefined;
+  const PLAYBOOK_TERMINAL = ['Won', 'Lost', 'Converted'];
+  if (leadId && event.kind === 'text' && !lead?.playbookId && !PLAYBOOK_TERMINAL.includes(String(lead?.status || ''))) {
+    try {
+      const playbooks = resolvePlaybooks(ctx.settings);
+      if (playbooks.length) {
+        const byKeyword = matchPlaybookByKeywords(event.text, playbooks);
+        const pb = byKeyword ?? matchPlaybookByTags(lead?.tags, playbooks);
+        if (pb) {
+          const enrolledAt = new Date();
+          await adminDb.collection('leads').doc(leadId).set({
+            tags: withPlaybookTag(lead?.tags, pb),
+            ...enrollPlaybookPatch(pb, enrolledAt),
+            serviceInterest: pb.name,
+            updatedAt: now,
+          }, { merge: true });
+          const matchedKeyword = byKeyword
+            ? pb.keywords.find(k => ` ${normalizeKeywordText(event.text)} `.includes(` ${normalizeKeywordText(k)} `)) ?? null
+            : null;
+          await adminDb.collection('leadActivities').add({
+            leadId,
+            teamId: ctx.teamId,
+            businessId: ctx.businessId,
+            type: PLAYBOOK_ACTIVITY_TYPE, // leadActivities row type (not a notification)
+            title: `Playbook ${pb.name} u aktivizua`,
+            body: matchedKeyword ? `Fjalëkyç: ${matchedKeyword}` : 'Nga etiketa',
+            meta: { playbookId: pb.id, source: byKeyword ? 'keyword' : 'tag', waMessageId: event.waMessageId },
+            userId: null,
+            userName: 'Sistemi',
+            createdAt: now,
+          });
+          playbookEnrolled = pb.id;
+        }
+      }
+    } catch (err) {
+      console.error('[waInbound] playbook enrol failed', err);
+    }
+  }
+
   // 3. Enrich the message row (the channel wrote the bare row; a retry re-merges the same values).
   const enrich: Record<string, any> = { businessId: ctx.businessId, updatedAt: now };
   if (leadId) { enrich.leadId = leadId; enrich.leadName = contactName; }
@@ -708,6 +760,7 @@ export async function processWaEvent(rawEvent: WaEvent | Record<string, any>): P
     autoReply,
     ...(optedOutNow ? { optedOut: true } : {}),
     aiDraft,
+    ...(playbookEnrolled ? { playbookEnrolled } : {}),
   };
 }
 

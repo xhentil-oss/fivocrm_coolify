@@ -27,12 +27,15 @@ interface Props {
    * path never moved temperature, staleness or the first-response SLA.
    */
   onSent?: (e: { kind: 'text' | 'template' | 'media'; body?: string }) => void;
+  /** Pre-filled composer text (a playbook step template) — the user still presses send. */
+  initialText?: string;
 }
 
-const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, leadId, onClose, embedded, onSent }) => {
+const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, leadId, onClose, embedded, onSent, initialText }) => {
   const { user } = useAuth();
   const { toast } = useToast();
-  const [text, setText] = useState('');
+  const [text, setText] = useState(initialText || '');
+  useEffect(() => { if (initialText) setText(initialText); }, [initialText]);
   const [sending, setSending] = useState(false);
   const [templateOpen, setTemplateOpen] = useState(false);
   const [tplName, setTplName] = useState('');

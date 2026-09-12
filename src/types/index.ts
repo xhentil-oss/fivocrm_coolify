@@ -1503,6 +1503,10 @@ export interface Lead extends FollowUpFields {
   cadenceActive?: boolean;
   cadenceStartedAt?: Date;
   cadenceStep?: number;         // next step index to fire (0-based)
+  /** Follow-up playbook (label → steps → templates) the cadence follows; null = default day list. */
+  playbookId?: string | null;
+  /** Service the lead asked for (playbook name), stamped by the inbound WhatsApp handler. */
+  serviceInterest?: string | null;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;

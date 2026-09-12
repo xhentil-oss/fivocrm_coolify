@@ -36,12 +36,16 @@ export interface FollowUpRowProps {
   focused?: boolean;
   /** When set, the row fades out (just completed / snoozed). */
   leaving?: boolean;
+  /** Playbook context, e.g. "SEO · hapi 2/7" — shown as a chip. */
+  hint?: string | null;
+  /** Contact tags (first two shown). */
+  tags?: string[] | null;
 }
 
 const initials = (name: string) => name.split(/\s+/).filter(Boolean).slice(0, 2).map(p => p[0]?.toUpperCase()).join('') || '?';
 
 export const FollowUpRow: React.FC<FollowUpRowProps> = ({
-  item, now, getName, section, onComplete, onSchedule, onSnooze, onLogged, onOpenWhatsApp, onOpenEmail, onCloseLead, focused, leaving,
+  item, now, getName, section, onComplete, onSchedule, onSnooze, onLogged, onOpenWhatsApp, onOpenEmail, onCloseLead, focused, leaving, hint, tags,
 }) => {
   const isWaiting = section === 'awaitingReply';
   const TypeIcon = FOLLOW_UP_TYPE_ICON[item.type];
@@ -90,6 +94,10 @@ export const FollowUpRow: React.FC<FollowUpRowProps> = ({
               item.kind === 'lead' ? 'bg-sky-100 text-sky-700 dark:bg-sky-950 dark:text-sky-300' : 'bg-emerald-100 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-300')}>
               {item.kind === 'lead' ? 'Lead' : 'Klient'}
             </span>
+            {(tags || []).slice(0, 2).map(t => (
+              <span key={t} className="hidden sm:inline text-[10px] rounded px-1 py-px bg-violet-100 text-violet-700 dark:bg-violet-950 dark:text-violet-300 shrink-0">{t}</span>
+            ))}
+            {hint && <span className="hidden md:inline text-[10px] text-muted-foreground shrink-0">· {hint}</span>}
           </div>
           <div className="flex items-center gap-2 text-xs text-muted-foreground min-w-0">
             {isWaiting ? (

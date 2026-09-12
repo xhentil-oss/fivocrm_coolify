@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
-import { BellRing, CheckCircle2, Users, Inbox, AlarmClock } from 'lucide-react';
+import { BellRing, CheckCircle2, Users, Inbox, AlarmClock, Tag } from 'lucide-react';
 import { useCollection } from '../hooks/useFirestore';
 import { useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
@@ -9,6 +9,8 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { useToast } from '../hooks/use-toast';
 import { useFollowUpActions, type FollowUpTarget } from '../hooks/useFollowUpActions';
 import { buildFollowUpQueue, isMineItem, type FollowUpItem, type SnoozePresetKey } from '../lib/crm/followUp';
+import { useTeamSettingsData } from '../hooks/useTeamSettings';
+import { resolvePlaybooks, currentPlaybookStep, nextPlaybookStep, renderPlaybookTemplate } from '../lib/crm/playbooks';
 import { FollowUpRow, FollowUpSection } from '../components/crm/FollowUpRow';
 import type { NextStepSubmit } from '../components/crm/NextStepPopover';
 import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
@@ -57,19 +59,49 @@ const FollowUpsView: React.FC = () => {
   const { data: rawCustomers, loading: customersLoading } = useCollection<Customer>('customers', { skipTeamFilter: true, skip: !canCustomers });
   const customers = useFilteredByOwner(rawCustomers);
   const { getName } = useUserNames();
+  const teamSettings = useTeamSettingsData();
+  const playbooks = useMemo(() => resolvePlaybooks(teamSettings), [teamSettings]);
+  // Label filter — tags carried by the contacts in the queue (playbook tags first).
+  const [tagFilter, setTagFilter] = useState<string | null>(null);
 
   const queue = useMemo(() => {
     const ls = kind === 'customer' ? [] : leads;
     const cs = kind === 'lead' || !canCustomers ? [] : customers;
     const q = buildFollowUpQueue(ls, cs, now);
-    if (scope === 'all') return q;
-    const mine = (arr: FollowUpItem[]) => arr.filter(i => isMineItem(i, user?.uid));
+    const tagOk = (i: FollowUpItem) => !tagFilter || ((i.raw as any).tags || []).some((t: string) => String(t).toLowerCase() === tagFilter.toLowerCase());
+    const keep = (i: FollowUpItem) => tagOk(i) && (scope === 'all' || isMineItem(i, user?.uid));
+    if (scope === 'all' && !tagFilter) return q;
+    const mine = (arr: FollowUpItem[]) => arr.filter(keep);
     const awaitingReply = mine(q.awaitingReply), overdue = mine(q.overdue), today = mine(q.today), thisWeek = mine(q.thisWeek), noNextStep = mine(q.noNextStep);
     return {
       awaitingReply, overdue, today, thisWeek, noNextStep,
       counts: { awaitingReply: awaitingReply.length, overdue: overdue.length, today: today.length, thisWeek: thisWeek.length, noNextStep: noNextStep.length, due: overdue.length + today.length },
     };
-  }, [leads, customers, kind, scope, now, user?.uid, canCustomers]);
+  }, [leads, customers, kind, scope, now, user?.uid, canCustomers, tagFilter]);
+
+  // Tags available for the filter: every playbook tag + tags present on contacts.
+  const tagOptions = useMemo(() => {
+    const set = new Map<string, string>();
+    playbooks.forEach(p => set.set(p.tag.toLowerCase(), p.tag));
+    [...(leads || []), ...(customers || [])].forEach(c => ((c as any).tags || []).forEach((t: string) => {
+      const k = String(t).trim(); if (k) set.set(k.toLowerCase(), set.get(k.toLowerCase()) || k);
+    }));
+    return [...set.values()].slice(0, 12);
+  }, [playbooks, leads, customers]);
+
+  // Playbook context per lead: "SEO · hapi 2/7" + the WhatsApp text ready to send.
+  const playbookFor = (item: FollowUpItem) => {
+    if (item.kind !== 'lead' || !playbooks.length) return null;
+    const lead = item.raw as Lead;
+    const cur = currentPlaybookStep(lead, playbooks) || nextPlaybookStep(lead, playbooks);
+    if (!cur) return null;
+    return {
+      hint: `${cur.playbook.name} · hapi ${cur.index + 1}/${cur.playbook.steps.length}`,
+      text: cur.step.template
+        ? renderPlaybookTemplate(cur.step.template, { name: lead.name, company: lead.company, service: cur.playbook.name, staffName: user?.displayName || '' })
+        : '',
+    };
+  };
 
   // Rows that were just acted on fade out until the subscription catches up.
   const [leaving, setLeaving] = useState<Set<string>>(new Set());
@@ -147,6 +179,8 @@ const FollowUpsView: React.FC = () => {
         key={`${item.kind}:${item.id}`}
         item={item}
         section={section}
+        hint={playbookFor(item)?.hint}
+        tags={(item.raw as any).tags || null}
         focused={focus === `${item.kind}:${item.id}`}
         leaving={leaving.has(`${item.kind}:${item.id}`)}
         {...rowProps}
@@ -210,6 +244,22 @@ const FollowUpsView: React.FC = () => {
           {chip('Këtë javë', queue.counts.thisWeek, 'border-blue-200 text-blue-700 dark:text-blue-400', 'sec-week')}
           {chip('Pa hap tjetër', queue.counts.noNextStep, 'border-border text-muted-foreground', 'sec-none')}
         </div>
+        {tagOptions.length > 0 && (
+          <div className="flex items-center gap-1.5 flex-wrap">
+            <Tag className="w-3.5 h-3.5 text-muted-foreground" />
+            <button type="button" onClick={() => setTagFilter(null)}
+              className={cn('rounded-full border px-2 py-0.5 text-[11px] transition-colors', !tagFilter ? 'bg-foreground text-background border-foreground' : 'hover:bg-muted')}>
+              Të gjitha
+            </button>
+            {tagOptions.map(t => (
+              <button key={t} type="button" onClick={() => setTagFilter(tagFilter?.toLowerCase() === t.toLowerCase() ? null : t)}
+                className={cn('rounded-full border px-2 py-0.5 text-[11px] transition-colors',
+                  tagFilter?.toLowerCase() === t.toLowerCase() ? 'bg-violet-600 text-white border-violet-600' : 'hover:bg-muted')}>
+                {t}
+              </button>
+            ))}
+          </div>
+        )}
       </div>
 
       {loading && <p className="text-sm text-muted-foreground">Duke ngarkuar…</p>}
@@ -284,6 +334,7 @@ const FollowUpsView: React.FC = () => {
           leadName={waItem.name}
           leadId={waItem.kind === 'lead' ? waItem.id : undefined}
           onClose={() => setWaItem(null)}
+          initialText={playbookFor(waItem)?.text || undefined}
           onSent={(e) => void actions.logContact(targetOf(waItem), 'whatsapp', e.body, { countsAsFollowUp: true })}
         />
       )}
