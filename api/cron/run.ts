@@ -11,12 +11,18 @@ import { syncAllGmbAccounts } from '../_gmb.js';
 // Credentials live in `teamSecrets` (client-unreadable), NOT in `teamSettings`.
 // Always resolve tenant config through getTeamConfig so secrets are merged in.
 import { getTeamConfig, SECRET_FIELDS, writeTeamSecrets } from '../_tenantConfig.js';
+// Follow-up thresholds (SLA hours, stale days, cadence) — byte-identical mirror
+// of src/lib/crm/followUpConfig.ts; the UI resolves the same settings the same way.
+import { resolveFollowUpConfig } from '../_followUpConfig.js';
 import { syncTenantClaims } from '../_tenantClaims.js';
 import { writeAudit } from '../_audit.js';
 // Reporting module jobs. Kept in their own file: they are self-contained,
 // idempotent, and this file is already 3.4k lines.
 import { runReportSchedules, runReportReminders, runClientHealthRollup, runReportMetricsSocial } from '../_reportJobs.js';
 import { runCrmAutomations } from '../_crmAutomationJob.js';
+// "Who are this tenant's managers" — one resolver, shared with _gmb and _waInbound.
+import { managerIdsForBusiness } from '../_staffRecipients.js';
+import { sendBaileysText } from '../_waSend.js';
 // One delivery path for every notification — see the header of api/_push.ts.
 import { notifyUser, getUserPrefs, isDndActive, isSilenced, escapeHtml, BASE_URL } from '../_push.js';
 import { isTypeMutedByPrefs } from '../_notificationTypes.js';
@@ -1944,24 +1950,91 @@ async function runGoalOverdueAlerts() {
   return { notified };
 }
 
-// ── JOB: lead-follow-up-reminders ────────────────────────────────────────────
-async function runLeadFollowUpReminders() {
+// ── JOB: lead-follow-up-reminders (leads + customers) ────────────────────────
+// Every morning at 08:30 Europe/Tirane (vps/server.ts, scheduleDailyInZone — NOT
+// in run-all: "this morning" is a wall-clock promise) tell the owner of every
+// contact whose next step is due today or overdue. Reads ONLY docs with
+// `nextFollowUpDate <= end of today (local)` on `leads` AND `customers` — a
+// single-field range, no composite index needed — instead of the old full
+// `status in [...]` scan of the whole leads collection.
+//
+// Mirrors the day math of src/lib/crm/followUp.ts (`dueState`): calendar days
+// in Europe/Tirane via startOfRecurrenceDay, never setHours(0,0,0,0) — the
+// browser abroad and this UTC process must agree on what "today" is.
+//
+// Idempotency: `lastReminderSentAt` (23h debounce, so a retry the same morning
+// is silent and tomorrow's run fires again for a still-open step).
+//
+// Note: the range compares Timestamps, so a legacy `nextFollowUpDate` stored as
+// an ISO STRING is not matched (Firestore ranges are type-bound). Every current
+// write path (src/lib/crm/followUp.ts) stores a Date → Timestamp.
+const FOLLOW_UP_TYPE_LABEL: Record<string, string> = {
+  call: 'Telefonatë', whatsapp: 'WhatsApp', email: 'Email', meeting: 'Takim', other: 'Tjetër',
+};
+const FOLLOW_UP_PAGE = 500;
+const FOLLOW_UP_MAX_PAGES = 10; // 5 000 due contacts per collection per run — plenty, and bounded.
+
+async function dueFollowUpDocs(
+  collection: 'leads' | 'customers',
+  endOfTodayMs: number,
+  scopeBusinessId: string | null,
+): Promise<admin.firestore.QueryDocumentSnapshot[]> {
+  const cutoff = admin.firestore.Timestamp.fromMillis(endOfTodayMs);
+  const build = (scoped: boolean) => {
+    let q: admin.firestore.Query = db.collection(collection);
+    if (scoped && scopeBusinessId) q = q.where('businessId', '==', scopeBusinessId);
+    return q.where('nextFollowUpDate', '<=', cutoff).orderBy('nextFollowUpDate', 'asc');
+  };
+  const page = async (scoped: boolean) => {
+    const out: admin.firestore.QueryDocumentSnapshot[] = [];
+    let last: admin.firestore.QueryDocumentSnapshot | null = null;
+    for (let i = 0; i < FOLLOW_UP_MAX_PAGES; i++) {
+      let q = build(scoped).limit(FOLLOW_UP_PAGE);
+      if (last) q = q.startAfter(last);
+      const snap = await q.get();
+      out.push(...snap.docs);
+      if (snap.size < FOLLOW_UP_PAGE) break;
+      last = snap.docs[snap.docs.length - 1];
+    }
+    if (out.length >= FOLLOW_UP_PAGE * FOLLOW_UP_MAX_PAGES) {
+      console.warn(`[follow-up-reminders] ${collection}: hit the ${FOLLOW_UP_PAGE * FOLLOW_UP_MAX_PAGES}-doc cap — the rest waits for tomorrow`);
+    }
+    return out;
+  };
+  if (!scopeBusinessId) return page(false);
+  try {
+    // (businessId, nextFollowUpDate) composite index — declared in firestore.indexes.json.
+    return await page(true);
+  } catch (err: any) {
+    // Index not deployed yet: fall back to the single-field range and filter in memory.
+    console.warn(`[follow-up-reminders] scoped ${collection} read failed (${err?.message || err}) — falling back to unscoped range`);
+    return (await page(false)).filter(d => d.data().businessId === scopeBusinessId);
+  }
+}
+
+async function runFollowUpReminders(opts: { businessId?: string | null } = {}) {
   const now = new Date();
-  const todayStart = new Date(now);
-  todayStart.setHours(0, 0, 0, 0);
+  const nowMs = now.getTime();
+  const todayStartMs = startOfRecurrenceDay(now);
+  const endOfTodayMs = todayStartMs + 86_400_000 - 1;
+  const debounceCutoffMs = nowMs - 23 * 60 * 60 * 1000;
+  const scope = opts.businessId || null;
+  const ms = (v: any): number => (v?.toMillis ? v.toMillis() : (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0)));
 
-  // 23-hour debounce: don't re-notify if we already notified today
-  const twentyThreeHoursAgo = new Date(now.getTime() - 23 * 60 * 60 * 1000);
+  const [leadDocs, customerDocs] = await Promise.all([
+    dueFollowUpDocs('leads', endOfTodayMs, scope),
+    dueFollowUpDocs('customers', endOfTodayMs, scope),
+  ]);
 
-  // Only open + converted leads can have a live follow-up (Won/Lost are skipped
-  // below anyway) — scope the read instead of scanning every lead in the platform.
-  const leadsSnap = await db.collection('leads')
-    .where('status', 'in', ['New', 'Contacted', 'Qualified', 'Proposal', 'Follow-up', 'Converted'])
-    .get();
-  if (leadsSnap.empty) return { notified: 0 };
+  // The Admin SDK bypasses tenantActive(): exclude suspended tenants ourselves.
+  const suspendedBusinessIds = new Set<string>();
+  try {
+    const suspSnap = await db.collection('businesses').where('status', '==', 'suspended').get();
+    suspSnap.docs.forEach(d => suspendedBusinessIds.add(d.id));
+  } catch { /* fail-open on the read */ }
 
-  let notified = 0;
-  let waSent = 0;
+  let leadsNotified = 0, customersNotified = 0, waSent = 0;
+  let skippedDebounce = 0, noRecipient = 0, suspendedSkipped = 0, skippedStatus = 0;
   const ops: Promise<any>[] = [];
 
   // Per-run caches so we read each team's settings / template only once.
@@ -1983,83 +2056,82 @@ async function runLeadFollowUpReminders() {
     return data;
   };
 
-  for (const leadDoc of leadsSnap.docs) {
-    const lead = leadDoc.data();
+  const dueInfo = (dueMs: number): { overdue: boolean; days: number } => {
+    const dayDiff = Math.round((startOfRecurrenceDay(new Date(dueMs)) - todayStartMs) / 86_400_000);
+    return { overdue: dayDiff < 0, days: -dayDiff };
+  };
 
-    if (!lead.nextFollowUpDate) continue;
-    if (lead.status === 'Won' || lead.status === 'Lost') continue;
+  const process = async (kind: 'lead' | 'customer', doc: admin.firestore.QueryDocumentSnapshot) => {
+    const c = doc.data();
+    const dueMs = ms(c.nextFollowUpDate);
+    if (!dueMs || dueMs > endOfTodayMs) return;                       // defensive: the query already bounds it
 
-    const followUpDate: Date = lead.nextFollowUpDate?.toDate?.()
-      ? lead.nextFollowUpDate.toDate()
-      : new Date(lead.nextFollowUpDate);
-    followUpDate.setHours(0, 0, 0, 0);
+    if (kind === 'lead' && ['Won', 'Lost', 'Converted'].includes(c.status)) { skippedStatus++; return; }
+    if (kind === 'customer' && ['Inactive', 'Suspended'].includes(c.status)) { skippedStatus++; return; }
+    if (c.businessId && suspendedBusinessIds.has(c.businessId)) { suspendedSkipped++; return; }
 
-    // Only trigger for today or overdue
-    if (followUpDate > todayStart) continue;
+    const lastSent = ms(c.lastReminderSentAt);
+    if (lastSent && lastSent >= debounceCutoffMs) { skippedDebounce++; return; }
 
-    // Debounce: skip if already notified in the last 23h
-    if (lead.lastReminderSentAt) {
-      const lastSent: Date = lead.lastReminderSentAt?.toDate?.()
-        ? lead.lastReminderSentAt.toDate()
-        : new Date(lead.lastReminderSentAt);
-      if (lastSent >= twentyThreeHoursAgo) continue;
-    }
+    const recipient: string | null = c.assignedToUserId || c.createdByUserId || null;
+    if (!recipient) { noRecipient++; return; }
 
-    const assignedUserId = lead.assignedToUserId || lead.createdByUserId;
-    if (!assignedUserId) continue;
-
-    const isOverdue = followUpDate < todayStart;
-    const dateLabel = isOverdue
-      ? `Vonuar (${followUpDate.toLocaleDateString('sq-AL')})`
-      : 'Sot';
-
-    const followTitle = isOverdue ? `⚠ Rikontaktim i vonuar: ${lead.name}` : `🔔 Rikontaktim sot: ${lead.name}`;
-    const followMsg = lead.followUpNote
-      ? `${dateLabel} · ${lead.followUpNote}`
-      : `${dateLabel} · Është koha të rikontaktoni këtë lead.`;
+    const name = String(c.name || c.company || (kind === 'lead' ? 'lead' : 'klient'));
+    const { overdue, days } = dueInfo(dueMs);
+    const title = overdue ? `⚠ Vonuar ${days} ditë: ${name}` : `🔔 Rikontaktim sot: ${name}`;
+    const typeLabel = FOLLOW_UP_TYPE_LABEL[String(c.nextFollowUpType || 'other')] || FOLLOW_UP_TYPE_LABEL.other;
+    const message = (typeof c.followUpNote === 'string' && c.followUpNote.trim()) ? c.followUpNote.trim() : typeLabel;
 
     ops.push(notifyUser({
-      userId: assignedUserId,
-      type: 'lead_follow_up',
-      title: followTitle,
-      message: followMsg,
-      actionUrl: '/app/crm',
-      actionLabel: 'Shko tek CRM',
-      businessId: lead.businessId ?? null,
-      teamId: lead.teamId ?? null,
-    }));
+      userId: recipient,
+      type: kind === 'lead' ? 'lead_follow_up' : 'customer_follow_up',
+      title,
+      message,
+      actionUrl: `/app/follow-ups?focus=${kind}:${doc.id}`,
+      actionLabel: 'Hap ndjekjen',
+      businessId: c.businessId ?? null,
+      teamId: c.teamId ?? null,
+      ...(kind === 'customer' ? { customerId: doc.id } : {}),
+    }).then((r) => { if (r.written) { if (kind === 'lead') leadsNotified++; else customersNotified++; } }));
 
-    // Update lastReminderSentAt to debounce future runs
-    ops.push(
-      leadDoc.ref.update({ lastReminderSentAt: admin.firestore.Timestamp.now() })
-    );
+    // Debounce future runs (stamped even when delivery was gated by the user's
+    // prefs — the reminder was DUE and handled today).
+    ops.push(doc.ref.update({ lastReminderSentAt: admin.firestore.Timestamp.now() }));
 
-    notified++;
-
-    // Optional: send a WhatsApp follow-up template if the team enabled it.
-    const phone = lead.phone || lead.phoneNumber;
-    if (phone && lead.teamId) {
-      const settings = await getTeamSettings(lead.teamId);
+    // Optional: send a WhatsApp follow-up template if the team enabled it (leads only).
+    if (kind !== 'lead') return;
+    const phone = c.phone || c.phoneNumber;
+    if (phone && c.teamId) {
+      const settings = await getTeamSettings(c.teamId);
       if (settings?.waFollowUpEnabled && settings?.waFollowUpTemplateId && settings?.metaEnabled) {
         const tpl = await getTemplate(settings.waFollowUpTemplateId);
         const channels: any[] = settings.metaChannels || [];
-        const channel = channels.find((c) => c.phoneNumberId === settings.waFollowUpChannelPhoneNumberId) || channels[0];
+        const channel = channels.find((ch) => ch.phoneNumberId === settings.waFollowUpChannelPhoneNumberId) || channels[0];
         if (tpl && channel?.accessToken && channel?.phoneNumberId) {
           const params: string[] = (tpl.paramFields || []).map((f: string) =>
-            f && f !== 'custom' && lead[f] != null ? String(lead[f]) : ''
+            f && f !== 'custom' && c[f] != null ? String(c[f]) : ''
           );
           ops.push(
-            sendMetaBroadcastMessage(channel, normalizeWaPhone(phone), tpl, params, lead.teamId, null, { id: leadDoc.id, name: lead.name })
+            sendMetaBroadcastMessage(channel, normalizeWaPhone(phone), tpl, params, c.teamId, null, { id: doc.id, name: c.name })
               .catch((e) => console.error('[follow-up-wa]', e))
           );
           waSent++;
         }
       }
     }
-  }
+  };
+
+  for (const d of leadDocs) await process('lead', d);
+  for (const d of customerDocs) await process('customer', d);
 
   await settleAll(ops, 'lead-follow-up-reminders');
-  return { notified, waSent };
+  return {
+    scanned: { leads: leadDocs.length, customers: customerDocs.length },
+    leadsNotified, customersNotified, skippedDebounce, noRecipient, suspendedSkipped, skippedStatus, waSent,
+    // Legacy key — older run logs / the Settings cron card read `notified`.
+    notified: leadsNotified + customersNotified,
+    businessId: scope,
+  };
 }
 
 // ── JOB: lead-sla-stale-alerts ───────────────────────────────────────────────
@@ -2067,24 +2139,35 @@ async function runLeadFollowUpReminders() {
 // SLA_HOURS) and leads that went stale (no activity for STALE_DAYS), notifying
 // the owner (or team admins if unassigned). Debounced via per-lead flags.
 async function runLeadSlaAndStaleAlerts() {
-  const SLA_HOURS = 24;
-  const STALE_DAYS = 14;
   const STALE_RENOTIFY_DAYS = 7;
   const now = Date.now();
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
+
+  // SLA hours / stale days are tenant settings (Cilësimet → Automatizime →
+  // Ndjekja), validated by the same resolver the UI's leadIntel uses — one
+  // definition of "breached" and "i ftohur" on both sides. Defaults 24h / 14d.
+  const cfgCache = new Map<string, ReturnType<typeof resolveFollowUpConfig>>();
+  const teamCfg = async (teamId?: string | null) => {
+    const key = teamId || '';
+    const cached = cfgCache.get(key);
+    if (cached) return cached;
+    let cfg = resolveFollowUpConfig(null);
+    if (teamId) {
+      try { cfg = resolveFollowUpConfig(await getTeamConfig(teamId)); } catch { /* defaults */ }
+    }
+    cfgCache.set(key, cfg);
+    return cfg;
+  };
 
   // SLA/stale alerts don't apply to Lost/Converted (skipped below) — scope the read.
   const leadsSnap = await db.collection('leads')
     .where('status', 'in', ['New', 'Contacted', 'Qualified', 'Proposal', 'Follow-up', 'Won'])
     .get();
   const adminsByTeam: Record<string, string[]> = {};
-  const getTeamAdmins = async (teamId?: string): Promise<string[]> => {
+  const getTeamAdmins = async (teamId?: string, businessId?: string | null): Promise<string[]> => {
     if (!teamId) return [];
     if (adminsByTeam[teamId]) return adminsByTeam[teamId];
-    const snap = await db.collection('teamMembers').where('teamId', '==', teamId).get();
-    const ids = snap.docs
-      .filter(d => ['Admin', 'Manager', 'Owner'].includes(d.data().role))
-      .map(d => d.data().userId).filter(Boolean);
+    const ids = await managerIdsForBusiness(businessId ?? null, teamId);
     adminsByTeam[teamId] = ids;
     return ids;
   };
@@ -2096,8 +2179,9 @@ async function runLeadSlaAndStaleAlerts() {
     const lead = doc.data();
     if (lead.status === 'Lost' || lead.status === 'Converted') continue;
 
-    const recipients = lead.assignedToUserId ? [lead.assignedToUserId] : await getTeamAdmins(lead.teamId);
+    const recipients = lead.assignedToUserId ? [lead.assignedToUserId] : await getTeamAdmins(lead.teamId, lead.businessId);
     if (recipients.length === 0) continue;
+    const { followUpSlaHours: SLA_HOURS, followUpStaleDays: STALE_DAYS } = await teamCfg(lead.teamId);
 
     // First-response SLA breach — notify once.
     const createdMs = ms(lead.createdAt);
@@ -2129,6 +2213,85 @@ async function runLeadSlaAndStaleAlerts() {
 
   await settleAll(ops, 'lead-sla-stale-alerts');
   return { slaBreaches, staleLeads };
+}
+
+// ── JOB: conversation-sla ────────────────────────────────────────────────────
+// A WhatsApp thread the customer wrote to and nobody answered within the tenant's
+// `waResponseSlaMinutes` (default 120). `api/_waInbound.ts` arms the deadline
+// (`slaFirstResponseDueAt`, once per unanswered burst) and every staff reply
+// disarms it (`awaitingReply: false`, via markConversationAnswered); this job
+// only reads what is already due and notifies ONCE per breach
+// (`slaBreachNotified`). Every 15 min from the VPS — NOT in run-all: "two hours
+// without an answer" must mean two hours.
+// Index: conversations (awaitingReply, slaBreachNotified, slaFirstResponseDueAt).
+async function runConversationSla() {
+  const now = admin.firestore.Timestamp.now();
+  const snap = await db.collection('conversations')
+    .where('awaitingReply', '==', true)
+    .where('slaBreachNotified', '==', false)
+    .where('slaFirstResponseDueAt', '<=', now)
+    .limit(200)
+    .get();
+
+  // The Admin SDK bypasses tenantActive(): exclude suspended tenants ourselves.
+  const suspendedBusinessIds = new Set<string>();
+  try {
+    const suspSnap = await db.collection('businesses').where('status', '==', 'suspended').get();
+    suspSnap.docs.forEach(d => suspendedBusinessIds.add(d.id));
+  } catch { /* fail-open on the read, per-conversation skip below still applies to what we know */ }
+
+  const managersByBusiness = new Map<string, string[]>();
+  const managersFor = async (businessId: string | null, teamId: string | null): Promise<string[]> => {
+    const key = `${businessId || ''}|${teamId || ''}`;
+    const cached = managersByBusiness.get(key);
+    if (cached) return cached;
+    const ids = await managerIdsForBusiness(businessId, teamId);
+    managersByBusiness.set(key, ids);
+    return ids;
+  };
+  const ms = (v: any): number => (v?.toMillis ? v.toMillis() : (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0)));
+
+  let breached = 0, notified = 0, suspendedSkipped = 0, noRecipient = 0;
+  const ops: Promise<any>[] = [];
+
+  for (const doc of snap.docs) {
+    const conv = doc.data() as any;
+    const businessId: string | null = conv.businessId || null;
+    const teamId: string | null = conv.teamId || null;
+    if (businessId && suspendedBusinessIds.has(businessId)) { suspendedSkipped++; continue; }
+
+    const recipients = conv.ownerId
+      ? Array.from(new Set([conv.ownerId, conv.managerId].filter(Boolean) as string[]))
+      : await managersFor(businessId, teamId);
+    // Mark the breach even with nobody to tell, otherwise the row is re-read every 15 min forever.
+    if (recipients.length === 0) noRecipient++;
+
+    const waitedMin = Math.max(1, Math.round((now.toMillis() - (ms(conv.lastInboundAt) || ms(conv.slaFirstResponseDueAt))) / 60_000));
+    const name = String(conv.subject || conv.phone || 'kontakt');
+    const phone = String(conv.phone || '');
+    const title = `⏰ Pa përgjigje: ${name}`;
+    const message = `Mesazhi WhatsApp pret përgjigje prej ${waitedMin} min.${conv.lastInboundText ? ` „${String(conv.lastInboundText).slice(0, 100)}“` : ''}`;
+
+    for (const uid of recipients) {
+      ops.push(notifyUser({
+        userId: uid,
+        type: 'conversation_sla',
+        title,
+        message,
+        actionUrl: `/app/whatsapp?phone=${encodeURIComponent(phone)}`,
+        actionLabel: 'Hap bisedën',
+        businessId,
+        teamId,
+        customerId: conv.customerId || null,
+        conversationKey: doc.id,
+      }).then((r) => { if (r.written) notified++; }));
+    }
+    ops.push(doc.ref.set({ slaBreachNotified: true, slaBreachedAt: now, updatedAt: now }, { merge: true }));
+    breached++;
+  }
+
+  await settleAll(ops, 'conversation-sla');
+  return { checked: snap.size, breached, notified, suspendedSkipped, noRecipient };
 }
 
 // ── JOB: lead-wa-auto-reminders ──────────────────────────────────────────────
@@ -2197,8 +2360,10 @@ async function runLeadWhatsappAutoReminders() {
       sendMetaBroadcastMessage(channel, normalizeWaPhone(phone), tpl, params, lead.teamId, null, { id: leadDoc.id, name: lead.name })
         .catch((e) => console.error('[wa-auto-reminder]', e))
     );
+    // `businessId` is what the leadActivities read rule keys on — a row without
+    // it exists in the database and is invisible in every timeline.
     ops.push(db.collection('leadActivities').add({
-      leadId: leadDoc.id, teamId: lead.teamId, type: 'whatsapp',
+      leadId: leadDoc.id, teamId: lead.teamId, businessId: lead.businessId ?? null, type: 'whatsapp',
       title: 'WhatsApp automatik (rikujtues)',
       body: `Rikujtues pas ${Math.floor(daysSince)} ditësh pa komunikim.`,
       userId: null, userName: 'Sistemi', createdAt: admin.firestore.Timestamp.now(),
@@ -2877,7 +3042,9 @@ function renderTemplateBody(body: string, params: string[]): string {
 
 // Send one Baileys broadcast message via the team's VPS /send endpoint.  The
 // VPS writes its own whatsappMessages doc (channel:'baileys'), so we don't.
-// Returns true on success.
+// Returns true on success. The transport lives in api/_waSend.ts (shared with
+// the inbound handler's auto-reply); a campaign is deliberately NOT an
+// `isAutoReply` and never calls markConversationAnswered — it is not an answer.
 async function sendBaileysBroadcastMessage(
   vpsUrl: string,
   vpsSecret: string,
@@ -2887,18 +3054,9 @@ async function sendBaileysBroadcastMessage(
   teamId: string,
   lead: { id: string; name?: string }
 ): Promise<boolean> {
-  try {
-    const resp = await fetch(`${vpsUrl.replace(/\/$/, '')}/send`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-api-key': vpsSecret },
-      body: JSON.stringify({ to: phone, message, teamId, agentId, leadId: lead.id, leadName: lead.name || null }),
-      signal: AbortSignal.timeout(15_000),
-    });
-    return resp.ok;
-  } catch (e) {
-    console.error('[broadcast-baileys] send failed', e);
-    return false;
-  }
+  const r = await sendBaileysText(vpsUrl, vpsSecret, agentId, phone, message, { teamId, leadId: lead.id, leadName: lead.name || null });
+  if (!r.ok) console.error('[broadcast-baileys] send failed', r.error);
+  return r.ok;
 }
 
 /**
@@ -3061,8 +3219,22 @@ async function stampWaCampaignTouch(
 ): Promise<void> {
   const now = admin.firestore.Timestamp.now();
   const ops: Promise<any>[] = [];
+  // The timeline row must carry `businessId` (the leadActivities read rule keys
+  // on it). Prefer the lead's own; fall back to the team's, read once per call.
+  let teamBusinessId: string | null | undefined;
+  const businessIdFor = async (contact: any): Promise<string | null> => {
+    if (contact?.businessId) return String(contact.businessId);
+    if (teamBusinessId === undefined) {
+      try {
+        const t = await db.collection('teams').doc(teamId).get();
+        teamBusinessId = t.exists ? ((t.data() as any)?.businessId ?? null) : null;
+      } catch { teamBusinessId = null; }
+    }
+    return teamBusinessId ?? null;
+  };
   for (const t of targets) {
     if (t.kind !== 'lead' || !sentPhones.has(normalizeWaPhone(t.contact.phone || t.contact.phoneNumber))) continue;
+    const businessId = await businessIdFor(t.contact);
     ops.push(db.collection('leads').doc(t.contact.id).update({
       lastActivityAt: now,
       lastFollowUpDate: now,
@@ -3072,6 +3244,7 @@ async function stampWaCampaignTouch(
     ops.push(db.collection('leadActivities').add({
       leadId: t.contact.id,
       teamId,
+      businessId,
       type: 'whatsapp',
       title: 'WhatsApp automatik (fushatë)',
       body: `Fushata “${campaignName}”.`,
@@ -4736,15 +4909,18 @@ async function runLeadCadenceSteps() {
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
   const TERMINAL = ['Won', 'Converted', 'Lost'];
 
+  // `leadCadenceDays` is validated by the shared resolver (sorted unique ints
+  // 1–90, ≤ 8 steps; anything invalid → the default [1, 3, 7, 14]) — the same
+  // rule the Settings chips enforce, so a stray 0 or 200 can no longer create a
+  // task "today" or never.
   const tsCache = new Map<string, number[]>();
   const cadenceDays = async (teamId: string): Promise<number[]> => {
-    if (!teamId) return [1, 3, 7, 14];
+    if (!teamId) return resolveFollowUpConfig(null).leadCadenceDays;
     if (tsCache.has(teamId)) return tsCache.get(teamId)!;
-    let days = [1, 3, 7, 14];
+    let days = resolveFollowUpConfig(null).leadCadenceDays;
     try {
       const d = await db.collection('teamSettings').doc(teamId).get();
-      const raw = d.exists ? (d.data() as any).leadCadenceDays : null;
-      if (Array.isArray(raw) && raw.length) days = raw.map((n: any) => Number(n)).filter((n: number) => n >= 0).sort((a, b) => a - b);
+      days = resolveFollowUpConfig(d.exists ? (d.data() as any) : null).leadCadenceDays;
     } catch { /* default */ }
     tsCache.set(teamId, days);
     return days;
@@ -5229,9 +5405,20 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'expire-invitations':
         result = await runExpireInvitations();
         break;
-      case 'lead-follow-up-reminders':
-        result = await runLeadFollowUpReminders();
+      case 'lead-follow-up-reminders': {
+        // Leads + customers due today/overdue → owner. 08:30 Europe/Tirane from
+        // the VPS, NOT in run-all. A manual run ("Ekzekuto tani") is scoped to the
+        // caller's tenant unless they are a platform super-admin.
+        let scopeId: string | null = null;
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          scopeId = await callerBusinessId(req);
+          if (!scopeId) {
+            return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — ekzekutimi manual u ndal.' });
+          }
+        }
+        result = await runFollowUpReminders({ businessId: scopeId });
         break;
+      }
       case 'whatsapp-broadcasts':
         result = await runWhatsappBroadcasts();
         break;
@@ -5251,6 +5438,11 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       case 'lead-sla-stale-alerts':
         result = await runLeadSlaAndStaleAlerts();
+        break;
+      case 'conversation-sla':
+        // Unanswered WhatsApp threads past the tenant's response SLA. Every 15 min
+        // from the VPS, NOT in run-all (a wall-clock promise, like task-reminders).
+        result = await runConversationSla();
         break;
       case 'lead-wa-auto-reminders':
         result = await runLeadWhatsappAutoReminders();
@@ -5349,7 +5541,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
       case 'run-all': {
         // Single daily cron that runs all jobs — works within Vercel Hobby 2-cron limit
-        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leads, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, campaignSteps, whmcs, inquiryReminders, projectRollup, leadCadence, subscriptions, reportSchedules, reportReminders, tenantUsage, platformMetricsRun, notifCleanup] = await Promise.allSettled([
+        const [tasks, invoiceRem, overdueRem, recurTasks, recurInv, projCompl, projReset, goals, expenses, invites, leadSla, leadWaAuto, digest, waBroadcasts, emailCampaigns, purchaseCampaigns, campaignSteps, whmcs, inquiryReminders, projectRollup, leadCadence, subscriptions, reportSchedules, reportReminders, tenantUsage, platformMetricsRun, notifCleanup] = await Promise.allSettled([
           runTaskDeadlineAlerts(),
           runInvoiceReminders(),
           runOverdueReminders(),
@@ -5360,7 +5552,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           runGoalOverdueAlerts(),
           runRecurringExpenses(),
           runExpireInvitations(),
-          runLeadFollowUpReminders(),
+          // lead-follow-up-reminders is NOT here: it fires at 08:30 Europe/Tirane
+          // from the VPS scheduler (a wall-clock promise, like task-reminders).
           runLeadSlaAndStaleAlerts(),
           runLeadWhatsappAutoReminders(),
           runNotificationDigest(),
@@ -5396,7 +5589,6 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           goalAlerts: settled(goals),
           recurringExpenses: settled(expenses),
           invites: settled(invites),
-          leadReminders: settled(leads),
           leadSlaStale: settled(leadSla),
           leadWaAutoReminders: settled(leadWaAuto),
           digest: settled(digest),

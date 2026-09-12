@@ -1,7 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import OpenAI from 'openai';
 import { adminAuth, adminDb } from './_firebaseAdmin.js';
-import { getTeamConfig } from './_tenantConfig.js';
+import { generateChatWith, resolveAiConfig, type ChatMsg } from './_aiProvider.js';
 
 const SYSTEM_PROMPT = `Ti je FivoAI, asistenti inteligjent i platformës FivoCRM. Flet shqip dhe ndihmon stafin dhe klientët me detyra specifike biznesi.
 
@@ -44,6 +43,14 @@ function checkRateLimit(userId: string): boolean {
   return true;
 }
 
+/**
+ * POST /api/ai-chat — FivoAI assistant.
+ *
+ * Provider resolution (tenant key from teamSecrets, env fallback, Gemini ⇄ OpenAI
+ * fallback) lives in `api/_aiProvider.ts`, shared with the GMB review drafts and
+ * the WhatsApp "Sugjerim AI". This file keeps only what is specific to the chat:
+ * auth, the per-user rate limit, the team-membership gate and the usage log.
+ */
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
@@ -97,19 +104,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (context.teamName) systemMessage += `\n- Ekipi: ${sanitize(context.teamName)}`;
   }
 
-  // Resolve AI config: per-team settings (from CRM Settings) take priority,
-  // then fall back to environment variables.
-  let teamProvider: 'gemini' | 'openai' | undefined;
-  let teamApiKey: string | undefined;
-  let teamModel: string | undefined;
-  let teamAuthorized = false; // caller verified as member/portal-client of teamId
-
+  // The team's AI key is used only when the caller is a member OR a portal client
+  // of that team. The key never reaches the client either way — this gate exists
+  // to prevent cross-team quota abuse, not key exfiltration.
+  let teamAuthorized = false;
   if (teamId && typeof teamId === 'string') {
     try {
-      // Authorize the caller for this team, either as a staff member OR as a
-      // portal client linked to it (clientPortalAccess). The AI key is only
-      // ever used server-side and never returned to the client, so this gate
-      // exists to prevent cross-team quota abuse — not key exfiltration.
       const [memberSnap, portalSnap] = await Promise.all([
         adminDb.collection('teamMembers')
           .where('teamId', '==', teamId)
@@ -121,82 +121,46 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           .limit(20)
           .get(),
       ]);
-
       const isMember = !memberSnap.empty;
       const isPortalClient = portalSnap.docs.some((d) => d.data()?.teamId === teamId);
-
       teamAuthorized = isMember || isPortalClient;
-      if (teamAuthorized) {
-        // Credentials come from the server-only vault (teamSecrets), merged in.
-        const s = await getTeamConfig(teamId);
-        if (s.aiApiKey) {
-          teamApiKey = s.aiApiKey;
-          teamProvider = s.aiProvider === 'openai' ? 'openai' : 'gemini';
-          teamModel = s.aiModel || undefined;
-        }
-      }
     } catch (e) {
-      console.error('Failed to load team AI settings:', e);
+      console.error('Failed to verify team membership for AI chat:', e);
     }
   }
 
-  const geminiKey = teamProvider === 'gemini' ? teamApiKey : process.env.GEMINI_API_KEY;
-  const openaiKey = teamProvider === 'openai' ? teamApiKey : process.env.OPENAI_API_KEY;
+  const scopedTeamId = teamAuthorized && typeof teamId === 'string' ? teamId : null;
+  const cfg = await resolveAiConfig(scopedTeamId);
 
-  if (!geminiKey && !openaiKey) {
+  if (!cfg.hasKey) {
     return res.status(500).json({
       error: 'AI service not configured',
-      detail: `teamId=${teamId ? 'sent' : 'none'}, authorized=${teamAuthorized}, teamKey=${!!teamApiKey}, envGemini=${!!process.env.GEMINI_API_KEY}, envOpenAI=${!!process.env.OPENAI_API_KEY}`,
+      detail: `teamId=${teamId ? 'sent' : 'none'}, authorized=${teamAuthorized}, teamKey=${!!cfg.preferred}, envGemini=${!!process.env.GEMINI_API_KEY}, envOpenAI=${!!process.env.OPENAI_API_KEY}`,
     });
   }
 
   // Last 10 messages, capped at 4000 chars each
-  const recent = messages.slice(-10).map((m: any) => ({
+  const recent: ChatMsg[] = messages.slice(-10).map((m: any) => ({
     role: m.role as 'user' | 'assistant',
     content: m.content.slice(0, 4000),
   }));
 
-  // Which provider goes first: the team's explicit choice, else whatever key exists.
-  const preferGemini = teamProvider ? teamProvider === 'gemini' : !!geminiKey;
-
   try {
-    let result: { reply: string; tokensUsed: number; model: string };
-
-    if (preferGemini && geminiKey) {
-      try {
-        result = await callGemini(geminiKey, systemMessage, recent, teamModel);
-      } catch (gerr: any) {
-        if (openaiKey) {
-          console.error('Gemini failed, falling back to OpenAI:', gerr?.message || gerr);
-          result = await callOpenAI(openaiKey, systemMessage, recent);
-        } else {
-          throw gerr;
-        }
-      }
-    } else if (openaiKey) {
-      try {
-        result = await callOpenAI(openaiKey, systemMessage, recent, teamModel);
-      } catch (oerr: any) {
-        if (geminiKey) {
-          console.error('OpenAI failed, falling back to Gemini:', oerr?.message || oerr);
-          result = await callGemini(geminiKey, systemMessage, recent);
-        } else {
-          throw oerr;
-        }
-      }
-    } else {
-      result = await callGemini(geminiKey!, systemMessage, recent, teamModel);
-    }
+    const result = await generateChatWith(cfg, systemMessage, recent, { maxTokens: 1500, temperature: 0.7 });
+    const reply = result.reply || 'Nuk munda të gjeneroj përgjigje.';
 
     // Log usage (non-blocking)
     adminDb.collection('aiUsageLogs').add({
       userId: uid,
+      teamId: scopedTeamId,
+      feature: 'chat',
       tokensUsed: result.tokensUsed,
       model: result.model,
+      provider: result.provider,
       createdAt: new Date(),
     }).catch(() => {});
 
-    return res.status(200).json({ reply: result.reply });
+    return res.status(200).json({ reply });
   } catch (err: any) {
     console.error('AI Chat error:', err);
     if (err?.status === 429 || err?.statusCode === 429) {
@@ -210,72 +174,4 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       detail: String(err?.message || err).slice(0, 400),
     });
   }
-}
-
-type ChatMsg = { role: 'user' | 'assistant'; content: string };
-
-// --- Google Gemini (free tier via Google AI Studio) ---
-async function callGemini(
-  apiKey: string,
-  systemMessage: string,
-  msgs: ChatMsg[],
-  modelOverride?: string,
-): Promise<{ reply: string; tokensUsed: number; model: string }> {
-  const model = modelOverride || process.env.GEMINI_MODEL || 'gemini-2.0-flash';
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-  // Gemini uses 'user' / 'model' roles instead of 'user' / 'assistant'
-  const contents = msgs.map((m) => ({
-    role: m.role === 'assistant' ? 'model' : 'user',
-    parts: [{ text: m.content }],
-  }));
-
-  const resp = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      system_instruction: { parts: [{ text: systemMessage }] },
-      contents,
-      generationConfig: { temperature: 0.7, maxOutputTokens: 1500 },
-    }),
-  });
-
-  if (!resp.ok) {
-    const body = await resp.text().catch(() => '');
-    const err: any = new Error(`Gemini API ${resp.status}: ${body.slice(0, 300)}`);
-    err.statusCode = resp.status;
-    throw err;
-  }
-
-  const data: any = await resp.json();
-  const reply =
-    data?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') ||
-    'Nuk munda të gjeneroj përgjigje.';
-  const tokensUsed = data?.usageMetadata?.totalTokenCount || 0;
-
-  return { reply, tokensUsed, model };
-}
-
-// --- OpenAI (fallback) ---
-async function callOpenAI(
-  apiKey: string,
-  systemMessage: string,
-  msgs: ChatMsg[],
-  modelOverride?: string,
-): Promise<{ reply: string; tokensUsed: number; model: string }> {
-  const model = modelOverride || 'gpt-4o-mini';
-  const openai = new OpenAI({ apiKey });
-
-  const completion = await openai.chat.completions.create({
-    model,
-    messages: [
-      { role: 'system', content: systemMessage },
-      ...msgs.map((m) => ({ role: m.role, content: m.content })),
-    ],
-    max_tokens: 1500,
-    temperature: 0.7,
-  });
-
-  const reply = completion.choices[0]?.message?.content || 'Nuk munda të gjeneroj përgjigje.';
-  return { reply, tokensUsed: completion.usage?.total_tokens || 0, model };
 }

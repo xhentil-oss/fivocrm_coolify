@@ -51,6 +51,7 @@ function lazyRetry(factory: () => Promise<any>): React.LazyExoticComponent<any> 
 const ProjectsView = lazyRetry(() => import('./views/ProjectsView'));
 const ProjectDetailView = lazyRetry(() => import('./views/ProjectDetailView'));
 const CRMView = lazyRetry(() => import('./views/CRMView'));
+const FollowUpsView = lazyRetry(() => import('./views/FollowUpsView'));
 const DealsView = lazyRetry(() => import('./views/DealsView'));
 const TasksView = lazyRetry(() => import('./views/TasksView'));
 const ReportsView = lazyRetry(() => import('./views/ReportsView'));
@@ -405,6 +406,8 @@ function AppContent() {
                       <Route path="/app/projects" element={<PermissionGate permissionKey="canAccessProjects"><ProjectsView /></PermissionGate>} />
                       <Route path="/app/projects/:projectId" element={<PermissionGate permissionKey="canAccessProjects"><ProjectDetailView /></PermissionGate>} />
                       <Route path="/app/crm" element={<PermissionGate permissionKey="canAccessCRM"><CRMView /></PermissionGate>} />
+                      {/* Follow-up queue (leads + customers) — an extraPath of the crm module. */}
+                      <Route path="/app/follow-ups" element={<ModuleGate moduleId="crm"><FollowUpsView /></ModuleGate>} />
                       <Route path="/app/deals" element={<PermissionGate permissionKey="canAccessCRM"><DealsView /></PermissionGate>} />
                       <Route path="/app/tasks" element={<PermissionGate permissionKey="canAccessTasks"><TasksView /></PermissionGate>} />
                       {/* Daily reports now live inside the hub. Kept as a redirect so

@@ -1375,3 +1375,99 @@ test('48b. the firing log is readable by the tenant and writable by nobody', asy
   await assertFails(setDoc(doc(sa, 'crmAutomationRuns', 'ruleMine_lead1_created'), { results: [] }, { merge: true }));
   await assertFails(getDoc(doc(outsider(), 'crmAutomationRuns', 'ruleMine_lead1_created')));
 });
+
+// ── Inbound WhatsApp (api/_waInbound.ts): businessId is additive on whatsappMessages,
+//    conversations/wa-* stay tenant-bound, and the server-only counters are deny-all ──
+test('49a. whatsappMessages stamped with businessId: business member reads, other tenant is refused', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'whatsappMessages', 'waMsgMine'), {
+      teamId: MY_TEAM, businessId: MY_BIZ, phone: '355691234567', direction: 'inbound',
+      message: 'Përshëndetje', channel: 'baileys', status: 'received',
+    });
+  });
+  // A member of the SAME business but a DIFFERENT department: the new businessId
+  // clause is what lets them in (the team clause alone would refuse).
+  const dept2 = staffOf('dina', MY_BIZ, 'teamDept2', ['member']);
+  await assertSucceeds(getDoc(doc(dept2, 'whatsappMessages', 'waMsgMine')));
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(getDoc(doc(alice, 'whatsappMessages', 'waMsgMine')));
+  // Another tenant — even its admin — never reads it.
+  await assertFails(getDoc(doc(outsider(), 'whatsappMessages', 'waMsgMine')));
+  // A portal client of the same business is not staff.
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+  await assertFails(getDoc(doc(carol, 'whatsappMessages', 'waMsgMine')));
+});
+
+test('49b. legacy whatsappMessages (teamId only) stay readable by the team member', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'whatsappMessages', 'waMsgLegacy'), {
+      teamId: MY_TEAM, phone: '355691234567', direction: 'inbound', message: 'legacy', channel: 'meta', status: 'received',
+    });
+  });
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(getDoc(doc(alice, 'whatsappMessages', 'waMsgLegacy')));
+  // No businessId on the row → the business clause has nothing to match; a member
+  // of another department is (still) refused, and another tenant certainly is.
+  const dept2 = staffOf('dina', MY_BIZ, 'teamDept2', ['member']);
+  await assertFails(getDoc(doc(dept2, 'whatsappMessages', 'waMsgLegacy')));
+  await assertFails(getDoc(doc(outsider(), 'whatsappMessages', 'waMsgLegacy')));
+});
+
+test('49c. conversations/wa-*: business member reads, other tenant does not, outsider cannot clear the SLA flag', async () => {
+  const convId = `wa-${MY_TEAM}-355691234567`;
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'conversations', convId), {
+      channel: 'whatsapp', channelKind: 'baileys', businessId: MY_BIZ, teamId: MY_TEAM, phone: '355691234567',
+      ownerId: null, managerId: null, watchers: [], unassigned: true, status: 'open',
+      awaitingReply: true, slaBreachNotified: false, leadId: null, customerId: null,
+    });
+  });
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(getDoc(doc(alice, 'conversations', convId)));
+  const mallory = outsider();
+  await assertFails(getDoc(doc(mallory, 'conversations', convId)));
+  // Re-arming / silencing the SLA from another tenant is refused.
+  await assertFails(updateDoc(doc(mallory, 'conversations', convId), { slaBreachNotified: true }));
+  await assertFails(updateDoc(doc(mallory, 'conversations', convId), { awaitingReply: false }));
+  // Nor may a portal client (not a watcher, not this thread's client channel) touch it.
+  const carol = portalOf('carol', 'cust1', 'carol@client.com');
+  await assertFails(updateDoc(doc(carol, 'conversations', convId), { slaBreachNotified: true }));
+});
+
+test('49d. waInboundCounters and aiDailyUsage are deny-all (even for the tenant admin and super-admin)', async () => {
+  await testEnv.withSecurityRulesDisabled(async (ctx) => {
+    await setDoc(doc(ctx.firestore(), 'waInboundCounters', `${MY_TEAM}_2026-09-12`), {
+      teamId: MY_TEAM, businessId: MY_BIZ, date: '2026-09-12', leadsCreated: 50,
+    });
+    await setDoc(doc(ctx.firestore(), 'aiDailyUsage', `${MY_TEAM}_2026-09-12`), {
+      teamId: MY_TEAM, businessId: MY_BIZ, date: '2026-09-12', drafts: 200,
+    });
+  });
+  const admin = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  for (const db of [admin, sa]) {
+    await assertFails(getDoc(doc(db, 'waInboundCounters', `${MY_TEAM}_2026-09-12`)));
+    // Resetting the counter would lift the tenant's own daily lead cap.
+    await assertFails(setDoc(doc(db, 'waInboundCounters', `${MY_TEAM}_2026-09-12`), { leadsCreated: 0 }, { merge: true }));
+    await assertFails(getDoc(doc(db, 'aiDailyUsage', `${MY_TEAM}_2026-09-12`)));
+    await assertFails(setDoc(doc(db, 'aiDailyUsage', `${MY_TEAM}_2026-09-12`), { drafts: 0 }, { merge: true }));
+  }
+});
+
+// 50. Follow-up state on a customer is STAFF-side. The portal client may edit their
+//     own profile but must not touch next step / last touch / owner — otherwise a
+//     client could hide themselves from the follow-up queue or re-assign their account.
+test('50a. portal client edits own profile field but cannot write follow-up fields on their customer doc', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertSucceeds(updateDoc(doc(carol, 'customers', 'cust1'), { phone: '+355691234567' }));
+  await assertFails(updateDoc(doc(carol, 'customers', 'cust1'), { nextFollowUpDate: new Date('2099-01-01') }));
+  await assertFails(updateDoc(doc(carol, 'customers', 'cust1'), { awaitingReply: false }));
+  await assertFails(updateDoc(doc(carol, 'customers', 'cust1'), { lastActivityAt: new Date() }));
+  await assertFails(updateDoc(doc(carol, 'customers', 'cust1'), { assignedToUserId: 'carol' }));
+});
+test('50b. staff member schedules a next step on a customer of their business', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['member']);
+  await assertSucceeds(updateDoc(doc(alice, 'customers', 'cust1'), {
+    nextFollowUpDate: new Date('2026-09-15T10:00:00Z'), nextFollowUpType: 'call', followUpNote: 'oferta',
+  }));
+});

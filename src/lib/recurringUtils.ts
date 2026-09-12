@@ -35,8 +35,10 @@ function zoneOffsetMs(at: Date, tz: string): number {
   }
 }
 
-/** Civil (wall-clock) time in the zone, expressed through the UTC getters. */
-function toZoned(at: Date, tz: string): Date {
+/** Civil (wall-clock) time in the zone, expressed through the UTC getters.
+ *  Exported for other calendar-shaped modules (follow-up due dates) so they do
+ *  the same zone-explicit arithmetic instead of re-implementing it. */
+export function toZoned(at: Date, tz: string): Date {
   return new Date(at.getTime() + zoneOffsetMs(at, tz));
 }
 
@@ -46,7 +48,7 @@ function toZoned(at: Date, tz: string): Date {
  * that guess so a date landing on the other side of a DST switch still returns
  * the right wall-clock time.
  */
-function fromZoned(zoned: Date, tz: string): Date {
+export function fromZoned(zoned: Date, tz: string): Date {
   const guess = new Date(zoned.getTime() - zoneOffsetMs(zoned, tz));
   return new Date(zoned.getTime() - zoneOffsetMs(guess, tz));
 }

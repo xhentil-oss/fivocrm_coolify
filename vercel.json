@@ -5,6 +5,9 @@
     },
     "api/email.ts": {
       "maxDuration": 60
+    },
+    "api/meta-webhook.ts": {
+      "maxDuration": 30
     }
   },
   "rewrites": [
@@ -71,6 +74,18 @@
     {
       "source": "/api/platform-admin",
       "destination": "/api/email?type=platform-admin"
+    },
+    {
+      "source": "/api/wa-inbound",
+      "destination": "/api/email?type=wa-inbound"
+    },
+    {
+      "source": "/api/contact-email",
+      "destination": "/api/email?type=contact-email"
+    },
+    {
+      "source": "/api/ai-reply",
+      "destination": "/api/email?type=ai-reply"
     },
     {
       "source": "/api/(.*)",

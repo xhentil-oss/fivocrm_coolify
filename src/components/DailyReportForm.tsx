@@ -27,6 +27,7 @@ import {
 } from '../lib/productivity/dailyReportPlan';
 import { checkDailyReportQuality } from '../lib/productivity/dailyReportQuality';
 import { completeTask } from '../lib/recurringUtils';
+import { dueState } from '../lib/crm/followUp';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import type {
   Customer, DailyReport, DailyTaskOutcome, Project, Task, Lead,
@@ -284,13 +285,12 @@ const DailyReportForm: React.FC<DailyReportFormProps> = ({
   // CRM: leads with follow-up due today or overdue
   const todayFollowUps = useMemo(() => {
     if (!myLeads) return [];
-    const todayEnd = new Date();
-    todayEnd.setHours(23, 59, 59, 999);
+    // Same day math as /app/follow-ups (Europe/Tirane), so the report and the
+    // queue agree on what "today" was.
     return myLeads.filter(l => {
-      if (!l.nextFollowUpDate) return false;
-      if (l.status === 'Won' || l.status === 'Lost') return false;
-      const d = l.nextFollowUpDate instanceof Date ? l.nextFollowUpDate : new Date(l.nextFollowUpDate);
-      return d <= todayEnd;
+      if (l.status === 'Won' || l.status === 'Lost' || l.status === 'Converted') return false;
+      const s = dueState(l).state;
+      return s === 'overdue' || s === 'today';
     });
   }, [myLeads]);
 

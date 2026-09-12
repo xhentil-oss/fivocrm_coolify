@@ -40,6 +40,8 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   project_comment: 'messages',
   client_request: 'messages',
   gmb_negative_review: 'messages',
+  whatsapp_message: 'messages',
+  conversation_sla: 'messages',
   // projects
   project_created: 'projects',
   project_completed: 'projects',
@@ -51,6 +53,7 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   lead_converted: 'projects',
   new_client: 'projects',
   lead_follow_up: 'projects',
+  customer_follow_up: 'projects',
   lead_cadence_step: 'projects',
   crm_automation: 'projects',
   guest_project_invited: 'projects',

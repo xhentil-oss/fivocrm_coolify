@@ -70,6 +70,8 @@ const CUSTOMER_REFS: RefSpec[] = [
   { collection: 'serviceInquiries', field: 'customerId' },
   { collection: 'shopOrders', field: 'customerId' },
   { collection: 'conversations', field: 'customerId' },
+  // Stamped by api/_waInbound.ts when the inbound number matches a customer.
+  { collection: 'whatsappMessages', field: 'customerId' },
   { collection: 'campaignEnrollments', field: 'customerId' },
   { collection: 'socialAccounts', field: 'customerId' },
   { collection: 'socialSnapshots', field: 'customerId' },

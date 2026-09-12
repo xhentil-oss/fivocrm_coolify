@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { useCollection, useMutation, getGlobalTeamId } from '../hooks/useFirestore';
+import { useCollection, useMutation, useDocument, getGlobalTeamId } from '../hooks/useFirestore';
+import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
-import { X, Send, MessageSquare, Loader2, Phone, FileText, Paperclip, Zap } from 'lucide-react';
+import { X, Send, MessageSquare, Loader2, Phone, FileText, Paperclip, Zap, Sparkles, RefreshCw } from 'lucide-react';
 import { Button } from './ui/button';
 import { normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import { useFileUpload } from '../hooks/useFileUpload';
@@ -19,9 +20,16 @@ interface Props {
   onClose: () => void;
   /** When true, render inline (fills its container) instead of as a fixed right-side drawer. */
   embedded?: boolean;
+  /**
+   * Fired after a SUCCESSFUL send. The panel does not know which CRM entity it
+   * belongs to, so the owner (CRMView / FollowUpsView / Customer360) logs the
+   * timeline row and stamps lastActivityAt — without this the primary WhatsApp
+   * path never moved temperature, staleness or the first-response SLA.
+   */
+  onSent?: (e: { kind: 'text' | 'template' | 'media'; body?: string }) => void;
 }
 
-const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, leadId, onClose, embedded }) => {
+const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, leadId, onClose, embedded, onSent }) => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [text, setText] = useState('');
@@ -58,6 +66,36 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
 
   const normalizedPhone = normalizeAlbanianPhone(phone);
   const teamId = getGlobalTeamId();
+
+  // ── AI suggestion ("AI propozon, njeriu dërgon") ──
+  // The inbound handler (api/_waInbound.ts) drafts a reply onto the conversation doc;
+  // nothing is ever auto-sent. The staff member can use it, edit it, or ask again.
+  const teamSettings = useTeamSettingsData();
+  const aiAssistOn = (teamSettings as any)?.waAiAssist !== 'off' && !!((teamSettings as any)?.hasAiApiKey ?? true);
+  const convId = teamId && normalizedPhone ? `wa-${teamId}-${normalizedPhone}` : undefined;
+  const { data: conversation } = useDocument<any>('conversations', convId);
+  const [aiLoading, setAiLoading] = useState(false);
+  const [aiDismissedFor, setAiDismissedFor] = useState<string | null>(null);
+  const requestAiDraft = async () => {
+    if (!user || aiLoading || !teamId) return;
+    setAiLoading(true);
+    try {
+      const token = await user.getIdToken();
+      const res = await fetch('/api/ai-reply', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ teamId, phone: normalizedPhone }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'Sugjerimi dështoi');
+      setAiDismissedFor(null);
+      if (data?.suggestedReply && !conversation?.suggestedReply) setText((t) => t || data.suggestedReply);
+    } catch (err: unknown) {
+      toast({ title: 'AI', description: err instanceof Error ? err.message : 'Sugjerimi dështoi', variant: 'destructive' });
+    } finally {
+      setAiLoading(false);
+    }
+  };
 
   const { data: rawMessages, loading } = useCollection<WhatsAppMessage>('whatsappMessages', {
     skip: !normalizedPhone || !teamId,
@@ -158,6 +196,7 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
         }
         throw new Error(data.error || 'Dërgimi dështoi');
       }
+      onSent?.({ kind: 'text', body });
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Dërgimi dështoi';
       toast({ title: 'Gabim WhatsApp', description: msg, variant: 'destructive' });
@@ -201,6 +240,7 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || 'Dërgimi i template-it dështoi');
       toast({ title: 'Template u dërgua', description: tplName.trim() });
+      onSent?.({ kind: 'template', body: `Template: ${tplName.trim()}` });
       setTemplateOpen(false);
       setTplName('');
       setTplParams('');
@@ -289,6 +329,7 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
         }
         throw new Error(data.error || 'Dërgimi i medias dështoi');
       }
+      onSent?.({ kind: 'media', body: text.trim() || `[${mediaType}] ${file.name}` });
       setText('');
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Dërgimi i medias dështoi';
@@ -441,6 +482,44 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
           <div className="mb-2 px-3 py-2 rounded-md bg-amber-500/10 border border-amber-500/30 text-[11px] text-amber-700 dark:text-amber-400 leading-snug">
             ⚠️ Jashtë dritares 24-orëshe të Meta. Mesazhet me tekst të lirë do refuzohen — duhet të përdorni një template të aprovuar.
           </div>
+        )}
+        {aiAssistOn && conversation?.awaitingReply && (
+          conversation?.suggestedReply && aiDismissedFor !== (conversation.suggestedForMessageId || 'x') ? (
+            <div className="mb-2 rounded-md border border-violet-300/60 bg-violet-50 dark:bg-violet-950/30 dark:border-violet-800 p-2.5 space-y-2">
+              <div className="flex items-center justify-between gap-2">
+                <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-violet-700 dark:text-violet-300">
+                  <Sparkles className="w-3.5 h-3.5" /> Sugjerim AI — ti e dërgon
+                </span>
+                <div className="flex items-center gap-1">
+                  <button type="button" className="text-violet-700 dark:text-violet-300 hover:opacity-80" title="Rigjenero" onClick={requestAiDraft} disabled={aiLoading}>
+                    {aiLoading ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <RefreshCw className="w-3.5 h-3.5" />}
+                  </button>
+                  <button type="button" className="text-muted-foreground hover:text-foreground" title="Hiq" onClick={() => setAiDismissedFor(conversation.suggestedForMessageId || 'x')}>
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              </div>
+              <p className="text-sm text-foreground whitespace-pre-wrap leading-snug">{conversation.suggestedReply}</p>
+              <div className="flex gap-1.5">
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setText(conversation.suggestedReply)}>
+                  Ndrysho
+                </Button>
+                <Button size="sm" className="h-7 text-xs bg-[#25D366] hover:bg-[#1da851] text-white"
+                  onClick={() => { setText(conversation.suggestedReply); setTimeout(() => { void handleSend(); }, 0); }}
+                  disabled={sending}>
+                  <Send className="w-3 h-3 mr-1" /> Dërgo
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="mb-2 flex justify-end">
+              <button type="button" onClick={requestAiDraft} disabled={aiLoading}
+                className="inline-flex items-center gap-1 text-[11px] text-violet-700 dark:text-violet-300 hover:underline disabled:opacity-60">
+                {aiLoading ? <Loader2 className="w-3 h-3 animate-spin" /> : <Sparkles className="w-3 h-3" />}
+                Sugjero përgjigje me AI
+              </button>
+            </div>
+          )
         )}
         {quickOpen && (snippets?.length || 0) > 0 && (
           <div className="mb-2 max-h-48 overflow-y-auto rounded-md border border-border bg-popover shadow-lg">

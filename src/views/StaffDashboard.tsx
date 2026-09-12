@@ -40,6 +40,7 @@ import { taskDueMs, compareTasksByDue, compareTaskIds } from '../lib/taskSort';
 import { claimTaskNextCycle, releaseTaskNextCycle } from '../lib/taskRecurrenceClaim';
 import { useFilteredTasks, useFilteredProjects, useFilteredByOwner } from '../hooks/useRoleFilteredData';
 import MomentumWidget from '../components/MomentumWidget';
+import TodayFollowUpsWidget from '../components/dashboard/TodayFollowUpsWidget';
 
 
 // ── Greeting based on time of day ──
@@ -104,7 +105,7 @@ function calculateStreak(activities: (Activity & { id: string })[], userId: stri
 
 const StaffDashboard: React.FC = () => {
   const { user } = useAuth();
-  const { isGuest, dataScope, canEdit } = usePermissions(); // also ensures teamId is synced
+  const { isGuest, dataScope, canEdit, canAccessCRM } = usePermissions(); // also ensures teamId is synced
   const navigate = useNavigate();
   const { toast } = useToast();
   const [showAllMyTasks, setShowAllMyTasks] = useState(false);
@@ -599,6 +600,11 @@ const StaffDashboard: React.FC = () => {
           </div>
         </Card>
       </div>
+
+      {/* ── Follow-ups due today (leads + customers) — hidden without CRM access ── */}
+      {canAccessCRM && (
+        <TodayFollowUpsWidget scope={canSeeTeamDay ? 'all' : 'mine'} />
+      )}
 
       {/* ── ADMIN/MANAGER: Team tasks due today, per person ── */}
       {canSeeTeamDay && (

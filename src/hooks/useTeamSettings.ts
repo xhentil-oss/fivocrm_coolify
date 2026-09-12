@@ -65,6 +65,35 @@ export interface TeamSettings {
   waAutoReplyText?: string;
   waBusinessStart?: string;          // "HH:MM" (Europe/Tirane)
   waBusinessEnd?: string;            // "HH:MM"
+  // ── Auto-reply v2 (api/_waAutoReply.ts; edited in Cilësimet → Automatizime →
+  //    "Ndjekja & Përgjigjet automatike", FollowUpSettingsPanel) ──
+  /** Working weekdays for the outside-hours reply: 0 = Sunday … 6 = Saturday. Default [1..5]. */
+  waBusinessDays?: number[];
+  /** First-contact greeting: auto-sent ONCE to a number with no history (see waGreetingAfterDays). */
+  waGreetingEnabled?: boolean;
+  waGreetingText?: string;
+  /** A contact silent for this many days counts as "new" again and gets the greeting. Default 7. */
+  waGreetingAfterDays?: number;
+  /** Minimum hours between two auto-replies to the same contact. Default 6. */
+  waAutoReplyDebounceHours?: number;
+  /** AI assistant on inbound WhatsApp: 'off' | 'draft' ("AI propozon, njeriu dërgon").
+   *  'auto' is deliberately NOT offered. */
+  waAiAssist?: 'off' | 'draft';
+  /** Free-text business context fed to the AI prompt (services, hours, price policy — never secrets). */
+  waAiContext?: string;
+  /** Max AI drafts per team per day (`aiDailyUsage`). Default 200. */
+  waAiDailyCap?: number;
+  /** Create a lead for an unknown inbound WhatsApp number. Default true. */
+  waAutoCreateLead?: boolean;
+  /** Max auto-created leads per team per day (`waInboundCounters`). Default 50. */
+  waAutoCreateLeadDailyCap?: number;
+  // ── Follow-up thresholds (src/lib/crm/followUpConfig.ts validates; defaults there) ──
+  /** Unanswered inbound WhatsApp → `conversation_sla` after N minutes (15–1440). Default 120. */
+  waResponseSlaMinutes?: number;
+  /** First-response SLA on a new lead, hours (1–168). Default 24. */
+  followUpSlaHours?: number;
+  /** No activity for N days → lead "i ftohur" (1–365). Default 14. */
+  followUpStaleDays?: number;
   waFollowUpEnabled?: boolean;
   waFollowUpTemplateId?: string;     // ref → waTemplates
   waFollowUpChannelPhoneNumberId?: string;

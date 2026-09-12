@@ -43,6 +43,7 @@ import {
   ChevronsUpDown,
   Inbox,
   Upload,
+  CheckCircle2,
 } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -77,7 +78,14 @@ import DuplicateContactsPanel from '../components/DuplicateContactsPanel';
 import { useLeadIntel } from '../hooks/useLeadIntel';
 import { useSavedSegments, type LeadSegment } from '../hooks/useSavedSegments';
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
-import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember, Quote, Deal } from '../types';
+import { buildFollowUpQueue, dueState, touchContactPatch } from '../lib/crm/followUp';
+import { useFollowUpActions, targetFromLead } from '../hooks/useFollowUpActions';
+import FollowUpBadge from '../components/crm/FollowUpBadge';
+import NextStepPopover from '../components/crm/NextStepPopover';
+import SnoozeMenu from '../components/crm/SnoozeMenu';
+import ContactQuickActions from '../components/crm/ContactQuickActions';
+import EmailComposerDialog, { useContactEmailAvailable, type EmailTarget } from '../components/crm/EmailComposerDialog';
+import type { Lead, ClientPortalAccess, Customer, Notification, TeamMember, Quote, Deal, FollowUpType } from '../types';
 
 // Built-in business categories. Custom ones typed in the lead form are merged in
 // from teamSettings.leadCategories + the categories already on existing leads.
@@ -146,11 +154,12 @@ const CRMView: React.FC = () => {
   const [visibleLimit, setVisibleLimit] = useState(PAGE_SIZE);
   const { toast } = useToast();
 
-  // Follow-up / re-contact state (synced with selectedLead)
-  const [followUpDate, setFollowUpDate] = useState('');
-  const [followUpNote, setFollowUpNote] = useState('');
-  const [followUpSaving, setFollowUpSaving] = useState(false);
+  // Re-contact composer state (synced with selectedLead). Follow-up state itself
+  // (next step / snooze / complete) lives in useFollowUpActions — no local copy.
   const [recontactMsg, setRecontactMsg] = useState('');
+  const followUp = useFollowUpActions();
+  const emailAvailable = useContactEmailAvailable();
+  const [emailTarget, setEmailTarget] = useState<EmailTarget | null>(null);
   const [sendingEmail, setSendingEmail] = useState(false);
   const [sendingWa, setSendingWa] = useState(false);
 
@@ -569,14 +578,14 @@ const CRMView: React.FC = () => {
   };
 
   // Bump a lead's recency signals after an activity. Outbound touches also set
-  // firstResponseAt (once) — the basis for the first-response SLA.
+  // firstResponseAt (once) — the basis for the first-response SLA. The patch is
+  // the shared `touchContactPatch` (src/lib/crm/followUp.ts), so every surface
+  // stamps the same fields.
   const bumpLeadActivity = (leadId: string, type: string) => {
-    const patch: Record<string, any> = { lastActivityAt: new Date() };
-    if (['call', 'email', 'whatsapp', 'meeting'].includes(type)) {
-      const l = leads?.find(x => x.id === leadId);
-      if (l && !l.firstResponseAt) patch.firstResponseAt = new Date();
-    }
-    leadMutation.update(leadId, patch).catch(() => { /* non-critical */ });
+    const l = leads?.find(x => x.id === leadId);
+    if (!l) return;
+    const channel: FollowUpType = (['call', 'email', 'whatsapp', 'meeting'] as FollowUpType[]).includes(type as FollowUpType) ? (type as FollowUpType) : 'other';
+    leadMutation.update(leadId, touchContactPatch(l, channel, new Date(), { entity: 'lead' })).catch(() => { /* non-critical */ });
   };
 
   // Append an entry to a lead's activity timeline (fire-and-forget) + bump recency.
@@ -590,6 +599,10 @@ const CRMView: React.FC = () => {
 
   // Lead scoring + per-lead intel (score/temperature/SLA), extracted to a hook (P3).
   const { leadIntelMap, getScore, getTemp, getSla } = useLeadIntel(leads);
+
+  // The drawer holds a SNAPSHOT of the lead; follow-up writes must render from
+  // the live document or the badge/popover would show stale state.
+  const liveLead: Lead | null = selectedLead ? ((leads || []).find(l => l.id === selectedLead.id) || selectedLead) : null;
 
   // P2.3 — open/close the lead drawer with the URL in sync (deep-linkable via
   // ?lead=<id>; a query param keeps us on the same route so filters/scroll persist).
@@ -727,45 +740,12 @@ const CRMView: React.FC = () => {
     }
   };
 
-  const handleFollowUp = async (leadId: string) => {
-    await leadMutation.update(leadId, {
-      lastFollowUpDate: new Date(),
-      nextFollowUpDate: null,
-      followUpNote: null,
-      status: 'Follow-up',
-    });
-  };
-
-  // Sync follow-up state whenever the selected lead changes
+  // Pre-fill the re-contact composer whenever the selected lead changes.
   useEffect(() => {
     if (!selectedLead) return;
-    const nd = selectedLead.nextFollowUpDate;
-    setFollowUpDate(nd
-      ? (nd instanceof Date ? nd : new Date((nd as any)?.seconds ? (nd as any).seconds * 1000 : nd)).toISOString().split('T')[0]
-      : '');
-    setFollowUpNote(selectedLead.followUpNote || '');
     const firstName = selectedLead.name?.split(' ')[0] || selectedLead.name || 'ju';
     setRecontactMsg(`Përshëndetje ${firstName},\n\nDoja t'ju kontaktoja lidhur me shërbimin tonë.\n\nA keni mundësi të flasim këtë javë?\n\nFaleminderit!`);
   }, [selectedLead?.id]);
-
-  const handleSaveFollowUp = async () => {
-    if (!selectedLead) return;
-    setFollowUpSaving(true);
-    try {
-      await leadMutation.update(selectedLead.id, {
-        nextFollowUpDate: followUpDate ? new Date(followUpDate) : null,
-        followUpNote: followUpNote.trim() || null,
-      });
-      if (followUpDate) {
-        logLead(selectedLead.id, 'followup_scheduled', `Rikontakt i planifikuar: ${followUpDate}`, followUpNote.trim() || undefined);
-      }
-      toast({ title: 'Kujtesë e ruajtur' });
-    } catch {
-      toast({ title: 'Gabim', description: 'Kujtesja nuk u ruajt', variant: 'destructive' });
-    } finally {
-      setFollowUpSaving(false);
-    }
-  };
 
   const handleSendRecontactWhatsApp = async () => {
     if (!selectedLead?.phoneNumber || !recontactMsg.trim()) return;
@@ -780,8 +760,7 @@ const CRMView: React.FC = () => {
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Dërgimi dështoi'); }
       toast({ title: 'WhatsApp u dërgua!' });
-      await leadMutation.update(selectedLead.id, { lastFollowUpDate: new Date(), ...(selectedLead.firstResponseAt ? {} : { firstResponseAt: new Date() }) });
-      logLead(selectedLead.id, 'whatsapp', 'WhatsApp i dërguar', recontactMsg.trim());
+      await followUp.logContact(targetFromLead(selectedLead), 'whatsapp', recontactMsg.trim(), { countsAsFollowUp: true });
     } catch (err: unknown) {
       toast({ title: 'Gabim WhatsApp', description: err instanceof Error ? err.message : 'Dërgimi dështoi', variant: 'destructive' });
     } finally {
@@ -801,8 +780,7 @@ const CRMView: React.FC = () => {
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error || 'Dërgimi dështoi'); }
       toast({ title: 'Email u dërgua!' });
-      await leadMutation.update(selectedLead.id, { lastFollowUpDate: new Date(), ...(selectedLead.firstResponseAt ? {} : { firstResponseAt: new Date() }) });
-      logLead(selectedLead.id, 'email', 'Email i dërguar', recontactMsg.trim());
+      await followUp.logContact(targetFromLead(selectedLead), 'email', recontactMsg.trim(), { countsAsFollowUp: true });
     } catch (err: unknown) {
       toast({ title: 'Gabim Email', description: err instanceof Error ? err.message : 'Dërgimi dështoi', variant: 'destructive' });
     } finally {
@@ -1031,11 +1009,7 @@ const CRMView: React.FC = () => {
 
     // Sort
     const dir = sortDir === 'asc' ? 1 : -1;
-    const getFollowMs = (l: Lead) => {
-      const nd = l.nextFollowUpDate as any;
-      if (!nd) return Number.POSITIVE_INFINITY;
-      return nd instanceof Date ? nd.getTime() : (nd?.seconds ? nd.seconds * 1000 : new Date(nd).getTime());
-    };
+    const getFollowMs = (l: Lead) => dueState(l).dueMs ?? Number.POSITIVE_INFINITY;
     const sorted = [...result].sort((a, b) => {
       switch (sortBy) {
         case 'name': return a.name.localeCompare(b.name, 'sq') * dir;
@@ -1102,17 +1076,8 @@ const CRMView: React.FC = () => {
     toast({ title: 'Segmenti u ruajt', description: name });
   };
 
-  const needsFollowUp = React.useMemo(() => {
-    if (!leads) return [];
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
-    
-    return leads.filter(lead => {
-      if (lead.status === 'Lost' || lead.status === 'Converted') return false;
-      if (!lead.lastFollowUpDate) return true;
-      return new Date(lead.lastFollowUpDate) < thirtyDaysAgo;
-    });
-  }, [leads]);
+  // Follow-up counts — the same numbers /app/follow-ups shows (one queue builder).
+  const followUpCounts = React.useMemo(() => buildFollowUpQueue(leads, [], new Date()).counts, [leads]);
 
   // Forecast (weighted) — current value + 30d sparkline + delta vs prior 30d
   const forecastData = React.useMemo(() => {
@@ -1261,7 +1226,15 @@ const CRMView: React.FC = () => {
         <div>
           <h1 className="text-h2 text-foreground">Leads</h1>
           <p className="text-body text-muted-foreground mt-1">
-            {leads?.length || 0} lead total {needsFollowUp.length > 0 ? `· ${needsFollowUp.length} kërkojnë ndjekje` : ''}
+            {leads?.length || 0} lead total
+            {followUpCounts.due > 0 && (
+              <>
+                {' · '}
+                <button type="button" className="underline decoration-dotted hover:text-foreground" onClick={() => navigate('/app/follow-ups')}>
+                  {followUpCounts.overdue > 0 ? `${followUpCounts.overdue} vonuar` : ''}{followUpCounts.overdue > 0 && followUpCounts.today > 0 ? ' · ' : ''}{followUpCounts.today > 0 ? `${followUpCounts.today} sot` : ''}
+                </button>
+              </>
+            )}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -1473,13 +1446,20 @@ const CRMView: React.FC = () => {
           </p>
         </Card>
 
-        <Card className={`p-3 sm:p-4 card-hover ${needsFollowUp.length > 0 ? 'border-l-2 border-l-warning' : ''}`}>
+        <Card
+          className={`p-3 sm:p-4 card-hover cursor-pointer ${followUpCounts.overdue > 0 ? 'border-l-2 border-l-destructive' : followUpCounts.due > 0 ? 'border-l-2 border-l-warning' : ''}`}
+          onClick={() => navigate('/app/follow-ups')}
+          title="Hap radhën e ndjekjeve"
+        >
           <div className="flex items-center gap-1.5 text-muted-foreground">
             <CalendarIcon className="w-3.5 h-3.5" />
-            <p className="text-xs">Për ndjekje</p>
+            <p className="text-xs">Për ndjekje sot</p>
           </div>
-          <p className={`mt-1.5 text-2xl sm:text-3xl font-semibold tabular-nums leading-none ${needsFollowUp.length > 0 ? 'text-warning' : 'text-foreground'}`}>
-            {needsFollowUp.length}
+          <p className={`mt-1.5 text-2xl sm:text-3xl font-semibold tabular-nums leading-none ${followUpCounts.overdue > 0 ? 'text-destructive' : followUpCounts.due > 0 ? 'text-warning' : 'text-foreground'}`}>
+            {followUpCounts.due}
+          </p>
+          <p className="mt-1 text-[11px] text-muted-foreground">
+            {followUpCounts.overdue > 0 ? `${followUpCounts.overdue} vonuar · ` : ''}{followUpCounts.noNextStep} pa hap tjetër
           </p>
         </Card>
 
@@ -1608,24 +1588,9 @@ const CRMView: React.FC = () => {
               const scoreColor = s >= 70 ? 'text-green-600' : s >= 40 ? 'text-yellow-600' : 'text-red-500';
               const leadPhone = normalizeAlbanianPhone(lead.phoneNumber || lead.phone || '');
               const waUnread = leadPhone ? (waUnreadByPhone.get(leadPhone) || 0) : 0;
-              const nd = lead.nextFollowUpDate;
-              let followBadge: React.ReactNode = null;
-              if (nd) {
-                const d = nd instanceof Date ? new Date(nd) : new Date((nd as any)?.seconds ? (nd as any).seconds * 1000 : nd);
-                const today = new Date(); today.setHours(0,0,0,0); d.setHours(0,0,0,0);
-                const isOverdue = d < today;
-                const isDueToday = d.getTime() === today.getTime();
-                followBadge = (
-                  <span className={`inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full ${
-                    isOverdue ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
-                    isDueToday ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
-                    'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-                  }`}>
-                    <Clock className="w-3 h-3" />
-                    {isOverdue ? 'Vonuar' : isDueToday ? 'Sot' : d.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}
-                  </span>
-                );
-              }
+              const followBadge: React.ReactNode = lead.nextFollowUpDate
+                ? <FollowUpBadge contact={lead} size="sm" hideWhenNone />
+                : null;
               return (
                 <Card key={lead.id} className="p-3 active:bg-muted/40 transition-colors" onClick={() => openLead(lead)}>
                   {/* Tier 1 — name + status + score + menu */}
@@ -2148,25 +2113,20 @@ const CRMView: React.FC = () => {
                           );
                         })()}
                       </td>
-                      <td className="px-6 py-4">
-                        {(() => {
-                          const nd = lead.nextFollowUpDate;
-                          if (!nd) return <span className="text-xs text-muted-foreground">—</span>;
-                          const d = nd instanceof Date ? new Date(nd) : new Date((nd as any)?.seconds ? (nd as any).seconds * 1000 : nd);
-                          const today = new Date(); today.setHours(0,0,0,0); d.setHours(0,0,0,0);
-                          const isOverdue = d < today;
-                          const isDueToday = d.getTime() === today.getTime();
-                          return (
-                            <div className={`flex items-center gap-1.5 text-xs font-medium px-2 py-1 rounded-full w-fit ${
-                              isOverdue ? 'bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400' :
-                              isDueToday ? 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400' :
-                              'bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400'
-                            }`}>
-                              <Clock className="w-3 h-3" />
-                              {isDueToday ? 'Sot' : d.toLocaleDateString('sq-AL', { day: 'numeric', month: 'short' })}
-                            </div>
-                          );
-                        })()}
+                      <td className="px-6 py-4" onClick={(e) => e.stopPropagation()}>
+                        <NextStepPopover
+                          contact={lead}
+                          entity="lead"
+                          mode="schedule"
+                          align="start"
+                          trigger={
+                            lead.nextFollowUpDate
+                              ? <button type="button" className="rounded-full" title="Ndrysho hapin tjetër"><FollowUpBadge contact={lead} /></button>
+                              : <button type="button" className="text-xs text-muted-foreground hover:text-foreground underline decoration-dotted" title="Cakto hapin tjetër">Cakto…</button>
+                          }
+                          onSubmit={(p) => followUp.schedule(targetFromLead(lead), p.next)}
+                          onCloseLead={(s) => { if (s === 'Lost') setLostReasonLead(lead); else openLead(lead); }}
+                        />
                       </td>
                       <td className="px-6 py-4 text-xs text-muted-foreground">
                         {(() => {
@@ -2193,6 +2153,20 @@ const CRMView: React.FC = () => {
                       </td>
                       <td className="px-6 py-4">
                         <div className="flex gap-1 opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                          {dueState(lead).state === 'overdue' || dueState(lead).state === 'today' ? (
+                            <NextStepPopover
+                              contact={lead}
+                              entity="lead"
+                              mode="complete"
+                              trigger={
+                                <Button variant="ghost" size="sm" className="h-8 w-8 p-0 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/40" title="U bë" aria-label="Ndjekja u krye" onClick={(e) => e.stopPropagation()}>
+                                  <CheckCircle2 className="w-4 h-4" />
+                                </Button>
+                              }
+                              onSubmit={(p) => followUp.complete(targetFromLead(lead), p.outcome || { channel: lead.nextFollowUpType || 'call', result: null }, p.next)}
+                              onCloseLead={(s) => { if (s === 'Lost') setLostReasonLead(lead); else openLead(lead); }}
+                            />
+                          ) : null}
                           {lead.phoneNumber && waEnabled && (
                             <Button
                               variant="ghost"
@@ -2281,42 +2255,16 @@ const CRMView: React.FC = () => {
               </div>
             ); })()}
             <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Kontakto</p>
-            <div className="flex flex-wrap gap-2">
-              {selectedLead.email && (
-                <Button variant="outline" size="sm" asChild>
-                  <a href={`mailto:${selectedLead.email}`}>
-                    <Mail className="w-4 h-4 mr-1.5" />
-                    Email
-                  </a>
-                </Button>
-              )}
-              {selectedLead.phoneNumber && (
-                <Button variant="outline" size="sm" asChild>
-                  <a href={`tel:${selectedLead.phoneNumber}`}>
-                    <Phone className="w-4 h-4 mr-1.5" />
-                    Thirr
-                  </a>
-                </Button>
-              )}
-              {selectedLead.phoneNumber && waEnabled && (
-                <Button
-                  variant="outline"
-                  size="sm"
-                  className="text-[#25D366] border-[#25D366]/30 hover:bg-[#25D366]/10"
-                  onClick={() => { setSelectedLead(null); setWhatsappLead(selectedLead); }}
-                >
-                  <MessageSquare className="w-4 h-4 mr-1.5" />
-                  WhatsApp Chat
-                </Button>
-              )}
-              {selectedLead.phoneNumber && (
-                <Button variant="outline" size="sm" asChild>
-                  <a href={`sms:${selectedLead.phoneNumber}`}>
-                    <MessageSquare className="w-4 h-4 mr-1.5" />
-                    SMS
-                  </a>
-                </Button>
-              )}
+            <div className="flex flex-wrap gap-2 items-center">
+              <ContactQuickActions
+                contact={{ name: selectedLead.name, phone: selectedLead.phoneNumber || selectedLead.phone, email: selectedLead.email }}
+                entity="lead"
+                withSms
+                stopPropagation={false}
+                onLogged={(ch) => { void followUp.logContact(targetFromLead(liveLead || selectedLead), ch); toast({ title: 'Kontakti u regjistrua' }); }}
+                onOpenWhatsApp={waEnabled ? () => { setSelectedLead(null); setWhatsappLead(selectedLead); } : undefined}
+                onOpenEmail={emailAvailable && selectedLead.email ? () => setEmailTarget({ kind: 'lead', id: selectedLead.id, name: selectedLead.name, email: selectedLead.email!, company: selectedLead.company }) : undefined}
+              />
               {selectedLead.website && (
                 <Button variant="outline" size="sm" asChild>
                   <a href={safeHref(selectedLead.website)} target="_blank" rel="noopener noreferrer">
@@ -2337,85 +2285,64 @@ const CRMView: React.FC = () => {
           {
             value: 'rikontakto',
             label: (() => {
-              const nd = selectedLead.nextFollowUpDate;
-              if (!nd) return 'Rikontakto';
-              const d = nd instanceof Date ? nd : new Date((nd as any)?.seconds ? (nd as any).seconds * 1000 : nd);
-              const today = new Date(); today.setHours(0,0,0,0); d.setHours(0,0,0,0);
-              if (d < today) return '🔴 Rikontakto';
-              if (d.getTime() === today.getTime()) return '🟡 Rikontakto';
-              return '🔵 Rikontakto';
+              const s = dueState(liveLead || selectedLead).state;
+              return s === 'overdue' ? '🔴 Rikontakto' : s === 'today' ? '🟡 Rikontakto' : s === 'upcoming' ? '🔵 Rikontakto' : 'Rikontakto';
             })(),
             content: (() => {
-              const today = new Date(); today.setHours(0,0,0,0);
-              const nd = followUpDate ? new Date(followUpDate) : null;
-              if (nd) nd.setHours(0,0,0,0);
-              const isOverdue = nd && nd < today;
-              const isDueToday = nd && nd.getTime() === today.getTime();
-              const hasContact = selectedLead.phoneNumber || selectedLead.email;
+              const lead = liveLead || selectedLead;
+              const due = dueState(lead);
+              const hasContact = lead.phoneNumber || lead.email;
+              const target = targetFromLead(lead);
+              const closeLeadFromPopover = (s: 'Won' | 'Lost') => { if (s === 'Lost') setLostReasonLead(lead); else toast({ title: 'Ndrysho statusin në Fituar', description: 'Përdor menunë e statusit të lead-it.' }); };
               return (
                 <div className="space-y-5">
-                  {/* ── Scheduled reminder ── */}
+                  {/* ── Next step (single source: useFollowUpActions) ── */}
                   <div className="space-y-3">
                     <div className="flex items-center gap-2">
                       <Bell className="w-4 h-4 text-primary" />
-                      <p className="text-sm font-semibold">Kujtesë e Caktuar</p>
+                      <p className="text-sm font-semibold">Hapi tjetër</p>
                     </div>
 
-                    {nd && (
-                      <div className={`flex items-center gap-2 p-2.5 rounded-lg text-sm font-medium ${
-                        isOverdue ? 'bg-red-50 text-red-700 border border-red-200 dark:bg-red-900/20 dark:text-red-400' :
-                        isDueToday ? 'bg-amber-50 text-amber-700 border border-amber-200 dark:bg-amber-900/20 dark:text-amber-400' :
-                        'bg-blue-50 text-blue-700 border border-blue-200 dark:bg-blue-900/20 dark:text-blue-400'
-                      }`}>
-                        <Clock className="w-4 h-4 shrink-0" />
-                        <span>
-                          {isOverdue ? `Vonuar · ${nd.toLocaleDateString('sq-AL')}` :
-                           isDueToday ? 'Sot' :
-                           nd.toLocaleDateString('sq-AL', { weekday: 'short', day: 'numeric', month: 'short' })}
-                        </span>
-                        {followUpNote && <span className="text-xs font-normal opacity-80 ml-1 truncate">— {followUpNote}</span>}
-                      </div>
-                    )}
+                    <div className={`flex items-center gap-2 p-2.5 rounded-lg text-sm ${due.className}`}>
+                      <Clock className="w-4 h-4 shrink-0" />
+                      <FollowUpBadge contact={lead} className="border-0 bg-transparent px-0" />
+                      {lead.followUpNote && <span className="text-xs font-normal opacity-80 ml-1 truncate">— {lead.followUpNote}</span>}
+                    </div>
 
-                    <div className="space-y-2">
-                      <div>
-                        <Label className="text-xs text-muted-foreground">Data e Rikontaktimit</Label>
-                        <Input
-                          type="date"
-                          value={followUpDate}
-                          onChange={(e) => setFollowUpDate(e.target.value)}
-                          className="mt-1 text-sm"
+                    <div className="flex flex-wrap gap-2">
+                      {due.state !== 'none' && (
+                        <NextStepPopover
+                          contact={lead}
+                          entity="lead"
+                          mode="complete"
+                          align="start"
+                          trigger={
+                            <Button size="sm" className="flex-1 min-w-[120px] bg-emerald-600 hover:bg-emerald-700 text-white">
+                              <CheckCircle2 className="w-4 h-4 mr-1.5" />U bë
+                            </Button>
+                          }
+                          onSubmit={(p) => followUp.complete(target, p.outcome || { channel: lead.nextFollowUpType || 'call', result: null }, p.next)}
+                          onCloseLead={closeLeadFromPopover}
                         />
-                      </div>
-                      <div>
-                        <Label className="text-xs text-muted-foreground">Shënim (opsional)</Label>
-                        <Textarea
-                          value={followUpNote}
-                          onChange={(e) => setFollowUpNote(e.target.value)}
-                          placeholder="Diskuto çmimin, dërgo ofertën, kujto preferencat..."
-                          rows={2}
-                          className="mt-1 text-sm resize-none"
-                        />
-                      </div>
-                      <div className="flex gap-2">
-                        <Button size="sm" onClick={handleSaveFollowUp} disabled={followUpSaving} className="flex-1">
-                          {followUpSaving ? 'Duke ruajtur...' : 'Ruaj Kujtesën'}
-                        </Button>
-                        {nd && (
-                          <Button
-                            size="sm" variant="outline"
-                            className="text-destructive hover:text-destructive border-destructive/30"
-                            onClick={async () => {
-                              await leadMutation.update(selectedLead.id, { nextFollowUpDate: null, followUpNote: null });
-                              setFollowUpDate(''); setFollowUpNote('');
-                              toast({ title: 'Kujtesë e fshirë' });
-                            }}
-                          >
-                            <X className="w-4 h-4" />
+                      )}
+                      <NextStepPopover
+                        contact={lead}
+                        entity="lead"
+                        mode="schedule"
+                        align="start"
+                        trigger={
+                          <Button size="sm" variant={due.state === 'none' ? 'default' : 'outline'} className="flex-1 min-w-[120px]">
+                            <Bell className="w-4 h-4 mr-1.5" />{due.state === 'none' ? 'Cakto hapin' : 'Ndrysho'}
                           </Button>
-                        )}
-                      </div>
+                        }
+                        onSubmit={(p) => followUp.schedule(target, p.next)}
+                        onCloseLead={closeLeadFromPopover}
+                      />
+                      {due.state !== 'none' && <SnoozeMenu onSnooze={(p) => followUp.snooze(target, p)} />}
                     </div>
+                    {due.state === 'none' && lead.status !== 'Lost' && lead.status !== 'Converted' && lead.status !== 'Won' && (
+                      <p className="text-xs text-muted-foreground">Ky lead i hapur nuk ka asgjë të planifikuar — cakto hapin tjetër që të mos harrohet.</p>
+                    )}
                   </div>
 
                   {/* ── Automated follow-up cadence ── */}
@@ -2742,12 +2669,20 @@ const CRMView: React.FC = () => {
         </DialogContent>
       </Dialog>
 
+      <EmailComposerDialog target={emailTarget} onOpenChange={(o) => { if (!o) setEmailTarget(null); }} />
+
       {whatsappLead && waEnabled && (
         <WhatsAppChatPanel
           phone={whatsappLead.phoneNumber || whatsappLead.phone || ''}
           leadName={whatsappLead.name}
           leadId={whatsappLead.id}
           onClose={() => setWhatsappLead(null)}
+          onSent={(e) => {
+            // The primary WhatsApp path: log the touch + move lastActivityAt /
+            // firstResponseAt so temperature, staleness and the SLA see it.
+            const live = (leads || []).find(l => l.id === whatsappLead.id) || whatsappLead;
+            void followUp.logContact(targetFromLead(live), 'whatsapp', e.body, { countsAsFollowUp: true });
+          }}
         />
       )}
 

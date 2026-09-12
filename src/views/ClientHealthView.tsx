@@ -22,10 +22,10 @@ import { Input } from '../components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
 import { useCollection } from '../hooks/useFirestore';
 import {
-  CLIENT_HEALTH_CLASSES, CLIENT_HEALTH_LABELS, computeClientHealth, suggestProjectHealth,
+  CLIENT_HEALTH_CLASSES, CLIENT_HEALTH_LABELS, computeClientHealth,
 } from '../lib/reporting/health';
-import { PUBLISHED_STATUSES } from '../lib/reporting/workflow';
-import { buildPeriod, isWithinPeriod, periodKeyFor } from '../lib/reporting/period';
+import { buildClientHealthSignals } from '../lib/reporting/clientHealthSignals';
+import { buildPeriod, periodKeyFor } from '../lib/reporting/period';
 import type {
   ClientHealthCategory, ClientHealthScore, Customer, Invoice, Project, Report, ClientRequest,
 } from '../types';
@@ -51,66 +51,11 @@ const ClientHealthView: React.FC = () => {
   }, [now]);
 
   const rows = useMemo(() => (customers || []).map(customer => {
-    const custProjects = (projects || []).filter(p => p.customerId === customer.id);
-    const custInvoices = (invoices || []).filter(i => i.customerId === customer.id);
-    const custReports = (reports || []).filter(r => r.customerId === customer.id);
-    const custRequests = (requests || []).filter(r => r.customerId === customer.id);
-
-    // Worst project RAG among active projects, using the same suggestion engine the
-    // project-status report uses — one definition of "at risk" across the product.
-    // `Project.status` is capitalised ('Completed', 'Archived', …). The filter here
-    // used to compare against lowercase 'completed', so it excluded nothing and
-    // finished work was still weighed as an open project.
-    const CLOSED_PROJECT_STATUSES = ['Completed', 'Archived', 'Cancelled'];
-    const projectHealths = custProjects
-      .filter(p => !CLOSED_PROJECT_STATUSES.includes(p.status))
-      .map(p => suggestProjectHealth({
-        projectStatus: 'active',
-        daysToDeadline: p.endDate
-          ? Math.round((p.endDate.getTime() - now.getTime()) / 86_400_000)
-          : undefined,
-        // `spent` is a real field on Project — the previous `as any` cast hid that and
-        // made this look like a guess.
-        budgetConsumed: p.budget && p.spent ? p.spent / p.budget : undefined,
-      }).health);
-    const worst = projectHealths.includes('red') ? 'red'
-      : projectHealths.includes('yellow') ? 'yellow'
-        : projectHealths.length ? 'green' : undefined;
-
-    const overdueInvoices = custInvoices.filter(i =>
-      i.status !== 'Paid' && i.dueDate && i.dueDate.getTime() < now.getTime()).length;
-
-    const reportsInPeriod = custReports.filter(r => isWithinPeriod(r.period.start, period));
-    const delivered = reportsInPeriod.filter(r => PUBLISHED_STATUSES.has(r.status)).length;
-
-    // Client-visible KPI attainment across the client's most recent published report.
-    const latestPublished = custReports
-      .filter(r => PUBLISHED_STATUSES.has(r.status))
-      .sort((a, b) => (b.publishedAt?.getTime() || 0) - (a.publishedAt?.getTime() || 0))[0];
-    const attainments = (latestPublished?.kpiValues || [])
-      .filter(k => k.clientVisible && typeof k.value === 'number' && typeof k.target === 'number' && k.target !== 0)
-      .map(k => (k.higherIsBetter === false
-        ? Math.min(2, (k.target as number) / Math.max(1e-9, k.value as number))
-        : (k.value as number) / (k.target as number)));
-    const kpiAttainment = attainments.length
-      ? attainments.reduce((a, b) => a + b, 0) / attainments.length
-      : null;
-
-    const openRequests = custRequests.filter(r => (r.status || '') !== 'Completed').length;
-    const pendingApprovals = custReports.filter(r =>
-      PUBLISHED_STATUSES.has(r.status) && !r.acknowledgedAt && !r.clientDecisionAt).length;
-
-    const health = computeClientHealth({
-      status: 'active',
-      kpiAttainment,
-      reportsDelivered: delivered,
-      reportsDue: reportsInPeriod.length || (custProjects.length ? 1 : 0),
-      openIssues: openRequests,
-      overdueClientApprovals: pendingApprovals,
-      overdueInvoices,
-      worstProjectHealth: worst as any,
-      unansweredMessages: openRequests,
-    });
+    // Signal building lives in src/lib/reporting/clientHealthSignals.ts so the
+    // Customer360 header badge and this page share ONE definition of "at risk".
+    const health = computeClientHealth(buildClientHealthSignals({
+      customer, projects, invoices, requests, reports: reports || [], now, period,
+    }));
 
     const prevSnapshot = (snapshots || []).find(s => s.customerId === customer.id && s.periodKey === prevKey);
 

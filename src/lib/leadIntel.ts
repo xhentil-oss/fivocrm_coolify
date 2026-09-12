@@ -1,10 +1,15 @@
 import type { Lead } from '../types';
 import { getTimestampMs } from './utils';
 import { calculateLeadScore } from './leadScore';
+import { DEFAULT_FOLLOW_UP_CONFIG, type FollowUpConfig } from './crm/followUpConfig';
 
-// SLA / staleness thresholds (kept in sync with the cron in api/cron/run.ts).
-export const SLA_FIRST_RESPONSE_HOURS = 24;
-export const STALE_DAYS = 14;
+// SLA / staleness thresholds now come from `teamSettings` through
+// `resolveFollowUpConfig()` (src/lib/crm/followUpConfig.ts, mirrored by
+// api/_followUpConfig.ts for the cron). The constants below are the DEFAULTS only.
+/** @deprecated use `resolveFollowUpConfig(settings).followUpSlaHours` */
+export const SLA_FIRST_RESPONSE_HOURS = DEFAULT_FOLLOW_UP_CONFIG.followUpSlaHours;
+/** @deprecated use `resolveFollowUpConfig(settings).followUpStaleDays` */
+export const STALE_DAYS = DEFAULT_FOLLOW_UP_CONFIG.followUpStaleDays;
 
 export type Temperature = 'hot' | 'warm' | 'cold';
 
@@ -38,15 +43,22 @@ export function leadTemperature(lead: Lead, score?: number): Temperature {
   return pts >= 4 ? 'hot' : pts >= 2 ? 'warm' : 'cold';
 }
 
-/** SLA breach (no first response in time) + staleness (no recent activity). */
-export function leadSla(lead: Lead): { breached: boolean; stale: boolean } {
+/**
+ * SLA breach (no first response in time) + staleness (no recent activity).
+ * `cfg` is the tenant's resolved thresholds; callers without settings at hand
+ * get the defaults. Mirrored by `runLeadSlaAndStaleAlerts` in api/cron/run.ts.
+ */
+export function leadSla(
+  lead: Lead,
+  cfg: Pick<FollowUpConfig, 'followUpSlaHours' | 'followUpStaleDays'> = DEFAULT_FOLLOW_UP_CONFIG,
+): { breached: boolean; stale: boolean } {
   if (lead.status === 'Lost' || lead.status === 'Converted') return { breached: false, stale: false };
   const createdMs = getTimestampMs(lead.createdAt) || 0;
   const hoursSinceCreated = createdMs ? (Date.now() - createdMs) / 3_600_000 : 0;
-  const breached = !lead.firstResponseAt && hoursSinceCreated > SLA_FIRST_RESPONSE_HOURS;
+  const breached = !lead.firstResponseAt && hoursSinceCreated > cfg.followUpSlaHours;
   const lastMs = leadLastActivityMs(lead);
   const staleDays = lastMs ? (Date.now() - lastMs) / 86_400_000 : Infinity;
-  const stale = staleDays > STALE_DAYS;
+  const stale = staleDays > cfg.followUpStaleDays;
   return { breached, stale };
 }
 

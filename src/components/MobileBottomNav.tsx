@@ -19,6 +19,7 @@ import {
   Shield,
   Wallet,
   Package,
+  BellRing,
 } from 'lucide-react';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -80,6 +81,7 @@ const MobileBottomNav: React.FC = () => {
   // ── "Më shumë" drawer items ──
   const moreItems = [
     { to: '/app/projects',      icon: FolderKanban, label: 'Projektet',   perm: 'canAccessProjects' },
+    { to: '/app/follow-ups',    icon: BellRing,     label: 'Ndjekjet',    perm: 'canAccessCRM' },
     { to: '/app/crm',           icon: Shield,       label: 'CRM',         perm: 'canAccessCRM' },
     { to: '/app/products',      icon: Package,      label: 'Dyqani',      perm: 'canAccessProducts' },
     { to: '/app/invoices',      icon: Receipt,      label: 'Faturat',     perm: 'canAccessInvoices' },

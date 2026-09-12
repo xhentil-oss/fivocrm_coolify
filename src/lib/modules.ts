@@ -65,7 +65,7 @@ export interface ModuleDef {
 
 export const MODULES: ModuleDef[] = [
   // ── CRM ──
-  { id: 'crm', path: '/app/crm', label: 'CRM Leads', description: 'Pipeline i lead-eve, temperatura, SLA dhe raporte.', permissionKey: 'canAccessCRM', minPlan: 'starter', optional: true, group: 'CRM' },
+  { id: 'crm', path: '/app/crm', label: 'CRM Leads', description: 'Pipeline i lead-eve, temperatura, SLA dhe raporte.', permissionKey: 'canAccessCRM', minPlan: 'starter', optional: true, group: 'CRM', extraPaths: ['/app/follow-ups'] },
   { id: 'deals', path: '/app/deals', label: 'Marrëveshjet', description: 'Oportunitetet e kualifikuara, të ndara nga lead-et.', permissionKey: 'canAccessCRM', minPlan: 'pro', optional: true, group: 'CRM' },
   { id: 'customers', path: '/app/customers', label: 'Klientët', description: 'Kartela 360° e klientit, kontaktet dhe historiku.', permissionKey: 'canAccessCustomers', minPlan: 'starter', optional: true, group: 'CRM' },
 

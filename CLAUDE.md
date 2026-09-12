@@ -736,6 +736,51 @@ Full audit: `workspace/CHAT_NOTIFICATIONS_AUDIT_2026_08.md`.
   RECIPIENT write a notification, so the sender cannot clean up after deleting a
   message — the reader's ChatView dismisses rows whose `messageId` is deleted.
 
+### Follow-up ("Ndjekja"): one next step per contact, leads AND customers
+
+Full runbook: `workspace/FOLLOW_UP.md`.
+
+- **`FollowUpFields` (types) is shared by `Lead` and `Customer`**: `nextFollowUpDate`
+  (day, stored at noon Europe/Tirane), `nextFollowUpType`, `followUpNote`,
+  `lastFollowUpDate`, `lastActivityAt`, `lastReminderSentAt`, `lastInboundAt`,
+  `awaitingReply`, `waOptOut`. There is deliberately **no `lastContactAt`** — every
+  engine (temperature, staleness, WA dormancy, automation facts) reads
+  `lastActivityAt`; a synonym would drift.
+- **`src/lib/crm/followUp.ts` is the only follow-up logic** (unit-tested): `dueState`
+  (day math via `toZoned/fromZoned` from `recurringUtils.ts` — never
+  `setHours(0,0,0,0)`), presets (snooze is relative to TODAY), `touchContactPatch`,
+  `completeFollowUpPatch`, `scheduleNextStepPatch` (explicit `null` on clear),
+  `statusAfterTouch` (New → Contacted), `needsNextStep`, `buildFollowUpQueue`.
+- **`useFollowUpActions` is the only client write path** (complete / snooze /
+  schedule / touch / logContact, with Undo). The timeline row for a WhatsApp send or
+  a confirmed call is written by the CLIENT (`WhatsAppChatPanel.onSent` →
+  `logContact`); the server stamps fields only (`markConversationAnswered` in
+  `api/_waInbound.ts`) — except `contact-email`, where the server writes the row
+  because the send happens there. Never both.
+- **An open lead with no next step is a defect the queue exposes** ("Pa hap
+  tjetër"); `NextStepPopover` makes the next step mandatory for an open lead — the
+  only exit is closing the lead. Customers may have none.
+- **Inbound WhatsApp has ONE handler for both channels**: `api/_waInbound.ts`
+  (`POST /api/wa-inbound`, Bearer `CRON_SECRET` from the VPS; the Meta webhook calls
+  `processWaEvent` in-process and now responds `200` AFTER processing). It resolves
+  lead ‖ customer via `_contactIdentity`, upserts `conversations/wa-{teamId}-{phone}`
+  (owner chain incl. `whatsappThreads`, SLA armed only on the `awaitingReply`
+  transition), notifies via `notifyUser('whatsapp_message')` with a 2-min burst
+  debounce, decides auto-reply through `_waAutoReply.ts` (mirror
+  `src/lib/messaging/autoReply.ts`, named block reasons) and drafts an AI reply
+  (`waAiAssist: 'off'|'draft'` — **there is no auto-send, on purpose**).
+  `conversation-sla` (15 min) enforces `slaFirstResponseDueAt`.
+- `lead-follow-up-reminders` covers leads AND customers, runs at **08:30 local** via
+  `scheduleDailyInZone` (not in `run-all`), and deep-links to
+  `/app/follow-ups?focus=<kind>:<id>`. Thresholds (`followUpSlaHours`,
+  `followUpStaleDays`, `waResponseSlaMinutes`, `leadCadenceDays`) come from
+  `src/lib/crm/followUpConfig.ts` / `api/_followUpConfig.ts`, edited in Cilësimet →
+  Automatizime (`FollowUpSettingsPanel`). The automation engine is untouched.
+- Rules: the portal client may edit their own `customers` doc but the follow-up
+  fields + `assignedToUserId/status/tags` are denied (tests 50a/50b). Badges/widget
+  need indexes `(businessId, nextFollowUpDate)` and `(businessId, awaitingReply)` on
+  leads + customers; `useFollowUpDue` hides itself on a listener error.
+
 ### Task reminders ("Më kujto") & task ordering
 
 - **One reminder per task, three fields that must agree**: `reminderAt` (absolute

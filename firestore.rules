@@ -436,7 +436,16 @@ service cloud.firestore {
             && resource.data.email == request.auth.token.email.lower())
         || isSuperAdmin();
       allow create: if canCreateBusinessDoc() || isSelfCreate();
-      allow update, delete: if canManageBusinessDoc()
+      // The portal client may edit their own profile, but never the STAFF-side
+      // follow-up state (next step, last touch, owner) — a client could otherwise
+      // hide themselves from the follow-up queue or re-assign their own account.
+      allow update: if canManageBusinessDoc()
+        || (isPortalClientDoc(docId)
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+                 'nextFollowUpDate', 'nextFollowUpType', 'followUpNote', 'lastFollowUpDate',
+                 'lastActivityAt', 'lastReminderSentAt', 'lastInboundAt', 'awaitingReply',
+                 'assignedToUserId', 'status', 'tags', 'businessId', 'teamId']));
+      allow delete: if canManageBusinessDoc()
         || isPortalClientDoc(docId);
     }
 
@@ -1584,9 +1593,22 @@ service cloud.firestore {
       // Client list queries always filter by teamId (see CRMView/ChatView/
       // WhatsAppChatPanel), so these per-doc rules hold for queries too.
       // Server writes use the Admin SDK and bypass rules.
-      allow read: if isTeamMember(resource.data.teamId);
+      // `businessId` is stamped by api/_waInbound.ts on every new row (additive —
+      // legacy rows carry only teamId and stay readable through the team clause).
+      allow read: if isTeamMember(resource.data.get('teamId', ''))
+        || isBusinessMember(resource.data.get('businessId', ''));
       allow create: if isTeamMember(request.resource.data.teamId);
       allow update, delete: if isTeamMember(resource.data.teamId);
+    }
+
+    // Per-tenant daily counters written by the inbound WhatsApp handler (auto-created
+    // lead cap) and the AI-draft cap (B3). Server-only: a client that could reset the
+    // counter could lift its own cap.
+    match /waInboundCounters/{docId} {
+      allow read, write: if false;
+    }
+    match /aiDailyUsage/{docId} {
+      allow read, write: if false;
     }
 
     match /whatsappConversations/{docId} {

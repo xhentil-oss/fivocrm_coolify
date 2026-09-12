@@ -34,11 +34,13 @@ import {
   ClipboardList,
   HeartPulse,
   Search,
+  BellRing,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { isPathEnabled, type PlanKey } from '../lib/modules';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
+import { useFollowUpDue } from '../hooks/useFollowUpDue';
 import { useCollection, useDocument, useGlobalBusinessId } from '../hooks/useFirestore';
 import type { Business } from '../types';
 
@@ -100,6 +102,7 @@ const allSections: NavSection[] = [
     key: 'sales',
     label: 'Shitjet & klientët',
     entries: [
+      { path: '/app/follow-ups', label: 'Ndjekjet', icon: BellRing, permissionKey: 'canAccessCRM' },
       { path: '/app/crm', label: 'CRM Leads', icon: Users, permissionKey: 'canAccessCRM' },
       { path: '/app/deals', label: 'Marrëveshjet', icon: Handshake, permissionKey: 'canAccessCRM' },
       { path: '/app/customers', label: 'Klientët', icon: Users, permissionKey: 'canAccessCustomers' },
@@ -249,6 +252,19 @@ const Sidebar: React.FC<SidebarProps> = ({
     return count;
   }, [unreadMessages, unreadClientMessages, user, businessId, myGroupIds]);
 
+  // Follow-ups due for ME (waiting replies + overdue + today). Bounded listener;
+  // hidden entirely when the index is not deployed / no access (error → 0).
+  const followUpDue = useFollowUpDue();
+  const followUpBadge = followUpDue.error ? 0
+    : followUpDue.counts.mine.awaitingReply + followUpDue.counts.mine.overdue + followUpDue.counts.mine.today;
+  const followUpUrgent = !followUpDue.error && (followUpDue.counts.mine.awaitingReply + followUpDue.counts.mine.overdue) > 0;
+
+  // Per-path badges — one place instead of a hard-coded `/app/chat` special case.
+  const badges: Record<string, { count: number; urgent: boolean }> = {
+    '/app/chat': { count: unreadChatCount, urgent: true },
+    '/app/follow-ups': { count: followUpBadge, urgent: followUpUrgent },
+  };
+
   // NO chime here. The unread badge above is this component's job; the SOUND belongs
   // to exactly one owner, and that is the bell (NotificationsCenter) when off the chat
   // page, the ChatView chirp when on it.
@@ -348,16 +364,17 @@ const Sidebar: React.FC<SidebarProps> = ({
                 isActive ? 'text-white' : 'text-[#6e82a4] group-hover:text-white'
               )}
             />
-            {item.path === '/app/chat' && unreadChatCount > 0 && collapsed && (
-              <span className="absolute -top-1 -right-1 w-2.5 h-2.5 bg-[#d64545] rounded-full animate-pulse" />
+            {(badges[item.path]?.count ?? 0) > 0 && collapsed && (
+              <span className={cn('absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full', badges[item.path].urgent ? 'bg-[#d64545] animate-pulse' : 'bg-amber-400')} />
             )}
           </span>
           {!collapsed && (
             <>
               <span className="flex-1 whitespace-nowrap overflow-hidden text-ellipsis">{item.label}</span>
-              {item.path === '/app/chat' && unreadChatCount > 0 && (
-                <span className="flex-shrink-0 font-mono text-[10px] font-bold text-white bg-[#d64545] rounded-full px-2 py-0.5 animate-pulse">
-                  {unreadChatCount > 99 ? '99+' : unreadChatCount}
+              {(badges[item.path]?.count ?? 0) > 0 && (
+                <span className={cn('flex-shrink-0 font-mono text-[10px] font-bold rounded-full px-2 py-0.5',
+                  badges[item.path].urgent ? 'text-white bg-[#d64545] animate-pulse' : 'text-[#1b2a44] bg-amber-400')}>
+                  {badges[item.path].count > 99 ? '99+' : badges[item.path].count}
                 </span>
               )}
             </>

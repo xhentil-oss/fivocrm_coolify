@@ -1,5 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminAuth, adminDb as db } from './_firebaseAdmin.js';
+import { markConversationAnswered } from './_waInbound.js';
 
 function isValidPhone(phone: string): boolean {
   const digits = phone.replace(/[^\d]/g, '');
@@ -201,6 +202,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           teamId: teamId || null,
           jid: hasValidJid ? jid : undefined,
           agentId: agentId || undefined,
+          // Persisted on the outbound row by the VPS — who answered, for the SLA/first-response stamps.
+          sentByUid: uid,
         }),
         signal: AbortSignal.timeout(10_000),
       });
@@ -212,6 +215,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!r.ok) {
         console.error('[whatsapp] VPS error:', r.status, text.slice(0, 300));
         return res.status(r.status).json({ error: (data as any)?.error || 'VPS server error' });
+      }
+
+      // A staff reply closes the "awaiting reply" window on the thread + contact(s).
+      // Best-effort: the message is already delivered, a failed stamp must not fail the send.
+      const answeredTeamId = (teamId as string | undefined) || ((data as any)?.teamId as string | undefined) || null;
+      if (answeredTeamId && normalizedTo) {
+        await markConversationAnswered({
+          teamId: answeredTeamId, phone: normalizedTo, byUid: uid, source: 'app', leadId: leadId || null,
+        }).catch(() => {});
       }
 
       return res.status(200).json({ success: true, id: (data as any)?.id });

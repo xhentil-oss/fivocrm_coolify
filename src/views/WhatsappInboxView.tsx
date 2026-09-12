@@ -1,4 +1,5 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useCollection, useGlobalTeamId, useWhatsappEnabled } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
@@ -9,7 +10,6 @@ import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
 import WhatsAppStatusBadge from '../components/WhatsAppStatusBadge';
 import WhatsappTemplateManager from '../components/WhatsappTemplateManager';
 import WhatsappBroadcasts from '../components/WhatsappBroadcasts';
-import WhatsappAutomation from '../components/WhatsappAutomation';
 import WhatsappAnalytics from '../components/WhatsappAnalytics';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { Search, MessageSquare, UserCircle2, Inbox, FileText, Megaphone, Zap, BarChart3, ArrowLeft } from 'lucide-react';
@@ -50,11 +50,21 @@ const WhatsappInboxView: React.FC = () => {
   const waEnabled = useWhatsappEnabled();
 
   const [selectedPhone, setSelectedPhone] = useState<string | null>(null);
+  // Deep link from a notification / the follow-up queue: /app/whatsapp?phone=355…
+  // Same normalisation as the conversation keys, so the preselect matches the row.
+  const [searchParams] = useSearchParams();
+  const phoneParam = searchParams.get('phone');
+  useEffect(() => {
+    if (!phoneParam) return;
+    const p = normalizeAlbanianPhone(phoneParam);
+    if (p) setSelectedPhone(p);
+  }, [phoneParam]);
   const [search, setSearch] = useState('');
   const [tab, setTab] = useState<TabKey>('all');
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [broadcastsOpen, setBroadcastsOpen] = useState(false);
-  const [automationOpen, setAutomationOpen] = useState(false);
+  // "Automatizime" now lives in Cilësimet → Automatizimi (FollowUpSettingsPanel).
+  const navigate = useNavigate();
   const [analyticsOpen, setAnalyticsOpen] = useState(false);
 
   const { data: messages } = useCollection<WhatsAppMessage>('whatsappMessages', {
@@ -196,7 +206,7 @@ const WhatsappInboxView: React.FC = () => {
           </button>
           {(permissions.isOwner || permissions.isAdmin) && (
             <button
-              onClick={() => setAutomationOpen(true)}
+              onClick={() => navigate('/app/settings?tab=automation')}
               className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1.5 rounded-md border border-border hover:bg-muted"
             >
               <Zap className="w-3.5 h-3.5" /> <span className="hidden sm:inline">Automatizime</span>
@@ -207,7 +217,6 @@ const WhatsappInboxView: React.FC = () => {
       </div>
       {templatesOpen && <WhatsappTemplateManager onClose={() => setTemplatesOpen(false)} />}
       {broadcastsOpen && <WhatsappBroadcasts onClose={() => setBroadcastsOpen(false)} />}
-      {automationOpen && <WhatsappAutomation onClose={() => setAutomationOpen(false)} />}
       {analyticsOpen && <WhatsappAnalytics onClose={() => setAnalyticsOpen(false)} />}
 
       <div className="flex flex-1 min-h-0 gap-3">

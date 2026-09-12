@@ -24,7 +24,17 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs'
 import { Separator } from '../components/ui/separator';
 import { safeHref, toAll, canSeeFinancials, currencySymbol } from '../lib/utils';
 import { resolvePortalUserId } from '../lib/notifyClient';
-import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract, Service } from '../types';
+import FollowUpBadge from '../components/crm/FollowUpBadge';
+import ContactQuickActions from '../components/crm/ContactQuickActions';
+import NextStepPopover from '../components/crm/NextStepPopover';
+import SnoozeMenu from '../components/crm/SnoozeMenu';
+import ClientHealthBadge from '../components/reporting/ClientHealthBadge';
+import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
+import EmailComposerDialog, { useContactEmailAvailable, type EmailTarget } from '../components/crm/EmailComposerDialog';
+import { useFollowUpActions, targetFromCustomer } from '../hooks/useFollowUpActions';
+import { dueState, daysSinceContact, touchContactPatch } from '../lib/crm/followUp';
+import { Bell, CheckCircle2 } from 'lucide-react';
+import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract, Service, FollowUpType } from '../types';
 
 const Customer360View: React.FC = () => {
   const { customerId } = useParams<{ customerId: string }>();
@@ -38,6 +48,10 @@ const Customer360View: React.FC = () => {
   const [activityTitle, setActivityTitle] = useState('');
   const [activityDesc, setActivityDesc] = useState('');
   const [sendingQuoteId, setSendingQuoteId] = useState<string | null>(null);
+  const followUp = useFollowUpActions();
+  const [waOpen, setWaOpen] = useState(false);
+  const emailAvailable = useContactEmailAvailable();
+  const [emailTarget, setEmailTarget] = useState<EmailTarget | null>(null);
 
   // Duplicate a quote as a new Draft revision (version+1, same root).
   const createQuoteVersion = async (q: Quote) => {
@@ -276,6 +290,12 @@ const Customer360View: React.FC = () => {
       userId: user.uid,
       createdAt: new Date(),
     } as any);
+    // A logged call/meeting/email IS a touch: move lastActivityAt on the customer
+    // so "N ditë pa kontakt" and the health signals see it.
+    if (customer) {
+      const channel: FollowUpType = activityType === 'call' ? 'call' : activityType === 'meeting' ? 'meeting' : activityType === 'email_sent' ? 'email' : 'other';
+      customerMutation.update(customer.id, touchContactPatch(customer, channel, new Date(), { entity: 'customer', countsAsFollowUp: channel !== 'other' })).catch(() => { /* non-critical */ });
+    }
     setActivityTitle('');
     setActivityDesc('');
     setActivityType('note');
@@ -345,17 +365,67 @@ const Customer360View: React.FC = () => {
         <Button variant="ghost" size="icon" onClick={() => navigate('/app/customers')}>
           <ArrowLeft className="w-5 h-5" />
         </Button>
-        <div className="flex-1">
-          <h1 className="text-2xl font-bold">{customer.name}</h1>
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <h1 className="text-2xl font-bold">{customer.name}</h1>
+            <ClientHealthBadge customer={customer} projects={projects} invoices={invoices} requests={requests} size="sm" />
+          </div>
           <div className="flex items-center gap-3 text-sm text-muted-foreground mt-1 flex-wrap">
-            {(customer as any).company && (
-              <span className="flex items-center gap-1"><Building2 className="w-3.5 h-3.5" />{(customer as any).company}</span>
+            {customer.company && (
+              <span className="flex items-center gap-1"><Building2 className="w-3.5 h-3.5" />{customer.company}</span>
             )}
             {customer.email && (
               <span className="flex items-center gap-1"><Mail className="w-3.5 h-3.5" />{customer.email}</span>
             )}
             {customer.phone && (
               <span className="flex items-center gap-1"><Phone className="w-3.5 h-3.5" />{customer.phone}</span>
+            )}
+            {(() => { const d = daysSinceContact(customer); return (
+              <span className={`text-xs ${d === null || d > 30 ? 'text-warning' : ''}`}>
+                {d === null ? 'Pa kontakt të regjistruar' : d === 0 ? 'Kontaktuar sot' : `Kontakti i fundit ${d} ditë më parë`}
+              </span>
+            ); })()}
+          </div>
+          {/* Follow-up strip: next step + quick actions — the single write path is useFollowUpActions */}
+          <div className="flex items-center gap-2 flex-wrap mt-2">
+            <ContactQuickActions
+              contact={{ name: customer.name, phone: customer.phone, email: customer.email }}
+              entity="customer"
+              onLogged={(ch) => { void followUp.logContact(targetFromCustomer(customer), ch); toast({ title: 'Kontakti u regjistrua' }); }}
+              onOpenWhatsApp={customer.phone ? () => setWaOpen(true) : undefined}
+              onOpenEmail={emailAvailable && customer.email ? () => setEmailTarget({ kind: 'customer', id: customer.id, name: customer.name, email: customer.email!, company: customer.company }) : undefined}
+            />
+            <span className="w-px h-5 bg-border mx-1 hidden sm:block" />
+            {dueState(customer).state !== 'none' ? (
+              <>
+                <FollowUpBadge contact={customer} />
+                <NextStepPopover
+                  contact={customer}
+                  entity="customer"
+                  mode="complete"
+                  align="start"
+                  trigger={<Button size="sm" variant="outline" className="h-8 text-emerald-700 border-emerald-500/40"><CheckCircle2 className="w-4 h-4 mr-1" />U bë</Button>}
+                  onSubmit={(p) => followUp.complete(targetFromCustomer(customer), p.outcome || { channel: customer.nextFollowUpType || 'call', result: null }, p.next)}
+                />
+                <NextStepPopover
+                  contact={customer}
+                  entity="customer"
+                  mode="schedule"
+                  align="start"
+                  trigger={<Button size="sm" variant="ghost" className="h-8"><Bell className="w-4 h-4 mr-1" />Ndrysho</Button>}
+                  onSubmit={(p) => followUp.schedule(targetFromCustomer(customer), p.next)}
+                />
+                <SnoozeMenu onSnooze={(p) => followUp.snooze(targetFromCustomer(customer), p)} />
+              </>
+            ) : (
+              <NextStepPopover
+                contact={customer}
+                entity="customer"
+                mode="schedule"
+                align="start"
+                trigger={<Button size="sm" variant="outline" className="h-8"><Bell className="w-4 h-4 mr-1" />Cakto hapin tjetër</Button>}
+                onSubmit={(p) => followUp.schedule(targetFromCustomer(customer), p.next)}
+              />
             )}
           </div>
         </div>
@@ -374,10 +444,21 @@ const Customer360View: React.FC = () => {
             Shiko si klient
           </Button>
         )}
-        <Badge className={getStatusColor((customer as any).status || 'Active')} variant="secondary">
-          {(customer as any).status || 'Active'}
+        <Badge className={getStatusColor(customer.status || 'Active')} variant="secondary">
+          {customer.status || 'Active'}
         </Badge>
       </div>
+
+      <EmailComposerDialog target={emailTarget} onOpenChange={(o) => { if (!o) setEmailTarget(null); }} />
+
+      {waOpen && customer.phone && (
+        <WhatsAppChatPanel
+          phone={customer.phone}
+          leadName={customer.name}
+          onClose={() => setWaOpen(false)}
+          onSent={(e) => void followUp.logContact(targetFromCustomer(customer), 'whatsapp', e.body, { countsAsFollowUp: true })}
+        />
+      )}
 
       {/* Stats Cards */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

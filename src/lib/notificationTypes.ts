@@ -70,6 +70,12 @@ export const NOTIFICATION_TYPES = {
   // Google Reviews (GMB): a fresh ≤2★ review is a client communication that needs
   // a same-day public answer — deliberately in `messages`, not `system`.
   gmb_negative_review:      { category: 'messages', priority: 'warning',  groupLabel: 'reviews negative në Google' },
+  // Inbound WhatsApp (Meta + Baileys, one handler: api/_waInbound.ts) → the thread's
+  // owner, else the tenant's managers. Burst-debounced server-side (2 min).
+  whatsapp_message:         { category: 'messages', priority: 'info',     groupLabel: 'mesazhe WhatsApp' },
+  // A WhatsApp thread waited past `waResponseSlaMinutes` with nobody answering
+  // (cron `conversation-sla`, every 15 min). Critical: a potential client is leaving.
+  conversation_sla:         { category: 'messages', priority: 'critical', groupLabel: 'SLA përgjigjeje' },
 
   // ── Projekte & CRM ──────────────────────────────────────────────────────────
   project_created:          { category: 'projects', priority: 'neutral',  portal: true },
@@ -84,6 +90,8 @@ export const NOTIFICATION_TYPES = {
   // (useClientPortal) — was live but unregistered, so it had no icon and no mute.
   new_client:               { category: 'projects', priority: 'success',  groupLabel: 'klientë të rinj' },
   lead_follow_up:           { category: 'projects', priority: 'warning',  groupLabel: 'rikontaktime lead' },
+  // The customer counterpart of lead_follow_up: a scheduled next step on a CUSTOMER is due.
+  customer_follow_up:       { category: 'projects', priority: 'warning',  groupLabel: 'rikontakte klientësh' },
   lead_cadence_step:        { category: 'projects', priority: 'warning',  groupLabel: 'hapa ndjekjeje' },
   // Fired by a CRM automation rule (src/lib/crm/automationRules.ts → cron `crm-automations`).
   crm_automation:           { category: 'projects', priority: 'info',     groupLabel: 'automatizime CRM' },

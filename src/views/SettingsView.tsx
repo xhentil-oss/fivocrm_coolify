@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
+import { useSearchParams } from 'react-router-dom';
 import {
   User,
   Bell,
@@ -41,6 +42,7 @@ import { Switch } from '../components/ui/switch';
 import { Separator } from '../components/ui/separator';
 import WhatsAppStatusBadge from '../components/WhatsAppStatusBadge';
 import ModulesSettingsPanel from '../components/ModulesSettingsPanel';
+import FollowUpSettingsPanel from '../components/settings/FollowUpSettingsPanel';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '../components/ui/dialog';
 import { Checkbox } from '../components/ui/checkbox';
@@ -127,6 +129,9 @@ const CronJobCard: React.FC<CronJobCardProps> = ({
   </Card>
 );
 
+const SETTINGS_TABS = ['profile', 'notifications', 'security', 'appearance', 'integrations', 'automation', 'roles', 'modules'];
+const ADMIN_ONLY_TABS = ['integrations', 'automation', 'roles', 'modules'];
+
 // ─── SettingsView ──────────────────────────────────────────────────────────────
 const SettingsView: React.FC = () => {
   const { teamId: permTeamId, isAdmin, isOwner } = usePermissions();
@@ -136,6 +141,17 @@ const SettingsView: React.FC = () => {
   const globalActiveTeamId = useGlobalTeamId();
   const teamId = permTeamId || globalActiveTeamId;
   const firestoreSettings = useTeamSettingsData();
+  // `?tab=` deep link (e.g. the WhatsApp inbox's "Automatizime" button →
+  // /app/settings?tab=automation). Admin-only tabs fall back to the profile.
+  const [searchParams, setSearchParams] = useSearchParams();
+  const requestedTab = searchParams.get('tab') || 'profile';
+  const activeTab = SETTINGS_TABS.includes(requestedTab)
+    && (!ADMIN_ONLY_TABS.includes(requestedTab) || isAdmin || isOwner) ? requestedTab : 'profile';
+  const setActiveTab = useCallback((tab: string) => {
+    const next = new URLSearchParams(searchParams);
+    if (tab === 'profile') next.delete('tab'); else next.set('tab', tab);
+    setSearchParams(next, { replace: true });
+  }, [searchParams, setSearchParams]);
   const [breakReminderOn, setBreakReminderOn] = useState(isBreakReminderEnabled);
   const [stripePublishableKey, setStripePublishableKey] = useState('');
   const [stripeWebhookSecret, setStripeWebhookSecret] = useState('');
@@ -686,7 +702,7 @@ const SettingsView: React.FC = () => {
         </p>
       </div>
 
-      <Tabs defaultValue="profile" className="space-y-6">
+      <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-6">
         <TabsList className="bg-muted w-full overflow-x-auto flex-nowrap justify-start sm:justify-center">
           <TabsTrigger value="profile" className="data-[state=active]:bg-background data-[state=active]:text-primary min-w-fit">
             <User className="w-4 h-4 sm:mr-2" />
@@ -2180,6 +2196,10 @@ const SettingsView: React.FC = () => {
           </Card>
         </TabsContent>
         <TabsContent value="automation" className="space-y-6">
+          {/* Ndjekja & Përgjigjet automatike — every follow-up / WhatsApp-reply
+              knob in one place (replaces the old WhatsappAutomation modal). */}
+          <FollowUpSettingsPanel teamId={teamId} settings={firestoreSettings} canEdit={isAdmin || isOwner} />
+
           {/* Info banner */}
           <div className="p-4 bg-primary/5 border border-primary/20 rounded-lg flex items-start gap-3">
             <Zap className="w-5 h-5 text-primary mt-0.5 shrink-0" />

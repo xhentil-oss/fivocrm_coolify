@@ -806,7 +806,37 @@ export interface Task {
   createdByUserId: string | null;
 }
 
-export interface Customer {
+// ── Follow-up ("Ndjekja") — shared by Lead AND Customer ─────────────────────
+// One pending NEXT STEP per contact, stored on the document itself. History is
+// the timeline (`leadActivities` / `activities`); these fields only say what
+// comes next and when the contact was last touched. All logic lives in
+// `src/lib/crm/followUp.ts` — never hand-write these patches in a view.
+export type FollowUpType = 'call' | 'whatsapp' | 'email' | 'meeting' | 'other';
+
+export interface FollowUpFields {
+  /** Day the next step is due (day granularity; compared in Europe/Tirane). */
+  nextFollowUpDate?: Date | null;
+  /** Channel of the next step — picks the row's primary action + the activity type on completion. */
+  nextFollowUpType?: FollowUpType | null;
+  /** One-line note for the next step ("diskuto çmimin", "dërgo ofertën"). */
+  followUpNote?: string | null;
+  /** Last time a follow-up was completed / the contact was deliberately touched. */
+  lastFollowUpDate?: Date | null;
+  /** Most recent activity of any kind (temperature / staleness basis). */
+  lastActivityAt?: Date | null;
+  /** Cron debounce: last "follow-up due" reminder sent to the owner. */
+  lastReminderSentAt?: Date | null;
+  /** Last inbound message from the contact (WhatsApp inbound handler). */
+  lastInboundAt?: Date | null;
+  /** The contact wrote to us and nobody has answered yet ("Presin përgjigje"). */
+  awaitingReply?: boolean | null;
+  /** Contact asked not to receive automated WhatsApp messages. */
+  waOptOut?: boolean | null;
+}
+
+export type CustomerStatus = 'Active' | 'Inactive' | 'VIP' | 'Pending' | 'Suspended';
+
+export interface Customer extends FollowUpFields {
   id: string;
   name: string;
   email?: string;
@@ -826,6 +856,16 @@ export interface Customer {
   whmcsClientId?: string;
   /** Opt-out: when true, this customer is NOT emailed/messaged about overdue invoices. */
   disableOverdueReminders?: boolean;
+  // Back-office profile fields written by CustomersView's form (were `as any`).
+  status?: CustomerStatus;
+  tags?: string[];
+  notes?: string;
+  industry?: string;
+  contactPerson?: string;
+  creditLimit?: number;
+  paymentTerms?: string;
+  billingAddress?: string;
+  shippingAddress?: string;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
@@ -1425,7 +1465,7 @@ export interface FileAttachment {
   type?: string;   // mime type
 }
 
-export interface Lead {
+export interface Lead extends FollowUpFields {
   id: string;
   name: string;
   email?: string;
@@ -1447,16 +1487,14 @@ export interface Lead {
   businessCategory?: string;
   notes?: string;
   attachments?: FileAttachment[]; // documents uploaded from the lead drawer (tab "Dokumente")
-  lastFollowUpDate?: Date;
-  nextFollowUpDate?: Date;
-  followUpNote?: string;
-  lastReminderSentAt?: Date;
+  // nextFollowUpDate / nextFollowUpType / followUpNote / lastFollowUpDate /
+  // lastActivityAt / lastReminderSentAt / lastInboundAt / awaitingReply come
+  // from FollowUpFields (shared with Customer).
   tags?: string[];
   serviceInquiryId?: string;
   assignedToUserId?: string;
   customerId?: string;          // set when converted (reverse link to the Customer)
   firstResponseAt?: Date;       // first outbound touch (for response-time/SLA)
-  lastActivityAt?: Date;        // most recent timeline activity (for temperature/staleness)
   slaBreachNotified?: boolean;  // cron debounce: first-response SLA breach alerted
   staleNotifiedAt?: Date;       // cron debounce: last staleness alert
   waAutoReminderAt?: Date;      // cron debounce: last WhatsApp auto-reminder sent

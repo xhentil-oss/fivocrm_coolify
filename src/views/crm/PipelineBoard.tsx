@@ -16,6 +16,8 @@ import { Zap, Percent, GripVertical } from 'lucide-react';
 import type { Lead } from '../../types';
 import { leadTemperature, leadSla, TEMP_META } from '../../lib/leadIntel';
 import { PIPELINE_STAGES, leadStageProbability, type LeadStatus } from '../../lib/leadStages';
+import { needsNextStep } from '../../lib/crm/followUp';
+import FollowUpBadge from '../../components/crm/FollowUpBadge';
 
 export type LeadIntel = { score: number; temperature: ReturnType<typeof leadTemperature>; sla: ReturnType<typeof leadSla> };
 type IntelMap = Map<string, LeadIntel>;
@@ -79,6 +81,11 @@ function LeadCard({ lead, calculateLeadScore, onCardClick, intel }: { lead: Lead
               <Percent className="w-2.5 h-2.5" />
               <span className="tabular-nums">{prob}%</span>
             </Badge>
+            {lead.nextFollowUpDate ? (
+              <FollowUpBadge contact={lead} size="sm" hideWhenNone />
+            ) : needsNextStep(lead) ? (
+              <span className="text-[10px] px-1.5 py-px rounded-full bg-muted text-muted-foreground" title="Asgjë e planifikuar për këtë lead">Pa hap</span>
+            ) : null}
           </div>
         </button>
       </div>

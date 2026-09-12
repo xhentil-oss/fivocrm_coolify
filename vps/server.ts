@@ -546,6 +546,35 @@ async function connectAgent(agent: AgentState): Promise<void> {
         } else {
           console.log(`[${agent.config.id}] ${isFromMe ? '→' : '←'} ${phone}: ${body.slice(0, 80)}`);
         }
+
+        // Hand the event to the CRM's shared inbound handler (identity → conversation →
+        // notification → auto-reply). The row above is already durable, so this is
+        // fire-and-forget with retries; a LID-only jid is skipped until its phone is known.
+        // fromMe = the staff answered from the PHONE — the cheapest "replied" signal we have.
+        if (!isLid) {
+          const m = msg.message as any;
+          const kind = m.reactionMessage ? 'reaction'
+            : m.protocolMessage ? 'system'
+            : (m.conversation || m.extendedTextMessage?.text) ? 'text'
+            : 'media';
+          void postWaEvent({
+            channel: 'baileys',
+            direction: isFromMe ? 'outbound' : 'inbound',
+            teamId: agent.config.teamId,
+            agentId: agent.config.id,
+            metaPhoneNumberId: null,
+            channelPhone: agent.connectedPhone || agent.config.id,
+            waMessageId: docId,
+            phone,
+            jid: resolvedJid,
+            isLid: false,
+            text: body,
+            kind,
+            pushName,
+            isAutoReply: false,
+            timestamp: ts.toISOString(),
+          });
+        }
       } catch (e) { console.error(`[${agent.config.id}] Error saving message:`, e); }
     }
   });
@@ -714,9 +743,13 @@ app.post('/sync', requireApiKey, async (req, res) => {
 
 // Send message
 app.post('/send', requireApiKey, async (req, res) => {
-  const { to, message, leadId, leadName, teamId, jid: rawJidFromBody, agentId } = req.body as {
+  const { to, message, leadId, leadName, teamId, jid: rawJidFromBody, agentId, isAutoReply, sentByUid } = req.body as {
     to: string; message: string; leadId?: string; leadName?: string;
     teamId?: string; jid?: string; agentId?: string;
+    /** Auto-reply echo (from api/_waInbound.ts) — must never count as a staff answer. */
+    isAutoReply?: boolean;
+    /** The staff uid that pressed send (api/whatsapp.ts); null for automation. */
+    sentByUid?: string | null;
   };
 
   // Defence-in-depth rate limit: max 30 sends/min per agent (VPS-side guard
@@ -752,11 +785,15 @@ app.post('/send', requireApiKey, async (req, res) => {
       leadId: leadId || null, leadName: leadName || null, waMessageId,
       teamId: resolvedTeamId, agentId: agent.config.id, channelPhone: agent.connectedPhone || agent.config.id,
       status: 'sent', channel: 'baileys',
+      isAutoReply: !!isAutoReply,
+      sentByUid: typeof sentByUid === 'string' && sentByUid ? sentByUid : null,
       createdAt: admin.firestore.Timestamp.fromDate(new Date()),
       updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
     });
-    console.log(`[${agent.config.id}] → ${cleanPhone}: ${message.slice(0, 80)}`);
-    res.json({ success: true, id: docId, agentId: agent.config.id });
+    console.log(`[${agent.config.id}] → ${cleanPhone}: ${message.slice(0, 80)}${isAutoReply ? ' (auto-reply)' : ''}`);
+    // teamId is returned so the caller (api/whatsapp.ts) can key the conversation
+    // even when it did not know the agent's team.
+    res.json({ success: true, id: docId, agentId: agent.config.id, teamId: resolvedTeamId });
   } catch (err: unknown) {
     res.status(500).json({ error: err instanceof Error ? err.message : 'Dërgimi dështoi' });
   }
@@ -871,6 +908,59 @@ async function triggerCronJob(job: string, params?: Record<string, string>): Pro
   }
 }
 
+// ── Inbound WhatsApp → CRM handler (POST /api/wa-inbound) ──────────────────────
+// Same authorised channel as triggerCronJob (CRM_BASE_URL + Bearer CRON_SECRET).
+// The whatsappMessages row is already written before this is called, so the
+// event is fire-and-forget: 3 attempts with 1s/3s/9s back-off, 20s timeout each,
+// and a loud log on the final failure. A retried POST re-runs idempotent upserts
+// on the CRM side, so a duplicate delivery is harmless.
+interface WaEventPayload {
+  channel: 'baileys' | 'meta';
+  direction: 'inbound' | 'outbound';
+  teamId: string;
+  agentId: string | null;
+  metaPhoneNumberId: string | null;
+  channelPhone: string;
+  waMessageId: string;
+  phone: string;
+  jid: string;
+  isLid: boolean;
+  text: string;
+  kind: 'text' | 'media' | 'reaction' | 'system';
+  pushName: string | null;
+  isAutoReply: boolean;
+  timestamp: string;
+}
+const WA_EVENT_RETRY_DELAYS_MS = [1_000, 3_000, 9_000];
+
+async function postWaEvent(event: WaEventPayload): Promise<void> {
+  if (!CRM_BASE_URL || !CRON_SECRET) return;
+  const label = `${event.direction} ${event.phone} ${event.waMessageId}`;
+  let lastErr = '';
+  for (let attempt = 0; attempt < WA_EVENT_RETRY_DELAYS_MS.length; attempt++) {
+    try {
+      const ctrl = new AbortController();
+      const to = setTimeout(() => ctrl.abort(), 20_000);
+      const res = await fetch(`${CRM_BASE_URL}/api/wa-inbound`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${CRON_SECRET}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(event),
+        signal: ctrl.signal,
+      });
+      clearTimeout(to);
+      if (res.ok) return;
+      // 4xx = the payload is wrong, retrying cannot fix it; 5xx/timeouts are retried.
+      const text = await res.text().catch(() => '');
+      lastErr = `HTTP ${res.status} ${text.slice(0, 200)}`;
+      if (res.status >= 400 && res.status < 500) break;
+    } catch (err) {
+      lastErr = (err as Error)?.message || String(err);
+    }
+    await new Promise(r => setTimeout(r, WA_EVENT_RETRY_DELAYS_MS[attempt]));
+  }
+  console.error(`[WA→CRM] wa-inbound "${label}" dështoi pas ${WA_EVENT_RETRY_DELAYS_MS.length} provave: ${lastErr}`);
+}
+
 function scheduleDailyUtc(hour: number, minute: number, fn: () => void): void {
   const DAY = 24 * 60 * 60 * 1000;
   const now = new Date();
@@ -942,6 +1032,11 @@ function startCronSchedulers(): void {
   // index) and marks each one reminderSentAt, so a 5-minute cadence costs a few
   // reads per run and a restart can never double-notify.
   setInterval(() => { void triggerCronJob('task-reminders'); }, 5 * MIN);
+  // Unanswered WhatsApp threads past the tenant's response SLA (default 120 min).
+  // The job reads ONLY conversations that are due (awaitingReply + slaBreachNotified
+  // + slaFirstResponseDueAt, one composite index) and marks each breach once, so a
+  // 15-minute cadence costs a handful of reads and a restart cannot double-notify.
+  setInterval(() => { void triggerCronJob('conversation-sla'); }, 15 * MIN);
   setInterval(() => { void triggerCronJob('lead-sla-stale-alerts'); }, 60 * MIN);
   // CRM automation rules (CRM → Automatizime). Hourly: "pa pronar prej 2 orësh"
   // must mean two hours, not "at tomorrow's run-all". The job reads ONLY tenants
@@ -1019,10 +1114,17 @@ function startCronSchedulers(): void {
   scheduleDailyInZone(CRON_LOCAL_TZ, 10, 0, () => {
     void triggerCronJob('whatsapp-automations');
   });
+  // Follow-up reminders ("Ndjekja": leads + customers due today/overdue → the
+  // owner's bell/push/email) — 08:30 local, before the working day starts. A
+  // wall-clock promise to a person, so scheduleDailyInZone (never UTC) and NOT in
+  // run-all. The job debounces per contact (23h), so a restart-day double fire is silent.
+  scheduleDailyInZone(CRON_LOCAL_TZ, 8, 30, () => {
+    void triggerCronJob('lead-follow-up-reminders');
+  });
 
   // Kick the frequent set shortly after boot so a restart doesn't stall a broadcast.
   setTimeout(() => { void triggerCronJob('whatsapp-broadcasts'); }, MIN);
-  console.log(`[CRON] ✅ Schedulerët aktiv → ${CRM_BASE_URL} (daily run-all @ ${CRON_DAILY_HOUR}:00 UTC, raporti ditor 17:35/18:35 ${CRON_LOCAL_TZ}, automatizimet WhatsApp 10:00 ${CRON_LOCAL_TZ})`);
+  console.log(`[CRON] ✅ Schedulerët aktiv → ${CRM_BASE_URL} (daily run-all @ ${CRON_DAILY_HOUR}:00 UTC, raporti ditor 17:35/18:35 ${CRON_LOCAL_TZ}, automatizimet WhatsApp 10:00 ${CRON_LOCAL_TZ}, kujtesat e ndjekjes 08:30 ${CRON_LOCAL_TZ})`);
 }
 
 // ── Start ─────────────────────────────────────────────────────────────────────

@@ -58,6 +58,14 @@ import { Checkbox } from '../components/ui/checkbox';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { Separator } from '../components/ui/separator';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '../components/ui/dropdown-menu';
+import FollowUpBadge from '../components/crm/FollowUpBadge';
+import ContactQuickActions from '../components/crm/ContactQuickActions';
+import NextStepPopover from '../components/crm/NextStepPopover';
+import WhatsAppChatPanel from '../components/WhatsAppChatPanel';
+import EmailComposerDialog, { useContactEmailAvailable, type EmailTarget } from '../components/crm/EmailComposerDialog';
+import { useFollowUpActions, targetFromCustomer } from '../hooks/useFollowUpActions';
+import { dueState, daysSinceContact } from '../lib/crm/followUp';
+import { Bell } from 'lucide-react';
 import { useToast } from '../hooks/use-toast';
 import { useFilteredByOwner, useUniqueTeamMembers } from '../hooks/useRoleFilteredData';
 import { useUserNames } from '../hooks/useUserNames';
@@ -93,7 +101,14 @@ const CustomersView: React.FC = () => {
   const [industryFilter, setIndustryFilter] = useState<string>('__all__');
   const [creditLimitFilter, setCreditLimitFilter] = useState<string>('__all__');
   const [tagFilter, setTagFilter] = useState<string>('__all__');
-  const [sortBy, setSortBy] = useState<'recent' | 'name' | 'revenue'>('recent');
+  // Follow-up filter: who has gone quiet / who is overdue for a touch.
+  const [followFilter, setFollowFilter] = useState<'__all__' | 'no_contact_30' | 'no_contact_90' | 'overdue' | 'due_today' | 'has_next'>('__all__');
+  const [sortBy, setSortBy] = useState<'recent' | 'name' | 'revenue' | 'follow' | 'last_contact'>('recent');
+  const followUp = useFollowUpActions();
+  const [waCustomer, setWaCustomer] = useState<Customer | null>(null);
+  const emailAvailable = useContactEmailAvailable();
+  const [emailTarget, setEmailTarget] = useState<EmailTarget | null>(null);
+  const openEmailFor = (c: Customer) => { if (c.email) setEmailTarget({ kind: 'customer', id: c.id, name: c.name, email: c.email, company: c.company }); };
   const [showFilters, setShowFilters] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
   // Manual duplicate merge (Admin/Manager only — the server re-checks the role).
@@ -263,6 +278,17 @@ const CustomersView: React.FC = () => {
       if (tagFilter !== '__all__') {
         if (!parseTags((customer as any).tags).some(t => t.toLowerCase() === tagFilter.toLowerCase())) return false;
       }
+      if (followFilter !== '__all__') {
+        const since = daysSinceContact(customer);
+        const due = dueState(customer).state;
+        switch (followFilter) {
+          case 'no_contact_30': if (since !== null && since < 30) return false; break;
+          case 'no_contact_90': if (since !== null && since < 90) return false; break;
+          case 'overdue': if (due !== 'overdue') return false; break;
+          case 'due_today': if (due !== 'today' && due !== 'overdue') return false; break;
+          case 'has_next': if (due === 'none') return false; break;
+        }
+      }
       return true;
     });
     // Sort: newest first (createdAt desc), alphabetically, or by revenue brought in
@@ -270,6 +296,18 @@ const CustomersView: React.FC = () => {
     const ms = (d: any) => { const x = d?.toDate ? d.toDate() : d; const t = x instanceof Date ? x.getTime() : Date.parse(x); return isNaN(t) ? 0 : t; };
     return [...list].sort((a, b) => {
       if (sortBy === 'name') return (a.name || '').localeCompare(b.name || '');
+      if (sortBy === 'follow') {
+        // Next step soonest first; customers without one last.
+        const da = dueState(a).dueMs ?? Number.POSITIVE_INFINITY, db = dueState(b).dueMs ?? Number.POSITIVE_INFINITY;
+        if (da !== db) return da - db;
+        return (a.name || '').localeCompare(b.name || '');
+      }
+      if (sortBy === 'last_contact') {
+        // Longest silence first; never-contacted at the very top.
+        const sa = daysSinceContact(a) ?? Number.POSITIVE_INFINITY, sb = daysSinceContact(b) ?? Number.POSITIVE_INFINITY;
+        if (sa !== sb) return sb - sa;
+        return (a.name || '').localeCompare(b.name || '');
+      }
       if (sortBy === 'revenue') {
         const ra = revenueByCustomer.get(a.id), rb = revenueByCustomer.get(b.id);
         const dc = (rb?.collected || 0) - (ra?.collected || 0);
@@ -280,11 +318,11 @@ const CustomersView: React.FC = () => {
       }
       return ms((b as any).createdAt) - ms((a as any).createdAt);
     });
-  }, [customers, searchQuery, statusFilter, industryFilter, creditLimitFilter, tagFilter, sortBy, revenueByCustomer]);
+  }, [customers, searchQuery, statusFilter, industryFilter, creditLimitFilter, tagFilter, followFilter, sortBy, revenueByCustomer]);
 
   // Cap rendered rows so large customer lists don't mount hundreds of DOM nodes
   // at once (mobile jank). "Load more" reveals the rest of the filtered set.
-  useEffect(() => { setVisibleCount(20); }, [searchQuery, statusFilter, industryFilter, creditLimitFilter, tagFilter, sortBy]);
+  useEffect(() => { setVisibleCount(20); }, [searchQuery, statusFilter, industryFilter, creditLimitFilter, tagFilter, followFilter, sortBy]);
   const visibleCustomers = useMemo(
     () => filteredCustomers.slice(0, visibleCount),
     [filteredCustomers, visibleCount]
@@ -306,7 +344,7 @@ const CustomersView: React.FC = () => {
     }, {} as Record<string, number>);
   }, [customers]);
 
-  const hasActiveFilters = searchQuery || statusFilter !== '__all__' || industryFilter !== '__all__' || creditLimitFilter !== '__all__' || tagFilter !== '__all__';
+  const hasActiveFilters = searchQuery || statusFilter !== '__all__' || industryFilter !== '__all__' || creditLimitFilter !== '__all__' || tagFilter !== '__all__' || followFilter !== '__all__';
 
   const clearFilters = () => {
     setSearchQuery('');
@@ -314,6 +352,7 @@ const CustomersView: React.FC = () => {
     setIndustryFilter('__all__');
     setCreditLimitFilter('__all__');
     setTagFilter('__all__');
+    setFollowFilter('__all__');
   };
 
   // Export the currently-filtered customers to a CSV file.
@@ -846,7 +885,7 @@ const CustomersView: React.FC = () => {
                   Filtrat
                   {hasActiveFilters && (
                     <Badge variant="secondary" className="ml-1 h-5 w-5 p-0 flex items-center justify-center text-xs">
-                      {[statusFilter !== '__all__', industryFilter !== '__all__', creditLimitFilter !== '__all__', tagFilter !== '__all__'].filter(Boolean).length}
+                      {[statusFilter !== '__all__', industryFilter !== '__all__', creditLimitFilter !== '__all__', tagFilter !== '__all__', followFilter !== '__all__'].filter(Boolean).length}
                     </Badge>
                   )}
                 </Button>
@@ -856,6 +895,8 @@ const CustomersView: React.FC = () => {
                     <SelectItem value="recent">Më të rejat</SelectItem>
                     <SelectItem value="name">Sipas emrit (A–Z)</SelectItem>
                     <SelectItem value="revenue">Sipas të ardhurave</SelectItem>
+                    <SelectItem value="follow">Sipas hapit tjetër</SelectItem>
+                    <SelectItem value="last_contact">Më gjatë pa kontakt</SelectItem>
                   </SelectContent>
                 </Select>
                 <Button variant="outline" onClick={exportCsv} className="gap-2" title="Eksporto listën e filtruar në CSV">
@@ -904,6 +945,20 @@ const CustomersView: React.FC = () => {
                         <SelectItem value="low">Deri 10,000 ALL</SelectItem>
                         <SelectItem value="medium">10,000 - 50,000 ALL</SelectItem>
                         <SelectItem value="high">Mbi 50,000 ALL</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div>
+                    <Label className="text-sm text-muted-foreground mb-2 block">Ndjekja</Label>
+                    <Select value={followFilter} onValueChange={(v) => setFollowFilter(v as any)}>
+                      <SelectTrigger><SelectValue placeholder="Të gjithë" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__all__">Të gjithë</SelectItem>
+                        <SelectItem value="no_contact_30">Pa kontakt &gt; 30 ditë</SelectItem>
+                        <SelectItem value="no_contact_90">Pa kontakt &gt; 90 ditë</SelectItem>
+                        <SelectItem value="overdue">Ndjekje e vonuar</SelectItem>
+                        <SelectItem value="due_today">Ndjekje sot / vonuar</SelectItem>
+                        <SelectItem value="has_next">Me hap tjetër</SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1004,6 +1059,17 @@ const CustomersView: React.FC = () => {
                           <StatusIcon className="w-3 h-3" />
                           {statusOpt?.label || cust.status || 'Aktiv'}
                         </Badge>
+                        <NextStepPopover
+                          contact={customer}
+                          entity="customer"
+                          mode="schedule"
+                          trigger={
+                            customer.nextFollowUpDate
+                              ? <button type="button" className="rounded-full" title="Ndrysho hapin tjetër"><FollowUpBadge contact={customer} size="sm" /></button>
+                              : <Button variant="ghost" size="sm" className="h-8 w-8 p-0" title="Cakto ndjekje"><Bell className="w-4 h-4" /></Button>
+                          }
+                          onSubmit={(p) => followUp.schedule(targetFromCustomer(customer), p.next)}
+                        />
                         {permissions.canEdit && (
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
@@ -1033,7 +1099,20 @@ const CustomersView: React.FC = () => {
                       {customer.phone && (
                         <div className="flex items-center gap-1"><Phone className="w-3 h-3" />{customer.phone}</div>
                       )}
+                      {(() => { const d = daysSinceContact(customer); return (
+                        <span className={`ml-auto text-xs ${d === null || d > 30 ? 'text-warning' : ''}`} title="Kontakti i fundit">
+                          {d === null ? 'Pa kontakt' : d === 0 ? 'Kontaktuar sot' : `${d} ditë pa kontakt`}
+                        </span>
+                      ); })()}
                     </div>
+                    <ContactQuickActions
+                      contact={{ name: customer.name, phone: customer.phone, email: customer.email }}
+                      entity="customer"
+                      compact
+                      onLogged={(ch) => void followUp.logContact(targetFromCustomer(customer), ch)}
+                      onOpenWhatsApp={customer.phone ? () => setWaCustomer(customer) : undefined}
+                      onOpenEmail={emailAvailable && customer.email ? () => openEmailFor(customer) : undefined}
+                    />
                     {parseTags(cust.tags).length > 0 && <TaskLabels labels={parseTags(cust.tags)} />}
                   </Card>
                 );
@@ -1122,6 +1201,30 @@ const CustomersView: React.FC = () => {
                               {customer.phone && (
                                 <div className="flex items-center gap-1 text-sm"><Phone className="w-3 h-3 text-muted-foreground" />{customer.phone}</div>
                               )}
+                              <div className="flex items-center gap-2 pt-0.5">
+                                <ContactQuickActions
+                                  contact={{ name: customer.name, phone: customer.phone, email: customer.email }}
+                                  entity="customer"
+                                  compact
+                                  onLogged={(ch) => void followUp.logContact(targetFromCustomer(customer), ch)}
+                                  onOpenWhatsApp={customer.phone ? () => setWaCustomer(customer) : undefined}
+                                  onOpenEmail={emailAvailable && customer.email ? () => openEmailFor(customer) : undefined}
+                                />
+                                <NextStepPopover
+                                  contact={customer}
+                                  entity="customer"
+                                  mode="schedule"
+                                  align="start"
+                                  trigger={
+                                    customer.nextFollowUpDate
+                                      ? <button type="button" className="rounded-full" title="Ndrysho hapin tjetër"><FollowUpBadge contact={customer} size="sm" /></button>
+                                      : <button type="button" className="text-[11px] text-muted-foreground hover:text-foreground underline decoration-dotted whitespace-nowrap" title="Cakto ndjekje">
+                                          {(() => { const d = daysSinceContact(customer); return d === null ? 'Pa kontakt · cakto' : d > 30 ? `${d} ditë pa kontakt · cakto` : 'Cakto ndjekje'; })()}
+                                        </button>
+                                  }
+                                  onSubmit={(p) => followUp.schedule(targetFromCustomer(customer), p.next)}
+                                />
+                              </div>
                             </div>
                           </td>
                           <td className="px-3 sm:px-6 py-3 sm:py-4 hidden lg:table-cell">
@@ -1554,6 +1657,17 @@ const CustomersView: React.FC = () => {
       </Dialog>
 
       {/* Unsaved Changes Confirmation */}
+      <EmailComposerDialog target={emailTarget} onOpenChange={(o) => { if (!o) setEmailTarget(null); }} />
+
+      {waCustomer && waCustomer.phone && (
+        <WhatsAppChatPanel
+          phone={waCustomer.phone}
+          leadName={waCustomer.name}
+          onClose={() => setWaCustomer(null)}
+          onSent={(e) => void followUp.logContact(targetFromCustomer(waCustomer), 'whatsapp', e.body, { countsAsFollowUp: true })}
+        />
+      )}
+
       <AlertDialog open={discardOpen} onOpenChange={(open) => { if (!open) cancelDiscard(); }}>
         <AlertDialogContent>
           <AlertDialogHeader>

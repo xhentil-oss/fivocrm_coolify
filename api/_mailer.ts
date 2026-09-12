@@ -18,6 +18,12 @@ export interface MailMessage {
   to: string;
   subject: string;
   html: string;
+  /**
+   * Reply-To header (already validated with `safeSenderAddress`). Used by the
+   * 1:1 contact email so a customer's answer lands in the STAFF member's inbox
+   * while the envelope sender stays the tenant's/platform's verified address.
+   */
+  replyTo?: string;
 }
 export interface SendResult {
   to: string;
@@ -131,7 +137,7 @@ async function sendViaResend(messages: MailMessage[], r: ResolvedMailer, campaig
       const resp = await fetch('https://api.resend.com/emails/batch', {
         method: 'POST',
         headers: { Authorization: `Bearer ${r.apiKey}`, 'Content-Type': 'application/json' },
-        body: JSON.stringify(chunk.map((m) => ({ from, to: [m.to], subject: m.subject, html: m.html, ...(tags ? { tags } : {}) }))),
+        body: JSON.stringify(chunk.map((m) => ({ from, to: [m.to], subject: m.subject, html: m.html, ...(m.replyTo ? { reply_to: m.replyTo } : {}), ...(tags ? { tags } : {}) }))),
         signal: AbortSignal.timeout(20_000),
       });
       const ok = resp.ok;
@@ -155,6 +161,7 @@ async function sendViaSendgrid(messages: MailMessage[], r: ResolvedMailer, campa
         body: JSON.stringify({
           personalizations: [{ to: [{ email: m.to }] }],
           from: { email: r.fromEmail, name: r.fromName },
+          ...(m.replyTo ? { reply_to: { email: m.replyTo } } : {}),
           subject: m.subject,
           content: [{ type: 'text/html', value: m.html }],
           ...(campaignId ? { custom_args: { campaignId } } : {}),
@@ -184,6 +191,7 @@ async function sendViaMailgun(messages: MailMessage[], r: ResolvedMailer, campai
   for (const m of messages) {
     try {
       const form = new URLSearchParams({ from, to: m.to, subject: m.subject, html: m.html });
+      if (m.replyTo) form.set('h:Reply-To', m.replyTo);
       if (campaignId) form.set('v:campaignId', campaignId);
       const resp = await fetch(`${base}/v3/${r.mailgunDomain}/messages`, {
         method: 'POST',
@@ -211,6 +219,7 @@ async function sendViaBrevo(messages: MailMessage[], r: ResolvedMailer, campaign
         headers: { 'api-key': r.apiKey || '', 'Content-Type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({
           sender: { email: r.fromEmail, name: r.fromName },
+          ...(m.replyTo ? { replyTo: { email: m.replyTo } } : {}),
           to: [{ email: m.to }],
           subject: m.subject,
           htmlContent: m.html,
@@ -246,7 +255,7 @@ async function sendViaSmtp(messages: MailMessage[], r: ResolvedMailer): Promise<
   // to trip rate limits that would also hurt invoices/invites.
   for (const m of messages) {
     try {
-      await transporter.sendMail({ from, to: m.to, subject: m.subject, html: m.html });
+      await transporter.sendMail({ from, to: m.to, subject: m.subject, html: m.html, ...(m.replyTo ? { replyTo: m.replyTo } : {}) });
       results.push({ to: m.to, ok: true });
     } catch (err: any) {
       results.push({ to: m.to, ok: false, error: err?.message || 'SMTP error' });

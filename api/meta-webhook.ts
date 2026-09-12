@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import crypto from 'crypto';
 import { adminDb, Timestamp } from './_firebaseAdmin.js';
-import { getTeamConfig } from './_tenantConfig.js';
+import { processWaEvent } from './_waInbound.js';
 
 /**
  * Meta WhatsApp Cloud API Webhook
@@ -13,8 +13,18 @@ import { getTeamConfig } from './_tenantConfig.js';
  *   META_WEBHOOK_VERIFY_TOKEN — a secret string you choose during webhook setup
  *   META_APP_SECRET           — Meta App Secret used to HMAC-sign POST bodies
  *
- * Per-team settings (from Firestore teamSettings):
- *   metaAccessToken, metaPhoneNumberId, metaBusinessAccountId
+ * This file owns ONLY the channel: HMAC verification, team resolution, payload
+ * parsing, the bare `whatsappMessages` row (id == Meta message id, idempotent),
+ * the 24h-window tracker and delivery-status updates. Everything that makes the
+ * message MEAN something — contact identity (lead ‖ customer), the
+ * `conversations/wa-*` thread, notifications, auto-reply — lives in
+ * api/_waInbound.ts and is shared with the Baileys channel.
+ *
+ * Meta is answered 200 AFTER processing (inside `maxDuration: 30`, vercel.json):
+ * on Vercel, work after the response is not guaranteed to run, and the old
+ * "respond first, then ~10 round-trips + a Meta send" silently lost auto-replies.
+ * Any exception still returns 200 — Meta retries non-2xx, and a retry would only
+ * re-run idempotent upserts.
  */
 
 // Disable Vercel's automatic body parser — we need the raw bytes to verify HMAC.
@@ -27,110 +37,6 @@ function normalizePhone(raw: string): string {
   if (/^3550[6-9]/.test(digits)) return '355' + digits.slice(4);
   if (/^0[6-9]/.test(digits)) return '355' + digits.slice(1);
   return digits;
-}
-
-/**
- * Owner + watchers routing for a WhatsApp conversation (Request 1, server mirror
- * of src/lib/conversationRouting.ts). Given the team's members + a resolved owner
- * (from the matched lead), compute the manager, watcher list, and unassigned flag.
- */
-function buildWaRouting(
-  members: Array<{ userId: string; teamId?: string; role?: string; status?: string }>,
-  ownerId: string | null,
-  teamId: string,
-) {
-  const active = members.filter((m) => (m.status ?? 'Active') === 'Active');
-  const managerId = active.find((m) => m.teamId === teamId && m.role === 'Manager')?.userId || null;
-  const teamMemberIds = active.filter((m) => m.teamId === teamId).map((m) => m.userId);
-  const adminIds = active.filter((m) => m.role === 'Admin').map((m) => m.userId);
-  const fallbackManagers = !ownerId && !managerId ? active.filter((m) => m.role === 'Manager').map((m) => m.userId) : [];
-  const watchers = Array.from(
-    new Set([ownerId, ...teamMemberIds, managerId, ...adminIds, ...fallbackManagers].filter(Boolean) as string[]),
-  );
-  return { managerId, watchers, unassigned: !ownerId };
-}
-
-/** Idempotent upsert of the `wa-<teamId>-<phone>` conversation doc. */
-async function upsertWaConversation(args: {
-  teamId: string;
-  businessId: string;
-  phone: string;
-  ownerId: string | null;
-  leadId: string | null;
-  subject: string | null;
-  members: Array<{ userId: string; teamId?: string; role?: string; status?: string }>;
-  ts: Date;
-}): Promise<void> {
-  const convId = `wa-${args.teamId}-${args.phone}`;
-  const ref = adminDb.collection('conversations').doc(convId);
-  const now = new Date();
-  const routing = buildWaRouting(args.members, args.ownerId, args.teamId);
-  try {
-    const snap = await ref.get();
-    if (!snap.exists) {
-      await ref.set({
-        channel: 'whatsapp',
-        businessId: args.businessId,
-        teamId: args.teamId,
-        phone: args.phone,
-        leadId: args.leadId,
-        subject: args.subject,
-        ownerId: args.ownerId,
-        managerId: routing.managerId,
-        salesAgentId: null,
-        watchers: routing.watchers,
-        unassigned: routing.unassigned,
-        status: 'open',
-        slaFirstResponseDueAt: Timestamp.fromDate(new Date(args.ts.getTime() + 2 * 3600_000)),
-        slaBreachNotified: false,
-        lastMessageAt: Timestamp.fromDate(args.ts),
-        createdAt: Timestamp.fromDate(now),
-        updatedAt: Timestamp.fromDate(now),
-        createdByUserId: null,
-      }, { merge: true });
-      return;
-    }
-    const existing = snap.data() as any;
-    const patch: any = { lastMessageAt: Timestamp.fromDate(args.ts), updatedAt: Timestamp.fromDate(now) };
-    if (existing.unassigned && args.ownerId) {
-      patch.ownerId = args.ownerId;
-      patch.managerId = routing.managerId;
-      patch.watchers = Array.from(new Set([...(existing.watchers || []), ...routing.watchers]));
-      patch.unassigned = false;
-    }
-    await ref.set(patch, { merge: true });
-  } catch { /* never block message ingest */ }
-}
-
-// Is `now` outside the configured business hours (Europe/Tirane)?
-// start/end are "HH:MM" strings; an empty config means always-open (no reply).
-function isOutsideBusinessHours(startStr?: string, endStr?: string): boolean {
-  if (!startStr || !endStr) return false;
-  const hhmm = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Europe/Tirane', hour: '2-digit', minute: '2-digit', hour12: false,
-  }).format(new Date());
-  const [h, m] = hhmm.split(':').map(Number);
-  const cur = h * 60 + m;
-  const [sh, sm] = startStr.split(':').map(Number);
-  const [eh, em] = endStr.split(':').map(Number);
-  const start = sh * 60 + sm;
-  const end = eh * 60 + em;
-  // Normal daytime window (start < end): outside = before start OR at/after end.
-  if (start <= end) return cur < start || cur >= end;
-  // Overnight window (e.g. 22:00–06:00): outside = between end and start.
-  return cur >= end && cur < start;
-}
-
-// Send a free-text WhatsApp message via Meta (used for auto-replies; valid only
-// inside the 24h window, which a fresh inbound message guarantees).
-async function sendMetaText(channel: any, to: string, bodyText: string): Promise<string | null> {
-  const resp = await fetch(`https://graph.facebook.com/v21.0/${channel.phoneNumberId}/messages`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${channel.accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messaging_product: 'whatsapp', to, type: 'text', text: { body: bodyText } }),
-  });
-  const data: any = await resp.json().catch(() => ({}));
-  return resp.ok ? (data?.messages?.[0]?.id || null) : null;
 }
 
 async function readRawBody(req: VercelRequest): Promise<Buffer> {
@@ -152,6 +58,81 @@ function verifyMetaSignature(raw: Buffer, signatureHeader: string | undefined, a
   } catch {
     return false;
   }
+}
+
+/** Which team owns this Meta phone number (multi-number array → legacy flat field → WABA id). */
+async function resolveTeamId(metaPhoneNumberId: string | undefined, wabaId: string | undefined): Promise<string> {
+  if (metaPhoneNumberId) {
+    const idsSnap = await adminDb.collection('teamSettings')
+      .where('metaPhoneNumberIds', 'array-contains', metaPhoneNumberId)
+      .limit(1)
+      .get();
+    if (!idsSnap.empty) return idsSnap.docs[0].id;
+
+    const teamSnap = await adminDb.collection('teamSettings')
+      .where('metaPhoneNumberId', '==', metaPhoneNumberId)
+      .limit(1)
+      .get();
+    if (!teamSnap.empty) return teamSnap.docs[0].id;
+  }
+  if (wabaId) {
+    const wabaSnap = await adminDb.collection('teamSettings')
+      .where('metaBusinessAccountId', '==', wabaId)
+      .limit(1)
+      .get();
+    if (!wabaSnap.empty) return wabaSnap.docs[0].id;
+  }
+  return '';
+}
+
+interface ParsedMedia {
+  text: string;
+  mediaType: string | null;
+  metaMediaId: string | null;
+  mediaMimeType: string | null;
+  mediaFilename: string | null;
+}
+
+/** Text placeholder + media descriptors for one Meta message. `null` = skip (reaction). */
+function parseMessage(msg: any): ParsedMedia | null {
+  const out: ParsedMedia = { text: '', mediaType: null, metaMediaId: null, mediaMimeType: null, mediaFilename: null };
+  switch (msg.type) {
+    case 'text':
+      out.text = msg.text?.body || '';
+      break;
+    case 'image':
+      out.text = msg.image?.caption || '[Foto]';
+      out.mediaType = 'image'; out.metaMediaId = msg.image?.id || null; out.mediaMimeType = msg.image?.mime_type || null;
+      break;
+    case 'video':
+      out.text = msg.video?.caption || '[Video]';
+      out.mediaType = 'video'; out.metaMediaId = msg.video?.id || null; out.mediaMimeType = msg.video?.mime_type || null;
+      break;
+    case 'audio':
+      out.text = '[Audio]';
+      out.mediaType = 'audio'; out.metaMediaId = msg.audio?.id || null; out.mediaMimeType = msg.audio?.mime_type || null;
+      break;
+    case 'document':
+      out.text = msg.document?.filename || '[Dokument]';
+      out.mediaType = 'document'; out.metaMediaId = msg.document?.id || null;
+      out.mediaMimeType = msg.document?.mime_type || null; out.mediaFilename = msg.document?.filename || null;
+      break;
+    case 'location':
+      out.text = '[Vendndodhje]';
+      break;
+    case 'contacts':
+      out.text = '[Kontakt]';
+      break;
+    case 'sticker':
+      out.text = '[Sticker]';
+      out.mediaType = 'sticker'; out.metaMediaId = msg.sticker?.id || null; out.mediaMimeType = msg.sticker?.mime_type || null;
+      break;
+    case 'reaction':
+      return null;
+    default:
+      out.text = `[${msg.type || 'Media'}]`;
+  }
+  return out;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -209,291 +190,156 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     return res.status(400).send('Invalid JSON');
   }
 
-  // Always respond 200 quickly to Meta (they retry on non-2xx)
-  res.status(200).json({ status: 'ok' });
-
+  // Process FIRST, answer 200 after — see the header. Wrapped so that an exception
+  // anywhere still yields a 200 (Meta retries non-2xx; every write here is idempotent).
   try {
-    if (body?.object !== 'whatsapp_business_account') return;
+    await processPayload(body);
+  } catch (err) {
+    console.error('[meta-webhook] Processing error:', err);
+  }
+  return res.status(200).json({ status: 'ok' });
+}
 
-    for (const entry of body.entry || []) {
-      const wabaId = entry.id; // WhatsApp Business Account ID
+async function processPayload(body: any): Promise<void> {
+  if (body?.object !== 'whatsapp_business_account') return;
 
-      for (const change of entry.changes || []) {
-        if (change.field !== 'messages') continue;
-        const value = change.value;
-        if (!value) continue;
+  // teams/{teamId}.businessId, resolved once per request per team.
+  const businessIdByTeam = new Map<string, string>();
+  const businessIdFor = async (teamId: string): Promise<string> => {
+    const cached = businessIdByTeam.get(teamId);
+    if (cached) return cached;
+    let businessId = teamId;
+    try {
+      const teamDoc = await adminDb.collection('teams').doc(teamId).get();
+      businessId = ((teamDoc.data() as any)?.businessId as string | undefined) || teamId;
+    } catch { /* legacy fallback: teamId */ }
+    businessIdByTeam.set(teamId, businessId);
+    return businessId;
+  };
 
-        const metaPhoneNumberId = value.metadata?.phone_number_id;
-        const displayPhone = value.metadata?.display_phone_number;
+  for (const entry of body.entry || []) {
+    const wabaId = entry.id; // WhatsApp Business Account ID
 
-        // Look up which team owns this phone number
-        // First try denormalized metaPhoneNumberIds array (supports multi-number)
-        let teamId = '';
-        const idsSnap = await adminDb.collection('teamSettings')
-          .where('metaPhoneNumberIds', 'array-contains', metaPhoneNumberId)
-          .limit(1)
-          .get();
-        if (!idsSnap.empty) {
-          teamId = idsSnap.docs[0].id;
-        }
+    for (const change of entry.changes || []) {
+      if (change.field !== 'messages') continue;
+      const value = change.value;
+      if (!value) continue;
 
-        if (!teamId) {
-          // Fallback: legacy flat field
-          const teamSnap = await adminDb.collection('teamSettings')
-            .where('metaPhoneNumberId', '==', metaPhoneNumberId)
-            .limit(1)
-            .get();
-          if (!teamSnap.empty) teamId = teamSnap.docs[0].id;
-        }
+      const metaPhoneNumberId: string | undefined = value.metadata?.phone_number_id;
+      const displayPhone: string | undefined = value.metadata?.display_phone_number;
+      const channelPhone = normalizePhone(displayPhone || '');
 
-        if (!teamId) {
-          // Try by WABA ID
-          const wabaSnap = await adminDb.collection('teamSettings')
-            .where('metaBusinessAccountId', '==', wabaId)
-            .limit(1)
-            .get();
-          if (!wabaSnap.empty) teamId = wabaSnap.docs[0].id;
-        }
+      const teamId = await resolveTeamId(metaPhoneNumberId, wabaId);
+      if (!teamId) {
+        console.warn(`[meta-webhook] No team found for phoneNumberId=${metaPhoneNumberId}, wabaId=${wabaId}`);
+        continue;
+      }
+      const businessId = await businessIdFor(teamId);
 
-        if (!teamId) {
-          console.warn(`[meta-webhook] No team found for phoneNumberId=${metaPhoneNumberId}, wabaId=${wabaId}`);
-          continue;
-        }
+      // ── Incoming messages ──────────────────────────────────────────────────
+      for (const msg of value.messages || []) {
+        const parsed = parseMessage(msg);
+        if (!parsed) continue; // reactions carry nothing to store or answer
 
-        // Load team settings once (used for auto-reply automation).
-        const teamSettings = await getTeamConfig(teamId);
-        const autoReplyChannel = (teamSettings.metaChannels || []).find((c: any) => c.phoneNumberId === metaPhoneNumberId);
+        const from = normalizePhone(msg.from); // sender phone
+        const waMessageId: string | undefined = msg.id;
+        const ts = msg.timestamp ? new Date(Number(msg.timestamp) * 1000) : new Date();
+        const contactName: string | null = value.contacts?.find((c: any) => c.wa_id === msg.from)?.profile?.name || null;
+        const docId = waMessageId || adminDb.collection('whatsappMessages').doc().id;
 
-        // Load team members + business once for conversation owner/watchers routing.
-        let convBusinessId = teamId;
-        let convMembers: Array<{ userId: string; teamId?: string; role?: string; status?: string }> = [];
+        // The bare row — written by the channel first, so the record never
+        // depends on the rest of the pipeline. `_waInbound` merges identity onto it.
+        await adminDb.collection('whatsappMessages').doc(docId).set({
+          phone: from,
+          jid: `${from}@s.whatsapp.net`,
+          direction: 'inbound' as const,
+          message: parsed.text,
+          waMessageId: waMessageId || null,
+          leadName: contactName,
+          pushName: contactName,
+          teamId,
+          businessId,
+          status: 'received',
+          channel: 'meta',
+          channelPhone,
+          metaPhoneNumberId: metaPhoneNumberId || null,
+          isLid: false,
+          mediaType: parsed.mediaType,
+          metaMediaId: parsed.metaMediaId,
+          mediaMimeType: parsed.mediaMimeType,
+          mediaFilename: parsed.mediaFilename,
+          createdAt: Timestamp.fromDate(ts),
+          updatedAt: Timestamp.fromDate(new Date()),
+        }, { merge: true });
+
+        // ── 24-hour customer-service window tracking ────────────────────────
+        // Per-(team,phone) doc with the last inbound timestamp so the UI can warn
+        // before sending premium messages outside the 24h window.
         try {
-          const teamDoc = await adminDb.collection('teams').doc(teamId).get();
-          convBusinessId = (teamDoc.data() as any)?.businessId || teamId;
-          const membersSnap = await adminDb.collection('teamMembers').where('teamId', '==', teamId).get();
-          convMembers = membersSnap.docs.map((d) => {
-            const x = d.data() as any;
-            return { userId: x.userId, teamId: x.teamId, role: x.role, status: x.status };
-          });
-        } catch { /* routing degrades to unassigned if this fails */ }
-
-        // ── Process incoming messages ─────────────────────────────────────
-        for (const msg of value.messages || []) {
-          const from = normalizePhone(msg.from); // sender phone
-          const waMessageId = msg.id;
-          const ts = msg.timestamp ? new Date(Number(msg.timestamp) * 1000) : new Date();
-
-          let text = '';
-          let mediaType: string | null = null;
-          let metaMediaId: string | null = null;
-          let mediaMimeType: string | null = null;
-          let mediaFilename: string | null = null;
-          if (msg.type === 'text') {
-            text = msg.text?.body || '';
-          } else if (msg.type === 'image') {
-            text = msg.image?.caption || '[Foto]';
-            mediaType = 'image';
-            metaMediaId = msg.image?.id || null;
-            mediaMimeType = msg.image?.mime_type || null;
-          } else if (msg.type === 'video') {
-            text = msg.video?.caption || '[Video]';
-            mediaType = 'video';
-            metaMediaId = msg.video?.id || null;
-            mediaMimeType = msg.video?.mime_type || null;
-          } else if (msg.type === 'audio') {
-            text = '[Audio]';
-            mediaType = 'audio';
-            metaMediaId = msg.audio?.id || null;
-            mediaMimeType = msg.audio?.mime_type || null;
-          } else if (msg.type === 'document') {
-            text = msg.document?.filename || '[Dokument]';
-            mediaType = 'document';
-            metaMediaId = msg.document?.id || null;
-            mediaMimeType = msg.document?.mime_type || null;
-            mediaFilename = msg.document?.filename || null;
-          } else if (msg.type === 'location') {
-            text = '[Vendndodhje]';
-          } else if (msg.type === 'contacts') {
-            text = '[Kontakt]';
-          } else if (msg.type === 'sticker') {
-            text = '[Sticker]';
-            mediaType = 'sticker';
-            metaMediaId = msg.sticker?.id || null;
-            mediaMimeType = msg.sticker?.mime_type || null;
-          } else if (msg.type === 'reaction') {
-            continue; // Skip reactions
-          } else {
-            text = `[${msg.type || 'Media'}]`;
-          }
-
-          // Contact name from Meta
-          const contactName = value.contacts?.find((c: any) => c.wa_id === msg.from)?.profile?.name || null;
-
-          // Try to find matching lead
-          let autoLeadId: string | null = null;
-          let autoLeadName: string | null = null;
-          let autoLeadOwnerId: string | null = null;
-          try {
-            const leadsSnap = await adminDb.collection('leads')
-              .where('teamId', '==', teamId)
-              .where('phoneNumber', '==', from)
-              .limit(1)
-              .get();
-            if (!leadsSnap.empty) {
-              autoLeadId = leadsSnap.docs[0].id;
-              autoLeadName = leadsSnap.docs[0].data().name || null;
-              autoLeadOwnerId = (leadsSnap.docs[0].data() as any).assignedToUserId || null;
-            }
-            if (!autoLeadId) {
-              const snap2 = await adminDb.collection('leads')
-                .where('teamId', '==', teamId)
-                .where('phone', '==', from)
-                .limit(1)
-                .get();
-              if (!snap2.empty) {
-                autoLeadId = snap2.docs[0].id;
-                autoLeadName = snap2.docs[0].data().name || null;
-                autoLeadOwnerId = (snap2.docs[0].data() as any).assignedToUserId || null;
-              }
-            }
-          } catch { /* non-critical */ }
-
-          const docId = waMessageId || adminDb.collection('whatsappMessages').doc().id;
-
-          await adminDb.collection('whatsappMessages').doc(docId).set({
-            phone: from,
-            jid: `${from}@s.whatsapp.net`,
-            direction: 'inbound' as const,
-            message: text,
-            waMessageId,
-            leadId: autoLeadId,
-            leadName: autoLeadName || contactName,
-            pushName: contactName,
+          await adminDb.collection('whatsappConversations').doc(`${teamId}_${from}`).set({
             teamId,
-            status: 'received',
+            phone: from,
+            lastInboundAt: Timestamp.fromDate(ts),
             channel: 'meta',
-            channelPhone: normalizePhone(displayPhone || ''),
-            metaPhoneNumberId,
-            isLid: false,
-            mediaType,
-            metaMediaId,
-            mediaMimeType,
-            mediaFilename,
-            createdAt: Timestamp.fromDate(ts),
             updatedAt: Timestamp.fromDate(new Date()),
           }, { merge: true });
-
-          // ── 24-hour customer-service window tracking ────────────────────
-          // Keep a per-(team,phone) doc with the timestamp of the last inbound
-          // message so the UI can warn before sending premium messages outside
-          // the 24h window.
-          try {
-            const convId = `${teamId}_${from}`;
-            await adminDb.collection('whatsappConversations').doc(convId).set({
-              teamId,
-              phone: from,
-              lastInboundAt: Timestamp.fromDate(ts),
-              channel: 'meta',
-              updatedAt: Timestamp.fromDate(new Date()),
-            }, { merge: true });
-          } catch (e) {
-            console.warn('[meta-webhook] conv tracker update failed:', e);
-          }
-
-          // ── Owner + watchers conversation (Request 1) ───────────────────
-          // Unify the WhatsApp thread with the same owner/watchers model as the
-          // portal, so it appears in the responsible person's chat with manager +
-          // admin supervision. Owner is inherited from the matched lead when known.
-          await upsertWaConversation({
-            teamId,
-            businessId: convBusinessId,
-            phone: from,
-            ownerId: autoLeadOwnerId,
-            leadId: autoLeadId,
-            subject: autoLeadName || contactName,
-            members: convMembers,
-            ts,
-          });
-
-          // ── Auto-reply outside business hours ───────────────────────────
-          // Sends a one-off welcome text when a customer writes outside hours.
-          // Debounced to once per 6h per phone so we never spam a conversation.
-          try {
-            if (
-              teamSettings.waAutoReplyEnabled &&
-              teamSettings.waAutoReplyText &&
-              autoReplyChannel?.accessToken &&
-              msg.type !== 'reaction' &&
-              isOutsideBusinessHours(teamSettings.waBusinessStart, teamSettings.waBusinessEnd)
-            ) {
-              const convId = `${teamId}_${from}`;
-              const convSnap = await adminDb.collection('whatsappConversations').doc(convId).get();
-              const lastAuto = convSnap.data()?.lastAutoReplyAt?.toDate?.();
-              const sixHoursAgo = new Date(Date.now() - 6 * 60 * 60 * 1000);
-              if (!lastAuto || lastAuto < sixHoursAgo) {
-                const replyId = await sendMetaText(autoReplyChannel, from, teamSettings.waAutoReplyText);
-                if (replyId) {
-                  await adminDb.collection('whatsappMessages').doc(replyId).set({
-                    phone: from,
-                    jid: `${from}@s.whatsapp.net`,
-                    direction: 'outbound' as const,
-                    message: teamSettings.waAutoReplyText,
-                    waMessageId: replyId,
-                    leadId: autoLeadId,
-                    leadName: autoLeadName || contactName,
-                    teamId,
-                    status: 'sent',
-                    channel: 'meta',
-                    channelPhone: normalizePhone(displayPhone || ''),
-                    metaPhoneNumberId,
-                    isAutoReply: true,
-                    createdAt: Timestamp.fromDate(new Date()),
-                    updatedAt: Timestamp.fromDate(new Date()),
-                  }, { merge: true });
-                  await adminDb.collection('whatsappConversations').doc(convId).set(
-                    { lastAutoReplyAt: Timestamp.fromDate(new Date()) },
-                    { merge: true }
-                  );
-                }
-              }
-            }
-          } catch (e) {
-            console.warn('[meta-webhook] auto-reply failed:', e);
-          }
-
-          console.log(`[meta-webhook] ← ${from}: ${text.slice(0, 80)}`);
+        } catch (e) {
+          console.warn('[meta-webhook] conv tracker update failed:', e);
         }
 
-        // ── Process status updates ────────────────────────────────────────
-        for (const status of value.statuses || []) {
-          const waMessageId = status.id;
-          if (!waMessageId) continue;
+        // ── Identity → conversation → notify → auto-reply (shared handler) ──
+        try {
+          await processWaEvent({
+            channel: 'meta',
+            direction: 'inbound',
+            teamId,
+            agentId: null,
+            metaPhoneNumberId: metaPhoneNumberId || null,
+            channelPhone,
+            waMessageId: docId,
+            phone: from,
+            jid: `${from}@s.whatsapp.net`,
+            isLid: false,
+            text: parsed.text,
+            kind: msg.type === 'text' ? 'text' : 'media',
+            pushName: contactName,
+            isAutoReply: false,
+            timestamp: ts.toISOString(),
+          });
+        } catch (e) {
+          console.error('[meta-webhook] processWaEvent failed:', e);
+        }
 
-          const statusMap: Record<string, string> = {
-            sent: 'sent',
-            delivered: 'delivered',
-            read: 'read',
-            failed: 'failed',
-          };
-          const newStatus = statusMap[status.status];
-          if (!newStatus) continue;
+        console.log(`[meta-webhook] ← ${from}: ${parsed.text.slice(0, 80)}`);
+      }
 
-          try {
-            const ref = adminDb.collection('whatsappMessages').doc(waMessageId);
-            const doc = await ref.get();
-            if (doc.exists) {
-              await ref.update({
-                status: newStatus,
-                updatedAt: Timestamp.fromDate(new Date()),
-              });
-            }
-          } catch (e) {
-            console.error('[meta-webhook] Status update error:', e);
+      // ── Status updates ─────────────────────────────────────────────────────
+      for (const status of value.statuses || []) {
+        const waMessageId = status.id;
+        if (!waMessageId) continue;
+
+        const statusMap: Record<string, string> = {
+          sent: 'sent',
+          delivered: 'delivered',
+          read: 'read',
+          failed: 'failed',
+        };
+        const newStatus = statusMap[status.status];
+        if (!newStatus) continue;
+
+        try {
+          const ref = adminDb.collection('whatsappMessages').doc(waMessageId);
+          const doc = await ref.get();
+          if (doc.exists) {
+            await ref.update({
+              status: newStatus,
+              updatedAt: Timestamp.fromDate(new Date()),
+            });
           }
+        } catch (e) {
+          console.error('[meta-webhook] Status update error:', e);
         }
       }
     }
-  } catch (err) {
-    console.error('[meta-webhook] Processing error:', err);
   }
 }

@@ -33,6 +33,8 @@ import { adminDb, Timestamp } from './_firebaseAdmin.js';
 import { refreshGoogleToken } from './_gsc.js';
 import { getTeamConfig } from './_tenantConfig.js';
 import { notifyUser } from './_push.js';
+import { managerIdsForBusiness } from './_staffRecipients.js';
+import { generateAiText, callGeminiText, callOpenAiText } from './_aiProvider.js';
 
 export const GMB_SCOPE = 'https://www.googleapis.com/auth/business.manage';
 const ACCT_API = 'https://mybusinessaccountmanagement.googleapis.com/v1';
@@ -184,45 +186,11 @@ export async function publishGmbReply(
   );
 }
 
-// ── AI drafting (per-tenant key via getTeamConfig, env fallback) ──────────────
-
-async function callGeminiText(apiKey: string, model: string, prompt: string): Promise<string> {
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contents: [{ parts: [{ text: prompt }] }] }),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json?.error?.message || `Gemini ${res.status}`);
-  return json?.candidates?.[0]?.content?.parts?.map((p: any) => p.text).join('') || '';
-}
-
-async function callOpenAiText(apiKey: string, model: string, prompt: string): Promise<string> {
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-    body: JSON.stringify({ model, messages: [{ role: 'user', content: prompt }], max_tokens: 400 }),
-  });
-  const json = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(json?.error?.message || `OpenAI ${res.status}`);
-  return json?.choices?.[0]?.message?.content || '';
-}
-
-/** One AI text call using the tenant's configured provider (Settings → FivoAI). */
-export async function generateAiText(teamId: string | null | undefined, prompt: string): Promise<string> {
-  const cfg = teamId ? await getTeamConfig(teamId) : {};
-  const provider = cfg.aiProvider === 'openai' ? 'openai' : 'gemini';
-  const teamKey = typeof cfg.aiApiKey === 'string' ? cfg.aiApiKey : '';
-  const geminiKey = provider === 'gemini' && teamKey ? teamKey : process.env.GEMINI_API_KEY || '';
-  const openaiKey = provider === 'openai' && teamKey ? teamKey : process.env.OPENAI_API_KEY || '';
-  const model = typeof cfg.aiModel === 'string' && cfg.aiModel ? cfg.aiModel : '';
-
-  if (provider === 'openai' && openaiKey) return (await callOpenAiText(openaiKey, model || 'gpt-4o-mini', prompt)).trim();
-  if (geminiKey) return (await callGeminiText(geminiKey, model || 'gemini-2.5-flash', prompt)).trim();
-  if (openaiKey) return (await callOpenAiText(openaiKey, model || 'gpt-4o-mini', prompt)).trim();
-  throw new Error('AI nuk është konfiguruar (vendos çelësin te Cilësimet → Integrime, ose GEMINI/OPENAI_API_KEY)');
-}
+// ── AI drafting ───────────────────────────────────────────────────────────────
+// The provider resolution (tenant key via getTeamConfig, env fallback, Gemini ⇄
+// OpenAI) lives in api/_aiProvider.ts now — shared with ai-chat and the WhatsApp
+// "Sugjerim AI" draft. Re-exported so existing callers keep their import.
+export { generateAiText, callGeminiText, callOpenAiText };
 
 export function gmbReplyPrompt(review: { author?: string; starRating?: number; comment?: string }, businessName: string, context?: string): string {
   return [
@@ -248,24 +216,15 @@ export function gmbReportPrompt(review: { author?: string; starRating?: number; 
 
 // ── Review sync ────────────────────────────────────────────────────────────────
 
-const MANAGER_ROLES = new Set(['Admin', 'Manager', 'Owner', 'SuperAdmin']);
-
-/** Admin/Manager userIds of a business (capped) — resolved once per sync, not per review. */
+/**
+ * Admin/Manager userIds of a business (capped at 5 for review alerts) — resolved
+ * once per sync, not per review. The resolver itself now lives in
+ * api/_staffRecipients.ts and is shared with the inbound-WhatsApp handler and
+ * the cron; re-exported so existing callers keep their import.
+ */
+export { managerIdsForBusiness };
 async function businessManagerIds(businessId?: string | null): Promise<string[]> {
-  if (!businessId) return [];
-  const snap = await adminDb.collection('teamMembers').where('businessId', '==', businessId).limit(50).get();
-  const seen = new Set<string>();
-  const targets: string[] = [];
-  for (const d of snap.docs) {
-    const m = d.data();
-    if (!m.userId || seen.has(m.userId)) continue;
-    if (m.status === 'Inactive') continue;
-    if (!MANAGER_ROLES.has(String(m.role || ''))) continue;
-    seen.add(m.userId);
-    targets.push(m.userId);
-    if (targets.length >= 5) break;
-  }
-  return targets;
+  return managerIdsForBusiness(businessId, null, { cap: 5 });
 }
 
 interface NewReviewSideEffectInput {

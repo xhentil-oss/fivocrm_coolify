@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { adminAuth, adminDb, Timestamp } from './_firebaseAdmin.js';
 import { getTeamConfig } from './_tenantConfig.js';
+import { markConversationAnswered } from './_waInbound.js';
 
 /**
  * Send a WhatsApp message via Meta Cloud API.
@@ -241,6 +242,9 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       createdAt: Timestamp.fromDate(new Date()),
       updatedAt: Timestamp.fromDate(new Date()),
     });
+
+    // A staff reply (text OR template) closes the "awaiting reply" window. Best-effort.
+    await markConversationAnswered({ teamId, phone: cleanPhone, byUid: uid, source: 'app', leadId: leadId || null }).catch(() => {});
 
     console.log(`[meta-send] → ${cleanPhone}: ${messageText.slice(0, 80)}`);
     return res.status(200).json({ success: true, id: docId });

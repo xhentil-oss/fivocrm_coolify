@@ -16,6 +16,9 @@ import tenantSecretsHandler from './_tenant-secrets.js';
 import billingHandler from './_billing.js';
 import reportsHandler from './_reports.js';
 import platformAdminHandler from './_platformAdmin.js';
+import waInboundHandler from './_waInbound.js';
+import contactEmailHandler from './_contact-email.js';
+import aiReplyHandler from './_ai-reply.js';
 
 /**
  * Consolidated dispatcher (named "email" for historical reasons — it also routes
@@ -37,6 +40,9 @@ import platformAdminHandler from './_platformAdmin.js';
  *   /api/billing                  -> ?type=billing         (Stripe subscription checkout/portal)
  *   /api/reports                  -> ?type=reports         (client report actions + email delivery)
  *   /api/platform-admin           -> ?type=platform-admin  (super-admin tenant administration)
+ *   /api/wa-inbound               -> ?type=wa-inbound      (VPS → inbound WhatsApp event, Bearer CRON_SECRET)
+ *   /api/contact-email            -> ?type=contact-email   (1:1 email to a lead/customer, logged + Reply-To staff)
+ *   /api/ai-reply                 -> ?type=ai-reply        (on-demand WhatsApp reply suggestion — AI proposes, a person sends)
  *
  * Created to stay under Vercel Hobby's 12-function limit.
  */
@@ -63,9 +69,24 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.url.includes('/api/billing')) type = 'billing';
     else if (req.url.includes('/api/reports')) type = 'reports';
     else if (req.url.includes('platform-admin')) type = 'platform-admin';
+    else if (req.url.includes('wa-inbound')) type = 'wa-inbound';
+    else if (req.url.includes('contact-email')) type = 'contact-email';
+    else if (req.url.includes('ai-reply')) type = 'ai-reply';
   }
 
   switch (type) {
+    case 'contact-email':
+      // 1:1 email from the CRM to a lead/customer through the tenant's provider;
+      // the server writes the timeline row + contact stamps (the client must not).
+      return contactEmailHandler(req, res);
+    case 'ai-reply':
+      // "Sugjerim AI" for a WhatsApp thread, on demand (Rigjenero). Stored on the
+      // conversation doc; never sent by itself.
+      return aiReplyHandler(req, res);
+    case 'wa-inbound':
+      // Baileys VPS → one inbound handler for both WhatsApp channels (identity,
+      // conversation, notification, auto-reply). Authenticated with CRON_SECRET.
+      return waInboundHandler(req, res);
     case 'platform-admin':
       // Platform console writes (tenant plan/status/seats/modules). Super-admin only,
       // validated + audited server-side — see api/_platformAdmin.ts.
@@ -110,6 +131,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     case 'invoice':
       return invoiceHandler(req, res);
     case 'lead-reminder':
+      // Legacy adapter → contact-email (kept for the CRMView "Dërgo Email" call).
       return leadReminderHandler(req, res);
     case 'welcome':
       return welcomeHandler(req, res);
