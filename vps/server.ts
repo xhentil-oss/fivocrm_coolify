@@ -487,7 +487,10 @@ async function connectAgent(agent: AgentState): Promise<void> {
       }
 
       const rawJid = msg.key.remoteJid || '';
-      if (rawJid.endsWith('@g.us')) continue;
+      // Only PEOPLE become contacts. Groups (@g.us), WhatsApp Channels (@newsletter)
+      // and status posts (@broadcast) carry an 18-digit id, not a phone number — a
+      // political news channel used to be minted as a CRM lead per post.
+      if (!isPersonJid(rawJid)) continue;
 
       let resolvedJid = rawJid; let isLid = false;
       if (rawJid.endsWith('@lid')) {
@@ -496,7 +499,7 @@ async function connectAgent(agent: AgentState): Promise<void> {
       }
 
       const phone = normalizePhone(resolvedJid.split('@')[0]);
-      if (!phone) continue;
+      if (!phone || !isPlausiblePhone(phone)) continue;
 
       const body = msg.message.conversation || msg.message.extendedTextMessage?.text || '[Media]';
       const ts = new Date(Number(msg.messageTimestamp) * 1000);
@@ -932,6 +935,17 @@ interface WaEventPayload {
   timestamp: string;
 }
 const WA_EVENT_RETRY_DELAYS_MS = [1_000, 3_000, 9_000];
+
+/** Person-to-person jids only: `@s.whatsapp.net` (phone) or `@lid` (privacy id). */
+function isPersonJid(jid: string): boolean {
+  return jid.endsWith('@s.whatsapp.net') || jid.endsWith('@lid');
+}
+
+/** E.164 is 8–15 digits; WhatsApp channel/group ids are longer (1203…, 18 digits). */
+function isPlausiblePhone(digits: string): boolean {
+  const d = String(digits || '').replace(/\D/g, '');
+  return d.length >= 8 && d.length <= 15;
+}
 
 async function postWaEvent(event: WaEventPayload): Promise<void> {
   if (!CRM_BASE_URL || !CRON_SECRET) return;

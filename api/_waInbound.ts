@@ -370,6 +370,13 @@ function validateEvent(raw: any): WaEvent | null {
   if (typeof raw.waMessageId !== 'string' || !raw.waMessageId) return null;
   const phone = normContactPhone(typeof raw.phone === 'string' ? raw.phone : '');
   if (!phone) return null;
+  // Never treat a WhatsApp Channel (@newsletter), status (@broadcast) or group
+  // (@g.us) as a contact — their ids are 18 digits and would otherwise become a
+  // "lead" per post. Defence in depth: the VPS filters these too.
+  const jidRaw = typeof raw.jid === 'string' ? raw.jid : '';
+  if (/@(newsletter|broadcast|g\.us)$/.test(jidRaw)) return null;
+  const digits = phone.replace(/\D/g, '');
+  if (digits.length < 8 || digits.length > 15) return null;
   const kind: WaEvent['kind'] = ['text', 'media', 'reaction', 'system'].includes(raw.kind) ? raw.kind : 'text';
   const ts = raw.timestamp ? new Date(raw.timestamp) : new Date();
   return {

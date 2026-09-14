@@ -1607,6 +1607,11 @@ service cloud.firestore {
     match /waInboundCounters/{docId} {
       allow read, write: if false;
     }
+    // Archive of leads/messages deleted because they came from a WhatsApp channel/
+    // group (not a person). Server-only, like every other cleanup archive.
+    match /waNonPersonCleanup/{docId} {
+      allow read, write: if false;
+    }
     match /aiDailyUsage/{docId} {
       allow read, write: if false;
     }
