@@ -1507,7 +1507,7 @@ test('51b. staff read and manage their own tenant hosting records', async () => 
   await assertSucceeds(getDoc(doc(alice, 'hostingProducts', 'hpMineHidden')));
   await assertSucceeds(getDoc(doc(alice, 'subscriptions', 'subMine')));
   await assertSucceeds(getDoc(doc(alice, 'hostingEvents', 'hevMine')));
-  await assertSucceeds(updateDoc(doc(alice, 'subscriptions', 'subMine'), { notes: 'VIP', lifecycleHold: true }));
+  await assertSucceeds(updateDoc(doc(alice, 'subscriptions', 'subMine'), { notes: 'VIP' }));
   await assertSucceeds(setDoc(doc(alice, 'hostingProducts', 'hpNew'), { businessId: MY_BIZ, teamId: MY_TEAM, name: 'Pro', serverId: 'srvMine', whmPackage: 'pro', status: 'Active', currency: 'EUR', pricing: { monthly: { price: 10 } }, createdByUserId: 'alice' }));
   // The tenant key is immutable: a subscription cannot be moved to another business.
   await assertFails(updateDoc(doc(alice, 'subscriptions', 'subMine'), { businessId: VICTIM_BIZ }));
@@ -1546,4 +1546,21 @@ test('51e. WHM tokens and the provider audit are server-only, even for admins an
   await assertFails(updateDoc(doc(alice, 'hostingEvents', 'hevMine'), { message: 'rewritten' }));
   // Nor may staff create an order directly: pricing and availability live in the endpoint.
   await assertFails(setDoc(doc(alice, 'hostingOrders', 'hoStaffForged'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', source: 'staff', status: 'Paid', lines: [], subtotal: 0, total: 0, currency: 'EUR', createdByUserId: 'alice' }));
+});
+test('51f. provider-binding and billing fields of subscriptions/domains are server-only, even for a tenant admin', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  // Binding a row to an arbitrary WHM account by hand would let staff SSO into it.
+  await assertFails(updateDoc(doc(alice, 'subscriptions', 'subMine'), { cpanelUsername: 'victimacct' }));
+  await assertFails(updateDoc(doc(alice, 'subscriptions', 'subMine'), { serverId: 'srvVictim' }));
+  await assertFails(updateDoc(doc(alice, 'subscriptions', 'subMine'), { status: 'Active', nextDueDate: new Date('2099-01-01') }));
+  await assertFails(updateDoc(doc(alice, 'subscriptions', 'subMine'), { recurringAmount: 0 }));
+  await assertFails(updateDoc(doc(alice, 'domains', 'domMine'), { expiryDate: new Date('2099-01-01') }));
+  await assertFails(updateDoc(doc(alice, 'domains', 'domMine'), { registrar: 'manual', nameservers: ['ns1.evil.com', 'ns2.evil.com'] }));
+  // Creating a subscription/domain from the browser is not allowed either: the
+  // endpoint verifies the account/domain at the provider before it exists here.
+  await assertFails(setDoc(doc(alice, 'subscriptions', 'subForged'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', source: 'fivocrm', productName: 'x', status: 'Active', recurringAmount: 1, cpanelUsername: 'root', serverId: 'srvMine', createdByUserId: 'alice' }));
+  await assertFails(setDoc(doc(alice, 'domains', 'domForged'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', source: 'fivocrm', registrar: 'dynadot', domainName: 'forged.com', status: 'Active', recurringAmount: 1, createdByUserId: 'alice' }));
+  // A row we bill cannot be deleted from the browser (billing history); a mirror row can.
+  await assertFails(deleteDoc(doc(alice, 'subscriptions', 'subMine')));
+  await assertFails(getDoc(doc(alice, 'hostingRateLimits', 'alice_domain.check')));
 });

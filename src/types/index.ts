@@ -1179,6 +1179,9 @@ export interface Subscription {
   suspendedAt?: Date | null;
   suspendReason?: string | null;
   terminatedAt?: Date | null;
+  /** `pkgacct` taken right before a termination (path on the server). */
+  lastBackupAt?: Date | null;
+  lastBackupPath?: string | null;
   /** Order that created it. */
   orderId?: string;
   notes?: string;

@@ -77,6 +77,7 @@ export const NOTIFICATION_TYPE_CATEGORY: Record<string, NotificationCategory> = 
   domain_renewed: 'system',
   domain_expiring: 'system',
   domain_action_failed: 'system',
+  hosting_staff_login: 'system',
   recurring_expense_created: 'invoices',
   expense_submitted: 'invoices',
   quote_sent: 'invoices',

@@ -245,7 +245,29 @@ export async function whmUnsuspendAccount(server: WhmServer, user: string): Prom
   await whmCall(server, 'unsuspendacct', { user });
 }
 
-/** DESTRUCTIVE: removes the account and its files. */
+/**
+ * Full account backup (`pkgacct`) into /home on the server (cpmove-<user>.tar.gz).
+ * Slow on big accounts, so the timeout is the whole function budget. The caller
+ * REFUSES to terminate when this fails — data loss must never be silent.
+ */
+export async function whmBackupAccount(server: WhmServer, user: string): Promise<{ path?: string }> {
+  const host = normalizeHostname(server.hostname);
+  const port = server.port && server.port > 0 ? server.port : 2087;
+  const res = await providerFetch(`https://${host}:${port}/json-api/pkgacct`, {
+    method: 'POST',
+    headers: { Authorization: `whm ${server.username || 'root'}:${server.apiToken}`, 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: formBody({ 'api.version': 1, user, skiphomedir: 0 }),
+    timeoutMs: 55_000,
+  });
+  let json: any;
+  try { json = JSON.parse(res.text); } catch { throw new ProviderError('whm', `pkgacct ktheu përgjigje jo-JSON (HTTP ${res.status})`); }
+  if (Number(json?.metadata?.result) !== 1) throw new ProviderError('whm', String(json?.metadata?.reason || 'pkgacct dështoi'), 'whm-error');
+  const raw = String(json?.metadata?.output?.raw || '');
+  const m = /(\/home\S*cpmove-[^\s'"]+\.tar\.gz)/.exec(raw);
+  return { path: m ? m[1] : undefined };
+}
+
+/** DESTRUCTIVE: removes the account and its files. Call `whmBackupAccount` first. */
 export async function whmTerminateAccount(server: WhmServer, user: string): Promise<void> {
   await whmCall(server, 'removeacct', { user, keepdns: 0 });
 }

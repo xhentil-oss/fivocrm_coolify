@@ -83,6 +83,8 @@ From WorkloadView, allow drag-and-drop or quick-assign to move tasks between tea
 - [x] Tab "Hosting" te Customer360View (abonimet + domain-et e klientit, lidhje te moduli)
 - [x] "Shto llogari ekzistuese" / "Shto domain ekzistues" (migrim jashtë WHMCS; `.al` me `registrar: 'manual'`, rinovim me dorë pas pagesës)
 - [x] Badge + filtër "Hosting & Domain-e" te Faturat (`source: 'hosting'`, lidhje te rekordi)
+- [x] Siguria (10 pika): terminim opt-in + backup pkgacct para fshirjes; verifikim pronësie llogarie në WHM para SSO/passwd/suspend/terminate/add; refuzim çmimi 0; rate limit `domain.check`/`order.create`; relay vetëm te hoste WHM të regjistruar + pa IP private; ACL të kufizuara për token-in (runbook); enkriptim AES-GCM i kredencialeve (`SECRETS_ENC_KEY`); token i lidhur me hostname; SSO/passwd vetëm Admin/Manager + audit + njoftim klienti; email pa fjalëkalim; fushat lidhëse/faturuese vetëm server-side (rregulla + test 51f)
+- [ ] Vercel env: `SECRETS_ENC_KEY` (openssl rand -base64 32) — pa të kasaforta mbetet plaintext (paralajmërim në log)
 - [ ] Faza 2: kontakte WHOIS për klient te Dynadot (`create_contact` + `registrant_contact`) — sot regjistranti është llogaria jonë
 - [ ] Faza 2: proratë / faturë diference te ndryshimi i paketës brenda periudhës
 - [ ] Faza 2: menaxhim DNS në portal (`dynadotSetDnsToIp` ekziston në driver, s'ka UI)

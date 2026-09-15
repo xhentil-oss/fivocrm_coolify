@@ -174,7 +174,25 @@ pagesës `applyDomainRenewal` vetëm shtyn skadencën, regjistron
 5. `/app/hosting` → Serverët (hostname + token → "Testo" mbush paketat) → Paketat →
    TLD-të (kosto + marzh → "Propozo çmimet") → Cilësimet (çelësi Dynadot, ditët).
 
-## 9. Kufizime të njohura (me qëllim)
+## 9. Siguria (rishikimi i 15 shtatorit 2026)
+
+| Rrezik | Mbrojtja |
+|---|---|
+| Terminimi fshin skedarët | `terminateDaysAfter` default **0** (opt-in). Kur terminohet, `pkgacct` (backup i plotë në `/home/cpmove-<user>.tar.gz`) bëhet PARA `removeacct`; nëse dështon, terminimi **ndalet** (vetëm `force: true` nga një njeri e kalon). `lastBackupAt/Path` te abonimi. |
+| Marrja e një llogarie të huaj në server të ndarë | `assertAccountOwned`: para SSO / passwd / suspend / unsuspend / terminate / changepackage / addExisting / adoptWhmcs, `accountsummary` duhet të kthejë të njëjtin domain si abonimi. Krijimi dhe fushat lidhëse (`cpanelUsername`, `serverId`, `status`, `nextDueDate`, …) janë **vetëm server-side** (rregullat, test 51f). |
+| Porosi me çmim 0 | motori refuzon domain me çmim 0 (`domain-zero-price`); porosia e portalit me total 0 refuzohet. |
+| Spam te Dynadot / fatura | `hostingRateLimits/{uid}_{action}` (deny-all): `domain.check` 30/orë klient, 120/orë staf; `order.create` 10/ditë klient, 60/ditë staf; max 3 porosi të papaguara per klient. |
+| Relay si SSRF | `/provider-proxy`: https vetëm; host `api.dynadot.com` ose portë 2087/2083 **dhe** hostname i regjistruar te `hostingServers`; refuzon IP private/loopback (edhe pas DNS). |
+| Token root i plotë | UI dhe runbook kërkojnë token me ACL të kufizuara (lista te §6). |
+| Kredenciale në tekst të hapur | `api/_secretCrypto.ts`: AES-256-GCM me `SECRETS_ENC_KEY` (32 byte base64) për `teamSecrets` dhe `hostingServerSecrets`; plaintext i vjetër lexohet ende dhe ri-enkriptohet në shkrimin tjetër; `SECRETS_ENC_KEY_PREVIOUS` për rotacion. |
+| Rrjedhje token-i me ndryshim hostname | token-i ruhet **i lidhur** me hostname + user; nëse `hostingServers.hostname` ndryshon, `loadServer` kthen token bosh + `tokenIssue` ("rifut token-in"). |
+| SSO/passwd nga çdo anëtar | vetëm Admin/Manager për stafin; `writeAudit` (`hosting.sub.sso`, `hosting.sub.resetPassword`); klienti njoftohet (`hosting_staff_login`) për çdo hyrje ose ndryshim fjalëkalimi nga stafi. |
+| Fjalëkalim me email | email-i i mirëseardhjes s'ka fjalëkalim: hyrje me SSO nga portali, "Fjalëkalim i ri" shfaqet një herë. |
+
+Env i ri në Vercel: `SECRETS_ENC_KEY` (gjenero: `openssl rand -base64 32`). Pa të,
+kasaforta shkruan plaintext dhe logon një paralajmërim — asgjë nuk prishet.
+
+## 10. Kufizime të njohura (me qëllim)
 
 - **Pa proratë** te ndryshimi i paketës — çmimi i ri vlen nga fatura tjetër.
 - **Pa kontakte WHOIS për klient** — regjistrimi përdor kontaktet default të
@@ -182,7 +200,7 @@ pagesës `applyDomainRenewal` vetëm shtyn skadencën, regjistron
   `registrant_contact` për klient.
 - **Domain-et `.al`**: Dynadot nuk i ofron; TLD-ja mund të shitet vetëm si "manual"
   (regjistrim jashtë sistemit, stafi krijon rreshtin `registrar: 'manual'`).
-- **Termini fshin skedarët** (`removeacct`) — `terminateDaysAfter: 0` e fik.
+- **Termini fshin skedarët** (`removeacct`) — i fikur si default; me backup para fshirjes kur ndizet.
 - Rinovimi te regjistruesi ndodh vetëm pas pagesës; nëse Dynadot dështon, fatura
   mbetet e paguar, `provisionError` shfaqet dhe stafi njoftohet
   (`domain_action_failed`) — nuk ka ri-provë automatike përtej ekzekutimit tjetër.

@@ -1,5 +1,6 @@
 import { safeSenderAddress, safeSenderName } from './_emailIdentity.js';
 import admin, { adminDb as db } from './_firebaseAdmin.js';
+import { encryptSecretFields, decryptSecretFields } from './_secretCrypto.js';
 
 /**
  * Per-tenant configuration, split into two documents:
@@ -51,7 +52,8 @@ export async function getTeamSecrets(teamId: string): Promise<Record<string, any
   if (!teamId) return {};
   try {
     const snap = await db.collection('teamSecrets').doc(teamId).get();
-    return snap.exists ? ((snap.data() as any) || {}) : {};
+    // Values are AES-GCM at rest when SECRETS_ENC_KEY is set; legacy plaintext passes through.
+    return snap.exists ? decryptSecretFields(((snap.data() as any) || {})) : {};
   } catch {
     return {};
   }
@@ -152,7 +154,7 @@ export async function writeTeamSecrets(
       payload[field] = admin.firestore.FieldValue.delete();
       cleared.push(field);
     } else {
-      payload[field] = value;
+      payload[field] = typeof value === 'string' ? encryptSecretFields({ v: value }).v : encryptSecretFields(value);
       written.push(field);
     }
   }

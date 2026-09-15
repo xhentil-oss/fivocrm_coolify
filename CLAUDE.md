@@ -231,6 +231,16 @@ permission `canAccessHosting`.
   deletion (`removeacct` deletes files).
 - Cron: `hosting-lifecycle` hourly, `hosting-sync` every 6h, from `vps/server.ts`, **NOT
   in `run-all`**; manual runs scoped to the caller's `bid`. Suspended tenants skipped.
+- **Security laws** (audit Sep 2026, full table in the runbook §9): a subscription's
+  WHM account must prove it serves the row's domain (`assertAccountOwned`) before
+  SSO / passwd / suspend / terminate / add / adopt; provider-binding + billing fields
+  of `subscriptions`/`domains` are server-only (rules, test 51f) and rows are created
+  only by the endpoint; terminate is opt-in (`terminateDaysAfter: 0`) and takes a
+  `pkgacct` backup first, refusing to delete without one; portal calls are
+  rate-limited (`hostingRateLimits`); the VPS relay only reaches registered WHM hosts
+  and never private IPs; secrets are AES-GCM at rest (`api/_secretCrypto.ts`,
+  `SECRETS_ENC_KEY`) and a WHM token is bound to the hostname/user it was saved for;
+  staff SSO/passwd = Admin/Manager, audited, and the customer is notified.
 - Adding an action? → `api/_hosting.ts` switch (load the record, compare `businessId` /
   `customerId` with claims — never trust ids from the body) + `hostingApi()` caller.
   Adding a collection? → `businessIsolatedAlways` + `teamScopedCollections` + rules +

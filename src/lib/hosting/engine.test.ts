@@ -234,10 +234,11 @@ describe('decideSubscription', () => {
     expect(decideSubscription(base, NOW, { suspendDaysAfter: 14 }).reason).toBe('within-grace');
     expect(decideSubscription(base, NOW).action).toBe('suspend');
     const suspended = { ...base, status: 'Suspended' as const };
-    expect(decideSubscription(suspended, NOW).reason).toBe('not-yet-terminate');
+    // Termination is OPT-IN: the default config never deletes an account.
+    expect(decideSubscription(suspended, NOW).reason).toBe('termination-disabled');
+    expect(decideSubscription(suspended, NOW, { terminateDaysAfter: 30 }).reason).toBe('not-yet-terminate');
     expect(decideSubscription(suspended, NOW, { terminateDaysAfter: 7 }).action).toBe('terminate');
     expect(decideSubscription(suspended, NOW, { terminateDaysAfter: 0 }).reason).toBe('termination-disabled');
-    expect(decideSubscription(suspended, NOW).reason).toBe('not-yet-terminate');
   });
 
   it('a suspended account whose renewal was never invoiced still gets its invoice', () => {
@@ -360,6 +361,7 @@ describe('priceOrder', () => {
     expect(priceOrder([{ kind: 'domain-register', domainName: 'a.xyz' }], tlds)).toMatchObject({ error: 'tld-not-sold', index: 0 });
     expect(priceOrder([{ kind: 'domain-register', domainName: 'a.com' }, { kind: 'domain-register', domainName: 'A.com' }], tlds)).toMatchObject({ error: 'duplicate-domain', index: 1 });
     expect(priceOrder([{ kind: 'domain-transfer', domainName: 'a.com' }], tlds)).toMatchObject({ error: 'transfer-without-auth-code' });
+    expect(priceOrder([{ kind: 'domain-register', domainName: 'a.free' }], [...tlds, { tld: 'free', currency: 'EUR', registerPrice: 0, renewPrice: 0 }])).toMatchObject({ error: 'domain-zero-price' });
     for (const k of Object.keys(ORDER_ERROR_LABELS)) expect(ORDER_ERROR_LABELS[k as never]).toBeTruthy();
   });
 });

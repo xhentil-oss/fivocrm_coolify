@@ -15,6 +15,8 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import admin, { adminAuth, adminDb as db } from './_firebaseAdmin.js';
 import { writeAudit } from './_audit.js';
 import { writeTeamSecrets } from './_tenantConfig.js';
+import { encryptSecret } from './_secretCrypto.js';
+import { normalizeHostname } from './_hostingProviders.js';
 import {
   priceOrder, parseDomain, isBillingCycle, type OrderLineInput, type TldPricing, ORDER_ERROR_LABELS,
 } from './_hostingEngine.js';
@@ -23,6 +25,7 @@ import {
   invoiceForOrder, provisionOrder, suspendSubscription, unsuspendSubscription, terminateSubscription,
   changeSubscriptionPackage, resetSubscriptionPassword, subscriptionSsoUrl, subscriptionUsage, testServer, testRegistrar,
   runHostingLifecycle, runHostingSync, dynadotKeyFor, dynadotCurrencyFor, teamIdForBusiness, logHostingEvent, onHostingInvoicePaid,
+  addExistingSubscription, addExistingDomain, adoptWhmcsSubscription,
 } from './_hostingJobs.js';
 
 const Timestamp = admin.firestore.Timestamp;
@@ -75,6 +78,30 @@ class HttpError extends Error { status: number; constructor(status: number, msg:
 const bad = (msg: string) => new HttpError(400, msg);
 const forbidden = (msg = 'Nuk keni të drejta për këtë veprim.') => new HttpError(403, msg);
 const notFound = (msg = 'Nuk u gjet.') => new HttpError(404, msg);
+
+/**
+ * Fixed-window rate limit per (uid, action) in `hostingRateLimits` (deny-all for
+ * clients). `domain.check` hits Dynadot (their quota, our reputation) and
+ * `order.create` sends invoices + emails — a portal client must not be able to loop
+ * either. One transaction per call; a Firestore hiccup fails OPEN (logged), because a
+ * blocked legitimate order costs more than a burst.
+ */
+async function assertRate(uid: string, action: string, max: number, windowMs: number): Promise<void> {
+  const ref = db.collection('hostingRateLimits').doc(`${uid}_${action}`);
+  let over = false;
+  try {
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      const now = Date.now();
+      const d = snap.exists ? (snap.data() as any) : null;
+      const start = d && typeof d.windowStart === 'number' && now - d.windowStart < windowMs ? d.windowStart : now;
+      const count = start === d?.windowStart ? Number(d.count) || 0 : 0;
+      if (count >= max) { over = true; return; }
+      tx.set(ref, { uid, action, windowStart: start, count: count + 1, updatedAt: Timestamp.now() });
+    });
+  } catch (err) { console.error('[hosting] rate-limit write failed (failing open)', err); }
+  if (over) throw new HttpError(429, 'Shumë kërkesa — provo sërish më vonë.');
+}
 
 async function loadOwned(collection: 'subscriptions' | 'domains' | 'hostingOrders', id: string, c: Caller): Promise<{ id: string; data: any }> {
   if (!id || typeof id !== 'string') throw bad('Mungon id');
@@ -133,7 +160,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (!snap.exists) throw notFound('Serveri nuk u gjet');
         if (!sameTenant(c, (snap.data() as any).businessId)) throw forbidden();
         if (token) {
-          await db.collection('hostingServerSecrets').doc(serverId).set({ apiToken: token, businessId: (snap.data() as any).businessId ?? null, updatedAt: Timestamp.now(), updatedBy: c.uid }, { merge: true });
+          const sd = snap.data() as any;
+          // Encrypted at rest and BOUND to the hostname/user it was issued for — see loadServer().
+          await db.collection('hostingServerSecrets').doc(serverId).set({
+            apiToken: encryptSecret(token), hostname: normalizeHostname(String(sd.hostname || '')), username: String(sd.username || 'root'),
+            businessId: sd.businessId ?? null, updatedAt: Timestamp.now(), updatedBy: c.uid,
+          }, { merge: true });
         } else {
           await db.collection('hostingServerSecrets').doc(serverId).delete().catch(() => {});
         }
@@ -172,6 +204,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       // ── Domain availability (staff + portal) ──────────────────────────────
       case 'domain.check': {
+        await assertRate(c.uid, 'domain.check', isStaff(c) ? 120 : 30, 60 * 60_000);
         const businessId = isStaff(c) ? (String(body.businessId || c.bid || '')) : (c.pbid || '');
         if (!businessId || (!c.superAdmin && !sameTenant(c, businessId) && c.pbid !== businessId)) throw forbidden();
         const raw: string[] = Array.isArray(body.domains) ? body.domains.map(String) : [String(body.domain || '')];
@@ -209,6 +242,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
       // ── Orders ────────────────────────────────────────────────────────────
       case 'order.create': {
+        await assertRate(c.uid, 'order.create', isStaff(c) ? 60 : 10, 24 * 60 * 60_000);
         let businessId: string; let customerId: string; let source: 'staff' | 'portal';
         if (isStaff(c)) {
           customerId = String(body.customerId || '');
@@ -248,6 +282,14 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         });
         const priced = priceOrder(inputs, tlds.filter((t: any) => source === 'staff' || t.portalVisible !== false));
         if (!priced.ok) throw bad(ORDER_ERROR_LABELS[priced.error] + (priced.index !== undefined ? ` (rreshti ${priced.index + 1})` : ''));
+        // A 0-total order provisions without payment. Staff may do that deliberately
+        // (an internal/free account); a portal client never — a package saved with a
+        // 0 price is a misconfiguration, not an offer.
+        if (source === 'portal' && !(priced.order.total > 0)) throw bad('Kjo porosi nuk ka çmim — kontaktoni stafin.');
+        if (source === 'portal') {
+          const open = await db.collection('hostingOrders').where('customerId', '==', customerId).where('status', '==', 'Pending').limit(3).get();
+          if (open.size >= 3) throw bad('Keni tashmë 3 porosi të papaguara. Paguani ose anuloni një prej tyre para se të porositni sërish.');
+        }
         // A domain we are about to register must be available NOW.
         const toRegister = priced.order.lines.filter((l) => l.kind === 'domain-register').map((l) => l.domainName!);
         if (toRegister.length) {
@@ -331,8 +373,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden('Vetëm Admin/Manager mund të terminojë një llogari.');
         const s = await loadOwned('subscriptions', String(body.subscriptionId || ''), c);
         if (body.confirm !== s.data.cpanelUsername && body.confirm !== s.data.domain) throw bad('Konfirmimi nuk përputhet (shkruaj username-in ose domain-in).');
-        await terminateSubscription(s.id, String(body.reason || 'manual').slice(0, 200), c.uid);
-        await audit('sub.terminate', `subscription:${s.id}`);
+        await terminateSubscription(s.id, String(body.reason || 'manual').slice(0, 200), c.uid, { force: body.force === true });
+        await audit('sub.terminate', `subscription:${s.id}`, { force: body.force === true });
         return res.status(200).json({ ok: true });
       }
       case 'sub.changePackage': {
@@ -343,16 +385,64 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         return res.status(200).json({ ok: true });
       }
       case 'sub.resetPassword': {
+        // Entering or re-keying a CUSTOMER's account: Admin/Manager only on the staff
+        // side, audited, and the customer is notified (see the executor).
+        if (isStaff(c) && !isConfigAdmin(c)) throw forbidden('Vetëm Admin/Manager mund të ndryshojë fjalëkalimin e një klienti.');
         const s = await loadOwned('subscriptions', String(body.subscriptionId || ''), c);
         if (s.data.status !== 'Active') throw bad('Llogaria nuk është aktive');
-        const password = await resetSubscriptionPassword(s.id, c.uid);
-        await audit('sub.resetPassword', `subscription:${s.id}`);
+        const password = await resetSubscriptionPassword(s.id, c.uid, { byStaff: isStaff(c) });
+        await audit('sub.resetPassword', `subscription:${s.id}`, { byStaff: isStaff(c), customerId: s.data.customerId });
         return res.status(200).json({ ok: true, password });
       }
       case 'sub.sso': {
+        if (isStaff(c) && !isConfigAdmin(c)) throw forbidden('Vetëm Admin/Manager mund të hyjë në cPanel-in e një klienti.');
         const s = await loadOwned('subscriptions', String(body.subscriptionId || ''), c);
-        const url = await subscriptionSsoUrl(s.id, c.uid);
+        const url = await subscriptionSsoUrl(s.id, c.uid, { byStaff: isStaff(c) });
+        await audit('sub.sso', `subscription:${s.id}`, { byStaff: isStaff(c), customerId: s.data.customerId });
         return res.status(200).json({ ok: true, url });
+      }
+      case 'sub.addExisting': {
+        if (!isStaff(c)) throw forbidden();
+        const customerId = String(body.customerId || '');
+        const cust = await db.collection('customers').doc(customerId).get();
+        if (!cust.exists) throw notFound('Klienti nuk u gjet');
+        const businessId = String((cust.data() as any).businessId || c.bid || '');
+        if (!sameTenant(c, businessId)) throw forbidden();
+        if (!isBillingCycle(body.cycle)) throw bad('Cikël i pavlefshëm');
+        const due = body.nextDueDate ? new Date(String(body.nextDueDate)) : null;
+        if (!due || Number.isNaN(due.getTime())) throw bad('Afati i pagesës së radhës mungon');
+        const id = await addExistingSubscription({
+          businessId, teamId: await teamIdForBusiness(businessId, c.tid), customerId, productId: body.productId ? String(body.productId) : null,
+          serverId: String(body.serverId || ''), cpanelUsername: String(body.cpanelUsername || ''), domain: String(body.domain || ''),
+          cycle: body.cycle, amount: Math.max(0, Number(body.amount) || 0), currency: body.currency === 'ALL' ? 'ALL' : 'EUR',
+          nextDueDate: due, status: body.status === 'Suspended' ? 'Suspended' : 'Active',
+        }, c.uid);
+        await audit('sub.addExisting', `subscription:${id}`, { customerId, cpanelUsername: String(body.cpanelUsername || '') });
+        return res.status(200).json({ ok: true, subscriptionId: id });
+      }
+      case 'domain.addExisting': {
+        if (!isStaff(c)) throw forbidden();
+        const customerId = String(body.customerId || '');
+        const cust = await db.collection('customers').doc(customerId).get();
+        if (!cust.exists) throw notFound('Klienti nuk u gjet');
+        const businessId = String((cust.data() as any).businessId || c.bid || '');
+        if (!sameTenant(c, businessId)) throw forbidden();
+        const expiry = body.expiryDate ? new Date(String(body.expiryDate)) : null;
+        const id = await addExistingDomain({
+          businessId, teamId: await teamIdForBusiness(businessId, c.tid), customerId, domainName: String(body.domainName || ''),
+          registrar: String(body.registrar || 'manual'), expiryDate: expiry && !Number.isNaN(expiry.getTime()) ? expiry : null,
+          years: Number(body.years) || 1, amount: Math.max(0, Number(body.amount) || 0), currency: body.currency === 'ALL' ? 'ALL' : 'EUR',
+          autoRenew: body.autoRenew !== false, nameservers: Array.isArray(body.nameservers) ? body.nameservers.map((x: unknown) => String(x).trim().toLowerCase()).filter(Boolean) : [],
+        }, c.uid);
+        await audit('domain.addExisting', `domain:${id}`, { customerId, domainName: String(body.domainName || '') });
+        return res.status(200).json({ ok: true, domainId: id });
+      }
+      case 'sub.adoptWhmcs': {
+        if (!isStaff(c)) throw forbidden();
+        const s = await loadOwned('subscriptions', String(body.subscriptionId || ''), c);
+        await adoptWhmcsSubscription(s.id, String(body.serverId || ''), String(body.cpanelUsername || ''), c.uid);
+        await audit('sub.adoptWhmcs', `subscription:${s.id}`, { serverId: body.serverId, cpanelUsername: body.cpanelUsername });
+        return res.status(200).json({ ok: true });
       }
       case 'sub.usage': {
         const s = await loadOwned('subscriptions', String(body.subscriptionId || ''), c);

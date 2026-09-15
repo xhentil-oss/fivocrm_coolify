@@ -331,7 +331,9 @@ export interface LifecycleConfig {
   invoiceDaysBefore: number;
   /** Days AFTER an unpaid due date the account is suspended. */
   suspendDaysAfter: number;
-  /** Days AFTER an unpaid due date the account is terminated (0 = never). */
+  /** Days AFTER an unpaid due date the account is terminated (0 = never).
+   *  Default 0: termination DELETES the customer's files, so it is opt-in per tenant,
+   *  and the executor takes a `pkgacct` backup first and refuses to delete without one. */
   terminateDaysAfter: number;
   /** Days BEFORE expiry a domain renewal invoice is issued. */
   domainInvoiceDaysBefore: number;
@@ -342,7 +344,7 @@ export interface LifecycleConfig {
 export const DEFAULT_LIFECYCLE: LifecycleConfig = {
   invoiceDaysBefore: 14,
   suspendDaysAfter: 7,
-  terminateDaysAfter: 30,
+  terminateDaysAfter: 0,
   domainInvoiceDaysBefore: 30,
   domainGraceDays: 30,
 };
@@ -658,6 +660,7 @@ export type OrderValidationError =
   | 'invalid-domain'
   | 'tld-not-sold'
   | 'duplicate-domain'
+  | 'domain-zero-price'
   | 'transfer-without-auth-code';
 
 export interface PricedOrder {
@@ -707,6 +710,9 @@ export function priceOrder(
       if (kind === 'transfer' && !inp.authCode?.trim()) return { ok: false, error: 'transfer-without-auth-code', index: i };
       const priced = domainPrice(tlds, dom.tld, inp.years ?? 1, kind);
       if (!priced) return { ok: false, error: 'tld-not-sold', index: i };
+      // A registration costs US money at the registrar: a 0 sell price is always a
+      // misconfiguration (a TLD saved without a price), never a legitimate free domain.
+      if (!(priced.amount > 0)) return { ok: false, error: 'domain-zero-price', index: i };
       lines.push({
         kind: inp.kind,
         description: `${kind === 'transfer' ? 'Transferim domain' : 'Regjistrim domain'} ${dom.name} (${priced.years} ${priced.years === 1 ? 'vit' : 'vjet'})`,
@@ -736,6 +742,7 @@ export const ORDER_ERROR_LABELS: Record<OrderValidationError, string> = {
   'invalid-domain': 'Emër domain-i i pavlefshëm',
   'tld-not-sold': 'Këtë prapashtesë (TLD) nuk e shesim',
   'duplicate-domain': 'I njëjti domain dy herë në porosi',
+  'domain-zero-price': 'Kjo prapashtesë (TLD) nuk ka çmim të vendosur — nuk mund të shitet me 0',
   'transfer-without-auth-code': 'Transferimi kërkon kodin EPP/Auth',
 };
 

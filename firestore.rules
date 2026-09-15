@@ -421,21 +421,47 @@ service cloud.firestore {
     // own (queries are `customerId == cid`), and every client-side change (SSO,
     // nameservers, auto-renew, cancel, orders) goes through POST /api/hosting, which
     // re-checks ownership — so no client write rule exists for them.
+    // Rows are CREATED only server-side (an order, "shto ekzistues" or "merr nën
+    // menaxhim" through POST /api/hosting, which verifies the account/domain at the
+    // provider first). A browser update may touch notes/tags but never the fields
+    // that bind the row to a provider account or drive billing — a staff member who
+    // could set `cpanelUsername` by hand could SSO into any account on a shared
+    // server, and one who could move `nextDueDate` could bill or suspend at will.
+    function subscriptionProtectedKeys() {
+      return ['cpanelUsername', 'serverId', 'whmPackage', 'status', 'provisionStatus', 'source',
+              'customerId', 'nextDueDate', 'anchorDay', 'currentInvoiceId', 'lastInvoicedDueKey',
+              'recurringAmount', 'currency', 'billingCycle', 'cancelAtPeriodEnd', 'lifecycleHold',
+              'suspendedAt', 'suspendReason', 'terminatedAt', 'whmcsServiceId'];
+    }
+    function domainProtectedKeys() {
+      return ['domainName', 'tld', 'registrar', 'source', 'status', 'provisionStatus', 'customerId',
+              'expiryDate', 'registrationDate', 'years', 'recurringAmount', 'currency', 'autoRenew',
+              'currentInvoiceId', 'lastInvoicedExpiryKey', 'renewedAtRegistrarForKey', 'lifecycleHold',
+              'nameservers', 'whmcsDomainId'];
+    }
     match /domains/{docId} {
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
-      allow create: if canCreateBusinessDoc();
-      allow update: if canManageBusinessDoc() && keepsBusinessId();
-      allow delete: if canManageBusinessDoc();
+      allow create: if isSuperAdmin();
+      allow update: if isSuperAdmin()
+        || (canManageBusinessDoc() && keepsBusinessId()
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(domainProtectedKeys()));
+      allow delete: if canManageBusinessDoc() && resource.data.get('source', 'whmcs') != 'fivocrm';
     }
     match /subscriptions/{docId} {
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
-      allow create: if canCreateBusinessDoc();
-      allow update: if canManageBusinessDoc() && keepsBusinessId();
-      allow delete: if canManageBusinessDoc();
+      allow create: if isSuperAdmin();
+      allow update: if isSuperAdmin()
+        || (canManageBusinessDoc() && keepsBusinessId()
+            && !request.resource.data.diff(resource.data).affectedKeys().hasAny(subscriptionProtectedKeys()));
+      allow delete: if canManageBusinessDoc() && resource.data.get('source', 'whmcs') != 'fivocrm';
+    }
+    // Per-user rate-limit counters for POST /api/hosting (server-only).
+    match /hostingRateLimits/{docId} {
+      allow read, write: if false;
     }
     // Servers: hostname/user/nameservers are staff-only. The WHM API TOKEN is never
     // here — it lives in hostingServerSecrets (deny-all), written by the endpoint.

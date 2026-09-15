@@ -33,7 +33,7 @@ import { saveTeamSettings, useTeamSettingsData } from '../hooks/useTeamSettings'
 import { hostingApi, checkDomains, type DomainCheckRow } from '../lib/hosting/api';
 import {
   BILLING_CYCLES, CYCLE_LABELS, DEFAULT_LIFECYCLE, DOMAIN_BLOCK_LABELS, SUBSCRIPTION_BLOCK_LABELS, ORDER_ERROR_LABELS,
-  availableCycles, cycleFromWhmcs, daysBetween, decideDomain, decideSubscription, monthlyEquivalent, normalizeLifecycleConfig,
+  availableCycles, daysBetween, decideDomain, decideSubscription, monthlyEquivalent, normalizeLifecycleConfig,
   parseDomain, priceOrder, suggestSellPrice, type BillingCycle, type OrderLineInput, type TldPricing,
 } from '../lib/hosting/engine';
 import type {
@@ -270,11 +270,11 @@ const SubscriptionDialog: React.FC<{
   sub: Subscription; products: HostingProduct[]; servers: HostingServer[]; customerName: (id?: string) => string; onClose: () => void; canEdit: boolean; isAdmin: boolean;
 }> = ({ sub, products, servers, customerName, onClose, canEdit, isAdmin }) => {
   const { toast } = useToast();
-  const mutation = useMutation<Subscription>('subscriptions');
   const [busy, setBusy] = useState<string | null>(null);
   const [usage, setUsage] = useState<any>(null);
   const [password, setPassword] = useState<string | null>(null);
   const [confirmTerm, setConfirmTerm] = useState('');
+  const [forceTerm, setForceTerm] = useState(false);
   const [pkg, setPkg] = useState(sub.productId || '');
   const [cycle, setCycle] = useState<string>(sub.billingCycle || 'monthly');
   const [adopt, setAdopt] = useState({ serverId: sub.serverId || '', username: sub.cpanelUsername || '' });
@@ -319,17 +319,11 @@ const SubscriptionDialog: React.FC<{
               <Input placeholder="cPanel username" value={adopt.username} onChange={(e) => setAdopt({ ...adopt, username: e.target.value })} />
             </div>
             <Button size="sm" disabled={!adopt.serverId || !adopt.username || busy === 'adopt'} onClick={() => call('adopt', async () => {
-              const c = cycleFromWhmcs(sub.billingCycle) || 'monthly';
+              // Server-side: the WHM account must exist AND serve this subscription's
+              // domain before the row is bound to it (rules refuse the direct write).
+              await hostingApi('sub.adoptWhmcs', { subscriptionId: sub.id, serverId: adopt.serverId, cpanelUsername: adopt.username.trim() });
               const due = toDate(sub.nextDueDate);
-              await mutation.update(sub.id, {
-                source: 'fivocrm', serverId: adopt.serverId, cpanelUsername: adopt.username.trim(), billingCycle: c,
-                anchorDay: due ? due.getUTCDate() : new Date().getUTCDate(), provisionStatus: 'provisioned',
-                // The current due date is NOT claimed: FivoCRM issues its invoice for it.
-                // Pre-claiming it (the first version did) made the lifecycle treat the
-                // period as "invoiced but unpaid" and suspend the account on the due date.
-                lastInvoicedDueKey: null, currentInvoiceId: null,
-              } as any);
-              toast({ title: 'U mor nën menaxhim', description: `Fatura për afatin ${due ? due.toLocaleDateString('sq-AL') : 'e radhës'} do të lëshohet nga FivoCRM — anulo faturën e papaguar në WHMCS nëse ekziston.` });
+              toast({ title: 'U mor nën menaxhim', description: `Llogaria u verifikua në WHM. Fatura për afatin ${due ? due.toLocaleDateString('sq-AL') : 'e radhës'} do të lëshohet nga FivoCRM — anulo faturën e papaguar në WHMCS nëse ekziston.` });
             })}>Merr nën menaxhim</Button>
           </Card>
         )}
@@ -337,9 +331,9 @@ const SubscriptionDialog: React.FC<{
         {isOurs && (
           <>
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" variant="outline" disabled={sub.status !== 'Active' || !!busy} onClick={() => call('sso', async () => { const r = await hostingApi<{ url: string }>('sub.sso', { subscriptionId: sub.id }); window.open(r.url, '_blank', 'noopener'); })}><ExternalLink className="w-4 h-4 mr-1" />Hyr në cPanel</Button>
+              {isAdmin && <Button size="sm" variant="outline" disabled={sub.status !== 'Active' || !!busy} title="Klienti njoftohet për çdo hyrje të stafit" onClick={() => call('sso', async () => { const r = await hostingApi<{ url: string }>('sub.sso', { subscriptionId: sub.id }); window.open(r.url, '_blank', 'noopener'); })}><ExternalLink className="w-4 h-4 mr-1" />Hyr në cPanel</Button>}
               <Button size="sm" variant="outline" disabled={!!busy || !sub.cpanelUsername} onClick={() => call('usage', async () => { const r = await hostingApi<{ usage: any }>('sub.usage', { subscriptionId: sub.id }); setUsage(r.usage || { missing: true }); })}><Activity className="w-4 h-4 mr-1" />Përdorimi</Button>
-              {canEdit && <Button size="sm" variant="outline" disabled={sub.status !== 'Active' || !!busy} onClick={() => call('pw', async () => { const r = await hostingApi<{ password: string }>('sub.resetPassword', { subscriptionId: sub.id }); setPassword(r.password); })}><KeyRound className="w-4 h-4 mr-1" />Fjalëkalim i ri</Button>}
+              {isAdmin && <Button size="sm" variant="outline" disabled={sub.status !== 'Active' || !!busy} title="Klienti njoftohet" onClick={() => call('pw', async () => { const r = await hostingApi<{ password: string }>('sub.resetPassword', { subscriptionId: sub.id }); setPassword(r.password); })}><KeyRound className="w-4 h-4 mr-1" />Fjalëkalim i ri</Button>}
               {canEdit && sub.status === 'Active' && <Button size="sm" variant="outline" disabled={!!busy} onClick={() => act('sub.suspend', { reason: 'manual' }, 'Llogaria u pezullua')}><Pause className="w-4 h-4 mr-1" />Pezullo</Button>}
               {canEdit && sub.status === 'Suspended' && <Button size="sm" variant="outline" disabled={!!busy} onClick={() => act('sub.unsuspend', {}, 'Llogaria u riaktivizua')}><Play className="w-4 h-4 mr-1" />Riaktivizo</Button>}
               {canEdit && sub.provisionStatus === 'failed' && sub.orderId && <Button size="sm" disabled={!!busy} onClick={() => call('prov', async () => { await hostingApi('order.provision', { orderId: sub.orderId }); toast({ title: 'Aktivizimi u riprovua' }); })}><Wand2 className="w-4 h-4 mr-1" />Riprovo aktivizimin</Button>}
@@ -369,10 +363,12 @@ const SubscriptionDialog: React.FC<{
                   {isAdmin && sub.status !== 'Terminated' && (
                     <div className="space-y-1 pt-2 border-t">
                       <Label className="text-xs text-red-700">Termino (fshin llogarinë dhe skedarët!)</Label>
+                      <p className="text-[11px] text-muted-foreground">Bëhet backup i plotë (pkgacct) në server para fshirjes; nëse backup-i dështon, terminimi ndalet.</p>
                       <div className="flex gap-2">
                         <Input placeholder={`shkruaj "${sub.cpanelUsername || sub.domain}"`} value={confirmTerm} onChange={(e) => setConfirmTerm(e.target.value)} />
-                        <Button size="sm" variant="destructive" disabled={!confirmTerm || !!busy} onClick={() => call('term', async () => { await hostingApi('sub.terminate', { subscriptionId: sub.id, confirm: confirmTerm, reason: 'manual' }); toast({ title: 'Llogaria u terminua' }); onClose(); })}><Trash2 className="w-4 h-4" /></Button>
+                        <Button size="sm" variant="destructive" disabled={!confirmTerm || !!busy} onClick={() => call('term', async () => { await hostingApi('sub.terminate', { subscriptionId: sub.id, confirm: confirmTerm, reason: 'manual', force: forceTerm }); toast({ title: 'Llogaria u terminua' }); onClose(); })}><Trash2 className="w-4 h-4" /></Button>
                       </div>
+                      <label className="flex items-center gap-2 text-[11px] text-red-700"><Switch checked={forceTerm} onCheckedChange={setForceTerm} />Fshi edhe nëse backup-i dështon (force)</label>
                     </div>
                   )}
                 </div>
@@ -800,7 +796,7 @@ const ServersTab: React.FC<{ servers: HostingServer[]; canEdit: boolean; isAdmin
       {editing && (
         <Dialog open onOpenChange={(o) => !o && setEditing(null)}>
           <DialogContent className="max-w-lg">
-            <DialogHeader><DialogTitle>{editing.id ? 'Ndrysho serverin' : 'Server i ri'}</DialogTitle><DialogDescription>Token-i ruhet vetëm në server (kasafortë), kurrë në shfletues. Lëre bosh për të mos e ndryshuar.</DialogDescription></DialogHeader>
+            <DialogHeader><DialogTitle>{editing.id ? 'Ndrysho serverin' : 'Server i ri'}</DialogTitle><DialogDescription>Token-i ruhet i enkriptuar në server dhe lidhet me hostname-in + përdoruesin e këtij momenti: nëse ndryshon hostname-in, rifute token-in. Krijo një token me privilegje të kufizuara (jo root i plotë): create-acct, suspend-acct, kill-acct, passwd, list-accts, list-pkgs, create-user-session, basic-whm-functions. Lëre bosh për të mos e ndryshuar.</DialogDescription></DialogHeader>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1 col-span-2"><Label>Emri</Label><Input value={editing.name || ''} onChange={(e) => setEditing({ ...editing, name: e.target.value })} /></div>
               <div className="space-y-1 col-span-2"><Label>Hostname WHM</Label><Input placeholder="srv1.shembull.al" value={editing.hostname || ''} onChange={(e) => setEditing({ ...editing, hostname: e.target.value })} /></div>
@@ -855,7 +851,7 @@ const SettingsTab: React.FC<{ teamId: string | null; settings: ReturnType<typeof
         </div>
         <div className="space-y-1"><Label className="text-xs">Nameservers default për domain-et e reja (një për rresht)</Label><Textarea rows={2} value={ns} onChange={(e) => setNs(e.target.value)} disabled={!isAdmin} /></div>
         <Button size="sm" disabled={!isAdmin || busy === 'lc'} onClick={() => run('lc', async () => { await saveTeamSettings(teamId, { hostingLifecycle: normalizeLifecycleConfig(lc), hostingDefaultNameservers: ns.split(/\s+/).filter(Boolean) }); toast({ title: 'Cilësimet u ruajtën' }); })}>Ruaj</Button>
-        <p className="text-xs text-muted-foreground">Default: {DEFAULT_LIFECYCLE.invoiceDaysBefore}/{DEFAULT_LIFECYCLE.suspendDaysAfter}/{DEFAULT_LIFECYCLE.terminateDaysAfter} ditë. Cikli ekzekutohet çdo orë nga VPS (`hosting-lifecycle`); sinkronizimi me serverët dhe Dynadot çdo 6 orë (`hosting-sync`).</p>
+        <p className="text-xs text-muted-foreground">Default: faturë {DEFAULT_LIFECYCLE.invoiceDaysBefore} ditë para, pezullim {DEFAULT_LIFECYCLE.suspendDaysAfter} ditë pas, terminim {DEFAULT_LIFECYCLE.terminateDaysAfter} = i fikur (fshirja e llogarisë është opt-in; kur ndizet, bëhet backup pkgacct para fshirjes). Cikli ekzekutohet çdo orë nga VPS (`hosting-lifecycle`); sinkronizimi me serverët dhe Dynadot çdo 6 orë (`hosting-sync`).</p>
         {settings?.hostingLastRun && (
           <div className="text-xs text-muted-foreground border-t pt-2">
             Ekzekutimi i fundit {fmtDate(settings.hostingLastRun.at)}: {settings.hostingLastRun.invoiced || 0} fatura, {settings.hostingLastRun.suspended || 0} pezullime, {settings.hostingLastRun.terminated || 0} terminime, {settings.hostingLastRun.renewed || 0} rinovime, {settings.hostingLastRun.provisioned || 0} aktivizime, {settings.hostingLastRun.errors || 0} gabime.
@@ -893,7 +889,6 @@ const EventsTab: React.FC<{ events: HostingEvent[] }> = ({ events }) => {
 
 const ManualSubscriptionDialog: React.FC<{ open: boolean; onOpenChange: (o: boolean) => void; products: HostingProduct[]; servers: HostingServer[] }> = ({ open, onOpenChange, products, servers }) => {
   const { toast } = useToast();
-  const mutation = useMutation<Subscription>('subscriptions');
   const { data: customers } = useCollection<Customer>('customers', { skip: !open });
   const [custQ, setCustQ] = useState('');
   const [f, setF] = useState({ customerId: '', productId: '', serverId: '', cpanelUsername: '', domain: '', cycle: 'monthly' as BillingCycle, amount: '', currency: 'EUR' as 'EUR' | 'ALL', nextDue: '', status: 'Active' as 'Active' | 'Suspended' });
@@ -912,15 +907,12 @@ const ManualSubscriptionDialog: React.FC<{ open: boolean; onOpenChange: (o: bool
     if (!f.customerId || !f.serverId || !f.cpanelUsername.trim() || !dom || !due || !(Number(f.amount) >= 0)) { toast({ title: 'Plotëso klientin, serverin, username-in, domain-in, afatin dhe çmimin', variant: 'destructive' }); return; }
     setBusy(true);
     try {
-      await mutation.create({
-        customerId: f.customerId, source: 'fivocrm', productId: f.productId || undefined, productName: product?.name || 'Hosting', domain: dom.name,
-        status: f.status, recurringAmount: Number(f.amount), currency: f.currency, billingCycle: f.cycle,
-        nextDueDate: due, anchorDay: due.getUTCDate(), registrationDate: new Date(),
-        serverId: f.serverId, whmPackage: product?.whmPackage, cpanelUsername: f.cpanelUsername.trim().toLowerCase(),
-        provisionStatus: 'provisioned', provisionError: null, lastInvoicedDueKey: null, currentInvoiceId: null,
-        notes: 'Shtuar manualisht (llogari ekzistuese)',
-      } as any);
-      toast({ title: 'Llogaria u shtua', description: `Fatura e parë e FivoCRM del ${DEFAULT_LIFECYCLE.invoiceDaysBefore} ditë para ${due.toLocaleDateString('sq-AL')}.` });
+      // Server-side: the account must exist in WHM and serve exactly this domain.
+      await hostingApi('sub.addExisting', {
+        customerId: f.customerId, productId: f.productId || null, serverId: f.serverId, cpanelUsername: f.cpanelUsername,
+        domain: dom.name, cycle: f.cycle, amount: Number(f.amount), currency: f.currency, nextDueDate: due.toISOString(), status: f.status,
+      });
+      toast({ title: 'Llogaria u shtua', description: `U verifikua në WHM. Fatura e parë e FivoCRM del ${DEFAULT_LIFECYCLE.invoiceDaysBefore} ditë para ${due.toLocaleDateString('sq-AL')}.` });
       onOpenChange(false);
     } catch (e) { toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' }); }
     finally { setBusy(false); }
@@ -929,7 +921,7 @@ const ManualSubscriptionDialog: React.FC<{ open: boolean; onOpenChange: (o: bool
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
-        <DialogHeader><DialogTitle>Shto llogari ekzistuese</DialogTitle><DialogDescription>Për llogari që janë tashmë në server (nuk krijohet asgjë në WHM). Shkruaj datën kur klienti duhet të paguajë herën tjetër — fatura del automatikisht para saj.</DialogDescription></DialogHeader>
+        <DialogHeader><DialogTitle>Shto llogari ekzistuese</DialogTitle><DialogDescription>Për llogari që janë tashmë në server (nuk krijohet asgjë në WHM; serveri verifikon që llogaria ekziston dhe i përket këtij domain-i). Shkruaj datën kur klienti duhet të paguajë herën tjetër — fatura del automatikisht para saj.</DialogDescription></DialogHeader>
         <div className="grid grid-cols-2 gap-3">
           <div className="space-y-1 col-span-2"><Label>Klienti</Label><Input placeholder="Kërko…" value={custQ} onChange={(e) => setCustQ(e.target.value)} /><Select value={f.customerId} onValueChange={(v) => setF({ ...f, customerId: v })}><SelectTrigger><SelectValue placeholder="Zgjidh klientin" /></SelectTrigger><SelectContent>{filtered.map((c) => <SelectItem key={c.id} value={c.id}>{c.name}{c.email ? ` · ${c.email}` : ''}</SelectItem>)}</SelectContent></Select></div>
           <div className="space-y-1"><Label>Paketa (opsionale)</Label><Select value={f.productId} onValueChange={pickProduct}><SelectTrigger><SelectValue placeholder="—" /></SelectTrigger><SelectContent>{products.filter((p) => p.status === 'Active').map((p) => <SelectItem key={p.id} value={p.id}>{p.name}</SelectItem>)}</SelectContent></Select></div>
@@ -949,7 +941,6 @@ const ManualSubscriptionDialog: React.FC<{ open: boolean; onOpenChange: (o: bool
 
 const ManualDomainDialog: React.FC<{ open: boolean; onOpenChange: (o: boolean) => void }> = ({ open, onOpenChange }) => {
   const { toast } = useToast();
-  const mutation = useMutation<Domain>('domains');
   const { data: customers } = useCollection<Customer>('customers', { skip: !open });
   const { data: tlds } = useCollection<DomainTld>('domainTlds', { skip: !open });
   const [custQ, setCustQ] = useState('');
@@ -964,17 +955,16 @@ const ManualDomainDialog: React.FC<{ open: boolean; onOpenChange: (o: boolean) =
   const save = async () => {
     const dom = parseDomain(f.domainName);
     const exp = f.expiry ? new Date(`${f.expiry}T12:00:00Z`) : null;
-    if (!f.customerId || !dom || !exp || !(Number(f.amount) >= 0)) { toast({ title: 'Plotëso klientin, domain-in, skadencën dhe çmimin e rinovimit', variant: 'destructive' }); return; }
+    if (!f.customerId || !dom || (f.registrar === 'manual' && !exp) || !(Number(f.amount) >= 0)) { toast({ title: 'Plotëso klientin, domain-in, skadencën dhe çmimin e rinovimit', variant: 'destructive' }); return; }
     setBusy(true);
     try {
-      await mutation.create({
-        customerId: f.customerId, source: 'fivocrm', registrar: f.registrar === 'manual' ? (f.registrarName.trim() || 'manual') : 'dynadot',
-        domainName: dom.name, tld: dom.tld, status: 'Active', years: Math.max(1, Number(f.years) || 1),
-        recurringAmount: Number(f.amount), currency: f.currency, autoRenew: f.autoRenew,
-        expiryDate: exp, nameservers: f.nameservers.split(/\s+/).filter(Boolean),
-        provisionStatus: 'provisioned', provisionError: null, lastInvoicedExpiryKey: null, currentInvoiceId: null,
-      } as any);
-      toast({ title: 'Domain-i u shtua', description: f.registrar === 'dynadot' ? 'Sinkronizimi do të marrë faktet nga Dynadot (skadenca, NS).' : 'Rinovimi te regjistruesi i jashtëm bëhet me dorë; FivoCRM lëshon faturën dhe të njofton.' });
+      // Server-side: a Dynadot domain must be in OUR account (facts are read from it).
+      await hostingApi('domain.addExisting', {
+        customerId: f.customerId, domainName: dom.name, registrar: f.registrar === 'manual' ? (f.registrarName.trim() || 'manual') : 'dynadot',
+        expiryDate: exp ? exp.toISOString() : null, years: Math.max(1, Number(f.years) || 1), amount: Number(f.amount), currency: f.currency,
+        autoRenew: f.autoRenew, nameservers: f.nameservers.split(/\s+/).filter(Boolean),
+      });
+      toast({ title: 'Domain-i u shtua', description: f.registrar === 'dynadot' ? 'U verifikua në Dynadot; skadenca dhe NS u lexuan nga regjistruesi.' : 'Rinovimi te regjistruesi i jashtëm bëhet me dorë; FivoCRM lëshon faturën dhe të njofton.' });
       onOpenChange(false);
     } catch (e) { toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' }); }
     finally { setBusy(false); }
@@ -989,7 +979,7 @@ const ManualDomainDialog: React.FC<{ open: boolean; onOpenChange: (o: boolean) =
           <div className="space-y-1 col-span-2"><Label>Domain</Label><Input placeholder="firma.al" value={f.domainName} onChange={(e) => onDomain(e.target.value)} /></div>
           <div className="space-y-1"><Label>Regjistruesi</Label><Select value={f.registrar} onValueChange={(v) => setF({ ...f, registrar: v as any })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="dynadot">Dynadot (llogaria jonë)</SelectItem><SelectItem value="manual">Tjetër (manual)</SelectItem></SelectContent></Select></div>
           {f.registrar === 'manual' ? <div className="space-y-1"><Label>Emri i regjistruesit</Label><Input placeholder="p.sh. AKEP / Albtelecom" value={f.registrarName} onChange={(e) => setF({ ...f, registrarName: e.target.value })} /></div> : <div />}
-          <div className="space-y-1"><Label>Skadon më</Label><Input type="date" value={f.expiry} onChange={(e) => setF({ ...f, expiry: e.target.value })} /></div>
+          <div className="space-y-1"><Label>Skadon më {f.registrar === 'dynadot' && <span className="text-xs text-muted-foreground">(lexohet nga Dynadot)</span>}</Label><Input type="date" value={f.expiry} onChange={(e) => setF({ ...f, expiry: e.target.value })} /></div>
           <div className="space-y-1"><Label>Vite për rinovim</Label><Select value={f.years} onValueChange={(v) => setF({ ...f, years: v })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{[1, 2, 3, 5].map((y) => <SelectItem key={y} value={String(y)}>{y}</SelectItem>)}</SelectContent></Select></div>
           <div className="space-y-1"><Label>Çmimi i rinovimit (total)</Label><div className="flex gap-2"><Input type="number" step="0.01" min={0} value={f.amount} onChange={(e) => setF({ ...f, amount: e.target.value })} /><Select value={f.currency} onValueChange={(v) => setF({ ...f, currency: v as any })}><SelectTrigger className="w-24"><SelectValue /></SelectTrigger><SelectContent><SelectItem value="EUR">EUR</SelectItem><SelectItem value="ALL">ALL</SelectItem></SelectContent></Select></div></div>
           <label className="flex items-center gap-2 text-sm"><Switch checked={f.autoRenew} onCheckedChange={(v) => setF({ ...f, autoRenew: v })} />Rinovim automatik (me faturë)</label>

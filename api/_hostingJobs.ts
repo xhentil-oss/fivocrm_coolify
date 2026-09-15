@@ -27,16 +27,17 @@ import { notifyUser, BASE_URL } from './_push.js';
 import { buildInvoiceEmail, publicInvoicePayUrl } from './_invoiceEmail.js';
 import { safeSenderAddress, senderHeader } from './_emailIdentity.js';
 import { formatMoney } from './_money.js';
+import { decryptSecret } from './_secretCrypto.js';
 import {
   CYCLE_LABELS, DEFAULT_LIFECYCLE, dayKey, decideDomain, decideSubscription, deriveCpanelUsername,
   generateAccountPassword, normalizeLifecycleConfig, nextDueDate, parseDomain, renewSubscriptionPatch,
-  renewalInvoiceId, utcNoon, addYearsClamped, isBillingCycle,
+  renewalInvoiceId, utcNoon, addYearsClamped, isBillingCycle, cycleFromWhmcs,
   type BillingCycle, type DomainFacts, type LifecycleConfig, type SubscriptionFacts,
 } from './_hostingEngine.js';
 import {
   ProviderError, redactProviderError, isWhmAccountExists,
-  whmCreateAccount, whmSuspendAccount, whmUnsuspendAccount, whmTerminateAccount, whmChangePackage,
-  whmSetPassword, whmCreateSession, whmAccountSummary, whmListAccounts, whmListPackages, whmVersion,
+  whmCreateAccount, whmSuspendAccount, whmUnsuspendAccount, whmTerminateAccount, whmChangePackage, whmBackupAccount,
+  whmSetPassword, whmCreateSession, whmAccountSummary, whmListAccounts, whmListPackages, whmVersion, normalizeHostname,
   dynadotRegister, dynadotRenew, dynadotTransfer, dynadotDomainInfo, dynadotSetNameservers, dynadotAccountInfo,
   type WhmServer,
 } from './_hostingProviders.js';
@@ -125,8 +126,16 @@ export async function dynadotCurrencyFor(teamId: string | null): Promise<string 
   return typeof c === 'string' && /^[A-Z]{3}$/.test(c) ? c : undefined;
 }
 
-/** Server doc + its token from the deny-all `hostingServerSecrets` collection. */
-export async function loadServer(serverId: string): Promise<{ id: string; data: any; whm: WhmServer } | null> {
+/**
+ * Server doc + its token from the deny-all `hostingServerSecrets` collection.
+ *
+ * The token is BOUND to the hostname + user it was saved for (stored next to it in
+ * the secret doc). `hostingServers.hostname` is editable by any staff member with
+ * the module; without the binding, re-pointing a server at an attacker's host would
+ * make the next call hand them the root token. A mismatch yields an empty token
+ * and `tokenIssue`, so every operation fails closed with a clear message.
+ */
+export async function loadServer(serverId: string): Promise<{ id: string; data: any; whm: WhmServer; tokenIssue?: string } | null> {
   if (!serverId) return null;
   const [doc, secret] = await Promise.all([
     db.collection('hostingServers').doc(serverId).get(),
@@ -134,12 +143,45 @@ export async function loadServer(serverId: string): Promise<{ id: string; data: 
   ]);
   if (!doc.exists) return null;
   const data = doc.data() as any;
-  const apiToken = String((secret.data() as any)?.apiToken || '');
+  const sec = (secret.data() as any) || {};
+  let apiToken = '';
+  let tokenIssue: string | undefined;
+  if (sec.apiToken) {
+    try { apiToken = decryptSecret(String(sec.apiToken)); } catch (err) { tokenIssue = redactProviderError(err); }
+    const boundHost = sec.hostname ? normalizeHostname(String(sec.hostname)) : null;
+    const boundUser = sec.username ? String(sec.username) : null;
+    if (apiToken && boundHost && boundHost !== normalizeHostname(String(data.hostname || ''))) {
+      apiToken = ''; tokenIssue = `Hostname-i ndryshoi pas ruajtjes së token-it (${boundHost} → ${data.hostname}) — rifut token-in`;
+    } else if (apiToken && boundUser && boundUser !== String(data.username || 'root')) {
+      apiToken = ''; tokenIssue = 'Përdoruesi WHM ndryshoi pas ruajtjes së token-it — rifut token-in';
+    }
+  }
   return {
     id: doc.id,
     data,
     whm: { hostname: data.hostname, port: Number(data.port) || 2087, username: data.username || 'root', apiToken },
+    tokenIssue,
   };
+}
+
+function noTokenMessage(server: { data: any; tokenIssue?: string }): string {
+  return server.tokenIssue || `Serveri "${server.data?.name || '?'}" nuk ka API token`;
+}
+
+/**
+ * The WHM account a subscription points at must really be THIS customer's: same
+ * primary domain in WHM as on the subscription. Without it, a row that names any
+ * username on a shared server would let staff SSO into / reset / delete someone
+ * else's account. Throws when the account is missing or belongs to another domain.
+ */
+export async function assertAccountOwned(server: WhmServer, username: string, domain: string | null | undefined): Promise<void> {
+  const acct = await whmAccountSummary(server, username);
+  if (!acct) throw new Error(`Llogaria "${username}" nuk ekziston në WHM`);
+  const want = parseDomain(domain || '')?.name;
+  const have = parseDomain(acct.domain)?.name;
+  if (!want || !have || want !== have) {
+    throw new Error(`Llogaria "${username}" në WHM i përket domain-it "${acct.domain}", jo "${domain || '?'}" — nuk lejohet`);
+  }
 }
 
 export async function portalUserIdFor(customerId: string | null | undefined): Promise<string | null> {
@@ -439,7 +481,7 @@ async function provisionHostingLine(args: {
   if (!product) throw new Error('Paketa e hosting-ut nuk ekziston më');
   const server = await loadServer(String(product.serverId || ''));
   if (!server) throw new Error('Serveri i paketës nuk u gjet');
-  if (!server.whm.apiToken) throw new Error(`Serveri "${server.data.name}" nuk ka API token`);
+  if (!server.whm.apiToken) throw new Error(noTokenMessage(server));
   const dom = parseDomain(line.domainName);
   if (!dom) throw new Error('Domain i pavlefshëm për llogarinë');
   const cycle: BillingCycle = isBillingCycle(line.cycle) ? line.cycle : 'monthly';
@@ -500,7 +542,9 @@ async function provisionHostingLine(args: {
         throw err;
       }
     }
-    // Welcome mail with the credentials — the ONLY place the password ever exists.
+    // Welcome mail — WITHOUT the password: the customer logs in through the portal
+    // (one-click cPanel SSO) and sets a password of their own from there. A password
+    // in a mailbox outlives the mailbox's security; the generated one is discarded.
     if (customer?.email) {
       const cpanelUrl = `https://${server.data.hostname}:2083`;
       const html = `
@@ -511,11 +555,10 @@ async function provisionHostingLine(args: {
           <table style="border-collapse:collapse;margin:16px 0">
             <tr><td style="padding:6px 12px;color:#555">cPanel</td><td style="padding:6px 12px"><a href="${cpanelUrl}">${cpanelUrl}</a></td></tr>
             <tr><td style="padding:6px 12px;color:#555">Përdoruesi</td><td style="padding:6px 12px"><code>${esc(username)}</code></td></tr>
-            <tr><td style="padding:6px 12px;color:#555">Fjalëkalimi</td><td style="padding:6px 12px"><code>${esc(password)}</code></td></tr>
             <tr><td style="padding:6px 12px;color:#555">Nameservers</td><td style="padding:6px 12px">${nameservers.map(esc).join('<br>') || '—'}</td></tr>
           </table>
-          <p>Mund të hyni edhe pa fjalëkalim nga portali juaj: <a href="${BASE_URL}/portal/hosting">${BASE_URL}/portal/hosting</a></p>
-          <p style="color:#777;font-size:12px">Ju lutemi ndryshoni fjalëkalimin pas hyrjes së parë.</p>
+          <p>Hyni në cPanel me një klik nga portali juaj: <a href="${BASE_URL}/portal/hosting">${BASE_URL}/portal/hosting</a> → "Hyr në cPanel".</p>
+          <p style="color:#777;font-size:12px">Për arsye sigurie fjalëkalimi nuk dërgohet me email. Nga portali mund të gjeneroni një fjalëkalim tuajin ("Fjalëkalim i ri").</p>
         </div>`;
       await sendTenantMail(teamId, customer.email, `Llogaria e hosting-ut për ${dom.name} është gati`, html);
     }
@@ -756,7 +799,8 @@ export async function suspendSubscription(subscriptionId: string, reason: string
   if (!s) throw new Error('Abonimi nuk u gjet');
   if (!s.cpanelUsername || !s.serverId) throw new Error('Abonimi nuk ka llogari cPanel');
   const server = await loadServer(String(s.serverId));
-  if (!server?.whm.apiToken) throw new Error('Serveri nuk ka API token');
+  if (!server?.whm.apiToken) throw new Error(server ? noTokenMessage(server) : 'Serveri nuk u gjet');
+  await assertAccountOwned(server.whm, String(s.cpanelUsername), s.domain);
   try {
     await whmSuspendAccount(server.whm, String(s.cpanelUsername), reason);
   } catch (err) {
@@ -780,7 +824,8 @@ export async function unsuspendSubscription(subscriptionId: string, actorUid: st
   const s = (await ref.get()).data() as any;
   if (!s) throw new Error('Abonimi nuk u gjet');
   const server = await loadServer(String(s.serverId || ''));
-  if (!server?.whm.apiToken) throw new Error('Serveri nuk ka API token');
+  if (!server?.whm.apiToken) throw new Error(server ? noTokenMessage(server) : 'Serveri nuk u gjet');
+  await assertAccountOwned(server.whm, String(s.cpanelUsername), s.domain);
   try {
     await whmUnsuspendAccount(server.whm, String(s.cpanelUsername));
   } catch (err) {
@@ -793,14 +838,39 @@ export async function unsuspendSubscription(subscriptionId: string, actorUid: st
   await logHostingEvent({ businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, subscriptionId, type: 'whm.unsuspend', ok: true, message: `${s.cpanelUsername} u riaktivizua`, actorUserId: actorUid });
 }
 
-/** DESTRUCTIVE: removes the cPanel account. Files are gone. */
-export async function terminateSubscription(subscriptionId: string, reason: string, actorUid: string | null): Promise<void> {
+/**
+ * DESTRUCTIVE: removes the cPanel account. A full `pkgacct` backup is taken FIRST
+ * (cpmove-<user>.tar.gz in /home on the server) and the deletion is REFUSED when the
+ * backup fails — unless `opts.force` (a human who read the warning). The account must
+ * also prove it is this customer's (`assertAccountOwned`).
+ */
+export async function terminateSubscription(subscriptionId: string, reason: string, actorUid: string | null, opts: { force?: boolean } = {}): Promise<void> {
   const ref = db.collection('subscriptions').doc(subscriptionId);
   const s = (await ref.get()).data() as any;
   if (!s) throw new Error('Abonimi nuk u gjet');
   if (s.cpanelUsername && s.serverId) {
     const server = await loadServer(String(s.serverId));
     if (server?.whm.apiToken) {
+      const exists = await whmAccountSummary(server.whm, String(s.cpanelUsername)).catch(() => null);
+      if (exists) {
+        await assertAccountOwned(server.whm, String(s.cpanelUsername), s.domain);
+        try {
+          const b = await whmBackupAccount(server.whm, String(s.cpanelUsername));
+          await ref.update({ lastBackupAt: Timestamp.now(), lastBackupPath: b.path ?? null, updatedAt: Timestamp.now() });
+          await logHostingEvent({ businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, subscriptionId, type: 'whm.pkgacct', ok: true, message: `Backup i ${s.cpanelUsername} para terminimit${b.path ? `: ${b.path}` : ''}`, actorUserId: actorUid });
+        } catch (err) {
+          const msg = redactProviderError(err);
+          await logHostingEvent({ businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, subscriptionId, type: 'whm.pkgacct', ok: false, message: msg, actorUserId: actorUid });
+          if (!opts.force) {
+            await notifyMany(await staffRecipients(s.businessId, s.createdByUserId), {
+              type: 'hosting_provision_failed', title: `Terminimi i ${s.domain || s.cpanelUsername} u ndal: backup-i dështoi`,
+              message: `${msg.slice(0, 160)} — llogaria NUK u fshi. Bëj backup me dorë ose termino me "force".`,
+              actionUrl: '/app/hosting', actionLabel: 'Shiko', businessId: s.businessId, teamId: s.teamId, customerId: s.customerId,
+            });
+            throw new Error(`Backup-i (pkgacct) dështoi — terminimi u ndal që të mos humbin të dhënat: ${msg}`);
+          }
+        }
+      }
       try {
         await whmTerminateAccount(server.whm, String(s.cpanelUsername));
       } catch (err) {
@@ -833,7 +903,8 @@ export async function changeSubscriptionPackage(subscriptionId: string, productI
   if (typeof price !== 'number') throw new Error('Paketa nuk shitet me këtë cikël');
   if (s.cpanelUsername) {
     const server = await loadServer(String(p.serverId || s.serverId));
-    if (!server?.whm.apiToken) throw new Error('Serveri nuk ka API token');
+    if (!server?.whm.apiToken) throw new Error(server ? noTokenMessage(server) : 'Serveri nuk u gjet');
+    await assertAccountOwned(server.whm, String(s.cpanelUsername), s.domain);
     try {
       await whmChangePackage(server.whm, String(s.cpanelUsername), String(p.whmPackage));
     } catch (err) {
@@ -849,11 +920,12 @@ export async function changeSubscriptionPackage(subscriptionId: string, productI
   await logHostingEvent({ businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, subscriptionId, type: 'whm.changepackage', ok: true, message: `Paketa → ${p.name} (${p.whmPackage}), ${CYCLE_LABELS[newCycle]} ${price} ${p.currency || ''}`, actorUserId: actorUid });
 }
 
-export async function resetSubscriptionPassword(subscriptionId: string, actorUid: string | null): Promise<string> {
+export async function resetSubscriptionPassword(subscriptionId: string, actorUid: string | null, opts: { byStaff?: boolean } = {}): Promise<string> {
   const s = (await db.collection('subscriptions').doc(subscriptionId).get()).data() as any;
   if (!s?.cpanelUsername || !s.serverId) throw new Error('Abonimi nuk ka llogari cPanel');
   const server = await loadServer(String(s.serverId));
-  if (!server?.whm.apiToken) throw new Error('Serveri nuk ka API token');
+  if (!server?.whm.apiToken) throw new Error(server ? noTokenMessage(server) : 'Serveri nuk u gjet');
+  await assertAccountOwned(server.whm, String(s.cpanelUsername), s.domain);
   const password = generateAccountPassword();
   try {
     await whmSetPassword(server.whm, String(s.cpanelUsername), password);
@@ -861,19 +933,138 @@ export async function resetSubscriptionPassword(subscriptionId: string, actorUid
     await logHostingEvent({ businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, subscriptionId, type: 'whm.passwd', ok: false, message: redactProviderError(err), actorUserId: actorUid });
     throw err;
   }
-  await logHostingEvent({ businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, subscriptionId, type: 'whm.passwd', ok: true, message: `Fjalëkalimi i ${s.cpanelUsername} u ndryshua`, actorUserId: actorUid });
+  await logHostingEvent({ businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, subscriptionId, type: 'whm.passwd', ok: true, message: `Fjalëkalimi i ${s.cpanelUsername} u ndryshua${opts.byStaff ? ' nga stafi' : ''}`, actorUserId: actorUid });
+  if (opts.byStaff) {
+    await notifyMany([await portalUserIdFor(s.customerId)], {
+      type: 'hosting_staff_login', title: `Stafi ndryshoi fjalëkalimin e cPanel për ${s.domain || s.cpanelUsername}`,
+      message: 'Nëse nuk e keni kërkuar ju, na kontaktoni menjëherë.', actionUrl: '/portal/hosting', actionLabel: 'Shiko',
+      businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, actorUserId: actorUid,
+    });
+  }
   return password;
 }
 
-export async function subscriptionSsoUrl(subscriptionId: string, actorUid: string | null): Promise<string> {
+export async function subscriptionSsoUrl(subscriptionId: string, actorUid: string | null, opts: { byStaff?: boolean } = {}): Promise<string> {
   const s = (await db.collection('subscriptions').doc(subscriptionId).get()).data() as any;
   if (!s?.cpanelUsername || !s.serverId) throw new Error('Abonimi nuk ka llogari cPanel');
   if (s.status !== 'Active') throw new Error('Llogaria nuk është aktive');
   const server = await loadServer(String(s.serverId));
-  if (!server?.whm.apiToken) throw new Error('Serveri nuk ka API token');
+  if (!server?.whm.apiToken) throw new Error(server ? noTokenMessage(server) : 'Serveri nuk u gjet');
+  await assertAccountOwned(server.whm, String(s.cpanelUsername), s.domain);
   const url = await whmCreateSession(server.whm, String(s.cpanelUsername));
-  await logHostingEvent({ businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, subscriptionId, type: 'whm.sso', ok: true, message: `Sesion cPanel për ${s.cpanelUsername}`, actorUserId: actorUid });
+  await logHostingEvent({ businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, subscriptionId, type: 'whm.sso', ok: true, message: `Sesion cPanel për ${s.cpanelUsername}${opts.byStaff ? ' (staf)' : ''}`, actorUserId: actorUid });
+  if (opts.byStaff) {
+    // The customer is told every time staff enters their account — it is their data.
+    await notifyMany([await portalUserIdFor(s.customerId)], {
+      type: 'hosting_staff_login', title: `Stafi hyri në cPanel-in e ${s.domain || s.cpanelUsername}`,
+      message: 'Hyrje për mirëmbajtje/suport. Nëse nuk e prisnit, na kontaktoni.', actionUrl: '/portal/hosting', actionLabel: 'Shiko',
+      businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, actorUserId: actorUid,
+    });
+  }
   return url;
+}
+
+// ── Existing accounts / domains (migration) — verified at the provider first ───
+
+export interface AddExistingSubscriptionInput {
+  businessId: string; teamId: string | null; customerId: string; productId?: string | null; serverId: string;
+  cpanelUsername: string; domain: string; cycle: BillingCycle; amount: number; currency: 'ALL' | 'EUR';
+  nextDueDate: Date; status: 'Active' | 'Suspended';
+}
+
+/** Creates a `source: 'fivocrm'` subscription for an account that already lives on the server. */
+export async function addExistingSubscription(inp: AddExistingSubscriptionInput, actorUid: string | null): Promise<string> {
+  const dom = parseDomain(inp.domain);
+  if (!dom) throw new Error('Domain i pavlefshëm');
+  const server = await loadServer(inp.serverId);
+  if (!server) throw new Error('Serveri nuk u gjet');
+  if (server.data.businessId !== inp.businessId) throw new Error('Serveri i përket një biznesi tjetër');
+  if (!server.whm.apiToken) throw new Error(noTokenMessage(server));
+  const username = inp.cpanelUsername.trim().toLowerCase();
+  // The account must exist AND serve this domain — otherwise "adding" it is taking it.
+  await assertAccountOwned(server.whm, username, dom.name);
+  const dup = await db.collection('subscriptions').where('serverId', '==', inp.serverId).where('cpanelUsername', '==', username).limit(1).get();
+  if (!dup.empty) throw new Error(`Llogaria ${username} është tashmë e regjistruar (abonimi ${dup.docs[0].id})`);
+  const product = inp.productId ? ((await db.collection('hostingProducts').doc(inp.productId).get()).data() as any) : null;
+  const due = utcNoon(inp.nextDueDate);
+  const ref = db.collection('subscriptions').doc();
+  await ref.set({
+    businessId: inp.businessId, teamId: inp.teamId, customerId: inp.customerId, source: 'fivocrm',
+    productId: inp.productId || null, productName: product?.name || 'Hosting', domain: dom.name,
+    status: inp.status, recurringAmount: inp.amount, currency: inp.currency, billingCycle: inp.cycle,
+    nextDueDate: Timestamp.fromDate(due), anchorDay: due.getUTCDate(), registrationDate: Timestamp.now(),
+    serverId: inp.serverId, whmPackage: product?.whmPackage || null, cpanelUsername: username,
+    provisionStatus: 'provisioned', provisionError: null, lastInvoicedDueKey: null, currentInvoiceId: null,
+    notes: 'Shtuar manualisht (llogari ekzistuese, verifikuar në WHM)',
+    createdAt: Timestamp.now(), updatedAt: Timestamp.now(), createdByUserId: actorUid,
+  });
+  await logHostingEvent({ businessId: inp.businessId, teamId: inp.teamId, customerId: inp.customerId, subscriptionId: ref.id, type: 'sub.addExisting', ok: true, message: `${username} (${dom.name}) u shtua si llogari ekzistuese`, actorUserId: actorUid });
+  return ref.id;
+}
+
+export interface AddExistingDomainInput {
+  businessId: string; teamId: string | null; customerId: string; domainName: string; registrar: string;
+  expiryDate: Date | null; years: number; amount: number; currency: 'ALL' | 'EUR'; autoRenew: boolean; nameservers: string[];
+}
+
+/** Creates a `source: 'fivocrm'` domain. A Dynadot one must exist in the account (facts come from the registrar). */
+export async function addExistingDomain(inp: AddExistingDomainInput, actorUid: string | null): Promise<string> {
+  const dom = parseDomain(inp.domainName);
+  if (!dom) throw new Error('Domain i pavlefshëm');
+  const dup = await db.collection('domains').where('businessId', '==', inp.businessId).where('domainName', '==', dom.name).limit(1).get();
+  if (!dup.empty && (dup.docs[0].data() as any).source === 'fivocrm') throw new Error(`${dom.name} është tashmë i regjistruar (${dup.docs[0].id})`);
+  let expiry = inp.expiryDate ? utcNoon(inp.expiryDate) : null;
+  let registration: Date | null = null;
+  let ns = inp.nameservers;
+  let locked: boolean | undefined;
+  if (inp.registrar === 'dynadot') {
+    const apiKey = await dynadotKeyFor(inp.teamId);
+    if (!apiKey) throw new Error('Çelësi i Dynadot mungon');
+    const info = await dynadotDomainInfo(apiKey, dom.name);
+    if (!info) throw new Error(`${dom.name} nuk është në llogarinë tuaj Dynadot`);
+    expiry = info.expiration ? utcNoon(info.expiration) : expiry;
+    registration = info.registration;
+    if (info.nameservers.length) ns = info.nameservers;
+    locked = info.locked;
+  }
+  if (!expiry) throw new Error('Skadenca mungon');
+  const ref = db.collection('domains').doc();
+  await ref.set({
+    businessId: inp.businessId, teamId: inp.teamId, customerId: inp.customerId, source: 'fivocrm',
+    registrar: inp.registrar === 'dynadot' ? 'dynadot' : (inp.registrar.trim() || 'manual'),
+    domainName: dom.name, tld: dom.tld, status: 'Active', years: Math.max(1, Math.floor(inp.years || 1)),
+    recurringAmount: inp.amount, currency: inp.currency, autoRenew: inp.autoRenew,
+    expiryDate: Timestamp.fromDate(expiry), ...(registration ? { registrationDate: Timestamp.fromDate(utcNoon(registration)) } : {}),
+    nameservers: ns, ...(locked !== undefined ? { locked } : {}),
+    provisionStatus: 'provisioned', provisionError: null, lastInvoicedExpiryKey: null, currentInvoiceId: null,
+    lastSyncAt: Timestamp.now(), createdAt: Timestamp.now(), updatedAt: Timestamp.now(), createdByUserId: actorUid,
+  });
+  await logHostingEvent({ businessId: inp.businessId, teamId: inp.teamId, customerId: inp.customerId, domainId: ref.id, type: 'domain.addExisting', ok: true, message: `${dom.name} (${inp.registrar}) u shtua si domain ekzistues`, actorUserId: actorUid });
+  return ref.id;
+}
+
+/** WHMCS mirror row → ours. The WHM account named must exist and serve the row's domain. */
+export async function adoptWhmcsSubscription(subscriptionId: string, serverId: string, cpanelUsername: string, actorUid: string | null): Promise<void> {
+  const ref = db.collection('subscriptions').doc(subscriptionId);
+  const s = (await ref.get()).data() as any;
+  if (!s) throw new Error('Abonimi nuk u gjet');
+  if (s.source === 'fivocrm') throw new Error('Abonimi është tashmë nën menaxhimin e FivoCRM');
+  const server = await loadServer(serverId);
+  if (!server) throw new Error('Serveri nuk u gjet');
+  if (server.data.businessId !== s.businessId) throw new Error('Serveri i përket një biznesi tjetër');
+  if (!server.whm.apiToken) throw new Error(noTokenMessage(server));
+  const username = cpanelUsername.trim().toLowerCase();
+  await assertAccountOwned(server.whm, username, s.domain);
+  const cycle = cycleFromWhmcs(s.billingCycle) || 'monthly';
+  const due = toDate(s.nextDueDate);
+  await ref.update({
+    source: 'fivocrm', serverId, cpanelUsername: username, billingCycle: cycle,
+    anchorDay: due ? due.getUTCDate() : new Date().getUTCDate(), provisionStatus: 'provisioned', provisionError: null,
+    // FivoCRM invoices the CURRENT due date; pre-claiming it made the lifecycle read
+    // the period as invoiced-but-unpaid and suspend on the due date.
+    lastInvoicedDueKey: null, currentInvoiceId: null, updatedAt: Timestamp.now(),
+  });
+  await logHostingEvent({ businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, subscriptionId, type: 'sub.adoptWhmcs', ok: true, message: `${username} (${s.domain}) u mor nën menaxhim nga WHMCS`, actorUserId: actorUid });
 }
 
 export async function subscriptionUsage(subscriptionId: string): Promise<{ diskUsedMb: number | null; diskLimitMb: number | null; suspended: boolean; ip?: string; plan?: string } | null> {
@@ -883,6 +1074,7 @@ export async function subscriptionUsage(subscriptionId: string): Promise<{ diskU
   if (!server?.whm.apiToken) return null;
   const a = await whmAccountSummary(server.whm, String(s.cpanelUsername));
   if (!a) return null;
+  if (parseDomain(a.domain)?.name !== parseDomain(s.domain || '')?.name) throw new Error(`Llogaria "${s.cpanelUsername}" në WHM i përket një domain-i tjetër`);
   return { diskUsedMb: a.diskUsedMb ?? null, diskLimitMb: a.diskLimitMb ?? null, suspended: a.suspended, ip: a.ip, plan: a.plan };
 }
 
@@ -890,6 +1082,11 @@ export async function testServer(serverId: string, actorUid: string | null): Pro
   const server = await loadServer(serverId);
   if (!server) throw new Error('Serveri nuk u gjet');
   const ref = db.collection('hostingServers').doc(serverId);
+  if (!server.whm.apiToken) {
+    const msg = noTokenMessage(server);
+    await ref.update({ lastCheckedAt: Timestamp.now(), lastCheckOk: false, lastCheckError: msg, updatedAt: Timestamp.now() });
+    return { ok: false, error: msg };
+  }
   try {
     const [version, packages, accounts] = await Promise.all([
       whmVersion(server.whm), whmListPackages(server.whm), whmListAccounts(server.whm).catch(() => null),

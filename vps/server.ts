@@ -13,6 +13,7 @@ import cors from 'cors';
 import multer from 'multer';
 import pino from 'pino';
 import { randomUUID } from 'crypto';
+import { lookup as dnsLookup } from 'dns/promises';
 
 process.on('unhandledRejection', (err) => { console.error('[WA] Unhandled rejection:', err); });
 process.on('uncaughtException', (err) => { console.error('[WA] Uncaught exception:', err); });
@@ -843,6 +844,33 @@ app.post('/upload', requireFirebaseAuth, uploadMw.single('file'), async (req: an
 // + secret); the VPS never stores WHMCS credentials and only ever forwards to
 // its own WHMCS_API_URL (so it can't be abused as an open SSRF relay).
 // ── Provider relay (cPanel/WHM + Dynadot) ─────────────────────────────────────
+const whmHostCache = new Map<string, { ok: boolean; at: number }>();
+async function isRegisteredWhmHost(hostname: string): Promise<boolean> {
+  const key = hostname.toLowerCase();
+  const hit = whmHostCache.get(key);
+  if (hit && Date.now() - hit.at < 5 * 60_000) return hit.ok;
+  let ok = false;
+  try {
+    const snap = await db.collection('hostingServers').where('hostname', '==', key).limit(1).get();
+    ok = !snap.empty;
+  } catch (err) { console.error('[relay] hostingServers lookup failed', err); }
+  whmHostCache.set(key, { ok, at: Date.now() });
+  return ok;
+}
+function isPrivateIp(ip: string): boolean {
+  if (/^(127\.|10\.|0\.|169\.254\.|192\.168\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip)) return true;
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return true;
+  const v6 = ip.toLowerCase();
+  return v6 === '::1' || v6.startsWith('fc') || v6.startsWith('fd') || v6.startsWith('fe80') || v6.startsWith('::ffff:127.') || v6.startsWith('::ffff:10.') || v6.startsWith('::ffff:192.168.');
+}
+async function resolvesToPrivate(hostname: string): Promise<boolean> {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(hostname) || hostname.includes(':')) return isPrivateIp(hostname.replace(/^\[|\]$/g, ''));
+  if (hostname === 'localhost') return true;
+  try {
+    const addrs = await dnsLookup(hostname, { all: true });
+    return addrs.length === 0 || addrs.some((a) => isPrivateIp(a.address));
+  } catch { return true; }
+}
 // Same idea as /whmcs-proxy: Vercel has no static egress IP, WHM firewalls and
 // Dynadot's API whitelist by IP, so FivoCRM sends the fully-built request here and
 // this VPS performs it. Allow-list: https only, and either api.dynadot.com or a
@@ -857,6 +885,13 @@ app.post('/provider-proxy', requireApiKey, async (req, res) => {
   const isDynadot = target.hostname === 'api.dynadot.com';
   const isWhm = target.port === '2087' || target.port === '2083';
   if (!isDynadot && !isWhm) { res.status(400).json({ error: 'Host i palejuar për relay' }); return; }
+  // A WHM target must be a server some tenant REGISTERED (hostingServers.hostname) —
+  // otherwise the relay is an SSRF primitive towards anything listening on :2087.
+  // And never a private / loopback address, whatever the hostname resolves to.
+  if (isWhm) {
+    if (!(await isRegisteredWhmHost(target.hostname))) { res.status(403).json({ error: 'Serveri WHM nuk është i regjistruar në FivoCRM' }); return; }
+    if (await resolvesToPrivate(target.hostname)) { res.status(403).json({ error: 'Adresë private/loopback e refuzuar' }); return; }
+  }
   const fwdHeaders: Record<string, string> = {};
   for (const [k, v] of Object.entries((headers as Record<string, unknown>) || {})) {
     if (/^(authorization|content-type|accept)$/i.test(k) && typeof v === 'string') fwdHeaders[k] = v;

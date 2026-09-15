@@ -120,6 +120,7 @@ export const NOTIFICATION_TYPES = {
   domain_renewed:           { category: 'system',   priority: 'success',  groupLabel: 'domain-e të rinovuara', portal: true },
   domain_expiring:          { category: 'system',   priority: 'warning',  groupLabel: 'domain-e që skadojnë', portal: true },
   domain_action_failed:     { category: 'system',   priority: 'critical', groupLabel: 'veprime domain të dështuara' },
+  hosting_staff_login:      { category: 'system',   priority: 'info',     groupLabel: 'hyrje stafi në cPanel', portal: true },
   recurring_expense_created:{ category: 'invoices', priority: 'neutral' },
   expense_submitted:        { category: 'invoices', priority: 'neutral',  groupLabel: 'shpenzime të reja' },
   quote_sent:               { category: 'invoices', priority: 'neutral',  portal: true },
