@@ -9,7 +9,7 @@
  */
 import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { Globe, Server, ShoppingCart, ExternalLink, KeyRound, Search, Loader2, Plus, Trash2, CheckCircle2, AlertTriangle, Clock, Activity } from 'lucide-react';
+import { Globe, Server, ShoppingCart, ExternalLink, KeyRound, Search, Loader2, Plus, Trash2, CheckCircle2, AlertTriangle, Clock, Activity, Ticket, HardDrive } from 'lucide-react';
 import { Card } from '../../components/ui/card';
 import { Badge } from '../../components/ui/badge';
 import { Button } from '../../components/ui/button';
@@ -27,7 +27,7 @@ import { useToast } from '../../hooks/use-toast';
 import { formatCurrency, getTimestampMs } from '../../lib/utils';
 import { hostingApi, checkDomains, type DomainCheckRow } from '../../lib/hosting/api';
 import { CYCLE_LABELS, ORDER_ERROR_LABELS, availableCycles, daysBetween, parseDomain, priceOrder, type BillingCycle, type OrderLineInput, type TldPricing } from '../../lib/hosting/engine';
-import type { Domain, DomainTld, HostingOrder, HostingProduct, Subscription } from '../../types';
+import type { Domain, DomainTld, HostingOrder, HostingProduct, Subscription, HostingBackup } from '../../types';
 
 const toDate = (v: unknown): Date | null => { const ms = getTimestampMs(v); return ms ? new Date(ms) : null; };
 const fmtDate = (v: unknown) => { const d = toDate(v); return d ? d.toLocaleDateString('sq-AL') : '—'; };
@@ -125,8 +125,8 @@ const PortalHostingView: React.FC = () => {
         </TabsContent>
       </Tabs>
 
-      {liveSub && <PortalSubscriptionDialog sub={liveSub} onClose={() => setSelSub(null)} />}
-      {liveDom && <PortalDomainDialog dom={liveDom} onClose={() => setSelDom(null)} />}
+      {liveSub && <PortalSubscriptionDialog sub={liveSub} products={activeProducts} customerId={customerId || ''} onClose={() => setSelSub(null)} onInvoice={(id) => navigate(`/portal/invoices?invoice=${id}`)} />}
+      {liveDom && <PortalDomainDialog dom={liveDom} subs={subs.filter((s) => s.source === 'fivocrm' && s.status === 'Active')} onClose={() => setSelDom(null)} />}
       <PortalOrderDialog open={orderOpen} onOpenChange={setOrderOpen} products={activeProducts} tlds={activeTlds} onCreated={(invoiceId) => { setOrderOpen(false); if (invoiceId) navigate(`/portal/invoices?invoice=${invoiceId}`); else toast({ title: 'Porosia u aktivizua' }); }} />
     </div>
   );
@@ -134,11 +134,15 @@ const PortalHostingView: React.FC = () => {
 
 export default PortalHostingView;
 
-const PortalSubscriptionDialog: React.FC<{ sub: Subscription; onClose: () => void }> = ({ sub, onClose }) => {
+const PortalSubscriptionDialog: React.FC<{ sub: Subscription; products: HostingProduct[]; customerId: string; onClose: () => void; onInvoice: (invoiceId: string) => void }> = ({ sub, products, customerId, onClose, onInvoice }) => {
   const { toast } = useToast();
   const [busy, setBusy] = useState<string | null>(null);
   const [usage, setUsage] = useState<any>(null);
   const [password, setPassword] = useState<string | null>(null);
+  const [upgradeId, setUpgradeId] = useState('');
+  const [quote, setQuote] = useState<any>(null);
+  const { data: backups } = useCollection<HostingBackup>('hostingBackups', { skip: !customerId, where: [{ field: 'customerId', operator: '==', value: customerId }, { field: 'subscriptionId', operator: '==', value: sub.id }], skipTeamFilter: true, skipBusinessFilter: true, limit: 10 });
+  const upgradeOptions = products.filter((p) => p.id !== sub.productId && (!sub.serverId || p.serverId === sub.serverId) && availableCycles(p.pricing as any).includes(sub.billingCycle as BillingCycle));
   const isOurs = sub.source === 'fivocrm';
   const run = async (k: string, fn: () => Promise<void>) => { setBusy(k); try { await fn(); } catch (e) { toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' }); } finally { setBusy(null); } };
   return (
@@ -154,6 +158,32 @@ const PortalSubscriptionDialog: React.FC<{ sub: Subscription; onClose: () => voi
               <Button size="sm" variant="outline" disabled={sub.status !== 'Active' || !!busy} onClick={() => run('pw', async () => { const r = await hostingApi<{ password: string }>('sub.resetPassword', { subscriptionId: sub.id }); setPassword(r.password); })}><KeyRound className="w-4 h-4 mr-1" />Fjalëkalim i ri</Button>
             </div>
             {usage && <Card className="p-3 text-sm">{usage.missing ? 'Nuk u gjetën të dhëna.' : <>Disk: <strong>{usage.diskUsedMb ?? '?'} MB</strong> nga {usage.diskLimitMb ?? '∞'} MB</>}</Card>}
+            {!usage && sub.diskLimitMb != null && <p className="text-xs text-muted-foreground">Disku: {sub.diskUsedMb ?? '?'} / {sub.diskLimitMb} MB{sub.diskUsedMb && sub.diskLimitMb && sub.diskUsedMb / sub.diskLimitMb >= 0.9 ? <span className="text-orange-700"> — afër limitit, konsideroni një paketë më të madhe</span> : ''}</p>}
+            {sub.status === 'Active' && upgradeOptions.length > 0 && (
+              <Card className="p-3 text-sm space-y-2">
+                <p className="font-medium">Ndrysho paketën</p>
+                {sub.pendingUpgrade ? (
+                  <p className="text-xs text-amber-700">Keni një upgrade në pritje të pagesës ({formatCurrency(sub.pendingUpgrade.amount, cur(sub.currency))}). <button className="underline" onClick={() => onInvoice(sub.pendingUpgrade!.invoiceId)}>Paguaj faturën</button></p>
+                ) : (
+                  <>
+                    <Select value={upgradeId} onValueChange={(v) => { setUpgradeId(v); setQuote(null); }}><SelectTrigger><SelectValue placeholder="Zgjidh paketën e re" /></SelectTrigger><SelectContent>{upgradeOptions.map((p) => <SelectItem key={p.id} value={p.id}>{p.name} — {formatCurrency(p.pricing[sub.billingCycle as BillingCycle]!.price, p.currency)} / {CYCLE_LABELS[sub.billingCycle as BillingCycle].toLowerCase()}</SelectItem>)}</SelectContent></Select>
+                    {quote ? (
+                      <div className="text-xs space-y-1">
+                        <p>{quote.amount > 0 ? <>Për {quote.daysRemaining} ditët e mbetura paguani vetëm diferencën: <strong>{formatCurrency(quote.amount, quote.currency)}</strong>. Paketa ndryshon sapo paguhet.</> : 'Asgjë për të paguar tani — çmimi i ri vlen nga rinovimi tjetër.'}</p>
+                        <Button size="sm" disabled={!!busy} onClick={() => run('upg', async () => { const r = await hostingApi<{ applied: boolean; invoiceId?: string }>('sub.requestUpgrade', { subscriptionId: sub.id, productId: upgradeId }); if (r.applied) toast({ title: 'Paketa u ndryshua' }); else if (r.invoiceId) onInvoice(r.invoiceId); })}>{quote.amount > 0 ? 'Vazhdo te pagesa' : 'Konfirmo'}</Button>
+                      </div>
+                    ) : <Button size="sm" variant="outline" disabled={!upgradeId || !!busy} onClick={() => run('quote', async () => { const r = await hostingApi<{ quote: any }>('sub.quoteUpgrade', { subscriptionId: sub.id, productId: upgradeId }); setQuote(r.quote); })}>Shiko çmimin</Button>}
+                  </>
+                )}
+              </Card>
+            )}
+            {(backups || []).length > 0 && (
+              <Card className="p-3 text-sm space-y-1">
+                <p className="font-medium flex items-center gap-1"><HardDrive className="w-4 h-4" />Backup-et tuaja</p>
+                <ul className="text-xs text-muted-foreground space-y-0.5">{[...(backups || [])].sort((a, b) => (getTimestampMs(b.createdAt) || 0) - (getTimestampMs(a.createdAt) || 0)).slice(0, 5).map((b) => <li key={b.id}>{fmtDate(b.createdAt)} · {b.kind === 'scheduled' ? 'automatik' : b.kind}</li>)}</ul>
+                <p className="text-[11px] text-muted-foreground">Për rikthim nga një backup, na kontaktoni nga chat-i.</p>
+              </Card>
+            )}
             {password && <Card className="p-3 text-sm bg-amber-50 border-amber-200">Fjalëkalimi i ri (ruajeni, shfaqet vetëm një herë): <code className="font-mono select-all">{password}</code></Card>}
             {sub.status !== 'Terminated' && sub.status !== 'Cancelled' && (
               <label className="flex items-center justify-between gap-2 text-sm pt-2 border-t"><span>Anulo në fund të periudhës aktuale<br /><span className="text-xs text-muted-foreground">Nuk lëshohet faturë tjetër; llogaria fshihet më {fmtDate(sub.nextDueDate)}.</span></span><Switch checked={!!sub.cancelAtPeriodEnd} disabled={!!busy} onCheckedChange={(v) => run('cancel', async () => { await hostingApi('sub.cancelAtPeriodEnd', { subscriptionId: sub.id, value: v }); toast({ title: v ? 'Kërkesa e anulimit u regjistrua' : 'Kërkesa e anulimit u tërhoq' }); })} /></label>
@@ -165,11 +195,13 @@ const PortalSubscriptionDialog: React.FC<{ sub: Subscription; onClose: () => voi
   );
 };
 
-const PortalDomainDialog: React.FC<{ dom: Domain; onClose: () => void }> = ({ dom, onClose }) => {
+const PortalDomainDialog: React.FC<{ dom: Domain; subs: Subscription[]; onClose: () => void }> = ({ dom, subs, onClose }) => {
   const { toast } = useToast();
   const [busy, setBusy] = useState(false);
   const [ns, setNs] = useState((dom.nameservers || []).join('\n'));
   const [auth, setAuth] = useState<string | null>(null);
+  const [target, setTarget] = useState(dom.subscriptionId || '');
+  const [customIp, setCustomIp] = useState(dom.dnsTargetIp || '');
   const isOurs = dom.source === 'fivocrm' && dom.registrar === 'dynadot';
   const run = async (fn: () => Promise<void>) => { setBusy(true); try { await fn(); } catch (e) { toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' }); } finally { setBusy(false); } };
   return (
@@ -180,6 +212,15 @@ const PortalDomainDialog: React.FC<{ dom: Domain; onClose: () => void }> = ({ do
           <div className="space-y-3">
             <div className="space-y-1"><Label className="text-xs">Nameservers (një për rresht)</Label><Textarea rows={3} value={ns} onChange={(e) => setNs(e.target.value)} /><Button size="sm" variant="outline" disabled={busy} onClick={() => run(async () => { await hostingApi('domain.setNameservers', { domainId: dom.id, nameservers: ns.split(/\s+/).filter(Boolean) }); toast({ title: 'Nameservers u ruajtën' }); })}>Ruaj nameservers</Button></div>
             <label className="flex items-center justify-between gap-2 text-sm"><span>Rinovim automatik<br /><span className="text-xs text-muted-foreground">Merrni faturën 30 ditë para skadencës; domain-i rinovohet kur paguhet.</span></span><Switch checked={dom.autoRenew !== false} disabled={busy} onCheckedChange={(v) => run(async () => { await hostingApi('domain.setAutoRenew', { domainId: dom.id, value: v }); })} /></label>
+            <Card className="p-3 space-y-2">
+              <p className="text-sm font-medium">Drejto domain-in te faqja juaj (DNS i Dynadot)</p>
+              <p className="text-xs text-muted-foreground">Vendos rekordet A (apex + www) te IP-ja e hosting-ut tuaj. Alternativa: nameservers-at më sipër.{dom.dnsMode === 'dynadot-dns' && dom.dnsTargetIp ? ` Aktualisht → ${dom.dnsTargetIp}.` : ''}</p>
+              <div className="grid sm:grid-cols-2 gap-2">
+                <Select value={target} onValueChange={setTarget}><SelectTrigger><SelectValue placeholder="Llogaria hosting" /></SelectTrigger><SelectContent>{subs.map((s) => <SelectItem key={s.id} value={s.id}>{s.domain || s.productName}</SelectItem>)}</SelectContent></Select>
+                <Input placeholder="ose IP manuale, p.sh. 185.1.2.3" value={customIp} onChange={(e) => setCustomIp(e.target.value)} />
+              </div>
+              <Button size="sm" variant="outline" disabled={busy || (!target && !customIp.trim())} onClick={() => run(async () => { const r = await hostingApi<{ ip: string }>('domain.pointToHosting', { domainId: dom.id, ...(customIp.trim() ? { ip: customIp.trim() } : { subscriptionId: target }) }); toast({ title: `Domain-i u drejtua te ${r.ip}`, description: 'Ndryshimi mund të duhet deri në disa orë të përhapet.' }); })}>Drejto</Button>
+            </Card>
             <div className="flex flex-wrap gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => run(async () => { const r = await hostingApi<{ authCode: string }>('domain.authCode', { domainId: dom.id }); setAuth(r.authCode); })}><KeyRound className="w-4 h-4 mr-1" />Kodi i transferimit (EPP)</Button></div>
             {auth && <Card className="p-3 text-sm bg-amber-50 border-amber-200">Kodi EPP: <code className="font-mono select-all">{auth}</code></Card>}
           </div>
@@ -198,9 +239,16 @@ const PortalOrderDialog: React.FC<{ open: boolean; onOpenChange: (o: boolean) =>
   const [results, setResults] = useState<DomainCheckRow[]>([]);
   const [checking, setChecking] = useState(false);
   const [busy, setBusy] = useState(false);
-  useEffect(() => { if (!open) { setLines([]); setSearch(''); setResults([]); } }, [open]);
+  const [couponCode, setCouponCode] = useState('');
+  const [serverQuote, setServerQuote] = useState<{ order: any; couponError: string | null } | null>(null);
+  useEffect(() => { if (!open) { setLines([]); setSearch(''); setResults([]); setCouponCode(''); setServerQuote(null); } }, [open]);
+  useEffect(() => { setServerQuote(null); }, [lines, couponCode]);
+  const fetchQuote = async () => {
+    try { const r = await hostingApi<{ order: any; couponError: string | null }>('order.quote', { lines, couponCode }); setServerQuote(r); if (r.couponError) toast({ title: 'Kuponi nuk u pranua', description: r.couponError, variant: 'destructive' }); else if (r.order.couponDiscount) toast({ title: `Kuponi u aplikua: −${formatCurrency(r.order.couponDiscount, r.order.currency)}` }); }
+    catch (e) { toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' }); }
+  };
   const tldPricing: TldPricing[] = tlds.map((t) => ({ tld: t.tld, currency: t.currency, registerPrice: t.registerPrice, renewPrice: t.renewPrice, transferPrice: t.transferPrice, minYears: t.minYears, maxYears: t.maxYears, status: 'Active' }));
-  const inputs: OrderLineInput[] = lines.map((l) => { if (l.kind === 'hosting') { const p = products.find((x) => x.id === l.productId); return { kind: 'hosting', productId: p?.id, productName: p?.name, cycle: l.cycle, pricing: p ? { ...(p.pricing as any), currency: p.currency } : null, domainName: l.domainName }; } return { kind: l.kind, domainName: l.domainName, years: l.years, authCode: l.authCode }; });
+  const inputs: OrderLineInput[] = lines.map((l) => { if (l.kind === 'hosting') { const p = products.find((x) => x.id === l.productId); return { kind: 'hosting', productId: p?.id, productName: p?.name, cycle: l.cycle, pricing: p ? { ...(p.pricing as any), currency: p.currency } : null, domainName: l.domainName, freeDomainTlds: p?.freeDomainTlds || null, freeDomainMinCycle: p?.freeDomainMinCycle || null }; } return { kind: l.kind, domainName: l.domainName, years: l.years, authCode: l.authCode }; });
   const priced = priceOrder(inputs, tldPricing);
   const setLine = (i: number, patch: Partial<DraftLine>) => setLines((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
 
@@ -217,7 +265,7 @@ const PortalOrderDialog: React.FC<{ open: boolean; onOpenChange: (o: boolean) =>
   const submit = async () => {
     if (!priced.ok) { toast({ title: ORDER_ERROR_LABELS[priced.error], variant: 'destructive' }); return; }
     setBusy(true);
-    try { const r = await hostingApi<{ invoiceId: string | null; orderNumber: string }>('order.create', { lines }); toast({ title: `Porosia ${r.orderNumber} u krijua`, description: r.invoiceId ? 'Paguani faturën për të aktivizuar shërbimet.' : undefined }); onCreated(r.invoiceId); }
+    try { const r = await hostingApi<{ invoiceId: string | null; orderNumber: string }>('order.create', { lines, couponCode: couponCode.trim() || undefined }); toast({ title: `Porosia ${r.orderNumber} u krijua`, description: r.invoiceId ? 'Paguani faturën për të aktivizuar shërbimet.' : undefined }); onCreated(r.invoiceId); }
     catch (e) { toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' }); }
     finally { setBusy(false); }
   };
@@ -255,6 +303,7 @@ const PortalOrderDialog: React.FC<{ open: boolean; onOpenChange: (o: boolean) =>
                 <Card key={p.id} className="p-3 space-y-1">
                   <div className="flex items-center justify-between"><span className="font-semibold">{p.name}</span>{first && <span className="text-sm">{formatCurrency(p.pricing[first]!.price, p.currency)} <span className="text-xs text-muted-foreground">/ {CYCLE_LABELS[first].toLowerCase()}</span></span>}</div>
                   {p.description && <p className="text-xs text-muted-foreground">{p.description}</p>}
+                  {p.freeDomainTlds?.length ? <p className="text-xs text-emerald-700">🎁 Domain falas (.{p.freeDomainTlds.join(', .')}) me pagesë {CYCLE_LABELS[p.freeDomainMinCycle || 'annually'].toLowerCase()}</p> : null}
                   {p.features?.length ? <ul className="text-xs text-muted-foreground list-disc pl-4">{p.features.slice(0, 4).map((f, i) => <li key={i}>{f}</li>)}</ul> : null}
                   <Button size="sm" variant="outline" className="w-full" onClick={() => setLines((ls) => [...ls, { kind: 'hosting', productId: p.id, cycle: first, domainName: lines.find((l) => l.kind === 'domain-register')?.domainName || '', years: 1 }])}><Plus className="w-4 h-4 mr-1" />Shto</Button>
                 </Card>
@@ -289,8 +338,20 @@ const PortalOrderDialog: React.FC<{ open: boolean; onOpenChange: (o: boolean) =>
           </div>
         )}
 
+        {lines.length > 0 && priced.ok && (
+          <div className="flex gap-2 items-center">
+            <Input className="uppercase" placeholder="Kod kuponi (nëse keni)" value={couponCode} onChange={(e) => setCouponCode(e.target.value.toUpperCase())} />
+            <Button variant="outline" size="sm" onClick={fetchQuote} disabled={!couponCode.trim()}><Ticket className="w-4 h-4 mr-1" />Apliko</Button>
+          </div>
+        )}
         <Card className="p-3 text-sm">
-          {lines.length === 0 ? <p className="text-muted-foreground">Shporta është bosh.</p> : priced.ok ? (<>{priced.order.lines.map((l, i) => <div key={i} className="flex justify-between"><span>{l.description}</span><span>{formatCurrency(l.total, l.currency)}</span></div>)}<div className="flex justify-between font-semibold border-t mt-2 pt-2"><span>Totali</span><span>{formatCurrency(priced.order.total, priced.order.currency)}</span></div></>) : <p className="text-orange-700">{ORDER_ERROR_LABELS[priced.error]}</p>}
+          {lines.length === 0 ? <p className="text-muted-foreground">Shporta është bosh.</p> : (() => { const o = serverQuote?.order || (priced.ok ? priced.order : null); if (!o) return <p className="text-orange-700">{!priced.ok ? ORDER_ERROR_LABELS[priced.error] : ''}</p>; return (
+            <>
+              {o.lines.map((l: any, i: number) => <div key={i} className="flex justify-between"><span>{l.description}{l.discount ? <span className="text-emerald-700 text-xs ml-1">−{formatCurrency(l.discount, l.currency)} {l.discountReason === 'free-domain' ? '(domain falas)' : ''}</span> : null}</span><span>{formatCurrency(l.total, l.currency)}</span></div>)}
+              {o.couponCode && <div className="flex justify-between text-emerald-700"><span>Kupon {o.couponCode}</span><span>−{formatCurrency(o.couponDiscount || 0, o.currency)}</span></div>}
+              <div className="flex justify-between font-semibold border-t mt-2 pt-2"><span>Totali</span><span>{formatCurrency(o.total, o.currency)}</span></div>
+            </>
+          ); })()}
         </Card>
         <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Anulo</Button><Button onClick={submit} disabled={busy || !priced.ok}>{busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}Porosit dhe paguaj</Button></DialogFooter>
       </DialogContent>

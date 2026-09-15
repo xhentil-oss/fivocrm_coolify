@@ -633,6 +633,10 @@ export interface OrderLineInput {
   years?: number;
   /** transfer: EPP / auth code */
   authCode?: string;
+  /** hosting: TLDs (no dot) the package gives away for the FIRST year… */
+  freeDomainTlds?: string[] | null;
+  /** …when bought on at least this cycle (default annually). */
+  freeDomainMinCycle?: BillingCycle | null;
 }
 
 export interface OrderLine {
@@ -645,6 +649,9 @@ export interface OrderLine {
   years?: number;
   unitPrice: number;
   setupFee: number;
+  /** Promotions (free first-year domain, coupon) — already subtracted from `total`. */
+  discount?: number;
+  discountReason?: string;
   total: number;
   currency: Currency;
   authCode?: string;
@@ -665,7 +672,12 @@ export type OrderValidationError =
 
 export interface PricedOrder {
   lines: OrderLine[];
+  /** Sum of line totals BEFORE promotions. */
   subtotal: number;
+  /** Free-domain + coupon discounts, total. */
+  discountTotal: number;
+  couponCode?: string;
+  couponDiscount?: number;
   total: number;
   currency: Currency;
 }
@@ -678,6 +690,7 @@ export function priceOrder(
   if (!inputs.length) return { ok: false, error: 'empty' };
   const lines: OrderLine[] = [];
   const seenDomains = new Set<string>();
+  const freeDomainRules: Array<{ tlds: string[]; minCycle: BillingCycle; cycle: BillingCycle }> = [];
   for (let i = 0; i < inputs.length; i++) {
     const inp = inputs[i];
     if (inp.kind === 'hosting') {
@@ -701,6 +714,7 @@ export function priceOrder(
         total: round2(p.price + (p.setupFee ?? 0)),
         currency,
       });
+      freeDomainRules.push({ tlds: (inp.freeDomainTlds || []).map(normalizeTld).filter(Boolean), minCycle: inp.freeDomainMinCycle || 'annually', cycle: inp.cycle });
     } else {
       const dom = parseDomain(inp.domainName);
       if (!dom) return { ok: false, error: 'invalid-domain', index: i };
@@ -729,7 +743,211 @@ export function priceOrder(
   const currency = lines[0].currency;
   if (lines.some((l) => l.currency !== currency)) return { ok: false, error: 'mixed-currency' };
   const subtotal = round2(lines.reduce((s, l) => s + l.total, 0));
-  return { ok: true, order: { lines, subtotal, total: subtotal, currency } };
+
+  // Promotion: "domain falas me hosting vjetor". ONE domain-register line, first
+  // year only, when a hosting line in the same order carries a rule whose TLD list
+  // contains it and whose cycle is long enough. Renewals bill the normal price.
+  for (const rule of freeDomainRules) {
+    if (!rule.tlds.length || CYCLE_MONTHS[rule.cycle] < CYCLE_MONTHS[rule.minCycle]) continue;
+    const target = lines.find((l) => l.kind === 'domain-register' && !l.discount && rule.tlds.includes(parseDomain(l.domainName)?.tld || ''));
+    if (!target) continue;
+    const firstYear = round2(target.unitPrice / Math.max(1, target.years || 1));
+    target.discount = firstYear;
+    target.discountReason = 'free-domain';
+    target.total = round2(target.total - firstYear);
+    break;
+  }
+  const discountTotal = round2(lines.reduce((s, l) => s + (l.discount || 0), 0));
+  const total = round2(lines.reduce((s, l) => s + l.total, 0));
+  return { ok: true, order: { lines, subtotal, discountTotal, total, currency } };
+}
+
+// ── Coupons ────────────────────────────────────────────────────────────────────
+
+export interface CouponFacts {
+  code: string;
+  type: 'percent' | 'fixed';
+  value: number;
+  currency?: Currency | null;
+  /** Which lines it discounts. */
+  appliesTo: 'all' | 'hosting' | 'domains';
+  status?: 'Active' | 'Archived' | string;
+  validFrom?: Date | null;
+  validUntil?: Date | null;
+  maxUses?: number | null;
+  uses?: number;
+  minTotal?: number | null;
+}
+
+export type CouponError =
+  | 'coupon-not-found'
+  | 'coupon-inactive'
+  | 'coupon-not-started'
+  | 'coupon-expired'
+  | 'coupon-exhausted'
+  | 'coupon-min-total'
+  | 'coupon-currency'
+  | 'coupon-not-applicable';
+
+export const COUPON_ERROR_LABELS: Record<CouponError, string> = {
+  'coupon-not-found': 'Kuponi nuk ekziston',
+  'coupon-inactive': 'Kuponi nuk është aktiv',
+  'coupon-not-started': 'Kuponi nuk ka filluar ende',
+  'coupon-expired': 'Kuponi ka skaduar',
+  'coupon-exhausted': 'Kuponi është përdorur maksimalisht',
+  'coupon-min-total': 'Porosia nuk arrin minimumin e kuponit',
+  'coupon-currency': 'Kuponi është në monedhë tjetër',
+  'coupon-not-applicable': 'Kuponi nuk vlen për këta artikuj',
+};
+
+export function normalizeCouponCode(raw: string | undefined | null): string {
+  return String(raw || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 32);
+}
+
+/** Apply a coupon to a priced order. Percent/fixed over eligible lines, first invoice only. */
+export function applyCoupon(order: PricedOrder, coupon: CouponFacts | null | undefined, now: Date): { ok: true; order: PricedOrder } | { ok: false; error: CouponError } {
+  if (!coupon) return { ok: false, error: 'coupon-not-found' };
+  if (coupon.status && coupon.status !== 'Active') return { ok: false, error: 'coupon-inactive' };
+  if (coupon.validFrom && now < coupon.validFrom) return { ok: false, error: 'coupon-not-started' };
+  if (coupon.validUntil && now > coupon.validUntil) return { ok: false, error: 'coupon-expired' };
+  if (coupon.maxUses != null && coupon.maxUses > 0 && (coupon.uses || 0) >= coupon.maxUses) return { ok: false, error: 'coupon-exhausted' };
+  if (coupon.type === 'fixed' && coupon.currency && coupon.currency !== order.currency) return { ok: false, error: 'coupon-currency' };
+  if (coupon.minTotal != null && order.total < coupon.minTotal) return { ok: false, error: 'coupon-min-total' };
+  const eligible = order.lines.filter((l) =>
+    coupon.appliesTo === 'all' || (coupon.appliesTo === 'hosting' ? l.kind === 'hosting' : l.kind !== 'hosting'));
+  const base = round2(eligible.reduce((s, l) => s + l.total, 0));
+  if (!eligible.length || base <= 0) return { ok: false, error: 'coupon-not-applicable' };
+  const raw = coupon.type === 'percent' ? base * Math.min(100, Math.max(0, coupon.value)) / 100 : Math.max(0, coupon.value);
+  const discount = round2(Math.min(base, raw));
+  if (discount <= 0) return { ok: false, error: 'coupon-not-applicable' };
+  // Spread proportionally so each line's total stays honest (invoice items mirror them).
+  let left = discount;
+  const lines = order.lines.map((l, i) => {
+    if (!eligible.includes(l)) return l;
+    const isLast = eligible[eligible.length - 1] === l;
+    const share = isLast ? left : round2(discount * (l.total / base));
+    left = round2(left - share);
+    void i;
+    return { ...l, discount: round2((l.discount || 0) + share), discountReason: l.discountReason ? `${l.discountReason}+coupon` : 'coupon', total: round2(l.total - share) };
+  });
+  return {
+    ok: true,
+    order: {
+      ...order, lines, couponCode: normalizeCouponCode(coupon.code), couponDiscount: discount,
+      discountTotal: round2(order.discountTotal + discount), total: round2(order.total - discount),
+    },
+  };
+}
+
+// ── Proration (package upgrade mid-period) ─────────────────────────────────────
+
+export interface ProrationInput {
+  oldPrice: number;
+  newPrice: number;
+  cycle: BillingCycle;
+  nextDueDate: Date;
+  now: Date;
+}
+
+export interface ProrationQuote {
+  daysRemaining: number;
+  daysInPeriod: number;
+  fraction: number;
+  /** Positive = the customer owes this now; ≤ 0 = downgrade, nothing to bill. */
+  amount: number;
+}
+
+/**
+ * Charge the price DIFFERENCE for the days left in the current period. The period
+ * is reconstructed from the due date minus one cycle. Never negative-bills: a
+ * downgrade applies from the next invoice and refunds nothing (WHMCS default).
+ */
+export function prorationQuote(inp: ProrationInput): ProrationQuote {
+  const due = utcNoon(inp.nextDueDate);
+  const periodStart = addMonthsClamped(due, -CYCLE_MONTHS[inp.cycle]);
+  const daysInPeriod = Math.max(1, daysBetween(periodStart, due));
+  const daysRemaining = Math.min(daysInPeriod, Math.max(0, daysBetween(inp.now, due)));
+  const fraction = daysRemaining / daysInPeriod;
+  const diff = (inp.newPrice || 0) - (inp.oldPrice || 0);
+  const amount = diff > 0 ? round2(diff * fraction) : 0;
+  return { daysRemaining, daysInPeriod, fraction: Math.round(fraction * 10000) / 10000, amount };
+}
+
+// ── Provisioning retry (exponential backoff) ───────────────────────────────────
+
+export const PROVISION_RETRY_DELAYS_MS: readonly number[] = [15 * 60_000, 60 * 60_000, 4 * 3_600_000, 12 * 3_600_000, 24 * 3_600_000];
+
+/** Delay before retry number `attempt` (1-based); null = give up, a human must act. */
+export function nextRetryDelayMs(attempt: number): number | null {
+  if (!Number.isFinite(attempt) || attempt < 1) return PROVISION_RETRY_DELAYS_MS[0];
+  return attempt > PROVISION_RETRY_DELAYS_MS.length ? null : PROVISION_RETRY_DELAYS_MS[attempt - 1];
+}
+
+// ── Usage alarms ───────────────────────────────────────────────────────────────
+
+export type UsageAlertLevel = 'warning' | 'critical' | null;
+
+/** ≥ 90 % of the quota = warning, ≥ 97 % = critical; unlimited or unknown = none. */
+export function usageAlertLevel(usedMb: number | null | undefined, limitMb: number | null | undefined): UsageAlertLevel {
+  if (!usedMb || !limitMb || limitMb <= 0) return null;
+  const pct = usedMb / limitMb;
+  if (pct >= 0.97) return 'critical';
+  if (pct >= 0.9) return 'warning';
+  return null;
+}
+
+// ── Expiry report (weekly digest) ──────────────────────────────────────────────
+
+export interface ExpiryReportRow {
+  id: string;
+  name: string;
+  customerId?: string | null;
+  date: Date;
+  daysLeft: number;
+  amount: number;
+  currency?: string | null;
+}
+
+export interface ExpiryReport {
+  domainsWithin30: ExpiryReportRow[];
+  domainsWithin60: ExpiryReportRow[];
+  subscriptionsDueWithin30: ExpiryReportRow[];
+  unpaidRenewals: ExpiryReportRow[];
+  suspended: ExpiryReportRow[];
+  total: number;
+}
+
+export function buildExpiryReport(
+  subs: ReadonlyArray<{ id: string; source?: string; status: string; domain?: string | null; productName?: string; customerId?: string | null; nextDueDate: Date | null; recurringAmount?: number; currency?: string | null; currentInvoiceId?: string | null }>,
+  domains: ReadonlyArray<{ id: string; source?: string; status: string; domainName: string; customerId?: string | null; expiryDate: Date | null; recurringAmount?: number; currency?: string | null }>,
+  now: Date,
+): ExpiryReport {
+  const r: ExpiryReport = { domainsWithin30: [], domainsWithin60: [], subscriptionsDueWithin30: [], unpaidRenewals: [], suspended: [], total: 0 };
+  for (const d of domains) {
+    if (d.source && d.source !== 'fivocrm') continue;
+    if (!d.expiryDate || ['Expired', 'Cancelled', 'Transferred Away'].includes(d.status)) continue;
+    const daysLeft = daysBetween(now, d.expiryDate);
+    const row: ExpiryReportRow = { id: d.id, name: d.domainName, customerId: d.customerId ?? null, date: d.expiryDate, daysLeft, amount: d.recurringAmount || 0, currency: d.currency ?? null };
+    if (daysLeft <= 30) r.domainsWithin30.push(row);
+    else if (daysLeft <= 60) r.domainsWithin60.push(row);
+  }
+  for (const s of subs) {
+    if (s.source && s.source !== 'fivocrm') continue;
+    if (['Terminated', 'Cancelled', 'Pending'].includes(s.status)) continue;
+    const name = s.domain || s.productName || s.id;
+    if (s.status === 'Suspended') {
+      r.suspended.push({ id: s.id, name, customerId: s.customerId ?? null, date: s.nextDueDate || now, daysLeft: s.nextDueDate ? daysBetween(now, s.nextDueDate) : 0, amount: s.recurringAmount || 0, currency: s.currency ?? null });
+    }
+    if (!s.nextDueDate) continue;
+    const daysLeft = daysBetween(now, s.nextDueDate);
+    const row: ExpiryReportRow = { id: s.id, name, customerId: s.customerId ?? null, date: s.nextDueDate, daysLeft, amount: s.recurringAmount || 0, currency: s.currency ?? null };
+    if (s.currentInvoiceId && daysLeft < 0) r.unpaidRenewals.push(row);
+    else if (daysLeft >= 0 && daysLeft <= 30) r.subscriptionsDueWithin30.push(row);
+  }
+  const byDays = (a: ExpiryReportRow, b: ExpiryReportRow) => a.daysLeft - b.daysLeft;
+  r.domainsWithin30.sort(byDays); r.domainsWithin60.sort(byDays); r.subscriptionsDueWithin30.sort(byDays); r.unpaidRenewals.sort(byDays);
+  r.total = r.domainsWithin30.length + r.domainsWithin60.length + r.subscriptionsDueWithin30.length + r.unpaidRenewals.length + r.suspended.length;
+  return r;
 }
 
 export const ORDER_ERROR_LABELS: Record<OrderValidationError, string> = {

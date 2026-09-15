@@ -31,14 +31,17 @@ import { decryptSecret } from './_secretCrypto.js';
 import {
   CYCLE_LABELS, DEFAULT_LIFECYCLE, dayKey, decideDomain, decideSubscription, deriveCpanelUsername,
   generateAccountPassword, normalizeLifecycleConfig, nextDueDate, parseDomain, renewSubscriptionPatch,
-  renewalInvoiceId, utcNoon, addYearsClamped, isBillingCycle, cycleFromWhmcs,
+  renewalInvoiceId, utcNoon, addYearsClamped, isBillingCycle, cycleFromWhmcs, suggestSellPrice, prorationQuote,
+  nextRetryDelayMs, usageAlertLevel, buildExpiryReport, normalizeTld, cyclePrice,
   type BillingCycle, type DomainFacts, type LifecycleConfig, type SubscriptionFacts,
 } from './_hostingEngine.js';
+import { managerIdsForBusiness } from './_staffRecipients.js';
 import {
   ProviderError, redactProviderError, isWhmAccountExists,
   whmCreateAccount, whmSuspendAccount, whmUnsuspendAccount, whmTerminateAccount, whmChangePackage, whmBackupAccount,
   whmSetPassword, whmCreateSession, whmAccountSummary, whmListAccounts, whmListPackages, whmVersion, normalizeHostname,
   dynadotRegister, dynadotRenew, dynadotTransfer, dynadotDomainInfo, dynadotSetNameservers, dynadotAccountInfo,
+  dynadotTldPrices, dynadotSetDnsToIp,
   type WhmServer,
 } from './_hostingProviders.js';
 
@@ -438,22 +441,32 @@ export async function provisionOrder(orderId: string, actorUid: string | null = 
 
   const allDone = lines.every((l) => l.provisionStatus === 'provisioned' || l.provisionStatus === 'pending');
   const status = allDone ? 'Active' : 'Failed';
+  // Transient provider failures retry on their own with exponential backoff
+  // (15m → 1h → 4h → 12h → 24h); after the table a human must act.
+  const retryCount = allDone ? 0 : (Number(order.retryCount) || 0) + 1;
+  const delay = allDone ? null : nextRetryDelayMs(retryCount);
   await ref.update({
     status, lines,
     lastError: errors.length ? errors.join(' | ').slice(0, 900) : null,
-    ...(allDone ? { provisionedAt: Timestamp.now() } : {}),
+    ...(allDone ? { provisionedAt: Timestamp.now(), retryCount: 0, nextRetryAt: null, retryExhausted: false } : {
+      retryCount, nextRetryAt: delay ? Timestamp.fromDate(new Date(Date.now() + delay)) : null, retryExhausted: delay === null,
+    }),
     updatedAt: Timestamp.now(),
   });
 
   if (errors.length) {
-    await notifyMany(await staffRecipients(businessId, order.createdByUserId), {
-      type: 'hosting_provision_failed',
-      title: `⚠️ Aktivizimi i porosisë ${order.orderNumber || ''} dështoi`,
-      message: errors[0].slice(0, 200),
-      actionUrl: '/app/hosting?tab=orders',
-      actionLabel: 'Shiko porositë',
-      businessId, teamId, customerId: order.customerId,
-    });
+    // Tell staff on the FIRST failure and when retries are exhausted — not on
+    // every automatic attempt in between.
+    if (retryCount === 1 || delay === null) {
+      await notifyMany(await staffRecipients(businessId, order.createdByUserId), {
+        type: 'hosting_provision_failed',
+        title: delay === null ? `⛔ Porosia ${order.orderNumber || ''}: ri-provat u shteruan` : `⚠️ Aktivizimi i porosisë ${order.orderNumber || ''} dështoi`,
+        message: `${errors[0].slice(0, 160)}${delay ? ` — riprovohet automatikisht pas ${Math.round(delay / 60_000)} min.` : ' — nevojitet ndërhyrje.'}`,
+        actionUrl: '/app/hosting?tab=orders',
+        actionLabel: 'Shiko porositë',
+        businessId, teamId, customerId: order.customerId,
+      });
+    }
   } else if (portalUid) {
     await notifyMany([portalUid], {
       type: 'hosting_provisioned',
@@ -685,7 +698,9 @@ export async function onHostingInvoicePaid(invoiceId: string, actorUid: string |
     }
   }
   if (inv.subscriptionId) {
-    if (await applySubscriptionRenewal(String(inv.subscriptionId), invoiceId, actorUid)) handled.push('subscription-renewed');
+    if (inv.hostingUpgrade) {
+      if (await applyPendingUpgrade(String(inv.subscriptionId), invoiceId, actorUid)) handled.push('subscription-upgraded');
+    } else if (await applySubscriptionRenewal(String(inv.subscriptionId), invoiceId, actorUid)) handled.push('subscription-renewed');
   }
   if (inv.domainId) {
     if (await applyDomainRenewal(String(inv.domainId), invoiceId, actorUid)) handled.push('domain-renewed');
@@ -857,6 +872,7 @@ export async function terminateSubscription(subscriptionId: string, reason: stri
         try {
           const b = await whmBackupAccount(server.whm, String(s.cpanelUsername));
           await ref.update({ lastBackupAt: Timestamp.now(), lastBackupPath: b.path ?? null, updatedAt: Timestamp.now() });
+          await db.collection('hostingBackups').add({ businessId: s.businessId ?? null, teamId: s.teamId ?? null, customerId: s.customerId ?? null, subscriptionId, serverId: s.serverId, cpanelUsername: s.cpanelUsername, domain: s.domain || null, kind: 'pre-terminate', path: b.path ?? null, ok: true, createdAt: Timestamp.now(), createdByUserId: actorUid });
           await logHostingEvent({ businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, subscriptionId, type: 'whm.pkgacct', ok: true, message: `Backup i ${s.cpanelUsername} para terminimit${b.path ? `: ${b.path}` : ''}`, actorUserId: actorUid });
         } catch (err) {
           const msg = redactProviderError(err);
@@ -1176,10 +1192,16 @@ export async function runHostingLifecycle(opts: { businessId?: string | null } =
 
   // 1. Orders whose invoice was paid by hand (Stripe calls us directly; this is the backstop).
   try {
-    const pending = await scoped(db.collection('hostingOrders').where('status', 'in', ['Pending', 'Paid'])).limit(200).get();
+    const pending = await scoped(db.collection('hostingOrders').where('status', 'in', ['Pending', 'Paid', 'Failed'])).limit(200).get();
     for (const doc of pending.docs) {
       const o = doc.data() as any;
       if (o.businessId && suspendedTenants.has(o.businessId)) { r.suspendedTenantsSkipped++; continue; }
+      if (o.status === 'Failed') {
+        // Automatic retry with backoff; exhausted or not-yet-due ones wait.
+        if (o.retryExhausted) { block('retry-exhausted'); continue; }
+        const nextAt = toDate(o.nextRetryAt);
+        if (nextAt && nextAt > now) { block('retry-not-due'); continue; }
+      }
       try {
         if (o.status === 'Pending') {
           if (!o.invoiceId) continue;
@@ -1217,6 +1239,13 @@ export async function runHostingLifecycle(opts: { businessId?: string | null } =
             if (await applySubscriptionRenewal(doc.id, String(s.currentInvoiceId), null)) { r.renewed++; tally(teamId, 'renewed'); }
           } catch (err) { r.errors++; tally(teamId, 'errors'); console.error('[hosting-lifecycle] renew', doc.id, err); }
           continue;
+        }
+      }
+      // An upgrade invoice settled by hand ("Paguar" at Faturat) — apply the package.
+      if (s.pendingUpgrade?.invoiceId) {
+        const up = await db.collection('invoices').doc(String(s.pendingUpgrade.invoiceId)).get();
+        if (up.exists && (up.data() as any).status === 'Paid') {
+          try { await applyPendingUpgrade(doc.id, String(s.pendingUpgrade.invoiceId), null); } catch (err) { r.errors++; console.error('[hosting-lifecycle] upgrade', doc.id, err); }
         }
       }
       const facts: SubscriptionFacts = {
@@ -1378,7 +1407,8 @@ export async function runHostingLifecycle(opts: { businessId?: string | null } =
 export async function runHostingSync(opts: { businessId?: string | null } = {}): Promise<Record<string, unknown>> {
   const scopeId = opts.businessId || null;
   const scoped = <T extends FirebaseFirestore.Query>(q: T): T => (scopeId ? q.where('businessId', '==', scopeId) : q) as T;
-  const out = { servers: 0, serversFailed: 0, domainsSynced: 0, domainsFailed: 0, transfersCompleted: 0, drift: 0, businessId: scopeId };
+  const out: Record<string, unknown> & { servers: number; serversFailed: number; domainsSynced: number; domainsFailed: number; transfersCompleted: number; drift: number; usageAlerts?: number; tldCostSyncs?: number } =
+    { servers: 0, serversFailed: 0, domainsSynced: 0, domainsFailed: 0, transfersCompleted: 0, drift: 0, usageAlerts: 0, tldCostSyncs: 0, businessId: scopeId };
 
   const servers = await scoped(db.collection('hostingServers').where('status', '==', 'Active')).limit(100).get();
   for (const doc of servers.docs) {
@@ -1391,16 +1421,46 @@ export async function runHostingSync(opts: { businessId?: string | null } = {}):
       const accts = await whmListAccounts(server.whm);
       const byUser = new Map(accts.map((a) => [a.user, a]));
       const subs = await db.collection('subscriptions').where('serverId', '==', doc.id).where('source', '==', 'fivocrm').get();
+      const DAY = 86_400_000;
       for (const s of subs.docs) {
         const d = s.data() as any;
         if (!d.cpanelUsername || d.status === 'Terminated' || d.status === 'Cancelled' || d.status === 'Pending') continue;
         const a = byUser.get(String(d.cpanelUsername));
         const whmState = !a ? 'missing' : a.suspended ? 'Suspended' : 'Active';
+        const patch: Record<string, unknown> = { lastSyncAt: Timestamp.now() };
         if (whmState !== d.status) {
           out.drift++;
           await logHostingEvent({ businessId: d.businessId, teamId: d.teamId, customerId: d.customerId, subscriptionId: s.id, type: 'sync.drift', ok: false, message: `WHM: ${whmState}, FivoCRM: ${d.status} (${d.cpanelUsername})` });
+          // Someone changed the account outside FivoCRM (or it vanished): staff must
+          // know, once a day, not once per sync.
+          const last = toDate(d.driftAlertAt);
+          if (!last || Date.now() - last.getTime() > DAY) {
+            patch.driftAlertAt = Timestamp.now();
+            await notifyMany(await staffRecipients(d.businessId, d.createdByUserId), {
+              type: 'hosting_drift', title: `Mospërputhje WHM: ${d.domain || d.cpanelUsername}`,
+              message: whmState === 'missing' ? 'Llogaria nuk ekziston më në server, por FivoCRM e ka aktive.' : `WHM e ka "${whmState}", FivoCRM "${d.status}". Ndryshim jashtë FivoCRM?`,
+              actionUrl: '/app/hosting?tab=subscriptions', actionLabel: 'Shiko', businessId: d.businessId, teamId: d.teamId, customerId: d.customerId,
+            });
+          }
         }
-        if (a) await s.ref.update({ diskUsedMb: a.diskUsedMb ?? null, diskLimitMb: a.diskLimitMb ?? null, lastSyncAt: Timestamp.now() }).catch(() => {});
+        if (a) {
+          patch.diskUsedMb = a.diskUsedMb ?? null; patch.diskLimitMb = a.diskLimitMb ?? null;
+          const level = usageAlertLevel(a.diskUsedMb, a.diskLimitMb);
+          const last = toDate(d.usageAlertAt);
+          if (level && (!last || Date.now() - last.getTime() > DAY)) {
+            patch.usageAlertAt = Timestamp.now();
+            const pct = Math.round(((a.diskUsedMb || 0) / (a.diskLimitMb || 1)) * 100);
+            const portalUid = await portalUserIdFor(d.customerId);
+            await notifyMany([portalUid, ...(await staffRecipients(d.businessId, d.createdByUserId))], {
+              type: 'hosting_usage_alert', title: `${level === 'critical' ? '⛔' : '⚠️'} Disku ${pct}% — ${d.domain || d.cpanelUsername}`,
+              message: `${a.diskUsedMb} MB nga ${a.diskLimitMb} MB. ${level === 'critical' ? 'Faqja mund të ndalojë së funksionuari.' : 'Konsideroni një paketë më të madhe.'}`,
+              actionUrl: portalUid ? '/portal/hosting' : '/app/hosting?tab=subscriptions', actionLabel: 'Shiko',
+              businessId: d.businessId, teamId: d.teamId, customerId: d.customerId,
+            });
+            out.usageAlerts = (Number(out.usageAlerts) || 0) + 1;
+          }
+        }
+        await s.ref.update(patch).catch(() => {});
       }
     } catch (err) { console.error('[hosting-sync] drift check', doc.id, err); }
   }
@@ -1437,5 +1497,302 @@ export async function runHostingSync(opts: { businessId?: string | null } = {}):
       console.error('[hosting-sync] domain', d.domainName, redactProviderError(err));
     }
   }
+
+  // Weekly wholesale-cost refresh per tenant that has a TLD price list.
+  try {
+    const tldBiz = await scoped(db.collection('domainTlds').where('status', '==', 'Active')).select('businessId', 'teamId').limit(500).get();
+    const seen = new Set<string>();
+    for (const doc of tldBiz.docs) {
+      const d = doc.data() as any;
+      const bid = String(d.businessId || '');
+      if (!bid || seen.has(bid)) continue;
+      seen.add(bid);
+      const teamId = await teamIdForBusiness(bid, d.teamId);
+      if (!teamId) continue;
+      const ts = ((await db.collection('teamSettings').doc(teamId).get()).data() as any) || {};
+      const last = toDate(ts.hostingTldCostsSyncedAt);
+      if (last && Date.now() - last.getTime() < 7 * 86_400_000) continue;
+      const r = await syncTldCosts(bid, teamId, null).catch((err) => { console.error('[hosting-sync] tld costs', bid, redactProviderError(err)); return null; });
+      if (r) out.tldCostSyncs = (Number(out.tldCostSyncs) || 0) + 1;
+    }
+  } catch (err) { console.error('[hosting-sync] tld cost pass failed', err); }
   return out;
+}
+
+// ── TLD wholesale costs → suggested sell prices ────────────────────────────────
+
+export async function syncTldCosts(businessId: string, teamId: string, actorUid: string | null): Promise<{ updated: number; unmatched: string[]; belowCost: string[]; currency: string | null }> {
+  const apiKey = await dynadotKeyFor(teamId);
+  if (!apiKey) throw new Error('Çelësi i Dynadot nuk është konfiguruar');
+  const settings = ((await db.collection('teamSettings').doc(teamId).get()).data() as any) || {};
+  const marginPct = Number.isFinite(Number(settings.hostingTldMarginPct)) ? Number(settings.hostingTldMarginPct) : 40;
+  const currency = await dynadotCurrencyFor(teamId);
+  const prices = await dynadotTldPrices(apiKey, currency);
+  const byTld = new Map(prices.map((p) => [p.tld, p]));
+  const snap = await db.collection('domainTlds').where('businessId', '==', businessId).get();
+  let updated = 0;
+  const unmatched: string[] = [];
+  const belowCost: string[] = [];
+  const now = Timestamp.now();
+  for (const doc of snap.docs) {
+    const t = doc.data() as any;
+    const p = byTld.get(normalizeTld(t.tld));
+    if (!p || (p.register == null && p.renew == null)) { unmatched.push(String(t.tld)); continue; }
+    const sameCurrency = !!p.currency && p.currency === t.currency;
+    const suggestedRegister = p.register != null ? suggestSellPrice(p.register, marginPct) : null;
+    const suggestedRenew = p.renew != null ? suggestSellPrice(p.renew, marginPct) : (suggestedRegister ?? null);
+    const isBelow = sameCurrency && ((p.register != null && Number(t.registerPrice) < p.register) || (p.renew != null && Number(t.renewPrice) < p.renew));
+    if (isBelow) belowCost.push(String(t.tld));
+    await doc.ref.update({
+      costRegister: p.register, costRenew: p.renew ?? p.register, costTransfer: p.transfer,
+      costCurrency: p.currency, costSyncedAt: now,
+      suggestedRegisterPrice: suggestedRegister, suggestedRenewPrice: suggestedRenew, suggestedMarginPct: marginPct,
+      costCurrencyMismatch: !sameCurrency, belowCost: isBelow, updatedAt: now,
+    });
+    updated++;
+  }
+  await db.collection('teamSettings').doc(teamId).set({ hostingTldCostsSyncedAt: now, hostingTldCostsLastResult: { updated, unmatched: unmatched.slice(0, 30), belowCost } }, { merge: true });
+  await logHostingEvent({ businessId, teamId, type: 'dynadot.tld_price', ok: true, message: `Kostot e ${updated} TLD u sinkronizuan${belowCost.length ? ` — NËN KOSTO: ${belowCost.join(', ')}` : ''}`, actorUserId: actorUid });
+  if (belowCost.length) {
+    await notifyMany(await staffRecipients(businessId, null), {
+      type: 'hosting_drift', title: `TLD nën kosto: ${belowCost.join(', ')}`,
+      message: 'Çmimi i shitjes është më i ulët se kostoja te Dynadot. Apliko çmimet e propozuara te Hosting → TLD-të.',
+      actionUrl: '/app/hosting?tab=tlds', actionLabel: 'Shiko TLD-të', businessId, teamId,
+    });
+  }
+  return { updated, unmatched, belowCost, currency: currency || null };
+}
+
+// ── Package upgrade with proration ─────────────────────────────────────────────
+
+export async function quoteUpgrade(subscriptionId: string, productId: string, cycleIn: BillingCycle | null): Promise<{ amount: number; currency: 'ALL' | 'EUR'; oldPrice: number; newPrice: number; cycle: BillingCycle; daysRemaining: number; daysInPeriod: number; product: any }> {
+  const s = (await db.collection('subscriptions').doc(subscriptionId).get()).data() as any;
+  if (!s) throw new Error('Abonimi nuk u gjet');
+  if (s.source !== 'fivocrm') throw new Error('Abonimi nuk menaxhohet nga FivoCRM');
+  const p = (await db.collection('hostingProducts').doc(productId).get()).data() as any;
+  if (!p || p.status !== 'Active') throw new Error('Paketa nuk u gjet');
+  if (p.businessId !== s.businessId) throw new Error('Paketa i përket një biznesi tjetër');
+  if (s.serverId && p.serverId && s.serverId !== p.serverId) throw new Error('Paketa është në një server tjetër — migrimi nuk mbështetet');
+  const cycle: BillingCycle = cycleIn && isBillingCycle(cycleIn) ? cycleIn : (isBillingCycle(s.billingCycle) ? s.billingCycle : 'monthly');
+  const np = cyclePrice(p.pricing, cycle);
+  if (!np) throw new Error('Paketa nuk shitet me këtë cikël');
+  const due = toDate(s.nextDueDate);
+  const sameCycle = cycle === s.billingCycle;
+  // Proration only makes sense inside the SAME cycle; a cycle change applies from
+  // the next invoice with no charge now.
+  const q = due && sameCycle
+    ? prorationQuote({ oldPrice: Number(s.recurringAmount) || 0, newPrice: np.price, cycle, nextDueDate: due, now: new Date() })
+    : { amount: 0, daysRemaining: 0, daysInPeriod: 0, fraction: 0 };
+  return { amount: q.amount, currency: (p.currency === 'ALL' ? 'ALL' : 'EUR'), oldPrice: Number(s.recurringAmount) || 0, newPrice: np.price, cycle, daysRemaining: q.daysRemaining, daysInPeriod: q.daysInPeriod, product: { id: productId, name: p.name } };
+}
+
+/**
+ * Upgrade now. Owes something → invoice `hst_upg_<sub>_<day>` and the package
+ * changes when it is PAID (webhook / lifecycle). Owes nothing (downgrade, cycle
+ * change) → applied immediately, effective from the next invoice.
+ */
+export async function requestUpgrade(subscriptionId: string, productId: string, cycleIn: BillingCycle | null, actorUid: string | null, opts: { portal?: boolean } = {}): Promise<{ applied: boolean; invoiceId?: string; amount: number; currency: string }> {
+  const q = await quoteUpgrade(subscriptionId, productId, cycleIn);
+  const ref = db.collection('subscriptions').doc(subscriptionId);
+  const s = (await ref.get()).data() as any;
+  if (s.pendingUpgrade?.invoiceId) {
+    const inv = await db.collection('invoices').doc(String(s.pendingUpgrade.invoiceId)).get();
+    if (inv.exists && (inv.data() as any).status !== 'Paid' && (inv.data() as any).status !== 'Cancelled') {
+      return { applied: false, invoiceId: inv.id, amount: Number(s.pendingUpgrade.amount) || 0, currency: q.currency };
+    }
+  }
+  if (q.amount <= 0) {
+    await changeSubscriptionPackage(subscriptionId, productId, q.cycle, actorUid);
+    return { applied: true, amount: 0, currency: q.currency };
+  }
+  const teamId = await teamIdForBusiness(s.businessId, s.teamId);
+  const invoiceId = `hst_upg_${subscriptionId}_${dayKey(new Date())}`;
+  const label = `HST-U-${dayKey(new Date()).replace(/-/g, '')}-${subscriptionId.slice(-4).toUpperCase()}`;
+  const subject = `Upgrade ${s.productName} → ${q.product.name}${s.domain ? ` (${s.domain})` : ''}`;
+  await createHostingInvoice({
+    id: invoiceId, label, businessId: s.businessId ?? null, teamId, customerId: String(s.customerId), currency: q.currency, amount: q.amount,
+    dueDate: utcNoon(new Date(Date.now() + 7 * 86_400_000)),
+    notes: `Diferenca e paketës për ${q.daysRemaining} ditët e mbetura të periudhës aktuale (${q.daysInPeriod} ditë). Paketa ndryshon sapo paguhet.`,
+    items: [{ description: `${subject} — proratë ${q.daysRemaining}/${q.daysInPeriod} ditë`, quantity: 1, unitPrice: q.amount }],
+    link: { subscriptionId }, createdByUserId: actorUid,
+  });
+  await db.collection('invoices').doc(invoiceId).update({ hostingUpgrade: { productId, cycle: q.cycle, requestedBy: opts.portal ? 'portal' : 'staff' } }).catch(() => {});
+  await ref.update({ pendingUpgrade: { productId, cycle: q.cycle, invoiceId, amount: q.amount, requestedAt: Timestamp.now() }, updatedAt: Timestamp.now() });
+  await logHostingEvent({ businessId: s.businessId, teamId, customerId: s.customerId, subscriptionId, type: 'sub.upgradeRequested', ok: true, message: `${subject}: ${q.amount} ${q.currency} (proratë)`, actorUserId: actorUid });
+  await emailInvoiceToCustomer(invoiceId, String(s.customerId), teamId, { amount: q.amount, currency: q.currency, dueDate: new Date(Date.now() + 7 * 86_400_000), subject, label }).catch(() => {});
+  const portalUid = await portalUserIdFor(s.customerId);
+  await notifyMany([portalUid, ...(await staffRecipients(s.businessId, s.createdByUserId))], {
+    type: 'hosting_upgrade_invoice', title: `Faturë upgrade: ${q.product.name}`,
+    message: `${formatMoney(q.amount, q.currency)} për ditët e mbetura. Paketa ndryshon pas pagesës.`,
+    actionUrl: portalUid ? `/portal/invoices?invoice=${invoiceId}` : `/app/invoices?invoice=${invoiceId}`, actionLabel: 'Shiko faturën',
+    businessId: s.businessId ?? null, teamId, customerId: s.customerId ?? null,
+  });
+  return { applied: false, invoiceId, amount: q.amount, currency: q.currency };
+}
+
+export async function applyPendingUpgrade(subscriptionId: string, invoiceId: string, actorUid: string | null): Promise<boolean> {
+  const ref = db.collection('subscriptions').doc(subscriptionId);
+  const s = (await ref.get()).data() as any;
+  if (!s?.pendingUpgrade || s.pendingUpgrade.invoiceId !== invoiceId) return false;
+  await changeSubscriptionPackage(subscriptionId, String(s.pendingUpgrade.productId), isBillingCycle(s.pendingUpgrade.cycle) ? s.pendingUpgrade.cycle : null, actorUid);
+  await ref.update({ pendingUpgrade: null, updatedAt: Timestamp.now() });
+  const portalUid = await portalUserIdFor(s.customerId);
+  await notifyMany([portalUid], {
+    type: 'hosting_provisioned', title: 'Paketa u ndryshua ✓', message: 'Upgrade-i u aplikua pas pagesës.',
+    actionUrl: '/portal/hosting', actionLabel: 'Shiko', businessId: s.businessId, teamId: s.teamId, customerId: s.customerId,
+  });
+  return true;
+}
+
+// ── Scheduled backups ──────────────────────────────────────────────────────────
+
+export async function backupSubscription(subscriptionId: string, kind: 'scheduled' | 'manual', actorUid: string | null): Promise<{ ok: boolean; path?: string; error?: string }> {
+  const ref = db.collection('subscriptions').doc(subscriptionId);
+  const s = (await ref.get()).data() as any;
+  if (!s?.cpanelUsername || !s.serverId) return { ok: false, error: 'Abonimi nuk ka llogari cPanel' };
+  const server = await loadServer(String(s.serverId));
+  if (!server?.whm.apiToken) return { ok: false, error: server ? noTokenMessage(server) : 'Serveri nuk u gjet' };
+  try {
+    await assertAccountOwned(server.whm, String(s.cpanelUsername), s.domain);
+    const b = await whmBackupAccount(server.whm, String(s.cpanelUsername));
+    await ref.update({ lastBackupAt: Timestamp.now(), lastBackupPath: b.path ?? null, lastBackupError: null, updatedAt: Timestamp.now() });
+    await db.collection('hostingBackups').add({ businessId: s.businessId ?? null, teamId: s.teamId ?? null, customerId: s.customerId ?? null, subscriptionId, serverId: s.serverId, cpanelUsername: s.cpanelUsername, domain: s.domain || null, kind, path: b.path ?? null, ok: true, createdAt: Timestamp.now(), createdByUserId: actorUid });
+    await logHostingEvent({ businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, subscriptionId, type: 'whm.pkgacct', ok: true, message: `Backup ${kind} i ${s.cpanelUsername}${b.path ? `: ${b.path}` : ''}`, actorUserId: actorUid });
+    return { ok: true, path: b.path };
+  } catch (err) {
+    const msg = redactProviderError(err);
+    await ref.update({ lastBackupError: msg, lastBackupAttemptAt: Timestamp.now(), updatedAt: Timestamp.now() }).catch(() => {});
+    await logHostingEvent({ businessId: s.businessId, teamId: s.teamId, customerId: s.customerId, subscriptionId, type: 'whm.pkgacct', ok: false, message: msg, actorUserId: actorUid });
+    await notifyMany(await staffRecipients(s.businessId, s.createdByUserId), {
+      type: 'hosting_backup_failed', title: `Backup dështoi: ${s.domain || s.cpanelUsername}`, message: msg.slice(0, 200),
+      actionUrl: '/app/hosting?tab=subscriptions', actionLabel: 'Shiko', businessId: s.businessId, teamId: s.teamId, customerId: s.customerId,
+    });
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * `?job=hosting-backups` — every 30 min from the VPS. Backs up the `max` most
+ * overdue active accounts (pkgacct is slow; one function run must stay under the
+ * budget). Interval per tenant: `teamSettings.hostingBackupIntervalDays` (default 7,
+ * 0 = off). Failed attempts wait 12h before being retried.
+ */
+export async function runHostingBackups(opts: { businessId?: string | null; max?: number } = {}): Promise<Record<string, unknown>> {
+  const scopeId = opts.businessId || null;
+  const max = Math.max(1, Math.min(5, opts.max ?? 2));
+  const scoped = <T extends FirebaseFirestore.Query>(q: T): T => (scopeId ? q.where('businessId', '==', scopeId) : q) as T;
+  const suspendedTenants = await suspendedBusinessIds();
+  const subs = await scoped(db.collection('subscriptions').where('source', '==', 'fivocrm').where('status', 'in', ['Active', 'Suspended'])).limit(1000).get();
+  const intervalCache = new Map<string, number>();
+  const due: Array<{ id: string; overdueMs: number }> = [];
+  const now = Date.now();
+  for (const doc of subs.docs) {
+    const s = doc.data() as any;
+    if (!s.cpanelUsername || !s.serverId) continue;
+    if (s.businessId && suspendedTenants.has(s.businessId)) continue;
+    const teamId = await teamIdForBusiness(s.businessId, s.teamId);
+    const k = teamId || '';
+    if (!intervalCache.has(k)) {
+      const ts = teamId ? ((await db.collection('teamSettings').doc(teamId).get()).data() as any) || {} : {};
+      const v = ts.hostingBackupIntervalDays;
+      intervalCache.set(k, v === undefined || v === null ? 7 : Math.max(0, Number(v) || 0));
+    }
+    const days = intervalCache.get(k)!;
+    if (days <= 0) continue;
+    const last = toDate(s.lastBackupAt);
+    const attempt = toDate(s.lastBackupAttemptAt);
+    if (attempt && now - attempt.getTime() < 12 * 3_600_000 && (!last || attempt > last)) continue;
+    const overdueMs = now - ((last?.getTime() ?? 0) + days * 86_400_000);
+    if (overdueMs >= 0) due.push({ id: doc.id, overdueMs });
+  }
+  due.sort((a, b) => b.overdueMs - a.overdueMs);
+  let ok = 0, failed = 0;
+  for (const d of due.slice(0, max)) {
+    const r = await backupSubscription(d.id, 'scheduled', null);
+    if (r.ok) ok++; else failed++;
+  }
+  return { due: due.length, backedUp: ok, failed, businessId: scopeId };
+}
+
+// ── Weekly expiry digest ───────────────────────────────────────────────────────
+
+/** `?job=hosting-expiry-report` — Mondays 08:00 local. One digest per tenant to its managers. */
+export async function runHostingExpiryReport(opts: { businessId?: string | null } = {}): Promise<Record<string, unknown>> {
+  const scopeId = opts.businessId || null;
+  const scoped = <T extends FirebaseFirestore.Query>(q: T): T => (scopeId ? q.where('businessId', '==', scopeId) : q) as T;
+  const suspendedTenants = await suspendedBusinessIds();
+  const now = new Date();
+  const [subsSnap, domsSnap] = await Promise.all([
+    scoped(db.collection('subscriptions').where('source', '==', 'fivocrm').where('status', 'in', ['Active', 'Suspended'])).limit(2000).get(),
+    scoped(db.collection('domains').where('source', '==', 'fivocrm').where('status', 'in', ['Active', 'Grace'])).limit(2000).get(),
+  ]);
+  const byBiz = new Map<string, { subs: any[]; doms: any[]; teamId: string | null }>();
+  const bucket = (bid: string, teamId: string | null) => {
+    if (!byBiz.has(bid)) byBiz.set(bid, { subs: [], doms: [], teamId });
+    const b = byBiz.get(bid)!;
+    if (!b.teamId && teamId) b.teamId = teamId;
+    return b;
+  };
+  subsSnap.docs.forEach((d) => { const s = d.data() as any; if (s.businessId) bucket(String(s.businessId), s.teamId || null).subs.push({ id: d.id, ...s, nextDueDate: toDate(s.nextDueDate) }); });
+  domsSnap.docs.forEach((d) => { const x = d.data() as any; if (x.businessId) bucket(String(x.businessId), x.teamId || null).doms.push({ id: d.id, ...x, expiryDate: toDate(x.expiryDate) }); });
+  let sent = 0, tenants = 0;
+  for (const [bid, b] of byBiz) {
+    if (suspendedTenants.has(bid)) continue;
+    tenants++;
+    const report = buildExpiryReport(b.subs, b.doms, now);
+    const teamId = await teamIdForBusiness(bid, b.teamId);
+    if (teamId) {
+      await db.collection('teamSettings').doc(teamId).set({ hostingExpiryReport: { at: Timestamp.now(), domains30: report.domainsWithin30.length, domains60: report.domainsWithin60.length, subsDue30: report.subscriptionsDueWithin30.length, unpaid: report.unpaidRenewals.length, suspended: report.suspended.length } }, { merge: true });
+    }
+    if (report.total === 0) continue;
+    const fmt = (r: { name: string; daysLeft: number; amount: number; currency?: string | null }) => `${r.name} (${r.daysLeft} ditë, ${formatMoney(r.amount, r.currency)})`;
+    const parts: string[] = [];
+    if (report.domainsWithin30.length) parts.push(`Domain-e ≤30 ditë: ${report.domainsWithin30.slice(0, 8).map(fmt).join('; ')}${report.domainsWithin30.length > 8 ? ' …' : ''}`);
+    if (report.domainsWithin60.length) parts.push(`Domain-e 31–60 ditë: ${report.domainsWithin60.length}`);
+    if (report.subscriptionsDueWithin30.length) parts.push(`Hosting me afat ≤30 ditë: ${report.subscriptionsDueWithin30.slice(0, 8).map(fmt).join('; ')}`);
+    if (report.unpaidRenewals.length) parts.push(`Rinovime TË PAPAGUARA pas afatit: ${report.unpaidRenewals.map(fmt).join('; ')}`);
+    if (report.suspended.length) parts.push(`Të pezulluara: ${report.suspended.map((r) => r.name).join(', ')}`);
+    const managers = await managerIdsForBusiness(bid, teamId);
+    await notifyMany(managers, {
+      type: 'hosting_expiry_report',
+      title: `Raporti javor hosting & domain-e (${report.total} artikuj)`,
+      message: parts.join(' • ').slice(0, 1500),
+      actionUrl: '/app/hosting?tab=domains', actionLabel: 'Hape modulin', businessId: bid, teamId,
+    });
+    sent += managers.length;
+  }
+  return { tenants, notificationsSent: sent, businessId: scopeId };
+}
+
+// ── DNS: point a domain at the customer's hosting (Dynadot DNS) ────────────────
+
+export async function pointDomainToHosting(domainId: string, target: { subscriptionId?: string | null; ip?: string | null }, actorUid: string | null): Promise<{ ip: string }> {
+  const ref = db.collection('domains').doc(domainId);
+  const d = (await ref.get()).data() as any;
+  if (!d) throw new Error('Domain-i nuk u gjet');
+  if (d.source !== 'fivocrm' || d.registrar !== 'dynadot') throw new Error('Ky domain nuk menaxhohet nga FivoCRM/Dynadot');
+  let ip = String(target.ip || '').trim();
+  let subscriptionId: string | null = null;
+  if (target.subscriptionId) {
+    const s = (await db.collection('subscriptions').doc(String(target.subscriptionId)).get()).data() as any;
+    if (!s) throw new Error('Abonimi nuk u gjet');
+    if (s.customerId !== d.customerId || s.businessId !== d.businessId) throw new Error('Abonimi nuk i përket të njëjtit klient');
+    const server = await loadServer(String(s.serverId || ''));
+    ip = String(server?.data?.ipAddress || '').trim();
+    if (!ip) throw new Error(`Serveri "${server?.data?.name || '?'}" nuk ka IP publike të vendosur (Hosting → Serverët)`);
+    subscriptionId = String(target.subscriptionId);
+  }
+  if (!/^\d{1,3}(\.\d{1,3}){3}$/.test(ip)) throw new Error('IP e pavlefshme');
+  const teamId = await teamIdForBusiness(d.businessId, d.teamId);
+  const apiKey = await dynadotKeyFor(teamId);
+  if (!apiKey) throw new Error('Çelësi i Dynadot mungon');
+  try {
+    await dynadotSetDnsToIp(apiKey, String(d.domainName), ip);
+  } catch (err) {
+    await logHostingEvent({ businessId: d.businessId, teamId, customerId: d.customerId, domainId, type: 'dynadot.set_dns2', ok: false, message: redactProviderError(err), actorUserId: actorUid });
+    throw err;
+  }
+  await ref.update({ dnsMode: 'dynadot-dns', dnsTargetIp: ip, ...(subscriptionId ? { subscriptionId } : {}), updatedAt: Timestamp.now() });
+  await logHostingEvent({ businessId: d.businessId, teamId, customerId: d.customerId, domainId, type: 'dynadot.set_dns2', ok: true, message: `${d.domainName} → A ${ip} (apex + www) me DNS të Dynadot`, actorUserId: actorUid });
+  return { ip };
 }

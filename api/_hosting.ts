@@ -19,6 +19,7 @@ import { encryptSecret } from './_secretCrypto.js';
 import { normalizeHostname } from './_hostingProviders.js';
 import {
   priceOrder, parseDomain, isBillingCycle, type OrderLineInput, type TldPricing, ORDER_ERROR_LABELS,
+  applyCoupon, normalizeCouponCode, COUPON_ERROR_LABELS, type CouponFacts, type PricedOrder,
 } from './_hostingEngine.js';
 import { dynadotSearch, dynadotSetNameservers, dynadotSetPrivacy, dynadotSetRenewOption, dynadotGetAuthCode, redactProviderError } from './_hostingProviders.js';
 import {
@@ -26,6 +27,7 @@ import {
   changeSubscriptionPackage, resetSubscriptionPassword, subscriptionSsoUrl, subscriptionUsage, testServer, testRegistrar,
   runHostingLifecycle, runHostingSync, dynadotKeyFor, dynadotCurrencyFor, teamIdForBusiness, logHostingEvent, onHostingInvoicePaid,
   addExistingSubscription, addExistingDomain, adoptWhmcsSubscription,
+  syncTldCosts, quoteUpgrade, requestUpgrade, backupSubscription, pointDomainToHosting, toDate,
 } from './_hostingJobs.js';
 
 const Timestamp = admin.firestore.Timestamp;
@@ -136,6 +138,72 @@ async function nextOrderNumber(businessId: string): Promise<string> {
   return `HOS-${year}-${String(n).padStart(4, '0')}`;
 }
 
+/**
+ * Price an order request from the CATALOG (never from the body), apply the
+ * free-domain rule and an optional coupon. Shared by `order.quote` and
+ * `order.create`, so what the cart shows is exactly what gets invoiced.
+ */
+async function priceOrderRequest(c: Caller, body: Record<string, any>): Promise<{
+  businessId: string; customerId: string; source: 'staff' | 'portal'; priced: PricedOrder; coupon: { id: string; data: any } | null; couponError: string | null;
+}> {
+  let businessId: string; let customerId: string; let source: 'staff' | 'portal';
+  if (isStaff(c)) {
+    customerId = String(body.customerId || '');
+    if (!customerId) throw bad('Mungon klienti');
+    const cust = await db.collection('customers').doc(customerId).get();
+    if (!cust.exists) throw notFound('Klienti nuk u gjet');
+    businessId = String((cust.data() as any).businessId || c.bid || '');
+    if (!sameTenant(c, businessId)) throw forbidden();
+    source = 'staff';
+  } else if (c.cid) {
+    customerId = c.cid;
+    const cust = await db.collection('customers').doc(customerId).get();
+    if (!cust.exists) throw notFound('Klienti nuk u gjet');
+    businessId = String((cust.data() as any).businessId || c.pbid || '');
+    source = 'portal';
+  } else throw forbidden();
+  const linesIn: any[] = Array.isArray(body.lines) ? body.lines : [];
+  if (!linesIn.length) throw bad(ORDER_ERROR_LABELS.empty);
+  const productIds = Array.from(new Set(linesIn.filter((l) => l.kind === 'hosting').map((l) => String(l.productId || ''))));
+  const products = new Map<string, any>();
+  for (const pid of productIds) {
+    if (!pid) continue;
+    const p = await db.collection('hostingProducts').doc(pid).get();
+    if (!p.exists) throw bad('Paketa nuk ekziston');
+    const pd = p.data() as any;
+    if (pd.businessId !== businessId || pd.status !== 'Active' || (source === 'portal' && !pd.portalVisible)) throw bad('Paketa nuk është në shitje');
+    products.set(pid, { ...pd, id: pid });
+  }
+  const tlds = await loadTlds(businessId);
+  const inputs: OrderLineInput[] = linesIn.map((l) => {
+    if (l.kind === 'hosting') {
+      const p = products.get(String(l.productId || ''));
+      return { kind: 'hosting', productId: p?.id, productName: p?.name, cycle: isBillingCycle(l.cycle) ? l.cycle : undefined, pricing: p ? { ...p.pricing, currency: p.currency } : null, domainName: String(l.domainName || ''), freeDomainTlds: Array.isArray(p?.freeDomainTlds) ? p.freeDomainTlds : null, freeDomainMinCycle: isBillingCycle(p?.freeDomainMinCycle) ? p.freeDomainMinCycle : null };
+    }
+    return { kind: l.kind === 'domain-transfer' ? 'domain-transfer' : 'domain-register', domainName: String(l.domainName || ''), years: Number(l.years) || 1, authCode: l.authCode ? String(l.authCode) : undefined };
+  });
+  const priced = priceOrder(inputs, tlds.filter((t: any) => source === 'staff' || t.portalVisible !== false));
+  if (!priced.ok) throw bad(ORDER_ERROR_LABELS[priced.error] + (priced.index !== undefined ? ` (rreshti ${priced.index + 1})` : ''));
+  let order = priced.order;
+  let coupon: { id: string; data: any } | null = null;
+  let couponError: string | null = null;
+  const code = normalizeCouponCode(body.couponCode);
+  if (code) {
+    const snap = await db.collection('hostingCoupons').where('businessId', '==', businessId).where('code', '==', code).limit(1).get();
+    const doc = snap.empty ? null : snap.docs[0];
+    const cd = doc ? (doc.data() as any) : null;
+    const facts: CouponFacts | null = cd ? {
+      code, type: cd.type === 'fixed' ? 'fixed' : 'percent', value: Number(cd.value) || 0, currency: cd.currency || null,
+      appliesTo: cd.appliesTo === 'hosting' || cd.appliesTo === 'domains' ? cd.appliesTo : 'all', status: cd.status,
+      validFrom: toDate(cd.validFrom), validUntil: toDate(cd.validUntil), maxUses: cd.maxUses ?? null, uses: Number(cd.uses) || 0, minTotal: cd.minTotal ?? null,
+    } : null;
+    const applied = applyCoupon(order, facts, new Date());
+    if (applied.ok) { order = applied.order; coupon = doc ? { id: doc.id, data: cd } : null; }
+    else couponError = COUPON_ERROR_LABELS[applied.error];
+  }
+  return { businessId, customerId, source, priced: order, coupon, couponError };
+}
+
 export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
   const authHeader = req.headers.authorization as string | undefined;
@@ -241,51 +309,22 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       }
 
       // ── Orders ────────────────────────────────────────────────────────────
+      case 'order.quote': {
+        await assertRate(c.uid, 'order.quote', isStaff(c) ? 300 : 60, 60 * 60_000);
+        const q = await priceOrderRequest(c, body);
+        return res.status(200).json({ ok: true, order: q.priced, couponError: q.couponError });
+      }
       case 'order.create': {
         await assertRate(c.uid, 'order.create', isStaff(c) ? 60 : 10, 24 * 60 * 60_000);
-        let businessId: string; let customerId: string; let source: 'staff' | 'portal';
-        if (isStaff(c)) {
-          customerId = String(body.customerId || '');
-          if (!customerId) throw bad('Mungon klienti');
-          const cust = await db.collection('customers').doc(customerId).get();
-          if (!cust.exists) throw notFound('Klienti nuk u gjet');
-          businessId = String((cust.data() as any).businessId || c.bid || '');
-          if (!sameTenant(c, businessId)) throw forbidden();
-          source = 'staff';
-        } else if (c.cid) {
-          customerId = c.cid;
-          const cust = await db.collection('customers').doc(customerId).get();
-          if (!cust.exists) throw notFound('Klienti nuk u gjet');
-          businessId = String((cust.data() as any).businessId || c.pbid || '');
-          source = 'portal';
-        } else throw forbidden();
-        const linesIn: any[] = Array.isArray(body.lines) ? body.lines : [];
-        if (!linesIn.length) throw bad(ORDER_ERROR_LABELS.empty);
-        // Prices ALWAYS come from the catalog, never from the request body.
-        const productIds = Array.from(new Set(linesIn.filter((l) => l.kind === 'hosting').map((l) => String(l.productId || ''))));
-        const products = new Map<string, any>();
-        for (const pid of productIds) {
-          if (!pid) continue;
-          const p = await db.collection('hostingProducts').doc(pid).get();
-          if (!p.exists) throw bad('Paketa nuk ekziston');
-          const pd = p.data() as any;
-          if (pd.businessId !== businessId || pd.status !== 'Active' || (source === 'portal' && !pd.portalVisible)) throw bad('Paketa nuk është në shitje');
-          products.set(pid, { ...pd, id: pid });
-        }
-        const tlds = await loadTlds(businessId);
-        const inputs: OrderLineInput[] = linesIn.map((l) => {
-          if (l.kind === 'hosting') {
-            const p = products.get(String(l.productId || ''));
-            return { kind: 'hosting', productId: p?.id, productName: p?.name, cycle: isBillingCycle(l.cycle) ? l.cycle : undefined, pricing: p ? { ...p.pricing, currency: p.currency } : null, domainName: String(l.domainName || '') };
-          }
-          return { kind: l.kind === 'domain-transfer' ? 'domain-transfer' : 'domain-register', domainName: String(l.domainName || ''), years: Number(l.years) || 1, authCode: l.authCode ? String(l.authCode) : undefined };
-        });
-        const priced = priceOrder(inputs, tlds.filter((t: any) => source === 'staff' || t.portalVisible !== false));
-        if (!priced.ok) throw bad(ORDER_ERROR_LABELS[priced.error] + (priced.index !== undefined ? ` (rreshti ${priced.index + 1})` : ''));
+        const q = await priceOrderRequest(c, body);
+        const { businessId, customerId, source, coupon, couponError } = q;
+        const priced = { ok: true as const, order: q.priced };
+        if (couponError) throw bad(couponError);
         // A 0-total order provisions without payment. Staff may do that deliberately
         // (an internal/free account); a portal client never — a package saved with a
-        // 0 price is a misconfiguration, not an offer.
-        if (source === 'portal' && !(priced.order.total > 0)) throw bad('Kjo porosi nuk ka çmim — kontaktoni stafin.');
+        // 0 price is a misconfiguration, not an offer. A coupon that zeroes the
+        // total is a legitimate promotion and passes.
+        if (source === 'portal' && !(priced.order.total > 0) && !priced.order.couponDiscount) throw bad('Kjo porosi nuk ka çmim — kontaktoni stafin.');
         if (source === 'portal') {
           const open = await db.collection('hostingOrders').where('customerId', '==', customerId).where('status', '==', 'Pending').limit(3).get();
           if (open.size >= 3) throw bad('Keni tashmë 3 porosi të papaguara. Paguani ose anuloni një prej tyre para se të porositni sërish.');
@@ -306,11 +345,16 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         await ref.set({
           businessId, teamId, orderNumber, customerId, source, status: 'Pending',
           lines: priced.order.lines.map((l) => ({ ...l, provisionStatus: 'pending', provisionError: null })),
-          subtotal: priced.order.subtotal, total: priced.order.total, currency: priced.order.currency,
-          invoiceId: null, paidAt: null, provisionedAt: null, lastError: null,
+          subtotal: priced.order.subtotal, discountTotal: priced.order.discountTotal, total: priced.order.total, currency: priced.order.currency,
+          couponCode: priced.order.couponCode || null, couponDiscount: priced.order.couponDiscount || 0,
+          invoiceId: null, paidAt: null, provisionedAt: null, lastError: null, retryCount: 0, nextRetryAt: null, retryExhausted: false,
           notes: body.notes ? String(body.notes).slice(0, 500) : null,
           createdAt: Timestamp.now(), updatedAt: Timestamp.now(), createdByUserId: c.uid,
         });
+        if (coupon) {
+          // Count the use now (the order exists); a cancelled order does not give it back.
+          await db.collection('hostingCoupons').doc(coupon.id).update({ uses: admin.firestore.FieldValue.increment(1), lastUsedAt: Timestamp.now() }).catch(() => {});
+        }
         await logHostingEvent({ businessId, teamId, customerId, orderId: ref.id, type: 'order.created', ok: true, message: `${orderNumber}: ${priced.order.lines.map((l) => l.description).join('; ')}`.slice(0, 500), actorUserId: c.uid });
         const inv = await invoiceForOrder(ref.id, c.uid);
         let provisioned: any = null;
@@ -546,6 +590,55 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         const scope = c.superAdmin && body.businessId ? String(body.businessId) : c.bid;
         if (!scope) throw bad('Nuk u përcaktua biznesi');
         return res.status(200).json({ ok: true, result: await runHostingSync({ businessId: scope }) });
+      }
+      case 'tld.syncCosts': {
+        if (!isStaff(c) || !isConfigAdmin(c)) throw forbidden();
+        const businessId = c.superAdmin && body.businessId ? String(body.businessId) : c.bid;
+        if (!businessId) throw bad('Nuk u përcaktua biznesi');
+        const teamId = String(body.teamId || c.tid || (await teamIdForBusiness(businessId)) || '');
+        if (!teamId) throw bad('Mungon teamId');
+        const r = await syncTldCosts(businessId, teamId, c.uid);
+        await audit('tld.syncCosts', `business:${businessId}`, { updated: r.updated, belowCost: r.belowCost });
+        return res.status(200).json({ ok: true, ...r });
+      }
+      case 'sub.quoteUpgrade': {
+        const s = await loadOwned('subscriptions', String(body.subscriptionId || ''), c);
+        const productId = String(body.productId || '');
+        if (!isStaff(c)) {
+          const p = (await db.collection('hostingProducts').doc(productId).get()).data() as any;
+          if (!p || !p.portalVisible) throw bad('Paketa nuk është e disponueshme');
+        }
+        return res.status(200).json({ ok: true, quote: await quoteUpgrade(s.id, productId, isBillingCycle(body.cycle) ? body.cycle : null) });
+      }
+      case 'sub.requestUpgrade': {
+        const s = await loadOwned('subscriptions', String(body.subscriptionId || ''), c);
+        if (s.data.status !== 'Active') throw bad('Vetëm një llogari aktive mund të ndryshojë paketë');
+        const productId = String(body.productId || '');
+        if (!isStaff(c)) {
+          await assertRate(c.uid, 'sub.requestUpgrade', 5, 24 * 60 * 60_000);
+          const p = (await db.collection('hostingProducts').doc(productId).get()).data() as any;
+          if (!p || !p.portalVisible) throw bad('Paketa nuk është e disponueshme');
+        }
+        const r = await requestUpgrade(s.id, productId, isBillingCycle(body.cycle) ? body.cycle : null, c.uid, { portal: !isStaff(c) });
+        await audit('sub.requestUpgrade', `subscription:${s.id}`, { productId, applied: r.applied, amount: r.amount });
+        return res.status(200).json({ ok: true, ...r });
+      }
+      case 'backup.run': {
+        if (!isStaff(c)) throw forbidden();
+        const s = await loadOwned('subscriptions', String(body.subscriptionId || ''), c);
+        await assertRate(c.uid, 'backup.run', 20, 60 * 60_000);
+        const r = await backupSubscription(s.id, 'manual', c.uid);
+        await audit('backup.run', `subscription:${s.id}`, { ok: r.ok });
+        return res.status(r.ok ? 200 : 502).json(r.ok ? { ok: true, path: r.path } : { error: r.error });
+      }
+      case 'domain.pointToHosting': {
+        const d = await loadOwned('domains', String(body.domainId || ''), c);
+        if (body.subscriptionId) await loadOwned('subscriptions', String(body.subscriptionId), c); // same caller must own both
+        if (!isStaff(c)) await assertRate(c.uid, 'domain.pointToHosting', 20, 60 * 60_000);
+        let r: { ip: string };
+        try { r = await pointDomainToHosting(d.id, { subscriptionId: body.subscriptionId ? String(body.subscriptionId) : null, ip: body.ip ? String(body.ip) : null }, c.uid); }
+        catch (err) { throw new HttpError(502, redactProviderError(err)); }
+        return res.status(200).json({ ok: true, ip: r.ip });
       }
       default:
         throw bad(`Veprim i panjohur: "${action}"`);

@@ -10,6 +10,8 @@ export interface AgentStatus {
   status: AgentConnectionStatus;
   teamId: string | null;
   assignedToUserId: string | null;
+  /** The number the socket is logged in as — only while `status === 'connected'`. */
+  connectedPhone?: string | null;
 }
 
 export interface WhatsAppStatus {

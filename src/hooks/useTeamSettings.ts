@@ -183,6 +183,14 @@ export interface TeamSettings {
   hostingDefaultNameservers?: string[];
   /** Currency the Dynadot account is billed in (for wholesale cost display). */
   dynadotCurrency?: string;
+  /** Margin % applied to Dynadot wholesale costs to propose TLD sell prices (default 40). */
+  hostingTldMarginPct?: number;
+  hostingTldCostsSyncedAt?: any;
+  hostingTldCostsLastResult?: { updated?: number; unmatched?: string[]; belowCost?: string[] };
+  /** Days between scheduled pkgacct backups per account (default 7, 0 = off). */
+  hostingBackupIntervalDays?: number;
+  /** Last weekly expiry digest counts (written by the cron). */
+  hostingExpiryReport?: { at?: any; domains30?: number; domains60?: number; subsDue30?: number; unpaid?: number; suspended?: number };
   /** Last hosting-lifecycle run summary (written by the cron). */
   hostingLastRun?: { at?: any; invoiced?: number; suspended?: number; terminated?: number; provisioned?: number; renewed?: number; blocked?: Record<string, number>; errors?: number };
   /** Sinkronizim i orarit (cron every hour). Default true; manual sync always works. */

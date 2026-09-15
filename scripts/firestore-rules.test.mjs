@@ -149,6 +149,10 @@ before(async () => {
     await setDoc(doc(db, 'hostingOrders', 'hoMine'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', orderNumber: 'HOS-2026-0001', source: 'portal', status: 'Pending', lines: [], subtotal: 5, total: 5, currency: 'EUR' });
     await setDoc(doc(db, 'hostingOrders', 'hoVictim'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, customerId: 'custVictim', orderNumber: 'HOS-2026-0001', source: 'staff', status: 'Pending', lines: [], subtotal: 9, total: 9, currency: 'EUR' });
     await setDoc(doc(db, 'hostingEvents', 'hevMine'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', subscriptionId: 'subMine', type: 'whm.createacct', ok: true, message: 'ok' });
+    await setDoc(doc(db, 'hostingCoupons', 'cpMine'), { businessId: MY_BIZ, teamId: MY_TEAM, code: 'WELCOME10', type: 'percent', value: 10, appliesTo: 'all', status: 'Active', uses: 0 });
+    await setDoc(doc(db, 'hostingCoupons', 'cpVictim'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, code: 'SECRET50', type: 'percent', value: 50, appliesTo: 'all', status: 'Active', uses: 0 });
+    await setDoc(doc(db, 'hostingBackups', 'bkMine'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', subscriptionId: 'subMine', kind: 'scheduled', path: '/home/cpmove-cust1.tar.gz', ok: true });
+    await setDoc(doc(db, 'hostingBackups', 'bkVictim'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, customerId: 'custVictim', subscriptionId: 'subVictim', kind: 'scheduled', path: '/home/cpmove-v.tar.gz', ok: true });
   });
 });
 
@@ -1563,4 +1567,21 @@ test('51f. provider-binding and billing fields of subscriptions/domains are serv
   // A row we bill cannot be deleted from the browser (billing history); a mirror row can.
   await assertFails(deleteDoc(doc(alice, 'subscriptions', 'subMine')));
   await assertFails(getDoc(doc(alice, 'hostingRateLimits', 'alice_domain.check')));
+});
+test('51g. coupons are staff-only and tenant-bound; the backups ledger is read-only', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertSucceeds(getDoc(doc(alice, 'hostingCoupons', 'cpMine')));
+  await assertFails(getDoc(doc(alice, 'hostingCoupons', 'cpVictim')));
+  await assertSucceeds(setDoc(doc(alice, 'hostingCoupons', 'cpNew'), { businessId: MY_BIZ, teamId: MY_TEAM, code: 'SUMMER', type: 'fixed', value: 5, currency: 'EUR', appliesTo: 'hosting', status: 'Active', uses: 0, createdByUserId: 'alice' }));
+  await assertFails(updateDoc(doc(alice, 'hostingCoupons', 'cpMine'), { businessId: VICTIM_BIZ }));
+  // A code is a secret: the portal client validates it through the endpoint, never by reading.
+  await assertFails(getDoc(doc(carol, 'hostingCoupons', 'cpMine')));
+  await assertFails(setDoc(doc(carol, 'hostingCoupons', 'cpForged'), { businessId: MY_BIZ, code: 'FREE100', type: 'percent', value: 100, appliesTo: 'all', status: 'Active' }));
+  // Backups: staff + own client read; nobody writes from the browser.
+  await assertSucceeds(getDoc(doc(alice, 'hostingBackups', 'bkMine')));
+  await assertSucceeds(getDoc(doc(carol, 'hostingBackups', 'bkMine')));
+  await assertFails(getDoc(doc(carol, 'hostingBackups', 'bkVictim')));
+  await assertFails(getDoc(doc(alice, 'hostingBackups', 'bkVictim')));
+  await assertFails(setDoc(doc(alice, 'hostingBackups', 'bkForged'), { businessId: MY_BIZ, customerId: 'cust1', subscriptionId: 'subMine', kind: 'manual', ok: true }));
 });

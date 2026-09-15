@@ -192,9 +192,29 @@ pagesës `applyDomainRenewal` vetëm shtyn skadencën, regjistron
 Env i ri në Vercel: `SECRETS_ENC_KEY` (gjenero: `openssl rand -base64 32`). Pa të,
 kasaforta shkruan plaintext dhe logon një paralajmërim — asgjë nuk prishet.
 
-## 10. Kufizime të njohura (me qëllim)
+## 10. Upgrade-et e 15 shtatorit (pas sigurisë)
 
-- **Pa proratë** te ndryshimi i paketës — çmimi i ri vlen nga fatura tjetër.
+| Veçori | Ku | Si |
+|---|---|---|
+| Kostot TLD nga Dynadot | `syncTldCosts` (jobs), `dynadotTldPrices` (drivers), veprim `tld.syncCosts`, pjesë e `hosting-sync` çdo 7 ditë | `get_tld_price` → `costRegister/Renew/Transfer`, `costCurrency`, `suggested*Price` = kosto × (1 + `hostingTldMarginPct`, default 40) rrumbullakosur në .99; `belowCost` + njoftim `hosting_drift` kur shitet nën kosto; UI: "Sinkronizo kostot", "Apliko" per TLD |
+| Upgrade me proratë | `prorationQuote` (motor), `quoteUpgrade`/`requestUpgrade`/`applyPendingUpgrade` (jobs), veprime `sub.quoteUpgrade`, `sub.requestUpgrade` (staf + klient) | diferenca × ditët e mbetura / ditët e periudhës; > 0 → faturë `hst_upg_<sub>_<ditë>` me `hostingUpgrade`, paketa ndryshon kur paguhet (webhook ose `hosting-lifecycle`); ≤ 0 → aplikohet menjëherë; pa rimbursim; vetëm brenda të njëjtit cikël |
+| Domain falas | `HostingProduct.freeDomainTlds` + `freeDomainMinCycle`; `priceOrder` | 1 domain-register i parë me TLD në listë, viti i parë (`discountReason: 'free-domain'`), vetëm kur cikli i hosting-ut ≥ min; rinovimi me çmim të plotë |
+| Kupona | `hostingCoupons` (staf), `applyCoupon` (motor), `order.quote` + `couponCode` në `order.create` | percent/fixed mbi rreshtat e zgjedhur (`appliesTo`), `validFrom/Until`, `maxUses`, `minTotal`; `uses` rritet në krijim porosie; klienti kurrë s'lexon listën |
+| Hosting në Financat | `src/lib/hosting/finance.ts` → `monthlyRecurringRevenue(…, hostingSubs)` (forecast + cashflow), kartelë "Hosting & Domain-e · MRR" | vetëm `source: 'fivocrm'`, Active/Suspended pa `cancelAtPeriodEnd`, normalizuar /muaj në ALL |
+| Backup i planifikuar | `runHostingBackups` (`hosting-backups`, çdo 30 min, 2 llogari/ekzekutim), `backupSubscription`, koleksion `hostingBackups`, veprim `backup.run` | `hostingBackupIntervalDays` (default 7, 0 = fikur); dështimi → 12h pushim + `hosting_backup_failed`; lista te dialogu (staf) dhe portali (vetëm lista) |
+| Alarme përdorimi / drift | `runHostingSync` | disk ≥ 90 % (`warning`) / 97 % (`critical`) → `hosting_usage_alert` te staf + klient, 1/ditë; WHM ≠ FivoCRM → `hosting_drift` te staf, 1/ditë |
+| Raport javor | `runHostingExpiryReport` (`hosting-expiry-report`, e hënë 08:00 lokale), `buildExpiryReport` (motor) | domain-e ≤30/≤60 ditë, hosting me afat ≤30, rinovime të papaguara, të pezulluara → `hosting_expiry_report` te menaxherët (email sipas preferencave) + `teamSettings.hostingExpiryReport` |
+| Ri-provë provisioning | `provisionOrder` + `hosting-lifecycle` | `retryCount`/`nextRetryAt` me backoff 15m → 1h → 4h → 12h → 24h (`nextRetryDelayMs`); njoftim vetëm në dështimin e parë dhe kur shterohen |
+| DNS në portal | `pointDomainToHosting`, veprim `domain.pointToHosting` | `set_dns2` A (apex + www) → IP e serverit të abonimit (`hostingServers.ipAddress`) ose IP manuale; `dnsMode: 'dynadot-dns'` |
+
+Rregulla/indekse të reja: `hostingCoupons`, `hostingBackups` (test 51g, 113/113).
+Koleksionet e modulit janë tani te `TENANT_DATA_COLLECTIONS` (eksport/fshirje GDPR) dhe
+te `CUSTOMER_REFS` të merge-it të dublikatave (`domains`, `hostingOrders`, `hostingEvents`, `hostingBackups`).
+
+## 11. Kufizime të njohura (me qëllim)
+
+- **Proratë vetëm brenda të njëjtit cikël dhe vetëm për ngritje**; ulja ose ndryshimi i ciklit aplikohet nga fatura tjetër pa rimbursim.
+- **Forma e `get_tld_price`** është parse-uar me tolerancë dhe do të konfirmohet në sinkronizimin e parë real.
 - **Pa kontakte WHOIS për klient** — regjistrimi përdor kontaktet default të
   llogarisë Dynadot (privatësia ndizet nga UI). Faza 2: `create_contact` +
   `registrant_contact` për klient.

@@ -463,6 +463,22 @@ service cloud.firestore {
     match /hostingRateLimits/{docId} {
       allow read, write: if false;
     }
+    // Coupons: staff-only. A portal client never reads the list (a code is a secret);
+    // it is validated server-side by order.quote / order.create. `uses` is bumped by
+    // the endpoint, but a staff correction is allowed too.
+    match /hostingCoupons/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+    // Backups ledger: server-written (pkgacct runs); staff read theirs, a client its own.
+    match /hostingBackups/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
+      allow write: if false;
+    }
     // Servers: hostname/user/nameservers are staff-only. The WHM API TOKEN is never
     // here — it lives in hostingServerSecrets (deny-all), written by the endpoint.
     match /hostingServers/{docId} {

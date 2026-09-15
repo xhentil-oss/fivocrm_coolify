@@ -86,9 +86,14 @@ From WorkloadView, allow drag-and-drop or quick-assign to move tasks between tea
 - [x] Siguria (10 pika): terminim opt-in + backup pkgacct para fshirjes; verifikim pronësie llogarie në WHM para SSO/passwd/suspend/terminate/add; refuzim çmimi 0; rate limit `domain.check`/`order.create`; relay vetëm te hoste WHM të regjistruar + pa IP private; ACL të kufizuara për token-in (runbook); enkriptim AES-GCM i kredencialeve (`SECRETS_ENC_KEY`); token i lidhur me hostname; SSO/passwd vetëm Admin/Manager + audit + njoftim klienti; email pa fjalëkalim; fushat lidhëse/faturuese vetëm server-side (rregulla + test 51f)
 - [ ] Vercel env: `SECRETS_ENC_KEY` (openssl rand -base64 32) — pa të kasaforta mbetet plaintext (paralajmërim në log)
 - [ ] Faza 2: kontakte WHOIS për klient te Dynadot (`create_contact` + `registrant_contact`) — sot regjistranti është llogaria jonë
-- [ ] Faza 2: proratë / faturë diference te ndryshimi i paketës brenda periudhës
-- [ ] Faza 2: menaxhim DNS në portal (`dynadotSetDnsToIp` ekziston në driver, s'ka UI)
-- [ ] Faza 2: abonimet hosting në MRR / parashikimin e arkëtimeve të Financave (burim i tretë për predikatin "do të faturohet")
-- [ ] Faza 2: ri-provë automatike me backoff për rreshtat e dështuar të provisioning-ut (sot klikim nga stafi)
-- [ ] Faza 2: bundle (domain falas me hosting vjetor) dhe kupona
+- [ ] Faza 2: driver Plesk + regjistrues alternativ për .al; tiketa suporti të lidhura me abonimin; WordPress me një klik / SSL i menaxhuar
+- [x] Upgrade paketë me proratë (kuotë + faturë diference, aplikohet pas pagesës; portal + staf)
+- [x] DNS në portal: "Drejto te hosting-u" (set_dns2 A apex+www te IP e serverit ose IP manuale)
+- [x] Hosting në Financat: MRR + rinovimet e muajit tjetër (kartelë + forecast + cashflow)
+- [x] Sinkronizim javor i kostove TLD nga Dynadot + çmime të propozuara me marzh + alarm nën kosto
+- [x] Backup i planifikuar pkgacct (çdo N ditë, 2 llogari/30 min) + lista e backup-eve; alarme disku ≥90 % dhe drift WHM 1/ditë; raport javor skadencash te menaxherët (e hënë 08:00)
+- [x] Ri-provë automatike me backoff (15m→24h) për provisioning-un e dështuar
+- [x] Domain falas me hosting vjetor (rregull per paketë) + kupona (percent/fixed, kufij, skadencë)
+- [x] Rregullime: merge i dublikatave ri-drejton domains/hostingOrders/hostingEvents/hostingBackups; eksporti/fshirja GDPR përfshin gjithë koleksionet e hosting-ut
+- [ ] VPS: pas pull-it shtohen `hosting-backups` (30 min) dhe `hosting-expiry-report` (e hënë 08:00) — restart pm2
 

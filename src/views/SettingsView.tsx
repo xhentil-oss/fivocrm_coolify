@@ -57,6 +57,7 @@ import { getDocs, getDoc, setDoc, query, where, collection, writeBatch, doc, Tim
 import { db } from '../lib/firebase';
 import { dndZoneStamp } from '../lib/notificationPrefs';
 import { toast } from '../hooks/use-toast';
+import { useWhatsAppStatus, type AgentStatus } from '../hooks/useWhatsAppStatus';
 import { reportingCapabilitiesFor } from '../lib/reporting/permissions';
 import { safeSenderName, safeSenderAddress, senderNameIssue } from '../lib/emailIdentity';
 
@@ -272,6 +273,25 @@ const SettingsView: React.FC = () => {
 
   // ── WhatsApp Accounts (multi-agent Baileys) ──
   const { data: whatsappAccounts } = useCollection<WhatsAppAccount>('whatsappAccounts');
+  // Live socket state from the VPS (30s poll). `connectedPhone` on the document is
+  // only "the number seen at the last successful scan" — an account that dropped,
+  // logged out or was never loaded by the server still carried it, so Cilësimet
+  // showed "Lidhur" for a WhatsApp that could not send.
+  const waLive = useWhatsAppStatus();
+  const waLiveState = (acc: WhatsAppAccount): { connected: boolean; label: string; phone: string | null } => {
+    const agent: AgentStatus | undefined = waLive.agents.find(a => a.id === acc.id);
+    if (waLive.serverOnline && !waLive.loading) {
+      if (!agent) return { connected: false, label: acc.enabled ? 'Jo i ngarkuar në server' : 'Çaktivizuar', phone: null };
+      if (agent.status === 'connected') return { connected: true, label: `Lidhur: +${agent.connectedPhone || acc.connectedPhone || ''}`, phone: agent.connectedPhone || acc.connectedPhone || null };
+      if (agent.status === 'qr_ready') return { connected: false, label: 'Pret skanimin e QR', phone: null };
+      if (agent.status === 'connecting') return { connected: false, label: 'Duke u lidhur…', phone: null };
+      return { connected: false, label: 'Shkëputur', phone: null };
+    }
+    // Server unreachable / first poll pending: fall back to what the VPS last stamped.
+    if (acc.connectionStatus === 'disconnected') return { connected: false, label: 'Shkëputur (statusi i fundit)', phone: null };
+    if (acc.connectedPhone) return { connected: true, label: `Lidhur: +${acc.connectedPhone} (statusi i fundit)`, phone: acc.connectedPhone };
+    return { connected: false, label: 'Jo i lidhur', phone: null };
+  };
   const { data: teamMembersForWa } = useCollection<TeamMember>('teamMembers');
   const waMutation = useMutation<WhatsAppAccount>('whatsappAccounts');
   const [newWaLabel, setNewWaLabel] = useState('');
@@ -826,7 +846,8 @@ const SettingsView: React.FC = () => {
           {(() => {
             const myWaAccount = whatsappAccounts?.find(a => a.assignedToUserId === user?.uid);
             if (!myWaAccount) return null;
-            const connected = Boolean(myWaAccount.connectedPhone);
+            const myLive = waLiveState(myWaAccount);
+            const connected = myLive.connected;
             return (
               <Card className="p-6 space-y-4">
                 <div className="flex items-center gap-4">
@@ -836,7 +857,7 @@ const SettingsView: React.FC = () => {
                   <div className="flex-1">
                     <h3 className="text-h4 text-foreground">WhatsApp Personal</h3>
                     <p className="text-body-sm text-muted-foreground">
-                      {connected ? `Lidhur: +${myWaAccount.connectedPhone}` : 'Llogaria jote WhatsApp — skano QR-in për t\'u lidhur'}
+                      {connected ? myLive.label : `${myLive.label} — skano QR-in për t'u lidhur`}
                     </p>
                   </div>
                   {connected
@@ -1834,7 +1855,8 @@ const SettingsView: React.FC = () => {
               {whatsappAccounts && whatsappAccounts.length > 0 ? (
                 <div className="space-y-3">
                   {whatsappAccounts.map(acc => {
-                    const isConnected = Boolean(acc.connectedPhone);
+                    const live = waLiveState(acc);
+                    const isConnected = live.connected;
                     return (
                       <div key={acc.id} className="flex items-center gap-3 p-3 border border-border rounded-lg bg-muted/30">
                         <div className={`p-1.5 rounded-full ${isConnected ? 'bg-[#25D366]/10' : 'bg-muted'}`}>
@@ -1846,10 +1868,7 @@ const SettingsView: React.FC = () => {
                         <div className="flex-1 min-w-0">
                           <p className="text-sm font-medium text-foreground truncate">{acc.label}</p>
                           <p className="text-xs text-muted-foreground truncate">
-                            {isConnected
-                              ? `Lidhur: +${acc.connectedPhone}`
-                              : 'Jo i lidhur'
-                            }
+                            {live.label}
                             {acc.assignedToName && ` · ${acc.assignedToName}`}
                           </p>
                         </div>

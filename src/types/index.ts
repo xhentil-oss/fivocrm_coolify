@@ -12,8 +12,12 @@ export interface WhatsAppAccount {
   assignedToUserId?: string | null;
   assignedToName?: string | null;
   enabled: boolean;
+  /** Number seen at the LAST successful login. Not proof of a live socket — read `connectionStatus` / the live status poll. */
   connectedPhone?: string | null;
+  /** Stamped by the VPS on connection open/close. */
+  connectionStatus?: 'connected' | 'disconnected' | null;
   lastConnectedAt?: Date | null;
+  lastDisconnectedAt?: Date | null;
   createdAt?: Date;
   updatedAt?: Date;
 }
@@ -29,7 +33,14 @@ export interface WhatsAppMessage {
   pushName?: string | null;
   waMessageId?: string | null;
   teamId?: string;
-  status: 'sent' | 'delivered' | 'read' | 'received' | 'failed';
+  /**
+   * Outbound (Baileys): `pending` = written to the socket, not yet acked by WhatsApp;
+   * `sent` = server ack; `delivered` / `read` = recipient receipts; `failed` = rejected
+   * or the socket closed first (see `error`). Inbound rows are `received`.
+   */
+  status: 'pending' | 'sent' | 'delivered' | 'read' | 'received' | 'failed';
+  /** Why a `failed` row failed (VPS-written). */
+  error?: string | null;
   channel?: 'baileys' | 'meta';
   channelPhone?: string;
   metaPhoneNumberId?: string;
@@ -997,6 +1008,8 @@ export interface Invoice {
   hostingOrderId?: string;
   subscriptionId?: string;
   domainId?: string;
+  /** Prorated package upgrade: applied to the subscription when this invoice is paid. */
+  hostingUpgrade?: { productId: string; cycle: HostingBillingCycle; requestedBy?: 'staff' | 'portal' };
   /** WHMCS invoice id — idempotency key for the WHMCS → FivoCRM sync. */
   whmcsInvoiceId?: string;
   /** WHMCS invoice line items (products/services billed). */
@@ -1110,6 +1123,10 @@ export interface HostingProduct {
   /** Shown in the client portal catalog. */
   portalVisible?: boolean;
   sortOrder?: number;
+  /** Promotion: these TLDs (no dot) are free for the FIRST year when bought together
+   *  with this package on at least `freeDomainMinCycle` (default annually). */
+  freeDomainTlds?: string[];
+  freeDomainMinCycle?: HostingBillingCycle;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
@@ -1126,8 +1143,19 @@ export interface DomainTld {
   registerPrice: number;
   renewPrice: number;
   transferPrice?: number;
-  costRegister?: number;
-  costRenew?: number;
+  costRegister?: number | null;
+  costRenew?: number | null;
+  costTransfer?: number | null;
+  /** Currency of the cost figures (the Dynadot account's), filled by the weekly sync. */
+  costCurrency?: string | null;
+  costSyncedAt?: Date;
+  /** cost × (1 + margin) rounded to .99 — what the sync proposes; staff applies it. */
+  suggestedRegisterPrice?: number | null;
+  suggestedRenewPrice?: number | null;
+  suggestedMarginPct?: number;
+  /** Sell price is BELOW the registrar cost (same currency) — losing money on every sale. */
+  belowCost?: boolean;
+  costCurrencyMismatch?: boolean;
   minYears?: number;
   maxYears?: number;
   status: 'Active' | 'Archived';
@@ -1179,9 +1207,18 @@ export interface Subscription {
   suspendedAt?: Date | null;
   suspendReason?: string | null;
   terminatedAt?: Date | null;
-  /** `pkgacct` taken right before a termination (path on the server). */
+  /** Latest `pkgacct` (scheduled, manual or pre-terminate) — path on the server. */
   lastBackupAt?: Date | null;
   lastBackupPath?: string | null;
+  lastBackupError?: string | null;
+  lastBackupAttemptAt?: Date | null;
+  /** Upgrade requested mid-period: applied when its prorated invoice is paid. */
+  pendingUpgrade?: { productId: string; cycle: HostingBillingCycle; invoiceId: string; amount: number; requestedAt?: Date } | null;
+  /** Disk figures mirrored by hosting-sync; alerts are throttled to one per day. */
+  diskUsedMb?: number | null;
+  diskLimitMb?: number | null;
+  usageAlertAt?: Date | null;
+  driftAlertAt?: Date | null;
   /** Order that created it. */
   orderId?: string;
   notes?: string;
@@ -1214,6 +1251,9 @@ export interface Domain {
   locked?: boolean;
   /** Linked hosting account (the domain points at it). */
   subscriptionId?: string;
+  /** `dynadot-dns` = A records at Dynadot point at `dnsTargetIp` (set_dns2); otherwise custom nameservers. */
+  dnsMode?: 'nameservers' | 'dynadot-dns';
+  dnsTargetIp?: string | null;
   provisionStatus?: ProvisionStatus;
   provisionError?: string | null;
   lastSyncAt?: Date;
@@ -1247,6 +1287,9 @@ export interface HostingOrderLine {
   years?: number;
   unitPrice: number;
   setupFee: number;
+  /** Promotions already subtracted from `total` (free first-year domain, coupon). */
+  discount?: number;
+  discountReason?: string;
   total: number;
   currency: 'ALL' | 'EUR';
   /** Filled as the line is fulfilled. */
@@ -1267,12 +1310,19 @@ export interface HostingOrder {
   status: HostingOrderStatus;
   lines: HostingOrderLine[];
   subtotal: number;
+  discountTotal?: number;
+  couponCode?: string | null;
+  couponDiscount?: number;
   total: number;
   currency: 'ALL' | 'EUR';
   invoiceId?: string | null;
   paidAt?: Date | null;
   provisionedAt?: Date | null;
   lastError?: string | null;
+  /** Automatic provisioning retries (15m → 1h → 4h → 12h → 24h, then a human). */
+  retryCount?: number;
+  nextRetryAt?: Date | null;
+  retryExhausted?: boolean;
   notes?: string;
   createdAt: Date;
   updatedAt: Date;
@@ -1295,6 +1345,48 @@ export interface HostingEvent {
   detail?: Record<string, unknown>;
   actorUserId?: string | null;
   createdAt: Date;
+}
+
+/** Promo code for the FIRST invoice of a hosting/domain order. Staff-only document. */
+export interface HostingCoupon {
+  id: string;
+  businessId?: string;
+  teamId?: string;
+  /** Upper-case A-Z0-9_- */
+  code: string;
+  type: 'percent' | 'fixed';
+  value: number;
+  /** fixed only */
+  currency?: 'ALL' | 'EUR' | null;
+  appliesTo: 'all' | 'hosting' | 'domains';
+  status: 'Active' | 'Archived';
+  validFrom?: Date | null;
+  validUntil?: Date | null;
+  maxUses?: number | null;
+  uses?: number;
+  minTotal?: number | null;
+  note?: string;
+  lastUsedAt?: Date | null;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+/** One `pkgacct` run (server-written). The archive lives on the server; restore is a staff action. */
+export interface HostingBackup {
+  id: string;
+  businessId?: string;
+  teamId?: string;
+  customerId?: string;
+  subscriptionId: string;
+  serverId?: string;
+  cpanelUsername?: string;
+  domain?: string | null;
+  kind: 'scheduled' | 'manual' | 'pre-terminate';
+  path?: string | null;
+  ok: boolean;
+  createdAt: Date;
+  createdByUserId?: string | null;
 }
 
 export interface Service {

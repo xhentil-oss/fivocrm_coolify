@@ -16,6 +16,8 @@ vi.mock('../contexts/PermissionsContext', () => ({
 
 const navigate = vi.fn();
 vi.mock('react-router-dom', () => ({ useNavigate: () => navigate }));
+// Hosting module off in these tests: the MRR card and the extra listeners stay out of the way.
+vi.mock('../hooks/useModules', () => ({ useModules: () => ({ isEnabled: () => false, blockReason: () => null, plan: 'pro', disabledModules: [], loading: false, canManage: false, modules: [], setModuleEnabled: async () => {} }) }));
 
 // jsdom reports zero width, so recharts' ResponsiveContainer renders nothing and
 // logs. Swap it for a fixed-size box; the charts themselves still mount.

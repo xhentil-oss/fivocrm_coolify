@@ -9,7 +9,7 @@
 // Alarms: negative gap, receivables aged >60d, revenue decline vs 3-month
 // average, expense spike, single-client concentration.
 
-import type { Invoice, Expense, TeamMember, Project } from '../../types';
+import type { Invoice, Expense, TeamMember, Project, Subscription } from '../../types';
 import { toAll } from '../utils';
 import {
   parseDate,
@@ -60,6 +60,7 @@ export function computeCashflowHealth(
   teamMembers: TeamMember[] | undefined | null,
   projects: Project[] | undefined | null,
   now: Date = new Date(),
+  hostingSubscriptions?: Subscription[] | null,
 ): CashflowHealth {
   const inv = invoices || [];
   const exp = expenses || [];
@@ -67,7 +68,7 @@ export function computeCashflowHealth(
   // ── Monthly recurring inflow — SAME definition as the forecast card (monthly
   // projects + active recurring invoices, deduped) so the two cards agree and a
   // retainer modelled as a monthly project doesn't trigger a false gap alarm.
-  const monthlyInflow = monthlyRecurringRevenue(projects, invoices, now);
+  const monthlyInflow = monthlyRecurringRevenue(projects, invoices, now, hostingSubscriptions);
 
   // ── Monthly fixed outflow: payroll + recurring expenses.
   // Payroll for a month that has not happened yet is the PLAN — but a tenant who

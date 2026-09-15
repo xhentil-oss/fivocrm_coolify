@@ -13,7 +13,9 @@ import {
   ResponsiveContainer, ComposedChart, Area, Line, BarChart, Bar, XAxis, YAxis,
   Tooltip, CartesianGrid, ReferenceLine, LabelList,
 } from 'recharts';
-import type { Invoice, Expense, Customer, Project, TeamMember, Team } from '../types';
+import type { Invoice, Expense, Customer, Project, TeamMember, Team, Subscription, Domain } from '../types';
+import { hostingMonthlyRecurringRevenue, hostingRenewalsInWindow } from '../lib/hosting/finance';
+import { useModules } from '../hooks/useModules';
 import {
   getInvoiceCollectedBetween,
   getInvoiceCollectedAll,
@@ -172,6 +174,11 @@ const FinancesView: React.FC = () => {
   const { data: customers } = useCollection<Customer>('customers', { skipTeamFilter: true });
   const { data: projects } = useCollection<Project>('projects', { skipTeamFilter: true });
   const { data: teamMembers } = useCollection<TeamMember>('teamMembers', { skipTeamFilter: true });
+  // Hosting module: subscriptions we bill are a recurring-revenue source too.
+  const { isEnabled: moduleEnabled } = useModules();
+  const hostingOn = moduleEnabled('hosting');
+  const { data: hostingSubs } = useCollection<Subscription>('subscriptions', { skipTeamFilter: true, skip: !hostingOn });
+  const { data: hostingDomains } = useCollection<Domain>('domains', { skipTeamFilter: true, skip: !hostingOn });
   // Needed to join `expense.departmentId` (a teams doc id) to the free-text
   // `project.department` the P&L groups by — without it a cost tagged to one
   // department is spread by revenue weight across all of them.
@@ -567,15 +574,24 @@ const FinancesView: React.FC = () => {
 
   // ── Forward-looking cashflow health (recurring inflow vs fixed outflow) ──
   const cashflow = useMemo(
-    () => computeCashflowHealth(invoices, expenses, teamMembers, projects, now),
-    [invoices, expenses, teamMembers, projects, now],
+    () => computeCashflowHealth(invoices, expenses, teamMembers, projects, now, hostingSubs),
+    [invoices, expenses, teamMembers, projects, now, hostingSubs],
   );
 
   // ── Next-month profit forecast (project pipeline + recurring invoices) ──
   const forecast = useMemo(
-    () => forecastNextMonth(projects, invoices, expenses, teamMembers, now),
-    [projects, invoices, expenses, teamMembers, now],
+    () => forecastNextMonth(projects, invoices, expenses, teamMembers, now, hostingSubs),
+    [projects, invoices, expenses, teamMembers, now, hostingSubs],
   );
+  const hostingFinance = useMemo(() => {
+    if (!hostingOn) return null;
+    const mrr = hostingMonthlyRecurringRevenue(hostingSubs);
+    const start = new Date(now.getFullYear(), now.getMonth() + 1, 1);
+    const end = new Date(now.getFullYear(), now.getMonth() + 2, 0, 23, 59, 59);
+    const next = hostingRenewalsInWindow(hostingSubs, hostingDomains, start, end);
+    const active = (hostingSubs || []).filter(s => s.source === 'fivocrm' && s.status === 'Active').length;
+    return { mrr, nextMonth: next.totalAll, nextCount: next.rows.length, active };
+  }, [hostingOn, hostingSubs, hostingDomains, now]);
 
   // The trend and the forecast are one story, so they share one plot: six actual
   // months plus a dashed projected segment. The last actual value is duplicated
@@ -837,6 +853,16 @@ const FinancesView: React.FC = () => {
             value={`${hero.marginPct}%`}
             sub="mbi paranë e arkëtuar"
           />
+          {hostingFinance && (
+            <KpiCard
+              icon={<TrendingUp className="h-4 w-4" />}
+              iconBg="#e0f2fe"
+              iconInk="#0369a1"
+              label="Hosting & Domain-e · MRR"
+              value={formatALL(hostingFinance.mrr)}
+              sub={`${hostingFinance.active} llogari aktive · rinovime muajin tjetër ${formatALL(hostingFinance.nextMonth)} (${hostingFinance.nextCount})`}
+            />
+          )}
           <KpiCard
             icon={<Wallet className="h-4 w-4" />}
             iconBg="#fdf6e8"

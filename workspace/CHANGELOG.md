@@ -20,6 +20,13 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 <changelog>
 <!-- NEXT_ENTRY_HERE -->
 
+### [2026-09-15] — WhatsApp (Baileys): agents follow Firestore, honest send status
+- Root cause of "shows sent, not on my phone": a `whatsappAccounts` doc deleted in Cilësimet left its agent alive on the VPS and `getAgent()` (first connected) kept routing sends through it — messages left from the OLD number (…6087), not the new "Puna" account
+- `vps/server.ts`: `whatsappAccounts` onSnapshot → `reconcileAgents()` / `unloadAgent()` (deleted = logout + wipe session, disabled = close socket; `agent.unloading` stops the reconnect); `/reload` reconciles both ways
+- `/send` pre-generates the id, writes `status: 'pending'`, waits ≤6s for server ack (2) → `sent`; 0/close → `failed` + `error`; `messages.update` maps 0/2/3/4/5 and never downgrades; Baileys logger `warn` (`BAILEYS_LOG_LEVEL`)
+- `api/whatsapp.ts` status read `data.statuses` but VPS returns `agents` → always empty; fixed + `connectedPhone`. `SettingsView` shows LIVE state (`useWhatsAppStatus`) instead of the stamped phone; `WhatsAppChatPanel` ticks: clock / ✓ / ✓✓ / ✓✓ green / Dështoi
+- Still open: `/send` with no `agentId` picks the first connected agent regardless of team/user (item 1 of the review)
+
 ### [2026-09-07] — Customers: ranking by revenue
 - `src/views/CustomersView.tsx`: sort "Sipas të ardhurave" (cash collected desc → billed → name, rank #N shown), column "Të ardhura" (arkëtuar / faturuar / hapur, header click toggles the sort), CSV gains the three ALL columns
 - Figures come from `getInvoiceCollectedAll / getInvoiceTotalAll / getInvoiceOutstandingAll` (financialAnalytics) so Draft/Cancelled count 0 and partials count what was banked; column hidden when the invoices read is denied

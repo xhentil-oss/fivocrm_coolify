@@ -48,6 +48,12 @@ const CUSTOMER_REFS: RefSpec[] = [
   { collection: 'invoiceItems', field: 'customerId' },
   { collection: 'payments', field: 'customerId' },
   { collection: 'subscriptions', field: 'customerId' },
+  // Hosting & domains module (Sep 2026): a merged customer must keep their domains,
+  // orders, backups and provider audit — orphaning them hides paid services.
+  { collection: 'domains', field: 'customerId' },
+  { collection: 'hostingOrders', field: 'customerId' },
+  { collection: 'hostingEvents', field: 'customerId' },
+  { collection: 'hostingBackups', field: 'customerId' },
   { collection: 'quotes', field: 'customerId' },
   { collection: 'contracts', field: 'customerId' },
   { collection: 'projects', field: 'customerId' },

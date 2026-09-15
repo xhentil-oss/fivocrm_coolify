@@ -76,6 +76,7 @@
 | `hostingServers` / `hostingProducts` / `domainTlds` | Hosting module catalog: WHM servers, packages, TLD sell prices (token in `hostingServerSecrets`, deny-all) |
 | `subscriptions` / `domains` | Hosting accounts + registered domains — `source: 'whmcs'` (mirror) or `'fivocrm'` (billed by us) |
 | `hostingOrders` / `hostingEvents` | Hosting orders (endpoint-only create) + append-only provider/lifecycle audit |
+| `hostingCoupons` / `hostingBackups` | Promo codes (staff-only) + pkgacct backup ledger (server-written) |
 | `serviceInquiries` | Landing page form submissions |
 | `standups` | Morning standup entries |
 | `dailyReports` | Daily staff reports |
@@ -241,6 +242,19 @@ permission `canAccessHosting`.
   and never private IPs; secrets are AES-GCM at rest (`api/_secretCrypto.ts`,
   `SECRETS_ENC_KEY`) and a WHM token is bound to the hostname/user it was saved for;
   staff SSO/passwd = Admin/Manager, audited, and the customer is notified.
+- **Promotions and money helpers live in the engine too**: `priceOrder` applies the
+  product's `freeDomainTlds` rule (first year of ONE matching domain, hosting cycle ≥
+  `freeDomainMinCycle`), `applyCoupon` (staff-only `hostingCoupons`, validated by
+  `order.quote`/`order.create`, `uses` bumped on order creation), `prorationQuote`
+  (upgrade mid-period → invoice `hst_upg_<sub>_<day>` with `hostingUpgrade`, applied
+  when PAID; downgrades apply immediately, refund nothing). `src/lib/hosting/finance.ts`
+  is the hosting MRR/renewals source for Financat (`monthlyRecurringRevenue` 4th arg).
+- **Operations jobs**: `hosting-sync` also emits disk (≥90 %) and drift alerts once a day
+  and refreshes Dynadot TLD costs weekly (`syncTldCosts`, margin `hostingTldMarginPct`);
+  `hosting-backups` (30 min, 2 accounts/run, `hostingBackupIntervalDays`) writes
+  `hostingBackups`; `hosting-expiry-report` (Mon 08:00 local) digests to managers;
+  failed provisioning retries with `nextRetryDelayMs` backoff and notifies staff only on
+  the first failure and on exhaustion.
 - Adding an action? → `api/_hosting.ts` switch (load the record, compare `businessId` /
   `customerId` with claims — never trust ids from the body) + `hostingApi()` caller.
   Adding a collection? → `businessIsolatedAlways` + `teamScopedCollections` + rules +
@@ -463,6 +477,29 @@ permission `canAccessHosting`.
   **Financat "Rrogat" + "Shpenzime të tjera" == the Shpenzimet page total for the
   same month**, except in a `profile`-basis month. `scripts/audit-expense-totals*.mjs`
   verify it against live data (read-only).
+
+### WhatsApp via Baileys (VPS): agent lifecycle & honest send status
+
+- **Firestore `whatsappAccounts` IS the agent set.** `vps/server.ts` mirrors it live
+  (`watchAccounts` → `reconcileAgents` → `unloadAgent`): deleted → `logout()` + session
+  wiped, `enabled: false` → socket closed, session kept. `agent.unloading` stops the
+  reconnect loop. Before this, deleting an account in Cilësimet removed only the
+  document; the VPS kept the socket alive until the next restart and `getAgent()`
+  (first connected agent) kept sending through it — messages left from a number nobody
+  managed any more, "sent" in the CRM and absent from the user's phone.
+- **`sendMessage()` resolving proves nothing.** Baileys only wrote the stanza to the
+  socket. `/send` generates the id itself, writes `status: 'pending'`, waits ≤6s
+  (`SEND_ACK_TIMEOUT_MS`, under the relay's 10s abort) for the server ack (status 2)
+  → `sent`; 0 or a closed socket → `failed` + `error`. `messages.update` maps
+  0/2/3/4/5 and never downgrades a status. The UI shows the WhatsApp vocabulary:
+  clock / ✓ / ✓✓ / ✓✓ green / Dështoi — never ✓ for a row WhatsApp did not accept.
+- **"Lidhur" comes from the socket, not from `connectedPhone`.** The VPS `/status`
+  returns `{ agents }` (+ `connectedPhone`), `api/whatsapp.ts?action=status` relays it,
+  `useWhatsAppStatus` polls it, and Cilësimet renders that; `connectionStatus` /
+  `lastDisconnectedAt` on the doc are the offline fallback. Baileys' own logger is
+  `warn` (`BAILEYS_LOG_LEVEL`) — `silent` hid every send failure for a year.
+- Known gap: `/send` without `agentId` still picks the first connected agent
+  regardless of `teamId` / `assignedToUserId`. WhatsAppChatPanel sends no `agentId`.
 
 ### WhatsApp campaign automation (conditions + variants + evergreen rules)
 

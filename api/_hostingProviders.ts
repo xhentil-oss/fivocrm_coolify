@@ -492,3 +492,51 @@ export function redactProviderError(err: unknown): string {
   const msg = err instanceof Error ? err.message : String(err);
   return msg.replace(/(token|password|key)=([^&\s]+)/gi, '$1=***').slice(0, 500);
 }
+
+// ── Dynadot TLD price list (wholesale costs) ───────────────────────────────────
+
+export interface DynadotTldPrice {
+  tld: string;
+  register: number | null;
+  renew: number | null;
+  transfer: number | null;
+  currency: string | null;
+}
+
+function pickPrice(obj: any, re: RegExp): { price: number | null; currency: string | null } {
+  if (!obj || typeof obj !== 'object') return { price: null, currency: null };
+  for (const [k, v] of Object.entries(obj)) {
+    if (!re.test(k)) continue;
+    if (v && typeof v === 'object') {
+      const inner = (v as any).Price ?? (v as any).price ?? (v as any).Amount ?? null;
+      const m = parseDynadotMoney(inner);
+      return { price: m.price, currency: m.currency || ((v as any).Currency ? String((v as any).Currency) : null) };
+    }
+    return parseDynadotMoney(v);
+  }
+  return { price: null, currency: null };
+}
+
+/**
+ * Wholesale price per TLD in the account currency. The response shape of
+ * `get_tld_price` is parsed leniently (list key, nested Price objects or "x in USD"
+ * strings) — the first live sync is where this gets confirmed. Unknown TLDs simply
+ * do not appear; the caller keeps its hand-entered costs for them.
+ */
+export async function dynadotTldPrices(apiKey: string, currency?: string): Promise<DynadotTldPrice[]> {
+  const b = await dynadotCall(apiKey, 'get_tld_price', { currency });
+  const listKey = Object.keys(b || {}).find((k) => Array.isArray((b as any)[k]) && /tld|price/i.test(k));
+  const list: any[] = listKey ? (b as any)[listKey] : [];
+  const out: DynadotTldPrice[] = [];
+  for (const x of list) {
+    const tld = String(x?.Tld ?? x?.TLD ?? x?.tld ?? x?.Name ?? '').replace(/^\.+/, '').toLowerCase();
+    if (!tld) continue;
+    const priceObj = x?.Price && typeof x.Price === 'object' ? x.Price : x;
+    const reg = pickPrice(priceObj, /^regist/i);
+    const ren = pickPrice(priceObj, /^renew/i);
+    const tra = pickPrice(priceObj, /^transfer/i);
+    const cur = reg.currency || ren.currency || tra.currency || (x?.Currency ? String(x.Currency) : null) || (currency || null);
+    out.push({ tld, register: reg.price, renew: ren.price, transfer: tra.price, currency: cur });
+  }
+  return out;
+}

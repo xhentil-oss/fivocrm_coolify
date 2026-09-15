@@ -34,6 +34,13 @@ import {
   statusFromRegistrar,
   statusFromWhmAccount,
   suggestSellPrice,
+  applyCoupon,
+  COUPON_ERROR_LABELS,
+  prorationQuote,
+  nextRetryDelayMs,
+  usageAlertLevel,
+  buildExpiryReport,
+  PROVISION_RETRY_DELAYS_MS,
   type DomainFacts,
   type SubscriptionFacts,
   type TldPricing,
@@ -363,5 +370,127 @@ describe('priceOrder', () => {
     expect(priceOrder([{ kind: 'domain-transfer', domainName: 'a.com' }], tlds)).toMatchObject({ error: 'transfer-without-auth-code' });
     expect(priceOrder([{ kind: 'domain-register', domainName: 'a.free' }], [...tlds, { tld: 'free', currency: 'EUR', registerPrice: 0, renewPrice: 0 }])).toMatchObject({ error: 'domain-zero-price' });
     for (const k of Object.keys(ORDER_ERROR_LABELS)) expect(ORDER_ERROR_LABELS[k as never]).toBeTruthy();
+  });
+});
+
+// ── Promotions: free domain + coupons ──────────────────────────────────────────
+
+describe('free domain with annual hosting', () => {
+  const tlds: TldPricing[] = [{ tld: 'com', currency: 'EUR', registerPrice: 12, renewPrice: 14 }, { tld: 'net', currency: 'EUR', registerPrice: 13, renewPrice: 13 }];
+  const pricing = { monthly: { price: 5 }, annually: { price: 50 } };
+  const hosting = (cycle: 'monthly' | 'annually') => ({ kind: 'hosting' as const, productId: 'P', productName: 'Start', cycle, pricing, domainName: 'a.com', freeDomainTlds: ['com'], freeDomainMinCycle: 'annually' as const });
+
+  it('gives the first year of ONE matching domain away on an annual package', () => {
+    const r = priceOrder([hosting('annually'), { kind: 'domain-register', domainName: 'a.com', years: 2 }, { kind: 'domain-register', domainName: 'b.com', years: 1 }], tlds);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.order.lines[1]).toMatchObject({ discount: 12, discountReason: 'free-domain', total: 12 });
+    expect(r.order.lines[2].discount).toBeUndefined();
+    expect(r.order.subtotal).toBe(86);
+    expect(r.order.discountTotal).toBe(12);
+    expect(r.order.total).toBe(74);
+  });
+
+  it('does not apply on a monthly package or a TLD outside the list', () => {
+    const m = priceOrder([hosting('monthly'), { kind: 'domain-register', domainName: 'a.com' }], tlds);
+    expect(m.ok && m.order.discountTotal).toBe(0);
+    const n = priceOrder([hosting('annually'), { kind: 'domain-register', domainName: 'a.net' }], tlds);
+    expect(n.ok && n.order.discountTotal).toBe(0);
+  });
+});
+
+describe('applyCoupon', () => {
+  const tlds: TldPricing[] = [{ tld: 'com', currency: 'EUR', registerPrice: 10, renewPrice: 10 }];
+  const base = priceOrder([
+    { kind: 'hosting', productId: 'P', productName: 'S', cycle: 'annually', pricing: { annually: { price: 90 } }, domainName: 'a.com' },
+    { kind: 'domain-register', domainName: 'a.com' },
+  ], tlds);
+  const order = base.ok ? base.order : (null as never);
+  const NOW = new Date('2026-09-15T09:00:00Z');
+
+  it('percent over eligible lines, spread per line, totals honest', () => {
+    const r = applyCoupon(order, { code: 'welcome10', type: 'percent', value: 10, appliesTo: 'all' }, NOW);
+    expect(r.ok).toBe(true);
+    if (!r.ok) return;
+    expect(r.order.couponCode).toBe('WELCOME10');
+    expect(r.order.couponDiscount).toBe(10);
+    expect(r.order.total).toBe(90);
+    expect(r.order.lines.map((l) => l.total)).toEqual([81, 9]);
+    expect(r.order.lines.reduce((s, l) => s + (l.discount || 0), 0)).toBe(10);
+  });
+
+  it('fixed amount only on hosting lines, capped at the eligible base', () => {
+    const r = applyCoupon(order, { code: 'H5', type: 'fixed', value: 500, currency: 'EUR', appliesTo: 'hosting' }, NOW);
+    expect(r.ok && r.order.couponDiscount).toBe(90);
+    expect(r.ok && r.order.lines[1].total).toBe(10);
+  });
+
+  it('names every refusal', () => {
+    expect(applyCoupon(order, null, NOW)).toMatchObject({ error: 'coupon-not-found' });
+    expect(applyCoupon(order, { code: 'x', type: 'percent', value: 10, appliesTo: 'all', status: 'Archived' }, NOW)).toMatchObject({ error: 'coupon-inactive' });
+    expect(applyCoupon(order, { code: 'x', type: 'percent', value: 10, appliesTo: 'all', validFrom: new Date('2027-01-01') }, NOW)).toMatchObject({ error: 'coupon-not-started' });
+    expect(applyCoupon(order, { code: 'x', type: 'percent', value: 10, appliesTo: 'all', validUntil: new Date('2026-01-01') }, NOW)).toMatchObject({ error: 'coupon-expired' });
+    expect(applyCoupon(order, { code: 'x', type: 'percent', value: 10, appliesTo: 'all', maxUses: 3, uses: 3 }, NOW)).toMatchObject({ error: 'coupon-exhausted' });
+    expect(applyCoupon(order, { code: 'x', type: 'percent', value: 10, appliesTo: 'all', minTotal: 500 }, NOW)).toMatchObject({ error: 'coupon-min-total' });
+    expect(applyCoupon(order, { code: 'x', type: 'fixed', value: 10, currency: 'ALL', appliesTo: 'all' }, NOW)).toMatchObject({ error: 'coupon-currency' });
+    expect(applyCoupon({ ...order, lines: order.lines.filter((l) => l.kind === 'hosting') }, { code: 'x', type: 'percent', value: 10, appliesTo: 'domains' }, NOW)).toMatchObject({ error: 'coupon-not-applicable' });
+    for (const k of Object.keys(COUPON_ERROR_LABELS)) expect(COUPON_ERROR_LABELS[k as never]).toBeTruthy();
+  });
+});
+
+// ── Proration ──────────────────────────────────────────────────────────────────
+
+describe('prorationQuote', () => {
+  it('bills the price difference for the days left in the period', () => {
+    // Monthly period 15 Aug → 15 Sep (31 days); today 5 Sep → 10 days left.
+    const q = prorationQuote({ oldPrice: 10, newPrice: 41, cycle: 'monthly', nextDueDate: new Date('2026-09-15T12:00:00Z'), now: new Date('2026-09-05T09:00:00Z') });
+    expect(q.daysInPeriod).toBe(31);
+    expect(q.daysRemaining).toBe(10);
+    expect(q.amount).toBe(10);
+  });
+  it('a downgrade owes nothing now', () => {
+    expect(prorationQuote({ oldPrice: 40, newPrice: 10, cycle: 'annually', nextDueDate: new Date('2027-01-01T12:00:00Z'), now: new Date('2026-09-15T00:00:00Z') }).amount).toBe(0);
+  });
+  it('past the due date nothing remains', () => {
+    expect(prorationQuote({ oldPrice: 10, newPrice: 20, cycle: 'monthly', nextDueDate: new Date('2026-09-01T12:00:00Z'), now: new Date('2026-09-15T00:00:00Z') }).amount).toBe(0);
+  });
+});
+
+// ── Retry backoff, usage alarms, expiry report ─────────────────────────────────
+
+describe('operations helpers', () => {
+  it('nextRetryDelayMs backs off and gives up after the table', () => {
+    expect(nextRetryDelayMs(1)).toBe(PROVISION_RETRY_DELAYS_MS[0]);
+    expect(nextRetryDelayMs(5)).toBe(24 * 3_600_000);
+    expect(nextRetryDelayMs(6)).toBeNull();
+    expect(nextRetryDelayMs(0)).toBe(PROVISION_RETRY_DELAYS_MS[0]);
+  });
+  it('usageAlertLevel thresholds', () => {
+    expect(usageAlertLevel(500, 1000)).toBeNull();
+    expect(usageAlertLevel(910, 1000)).toBe('warning');
+    expect(usageAlertLevel(980, 1000)).toBe('critical');
+    expect(usageAlertLevel(980, null)).toBeNull();
+  });
+  it('buildExpiryReport buckets our rows only', () => {
+    const now = new Date('2026-09-15T09:00:00Z');
+    const r = buildExpiryReport(
+      [
+        { id: 's1', source: 'fivocrm', status: 'Active', domain: 'a.com', nextDueDate: new Date('2026-09-25T12:00:00Z'), recurringAmount: 5 },
+        { id: 's2', source: 'fivocrm', status: 'Suspended', domain: 'b.com', nextDueDate: new Date('2026-09-01T12:00:00Z'), currentInvoiceId: 'inv', recurringAmount: 5 },
+        { id: 's3', source: 'whmcs', status: 'Active', domain: 'w.com', nextDueDate: new Date('2026-09-20T12:00:00Z') },
+      ],
+      [
+        { id: 'd1', source: 'fivocrm', status: 'Active', domainName: 'a.com', expiryDate: new Date('2026-10-10T12:00:00Z'), recurringAmount: 14 },
+        { id: 'd2', source: 'fivocrm', status: 'Active', domainName: 'c.com', expiryDate: new Date('2026-11-05T12:00:00Z'), recurringAmount: 14 },
+        { id: 'd3', source: 'fivocrm', status: 'Expired', domainName: 'x.com', expiryDate: new Date('2026-09-01T12:00:00Z') },
+      ],
+      now,
+    );
+    expect(r.domainsWithin30.map((x) => x.id)).toEqual(['d1']);
+    expect(r.domainsWithin60.map((x) => x.id)).toEqual(['d2']);
+    expect(r.subscriptionsDueWithin30.map((x) => x.id)).toEqual(['s1']);
+    expect(r.unpaidRenewals.map((x) => x.id)).toEqual(['s2']);
+    expect(r.suspended.map((x) => x.id)).toEqual(['s2']);
+    expect(r.total).toBe(5);
   });
 });

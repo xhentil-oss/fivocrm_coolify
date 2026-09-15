@@ -12,7 +12,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   Server, Globe, ShoppingCart, Package, Tag, Settings, Activity, Plus, RefreshCw, ExternalLink, KeyRound,
-  Pause, Play, Trash2, AlertTriangle, CheckCircle2, Clock, Search, Shield, Loader2, Eye, EyeOff, Wand2, ArrowRightLeft,
+  Pause, Play, Trash2, AlertTriangle, CheckCircle2, Clock, Search, Shield, Loader2, Eye, EyeOff, Wand2, ArrowRightLeft, Ticket, HardDrive,
 } from 'lucide-react';
 import { Card } from '../components/ui/card';
 import { Badge } from '../components/ui/badge';
@@ -37,7 +37,7 @@ import {
   parseDomain, priceOrder, suggestSellPrice, type BillingCycle, type OrderLineInput, type TldPricing,
 } from '../lib/hosting/engine';
 import type {
-  Customer, Domain, DomainTld, HostingEvent, HostingOrder, HostingProduct, HostingServer, Subscription,
+  Customer, Domain, DomainTld, HostingEvent, HostingOrder, HostingProduct, HostingServer, Subscription, HostingCoupon, HostingBackup,
 } from '../types';
 
 // ── helpers ────────────────────────────────────────────────────────────────────
@@ -94,6 +94,7 @@ const HostingView: React.FC = () => {
   const { data: tlds } = useCollection<DomainTld>('domainTlds', { orderBy: { field: 'tld', direction: 'asc' } });
   const { data: servers } = useCollection<HostingServer>('hostingServers', { orderBy: { field: 'createdAt', direction: 'desc' } });
   const { data: events } = useCollection<HostingEvent>('hostingEvents', { orderBy: { field: 'createdAt', direction: 'desc' }, limit: 150 });
+  const { data: coupons } = useCollection<HostingCoupon>('hostingCoupons', { orderBy: { field: 'createdAt', direction: 'desc' } });
   const { data: customers } = useCollection<Customer>('customers');
   const customerName = useMemo(() => {
     const m = new Map<string, string>();
@@ -172,6 +173,7 @@ const HostingView: React.FC = () => {
           <TabsTrigger value="tlds" className="min-w-fit"><Tag className="w-4 h-4 sm:mr-2" /><span className="hidden sm:inline">TLD-të</span></TabsTrigger>
           <TabsTrigger value="servers" className="min-w-fit"><Shield className="w-4 h-4 sm:mr-2" /><span className="hidden sm:inline">Serverët</span></TabsTrigger>
           <TabsTrigger value="settings" className="min-w-fit"><Settings className="w-4 h-4 sm:mr-2" /><span className="hidden sm:inline">Cilësimet</span></TabsTrigger>
+          <TabsTrigger value="coupons" className="min-w-fit"><Ticket className="w-4 h-4 sm:mr-2" /><span className="hidden sm:inline">Kuponat</span></TabsTrigger>
           <TabsTrigger value="events" className="min-w-fit"><Activity className="w-4 h-4 sm:mr-2" /><span className="hidden sm:inline">Aktiviteti</span></TabsTrigger>
         </TabsList>
 
@@ -188,13 +190,16 @@ const HostingView: React.FC = () => {
           <ProductsTab products={products || []} servers={servers || []} canEdit={canEdit} />
         </TabsContent>
         <TabsContent value="tlds">
-          <TldsTab tlds={tlds || []} canEdit={canEdit} />
+          <TldsTab tlds={tlds || []} canEdit={canEdit} isAdmin={isAdmin} settings={settings} />
         </TabsContent>
         <TabsContent value="servers">
           <ServersTab servers={servers || []} canEdit={canEdit} isAdmin={isAdmin} />
         </TabsContent>
         <TabsContent value="settings">
           <SettingsTab teamId={teamId} settings={settings} isAdmin={isAdmin} />
+        </TabsContent>
+        <TabsContent value="coupons">
+          <CouponsTab coupons={coupons || []} canEdit={canEdit} />
         </TabsContent>
         <TabsContent value="events">
           <EventsTab events={events || []} />
@@ -275,6 +280,8 @@ const SubscriptionDialog: React.FC<{
   const [password, setPassword] = useState<string | null>(null);
   const [confirmTerm, setConfirmTerm] = useState('');
   const [forceTerm, setForceTerm] = useState(false);
+  const [quote, setQuote] = useState<any>(null);
+  const { data: backups } = useCollection<HostingBackup>('hostingBackups', { where: [{ field: 'subscriptionId', operator: '==', value: sub.id }], limit: 10 });
   const [pkg, setPkg] = useState(sub.productId || '');
   const [cycle, setCycle] = useState<string>(sub.billingCycle || 'monthly');
   const [adopt, setAdopt] = useState({ serverId: sub.serverId || '', username: sub.cpanelUsername || '' });
@@ -306,6 +313,8 @@ const SubscriptionDialog: React.FC<{
           <Info label="cPanel user" value={sub.cpanelUsername || '—'} />
           <Info label="Paketa WHM" value={sub.whmPackage || '—'} />
           {sub.lastInvoicedDueKey && <Info label="Faturuar për" value={sub.lastInvoicedDueKey} />}
+          {sub.diskLimitMb != null && <Info label="Disku" value={`${sub.diskUsedMb ?? '?'} / ${sub.diskLimitMb} MB${sub.diskUsedMb && sub.diskLimitMb ? ` (${Math.round((sub.diskUsedMb / sub.diskLimitMb) * 100)}%)` : ''}`} />}
+          <Info label="Backup i fundit" value={sub.lastBackupAt ? fmtDate(sub.lastBackupAt) : sub.lastBackupError ? <span className="text-red-700">dështoi</span> : '—'} />
           {sub.currentInvoiceId && <Info label="Fatura aktuale" value={<Link className="text-primary underline" to={`/app/invoices?invoice=${sub.currentInvoiceId}`}>hape</Link>} />}
           {sub.provisionError && <div className="col-span-full text-red-700 text-xs bg-red-50 p-2 rounded">{sub.provisionError}</div>}
         </div>
@@ -348,14 +357,31 @@ const SubscriptionDialog: React.FC<{
                 Fjalëkalimi i ri (shfaqet vetëm një herë): <code className="font-mono select-all">{password}</code>
               </Card>
             )}
+            <Card className="p-3 text-sm space-y-1">
+              <div className="flex items-center justify-between"><span className="font-medium flex items-center gap-1"><HardDrive className="w-4 h-4" />Backup-et (pkgacct)</span>{canEdit && <Button size="sm" variant="outline" disabled={!!busy || sub.status === 'Terminated'} onClick={() => call('bk', async () => { const r = await hostingApi<{ path?: string }>('backup.run', { subscriptionId: sub.id }); toast({ title: 'Backup u krye', description: r.path }); })}>{busy === 'bk' ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : null}Backup tani</Button>}</div>
+              {!(backups || []).length ? <p className="text-xs text-muted-foreground">Asnjë backup i regjistruar. Backup-et e planifikuara bëhen sipas intervalit te Cilësimet.</p> : (
+                <ul className="text-xs space-y-0.5">{[...(backups || [])].sort((a, b) => (getTimestampMs(b.createdAt) || 0) - (getTimestampMs(a.createdAt) || 0)).map((b) => <li key={b.id} className="flex justify-between gap-2"><span>{fmtDate(b.createdAt)} · {b.kind}</span><span className="font-mono truncate text-muted-foreground">{b.path || '—'}</span></li>)}</ul>
+              )}
+              {sub.lastBackupError && <p className="text-xs text-red-700">{sub.lastBackupError}</p>}
+            </Card>
 
             {canEdit && (
               <div className="grid sm:grid-cols-2 gap-3 pt-2 border-t">
                 <div className="space-y-2">
-                  <Label className="text-xs">Ndrysho paketën (nga fatura tjetër)</Label>
-                  <Select value={pkg} onValueChange={setPkg}><SelectTrigger><SelectValue placeholder="Paketa" /></SelectTrigger><SelectContent>{products.filter((p) => p.status === 'Active' && (!sub.serverId || p.serverId === sub.serverId)).map((p) => <SelectItem key={p.id} value={p.id}>{p.name} ({p.whmPackage})</SelectItem>)}</SelectContent></Select>
-                  <Select value={cycle} onValueChange={setCycle}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{BILLING_CYCLES.map((c) => <SelectItem key={c} value={c}>{CYCLE_LABELS[c]}</SelectItem>)}</SelectContent></Select>
-                  <Button size="sm" variant="outline" disabled={!pkg || !!busy || (pkg === sub.productId && cycle === sub.billingCycle)} onClick={() => act('sub.changePackage', { productId: pkg, cycle }, 'Paketa u ndryshua')}>Apliko</Button>
+                  <Label className="text-xs">Ndrysho paketën</Label>
+                  <Select value={pkg} onValueChange={(v) => { setPkg(v); setQuote(null); }}><SelectTrigger><SelectValue placeholder="Paketa" /></SelectTrigger><SelectContent>{products.filter((p) => p.status === 'Active' && (!sub.serverId || p.serverId === sub.serverId)).map((p) => <SelectItem key={p.id} value={p.id}>{p.name} ({p.whmPackage})</SelectItem>)}</SelectContent></Select>
+                  <Select value={cycle} onValueChange={(v) => { setCycle(v); setQuote(null); }}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{BILLING_CYCLES.map((c) => <SelectItem key={c} value={c}>{CYCLE_LABELS[c]}</SelectItem>)}</SelectContent></Select>
+                  {sub.pendingUpgrade ? (
+                    <p className="text-xs text-amber-700">Upgrade në pritje të pagesës: {formatCurrency(sub.pendingUpgrade.amount, cur(sub.currency))} — <Link className="underline" to={`/app/invoices?invoice=${sub.pendingUpgrade.invoiceId}`}>fatura</Link></p>
+                  ) : quote ? (
+                    <div className="text-xs space-y-1">
+                      <p>{quote.oldPrice} → <strong>{quote.newPrice}</strong> {quote.currency} / {CYCLE_LABELS[quote.cycle as BillingCycle]}</p>
+                      <p>{quote.amount > 0 ? <>Diferenca për {quote.daysRemaining}/{quote.daysInPeriod} ditët e mbetura: <strong>{formatCurrency(quote.amount, quote.currency)}</strong> — faturohet tani, paketa ndryshon pas pagesës.</> : 'Asgjë për të paguar tani — ndryshimi aplikohet menjëherë, çmimi i ri nga fatura tjetër.'}</p>
+                      <Button size="sm" disabled={!!busy} onClick={() => call('upg', async () => { const r = await hostingApi<{ applied: boolean; invoiceId?: string; amount: number }>('sub.requestUpgrade', { subscriptionId: sub.id, productId: pkg, cycle }); toast({ title: r.applied ? 'Paketa u ndryshua' : 'Fatura e upgrade-it u krijua', description: r.applied ? undefined : `${r.amount} — paketa ndryshon sapo paguhet.` }); setQuote(null); })}>{quote.amount > 0 ? 'Faturo diferencën' : 'Apliko'}</Button>
+                    </div>
+                  ) : (
+                    <Button size="sm" variant="outline" disabled={!pkg || !!busy || (pkg === sub.productId && cycle === sub.billingCycle)} onClick={() => call('quote', async () => { const r = await hostingApi<{ quote: any }>('sub.quoteUpgrade', { subscriptionId: sub.id, productId: pkg, cycle }); setQuote(r.quote); })}>Kuoto (me proratë)</Button>
+                  )}
                 </div>
                 <div className="space-y-3">
                   <label className="flex items-center justify-between gap-2 text-sm"><span>Hold (pa pezullim/terminim automatik)</span><Switch checked={!!sub.lifecycleHold} onCheckedChange={(v) => act('sub.setHold', { hold: v })} /></label>
@@ -505,6 +531,8 @@ const OrdersTab: React.FC<{ orders: HostingOrder[]; customerName: (id?: string) 
                 ))}
               </ul>
               {o.lastError && <p className="text-xs text-red-700 mt-1">{o.lastError}</p>}
+              {o.status === 'Failed' && <p className="text-xs text-muted-foreground mt-0.5">{o.retryExhausted ? `Ri-provat automatike u shteruan (${o.retryCount || 0}) — kërkohet ndërhyrje.` : `Ri-prova ${(o.retryCount || 0) + 1} automatikisht ${o.nextRetryAt ? `më ${toDate(o.nextRetryAt)?.toLocaleString('sq-AL', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })}` : 'së shpejti'}.`}</p>}
+              {o.couponCode && <p className="text-xs text-emerald-700 mt-0.5">Kupon {o.couponCode}: −{formatCurrency(o.couponDiscount || 0, o.currency)}</p>}
             </div>
             <div className="sm:text-right space-y-2">
               <p className="font-semibold">{formatCurrency(o.total, o.currency)}</p>
@@ -535,12 +563,20 @@ const NewOrderDialog: React.FC<{ open: boolean; onOpenChange: (o: boolean) => vo
   const [check, setCheck] = useState<Record<string, DomainCheckRow>>({});
   const [checking, setChecking] = useState(false);
   const [busy, setBusy] = useState(false);
-  useEffect(() => { if (!open) { setLines([{ kind: 'hosting', domainName: '', years: 1 }]); setCheck({}); setCustomerId(''); } }, [open]);
+  const [couponCode, setCouponCode] = useState('');
+  const [serverQuote, setServerQuote] = useState<{ order: any; couponError: string | null } | null>(null);
+  useEffect(() => { if (!open) { setLines([{ kind: 'hosting', domainName: '', years: 1 }]); setCheck({}); setCustomerId(''); setCouponCode(''); setServerQuote(null); } }, [open]);
+  useEffect(() => { setServerQuote(null); }, [lines, couponCode, customerId]);
+  const fetchQuote = async () => {
+    if (!customerId) { toast({ title: 'Zgjidh klientin', variant: 'destructive' }); return; }
+    try { const r = await hostingApi<{ order: any; couponError: string | null }>('order.quote', { customerId, lines: lines.map((l) => ({ ...l, domainName: l.domainName.trim() })), couponCode }); setServerQuote(r); if (r.couponError) toast({ title: 'Kuponi', description: r.couponError, variant: 'destructive' }); }
+    catch (e) { toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' }); }
+  };
 
   const activeProducts = products.filter((p) => p.status === 'Active');
   const tldPricing: TldPricing[] = tlds.filter((t) => t.status === 'Active').map((t) => ({ tld: t.tld, currency: t.currency, registerPrice: t.registerPrice, renewPrice: t.renewPrice, transferPrice: t.transferPrice, minYears: t.minYears, maxYears: t.maxYears, status: 'Active' }));
   const inputs: OrderLineInput[] = lines.map((l) => {
-    if (l.kind === 'hosting') { const p = activeProducts.find((x) => x.id === l.productId); return { kind: 'hosting', productId: p?.id, productName: p?.name, cycle: l.cycle, pricing: p ? { ...(p.pricing as any), currency: p.currency } : null, domainName: l.domainName }; }
+    if (l.kind === 'hosting') { const p = activeProducts.find((x) => x.id === l.productId); return { kind: 'hosting', productId: p?.id, productName: p?.name, cycle: l.cycle, pricing: p ? { ...(p.pricing as any), currency: p.currency } : null, domainName: l.domainName, freeDomainTlds: p?.freeDomainTlds || null, freeDomainMinCycle: p?.freeDomainMinCycle || null }; }
     return { kind: l.kind, domainName: l.domainName, years: l.years, authCode: l.authCode };
   });
   const priced = priceOrder(inputs, tldPricing);
@@ -559,7 +595,7 @@ const NewOrderDialog: React.FC<{ open: boolean; onOpenChange: (o: boolean) => vo
     if (!priced.ok) { toast({ title: ORDER_ERROR_LABELS[priced.error], variant: 'destructive' }); return; }
     setBusy(true);
     try {
-      const r = await hostingApi<{ orderId: string; orderNumber: string; invoiceId: string | null; provisioned?: any }>('order.create', { customerId, lines: lines.map((l) => ({ ...l, domainName: l.domainName.trim() })) });
+      const r = await hostingApi<{ orderId: string; orderNumber: string; invoiceId: string | null; provisioned?: any }>('order.create', { customerId, lines: lines.map((l) => ({ ...l, domainName: l.domainName.trim() })), couponCode: couponCode.trim() || undefined });
       toast({ title: `Porosia ${r.orderNumber} u krijua`, description: r.invoiceId ? 'Fatura u krijua dhe iu dërgua klientit. Aktivizimi nis pas pagesës.' : 'Porosi pa pagesë — aktivizimi nisi.' });
       onOpenChange(false);
     } catch (e) { toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' }); }
@@ -604,13 +640,18 @@ const NewOrderDialog: React.FC<{ open: boolean; onOpenChange: (o: boolean) => vo
             <Button variant="outline" size="sm" onClick={runCheck} disabled={checking}>{checking ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <Search className="w-4 h-4 mr-1" />}Kontrollo domain-et</Button>
           </div>
         </div>
+        <div className="flex gap-2 items-center">
+          <Input className="uppercase" placeholder="Kod kuponi (opsional)" value={couponCode} onChange={(e) => setCouponCode(e.target.value.toUpperCase())} />
+          <Button variant="outline" size="sm" onClick={fetchQuote} disabled={!priced.ok || !customerId}><Ticket className="w-4 h-4 mr-1" />Kuoto</Button>
+        </div>
         <Card className="p-3 text-sm">
-          {priced.ok ? (
+          {(() => { const o = serverQuote?.order || (priced.ok ? priced.order : null); if (!o) return <p className="text-muted-foreground">{!priced.ok ? ORDER_ERROR_LABELS[priced.error] + (priced.index !== undefined ? ` (rreshti ${priced.index + 1})` : '') : ''}</p>; return (
             <>
-              {priced.order.lines.map((l, i) => <div key={i} className="flex justify-between"><span>{l.description}</span><span>{formatCurrency(l.total, l.currency)}</span></div>)}
-              <div className="flex justify-between font-semibold border-t mt-2 pt-2"><span>Totali</span><span>{formatCurrency(priced.order.total, priced.order.currency)}</span></div>
+              {o.lines.map((l: any, i: number) => <div key={i} className="flex justify-between"><span>{l.description}{l.discount ? <span className="text-emerald-700 text-xs ml-1">−{formatCurrency(l.discount, l.currency)} {l.discountReason === 'free-domain' ? '(domain falas)' : ''}</span> : null}</span><span>{formatCurrency(l.total, l.currency)}</span></div>)}
+              {o.couponCode && <div className="flex justify-between text-emerald-700"><span>Kupon {o.couponCode}</span><span>−{formatCurrency(o.couponDiscount || 0, o.currency)}</span></div>}
+              <div className="flex justify-between font-semibold border-t mt-2 pt-2"><span>Totali{serverQuote ? ' (i konfirmuar)' : ''}</span><span>{formatCurrency(o.total, o.currency)}</span></div>
             </>
-          ) : <p className="text-muted-foreground">{ORDER_ERROR_LABELS[priced.error]}{priced.index !== undefined ? ` (rreshti ${priced.index + 1})` : ''}</p>}
+          ); })()}
         </Card>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>Anulo</Button>
@@ -633,7 +674,7 @@ const ProductsTab: React.FC<{ products: HostingProduct[]; servers: HostingServer
     const pricing: any = {};
     for (const c of BILLING_CYCLES) { const v = (editing.pricing as any)?.[c]; if (v && typeof v.price === 'number' && v.price >= 0) pricing[c] = { price: v.price, ...(v.setupFee ? { setupFee: v.setupFee } : {}) }; }
     if (!Object.keys(pricing).length) { toast({ title: 'Vendos të paktën një çmim', variant: 'destructive' }); return; }
-    const payload = { name: editing.name.trim(), description: editing.description || '', serverId: editing.serverId, whmPackage: editing.whmPackage.trim(), status: editing.status || 'Active', currency: cur(editing.currency), pricing, features: (editing.features || []).filter(Boolean), portalVisible: editing.portalVisible !== false, diskGb: editing.diskGb ?? null, bandwidthGb: editing.bandwidthGb ?? null };
+    const payload = { name: editing.name.trim(), description: editing.description || '', serverId: editing.serverId, whmPackage: editing.whmPackage.trim(), status: editing.status || 'Active', currency: cur(editing.currency), pricing, features: (editing.features || []).filter(Boolean), portalVisible: editing.portalVisible !== false, diskGb: editing.diskGb ?? null, bandwidthGb: editing.bandwidthGb ?? null, freeDomainTlds: (editing.freeDomainTlds || []).filter(Boolean), freeDomainMinCycle: editing.freeDomainMinCycle || 'annually' };
     try {
       if (editing.id) await mutation.update(editing.id, payload as any); else await mutation.create(payload as any);
       toast({ title: 'Paketa u ruajt' }); setEditing(null);
@@ -650,6 +691,7 @@ const ProductsTab: React.FC<{ products: HostingProduct[]; servers: HostingServer
             <div className="flex items-center justify-between gap-2"><span className="font-semibold">{p.name}</span><div className="flex gap-1">{p.status === 'Archived' && <Badge variant="outline">Arkiv</Badge>}{p.portalVisible && <Badge variant="outline" className="text-xs">portal</Badge>}</div></div>
             <p className="text-xs text-muted-foreground">{servers.find((s) => s.id === p.serverId)?.name || '?'} · WHM: {p.whmPackage}</p>
             <div className="text-sm space-y-0.5">{availableCycles(p.pricing as any).map((c) => <div key={c} className="flex justify-between"><span className="text-muted-foreground">{CYCLE_LABELS[c]}</span><span>{formatCurrency(p.pricing[c]!.price, p.currency)}</span></div>)}</div>
+            {p.freeDomainTlds?.length ? <p className="text-xs text-emerald-700">Domain falas (.{p.freeDomainTlds.join(', .')}) me {CYCLE_LABELS[p.freeDomainMinCycle || 'annually'].toLowerCase()}</p> : null}
           </Card>
         ))}
       </div>
@@ -677,6 +719,8 @@ const ProductsTab: React.FC<{ products: HostingProduct[]; servers: HostingServer
                   ))}
                 </div>
               </div>
+              <div className="space-y-1"><Label>Domain falas — TLD (me presje, p.sh. com, net)</Label><Input placeholder="com, net" value={(editing.freeDomainTlds || []).join(', ')} onChange={(e) => setEditing({ ...editing, freeDomainTlds: e.target.value.split(',').map((x) => x.trim().toLowerCase().replace(/^\.+/, '')).filter(Boolean) })} /></div>
+              <div className="space-y-1"><Label>…kur blihet me cikël ≥</Label><Select value={editing.freeDomainMinCycle || 'annually'} onValueChange={(v) => setEditing({ ...editing, freeDomainMinCycle: v as any })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent>{BILLING_CYCLES.map((c) => <SelectItem key={c} value={c}>{CYCLE_LABELS[c]}</SelectItem>)}</SelectContent></Select></div>
               <label className="flex items-center gap-2 text-sm sm:col-span-2"><Switch checked={editing.portalVisible !== false} onCheckedChange={(v) => setEditing({ ...editing, portalVisible: v })} />E dukshme në portalin e klientit</label>
             </div>
             <DialogFooter>
@@ -692,11 +736,23 @@ const ProductsTab: React.FC<{ products: HostingProduct[]; servers: HostingServer
 
 // ── TLDs ───────────────────────────────────────────────────────────────────────
 
-const TldsTab: React.FC<{ tlds: DomainTld[]; canEdit: boolean }> = ({ tlds, canEdit }) => {
+const TldsTab: React.FC<{ tlds: DomainTld[]; canEdit: boolean; isAdmin: boolean; settings: ReturnType<typeof useTeamSettingsData> }> = ({ tlds, canEdit, isAdmin, settings }) => {
   const { toast } = useToast();
   const mutation = useMutation<DomainTld>('domainTlds');
   const [editing, setEditing] = useState<Partial<DomainTld> | null>(null);
-  const [margin, setMargin] = useState(40);
+  const [margin, setMargin] = useState(settings?.hostingTldMarginPct ?? 40);
+  const [syncing, setSyncing] = useState(false);
+  const syncCosts = async () => {
+    setSyncing(true);
+    try { const r = await hostingApi<{ updated: number; unmatched: string[]; belowCost: string[]; currency: string | null }>('tld.syncCosts'); toast({ title: `Kostot u sinkronizuan (${r.updated} TLD${r.currency ? `, ${r.currency}` : ''})`, description: [r.unmatched.length ? `pa çmim te Dynadot: ${r.unmatched.join(', ')}` : '', r.belowCost.length ? `NËN KOSTO: ${r.belowCost.join(', ')}` : ''].filter(Boolean).join(' · ') || undefined, variant: r.belowCost.length ? 'destructive' : undefined }); }
+    catch (e) { toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' }); }
+    finally { setSyncing(false); }
+  };
+  const applySuggested = async (t: DomainTld) => {
+    if (t.suggestedRegisterPrice == null && t.suggestedRenewPrice == null) return;
+    try { await mutation.update(t.id, { ...(t.suggestedRegisterPrice != null ? { registerPrice: t.suggestedRegisterPrice } : {}), ...(t.suggestedRenewPrice != null ? { renewPrice: t.suggestedRenewPrice } : {}), belowCost: false } as any); toast({ title: `.${t.tld}: çmimet e propozuara u aplikuan` }); }
+    catch (e) { toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' }); }
+  };
   const save = async () => {
     if (!editing) return;
     const tld = String(editing.tld || '').trim().toLowerCase().replace(/^\.+/, '');
@@ -707,16 +763,25 @@ const TldsTab: React.FC<{ tlds: DomainTld[]; canEdit: boolean }> = ({ tlds, canE
   };
   return (
     <div className="space-y-3">
-      {canEdit && <Button onClick={() => setEditing({ status: 'Active', currency: 'EUR', minYears: 1, maxYears: 10, portalVisible: true })}><Plus className="w-4 h-4 mr-2" />TLD e re</Button>}
+      <div className="flex flex-wrap gap-2 items-center">
+        {canEdit && <Button onClick={() => setEditing({ status: 'Active', currency: 'EUR', minYears: 1, maxYears: 10, portalVisible: true })}><Plus className="w-4 h-4 mr-2" />TLD e re</Button>}
+        {isAdmin && <Button variant="outline" onClick={syncCosts} disabled={syncing || !settings?.hasDynadotApiKey}>{syncing ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <RefreshCw className="w-4 h-4 mr-2" />}Sinkronizo kostot nga Dynadot</Button>}
+        <span className="text-xs text-muted-foreground">{settings?.hostingTldCostsSyncedAt ? `Kostot u lexuan më ${fmtDate(settings.hostingTldCostsSyncedAt)} (automatikisht çdo javë, marzh ${settings?.hostingTldMarginPct ?? 40}%)` : 'Kostot lexohen automatikisht çdo javë nga Dynadot'}</span>
+      </div>
+      {tlds.some((t) => t.belowCost) && <Card className="p-3 border-red-300 bg-red-50 text-sm text-red-800 flex items-center gap-2"><AlertTriangle className="w-4 h-4" />TLD nën kosto: {tlds.filter((t) => t.belowCost).map((t) => `.${t.tld}`).join(', ')} — çmimi i shitjes është më i ulët se kostoja te Dynadot. Apliko propozimet.</Card>}
       {!tlds.length && <Card className="p-8 text-center text-muted-foreground">Asnjë TLD. Shto p.sh. <code>com</code>, <code>al</code>, <code>net</code> me çmimin e shitjes për regjistrim dhe rinovim.</Card>}
       <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
         {tlds.map((t) => (
           <Card key={t.id} className="p-4 cursor-pointer hover:border-primary/40" onClick={() => canEdit && setEditing(t)}>
-            <div className="flex items-center justify-between"><span className="font-semibold">.{t.tld}</span>{t.status === 'Archived' && <Badge variant="outline">Arkiv</Badge>}</div>
+            <div className="flex items-center justify-between"><span className="font-semibold">.{t.tld}</span><div className="flex gap-1">{t.belowCost && <Badge className="bg-red-100 text-red-800 border-0 text-xs">nën kosto</Badge>}{t.status === 'Archived' && <Badge variant="outline">Arkiv</Badge>}</div></div>
             <div className="text-sm mt-1 space-y-0.5">
-              <div className="flex justify-between"><span className="text-muted-foreground">Regjistrim</span><span>{formatCurrency(t.registerPrice, t.currency)}{t.costRegister ? <span className="text-xs text-muted-foreground"> (kosto {t.costRegister})</span> : null}</span></div>
-              <div className="flex justify-between"><span className="text-muted-foreground">Rinovim</span><span>{formatCurrency(t.renewPrice, t.currency)}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Regjistrim</span><span>{formatCurrency(t.registerPrice, t.currency)}{t.costRegister != null ? <span className="text-xs text-muted-foreground"> (kosto {t.costRegister} {t.costCurrency || ''})</span> : null}</span></div>
+              <div className="flex justify-between"><span className="text-muted-foreground">Rinovim</span><span>{formatCurrency(t.renewPrice, t.currency)}{t.costRenew != null ? <span className="text-xs text-muted-foreground"> (kosto {t.costRenew} {t.costCurrency || ''})</span> : null}</span></div>
               {t.transferPrice != null && <div className="flex justify-between"><span className="text-muted-foreground">Transferim</span><span>{formatCurrency(t.transferPrice, t.currency)}</span></div>}
+              {(t.suggestedRegisterPrice != null || t.suggestedRenewPrice != null) && (t.suggestedRegisterPrice !== t.registerPrice || t.suggestedRenewPrice !== t.renewPrice) && (
+                <div className="flex items-center justify-between pt-1 border-t mt-1 text-xs"><span className="text-muted-foreground">Propozim ({t.suggestedMarginPct ?? margin}%): {t.suggestedRegisterPrice ?? '—'} / {t.suggestedRenewPrice ?? '—'} {t.costCurrency || ''}{t.costCurrencyMismatch ? ' (monedhë tjetër)' : ''}</span>{canEdit && !t.costCurrencyMismatch && <Button size="sm" variant="ghost" className="h-6 px-2" onClick={(e) => { e.stopPropagation(); void applySuggested(t); }}><Wand2 className="w-3 h-3 mr-1" />Apliko</Button>}</div>
+              )}
+              {t.costSyncedAt && <p className="text-[10px] text-muted-foreground">kosto e lexuar {fmtDate(t.costSyncedAt)}</p>}
             </div>
           </Card>
         ))}
@@ -824,7 +889,9 @@ const SettingsTab: React.FC<{ teamId: string | null; settings: ReturnType<typeof
   const [lc, setLc] = useState(normalizeLifecycleConfig(settings?.hostingLifecycle));
   const [ns, setNs] = useState((settings?.hostingDefaultNameservers || []).join('\n'));
   const [dynCur, setDynCur] = useState(settings?.dynadotCurrency || 'USD');
-  useEffect(() => { setLc(normalizeLifecycleConfig(settings?.hostingLifecycle)); setNs((settings?.hostingDefaultNameservers || []).join('\n')); setDynCur(settings?.dynadotCurrency || 'USD'); }, [settings?.hostingLifecycle, settings?.hostingDefaultNameservers, settings?.dynadotCurrency]);
+  const [marginPct, setMarginPct] = useState(settings?.hostingTldMarginPct ?? 40);
+  const [backupDays, setBackupDays] = useState(settings?.hostingBackupIntervalDays ?? 7);
+  useEffect(() => { setLc(normalizeLifecycleConfig(settings?.hostingLifecycle)); setNs((settings?.hostingDefaultNameservers || []).join('\n')); setDynCur(settings?.dynadotCurrency || 'USD'); setMarginPct(settings?.hostingTldMarginPct ?? 40); setBackupDays(settings?.hostingBackupIntervalDays ?? 7); }, [settings?.hostingLifecycle, settings?.hostingDefaultNameservers, settings?.dynadotCurrency, settings?.hostingTldMarginPct, settings?.hostingBackupIntervalDays]);
   const run = async (label: string, fn: () => Promise<void>) => { setBusy(label); try { await fn(); } catch (e) { toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' }); } finally { setBusy(null); } };
   if (!teamId) return <Card className="p-6 text-muted-foreground">Nuk u gjet ekipi aktiv.</Card>;
   return (
@@ -850,7 +917,12 @@ const SettingsTab: React.FC<{ teamId: string | null; settings: ReturnType<typeof
           ))}
         </div>
         <div className="space-y-1"><Label className="text-xs">Nameservers default për domain-et e reja (një për rresht)</Label><Textarea rows={2} value={ns} onChange={(e) => setNs(e.target.value)} disabled={!isAdmin} /></div>
-        <Button size="sm" disabled={!isAdmin || busy === 'lc'} onClick={() => run('lc', async () => { await saveTeamSettings(teamId, { hostingLifecycle: normalizeLifecycleConfig(lc), hostingDefaultNameservers: ns.split(/\s+/).filter(Boolean) }); toast({ title: 'Cilësimet u ruajtën' }); })}>Ruaj</Button>
+        <div className="grid grid-cols-2 gap-3 text-sm">
+          <div className="space-y-1"><Label className="text-xs">Marzhi % mbi koston Dynadot (propozimi i çmimeve TLD)</Label><Input type="number" min={0} max={500} value={marginPct} onChange={(e) => setMarginPct(Number(e.target.value))} disabled={!isAdmin} /></div>
+          <div className="space-y-1"><Label className="text-xs">Backup automatik çdo N ditë (0 = fikur)</Label><Input type="number" min={0} max={90} value={backupDays} onChange={(e) => setBackupDays(Number(e.target.value))} disabled={!isAdmin} /></div>
+        </div>
+        <Button size="sm" disabled={!isAdmin || busy === 'lc'} onClick={() => run('lc', async () => { await saveTeamSettings(teamId, { hostingLifecycle: normalizeLifecycleConfig(lc), hostingDefaultNameservers: ns.split(/\s+/).filter(Boolean), hostingTldMarginPct: Math.max(0, marginPct), hostingBackupIntervalDays: Math.max(0, backupDays) }); toast({ title: 'Cilësimet u ruajtën' }); })}>Ruaj</Button>
+        {settings?.hostingExpiryReport?.at && <p className="text-xs text-muted-foreground">Raporti javor i fundit ({fmtDate(settings.hostingExpiryReport.at)}): {settings.hostingExpiryReport.domains30 || 0} domain-e ≤30 ditë, {settings.hostingExpiryReport.domains60 || 0} 31–60 ditë, {settings.hostingExpiryReport.subsDue30 || 0} hosting me afat ≤30 ditë, {settings.hostingExpiryReport.unpaid || 0} të papaguara, {settings.hostingExpiryReport.suspended || 0} të pezulluara. Dërgohet çdo të hënë 08:00 te menaxherët.</p>}
         <p className="text-xs text-muted-foreground">Default: faturë {DEFAULT_LIFECYCLE.invoiceDaysBefore} ditë para, pezullim {DEFAULT_LIFECYCLE.suspendDaysAfter} ditë pas, terminim {DEFAULT_LIFECYCLE.terminateDaysAfter} = i fikur (fshirja e llogarisë është opt-in; kur ndizet, bëhet backup pkgacct para fshirjes). Cikli ekzekutohet çdo orë nga VPS (`hosting-lifecycle`); sinkronizimi me serverët dhe Dynadot çdo 6 orë (`hosting-sync`).</p>
         {settings?.hostingLastRun && (
           <div className="text-xs text-muted-foreground border-t pt-2">
@@ -988,5 +1060,69 @@ const ManualDomainDialog: React.FC<{ open: boolean; onOpenChange: (o: boolean) =
         <DialogFooter><Button variant="outline" onClick={() => onOpenChange(false)}>Anulo</Button><Button onClick={save} disabled={busy}>{busy ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : null}Shto</Button></DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+};
+
+// ── Coupons ────────────────────────────────────────────────────────────────────
+
+const CouponsTab: React.FC<{ coupons: HostingCoupon[]; canEdit: boolean }> = ({ coupons, canEdit }) => {
+  const { toast } = useToast();
+  const mutation = useMutation<HostingCoupon>('hostingCoupons');
+  const [editing, setEditing] = useState<Partial<HostingCoupon> | null>(null);
+  const save = async () => {
+    if (!editing) return;
+    const code = String(editing.code || '').trim().toUpperCase().replace(/[^A-Z0-9_-]/g, '').slice(0, 32);
+    if (!code || !(Number(editing.value) > 0)) { toast({ title: 'Kodi dhe vlera janë të detyrueshme', variant: 'destructive' }); return; }
+    if (coupons.some((c) => c.code === code && c.id !== editing.id)) { toast({ title: 'Ky kod ekziston', variant: 'destructive' }); return; }
+    const payload = {
+      code, type: editing.type === 'fixed' ? 'fixed' : 'percent', value: Number(editing.value), currency: editing.type === 'fixed' ? cur(editing.currency) : null,
+      appliesTo: editing.appliesTo || 'all', status: editing.status || 'Active',
+      validFrom: editing.validFrom || null, validUntil: editing.validUntil || null,
+      maxUses: editing.maxUses != null && editing.maxUses !== ('' as any) ? Number(editing.maxUses) : null, minTotal: editing.minTotal != null && editing.minTotal !== ('' as any) ? Number(editing.minTotal) : null,
+      note: editing.note || '', ...(editing.id ? {} : { uses: 0 }),
+    };
+    try { if (editing.id) await mutation.update(editing.id, payload as any); else await mutation.create(payload as any); toast({ title: 'Kuponi u ruajt' }); setEditing(null); }
+    catch (e) { toast({ title: 'Gabim', description: (e as Error).message, variant: 'destructive' }); }
+  };
+  const dateInput = (d: unknown) => { const x = toDate(d); return x ? x.toISOString().slice(0, 10) : ''; };
+  return (
+    <div className="space-y-3">
+      {canEdit && <Button onClick={() => setEditing({ type: 'percent', appliesTo: 'all', status: 'Active', currency: 'EUR' })}><Plus className="w-4 h-4 mr-2" />Kupon i ri</Button>}
+      {!coupons.length && <Card className="p-8 text-center text-muted-foreground">Asnjë kupon. Kuponi vlen për faturën e parë të një porosie (hosting dhe/ose domain); klienti e shkruan te shporta në portal.</Card>}
+      <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-3">
+        {coupons.map((c) => (
+          <Card key={c.id} className="p-4 space-y-1 cursor-pointer hover:border-primary/40" onClick={() => canEdit && setEditing(c)}>
+            <div className="flex items-center justify-between"><span className="font-mono font-semibold">{c.code}</span><div className="flex gap-1">{c.status === 'Archived' && <Badge variant="outline">Arkiv</Badge>}{c.maxUses != null && (c.uses || 0) >= c.maxUses && <Badge className="bg-muted text-muted-foreground border-0 text-xs">i shteruar</Badge>}</div></div>
+            <p className="text-sm">{c.type === 'percent' ? `${c.value}%` : formatCurrency(c.value, c.currency || 'EUR')} zbritje · {c.appliesTo === 'hosting' ? 'vetëm hosting' : c.appliesTo === 'domains' ? 'vetëm domain-e' : 'gjithë porosia'}</p>
+            <p className="text-xs text-muted-foreground">Përdorur {c.uses || 0}{c.maxUses != null ? `/${c.maxUses}` : ''}{c.validUntil ? ` · deri ${fmtDate(c.validUntil)}` : ''}{c.minTotal ? ` · min ${c.minTotal}` : ''}</p>
+            {c.note && <p className="text-xs text-muted-foreground truncate">{c.note}</p>}
+          </Card>
+        ))}
+      </div>
+      {editing && (
+        <Dialog open onOpenChange={(o) => !o && setEditing(null)}>
+          <DialogContent className="max-w-lg">
+            <DialogHeader><DialogTitle>{editing.id ? `Ndrysho ${editing.code}` : 'Kupon i ri'}</DialogTitle><DialogDescription>Vlen vetëm për faturën e parë të porosisë; rinovimet faturohen me çmim të plotë.</DialogDescription></DialogHeader>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1"><Label>Kodi</Label><Input className="uppercase" value={editing.code || ''} onChange={(e) => setEditing({ ...editing, code: e.target.value.toUpperCase() })} disabled={!!editing.id} /></div>
+              <div className="space-y-1"><Label>Tipi</Label><Select value={editing.type || 'percent'} onValueChange={(v) => setEditing({ ...editing, type: v as any })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="percent">Përqindje</SelectItem><SelectItem value="fixed">Shumë fikse</SelectItem></SelectContent></Select></div>
+              <div className="space-y-1"><Label>{editing.type === 'fixed' ? 'Shuma' : 'Përqindja'}</Label><Input type="number" min={0} step="0.01" value={editing.value ?? ''} onChange={(e) => setEditing({ ...editing, value: Number(e.target.value) })} /></div>
+              {editing.type === 'fixed' ? <div className="space-y-1"><Label>Monedha</Label><Select value={editing.currency || 'EUR'} onValueChange={(v) => setEditing({ ...editing, currency: v as any })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="EUR">EUR</SelectItem><SelectItem value="ALL">ALL</SelectItem></SelectContent></Select></div> : <div />}
+              <div className="space-y-1"><Label>Vlen për</Label><Select value={editing.appliesTo || 'all'} onValueChange={(v) => setEditing({ ...editing, appliesTo: v as any })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="all">Gjithë porosinë</SelectItem><SelectItem value="hosting">Vetëm hosting</SelectItem><SelectItem value="domains">Vetëm domain-e</SelectItem></SelectContent></Select></div>
+              <div className="space-y-1"><Label>Statusi</Label><Select value={editing.status || 'Active'} onValueChange={(v) => setEditing({ ...editing, status: v as any })}><SelectTrigger><SelectValue /></SelectTrigger><SelectContent><SelectItem value="Active">Aktiv</SelectItem><SelectItem value="Archived">Arkiv</SelectItem></SelectContent></Select></div>
+              <div className="space-y-1"><Label>Nga</Label><Input type="date" value={dateInput(editing.validFrom)} onChange={(e) => setEditing({ ...editing, validFrom: e.target.value ? new Date(`${e.target.value}T00:00:00Z`) : null })} /></div>
+              <div className="space-y-1"><Label>Deri</Label><Input type="date" value={dateInput(editing.validUntil)} onChange={(e) => setEditing({ ...editing, validUntil: e.target.value ? new Date(`${e.target.value}T23:59:59Z`) : null })} /></div>
+              <div className="space-y-1"><Label>Max përdorime</Label><Input type="number" min={0} value={editing.maxUses ?? ''} onChange={(e) => setEditing({ ...editing, maxUses: e.target.value === '' ? null : Number(e.target.value) })} /></div>
+              <div className="space-y-1"><Label>Total minimal porosie</Label><Input type="number" min={0} step="0.01" value={editing.minTotal ?? ''} onChange={(e) => setEditing({ ...editing, minTotal: e.target.value === '' ? null : Number(e.target.value) })} /></div>
+              <div className="space-y-1 col-span-2"><Label>Shënim (i brendshëm)</Label><Input value={editing.note || ''} onChange={(e) => setEditing({ ...editing, note: e.target.value })} /></div>
+            </div>
+            <DialogFooter>
+              {editing.id && <Button variant="ghost" className="text-red-700 mr-auto" onClick={async () => { await mutation.remove(editing.id!); setEditing(null); }}>Fshi</Button>}
+              <Button variant="outline" onClick={() => setEditing(null)}>Anulo</Button><Button onClick={save}>Ruaj</Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+      )}
+    </div>
   );
 };

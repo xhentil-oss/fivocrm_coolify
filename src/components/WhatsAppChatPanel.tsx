@@ -3,7 +3,7 @@ import { useCollection, useMutation, useDocument, getGlobalTeamId } from '../hoo
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
-import { X, Send, MessageSquare, Loader2, Phone, FileText, Paperclip, Zap, Sparkles, RefreshCw } from 'lucide-react';
+import { X, Send, MessageSquare, Loader2, Phone, FileText, Paperclip, Zap, Sparkles, RefreshCw, Clock, AlertCircle } from 'lucide-react';
 import { Button } from './ui/button';
 import { normalizeAlbanianPhone, getTimestampMs } from '../lib/utils';
 import { useFileUpload } from '../hooks/useFileUpload';
@@ -463,9 +463,25 @@ const WhatsAppChatPanel: React.FC<Props> = ({ phone, jid: jidProp, leadName, lea
                 <div className={`flex items-center gap-1 mt-1 ${isOut ? 'justify-end' : 'justify-start'}`}>
                   <span className="text-[10px] text-muted-foreground">{timeStr}</span>
                   {isOut && (
-                    <span className="text-[10px] text-[#25D366]">
-                      {msg.status === 'read' ? '✓✓' : '✓'}
-                    </span>
+                    // WhatsApp's own vocabulary: clock = not yet accepted by the server,
+                    // ✓ = accepted, ✓✓ grey = delivered, ✓✓ green = read, ! = failed.
+                    // Before this every outbound row showed ✓, including ones WhatsApp
+                    // had never accepted.
+                    msg.status === 'failed' ? (
+                      <span className="inline-flex items-center gap-0.5 text-[10px] text-red-600" title={(msg as any).error || 'Dërgimi dështoi'}>
+                        <AlertCircle className="w-3 h-3" /> Dështoi
+                      </span>
+                    ) : msg.status === 'pending' ? (
+                      <span className="text-[10px] text-muted-foreground" title="Në pritje të konfirmimit nga WhatsApp">
+                        <Clock className="w-3 h-3" />
+                      </span>
+                    ) : msg.status === 'read' ? (
+                      <span className="text-[10px] text-[#25D366]" title="Lexuar">✓✓</span>
+                    ) : msg.status === 'delivered' ? (
+                      <span className="text-[10px] text-muted-foreground" title="Dorëzuar">✓✓</span>
+                    ) : (
+                      <span className="text-[10px] text-muted-foreground" title="Dërguar">✓</span>
+                    )
                   )}
                 </div>
               </div>

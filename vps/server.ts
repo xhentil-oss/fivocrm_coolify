@@ -3,6 +3,7 @@ import makeWASocket, {
   useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
+  generateMessageIDV2,
 } from 'baileys';
 import { Boom } from '@hapi/boom';
 import admin from 'firebase-admin';
@@ -96,6 +97,14 @@ interface AgentState {
   syncedContactNames: Map<string, string>;
   /** The actual WhatsApp number connected to this agent (digits-only, e.g. "35569…"). Set on connection.open. */
   connectedPhone: string | null;
+  /**
+   * Set by unloadAgent(): the account was deleted/disabled in Firestore. The
+   * connection.update 'close' handler must NOT schedule a reconnect for it —
+   * that is exactly how a deleted account kept sending for a day.
+   */
+  unloading: boolean;
+  /** /send waits here for the server ack (messages.update status ≥ 2) of a message id. */
+  ackWaiters: Map<string, (status: number) => void>;
 }
 
 function createAgentState(config: AgentConfig): AgentState {
@@ -109,10 +118,139 @@ function createAgentState(config: AgentConfig): AgentState {
     leadPhoneCache: new Map(),
     syncedContactNames: new Map(),
     connectedPhone: null,
+    unloading: false,
+    ackWaiters: new Map(),
   };
 }
 
 const agents = new Map<string, AgentState>();
+
+/**
+ * Baileys' own log. `silent` hid every send failure ("no sessions", bad-request,
+ * decrypt errors) for the life of this server; `warn` is quiet when healthy.
+ */
+const BAILEYS_LOG_LEVEL = process.env.BAILEYS_LOG_LEVEL || 'warn';
+
+/**
+ * How long /send waits for WhatsApp's server ack before answering. The Vercel
+ * relay (api/whatsapp.ts) aborts at 10s, so this must stay well under it. A
+ * message that is not acked in time is returned as `status: 'pending'` (still a
+ * 200 — it may well be acked a second later) and the messages.update handler
+ * upgrades the row when the receipt arrives.
+ */
+const SEND_ACK_TIMEOUT_MS = 6_000;
+
+/** Baileys WAMessageStatus → the `whatsappMessages.status` we store. */
+const RECEIPT_STATUS: Record<number, 'failed' | 'sent' | 'delivered' | 'read'> = {
+  0: 'failed', 2: 'sent', 3: 'delivered', 4: 'read', 5: 'read',
+};
+
+/**
+ * Stop an agent whose Firestore account was deleted or disabled. Before this
+ * existed, deleting the account in Cilësimet only removed the document: the VPS
+ * kept the socket alive (and reconnecting) until the next pm2 restart, and
+ * getAgent() kept picking it for sends — messages left from a number nobody
+ * managed any more.
+ *
+ * - `deleted`  → log the companion device out of WhatsApp and wipe the session.
+ * - `disabled` → just close the socket; the session stays so re-enabling works
+ *                without a new QR scan.
+ */
+async function unloadAgent(agent: AgentState, reason: 'deleted' | 'disabled'): Promise<void> {
+  const id = agent.config.id;
+  agent.unloading = true;
+  agents.delete(id);
+  if (agent.reconnectTimer) { clearTimeout(agent.reconnectTimer); agent.reconnectTimer = null; }
+  if (agent.lidResyncTimer) { clearInterval(agent.lidResyncTimer); agent.lidResyncTimer = null; }
+  if (agent.cacheEvictTimer) { clearInterval(agent.cacheEvictTimer); agent.cacheEvictTimer = null; }
+  for (const resolve of agent.ackWaiters.values()) resolve(0);
+  agent.ackWaiters.clear();
+  const sock = agent.sock;
+  agent.sock = null;
+  agent.connectionStatus = 'disconnected';
+  agent.qrDataUrl = null;
+  if (sock) {
+    if (reason === 'deleted') {
+      // logout() needs an open socket; fall back to a plain close.
+      try { await Promise.race([sock.logout(), new Promise(r => setTimeout(r, 5000))]); }
+      catch { try { sock.end(undefined); } catch {} }
+    } else {
+      try { sock.end(undefined); } catch {}
+    }
+  }
+  if (reason === 'deleted') {
+    try { rmSync(authDir(id), { recursive: true, force: true }); } catch {}
+  }
+  console.log(`[${id}] Agent u shkarkua (${reason === 'deleted' ? 'llogaria u fshi' : 'llogaria u çaktivizua'})`);
+}
+
+/**
+ * Bring the in-memory agents in line with `whatsappAccounts`: start every
+ * enabled account that is not running, stop every running agent whose account
+ * is gone or disabled. Used by the live listener and by POST /reload.
+ * Serialised — two snapshots in a row must not race each other.
+ */
+let reconcileChain: Promise<void> = Promise.resolve();
+function reconcileAgents(docs: admin.firestore.QueryDocumentSnapshot[]): Promise<{ added: string[]; removed: string[] }> {
+  const run = async () => {
+    const added: string[] = []; const removed: string[] = [];
+    const enabledIds = new Set<string>();
+    const knownIds = new Set(docs.map(d => d.id));
+
+    for (const doc of docs) {
+      const data = doc.data();
+      if (data.enabled !== true) continue;
+      enabledIds.add(doc.id);
+      if (agents.has(doc.id)) continue;
+      const config: AgentConfig = {
+        id: doc.id, teamId: data.teamId || DEFAULT_TEAM_ID,
+        label: data.label || doc.id, assignedToUserId: data.assignedToUserId, enabled: true,
+      };
+      const agent = createAgentState(config);
+      agent.cacheEvictTimer = setInterval(() => agent.leadPhoneCache.clear(), 6 * 60 * 60 * 1000);
+      agents.set(doc.id, agent);
+      await loadLidMappings(agent);
+      await loadPendingLidMessages(agent);
+      connectAgent(agent).catch(e => console.error(`[${agent.config.id}] connectAgent error:`, e));
+      added.push(doc.id);
+      console.log(`[VPS] Agent i ri ngarkuar: ${config.id} (${config.label})`);
+    }
+
+    // The env-based 'default' agent only exists while the collection is empty.
+    const keepEnvDefault = docs.length === 0;
+    for (const agent of Array.from(agents.values())) {
+      const id = agent.config.id;
+      if (enabledIds.has(id)) continue;
+      if (id === 'default' && keepEnvDefault && !knownIds.has('default')) continue;
+      await unloadAgent(agent, knownIds.has(id) ? 'disabled' : 'deleted');
+      removed.push(id);
+    }
+    return { added, removed };
+  };
+  const result = reconcileChain.then(run, run);
+  reconcileChain = result.then(() => undefined, () => undefined);
+  return result;
+}
+
+/**
+ * Live mirror of `whatsappAccounts`: a delete / disable / add in Cilësimet takes
+ * effect within seconds, without a restart. One listener, reads only on change.
+ */
+function watchAccounts(): void {
+  db.collection('whatsappAccounts').onSnapshot(
+    (snap) => {
+      reconcileAgents(snap.docs)
+        .then(({ added, removed }) => {
+          if (added.length || removed.length) console.log(`[VPS] whatsappAccounts → +${added.length} / -${removed.length} agjentë`);
+        })
+        .catch(e => console.error('[VPS] reconcile error:', e));
+    },
+    (err) => {
+      console.error('[VPS] whatsappAccounts listener error — riprovoj në 60s:', err);
+      setTimeout(watchAccounts, 60_000);
+    },
+  );
+}
 
 // ── Rate limit (per-agent) ──────────────────────────────────────────────────
 const SEND_RATE_WINDOW_MS = 60_000;
@@ -383,7 +521,7 @@ async function connectAgent(agent: AgentState): Promise<void> {
 
   agent.sock = makeWASocket({
     version, auth: state,
-    logger: pino({ level: 'silent' }),
+    logger: pino({ level: BAILEYS_LOG_LEVEL }),
     browser: ['Business CRM', 'Chrome', '1.0.0'],
     printQRInTerminal: false,
     shouldSyncHistoryMessage: () => true,
@@ -400,9 +538,20 @@ async function connectAgent(agent: AgentState): Promise<void> {
     }
     if (connection === 'close') {
       agent.connectionStatus = 'disconnected'; agent.qrDataUrl = null;
+      // Nobody is going to ack a message on a closed socket.
+      for (const resolve of agent.ackWaiters.values()) resolve(-1);
+      agent.ackWaiters.clear();
       const code = (lastDisconnect?.error as Boom)?.output?.statusCode;
       const isLoggedOut = code === DisconnectReason.loggedOut;
       console.log(`[${agent.config.id}] Lidhja u ndërpre (${code})`);
+      // Cilësimet reads this so "Lidhur" reflects the socket, not a phone number
+      // stamped once at the first successful scan.
+      db.collection('whatsappAccounts').doc(agent.config.id).update({
+        connectionStatus: 'disconnected',
+        lastDisconnectedAt: admin.firestore.Timestamp.fromDate(new Date()),
+        ...(isLoggedOut ? { connectedPhone: null } : {}),
+      }).catch(() => {});
+      if (agent.unloading) return; // account deleted/disabled — never reconnect
       if (isLoggedOut) {
         try { rmSync(dir, { recursive: true, force: true }); } catch {}
         console.log(`[${agent.config.id}] Sesion u fshi — QR i ri në 3s...`);
@@ -420,7 +569,7 @@ async function connectAgent(agent: AgentState): Promise<void> {
         const myPhone = normalizePhone(rawId);
         if (myPhone) {
           agent.connectedPhone = myPhone;
-          await db.collection('whatsappAccounts').doc(agent.config.id).update({ connectedPhone: myPhone, lastConnectedAt: admin.firestore.Timestamp.fromDate(new Date()) }).catch(() => {});
+          await db.collection('whatsappAccounts').doc(agent.config.id).update({ connectedPhone: myPhone, connectionStatus: 'connected', lastConnectedAt: admin.firestore.Timestamp.fromDate(new Date()) }).catch(() => {});
         }
       } catch {}
       setTimeout(() => readBaileysLidMappings(agent), 3000);
@@ -583,14 +732,29 @@ async function connectAgent(agent: AgentState): Promise<void> {
     }
   });
 
+  // Receipts: 0 ERROR, 1 PENDING, 2 SERVER_ACK, 3 DELIVERY_ACK, 4 READ, 5 PLAYED.
+  // Status 2 is the first proof WhatsApp accepted the message — /send waits for it.
   agent.sock.ev.on('messages.update', async (updates) => {
     for (const update of updates) {
       const waMessageId = update.key?.id; if (!waMessageId) continue;
-      const receiptMap: Record<number, string> = { 2: 'sent', 3: 'delivered', 4: 'read' };
-      const newStatus = receiptMap[(update.update as any)?.status]; if (!newStatus) continue;
+      const code = (update.update as any)?.status;
+      if (typeof code !== 'number') continue;
+      agent.ackWaiters.get(waMessageId)?.(code);
+      const newStatus = RECEIPT_STATUS[code]; if (!newStatus) continue;
       try {
-        const snap = await db.collection('whatsappMessages').where('waMessageId', '==', waMessageId).limit(1).get();
-        if (!snap.empty) await snap.docs[0].ref.update({ status: newStatus, updatedAt: admin.firestore.Timestamp.fromDate(new Date()) });
+        // Our rows use the WhatsApp id as the document id (one read, no index);
+        // fall back to the query for rows that predate that convention.
+        const direct = db.collection('whatsappMessages').doc(waMessageId);
+        const directSnap = await direct.get();
+        const ref = directSnap.exists
+          ? direct
+          : (await db.collection('whatsappMessages').where('waMessageId', '==', waMessageId).limit(1).get()).docs[0]?.ref;
+        if (!ref) continue;
+        const current = directSnap.exists ? directSnap.data()?.status : undefined;
+        // Receipts can arrive out of order; never downgrade read → delivered → sent.
+        const rank: Record<string, number> = { pending: 0, sent: 1, delivered: 2, read: 3 };
+        if (newStatus !== 'failed' && current && (rank[current] ?? -1) > rank[newStatus]) continue;
+        await ref.update({ status: newStatus, updatedAt: admin.firestore.Timestamp.fromDate(new Date()) });
       } catch (e) { console.error(`[${agent.config.id}] Error updating receipt:`, e); }
     }
   });
@@ -648,7 +812,11 @@ app.get('/', (_req, res) => {
 app.get('/status', requireApiKey, (_req, res) => {
   const statuses: Record<string, any> = {};
   for (const [id, a] of agents) {
-    statuses[id] = { label: a.config.label, status: a.connectionStatus, teamId: a.config.teamId, assignedToUserId: a.config.assignedToUserId, lidMappings: a.lidToPhoneMap.size, pendingLids: a.pendingLidMessages.size };
+    statuses[id] = {
+      label: a.config.label, status: a.connectionStatus, teamId: a.config.teamId, assignedToUserId: a.config.assignedToUserId,
+      connectedPhone: a.connectionStatus === 'connected' ? a.connectedPhone : null,
+      lidMappings: a.lidToPhoneMap.size, pendingLids: a.pendingLidMessages.size,
+    };
   }
   res.json({ agents: statuses });
 });
@@ -672,27 +840,13 @@ app.get('/qr-data/:agentId', requireApiKey, (req: any, res: any) => {
   });
 });
 
-// Hot-reload: load new agents from Firestore without restarting
+// Hot-reload: reconcile agents with Firestore without restarting (adds new
+// enabled accounts AND unloads deleted/disabled ones — same as the live listener).
 app.post('/reload', requireApiKey, async (_req: any, res: any) => {
   try {
-    const snap = await db.collection('whatsappAccounts').where('enabled', '==', true).get();
-    let added = 0;
-    for (const doc of snap.docs) {
-      if (agents.has(doc.id)) continue; // already running
-      const data = doc.data();
-      const config: AgentConfig = {
-        id: doc.id, teamId: data.teamId || DEFAULT_TEAM_ID,
-        label: data.label || doc.id, assignedToUserId: data.assignedToUserId, enabled: true,
-      };
-      const agent = createAgentState(config);
-      agent.cacheEvictTimer = setInterval(() => agent.leadPhoneCache.clear(), 6 * 60 * 60 * 1000);
-      agents.set(doc.id, agent);
-      await loadLidMappings(agent);
-      connectAgent(agent).catch(e => console.error(`[${agent.config.id}] connectAgent error:`, e));
-      added++;
-      console.log(`[VPS] Hot-reload: agent i ri ngarkuar ${config.id} (${config.label})`);
-    }
-    res.json({ ok: true, added, total: agents.size });
+    const snap = await db.collection('whatsappAccounts').get();
+    const { added, removed } = await reconcileAgents(snap.docs);
+    res.json({ ok: true, added: added.length, removed: removed.length, addedIds: added, removedIds: removed, total: agents.size });
   } catch (e: any) {
     res.status(500).json({ error: e?.message || 'Gabim' });
   }
@@ -779,27 +933,55 @@ app.post('/send', requireApiKey, async (req, res) => {
     res.status(400).json({ error: 'Numri i telefonit është i pavlefshëm' }); return;
   }
 
+  // Honest status. Baileys' sendMessage() resolves as soon as the stanza is
+  // written to the socket — it says nothing about WhatsApp accepting it. The row
+  // therefore starts as `pending` and becomes `sent` only on the server ack
+  // (messages.update status 2). The id is generated HERE so the row exists before
+  // the receipt can arrive (the ack used to race the write and hit a missing doc).
+  const resolvedTeamId = teamId || agent.config.teamId;
+  const waMessageId = generateMessageIDV2((agent.sock as any)?.user?.id);
+  const ref = db.collection('whatsappMessages').doc(waMessageId);
+  const now = () => admin.firestore.Timestamp.fromDate(new Date());
+  await ref.set({
+    phone: cleanPhone, jid, direction: 'outbound', message,
+    leadId: leadId || null, leadName: leadName || null, waMessageId,
+    teamId: resolvedTeamId, agentId: agent.config.id, channelPhone: agent.connectedPhone || agent.config.id,
+    status: 'pending', channel: 'baileys',
+    isAutoReply: !!isAutoReply,
+    sentByUid: typeof sentByUid === 'string' && sentByUid ? sentByUid : null,
+    createdAt: now(), updatedAt: now(),
+  });
+
+  const ack = new Promise<number>((resolve) => { agent.ackWaiters.set(waMessageId, resolve); });
+  let timer: ReturnType<typeof setTimeout> | null = null;
   try {
-    const sent = await agent.sock.sendMessage(jid, { text: message });
-    const resolvedTeamId = teamId || agent.config.teamId;
-    const waMessageId = sent?.key?.id || null;
-    const docId = waMessageId || db.collection('whatsappMessages').doc().id;
-    await db.collection('whatsappMessages').doc(docId).set({
-      phone: cleanPhone, jid, direction: 'outbound', message,
-      leadId: leadId || null, leadName: leadName || null, waMessageId,
-      teamId: resolvedTeamId, agentId: agent.config.id, channelPhone: agent.connectedPhone || agent.config.id,
-      status: 'sent', channel: 'baileys',
-      isAutoReply: !!isAutoReply,
-      sentByUid: typeof sentByUid === 'string' && sentByUid ? sentByUid : null,
-      createdAt: admin.firestore.Timestamp.fromDate(new Date()),
-      updatedAt: admin.firestore.Timestamp.fromDate(new Date()),
-    });
-    console.log(`[${agent.config.id}] → ${cleanPhone}: ${message.slice(0, 80)}${isAutoReply ? ' (auto-reply)' : ''}`);
+    await agent.sock.sendMessage(jid, { text: message }, { messageId: waMessageId });
+    const code = await Promise.race([
+      ack,
+      new Promise<number>((resolve) => { timer = setTimeout(() => resolve(-2), SEND_ACK_TIMEOUT_MS); }),
+    ]);
+    // -1 = socket closed before the ack, -2 = timed out, 0 = WhatsApp rejected it.
+    if (code === 0 || code === -1) {
+      const error = code === 0 ? 'WhatsApp e refuzoi mesazhin' : 'Lidhja u ndërpre para konfirmimit';
+      await ref.update({ status: 'failed', error, updatedAt: now() }).catch(() => {});
+      console.warn(`[${agent.config.id}] ✗ ${cleanPhone}: ${error}`);
+      res.status(502).json({ error, id: waMessageId, agentId: agent.config.id, teamId: resolvedTeamId });
+      return;
+    }
+    const status = code >= 2 ? 'sent' : 'pending';
+    if (status === 'pending') console.warn(`[${agent.config.id}] ? ${cleanPhone}: pa ack pas ${SEND_ACK_TIMEOUT_MS}ms — mbetet pending`);
+    else console.log(`[${agent.config.id}] → ${cleanPhone}: ${message.slice(0, 80)}${isAutoReply ? ' (auto-reply)' : ''}`);
     // teamId is returned so the caller (api/whatsapp.ts) can key the conversation
     // even when it did not know the agent's team.
-    res.json({ success: true, id: docId, agentId: agent.config.id, teamId: resolvedTeamId });
+    res.json({ success: true, id: waMessageId, status, agentId: agent.config.id, teamId: resolvedTeamId });
   } catch (err: unknown) {
-    res.status(500).json({ error: err instanceof Error ? err.message : 'Dërgimi dështoi' });
+    const error = err instanceof Error ? err.message : 'Dërgimi dështoi';
+    await ref.update({ status: 'failed', error, updatedAt: now() }).catch(() => {});
+    console.error(`[${agent.config.id}] ✗ ${cleanPhone}: ${error}`);
+    res.status(500).json({ error, id: waMessageId });
+  } finally {
+    if (timer) clearTimeout(timer);
+    agent.ackWaiters.delete(waMessageId);
   }
 });
 
@@ -1054,6 +1236,11 @@ function scheduleDailyUtc(hour: number, minute: number, fn: () => void): void {
 }
 
 /** Wall-clock date + time in an IANA zone, without pulling in a date library. */
+/** 0 = Sunday … 6 = Saturday, in the given zone. */
+function weekdayInZone(d: Date, timeZone: string): number {
+  const w = new Intl.DateTimeFormat('en-US', { timeZone, weekday: 'short' }).format(d);
+  return ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'].indexOf(w);
+}
 function partsInZone(d: Date, timeZone: string): { day: string; hour: number; minute: number } {
   const parts = new Intl.DateTimeFormat('en-CA', {
     timeZone, hour12: false,
@@ -1135,6 +1322,12 @@ function startCronSchedulers(): void {
   // live cPanel servers and Dynadot, so they run on their own cadence.
   setInterval(() => { void triggerCronJob('hosting-lifecycle'); }, 60 * MIN);
   setInterval(() => { void triggerCronJob('hosting-sync'); }, 360 * MIN);
+  // Scheduled cPanel backups: a couple of the most overdue accounts every 30 min.
+  setInterval(() => { void triggerCronJob('hosting-backups'); }, 30 * MIN);
+  // Weekly expiry digest to managers — Mondays 08:00 local (wall-clock promise).
+  scheduleDailyInZone(CRON_LOCAL_TZ, 8, 0, () => {
+    if (weekdayInZone(new Date(), CRON_LOCAL_TZ) === 1) void triggerCronJob('hosting-expiry-report');
+  });
   // ── Reporting module ──
   // report-schedules reads ONLY active schedules (tiny), so it can tick hourly.
   // That matters: a schedule carries a per-tenant local hour, and the job fires when
@@ -1230,4 +1423,8 @@ app.listen(PORT, async () => {
     await loadPendingLidMessages(agent);
     connectAgent(agent).catch(e => console.error(`[${agent.config.id}] connectAgent error:`, e));
   }
+
+  // From here on Firestore drives the agent set: a deleted or disabled account
+  // is unloaded within seconds instead of living on until the next restart.
+  watchAccounts();
 });

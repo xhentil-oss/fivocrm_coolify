@@ -106,13 +106,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           });
         }
         const data: any = await r.json();
-        const statuses = data?.statuses && typeof data.statuses === 'object' ? data.statuses : {};
+        // The VPS answers `{ agents: { [id]: {...} } }` (vps/server.ts GET /status).
+        // This used to read `data.statuses`, so the app saw an empty list — and
+        // "Lidhur" in Cilësimet was decided by a phone number stamped at first scan.
+        const raw = data?.agents ?? data?.statuses;
+        const statuses = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
         const all = Object.entries(statuses).map(([id, v]: [string, any]) => ({
           id,
           label: v?.label || id,
           status: v?.status || 'disconnected',
           teamId: v?.teamId || null,
           assignedToUserId: v?.assignedToUserId || null,
+          connectedPhone: typeof v?.connectedPhone === 'string' && v.connectedPhone ? v.connectedPhone : null,
         }));
         const filtered = teamId ? all.filter((a) => a.teamId === teamId) : all;
         return res.status(200).json({

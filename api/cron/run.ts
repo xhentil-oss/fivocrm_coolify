@@ -23,7 +23,7 @@ import { runReportSchedules, runReportReminders, runClientHealthRollup, runRepor
 import { runCrmAutomations } from '../_crmAutomationJob.js';
 // Hosting & domains module (cPanel/WHM + Dynadot): lifecycle + sync. Own file — it
 // talks to live servers and registrars and is NOT part of run-all.
-import { runHostingLifecycle, runHostingSync } from '../_hostingJobs.js';
+import { runHostingLifecycle, runHostingSync, runHostingBackups, runHostingExpiryReport } from '../_hostingJobs.js';
 // "Who are this tenant's managers" — one resolver, shared with _gmb and _waInbound.
 import { managerIdsForBusiness } from '../_staffRecipients.js';
 import { sendBaileysText } from '../_waSend.js';
@@ -4251,6 +4251,9 @@ async function runPlatformMetricsRollup(opts?: { dryRun?: boolean; month?: strin
 const TENANT_DATA_COLLECTIONS = [
   ...BACKFILL_COLLECTIONS,
   'payments', 'domains', 'dailyFocus', 'productivitySettings', 'weeklyReviews',
+  // Hosting & domains module (all stamped with businessId).
+  'subscriptions', 'hostingOrders', 'hostingEvents', 'hostingProducts', 'hostingServers', 'hostingServerSecrets',
+  'domainTlds', 'hostingCoupons', 'hostingBackups',
   'emailCampaigns', 'emailTemplates', 'campaignEnrollments', 'waTemplates', 'waBroadcasts',
   'socialSnapshots', 'products', 'productCategories', 'productBrands', 'stockMovements',
   'shopOrders', 'conversations', 'auditLogs', 'notifications', 'dailyReportMisses',
@@ -5732,13 +5735,34 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       case 'hosting-sync': {
-        // Server health + registrar facts (expiry, NS, completed transfers). Read-mostly.
+        // Server health + registrar facts (expiry, NS, completed transfers), disk/drift
+        // alerts, weekly TLD wholesale-cost refresh. Read-mostly.
         let scopeId: string | null = null;
         if (isManual && !(await callerIsSuperAdmin(req))) {
           scopeId = await callerBusinessId(req);
           if (!scopeId) return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — ekzekutimi manual u ndal.' });
         }
         result = await runHostingSync({ businessId: scopeId });
+        break;
+      }
+      case 'hosting-backups': {
+        // Scheduled pkgacct backups, a couple of the most overdue accounts per run.
+        let scopeId: string | null = null;
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          scopeId = await callerBusinessId(req);
+          if (!scopeId) return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — ekzekutimi manual u ndal.' });
+        }
+        result = await runHostingBackups({ businessId: scopeId });
+        break;
+      }
+      case 'hosting-expiry-report': {
+        // Weekly digest (Mondays 08:00 local from the VPS) to each tenant's managers.
+        let scopeId: string | null = null;
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          scopeId = await callerBusinessId(req);
+          if (!scopeId) return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — ekzekutimi manual u ndal.' });
+        }
+        result = await runHostingExpiryReport({ businessId: scopeId });
         break;
       }
       case 'crm-automations': {
@@ -5871,7 +5895,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, task-reminders, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, daily-report-check, whatsapp-broadcasts, whatsapp-automations, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social, gmb-sync, hosting-lifecycle, hosting-sync` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, task-reminders, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, daily-report-check, whatsapp-broadcasts, whatsapp-automations, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social, gmb-sync, hosting-lifecycle, hosting-sync, hosting-backups, hosting-expiry-report` });
     }
 
     await recordJobRun({
