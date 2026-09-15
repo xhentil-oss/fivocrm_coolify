@@ -343,6 +343,33 @@ export async function fetchClientProduct(serviceId: string | number): Promise<Ma
   return product ? mapWhmcsProduct(product) : null;
 }
 
+// ── Manual payments (FivoCRM UI → WHMCS) ──────────────────────────────────────
+/**
+ * WHMCS `transid` for a payment recorded inside FivoCRM. Deterministic on
+ * (invoice, key) so a retry — from the endpoint, the sync, or a re-mark after an
+ * un-mark — hits WHMCS's "transaction id already exists" and is a no-op.
+ */
+export function manualPaymentTransId(invoiceDocId: string, key: string): string {
+  return `fivocrm-${invoiceDocId}-${String(key || 'full').replace(/[^\w-]/g, '')}`;
+}
+
+/**
+ * FivoCRM payment-method label → WHMCS gateway SYSTEM name. WHMCS shows the
+ * gateway on the transaction; an unknown name is accepted but renders blank, so
+ * offline methods fall back to `WHMCS_MANUAL_GATEWAY` (default `banktransfer`,
+ * which every WHMCS install ships with).
+ */
+export function whmcsGatewayForMethod(method: string | undefined | null): string {
+  const fallback = (process.env.WHMCS_MANUAL_GATEWAY || 'banktransfer').trim() || 'banktransfer';
+  const m = String(method || '').trim().toLowerCase();
+  if (!m) return fallback;
+  if (/stripe|card|kart/.test(m)) return 'stripe';
+  if (/paypal/.test(m)) return 'paypal';
+  if (/bank|transfer|iban|swift/.test(m)) return 'banktransfer';
+  if (/cash|kesh|dor/.test(m)) return 'mailin';
+  return fallback;
+}
+
 // ── Write-back: record a payment on a WHMCS invoice (FivoCRM → WHMCS) ──────────
 /**
  * Record a payment against a WHMCS invoice when a WHMCS-sourced invoice is paid

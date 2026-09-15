@@ -10,6 +10,8 @@ import socialHandler from './_social-api.js';
 import gmbHandler from './_gmb-api.js';
 import linkContactHandler from './_link-contact.js';
 import mergeContactsHandler from './_merge-contacts.js';
+import whmcsPaymentHandler from './_whmcs-payment.js';
+import hostingHandler from './_hosting.js';
 import syncClaimsHandler from './_sync-claims.js';
 import notifyStaffHandler from './_notify-staff.js';
 import tenantSecretsHandler from './_tenant-secrets.js';
@@ -62,6 +64,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     else if (req.url.includes('/api/social')) type = 'social';
     else if (req.url.includes('/api/gmb')) type = 'gmb';
     else if (req.url.includes('merge-contacts')) type = 'merge-contacts';
+    else if (req.url.includes('whmcs-payment')) type = 'whmcs-payment';
+    else if (req.url.includes('/api/hosting')) type = 'hosting';
     else if (req.url.includes('link-contact')) type = 'link-contact';
     else if (req.url.includes('sync-claims')) type = 'sync-claims';
     else if (req.url.includes('notify-staff')) type = 'notify-staff';
@@ -115,6 +119,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       // Manual duplicate merge: moves invoices/projects/quotes/chat/... onto the
       // surviving record. Admin/Manager of the tenant only, archived + audited.
       return mergeContactsHandler(req, res);
+    case 'whmcs-payment':
+      // Posts a payment recorded inside FivoCRM (manual "Paguar" / instalment) to
+      // WHMCS. Staff of the invoice's business only; idempotent per payment key.
+      return whmcsPaymentHandler(req, res);
+    case 'hosting':
+      // Hosting & domains module — sub-dispatches on body.action (cPanel/WHM +
+      // Dynadot drivers, orders, provisioning). Staff of the tenant; a portal client
+      // only for its own subscriptions/domains.
+      return hostingHandler(req, res);
     case 'social':
       // Social Media module — sub-dispatches on ?action= (oauth/list/sync/...).
       return socialHandler(req, res);

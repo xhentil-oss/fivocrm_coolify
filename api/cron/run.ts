@@ -21,9 +21,17 @@ import { writeAudit } from '../_audit.js';
 // idempotent, and this file is already 3.4k lines.
 import { runReportSchedules, runReportReminders, runClientHealthRollup, runReportMetricsSocial } from '../_reportJobs.js';
 import { runCrmAutomations } from '../_crmAutomationJob.js';
+// Hosting & domains module (cPanel/WHM + Dynadot): lifecycle + sync. Own file — it
+// talks to live servers and registrars and is NOT part of run-all.
+import { runHostingLifecycle, runHostingSync } from '../_hostingJobs.js';
 // "Who are this tenant's managers" — one resolver, shared with _gmb and _waInbound.
 import { managerIdsForBusiness } from '../_staffRecipients.js';
 import { sendBaileysText } from '../_waSend.js';
+import {
+  INVOICE_WA_DEFAULT_TZ, resolveInvoiceWaConfig, invoiceWaDecision, invoiceWaStageField, invoiceWaDueText,
+  renderInvoiceWaText, invoiceWaFirstName, normalizeInvoiceWaPhone, formatInvoiceWaAmount, tallyInvoiceWaBlocked,
+  type InvoiceWaBlockReason,
+} from '../_invoiceWaReminders.js';
 // One delivery path for every notification — see the header of api/_push.ts.
 import { notifyUser, getUserPrefs, isDndActive, isSilenced, escapeHtml, BASE_URL } from '../_push.js';
 import { isTypeMutedByPrefs } from '../_notificationTypes.js';
@@ -554,19 +562,45 @@ async function runInvoiceReminders() {
 }
 
 // ── JOB: overdue-reminders ───────────────────────────────────────────────────
-// Emails the CUSTOMER about overdue invoices (weekly, unless the customer opted
-// out via disableOverdueReminders), and escalates to WhatsApp once an invoice is
-// more than waOverdueDays (default 60 ≈ 2 months) overdue.
+// Two things, both to the CUSTOMER:
+//  1) the weekly overdue EMAIL (unchanged; unless the customer opted out via
+//     `disableOverdueReminders`, or the tenant asked to skip WHMCS invoices —
+//     WHMCS mails those itself, so FivoCRM's copy was a duplicate);
+//  2) WhatsApp reminders in three stages (pre-due / due / overdue), decided by
+//     `invoiceWaDecision()` in api/_invoiceWaReminders.ts — the byte-identical
+//     mirror of src/lib/finance/invoiceWaReminders.ts. Every non-send is a NAMED
+//     reason, tallied per tenant into `teamSettings.waInvoiceLastRun` so the
+//     settings panel can show why nothing went out. Never add a filter inline.
+// Runs every ~2h from the VPS; the local send window (default 09–19
+// Europe/Tirane) is what keeps a 3 a.m. tick from messaging anyone.
 async function runOverdueReminders() {
   const transporter = makeTransporter();
   const smtpUser = safeSenderAddress(process.env.SMTP_USER);
   const now = Date.now();
   const ms = (v: any): number => (v?.toDate ? v.toDate().getTime() : (v ? new Date(v).getTime() : 0));
   const EMAIL_RENOTIFY_DAYS = 7;
-  const WA_RENOTIFY_DAYS = 14;
+  const MAX_PRE_DUE_DAYS = 30; // == INVOICE_WA_LIMITS.preDueDays.max
 
-  const snap = await db.collection('invoices').where('status', '==', 'Overdue').get();
-  if (snap.empty) return { emailsSent: 0, waSent: 0 };
+  // Overdue invoices (email + WA 'overdue' stage) …
+  const overdueSnap = await db.collection('invoices').where('status', '==', 'Overdue').get();
+  // … plus open invoices whose due date is within the widest pre-due window
+  // (WA 'pre-due' / 'due' stages; a Partial one past due also reaches the
+  // 'overdue' stage here — it never flips to Overdue). Index: (status, dueDate).
+  const horizon = admin.firestore.Timestamp.fromMillis(now + MAX_PRE_DUE_DAYS * 86_400_000);
+  let openSnapDocs: admin.firestore.QueryDocumentSnapshot[] = [];
+  try {
+    const openSnap = await db.collection('invoices')
+      .where('status', 'in', ['Pending', 'Partial'])
+      .where('dueDate', '<=', horizon)
+      .get();
+    openSnapDocs = openSnap.docs;
+  } catch (err: any) {
+    // A missing index must not take the overdue emails down with it.
+    console.error('[overdue-reminders] open-invoice query failed (index (status, dueDate) missing?):', err?.message || err);
+  }
+  const seen = new Set<string>();
+  const invoiceDocs = [...overdueSnap.docs, ...openSnapDocs].filter((d) => (seen.has(d.id) ? false : (seen.add(d.id), true)));
+  if (!invoiceDocs.length) return { emailsSent: 0, waSent: 0 };
 
   const custCache = new Map<string, any>();
   const tsCache = new Map<string, any>();
@@ -591,69 +625,151 @@ async function runOverdueReminders() {
     tplCache.set(id, data);
     return data;
   };
+  const whmcsBase = (() => {
+    const raw = (process.env.WHMCS_API_URL || '').trim();
+    if (!raw) return '';
+    return (/^https?:\/\//i.test(raw) ? raw : `https://${raw}`).replace(/\/$/, '');
+  })();
+  const dueFmt = new Intl.DateTimeFormat('sq-AL', { timeZone: INVOICE_WA_DEFAULT_TZ, day: '2-digit', month: '2-digit', year: 'numeric' });
 
   let emailsSent = 0, waSent = 0;
   const ops: Promise<any>[] = [];
+  // Per-tenant WA tallies → teamSettings.waInvoiceLastRun.
+  const perTeam = new Map<string, { sent: number; considered: number; blocked: InvoiceWaBlockReason[] }>();
+  const tally = (teamId: string) => {
+    let t = perTeam.get(teamId);
+    if (!t) { t = { sent: 0, considered: 0, blocked: [] }; perTeam.set(teamId, t); }
+    return t;
+  };
 
-  for (const doc of snap.docs) {
+  for (const doc of invoiceDocs) {
     const inv = doc.data();
     if (!inv.customerId) continue;
     const customer = await getCustomer(inv.customerId);
-    if (!customer || customer.disableOverdueReminders) continue; // opt-out
+    const settings = inv.teamId ? await getTeamSettings(inv.teamId) : null;
+    const cfg = resolveInvoiceWaConfig(settings);
 
     const dueMs = ms(inv.dueDate);
     const daysOverdue = dueMs ? Math.floor((now - dueMs) / 86_400_000) : 0;
     const invoiceLabel = inv.invoiceNumber || doc.id.slice(0, 8).toUpperCase();
+    const isWhmcs = inv.source === 'whmcs';
 
-    // 1) Weekly overdue email to the customer
-    const lastEmail = ms(inv.overdueEmailSentAt);
-    if (transporter && smtpUser && customer.email && (!lastEmail || (now - lastEmail) / 86_400_000 >= EMAIL_RENOTIFY_DAYS)) {
-      const dueDate = dueMs ? new Date(dueMs) : new Date();
-      const { html } = buildInvoiceEmail({
-        customerName: customer.name || 'Klient', invoiceNumber: invoiceLabel,
-        amount: inv.total || inv.amount || 0, dueDate, projectName: '', type: 'reminder2',
-        currency: inv.currency || 'ALL', paymentMethod: inv.paymentMethod,
-        bankName: inv.bankName, bankIBAN: inv.bankIBAN, bankSWIFT: inv.bankSWIFT,
-        bankAccountHolder: inv.bankAccountHolder, bankCountry: inv.bankCountry,
-        payUrl: await publicInvoicePayUrl(doc.id, inv),
-      });
-      ops.push(
-        transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject: `⚠️ Faturë e papaguar #${invoiceLabel} (${daysOverdue} ditë vonesë)`, html })
-          .then(() => doc.ref.update({ overdueEmailSentAt: admin.firestore.Timestamp.now() }))
-          .catch((e) => console.error('[overdue-email]', e))
-      );
-      emailsSent++;
+    // 1) Weekly overdue email to the customer (Overdue status only — unchanged).
+    if (inv.status === 'Overdue' && customer && !customer.disableOverdueReminders && !(isWhmcs && cfg.emailSkipWhmcs)) {
+      const lastEmail = ms(inv.overdueEmailSentAt);
+      if (transporter && smtpUser && customer.email && (!lastEmail || (now - lastEmail) / 86_400_000 >= EMAIL_RENOTIFY_DAYS)) {
+        const dueDate = dueMs ? new Date(dueMs) : new Date();
+        const { html } = buildInvoiceEmail({
+          customerName: customer.name || 'Klient', invoiceNumber: invoiceLabel,
+          amount: inv.total || inv.amount || 0, dueDate, projectName: '', type: 'reminder2',
+          currency: inv.currency || 'ALL', paymentMethod: inv.paymentMethod,
+          bankName: inv.bankName, bankIBAN: inv.bankIBAN, bankSWIFT: inv.bankSWIFT,
+          bankAccountHolder: inv.bankAccountHolder, bankCountry: inv.bankCountry,
+          payUrl: await publicInvoicePayUrl(doc.id, inv),
+        });
+        ops.push(
+          transporter.sendMail({ from: `"FivoCRM" <${smtpUser}>`, to: customer.email, subject: `⚠️ Faturë e papaguar #${invoiceLabel} (${daysOverdue} ditë vonesë)`, html })
+            .then(() => doc.ref.update({ overdueEmailSentAt: admin.firestore.Timestamp.now() }))
+            .catch((e) => console.error('[overdue-email]', e))
+        );
+        emailsSent++;
+      }
     }
 
-    // 2) WhatsApp escalation after waOverdueDays (default 60)
-    if (inv.teamId) {
-      const settings = await getTeamSettings(inv.teamId);
-      const waDays = Number(settings?.waOverdueDays) || 60;
-      const lastWa = ms(inv.overdueWaSentAt);
-      if (settings?.waOverdueEnabled && settings?.metaEnabled && settings?.waOverdueTemplateId && customer.phone
-          && daysOverdue >= waDays && (!lastWa || (now - lastWa) / 86_400_000 >= WA_RENOTIFY_DAYS)) {
-        const tpl = await getTemplate(settings.waOverdueTemplateId);
-        const channels: any[] = settings.metaChannels || [];
-        const channel = channels.find((c) => c.phoneNumberId === settings.waOverdueChannelPhoneNumberId) || channels[0];
-        if (tpl && channel?.accessToken && channel?.phoneNumberId) {
-          // `link` = the "Paguaj Tani" portal deep link — a template param mapped to
-          // it puts the pay URL in the message body (Meta buttons can't be added at
-          // send time, only in the approved template definition).
-          const ctx: Record<string, any> = { name: customer.name, invoiceNumber: invoiceLabel, amount: inv.total || inv.amount || 0, total: inv.total || inv.amount || 0, daysOverdue, link: await publicInvoicePayUrl(doc.id, inv) };
-          const params: string[] = (tpl.paramFields || []).map((f: string) => f && f !== 'custom' && ctx[f] != null ? String(ctx[f]) : '');
-          ops.push(
-            sendMetaBroadcastMessage(channel, normalizeWaPhone(customer.phone), tpl, params, inv.teamId, null, { id: doc.id, name: customer.name })
-              .catch((e) => console.error('[overdue-wa]', e))
-          );
-          ops.push(doc.ref.update({ overdueWaSentAt: admin.firestore.Timestamp.now() }));
-          waSent++;
-        }
-      }
+    // 2) WhatsApp — the engine decides, the job only fetches facts + sends.
+    if (!inv.teamId || !settings) continue;
+    if (!cfg.enabled) continue; // not tallied: a disabled tenant has no run to report
+    const t = tally(inv.teamId);
+    t.considered++;
+
+    let metaChannel: any = null;
+    let tpl: any = null;
+    let hasChannel = false;
+    if (cfg.channel === 'meta') {
+      const channels: any[] = settings.metaChannels || [];
+      metaChannel = channels.find((c) => c.phoneNumberId === cfg.channelPhoneNumberId) || channels[0];
+      hasChannel = !!(metaChannel?.accessToken && metaChannel?.phoneNumberId);
+      tpl = cfg.templateId ? await getTemplate(cfg.templateId) : null;
+    } else {
+      hasChannel = !!(settings.whatsappVpsUrl && settings.whatsappVpsSecret);
+    }
+
+    const total = Number(inv.total ?? inv.amount ?? 0) || 0;
+    const paidAmount = Number(inv.paidAmount || 0) || 0;
+    const decision = invoiceWaDecision(
+      {
+        status: inv.status, source: inv.source || null, dueDateMs: dueMs || null, total, paidAmount,
+        preDueWaSentAtMs: ms(inv.preDueWaSentAt) || null,
+        dueWaSentAtMs: ms(inv.dueWaSentAt) || null,
+        overdueWaSentAtMs: ms(inv.overdueWaSentAt) || null,
+      },
+      customer ? { phone: customer.phone, waOptOut: customer.waOptOut, disableOverdueReminders: customer.disableOverdueReminders } : null,
+      cfg,
+      { nowMs: now, timeZone: INVOICE_WA_DEFAULT_TZ, hasChannel, hasTemplate: !!tpl },
+    );
+    if (!decision.ok) { t.blocked.push(decision.reason); continue; }
+
+    const phone = normalizeInvoiceWaPhone(customer.phone);
+    const balance = Math.max(0, total - paidAmount);
+    const link = await publicInvoicePayUrl(doc.id, inv);
+    const ctx = {
+      name: customer.name || '',
+      firstName: invoiceWaFirstName(customer.name),
+      company: settings.companyName || '',
+      invoiceNumber: invoiceLabel,
+      amount: balance,
+      total,
+      currency: inv.currency || 'ALL',
+      dueDate: dueMs ? dueFmt.format(new Date(dueMs)) : '',
+      dueText: invoiceWaDueText(decision.stage, decision.daysLate),
+      daysLate: decision.daysLate,
+      daysOverdue: Math.max(0, decision.daysLate),
+      link,
+      whmcsLink: isWhmcs && whmcsBase && inv.whmcsInvoiceId ? `${whmcsBase}/viewinvoice.php?id=${inv.whmcsInvoiceId}` : '',
+    };
+    const stampField = invoiceWaStageField(decision.stage);
+    const stamp = () => doc.ref.update({ [stampField]: admin.firestore.Timestamp.now() });
+
+    if (cfg.channel === 'meta') {
+      // Template params come from `paramFields`; the pseudo-fields above
+      // (dueText, daysLate, link, whmcsLink, firstName) are all addressable.
+      const params: string[] = (tpl.paramFields || []).map((f: string) => {
+        const v = f && f !== 'custom' ? (ctx as Record<string, any>)[f] : undefined;
+        if (v === null || v === undefined) return '';
+        return f === 'amount' || f === 'total' ? formatInvoiceWaAmount(Number(v)) : String(v);
+      });
+      ops.push(
+        sendMetaBroadcastMessage(metaChannel, phone, tpl, params, inv.teamId, null, { id: doc.id, name: customer.name })
+          .then(stamp)
+          .catch((e) => console.error('[overdue-wa:meta]', e))
+      );
+    } else {
+      const text = renderInvoiceWaText(cfg.text, ctx);
+      ops.push(
+        sendBaileysText(settings.whatsappVpsUrl, settings.whatsappVpsSecret, cfg.agentId || undefined, phone, text, { teamId: inv.teamId, leadName: customer.name || null })
+          .then((r) => { if (r.ok) return stamp(); console.error('[overdue-wa:baileys]', r.error); })
+          .catch((e) => console.error('[overdue-wa:baileys]', e))
+      );
+    }
+    t.sent++;
+    waSent++;
+    if (inv.createdByUserId) {
+      ops.push(notifyUser({ userId: inv.createdByUserId, type: 'invoice_reminder_sent', title: `💬 Kujtesë WhatsApp (${ctx.dueText}): #${invoiceLabel}`, message: `Kujtesa u dërgua në WhatsApp te ${customer.name || 'klienti'}.`, actionUrl: '/app/invoices', actionLabel: 'Shiko Faturat', businessId: inv.businessId ?? null, teamId: inv.teamId ?? null, customerId: inv.customerId ?? null, email: false }));
     }
   }
 
+  // Per-tenant run summary for the settings panel (one merge write per enabled tenant).
+  const waBlocked: Record<string, Record<string, number>> = {};
+  for (const [teamId, t] of perTeam) {
+    const blocked = tallyInvoiceWaBlocked(t.blocked);
+    waBlocked[teamId] = blocked;
+    ops.push(db.collection('teamSettings').doc(teamId).set({
+      waInvoiceLastRun: { at: admin.firestore.Timestamp.now(), sent: t.sent, considered: t.considered, blocked },
+    }, { merge: true }).catch((e) => console.error('[overdue-wa] lastRun write failed', e)));
+  }
+
   await settleAll(ops, 'overdue-reminders');
-  return { emailsSent, waSent };
+  return { emailsSent, waSent, waBlocked };
 }
 
 // ── JOB: recurring-tasks ─────────────────────────────────────────────────────
@@ -5602,6 +5718,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       case 'lead-cadence-steps':
         result = await runLeadCadenceSteps();
         break;
+      case 'hosting-lifecycle': {
+        // Hosting & domains: renewal invoices, suspend/terminate on non-payment, domain
+        // renewals at the registrar, provisioning of orders paid by hand. Hourly from
+        // the VPS, NOT in run-all (it messages customers and touches live servers). A
+        // manual run is scoped to the caller's tenant.
+        let scopeId: string | null = null;
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          scopeId = await callerBusinessId(req);
+          if (!scopeId) return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — ekzekutimi manual u ndal.' });
+        }
+        result = await runHostingLifecycle({ businessId: scopeId });
+        break;
+      }
+      case 'hosting-sync': {
+        // Server health + registrar facts (expiry, NS, completed transfers). Read-mostly.
+        let scopeId: string | null = null;
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          scopeId = await callerBusinessId(req);
+          if (!scopeId) return res.status(403).json({ error: 'Nuk u përcaktua biznesi i përdoruesit — ekzekutimi manual u ndal.' });
+        }
+        result = await runHostingSync({ businessId: scopeId });
+        break;
+      }
       case 'crm-automations': {
         // CRM automation rules (CRM → Automatizime). Hourly from the VPS, NOT in
         // run-all. A manual run ("Ekzekuto tani" in the builder) is scoped to the
@@ -5732,7 +5871,7 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
         break;
       }
       default:
-        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, task-reminders, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, daily-report-check, whatsapp-broadcasts, whatsapp-automations, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social, gmb-sync` });
+        return res.status(400).json({ error: `Job i panjohur: "${job}". Vlerat e vlefshme: run-all, task-deadline-alerts, task-reminders, invoice-reminders, recurring-tasks, recurring-invoices, project-completion-reminder, recurring-project-reset, notification-digest, daily-report-check, whatsapp-broadcasts, whatsapp-automations, email-campaigns, purchase-campaigns, campaign-steps, whmcs-sync, whmcs-clients, report-schedules, report-reminders, client-health-rollup, report-metrics-social, gmb-sync, hosting-lifecycle, hosting-sync` });
     }
 
     await recordJobRun({

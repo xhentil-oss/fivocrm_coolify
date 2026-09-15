@@ -79,6 +79,7 @@ const CustomersView = lazyRetry(() => import('./views/CustomersView'));
 const ServicesView = lazyRetry(() => import('./views/ServicesView'));
 const ProductsView = lazyRetry(() => import('./views/ProductsView'));
 const ShopOrdersView = lazyRetry(() => import('./views/ShopOrdersView'));
+const HostingView = lazyRetry(() => import('./views/HostingView'));
 const ServiceInquiriesView = lazyRetry(() => import('./views/ServiceInquiriesView'));
 const ExpensesView = lazyRetry(() => import('./views/ExpensesView'));
 const WorkspaceView = lazyRetry(() => import('./views/WorkspaceView'));
@@ -96,6 +97,7 @@ const PortalInquiryView = lazyRetry(() => import('./views/portal/PortalInquiryVi
 const PortalProjectDetailView = lazyRetry(() => import('./views/portal/PortalProjectDetailView'));
 const PortalQuotesView = lazyRetry(() => import('./views/portal/PortalQuotesView'));
 const PortalShopView = lazyRetry(() => import('./views/portal/PortalShopView'));
+const PortalHostingView = lazyRetry(() => import('./views/portal/PortalHostingView'));
 const PortalReportsView = lazyRetry(() => import('./views/portal/PortalReportsView'));
 const OnboardingWizard = lazyRetry(() => import('./components/OnboardingWizard'));
 const SeoLandingPage = lazyRetry(() => import('./views/landing/SeoLandingPage'));
@@ -304,6 +306,7 @@ function AppContent() {
         <Route path="invoices" element={<Suspense fallback={<LazyFallback />}><PortalInvoicesView /></Suspense>} />
         <Route path="services" element={<Suspense fallback={<LazyFallback />}><PortalServicesView /></Suspense>} />
         <Route path="shop" element={<Suspense fallback={<LazyFallback />}><PortalShopView /></Suspense>} />
+        <Route path="hosting" element={<Suspense fallback={<LazyFallback />}><PortalHostingView /></Suspense>} />
         <Route path="reports" element={<Suspense fallback={<LazyFallback />}><PortalReportsView /></Suspense>} />
         <Route path="chat" element={<Suspense fallback={<LazyFallback />}><PortalChatView /></Suspense>} />
         {/* Requests removed — chat is now the single support channel. Redirect old links. */}
@@ -442,6 +445,8 @@ function AppContent() {
                           toggle, so a disabled module can't be reached by URL either. */}
                       <Route path="/app/products" element={<ModuleGate moduleId="shop"><ProductsView /></ModuleGate>} />
                       <Route path="/app/shop-orders" element={<ModuleGate moduleId="shop"><ShopOrdersView /></ModuleGate>} />
+                      {/* Hosting & domains module (cPanel/WHM + Dynadot). */}
+                      <Route path="/app/hosting" element={<ModuleGate moduleId="hosting"><HostingView /></ModuleGate>} />
                       <Route path="/app/service-inquiries" element={<PermissionGate permissionKey="canAccessCRM"><ServiceInquiriesView /></PermissionGate>} />
                       <Route path="/app/expenses" element={<PermissionGate permissionKey="canAccessExpenses"><ExpensesView /></PermissionGate>} />
                       <Route path="/app/workspace" element={<PermissionGate permissionKey="canAccessProjects"><WorkspaceView /></PermissionGate>} />

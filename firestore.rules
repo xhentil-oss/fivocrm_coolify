@@ -414,14 +414,75 @@ service cloud.firestore {
       allow update, delete: if canManageBusinessDoc();
     }
 
+    // ── Hosting & domains module (cPanel/WHM + Dynadot) ──
+    // `subscriptions` and `domains` predate the module as WHMCS read-only mirrors
+    // (`source: 'whmcs'`); the module adds `source: 'fivocrm'` rows it bills itself.
+    // Staff manage their tenant's records directly; a PORTAL CLIENT only reads its
+    // own (queries are `customerId == cid`), and every client-side change (SSO,
+    // nameservers, auto-renew, cancel, orders) goes through POST /api/hosting, which
+    // re-checks ownership — so no client write rule exists for them.
     match /domains/{docId} {
-      // WHMCS-synced domain registrations. Staff read their business's domains
-      // (queries are businessId-scoped); portal client reads their own. Written
-      // only by the Admin SDK sync (bypasses rules), so client writes stay admin-gated.
       allow read: if isBusinessMember(resource.data.businessId)
         || isPortalClientFor(resource.data.customerId)
         || isSuperAdmin();
-      allow create, update, delete: if canManageBusinessDoc();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+    match /subscriptions/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+    // Servers: hostname/user/nameservers are staff-only. The WHM API TOKEN is never
+    // here — it lives in hostingServerSecrets (deny-all), written by the endpoint.
+    match /hostingServers/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId) || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+    match /hostingServerSecrets/{docId} {
+      allow read, write: if false;
+    }
+    // Catalog: the portal sees only `portalVisible` rows of its own tenant.
+    match /hostingProducts/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || (resource.data.portalVisible == true
+            && isPortalClientOfBusiness(resource.data.businessId))
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+    match /domainTlds/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || (resource.data.get('portalVisible', true) != false
+            && isPortalClientOfBusiness(resource.data.businessId))
+        || isSuperAdmin();
+      allow create: if canCreateBusinessDoc();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if canManageBusinessDoc();
+    }
+    // Orders are created ONLY by the endpoint (it prices from the catalog and checks
+    // availability), so neither staff nor clients create them from the browser.
+    match /hostingOrders/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
+      allow create: if isSuperAdmin();
+      allow update: if canManageBusinessDoc() && keepsBusinessId();
+      allow delete: if isSuperAdmin();
+    }
+    // Provider/lifecycle audit: append-only, server-written.
+    match /hostingEvents/{docId} {
+      allow read: if isBusinessMember(resource.data.businessId)
+        || isPortalClientFor(resource.data.customerId)
+        || isSuperAdmin();
+      allow write: if false;
     }
 
     match /customers/{docId} {

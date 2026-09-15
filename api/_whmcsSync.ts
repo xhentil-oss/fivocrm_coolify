@@ -11,6 +11,9 @@ import {
   mapWhmcsDomain,
   mapWhmcsClient,
   mapWhmcsClientFull,
+  pushInvoicePayment,
+  manualPaymentTransId,
+  whmcsGatewayForMethod,
   type MappedInvoice,
   type MappedSubscription,
   type MappedDomain,
@@ -287,11 +290,120 @@ async function upsertInvoice(inv: MappedInvoice, customerId: string | null, team
   if (existing.locallyCancelled) {
     delete payload.status;
   }
+  // ── Payments recorded INSIDE FivoCRM (manual "Paguar", instalments) ──────────
+  // The UI queues them on `whmcsPendingPayments` in the same write as the status
+  // change. Until WHMCS confirms, the sync must NOT overwrite the local status /
+  // paidAt — this is exactly what used to flip a hand-settled invoice back to
+  // Pending overnight. It also drains the queue itself (idempotent transid), so
+  // a browser that never reached the endpoint is still reconciled here.
+  const pendingBefore: any[] = Array.isArray(existing.whmcsPendingPayments) ? existing.whmcsPendingPayments : [];
+  if (inv.status === 'Paid') {
+    // WHMCS has the money on record — whatever was pending is settled.
+    if (pendingBefore.length || existing.whmcsPaymentPendingAt || existing.whmcsPaymentSyncError) {
+      payload.whmcsPendingPayments = [];
+      payload.whmcsPaymentPendingAt = admin.firestore.FieldValue.delete();
+      payload.whmcsPaymentSyncError = admin.firestore.FieldValue.delete();
+      if (pendingBefore.length) {
+        payload.whmcsSyncedPaymentKeys = admin.firestore.FieldValue.arrayUnion(...pendingBefore.map((p) => String(p?.key || 'full')));
+      }
+    }
+  } else if (pendingBefore.length) {
+    const drained = await drainPendingWhmcsPayments(snap.docs[0].id, existing, { writeBack: false });
+    Object.assign(payload, drained.patch);
+    // Local status wins while WHMCS has not yet reported the payment.
+    delete payload.status;
+    delete payload.paidAt;
+  } else if (
+    existing.status === 'Paid'
+    && Array.isArray(existing.whmcsSyncedPaymentKeys) && existing.whmcsSyncedPaymentKeys.length
+    && (inv.status === 'Pending' || inv.status === 'Overdue')
+  ) {
+    // The payment WAS posted to WHMCS but WHMCS still lists a balance (partial
+    // amount, currency rounding). The money is real — keep the local settlement
+    // and let the operator reconcile in WHMCS. A cancellation/refund in WHMCS
+    // (→ Draft) is NOT preserved: that is a genuine reversal.
+    delete payload.status;
+    delete payload.paidAt;
+  } else if (existing.status === 'Partial' && Number(existing.paidAmount) > 0 && inv.status !== 'Draft') {
+    // WHMCS has no "Partial" status: an instalment recorded here (and already
+    // posted to WHMCS) would otherwise read as Pending/Overdue again.
+    delete payload.status;
+  }
   // Link to the catch-all project only if the invoice isn't already linked (never
   // override a manual link the user set).
   if (linkProjectId && !existing.projectId) payload.projectId = linkProjectId;
   await snap.docs[0].ref.update(payload);
   return 'updated';
+}
+
+// ── Manual-payment queue drain (FivoCRM → WHMCS) ──────────────────────────────
+export interface DrainResult {
+  /** Firestore patch reflecting the outcome (apply with `update`). */
+  patch: Record<string, any>;
+  synced: string[];
+  failed: { key: string; error: string }[];
+  remaining: number;
+  /** WHMCS not configured — nothing attempted, queue untouched. */
+  skipped?: boolean;
+}
+
+/**
+ * Post every queued local payment of a WHMCS-mirrored invoice to WHMCS.
+ * Shared by POST /api/whmcs-payment (user-triggered, `writeBack: true`) and the
+ * sync (`writeBack: false` — the caller merges `patch` into its own update).
+ *
+ * Idempotent: transid = manualPaymentTransId(docId, key); WHMCS's duplicate
+ * error counts as success. A failure keeps the entry queued and records the
+ * message on `whmcsPaymentSyncError` so the UI can show it and offer a retry.
+ */
+export async function drainPendingWhmcsPayments(
+  invoiceDocId: string,
+  data: Record<string, any>,
+  opts: { writeBack: boolean },
+): Promise<DrainResult> {
+  const pending: any[] = Array.isArray(data.whmcsPendingPayments) ? data.whmcsPendingPayments : [];
+  const whmcsInvoiceId = data.whmcsInvoiceId;
+  if (!pending.length || !whmcsInvoiceId) {
+    return { patch: {}, synced: [], failed: [], remaining: 0 };
+  }
+  if (!whmcsConfigured()) {
+    return { patch: {}, synced: [], failed: [], remaining: pending.length, skipped: true };
+  }
+
+  const synced: string[] = [];
+  const failed: { key: string; error: string }[] = [];
+  const remaining: any[] = [];
+  for (const p of pending) {
+    const key = String(p?.key || 'full');
+    const amount = Number(p?.amount);
+    const paidAt = p?.paidAt?.toDate ? p.paidAt.toDate() : p?.paidAt ? new Date(p.paidAt) : new Date();
+    const r = await pushInvoicePayment({
+      whmcsInvoiceId,
+      transId: manualPaymentTransId(invoiceDocId, key),
+      gateway: whmcsGatewayForMethod(p?.method),
+      // 'full' omits the amount so WHMCS closes the balance in its own currency.
+      amount: key !== 'full' && Number.isFinite(amount) && amount > 0 ? amount : undefined,
+      date: isNaN(paidAt.getTime()) ? new Date() : paidAt,
+    });
+    if (r.ok) synced.push(key);
+    else { failed.push({ key, error: r.message || 'gabim i panjohur' }); remaining.push(p); }
+  }
+
+  const patch: Record<string, any> = { whmcsPendingPayments: remaining };
+  if (synced.length) {
+    patch.whmcsPaymentSyncedAt = Timestamp.now();
+    patch.whmcsSyncedPaymentKeys = admin.firestore.FieldValue.arrayUnion(...synced);
+  }
+  if (failed.length) {
+    patch.whmcsPaymentSyncError = failed.map((f) => `${f.key}: ${f.error}`).join(' | ').slice(0, 500);
+  } else {
+    patch.whmcsPaymentSyncError = admin.firestore.FieldValue.delete();
+    patch.whmcsPaymentPendingAt = admin.firestore.FieldValue.delete();
+  }
+  if (opts.writeBack) {
+    await db.collection('invoices').doc(invoiceDocId).update({ ...patch, updatedAt: Timestamp.now() });
+  }
+  return { patch, synced, failed, remaining: remaining.length };
 }
 
 // ── Subscription upsert ─────────────────────────────────────────────────────

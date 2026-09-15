@@ -19,6 +19,11 @@ Rules:
 <!-- Add tasks here only when there are real next steps. -->
 
 <todo>
+Deploy WHMCS payment write-back + WhatsApp invoice reminders
+Code shipped 2026-09-14 (workspace/WHMCS_SYNC.md). Left: `firebase deploy --only firestore:indexes` (new `invoices (status, dueDate)`), push to main (Vercel: /api/whmcs-payment + cron logic + UI), then Cilësimet → Automatizime → Kujtesa → switch on "Kujtesa faturash në WhatsApp" (burimi WHMCS, kanali, fazat) and — for Meta — an approved Utility template. Smoke test: mark a WHMCS test invoice Paid → badge `WHMCS ✓`, transid `fivocrm-…` visible in WHMCS.
+</todo>
+
+<todo>
 Restart the VPS so the hourly `crm-automations` tick starts
 Rules + indexes deployed and code pushed on 2026-09-07 (Vercel deploys from main). Left: `pm2 restart` on the VPS (vps/server.ts schedules the job), then CRM → Automatizime → Receta → arm the first rules. Checklist: workspace/CRM_AUTOMATION.md.
 </todo>
@@ -69,4 +74,19 @@ Workload Reassign
 From WorkloadView, allow drag-and-drop or quick-assign to move tasks between team members.
 </todo>
 
+## Hosting & Domain-e (Sep 15, 2026) — kodi gati, deploy në pritje
+- [ ] `firebase deploy --only firestore:rules,firestore:indexes` (rules test 111/111 me JDK 21)
+- [ ] Vercel env: `HOSTING_PROXY_URL=https://wa.fivocrm.com/provider-proxy` (ose lihet WHMCS_PROXY_URL) — `WHMCS_PROXY_SECRET` ekziston
+- [ ] VPS: pull + pm2 restart (shton `/provider-proxy`, orarët `hosting-lifecycle` 60min / `hosting-sync` 360min)
+- [ ] Whitelist IP-në e VPS te Dynadot (Tools → API) dhe te firewall-i WHM (porti 2087)
+- [ ] Ndez modulin te tenant-i (Cilësimet → Modulet), shto serverin + token, paketat, TLD-të, çelësin Dynadot
+- [x] Tab "Hosting" te Customer360View (abonimet + domain-et e klientit, lidhje te moduli)
+- [x] "Shto llogari ekzistuese" / "Shto domain ekzistues" (migrim jashtë WHMCS; `.al` me `registrar: 'manual'`, rinovim me dorë pas pagesës)
+- [x] Badge + filtër "Hosting & Domain-e" te Faturat (`source: 'hosting'`, lidhje te rekordi)
+- [ ] Faza 2: kontakte WHOIS për klient te Dynadot (`create_contact` + `registrant_contact`) — sot regjistranti është llogaria jonë
+- [ ] Faza 2: proratë / faturë diference te ndryshimi i paketës brenda periudhës
+- [ ] Faza 2: menaxhim DNS në portal (`dynadotSetDnsToIp` ekziston në driver, s'ka UI)
+- [ ] Faza 2: abonimet hosting në MRR / parashikimin e arkëtimeve të Financave (burim i tretë për predikatin "do të faturohet")
+- [ ] Faza 2: ri-provë automatike me backoff për rreshtat e dështuar të provisioning-ut (sot klikim nga stafi)
+- [ ] Faza 2: bundle (domain falas me hosting vjetor) dhe kupona
 

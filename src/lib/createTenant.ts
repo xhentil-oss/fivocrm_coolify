@@ -77,7 +77,7 @@ export async function createTenant({ uid, companyName, ownerName, ownerEmail }: 
     canAccessInvoices: true, canAccessReports: true, canAccessSettings: true,
     canAccessWhatsapp: true, canAccessGoals: true, canAccessTeams: true,
     canAccessChat: true, canAccessCustomers: true, canAccessServices: true,
-    canAccessProducts: true, canAccessExpenses: true, canAccessProfile: true,
+    canAccessProducts: true, canAccessHosting: true, canAccessExpenses: true, canAccessProfile: true,
     createdByUserId: uid,
     createdAt: now,
     updatedAt: now,

@@ -189,6 +189,7 @@ const TeamsView: React.FC = () => {
         canAccessCustomers: true,
         canAccessServices: true,
         canAccessProducts: true,
+        canAccessHosting: true,
         canAccessExpenses: true,
         canAccessProfile: true,
         invitedByUserId: user.uid,
@@ -282,6 +283,7 @@ const TeamsView: React.FC = () => {
     const canAccessCustomers = formData.get('canAccessCustomers') === 'on';
     const canAccessServices = formData.get('canAccessServices') === 'on';
     const canAccessProducts = formData.get('canAccessProducts') === 'on';
+    const canAccessHosting = formData.get('canAccessHosting') === 'on';
     const canAccessExpenses = formData.get('canAccessExpenses') === 'on';
     const canAccessProfile = formData.get('canAccessProfile') === 'on';
     // NOT a module gate: this one lets the person assign work to COLLEAGUES.
@@ -337,6 +339,7 @@ const TeamsView: React.FC = () => {
       canAccessCustomers,
       canAccessServices,
       canAccessProducts,
+      canAccessHosting,
       canAccessExpenses,
       canAccessProfile,
       canAssignTasks,
@@ -403,6 +406,7 @@ const TeamsView: React.FC = () => {
     const canAccessCustomers = formData.get('canAccessCustomers') === 'on';
     const canAccessServices = formData.get('canAccessServices') === 'on';
     const canAccessProducts = formData.get('canAccessProducts') === 'on';
+    const canAccessHosting = formData.get('canAccessHosting') === 'on';
     const canAccessExpenses = formData.get('canAccessExpenses') === 'on';
     const canAccessProfile = formData.get('canAccessProfile') === 'on';
     const canAssignTasks = formData.get('canAssignTasks') === 'on';
@@ -424,6 +428,7 @@ const TeamsView: React.FC = () => {
       canAccessCustomers,
       canAccessServices,
       canAccessProducts,
+      canAccessHosting,
       canAccessExpenses,
       canAccessProfile,
       canAssignTasks,
@@ -1176,6 +1181,10 @@ const AddMemberForm: React.FC<{
             <Label htmlFor="addCanAccessProducts" className="font-normal">Dyqani & Produktet</Label>
           </div>
           <div className="flex items-center gap-2">
+            <Checkbox id="addCanAccessHosting" name="canAccessHosting" />
+            <Label htmlFor="addCanAccessHosting" className="font-normal">Hosting & Domain-e</Label>
+          </div>
+          <div className="flex items-center gap-2">
             <Checkbox id="addCanAccessExpenses" name="canAccessExpenses" />
             <Label htmlFor="addCanAccessExpenses" className="font-normal">Shpenzimet</Label>
           </div>
@@ -1301,6 +1310,10 @@ const InviteMemberForm: React.FC<{
           <div className="flex items-center gap-2">
             <Checkbox id="canAccessProducts" name="canAccessProducts" />
             <Label htmlFor="canAccessProducts" className="font-normal">Dyqani & Produktet</Label>
+          </div>
+          <div className="flex items-center gap-2">
+            <Checkbox id="canAccessHosting" name="canAccessHosting" />
+            <Label htmlFor="canAccessHosting" className="font-normal">Hosting & Domain-e</Label>
           </div>
           <div className="flex items-center gap-2">
             <Checkbox id="canAccessExpenses" name="canAccessExpenses" />

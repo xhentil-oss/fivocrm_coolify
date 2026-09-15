@@ -10,6 +10,7 @@ import {
   Wallet,
   Package,
   BellRing,
+  Server as ServerIcon,
 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import {
@@ -54,6 +55,7 @@ const CommandPalette: React.FC<CommandPaletteProps> = ({ open, onOpenChange }) =
     { icon: CheckSquare, label: 'Shko te Detyrat', path: '/app/tasks' },
     { icon: Package, label: 'Shko te Dyqani', path: '/app/products' },
     { icon: Package, label: 'Shko te Porositë', path: '/app/shop-orders' },
+    { icon: ServerIcon, label: 'Shko te Hosting & Domain-e', path: '/app/hosting' },
     { icon: MessageSquare, label: 'Shko te Chati', path: '/app/chat' },
     { icon: Wallet, label: 'Shko te Financat', path: '/app/finances' },
     { icon: Settings, label: 'Shko te Cilësimet', path: '/app/settings' },

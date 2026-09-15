@@ -20,6 +20,7 @@ import {
   Wallet,
   Package,
   BellRing,
+  Server as ServerIcon,
 } from 'lucide-react';
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
@@ -84,6 +85,7 @@ const MobileBottomNav: React.FC = () => {
     { to: '/app/follow-ups',    icon: BellRing,     label: 'Ndjekjet',    perm: 'canAccessCRM' },
     { to: '/app/crm',           icon: Shield,       label: 'CRM',         perm: 'canAccessCRM' },
     { to: '/app/products',      icon: Package,      label: 'Dyqani',      perm: 'canAccessProducts' },
+    { to: '/app/hosting',       icon: ServerIcon,   label: 'Hosting',     perm: 'canAccessHosting' },
     { to: '/app/invoices',      icon: Receipt,      label: 'Faturat',     perm: 'canAccessInvoices' },
     { to: '/app/expenses',      icon: DollarSign,   label: 'Shpenzimet',  perm: 'canAccessExpenses' },
     { to: '/app/goals',         icon: Target,       label: 'Objektivat',  perm: 'canAccessGoals' },

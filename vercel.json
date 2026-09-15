@@ -52,6 +52,14 @@
       "destination": "/api/email?type=merge-contacts"
     },
     {
+      "source": "/api/whmcs-payment",
+      "destination": "/api/email?type=whmcs-payment"
+    },
+    {
+      "source": "/api/hosting",
+      "destination": "/api/email?type=hosting"
+    },
+    {
       "source": "/api/sync-claims",
       "destination": "/api/email?type=sync-claims"
     },

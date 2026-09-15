@@ -45,6 +45,8 @@ export type UserPermissions = {
   /** Shop module (products, inventory, orders). Optional so legacy teamMember
    *  records without the flag fall back to the service-catalog permission. */
   canAccessProducts?: boolean;
+  /** Hosting & domains module (packages, cPanel accounts, registrar). Optional for legacy records. */
+  canAccessHosting?: boolean;
   canAccessExpenses: boolean;
   canAccessMarketing?: boolean;
   canAccessProfile: boolean;
@@ -80,6 +82,7 @@ const fullAccessPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canAccessCustomers: true,
   canAccessServices: true,
   canAccessProducts: true,
+  canAccessHosting: true,
   canAccessExpenses: true,
   canAccessMarketing: true,
   canAccessProfile: true,
@@ -107,6 +110,7 @@ const restrictedPermissions: Omit<UserPermissions, 'role' | 'dataScope' | 'teamI
   canAccessCustomers: false,
   canAccessServices: false,
   canAccessProducts: false,
+  canAccessHosting: false,
   canAccessExpenses: false,
   canAccessMarketing: false,
   canAccessProfile: true,
@@ -366,6 +370,7 @@ export function usePermissions(): UserPermissions {
         canAccessCustomers: false,
         canAccessServices: false,
         canAccessProducts: false,
+        canAccessHosting: false,
         canAccessExpenses: false,
         canAccessProfile: true,
         canAccessTimeTracking: false,
@@ -405,6 +410,7 @@ export function usePermissions(): UserPermissions {
         canAccessServices: true,
         // Sales sells whatever the tenant sells — services and products alike.
         canAccessProducts: true,
+        canAccessHosting: true,
         canAccessExpenses: membership.canAccessExpenses === true,
         canAccessMarketing: true,
         canAccessProfile: true,
@@ -447,6 +453,7 @@ export function usePermissions(): UserPermissions {
         canAccessCustomers: membership.canAccessCustomers === true || membership.canAccessCRM === true,
         canAccessServices: membership.canAccessServices === true || membership.canAccessInvoices === true,
         canAccessProducts: membership.canAccessProducts === true || membership.canAccessServices === true,
+        canAccessHosting: membership.canAccessHosting === true,
         canAccessExpenses: membership.canAccessExpenses === true || membership.canAccessInvoices === true,
         canAccessProfile: true,
         canAccessTimeTracking: true,
@@ -486,6 +493,7 @@ export function usePermissions(): UserPermissions {
         canAccessCustomers: true,
         canAccessServices: true,
         canAccessProducts: true,
+        canAccessHosting: true,
         canAccessExpenses: false,
         canAccessMarketing: true,
         canAccessProfile: true,
@@ -528,6 +536,7 @@ export function usePermissions(): UserPermissions {
       canAccessCustomers: membership.canAccessCustomers === true || membership.canAccessCRM === true,
       canAccessServices: membership.canAccessServices === true || membership.canAccessInvoices === true,
       canAccessProducts: membership.canAccessProducts === true || membership.canAccessServices === true,
+      canAccessHosting: membership.canAccessHosting === true,
       canAccessExpenses: membership.canAccessExpenses === true || membership.canAccessInvoices === true,
       canAccessProfile: true,
       canAccessTimeTracking: !isViewer ? true : membership.canAccessTasks === true,

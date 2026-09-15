@@ -41,6 +41,7 @@ export interface TeamSettings {
   hasMetaWebhookVerifyToken?: boolean;
   hasMetaChannelTokens?: boolean;
   hasGmbClientSecret?: boolean;
+  hasDynadotApiKey?: boolean;
   // Company identity (used in contract templates)
   companyName?: string;
   companyAddress?: string;
@@ -103,11 +104,35 @@ export interface TeamSettings {
   waAutoReminderStatuses?: string[];      // lead statuses to target (default Follow-up, Proposal)
   waAutoReminderTemplateId?: string;      // ref → waTemplates
   waAutoReminderChannelPhoneNumberId?: string;
-  // WhatsApp escalation for long-overdue invoices
+  // ── WhatsApp invoice reminders (src/lib/finance/invoiceWaReminders.ts resolves;
+  //    defaults there; sent by the `overdue-reminders` cron) ──
+  /** Master switch (legacy name kept: it used to be "escalation after 60 days" only). */
   waOverdueEnabled?: boolean;
-  waOverdueDays?: number;                 // default 60 (≈2 months)
-  waOverdueTemplateId?: string;           // ref → waTemplates
+  /** Overdue stage fires after N days late (1–365). Default 60. */
+  waOverdueDays?: number;
+  waOverdueTemplateId?: string;           // ref → waTemplates (Meta channel)
   waOverdueChannelPhoneNumberId?: string;
+  /** Which invoices: 'all' | 'whmcs' (mirrored from WHMCS) | 'fivocrm'. Default 'all'. */
+  waInvoiceSources?: 'all' | 'whmcs' | 'fivocrm';
+  /** 'meta' (approved template) | 'baileys' (free text via the team's VPS). Default 'meta'. */
+  waInvoiceChannel?: 'meta' | 'baileys';
+  /** Baileys agent (whatsappAccounts id); empty = the VPS picks a connected one. */
+  waInvoiceAgentId?: string;
+  /** Free-text body for Baileys; tokens {{name}} {{invoiceNumber}} {{amount}} {{dueDate}} {{link}} … */
+  waInvoiceText?: string;
+  /** "Skadon për N ditë" stage; 0 = off (0–30). Default 0. */
+  waInvoicePreDueDays?: number;
+  /** "Skadon sot" stage. Default false. */
+  waInvoiceOnDue?: boolean;
+  /** Repeat the overdue stage every N days (1–90). Default 14. */
+  waInvoiceRenotifyDays?: number;
+  /** Local send window (Europe/Tirane hours, 0–23). Default 9–19. */
+  waInvoiceHourStart?: number;
+  waInvoiceHourEnd?: number;
+  /** Skip FivoCRM's weekly overdue EMAIL for WHMCS invoices (WHMCS mails them itself). Default false. */
+  overdueEmailSkipWhmcs?: boolean;
+  /** Written by the cron after each tick: { at, sent, blocked: {reason: n} }. */
+  waInvoiceLastRun?: { at?: any; sent?: number; considered?: number; blocked?: Record<string, number> };
   leadAssignCursor?: number;              // round-robin cursor for landing-page auto-assignment
   cronSettings?: Record<string, any>;
   cronLastRuns?: Record<string, any>;
@@ -151,6 +176,15 @@ export interface TeamSettings {
   // ── Google Reviews (GMB) module ──
   /** Google OAuth Client ID i tenant-it (jo sekret; sekreti → teamSecrets.gmbClientSecret). */
   gmbClientId?: string;
+  // ── Hosting & domains module ──
+  /** Lifecycle days (renewal invoice lead, suspend/terminate grace, domain window). */
+  hostingLifecycle?: { invoiceDaysBefore?: number; suspendDaysAfter?: number; terminateDaysAfter?: number; domainInvoiceDaysBefore?: number; domainGraceDays?: number };
+  /** Default nameservers written on a freshly registered domain (falls back to the server's). */
+  hostingDefaultNameservers?: string[];
+  /** Currency the Dynadot account is billed in (for wholesale cost display). */
+  dynadotCurrency?: string;
+  /** Last hosting-lifecycle run summary (written by the cron). */
+  hostingLastRun?: { at?: any; invoiced?: number; suspended?: number; terminated?: number; provisioned?: number; renewed?: number; blocked?: Record<string, number>; errors?: number };
   /** Sinkronizim i orarit (cron every hour). Default true; manual sync always works. */
   gmbAutoSync?: boolean;
   /** Njofto Admin/Manager kur vjen review ≤ 2★. Default true. */

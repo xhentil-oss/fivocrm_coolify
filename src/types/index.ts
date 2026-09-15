@@ -687,6 +687,8 @@ export interface TeamMember {
   canAccessServices?: boolean;
   /** Shop module (products, inventory, orders). */
   canAccessProducts?: boolean;
+  /** Hosting & domains module. */
+  canAccessHosting?: boolean;
   canAccessExpenses?: boolean;
   canAccessProfile?: boolean;
   /**
@@ -989,7 +991,12 @@ export interface Invoice {
   stripeSessionId?: string;
   stripePaymentIntentId?: string;
   /** Origin of the invoice. 'whmcs' = mirrored one-way from WHMCS billing. */
-  source?: 'whmcs' | 'manual' | 'stripe';
+  source?: 'whmcs' | 'manual' | 'stripe' | 'hosting';
+  /** Hosting & domains module: the order this invoice pays for (first invoice), or the
+   *  subscription / domain it renews. Paying it triggers provisioning / renewal. */
+  hostingOrderId?: string;
+  subscriptionId?: string;
+  domainId?: string;
   /** WHMCS invoice id — idempotency key for the WHMCS → FivoCRM sync. */
   whmcsInvoiceId?: string;
   /** WHMCS invoice line items (products/services billed). */
@@ -1002,29 +1009,289 @@ export interface Invoice {
   /** Set when a WHMCS-mirrored invoice was cancelled locally — the sync preserves
    *  this (won't revert status), so it stays out of revenue instead of resurrecting. */
   locallyCancelled?: boolean;
+  // ── WHMCS payment write-back (payments recorded INSIDE FivoCRM) ──────────────
+  // See src/lib/whmcsPayment.ts. Stripe payments are pushed by the webhook; a
+  // manual "Paguar" / instalment is queued here and drained by
+  // POST /api/whmcs-payment or by the next whmcs-sync. While the queue is
+  // non-empty the sync PRESERVES the local status instead of reverting it.
+  /** Payments awaiting WHMCS (`key` = idempotency token → WHMCS transid). */
+  whmcsPendingPayments?: WhmcsPendingPayment[];
+  /** Keys already recorded in WHMCS (dedup for re-marks). */
+  whmcsSyncedPaymentKeys?: string[];
+  /** When the oldest still-pending local payment was recorded. */
+  whmcsPaymentPendingAt?: Date | null;
+  /** Last successful write-back to WHMCS (Stripe or manual). */
+  whmcsPaymentSyncedAt?: Date;
+  /** Last write-back failure (WHMCS API message). Cleared on success. */
+  whmcsPaymentSyncError?: string | null;
+  // ── WhatsApp invoice reminders (overdue-reminders cron) ──────────────────────
+  /** One-shot stages: "skadon për N ditë" and "skadon sot". */
+  preDueWaSentAt?: Date;
+  dueWaSentAt?: Date;
   createdAt: Date;
   updatedAt: Date;
   createdByUserId: string | null;
 }
 
-/** Active hosting/product subscription mirrored one-way from WHMCS. */
-export interface Subscription {
+/** A payment recorded in FivoCRM that still has to be posted to WHMCS. */
+export interface WhmcsPendingPayment {
+  /** 'full' (whole balance) or 'p<index>' (instalment index in partialPayments). */
+  key: string;
+  /** Amount in the invoice's currency; omitted for 'full' (WHMCS closes the balance). */
+  amount?: number;
+  /** FivoCRM payment method label ('Cash', 'Bank', 'Card', …) → WHMCS gateway. */
+  method?: string;
+  paidAt?: Date;
+}
+
+// ── Hosting & domains module ──
+// A `Subscription` is a hosting ACCOUNT the customer pays for on a cycle; a `Domain`
+// is a registered name. Both collections predate the module as WHMCS read-only
+// mirrors (`source: 'whmcs'`); rows we sell and bill ourselves carry
+// `source: 'fivocrm'`. The pure engine (`src/lib/hosting/engine.ts`, mirrored
+// byte-for-byte in `api/_hostingEngine.ts`) decides every lifecycle step; the
+// cron (`api/_hostingJobs.ts`) and the endpoint (`api/_hosting.ts`) only execute.
+
+export type HostingBillingCycle =
+  | 'monthly' | 'quarterly' | 'semiannually' | 'annually' | 'biennially' | 'triennially';
+
+export type SubscriptionStatus = 'Pending' | 'Active' | 'Suspended' | 'Terminated' | 'Cancelled';
+export type DomainStatus = 'Pending' | 'Active' | 'Grace' | 'Expired' | 'Cancelled' | 'Transferred Away';
+export type ProvisionStatus = 'pending' | 'provisioned' | 'failed';
+
+/** A cPanel/WHM server the tenant provisions accounts on. The API token lives in
+ *  `hostingServerSecrets/{serverId}` (deny-all for clients) — the UI sees `hasApiToken`. */
+export interface HostingServer {
   id: string;
-  /** WHMCS service (client product) id — idempotency key. */
-  whmcsServiceId: string;
-  whmcsClientId?: string;
-  customerId?: string;
+  businessId?: string;
   teamId?: string;
-  productName: string;
-  domain?: string;
-  status: 'Active' | 'Suspended' | 'Terminated' | 'Pending' | 'Cancelled';
-  recurringAmount: number;
-  currency?: 'ALL' | 'EUR';
-  billingCycle?: string;
-  nextDueDate?: Date;
-  source: 'whmcs';
+  name: string;
+  /** WHM hostname (no scheme), e.g. `srv1.shembull.al`. */
+  hostname: string;
+  /** WHM API port — 2087 by default. */
+  port?: number;
+  /** WHM API user (root or a reseller). */
+  username: string;
+  /** Nameservers handed to new accounts / registered domains. */
+  nameservers?: string[];
+  /** Public IP shown to the customer for A records. */
+  ipAddress?: string;
+  status: 'Active' | 'Inactive';
+  hasApiToken?: boolean;
+  /** Filled by "Testo lidhjen" / the sync job. */
+  lastCheckedAt?: Date;
+  lastCheckOk?: boolean;
+  lastCheckError?: string | null;
+  whmVersion?: string;
+  accountsCount?: number;
+  /** WHM packages seen on the last check (for the product form's picker). */
+  packages?: string[];
   createdAt: Date;
   updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+/** A hosting PACKAGE for sale: maps a WHM package on a server to a price list. */
+export interface HostingProduct {
+  id: string;
+  businessId?: string;
+  teamId?: string;
+  name: string;
+  description?: string;
+  serverId: string;
+  /** Exact WHM package name (`plan` in createacct). */
+  whmPackage: string;
+  status: 'Active' | 'Archived';
+  currency: 'ALL' | 'EUR';
+  pricing: Partial<Record<HostingBillingCycle, { price: number; setupFee?: number }>>;
+  features?: string[];
+  diskGb?: number;
+  bandwidthGb?: number;
+  /** Shown in the client portal catalog. */
+  portalVisible?: boolean;
+  sortOrder?: number;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+/** Sell prices for one TLD. `cost*` are what Dynadot charges us (display-only). */
+export interface DomainTld {
+  id: string;
+  businessId?: string;
+  teamId?: string;
+  /** Without the dot: `com`, `al`, `co.uk`. */
+  tld: string;
+  currency: 'ALL' | 'EUR';
+  registerPrice: number;
+  renewPrice: number;
+  transferPrice?: number;
+  costRegister?: number;
+  costRenew?: number;
+  minYears?: number;
+  maxYears?: number;
+  status: 'Active' | 'Archived';
+  portalVisible?: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+/** Active hosting subscription. `source: 'whmcs'` rows are mirrored one-way from
+ *  WHMCS and are never billed or provisioned by us; `'fivocrm'` rows are ours. */
+export interface Subscription {
+  id: string;
+  businessId?: string;
+  teamId?: string;
+  customerId?: string;
+  source: 'whmcs' | 'fivocrm';
+  /** WHMCS service (client product) id — idempotency key of the mirror. */
+  whmcsServiceId?: string;
+  whmcsClientId?: string;
+  productId?: string;
+  productName: string;
+  /** Primary domain of the account. */
+  domain?: string;
+  status: SubscriptionStatus;
+  recurringAmount: number;
+  currency?: 'ALL' | 'EUR';
+  /** Ours: a `HostingBillingCycle`. Mirror: WHMCS's free-text cycle. */
+  billingCycle?: HostingBillingCycle | string;
+  nextDueDate?: Date;
+  /** Day-of-month the series started on; the due date is clamped to it forever. */
+  anchorDay?: number;
+  registrationDate?: Date;
+  // ── provisioning (cPanel/WHM) ──
+  serverId?: string;
+  whmPackage?: string;
+  cpanelUsername?: string;
+  provisionStatus?: ProvisionStatus;
+  provisionError?: string | null;
+  provisionedAt?: Date;
+  // ── lifecycle ──
+  /** Day key (`2026-09-25`) of the due date the last renewal invoice was issued FOR. */
+  lastInvoicedDueKey?: string | null;
+  /** The renewal invoice for the current due date. */
+  currentInvoiceId?: string | null;
+  cancelAtPeriodEnd?: boolean;
+  /** Staff hold: the cron never auto-suspends/terminates while set. */
+  lifecycleHold?: boolean;
+  suspendedAt?: Date | null;
+  suspendReason?: string | null;
+  terminatedAt?: Date | null;
+  /** Order that created it. */
+  orderId?: string;
+  notes?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId?: string | null;
+}
+
+/** A registered domain name. Same source split as `Subscription`. */
+export interface Domain {
+  id: string;
+  businessId?: string;
+  teamId?: string;
+  customerId?: string;
+  source: 'whmcs' | 'fivocrm';
+  whmcsDomainId?: string;
+  whmcsClientId?: string;
+  domainName: string;
+  tld?: string;
+  status: DomainStatus | string;
+  registrar?: 'dynadot' | 'manual' | string;
+  registrationDate?: Date;
+  expiryDate?: Date;
+  years?: number;
+  recurringAmount: number;
+  currency?: 'ALL' | 'EUR';
+  autoRenew?: boolean;
+  nameservers?: string[];
+  privacy?: boolean;
+  locked?: boolean;
+  /** Linked hosting account (the domain points at it). */
+  subscriptionId?: string;
+  provisionStatus?: ProvisionStatus;
+  provisionError?: string | null;
+  lastSyncAt?: Date;
+  // ── lifecycle ──
+  lastInvoicedExpiryKey?: string | null;
+  currentInvoiceId?: string | null;
+  /** Expiry key the registrar confirmed a renewal for (guards a double renew). */
+  renewedAtRegistrarForKey?: string | null;
+  lifecycleHold?: boolean;
+  orderId?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId?: string | null;
+}
+
+export type HostingOrderStatus =
+  | 'Pending'        // awaiting payment
+  | 'Paid'           // invoice paid, provisioning not started
+  | 'Provisioning'
+  | 'Active'         // everything provisioned
+  | 'Failed'         // at least one line failed — staff retries
+  | 'Cancelled';
+
+export interface HostingOrderLine {
+  kind: 'hosting' | 'domain-register' | 'domain-transfer';
+  description: string;
+  productId?: string;
+  productName?: string;
+  cycle?: HostingBillingCycle;
+  domainName?: string;
+  years?: number;
+  unitPrice: number;
+  setupFee: number;
+  total: number;
+  currency: 'ALL' | 'EUR';
+  /** Filled as the line is fulfilled. */
+  subscriptionId?: string;
+  domainId?: string;
+  provisionStatus?: ProvisionStatus;
+  provisionError?: string | null;
+}
+
+/** An order = one invoice + N lines. Provisioning starts when the invoice is Paid. */
+export interface HostingOrder {
+  id: string;
+  businessId?: string;
+  teamId?: string;
+  orderNumber: string;
+  customerId: string;
+  source: 'portal' | 'staff';
+  status: HostingOrderStatus;
+  lines: HostingOrderLine[];
+  subtotal: number;
+  total: number;
+  currency: 'ALL' | 'EUR';
+  invoiceId?: string | null;
+  paidAt?: Date | null;
+  provisionedAt?: Date | null;
+  lastError?: string | null;
+  notes?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdByUserId: string | null;
+}
+
+/** Append-only audit of every provider call and lifecycle step (server-written). */
+export interface HostingEvent {
+  id: string;
+  businessId?: string;
+  teamId?: string;
+  customerId?: string;
+  subscriptionId?: string;
+  domainId?: string;
+  orderId?: string;
+  type: string;
+  ok: boolean;
+  message: string;
+  /** Redacted provider payload excerpt (never a password/token). */
+  detail?: Record<string, unknown>;
+  actorUserId?: string | null;
+  createdAt: Date;
 }
 
 export interface Service {
@@ -1923,6 +2190,8 @@ export interface TeamInvite {
   canAccessServices?: boolean;
   /** Shop module (products, inventory, orders). */
   canAccessProducts?: boolean;
+  /** Hosting & domains module. */
+  canAccessHosting?: boolean;
   canAccessExpenses?: boolean;
   canAccessProfile?: boolean;
   /** Carried onto the membership when the invite is accepted — see TeamMember. */

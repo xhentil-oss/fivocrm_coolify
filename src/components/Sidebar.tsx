@@ -35,6 +35,7 @@ import {
   HeartPulse,
   Search,
   BellRing,
+  Server as ServerIcon,
 } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { isPathEnabled, type PlanKey } from '../lib/modules';
@@ -110,6 +111,7 @@ const allSections: NavSection[] = [
       { path: '/app/contracts', label: 'Kontratat', icon: ScrollText, permissionKey: 'canAccessInvoices' },
       { path: '/app/services', label: 'Shërbimet', icon: Receipt, permissionKey: 'canAccessServices' },
       { path: '/app/products', label: 'Dyqani', icon: Package, permissionKey: 'canAccessProducts' },
+      { path: '/app/hosting', label: 'Hosting & Domain-e', icon: ServerIcon, permissionKey: 'canAccessHosting' },
       { path: '/app/price-calculator', label: 'Kalkulatori', icon: Calculator, permissionKey: 'canAccessServices' },
     ],
   },

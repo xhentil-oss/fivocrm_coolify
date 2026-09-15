@@ -14,7 +14,11 @@ import { useToast } from '../../hooks/use-toast';
 import { FOLLOW_UP_LIMITS, normalizeCadenceDays, resolveFollowUpConfig } from '../../lib/crm/followUpConfig';
 import { resolvePlaybooks } from '../../lib/crm/playbooks';
 import PlaybookEditor from './PlaybookEditor';
-import type { WhatsAppTemplate } from '../../types';
+import type { WhatsAppAccount, WhatsAppTemplate } from '../../types';
+import {
+  DEFAULT_INVOICE_WA_TEXT, INVOICE_WA_BLOCK_LABELS, INVOICE_WA_LIMITS, renderInvoiceWaText, resolveInvoiceWaConfig,
+  type InvoiceWaBlockReason,
+} from '../../lib/finance/invoiceWaReminders';
 
 /**
  * Cilësimet → Automatizimi → "Ndjekja & Përgjigjet automatike".
@@ -40,7 +44,9 @@ const SECTION_KEYS = {
   ai: ['waAiAssist', 'waAiContext', 'waAiDailyCap'],
   reminders: ['waFollowUpEnabled', 'waFollowUpTemplateId', 'waFollowUpChannelPhoneNumberId', 'waAutoReminderEnabled',
     'waAutoReminderDays', 'waAutoReminderStatuses', 'waAutoReminderTemplateId', 'waAutoReminderChannelPhoneNumberId',
-    'waOverdueEnabled', 'waOverdueDays', 'waOverdueTemplateId', 'waOverdueChannelPhoneNumberId'],
+    'waOverdueEnabled', 'waOverdueDays', 'waOverdueTemplateId', 'waOverdueChannelPhoneNumberId',
+    'waInvoiceSources', 'waInvoiceChannel', 'waInvoiceAgentId', 'waInvoiceText', 'waInvoicePreDueDays', 'waInvoiceOnDue',
+    'waInvoiceRenotifyDays', 'waInvoiceHourStart', 'waInvoiceHourEnd', 'overdueEmailSkipWhmcs'],
   newLead: ['waAutoCreateLead', 'waAutoCreateLeadDailyCap'],
   playbooks: ['followUpPlaybooks'],
 } as const satisfies Record<string, readonly (keyof TeamSettings)[]>;
@@ -65,6 +71,7 @@ function previewTokens(text: string): string {
 /** Read the draft from the stored settings, applying the documented defaults. */
 function draftFrom(s: TeamSettings | null): Draft {
   const cfg = resolveFollowUpConfig(s);
+  const invoiceWa = resolveInvoiceWaConfig(s);
   return {
     leadCadenceDays: cfg.leadCadenceDays,
     followUpSlaHours: s?.followUpSlaHours ?? cfg.followUpSlaHours,
@@ -94,6 +101,17 @@ function draftFrom(s: TeamSettings | null): Draft {
     waOverdueDays: s?.waOverdueDays ?? 60,
     waOverdueTemplateId: s?.waOverdueTemplateId || '',
     waOverdueChannelPhoneNumberId: s?.waOverdueChannelPhoneNumberId || '',
+    // Invoice WhatsApp reminders — same resolver the cron reads with.
+    waInvoiceSources: invoiceWa.sources,
+    waInvoiceChannel: invoiceWa.channel,
+    waInvoiceAgentId: invoiceWa.agentId,
+    waInvoiceText: s?.waInvoiceText ?? '',
+    waInvoicePreDueDays: invoiceWa.preDueDays,
+    waInvoiceOnDue: invoiceWa.onDue,
+    waInvoiceRenotifyDays: invoiceWa.renotifyDays,
+    waInvoiceHourStart: invoiceWa.hourStart,
+    waInvoiceHourEnd: invoiceWa.hourEnd,
+    overdueEmailSkipWhmcs: invoiceWa.emailSkipWhmcs,
     waAutoCreateLead: s?.waAutoCreateLead !== false,
     waAutoCreateLeadDailyCap: s?.waAutoCreateLeadDailyCap ?? 50,
     followUpPlaybooks: resolvePlaybooks(s),
@@ -223,6 +241,8 @@ const ToggleRow: React.FC<{ label: string; hint?: string; checked: boolean; onCh
 const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) => {
   const { toast } = useToast();
   const { data: templates } = useCollection<WhatsAppTemplate>('waTemplates');
+  const { data: waAccounts } = useCollection<WhatsAppAccount>('whatsappAccounts');
+  const baileysAgents = (waAccounts || []).filter((a) => a.enabled);
   const channels = settings?.metaChannels || [];
   const [draft, setDraft] = useState<Draft>(() => draftFrom(settings));
   const [saving, setSaving] = useState<SectionId | null>(null);
@@ -264,6 +284,15 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
         patch.waAutoReplyText = String(draft.waAutoReplyText || '').trim();
       }
       if (id === 'ai') patch.waAiContext = String(draft.waAiContext || '').trim();
+      if (id === 'reminders') {
+        // Write only what the invoice-reminder resolver accepts — the cron reads through it.
+        const wa = resolveInvoiceWaConfig(draft);
+        Object.assign(patch, {
+          waOverdueDays: wa.overdueDays, waInvoicePreDueDays: wa.preDueDays, waInvoiceRenotifyDays: wa.renotifyDays,
+          waInvoiceHourStart: wa.hourStart, waInvoiceHourEnd: wa.hourEnd, waInvoiceAgentId: wa.agentId,
+          waInvoiceText: String(draft.waInvoiceText || '').trim(),
+        });
+      }
       if (id === 'playbooks') {
         // Same validator the cron + inbound handler read with (api/_playbooks.ts).
         const valid = resolvePlaybooks(draft);
@@ -440,10 +469,100 @@ const FollowUpSettingsPanel: React.FC<Props> = ({ teamId, settings, canEdit }) =
         </div>
         {templateBlock('waAutoReminderTemplateId', 'waAutoReminderChannelPhoneNumberId', ro || !draft.waAutoReminderEnabled)}
         <div className="border-t border-border" />
-        <ToggleRow label="Eskalim për fatura të vonuara" checked={!!draft.waOverdueEnabled} onChange={(v) => set('waOverdueEnabled', v)} disabled={ro}
-          hint="Faturë e papaguar (Overdue) më shumë se X ditë → template te klienti (përveç email-it javor). Klientët me opsionin e fikur anashkalohen." />
-        <NumberField label="Pas" value={draft.waOverdueDays} onChange={(v) => set('waOverdueDays', v)} min={1} max={365} suffix="ditësh vonesë (60 ≈ 2 muaj)" disabled={ro || !draft.waOverdueEnabled} />
-        {templateBlock('waOverdueTemplateId', 'waOverdueChannelPhoneNumberId', ro || !draft.waOverdueEnabled)}
+        <ToggleRow label="Kujtesa faturash në WhatsApp" checked={!!draft.waOverdueEnabled} onChange={(v) => set('waOverdueEnabled', v)} disabled={ro}
+          hint="Faturat e papaguara (edhe ato nga WHMCS) → mesazh te klienti para afatit, në afat dhe/ose pas X ditësh vonesë. Klientët me kujtesat e fikura ose me WhatsApp të refuzuar anashkalohen." />
+        {(() => {
+          const off = ro || !draft.waOverdueEnabled;
+          const lastRun = settings?.waInvoiceLastRun;
+          const lastAt = lastRun?.at?.toDate ? lastRun.at.toDate() : lastRun?.at ? new Date(lastRun.at) : null;
+          const blockedEntries = Object.entries(lastRun?.blocked || {}).filter(([, v]) => (v as number) > 0)
+            .sort((a, b) => (b[1] as number) - (a[1] as number));
+          const sample = renderInvoiceWaText(draft.waInvoiceText || '', {
+            name: 'Arben Hoxha', firstName: 'Arben', company: settings?.companyName || 'Kompania', invoiceNumber: 'INV-2026-041',
+            amount: 12500, currency: 'ALL', dueDate: '30.09.2026', dueText: 'skadon për 3 ditë', daysLate: -3, link: 'https://…/pay/…',
+          });
+          return (<>
+            <div className="grid sm:grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label className="text-xs">Cilat fatura</Label>
+                <NativeSelect value={draft.waInvoiceSources || 'all'} onChange={(e) => set('waInvoiceSources', e.target.value as 'all' | 'whmcs' | 'fivocrm')} disabled={off}>
+                  <option value="all">Të gjitha</option>
+                  <option value="whmcs">Vetëm nga WHMCS (hosting/domain)</option>
+                  <option value="fivocrm">Vetëm të FivoCRM</option>
+                </NativeSelect>
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs">Kanali</Label>
+                <NativeSelect value={draft.waInvoiceChannel || 'meta'} onChange={(e) => set('waInvoiceChannel', e.target.value as 'meta' | 'baileys')} disabled={off}>
+                  <option value="meta">Meta (template i aprovuar)</option>
+                  <option value="baileys">Baileys (tekst i lirë, numri i ekipit)</option>
+                </NativeSelect>
+              </div>
+            </div>
+            {draft.waInvoiceChannel === 'baileys' ? (
+              <div className="space-y-3">
+                {baileysAgents.length > 1 && (
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">Agjenti Baileys</Label>
+                    <NativeSelect value={draft.waInvoiceAgentId || ''} onChange={(e) => set('waInvoiceAgentId', e.target.value)} disabled={off}>
+                      <option value="">I pari i lidhur</option>
+                      {baileysAgents.map((a) => <option key={a.id} value={a.id}>{a.label}{a.connectedPhone ? ` · ${a.connectedPhone}` : ''}</option>)}
+                    </NativeSelect>
+                  </div>
+                )}
+                <div className="space-y-1.5">
+                  <Label className="text-xs">Teksti i mesazhit</Label>
+                  <Textarea rows={4} value={draft.waInvoiceText || ''} onChange={(e) => set('waInvoiceText', e.target.value)} disabled={off}
+                    placeholder={DEFAULT_INVOICE_WA_TEXT} className="text-sm" />
+                  <p className="text-[11px] text-muted-foreground">
+                    Token-e: {'{{firstName}} {{name}} {{company}} {{invoiceNumber}} {{amount}} {{currency}} {{dueDate}} {{dueText}} {{daysLate}} {{link}} {{whmcsLink}}'}.
+                    Bosh = teksti standard. Pa {'{{link}}'} linku i pagesës shtohet vetë në fund.
+                  </p>
+                  <div className="rounded-md bg-muted/60 p-3 text-xs whitespace-pre-wrap">{sample}</div>
+                </div>
+              </div>
+            ) : (
+              <>
+                {templateBlock('waOverdueTemplateId', 'waOverdueChannelPhoneNumberId', off)}
+                <p className="text-[11px] text-muted-foreground">Meta dërgon vetëm template të aprovuar (kategori Utility). Parametrat e template-it mund t’i lidhësh me: name, firstName, invoiceNumber, amount, currency, dueDate, dueText, daysLate, link, whmcsLink.</p>
+              </>
+            )}
+            <div className="grid sm:grid-cols-3 gap-4">
+              <NumberField label="Para afatit" value={draft.waInvoicePreDueDays} onChange={(v) => set('waInvoicePreDueDays', v)}
+                min={INVOICE_WA_LIMITS.preDueDays.min} max={INVOICE_WA_LIMITS.preDueDays.max} suffix="ditë (0 = fikur)" hint="“Skadon për N ditë”, një herë" disabled={off} />
+              <NumberField label="Pas vonesës" value={draft.waOverdueDays} onChange={(v) => set('waOverdueDays', v)}
+                min={INVOICE_WA_LIMITS.overdueDays.min} max={INVOICE_WA_LIMITS.overdueDays.max} suffix="ditë" hint="“Ka N ditë vonesë”" disabled={off} />
+              <NumberField label="Përsërit çdo" value={draft.waInvoiceRenotifyDays} onChange={(v) => set('waInvoiceRenotifyDays', v)}
+                min={INVOICE_WA_LIMITS.renotifyDays.min} max={INVOICE_WA_LIMITS.renotifyDays.max} suffix="ditë" hint="Sa shpesh ripërsëritet kujtesa e vonesës" disabled={off} />
+            </div>
+            <ToggleRow label="Kujtesë edhe ditën e afatit" checked={!!draft.waInvoiceOnDue} onChange={(v) => set('waInvoiceOnDue', v)} disabled={off}
+              hint="“Fatura skadon sot” — një herë." />
+            <div className="grid sm:grid-cols-2 gap-4">
+              <NumberField label="Dërgo nga ora" value={draft.waInvoiceHourStart} onChange={(v) => set('waInvoiceHourStart', v)}
+                min={INVOICE_WA_LIMITS.hour.min} max={INVOICE_WA_LIMITS.hour.max} suffix="h (Europe/Tirane)" disabled={off} />
+              <NumberField label="deri në orën" value={draft.waInvoiceHourEnd} onChange={(v) => set('waInvoiceHourEnd', v)}
+                min={INVOICE_WA_LIMITS.hour.min + 1} max={INVOICE_WA_LIMITS.hour.max + 1} suffix="h" hint="Jashtë këtij orari asgjë nuk dërgohet" disabled={off} />
+            </div>
+            <ToggleRow label="Mos dërgo email-in javor të vonesës për faturat WHMCS" checked={!!draft.overdueEmailSkipWhmcs} onChange={(v) => set('overdueEmailSkipWhmcs', v)} disabled={ro}
+              hint="WHMCS ua dërgon vetë klientëve email-et e faturave; pa këtë çelës klienti merr dy email për të njëjtën faturë." />
+            {lastRun && (
+              <div className="rounded-md border border-border p-3 text-xs space-y-1">
+                <p className="font-medium">
+                  Ekzekutimi i fundit{lastAt && !isNaN(lastAt.getTime()) ? ` · ${lastAt.toLocaleString('sq-AL')}` : ''}: {lastRun.considered ?? 0} shqyrtuar → <span className="text-success font-semibold">{lastRun.sent ?? 0} dërguar</span>
+                </p>
+                {blockedEntries.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5">
+                    {blockedEntries.map(([reason, count]) => (
+                      <Badge key={reason} variant="secondary" className="text-[10px]">
+                        {count as number} · {INVOICE_WA_BLOCK_LABELS[reason as InvoiceWaBlockReason] || reason}
+                      </Badge>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </>);
+        })()}
       </SectionCard>
 
       {/* 5 · Lead i ri nga WhatsApp */}

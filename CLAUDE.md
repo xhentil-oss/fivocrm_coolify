@@ -73,6 +73,9 @@
 | `productCategories` / `productBrands` | Shop catalog taxonomy |
 | `stockMovements` | Append-only inventory ledger |
 | `shopOrders` | Shop orders (portal + back office) |
+| `hostingServers` / `hostingProducts` / `domainTlds` | Hosting module catalog: WHM servers, packages, TLD sell prices (token in `hostingServerSecrets`, deny-all) |
+| `subscriptions` / `domains` | Hosting accounts + registered domains — `source: 'whmcs'` (mirror) or `'fivocrm'` (billed by us) |
+| `hostingOrders` / `hostingEvents` | Hosting orders (endpoint-only create) + append-only provider/lifecycle audit |
 | `serviceInquiries` | Landing page form submissions |
 | `standups` | Morning standup entries |
 | `dailyReports` | Daily staff reports |
@@ -186,6 +189,52 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
 - Stock is never set directly — every change is a `stockMovements` entry, and orders
   decrement stock once, guarded by `shopOrder.stockApplied`.
 - Order lines are price **snapshots**, so later catalog edits never rewrite history.
+
+### Hosting & Domains module (`id: 'hosting'`, `minPlan: 'pro'`, off by default)
+
+Full runbook: `workspace/HOSTING_MODULE.md`. Staff `/app/hosting`, portal `/portal/hosting`,
+permission `canAccessHosting`.
+
+- **`src/lib/hosting/engine.ts` decides, `api/_hostingJobs.ts` executes.** The engine is
+  pure (cycles, `parseDomain`, `deriveCpanelUsername`, `priceOrder`, `decideSubscription`,
+  `decideDomain`) and `api/_hostingEngine.ts` is a **byte-identical copy** (test-enforced).
+  Every non-action is a named `SubscriptionBlockReason` / `DomainBlockReason` shown on
+  the row — never add a silent `continue` to the job loop.
+- **`subscriptions` / `domains` are shared with the WHMCS mirror.** `source: 'whmcs'` rows
+  are read-only mirrors WHMCS bills (`not-ours`); `source: 'fivocrm'` rows are ours.
+  "Merr nën menaxhim" flips a row and leaves `lastInvoicedDueKey` null, so FivoCRM
+  invoices the CURRENT due date (pre-claiming it made the lifecycle read the period
+  as invoiced-but-unpaid and suspend on the due date). "Shto ekzistues" creates
+  provisioned rows without touching a provider; a domain whose `registrar` is not
+  `dynadot` is renewed BY HAND after payment (`domain.renewManual` + staff notice).
+- **Renewal invoice id = `hst_sub_<id>_<dueKey>` / `hst_dom_<id>_<expiryKey>`**, written
+  with `create()`; the order invoice is `hst_ord_<orderId>`. Same law as recurring
+  billing: the period is the idempotency token, never a timestamp. `nextDueDate` moves
+  only in `applySubscriptionRenewal` (when `currentInvoiceId` == the paid invoice) via
+  `addMonthsClamped` with `anchorDay`.
+- **Drivers (`api/_hostingProviders.ts`) know nothing about Firestore.** WHM API 1 (POST,
+  `Authorization: whm user:token`) and Dynadot api3. Both whitelist IPs, so calls relay
+  through the VPS `/provider-proxy` (https + `api.dynadot.com` or port 2087/2083 only)
+  when `HOSTING_PROXY_URL` / `WHMCS_PROXY_URL` is set.
+- **Credentials:** WHM token → `hostingServerSecrets/{serverId}` (`read, write: if false`,
+  written only by `server.saveToken`); Dynadot key → `teamSecrets.dynadotApiKey`
+  (`SECRET_FIELDS`, flag `hasDynadotApiKey`). The cPanel password exists ONLY in the
+  welcome email; `sub.resetPassword` returns a new one once.
+- **Orders are created only by `POST /api/hosting` (`order.create`)** — prices come from
+  the catalog, availability is checked live, rules deny browser creates for everyone.
+  Paid (Stripe webhook `source: 'hosting'`, or the hourly job noticing a manual
+  "Paguar") → `provisionOrder`, idempotent per line (`sub_<orderId>_<i>`,
+  `dom_<orderId>_<i>`; an account/domain that already exists is adopted, not recreated).
+- **Registrar auto-renew stays OFF**: a domain renews at Dynadot only after OUR renewal
+  invoice is paid (`renewedAtRegistrarForKey` guards a double renew). Unpaid → `Grace`
+  → `Expired` after `domainGraceDays`; `terminateDaysAfter: 0` disables account
+  deletion (`removeacct` deletes files).
+- Cron: `hosting-lifecycle` hourly, `hosting-sync` every 6h, from `vps/server.ts`, **NOT
+  in `run-all`**; manual runs scoped to the caller's `bid`. Suspended tenants skipped.
+- Adding an action? → `api/_hosting.ts` switch (load the record, compare `businessId` /
+  `customerId` with claims — never trust ids from the body) + `hostingApi()` caller.
+  Adding a collection? → `businessIsolatedAlways` + `teamScopedCollections` + rules +
+  test 51x + indexes.
 
 ### Invoice ↔ Project link & recurring project billing
 
@@ -736,6 +785,41 @@ Full audit: `workspace/CHAT_NOTIFICATIONS_AUDIT_2026_08.md`.
   RECIPIENT write a notification, so the sender cannot clean up after deleting a
   message — the reader's ChatView dismisses rows whose `messageId` is deleted.
 
+### WHMCS mirror: payments back to WHMCS + WhatsApp invoice reminders
+
+Full runbook: `workspace/WHMCS_SYNC.md`.
+
+- **WHMCS is the source of truth; FivoCRM writes back exactly ONE fact: "this
+  payment was received."** Two write paths, one primitive (`pushInvoicePayment`
+  in `api/_whmcs.ts`): the Stripe webhook (transid = payment_intent) and the
+  manual-payment queue. A payment marked by hand ("Paguar", an instalment) on a
+  `source: 'whmcs'` invoice is queued on `whmcsPendingPayments` **in the same
+  update as the status change** (`whmcsPendingPatch`, `src/lib/whmcsPayment.ts`),
+  then drained by `POST /api/whmcs-payment` (`api/_whmcs-payment.ts`) or by the
+  next `whmcs-sync` (`drainPendingWhmcsPayments`). transid is deterministic
+  (`fivocrm-<docId>-<key>`, key `full` | `p<index>`), so WHMCS's duplicate error
+  is success and a re-mark never double-posts.
+- **While the queue is non-empty the sync PRESERVES the local status/paidAt.**
+  `upsertInvoice` used to rewrite both from WHMCS unconditionally, so a
+  hand-settled invoice flipped back to Pending overnight and its `paidAt`
+  vanished. WHMCS reporting `Paid` clears the queue; a WHMCS reversal (→ Draft)
+  still wins over a local Paid. `Partial` is FivoCRM-only and is kept.
+- Every manual write path (drawer, full form, instalment) must spread the
+  queue patch — adding a fourth "mark paid" path without it recreates the bug.
+  `whmcsPaymentSyncError` is SHOWN (badge + "Riprovo WHMCS"), never just logged.
+- **WhatsApp invoice reminders live in `overdue-reminders`**, decided by
+  `invoiceWaDecision()` in `src/lib/finance/invoiceWaReminders.ts` — the api copy
+  `api/_invoiceWaReminders.ts` is **byte-identical** (test-enforced). Three
+  stages with their own stamps (`preDueWaSentAt`, `dueWaSentAt`,
+  `overdueWaSentAt`), source filter (`all|whmcs|fivocrm`), Meta template OR
+  Baileys free text, a local send window (the job ticks every 2h — the window
+  is what stops a 3 a.m. message), `waOptOut` honoured, and every non-send a
+  named reason tallied into `teamSettings.waInvoiceLastRun`. Never add a filter
+  inline in the cron loop. Needs index `invoices (status, dueDate)`.
+- WHMCS invoices are created with every FivoCRM reminder flag already `true`
+  and `createdByUserId: null` — WHMCS emails them itself. `overdueEmailSkipWhmcs`
+  stops FivoCRM's weekly overdue email duplicating that.
+
 ### Follow-up ("Ndjekja"): one next step per contact, leads AND customers
 
 Full runbook: `workspace/FOLLOW_UP.md`.
@@ -893,6 +977,7 @@ Each package includes:
 | `_reports.ts` | `POST /api/reports` | Client report actions (view/ack/approve/reject/comment) + staff email send |
 | `_platformAdmin.ts` | `POST /api/platform-admin` | Platform console writes: tenant plan/status/trial/seats + module toggles (super-admin only, audited) |
 | `_link-contact.ts` | `POST /api/link-contact` | Pairs a customer with the lead for the same person (portal bootstrap) |
+| `_hosting.ts` | `POST /api/hosting` | Hosting & domains: servers/registrar config, domain check, orders, provisioning, cPanel SSO/suspend/terminate, Dynadot NS/privacy/EPP (staff; portal client on own records) |
 | `_merge-contacts.ts` | `POST /api/merge-contacts` | Manual duplicate merge: moves invoices/projects/quotes/chat onto the surviving contact (Admin/Manager, archived + audited) |
 | `_reportJobs.ts` | Cron | report-schedules, report-reminders, client-health-rollup |
 | `cron/run.ts` | Cron | Scheduled jobs (recurring invoices, etc.) |
@@ -978,6 +1063,7 @@ META_ACCESS_TOKEN        — Meta WhatsApp API
 - `workspace/DEBUGGING.md` — Debugging notes
 - `workspace/REPORTING_MODULE.md` — Reporting & accountability module (ERD, security, runbook)
 - `workspace/FINANCE_AUDIT_2026_09.md` — Finance/recurring-billing audit (anchor drift, period claims, tenant scoping)
+- `workspace/HOSTING_MODULE.md` — Hosting & domains module (cPanel/WHM + Dynadot): architecture, lifecycle table, endpoint actions, deploy steps
 
 ---
 

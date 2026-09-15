@@ -4,7 +4,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useClientPortal } from '../../hooks/useClientPortal';
 import { usePermissions } from '../../contexts/PermissionsContext';
 import { useCollection } from '../../hooks/useFirestore';
-import { LayoutDashboard, FileText, ShoppingBag, ClipboardList, FolderKanban, Calculator, ScrollText, LogOut, Menu, X, User, Eye, EyeOff, Sparkles, MessageCircle, ArrowRight, Share2, ShoppingCart } from 'lucide-react';
+import { LayoutDashboard, FileText, ShoppingBag, ClipboardList, FolderKanban, Calculator, ScrollText, LogOut, Menu, X, User, Eye, EyeOff, Sparkles, MessageCircle, ArrowRight, Share2, ShoppingCart, Globe } from 'lucide-react';
 import { Button } from '../../components/ui/button';
 import { Loader2 } from 'lucide-react';
 import PortalPushPrompt from './PortalPushPrompt';
@@ -20,6 +20,7 @@ const navItems = [
   { to: '/portal/contracts', icon: ScrollText, label: 'Kontratat' },
   { to: '/portal/services', icon: ShoppingBag, label: 'Shërbimet' },
   { to: '/portal/shop', icon: ShoppingCart, label: 'Dyqani', shopOnly: true },
+  { to: '/portal/hosting', icon: Globe, label: 'Hosting & Domain-e', hostingOnly: true },
   { to: '/portal/projects', icon: FolderKanban, label: 'Projektet' },
   { to: '/portal/reports', icon: ClipboardList, label: 'Raportet' },
   { to: '/portal/preventiva', icon: Calculator, label: 'Preventiva' },
@@ -39,7 +40,7 @@ const bottomNavItems = [
 const PortalLayout: React.FC = () => {
   const { user, logout } = useAuth();
   const permissions = usePermissions();
-  const { isClient, isLoading, businessId } = useClientPortal();
+  const { isClient, isLoading, businessId, customerId } = useClientPortal();
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileOpen, setMobileOpen] = useState(false);
@@ -72,9 +73,43 @@ const PortalLayout: React.FC = () => {
     limit: 1,
   });
   const hasShop = (portalProducts?.length || 0) > 0;
+
+  // ── Hosting tab visibility ──
+  // "Hosting & Domain-e" appears when the tenant SELLS hosting (≥1 portal-visible
+  // package) OR this client already owns a subscription/domain (a WHMCS-mirrored one
+  // included, so an existing customer can see their services even before the tenant
+  // publishes a catalog). Three single-doc probes, all scoped by the client's own keys.
+  const { data: portalHostingProducts } = useCollection<any>('hostingProducts', {
+    skip: !businessId,
+    where: [
+      { field: 'businessId', operator: '==', value: businessId || '' },
+      { field: 'portalVisible', operator: '==', value: true },
+    ],
+    skipTeamFilter: true,
+    skipBusinessFilter: true,
+    limit: 1,
+  });
+  const { data: mySubscriptions } = useCollection<any>('subscriptions', {
+    skip: !customerId,
+    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
+    skipTeamFilter: true,
+    skipBusinessFilter: true,
+    limit: 1,
+  });
+  const { data: myDomains } = useCollection<any>('domains', {
+    skip: !customerId,
+    where: [{ field: 'customerId', operator: '==', value: customerId || '' }],
+    skipTeamFilter: true,
+    skipBusinessFilter: true,
+    limit: 1,
+  });
+  const hasHosting = (portalHostingProducts?.length || 0) > 0
+    || (mySubscriptions?.length || 0) > 0
+    || (myDomains?.length || 0) > 0;
   const visibleNavItems = useMemo(
-    () => navItems.filter(item => !(item as any).shopOnly || hasShop),
-    [hasShop],
+    () => navItems.filter(item =>
+      (!(item as any).shopOnly || hasShop) && (!(item as any).hostingOnly || hasHosting)),
+    [hasShop, hasHosting],
   );
 
   // Admin "view as customer" preview — a real staff member is inspecting a

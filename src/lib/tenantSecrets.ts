@@ -21,6 +21,8 @@ export interface TenantSecretsInput {
   metaChannelTokens?: Record<string, string>;
   /** Google OAuth client secret (GMB/Reviews module) */
   gmbClientSecret?: string;
+  /** Dynadot registrar API key (hosting & domains module) */
+  dynadotApiKey?: string;
 }
 
 export async function saveTenantSecrets(teamId: string, secrets: TenantSecretsInput): Promise<void> {

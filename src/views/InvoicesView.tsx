@@ -1,3 +1,4 @@
+import { Link } from 'react-router-dom';
 import React, { useState, useEffect, useMemo } from 'react';
 import { useCollection, useMutation, useGlobalTeamId, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useTeamSettingsData } from '../hooks/useTeamSettings';
@@ -66,6 +67,7 @@ import { nextInvoiceOccurrence, projectAlsoBills, invoiceBillingPeriodKey } from
 import { pauseProjectBillingPatch, resumeProjectBillingPatch, stopProjectBillingPatch } from '../lib/finance/recurringBilling';
 import { appReturnUrl, openCheckout, openExternal, saveOrShareFile } from '../lib/native';
 import { resolvePortalUserId } from '../lib/notifyClient';
+import { isWhmcsInvoice, whmcsPendingPatch, pushWhmcsPayment, instalmentKey, whmcsSyncState } from '../lib/whmcsPayment';
 
 // Presentation-only status pill: a subtle tinted pill + a small coloured dot.
 // Reuses the existing semantic tokens (success/warning/error/muted + brand cyan)
@@ -542,6 +544,21 @@ const InvoicesView: React.FC = () => {
     }))).catch(err => console.error('[Notifications] invoice_paid dërgim dështoi:', err));
   };
 
+  // A payment recorded here on a WHMCS-mirrored invoice must reach WHMCS too —
+  // otherwise WHMCS keeps dunning the client and the next sync reverts the
+  // status. The queue entry is written in the SAME update as the status change
+  // (see whmcsPendingPatch); this only asks the server to drain it, and never
+  // fails the action: the FivoCRM write has already succeeded.
+  const syncWhmcsPayment = async (invoice: Invoice | null | undefined) => {
+    if (!invoice || !isWhmcsInvoice(invoice) || !user) return;
+    const r = await pushWhmcsPayment(() => user.getIdToken(), invoice.id);
+    if (r.ok) {
+      toast({ title: 'U pasqyrua në WHMCS', description: r.alreadyRecorded ? 'Pagesa ishte tashmë e regjistruar në WHMCS.' : `Fatura WHMCS #${invoice.whmcsInvoiceId} u përditësua.` });
+    } else {
+      toast({ title: 'Pagesa u ruajt, por WHMCS nuk u përditësua', description: `${r.error || 'Gabim'} — sinkronizimi do ta riprovojë vetë; ose "Riprovo WHMCS" te fatura.`, variant: 'destructive' });
+    }
+  };
+
   // The `paidAt` a status change should write, or undefined to leave it alone.
   // Marking an invoice Paid WITHOUT paidAt is the bug this centralises away: the
   // cash-basis helpers fall back to `createdAt`, so the revenue silently lands in
@@ -603,6 +620,14 @@ const InvoicesView: React.FC = () => {
         source: 'partial',
         sourceKey: `${partialPaymentInvoice.id}#p${result.index}`,
       } as any).catch((err) => console.error('[Payments] ledger write failed:', err));
+      if (isWhmcsInvoice(partialPaymentInvoice)) {
+        // Queue the instalment for WHMCS (same key scheme as the ledger), then ask
+        // the server to post it. The transaction above already wrote the money.
+        await invoiceMutation.update(partialPaymentInvoice.id, whmcsPendingPatch(partialPaymentInvoice, {
+          key: instalmentKey(result.index), amount, method: partialMethod, paidAt,
+        }) as any).catch((err) => console.error('[WHMCS] queue write failed:', err));
+        void syncWhmcsPayment(partialPaymentInvoice);
+      }
       if (result.isFullyPaid) {
         const recipients = scopedMembers.filter((m: any) => (m.status ?? 'Active') === 'Active' && m.userId !== user?.uid && (m.role === 'Admin' || m.canAccessInvoices));
         await Promise.all(recipients.map((m: any) => notificationMutation.create({
@@ -670,14 +695,19 @@ const InvoicesView: React.FC = () => {
       // Deliberately does NOT write `total`: the total is derived from the invoice's
       // services/line items, so editing it here would desync the composition. Amounts
       // and services are edited via the full invoice form (setEditInvoice).
+      const whmcsQueue = paidAt && isWhmcsInvoice(drawerInvoice)
+        ? whmcsPendingPatch(drawerInvoice, { key: 'full', method: drawerInvoice.paymentMethod || 'Manual', paidAt })
+        : {};
       await invoiceMutation.update(drawerInvoice.id, {
         customerId: drawerCustomer,
         projectId: drawerProject,
         dueDate: drawerDue ? new Date(drawerDue + 'T12:00:00') : null,
         status: drawerStatus,
         ...(paidAt ? { paidAt } : {}),
+        ...whmcsQueue,
       } as any);
       if (paidAt) await notifyInvoicePaid(drawerInvoice, 'Faturë e Paguar ✓');
+      if (paidAt) void syncWhmcsPayment(drawerInvoice);
       toast({ title: 'Ndryshimet u ruajtën' });
       setDrawerInvoice(null);
     } catch (err: any) {
@@ -748,6 +778,7 @@ const InvoicesView: React.FC = () => {
       list = list.filter(inv => inv.status === statusFilter);
     }
     if (projectFilter === '__none__') list = list.filter(inv => !inv.projectId);
+    else if (projectFilter === '__hosting__') list = list.filter(inv => (inv as any).source === 'hosting');
     else if (projectFilter !== '__all__') list = list.filter(inv => inv.projectId === projectFilter);
     if (monthFilter !== '__all__') {
       const m = Number(monthFilter);
@@ -793,6 +824,7 @@ const InvoicesView: React.FC = () => {
     () => (invoices || []).filter(i => !i.projectId && i.status !== 'Draft' && i.status !== 'Cancelled').length,
     [invoices],
   );
+  const hostingCount = React.useMemo(() => (invoices || []).filter(inv => (inv as any).source === 'hosting').length, [invoices]);
 
   // Cap rendered rows to avoid mounting hundreds of invoice rows at once on mobile.
   const [visibleCount, setVisibleCount] = useState(50);
@@ -1101,6 +1133,7 @@ const InvoicesView: React.FC = () => {
           >
             <option value="__all__">Çdo projekt</option>
             <option value="__none__">Pa projekt{unlinkedCount ? ` (${unlinkedCount})` : ''}</option>
+            <option value="__hosting__">Hosting & Domain-e{hostingCount ? ` (${hostingCount})` : ''}</option>
             {/* Alphabetical, archive last (sortArchivedLast is stable). */}
             {sortArchivedLast(
               (allProjects || []).slice().sort((a, b) => (a.name || '').localeCompare(b.name || ''))
@@ -1169,6 +1202,8 @@ const InvoicesView: React.FC = () => {
                     {(invoice as any).autoGenerated && (
                       <Badge variant="outline" className="text-[10px] px-1.5 py-0 border-blue-300 text-blue-600">Auto</Badge>
                     )}
+                    <WhmcsSyncBadge invoice={invoice} />
+                    <HostingBadge invoice={invoice} />
                     {(invoice as any).isRecurring && !(invoice as any).autoGenerated && (
                       <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${(invoice as any).isRecurringPaused ? 'border-amber-300 text-amber-600' : 'border-green-300 text-green-600'}`}>
                         {(invoice as any).isRecurringPaused ? '⏸' : '↻'}
@@ -1444,6 +1479,8 @@ const InvoicesView: React.FC = () => {
                         {(invoice as any).autoGenerated && (
                           <span className="text-[9px] font-semibold tracking-wide px-1.5 py-0.5 rounded-full bg-primary/10 text-primary">AUTO</span>
                         )}
+                        <WhmcsSyncBadge invoice={invoice} />
+                        <HostingBadge invoice={invoice} />
                         {(invoice as any).isRecurring && !(invoice as any).autoGenerated && (
                           <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${(invoice as any).isRecurringPaused ? 'bg-warning/10 text-warning' : 'bg-success/10 text-success'}`}>
                             {(invoice as any).isRecurringPaused ? '⏸' : '↻'}
@@ -1603,6 +1640,12 @@ const InvoicesView: React.FC = () => {
                   <span className="font-mono text-sm font-semibold">
                     {(drawerInvoice.total ?? drawerInvoice.amount ?? 0).toLocaleString()} {currencySymbol((drawerInvoice as any).currency)}
                   </span>
+                  <WhmcsSyncBadge invoice={drawerInvoice} detailed />
+                  <HostingBadge invoice={drawerInvoice} />
+                  {(whmcsSyncState(drawerInvoice) === 'pending' || whmcsSyncState(drawerInvoice) === 'error') && permissions.canEdit && (
+                    <button type="button" onClick={() => void syncWhmcsPayment(drawerInvoice)}
+                      className="text-[11px] underline text-primary hover:text-primary/80">Riprovo WHMCS</button>
+                  )}
                 </div>
               </div>
               <Button variant="ghost" size="icon" className="h-8 w-8 flex-shrink-0" onClick={() => setDrawerInvoice(null)} title="Mbyll">
@@ -2088,6 +2131,43 @@ const InvoicesView: React.FC = () => {
   );
 };
 
+/**
+ * Write-back state of a payment recorded in FivoCRM on a WHMCS-mirrored invoice.
+ * `whmcsPaymentSyncError` used to be written by the Stripe webhook and shown
+ * nowhere — a failed mirror was invisible until WHMCS dunned the client.
+ */
+/**
+ * Invoices raised by the hosting module (`source: 'hosting'`): the first invoice of an
+ * order, or a subscription / domain renewal. The badge deep-links to the record that
+ * paying it provisions/renews, so reconciliation never needs the invoice id.
+ */
+const HostingBadge: React.FC<{ invoice: Invoice }> = ({ invoice }) => {
+  if ((invoice as any).source !== 'hosting') return null;
+  const tab = (invoice as any).domainId ? 'domains' : (invoice as any).subscriptionId ? 'subscriptions' : 'orders';
+  const what = (invoice as any).domainId ? 'rinovim domain-i' : (invoice as any).subscriptionId ? 'rinovim hosting-u' : 'porosi hosting/domain';
+  return (
+    <Link to={`/app/hosting?tab=${tab}`} onClick={(e) => e.stopPropagation()}
+      className="text-[9px] font-semibold tracking-wide px-1.5 py-0.5 rounded-full bg-sky-100 text-sky-800 hover:bg-sky-200"
+      title={`Fatura vjen nga moduli Hosting (${what}) — hape rekordin`}>HOSTING</Link>
+  );
+};
+
+const WhmcsSyncBadge: React.FC<{ invoice: Invoice; detailed?: boolean }> = ({ invoice, detailed }) => {
+  const state = whmcsSyncState(invoice);
+  if (!isWhmcsInvoice(invoice)) return null;
+  const base = 'text-[9px] font-semibold tracking-wide px-1.5 py-0.5 rounded-full';
+  if (state === 'error') {
+    return <span className={`${base} bg-error/10 text-error`} title={invoice.whmcsPaymentSyncError || 'WHMCS nuk u përditësua'}>WHMCS ✕{detailed ? ' pagesa s’u pasqyrua' : ''}</span>;
+  }
+  if (state === 'pending') {
+    return <span className={`${base} bg-warning/10 text-warning`} title="Pagesa pret të regjistrohet në WHMCS">WHMCS …{detailed ? ' në pritje' : ''}</span>;
+  }
+  if (state === 'synced' && detailed) {
+    return <span className={`${base} bg-success/10 text-success`} title="Pagesa u regjistrua në WHMCS">WHMCS ✓</span>;
+  }
+  return <span className={`${base} bg-muted text-muted-foreground`} title={`Fatura vjen nga WHMCS (#${invoice.whmcsInvoiceId})`}>WHMCS</span>;
+};
+
 const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null; onDirtyChange?: (dirty: boolean) => void }> = ({ onClose, editInvoice, onDirtyChange }) => {
   const isEditing = !!editInvoice;
   const logActivity = useActivityLogger();
@@ -2437,8 +2517,15 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
 
       if (isEditing) {
         // Set paidAt when manually marking as Paid via the full edit form
+        let whmcsNewlyPaid = false;
         if (status === 'Paid' && editInvoice?.status !== 'Paid') {
           invoiceData.paidAt = paidAtDateForm ? new Date(paidAtDateForm + 'T12:00:00') : new Date();
+          if (isWhmcsInvoice(editInvoice)) {
+            // Mirror the payment to WHMCS (queued here, drained by /api/whmcs-payment
+            // or the next sync) — see src/lib/whmcsPayment.ts.
+            Object.assign(invoiceData, whmcsPendingPatch(editInvoice, { key: 'full', method: paymentMethod, paidAt: invoiceData.paidAt }));
+            whmcsNewlyPaid = true;
+          }
         } else if (status === 'Paid' && editInvoice?.status === 'Paid') {
           // Keep existing paidAt but allow updating it via the date field
           invoiceData.paidAt = paidAtDateForm ? new Date(paidAtDateForm + 'T12:00:00') : editInvoice.paidAt;
@@ -2447,6 +2534,11 @@ const InvoiceForm: React.FC<{ onClose: () => void; editInvoice?: Invoice | null;
 
         // Update existing invoice
         await invoiceMutation.update(editInvoice!.id, invoiceData);
+        if (whmcsNewlyPaid && currentUser) {
+          void pushWhmcsPayment(() => currentUser.getIdToken(), editInvoice!.id).then((r) => {
+            if (!r.ok) toast({ title: 'Pagesa u ruajt, por WHMCS nuk u përditësua', description: `${r.error || 'Gabim'} — sinkronizimi do ta riprovojë vetë.`, variant: 'destructive' });
+          });
+        }
 
         // Delete old line items and recreate
         if (existingItems) {

@@ -8,6 +8,7 @@ import {
 } from './_billingPlans.js';
 import { writeAudit } from './_audit.js';
 import { notifyUser } from './_push.js';
+import { onHostingInvoicePaid } from './_hostingJobs.js';
 
 // Lazy init: constructing Stripe at MODULE LOAD with a missing STRIPE_SECRET_KEY
 // crashes the function on every request — Stripe's retries then hit a dead endpoint.
@@ -315,6 +316,18 @@ async function handleInvoiceCheckoutPaid(session: Stripe.Checkout.Session, invoi
   );
 
   console.log(`Invoice ${invoiceId} marked as paid via Stripe`);
+
+  // Hosting & domains: a paid order → provision; a paid renewal → advance the due
+  // date / renew at the registrar. Best-effort and idempotent (the hourly
+  // `hosting-lifecycle` job is the backstop) — never fail the webhook on it.
+  if (invoiceData?.source === 'hosting') {
+    try {
+      const r = await onHostingInvoicePaid(invoiceId, null);
+      console.log(`[Stripe Webhook] hosting invoice ${invoiceId}: ${r.handled.join(', ') || 'nothing to do'}`);
+    } catch (err) {
+      console.error('[Stripe Webhook] hosting post-payment failed:', err);
+    }
+  }
 
   // Write the payment back to WHMCS for WHMCS-sourced invoices (best-effort).
   // Never fail the Stripe webhook on a WHMCS error — the FivoCRM invoice is

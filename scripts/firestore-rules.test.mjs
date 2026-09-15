@@ -132,6 +132,23 @@ before(async () => {
       customerId: 'cust1', items: [], currency: 'ALL', subtotal: 0, total: 100,
       status: 'Pending', source: 'portal',
     });
+
+    // ── seed for the hosting & domains module (51+) ──
+    await setDoc(doc(db, 'hostingServers', 'srvMine'), { businessId: MY_BIZ, teamId: MY_TEAM, name: 'srv1', hostname: 'srv1.mine.al', username: 'root', status: 'Active' });
+    await setDoc(doc(db, 'hostingServers', 'srvVictim'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, name: 'v', hostname: 'srv.victim.al', username: 'root', status: 'Active' });
+    await setDoc(doc(db, 'hostingServerSecrets', 'srvMine'), { apiToken: 'SECRET-TOKEN', businessId: MY_BIZ });
+    await setDoc(doc(db, 'hostingProducts', 'hpMinePublic'), { businessId: MY_BIZ, teamId: MY_TEAM, name: 'Start', serverId: 'srvMine', whmPackage: 'start', status: 'Active', currency: 'EUR', pricing: { monthly: { price: 5 } }, portalVisible: true });
+    await setDoc(doc(db, 'hostingProducts', 'hpMineHidden'), { businessId: MY_BIZ, teamId: MY_TEAM, name: 'Internal', serverId: 'srvMine', whmPackage: 'int', status: 'Active', currency: 'EUR', pricing: { monthly: { price: 1 } }, portalVisible: false });
+    await setDoc(doc(db, 'hostingProducts', 'hpVictim'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, name: 'V', serverId: 'srvVictim', whmPackage: 'v', status: 'Active', currency: 'EUR', pricing: { monthly: { price: 9 } }, portalVisible: true });
+    await setDoc(doc(db, 'domainTlds', 'tldMine'), { businessId: MY_BIZ, teamId: MY_TEAM, tld: 'com', currency: 'EUR', registerPrice: 12, renewPrice: 14, costRegister: 9, status: 'Active' });
+    await setDoc(doc(db, 'domainTlds', 'tldVictim'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, tld: 'al', currency: 'EUR', registerPrice: 20, renewPrice: 20, costRegister: 15, status: 'Active' });
+    await setDoc(doc(db, 'subscriptions', 'subMine'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', source: 'fivocrm', productName: 'Start', domain: 'cust1.com', status: 'Active', recurringAmount: 5, currency: 'EUR', billingCycle: 'monthly', cpanelUsername: 'cust1' });
+    await setDoc(doc(db, 'subscriptions', 'subVictim'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, customerId: 'custVictim', source: 'fivocrm', productName: 'V', status: 'Active', recurringAmount: 9, currency: 'EUR', billingCycle: 'monthly' });
+    await setDoc(doc(db, 'domains', 'domMine'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', source: 'fivocrm', registrar: 'dynadot', domainName: 'cust1.com', status: 'Active', recurringAmount: 14, currency: 'EUR', autoRenew: true });
+    await setDoc(doc(db, 'domains', 'domVictim'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, customerId: 'custVictim', source: 'fivocrm', registrar: 'dynadot', domainName: 'victim.al', status: 'Active', recurringAmount: 20, currency: 'EUR' });
+    await setDoc(doc(db, 'hostingOrders', 'hoMine'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', orderNumber: 'HOS-2026-0001', source: 'portal', status: 'Pending', lines: [], subtotal: 5, total: 5, currency: 'EUR' });
+    await setDoc(doc(db, 'hostingOrders', 'hoVictim'), { businessId: VICTIM_BIZ, teamId: VICTIM_TEAM, customerId: 'custVictim', orderNumber: 'HOS-2026-0001', source: 'staff', status: 'Pending', lines: [], subtotal: 9, total: 9, currency: 'EUR' });
+    await setDoc(doc(db, 'hostingEvents', 'hevMine'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', subscriptionId: 'subMine', type: 'whm.createacct', ok: true, message: 'ok' });
   });
 });
 
@@ -1470,4 +1487,63 @@ test('50b. staff member schedules a next step on a customer of their business', 
   await assertSucceeds(updateDoc(doc(alice, 'customers', 'cust1'), {
     nextFollowUpDate: new Date('2026-09-15T10:00:00Z'), nextFollowUpType: 'call', followUpNote: 'oferta',
   }));
+});
+
+// 51. Hosting & domains module. Servers, packages and TLD prices are margin
+//     intelligence; subscriptions/domains/orders are customer contracts. A portal
+//     client reads only its own rows and never writes any (POST /api/hosting does).
+test('51a. cross-tenant staff cannot read another tenant hosting records', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertFails(getDoc(doc(alice, 'hostingServers', 'srvVictim')));
+  await assertFails(getDoc(doc(alice, 'hostingProducts', 'hpVictim')));
+  await assertFails(getDoc(doc(alice, 'domainTlds', 'tldVictim')));
+  await assertFails(getDoc(doc(alice, 'subscriptions', 'subVictim')));
+  await assertFails(getDoc(doc(alice, 'domains', 'domVictim')));
+  await assertFails(getDoc(doc(alice, 'hostingOrders', 'hoVictim')));
+});
+test('51b. staff read and manage their own tenant hosting records', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  await assertSucceeds(getDoc(doc(alice, 'hostingServers', 'srvMine')));
+  await assertSucceeds(getDoc(doc(alice, 'hostingProducts', 'hpMineHidden')));
+  await assertSucceeds(getDoc(doc(alice, 'subscriptions', 'subMine')));
+  await assertSucceeds(getDoc(doc(alice, 'hostingEvents', 'hevMine')));
+  await assertSucceeds(updateDoc(doc(alice, 'subscriptions', 'subMine'), { notes: 'VIP', lifecycleHold: true }));
+  await assertSucceeds(setDoc(doc(alice, 'hostingProducts', 'hpNew'), { businessId: MY_BIZ, teamId: MY_TEAM, name: 'Pro', serverId: 'srvMine', whmPackage: 'pro', status: 'Active', currency: 'EUR', pricing: { monthly: { price: 10 } }, createdByUserId: 'alice' }));
+  // The tenant key is immutable: a subscription cannot be moved to another business.
+  await assertFails(updateDoc(doc(alice, 'subscriptions', 'subMine'), { businessId: VICTIM_BIZ }));
+});
+test('51c. portal client reads own subscription/domain/order/events and the public catalog only', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertSucceeds(getDoc(doc(carol, 'subscriptions', 'subMine')));
+  await assertSucceeds(getDoc(doc(carol, 'domains', 'domMine')));
+  await assertSucceeds(getDoc(doc(carol, 'hostingOrders', 'hoMine')));
+  await assertSucceeds(getDoc(doc(carol, 'hostingEvents', 'hevMine')));
+  await assertSucceeds(getDoc(doc(carol, 'hostingProducts', 'hpMinePublic')));
+  await assertSucceeds(getDoc(doc(carol, 'domainTlds', 'tldMine')));
+  await assertFails(getDoc(doc(carol, 'hostingProducts', 'hpMineHidden')));
+  await assertFails(getDoc(doc(carol, 'hostingServers', 'srvMine')));
+  await assertFails(getDoc(doc(carol, 'subscriptions', 'subVictim')));
+  await assertFails(getDoc(doc(carol, 'domains', 'domVictim')));
+  await assertFails(getDoc(doc(carol, 'hostingOrders', 'hoVictim')));
+  await assertFails(getDoc(doc(carol, 'hostingProducts', 'hpVictim')));
+});
+test('51d. portal client cannot write hosting records from the browser', async () => {
+  const carol = portalOf('carol', 'cust1', 'carol@client.com', MY_BIZ);
+  await assertFails(updateDoc(doc(carol, 'subscriptions', 'subMine'), { status: 'Active', recurringAmount: 0 }));
+  await assertFails(updateDoc(doc(carol, 'subscriptions', 'subMine'), { cancelAtPeriodEnd: true }));
+  await assertFails(updateDoc(doc(carol, 'domains', 'domMine'), { autoRenew: false }));
+  await assertFails(updateDoc(doc(carol, 'hostingOrders', 'hoMine'), { status: 'Paid' }));
+  await assertFails(setDoc(doc(carol, 'hostingOrders', 'hoForged'), { businessId: MY_BIZ, customerId: 'cust1', source: 'portal', status: 'Paid', lines: [], subtotal: 0, total: 0, currency: 'EUR', createdByUserId: 'carol' }));
+});
+test('51e. WHM tokens and the provider audit are server-only, even for admins and the platform super-admin', async () => {
+  const alice = staffOf('alice', MY_BIZ, MY_TEAM, ['admin']);
+  const sa = testEnv.authenticatedContext('root', { email: 'root@fivo.al', superAdmin: true }).firestore();
+  for (const db of [alice, sa]) {
+    await assertFails(getDoc(doc(db, 'hostingServerSecrets', 'srvMine')));
+    await assertFails(setDoc(doc(db, 'hostingServerSecrets', 'srvMine'), { apiToken: 'x' }, { merge: true }));
+  }
+  await assertFails(setDoc(doc(alice, 'hostingEvents', 'forged'), { businessId: MY_BIZ, type: 'whm.removeacct', ok: true, message: 'x' }));
+  await assertFails(updateDoc(doc(alice, 'hostingEvents', 'hevMine'), { message: 'rewritten' }));
+  // Nor may staff create an order directly: pricing and availability live in the endpoint.
+  await assertFails(setDoc(doc(alice, 'hostingOrders', 'hoStaffForged'), { businessId: MY_BIZ, teamId: MY_TEAM, customerId: 'cust1', source: 'staff', status: 'Paid', lines: [], subtotal: 0, total: 0, currency: 'EUR', createdByUserId: 'alice' }));
 });

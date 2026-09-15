@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams, useNavigate, Link } from 'react-router-dom';
+import { useModules } from '../hooks/useModules';
 import { useCollection, useDocument, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
@@ -34,7 +35,7 @@ import EmailComposerDialog, { useContactEmailAvailable, type EmailTarget } from 
 import { useFollowUpActions, targetFromCustomer } from '../hooks/useFollowUpActions';
 import { dueState, daysSinceContact, touchContactPatch } from '../lib/crm/followUp';
 import { Bell, CheckCircle2 } from 'lucide-react';
-import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract, Service, FollowUpType } from '../types';
+import type { Customer, Invoice, Project, ClientRequest, Activity, Task, Quote, Lead, Contract, Service, FollowUpType, Subscription, Domain } from '../types';
 
 const Customer360View: React.FC = () => {
   const { customerId } = useParams<{ customerId: string }>();
@@ -94,6 +95,11 @@ const Customer360View: React.FC = () => {
   const { data: services } = useCollection<Service>('services', { skipTeamFilter: true });
   const { data: allLeads } = useCollection<Lead>('leads', { skipTeamFilter: true });
   const { data: allContracts } = useCollection<Contract>('contracts', byCustomer);
+  // Hosting module: the customer's accounts + domains (WHMCS mirror rows included).
+  const { isEnabled: moduleEnabled } = useModules();
+  const hostingOn = moduleEnabled('hosting');
+  const { data: hostingSubs } = useCollection<Subscription>('subscriptions', { ...byCustomer, skip: byCustomer.skip || !hostingOn });
+  const { data: hostingDomains } = useCollection<Domain>('domains', { ...byCustomer, skip: byCustomer.skip || !hostingOn });
   const activityMutation = useMutation<Activity>('activities');
   const quoteMutation = useMutation<Quote>('quotes');
   const contractMutation = useMutation<Contract>('contracts');
@@ -541,6 +547,9 @@ const Customer360View: React.FC = () => {
           <TabsTrigger value="activities">Aktivitete ({customerActivities.length})</TabsTrigger>
           <TabsTrigger value="quotes">Preventiva ({customerQuotes.length})</TabsTrigger>
           <TabsTrigger value="contracts">Kontratat ({customerContracts.length})</TabsTrigger>
+          {hostingOn && ((hostingSubs?.length || 0) + (hostingDomains?.length || 0) > 0) && (
+            <TabsTrigger value="hosting">Hosting ({(hostingSubs?.length || 0) + (hostingDomains?.length || 0)})</TabsTrigger>
+          )}
         </TabsList>
 
         {/* Overview Tab */}
@@ -1214,6 +1223,62 @@ const Customer360View: React.FC = () => {
             </CardContent>
           </Card>
         </TabsContent>
+
+        {/* Hosting & Domain-e — read-only summary; every action lives in /app/hosting. */}
+        {hostingOn && (
+          <TabsContent value="hosting">
+            <Card>
+              <CardHeader className="flex flex-row items-center justify-between">
+                <CardTitle className="text-base">Hosting & Domain-e</CardTitle>
+                <Button asChild size="sm" variant="outline"><Link to="/app/hosting">Hape modulin</Link></Button>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Llogari hosting ({hostingSubs?.length || 0})</p>
+                  {!(hostingSubs?.length) && <p className="text-sm text-muted-foreground">Asnjë llogari.</p>}
+                  <div className="space-y-2">
+                    {(hostingSubs || []).map((s) => {
+                      const due = (s as any).nextDueDate?.toDate ? (s as any).nextDueDate.toDate() : (s.nextDueDate ? new Date(s.nextDueDate as any) : null);
+                      return (
+                        <Link key={s.id} to="/app/hosting?tab=subscriptions" className="flex items-center justify-between gap-3 rounded-md border p-3 hover:bg-muted/40">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium truncate">{s.domain || s.productName}</p>
+                            <p className="text-xs text-muted-foreground truncate">{s.productName}{s.cpanelUsername ? ` · ${s.cpanelUsername}` : ''}{s.source === 'whmcs' ? ' · WHMCS' : ''}</p>
+                          </div>
+                          <div className="text-right text-xs">
+                            <Badge className={`${s.status === 'Active' ? 'bg-emerald-100 text-emerald-800' : s.status === 'Suspended' ? 'bg-orange-100 text-orange-800' : 'bg-muted text-muted-foreground'} border-0`}>{s.status}</Badge>
+                            <p className="text-muted-foreground mt-1">{(s.recurringAmount || 0).toLocaleString()} {currencySymbol(s.currency)} · afati {due ? due.toLocaleDateString('sq-AL') : '—'}</p>
+                          </div>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs font-semibold text-muted-foreground uppercase mb-2">Domain-e ({hostingDomains?.length || 0})</p>
+                  {!(hostingDomains?.length) && <p className="text-sm text-muted-foreground">Asnjë domain.</p>}
+                  <div className="space-y-2">
+                    {(hostingDomains || []).map((d) => {
+                      const exp = (d as any).expiryDate?.toDate ? (d as any).expiryDate.toDate() : (d.expiryDate ? new Date(d.expiryDate as any) : null);
+                      return (
+                        <Link key={d.id} to="/app/hosting?tab=domains" className="flex items-center justify-between gap-3 rounded-md border p-3 hover:bg-muted/40">
+                          <div className="min-w-0">
+                            <p className="text-sm font-medium truncate">{d.domainName}</p>
+                            <p className="text-xs text-muted-foreground truncate">{d.registrar || (d.source === 'whmcs' ? 'WHMCS' : '—')}{d.nameservers?.length ? ` · ${d.nameservers.slice(0, 2).join(', ')}` : ''}</p>
+                          </div>
+                          <div className="text-right text-xs">
+                            <Badge className={`${d.status === 'Active' ? 'bg-emerald-100 text-emerald-800' : d.status === 'Grace' ? 'bg-orange-100 text-orange-800' : 'bg-muted text-muted-foreground'} border-0`}>{d.status}</Badge>
+                            <p className="text-muted-foreground mt-1">skadon {exp ? exp.toLocaleDateString('sq-AL') : '—'}</p>
+                          </div>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
       </Tabs>
 
       {/* Add Activity Dialog */}

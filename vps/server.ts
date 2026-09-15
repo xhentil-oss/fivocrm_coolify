@@ -842,6 +842,39 @@ app.post('/upload', requireFirebaseAuth, uploadMw.single('file'), async (req: an
 // from this VPS's static IP. FivoCRM (Vercel) builds the body (incl. identifier
 // + secret); the VPS never stores WHMCS credentials and only ever forwards to
 // its own WHMCS_API_URL (so it can't be abused as an open SSRF relay).
+// ── Provider relay (cPanel/WHM + Dynadot) ─────────────────────────────────────
+// Same idea as /whmcs-proxy: Vercel has no static egress IP, WHM firewalls and
+// Dynadot's API whitelist by IP, so FivoCRM sends the fully-built request here and
+// this VPS performs it. Allow-list: https only, and either api.dynadot.com or a
+// WHM port (2087/2083) — so it cannot be turned into an open relay. The VPS stores
+// no provider credential; they travel inside the forwarded request and are never
+// logged.
+app.post('/provider-proxy', requireApiKey, async (req, res) => {
+  const { url, method, headers, body } = (req.body as any) || {};
+  if (typeof url !== 'string' || !/^https:\/\//i.test(url)) { res.status(400).json({ error: 'URL e pavlefshme (duhet https)' }); return; }
+  let target: URL;
+  try { target = new URL(url); } catch { res.status(400).json({ error: 'URL e pavlefshme' }); return; }
+  const isDynadot = target.hostname === 'api.dynadot.com';
+  const isWhm = target.port === '2087' || target.port === '2083';
+  if (!isDynadot && !isWhm) { res.status(400).json({ error: 'Host i palejuar për relay' }); return; }
+  const fwdHeaders: Record<string, string> = {};
+  for (const [k, v] of Object.entries((headers as Record<string, unknown>) || {})) {
+    if (/^(authorization|content-type|accept)$/i.test(k) && typeof v === 'string') fwdHeaders[k] = v;
+  }
+  try {
+    const r = await fetch(url, {
+      method: method === 'GET' ? 'GET' : 'POST',
+      headers: fwdHeaders,
+      body: method === 'GET' ? undefined : (typeof body === 'string' ? body : undefined),
+      signal: AbortSignal.timeout(40_000),
+    });
+    const text = await r.text();
+    res.status(200).json({ status: r.status, body: text });
+  } catch (err: unknown) {
+    res.status(502).json({ error: err instanceof Error ? err.message : 'Provider relay dështoi' });
+  }
+});
+
 app.post('/whmcs-proxy', requireApiKey, async (req, res) => {
   const { url, form } = (req.body as any) || {};
   if (typeof form !== 'string' || !form) { res.status(400).json({ error: 'Mungon fusha "form"' }); return; }
@@ -1062,6 +1095,11 @@ function startCronSchedulers(): void {
   // reads and zero writes. A tenant can opt out via teamSettings.gmbAutoSync.
   setInterval(() => { void triggerCronJob('gmb-sync'); }, 60 * MIN);
   setInterval(() => { void triggerCronJob('overdue-reminders'); }, 120 * MIN);
+  // Hosting & domains: renewal invoices / suspend / terminate / registrar renewals
+  // hourly; server + registrar facts every 6h. Neither is in run-all — they touch
+  // live cPanel servers and Dynadot, so they run on their own cadence.
+  setInterval(() => { void triggerCronJob('hosting-lifecycle'); }, 60 * MIN);
+  setInterval(() => { void triggerCronJob('hosting-sync'); }, 360 * MIN);
   // ── Reporting module ──
   // report-schedules reads ONLY active schedules (tiny), so it can tick hourly.
   // That matters: a schedule carries a per-tenant local hour, and the job fires when

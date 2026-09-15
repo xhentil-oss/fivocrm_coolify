@@ -28,6 +28,8 @@ export const SECRET_FIELDS = [
   'metaChannelTokens',
   /** Google OAuth client secret for the GMB/Reviews module (gmbClientId stays in teamSettings — it is not secret). */
   'gmbClientSecret',
+  /** Dynadot registrar API key (hosting & domains module). */
+  'dynadotApiKey',
 ] as const;
 
 /** Public boolean markers mirrored onto teamSettings so the UI can say "configured". */
@@ -39,6 +41,7 @@ export const SECRET_FLAGS: Record<string, string> = {
   metaWebhookVerifyToken: 'hasMetaWebhookVerifyToken',
   metaChannelTokens: 'hasMetaChannelTokens',
   gmbClientSecret: 'hasGmbClientSecret',
+  dynadotApiKey: 'hasDynadotApiKey',
 };
 
 export interface TeamConfig extends Record<string, any> {}

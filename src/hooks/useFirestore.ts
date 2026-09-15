@@ -157,6 +157,10 @@ const teamScopedCollections = new Set([
   // Shop module (products/orders). Portal reads pass skipTeamFilter and scope by
   // businessId explicitly, so membership here mainly enforces teamId on create.
   'products', 'productCategories', 'productBrands', 'stockMovements', 'shopOrders',
+  // Hosting & domains module (packages, servers, TLD prices, orders, subscriptions,
+  // registered domains, provisioning audit). Portal reads scope by businessId +
+  // customerId explicitly; membership here enforces teamId/businessId on create.
+  'hostingProducts', 'hostingServers', 'domainTlds', 'hostingOrders', 'subscriptions', 'domains', 'hostingEvents',
   // whatsappMessages reads pass skipTeamFilter (they scope by teamId+phone
   // explicitly), so being in this set only enforces teamId on create.
   'whatsappMessages',
@@ -200,7 +204,9 @@ const businessIsolatedAlways = new Set<string>([
   // Shop catalog + orders are tenant records: a staff user must never see another
   // tenant's products, even from a view that passes skipTeamFilter.
   'products', 'productCategories', 'productBrands', 'stockMovements', 'shopOrders',
-  'domains',
+  // Hosting & domains: every record is a tenant record (a server's hostname and a
+  // TLD price list are margin intelligence; a subscription is a customer contract).
+  'domains', 'subscriptions', 'hostingProducts', 'hostingServers', 'domainTlds', 'hostingOrders', 'hostingEvents',
   'teamMembers', 'teamInvites',
   // ── Structure/identity collections, now tenant-scoped as well ──
   // A TEAM IS A DEPARTMENT INSIDE A BUSINESS, so a team list is always read within

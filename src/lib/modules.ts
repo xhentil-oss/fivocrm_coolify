@@ -109,6 +109,18 @@ export const MODULES: ModuleDef[] = [
     extraPaths: ['/app/shop-orders'],
     group: 'Shitje',
   },
+  {
+    id: 'hosting',
+    path: '/app/hosting',
+    label: 'Hosting & Domain-e',
+    description: 'Shitje hosting-u dhe domain-esh: paketa cPanel/WHM, regjistrim domain-esh (Dynadot), faturim periodik, pezullim automatik dhe portal klienti.',
+    permissionKey: 'canAccessHosting',
+    minPlan: 'pro',
+    optional: true,
+    // Only hosting resellers need it — stays off until the tenant switches it on.
+    defaultOff: true,
+    group: 'Shitje',
+  },
   { id: 'price-calculator', path: '/app/price-calculator', label: 'Kalkulatori', description: 'Preventiva të çmimeve me paketa dhe zbritje.', permissionKey: 'canAccessServices', minPlan: 'pro', optional: true, group: 'Shitje' },
   { id: 'contracts', path: '/app/contracts', label: 'Kontratat', description: 'Kontrata me nënshkrim dhe gjurmë auditi.', permissionKey: 'canAccessInvoices', minPlan: 'pro', optional: true, group: 'Shitje' },
 
