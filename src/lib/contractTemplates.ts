@@ -1,3 +1,5 @@
+import { SEO_ADVANCED_IT_TEMPLATE } from './contractTemplateSeoAdvancedIt';
+
 export interface ContractParties {
   // Provider (our company)
   companyName: string;
@@ -263,6 +265,8 @@ export const CONTRACT_TEMPLATES: ContractTemplate[] = [
 <hr>
 <p><strong>Ofruesi — ${p.companyName}:</strong> _______________________&nbsp;&nbsp;&nbsp;&nbsp;<strong>Klienti — ${p.clientName}:</strong> _______________________</p>`,
   },
+
+  SEO_ADVANCED_IT_TEMPLATE,
 
   {
     id: 'nda',
