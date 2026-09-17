@@ -169,6 +169,32 @@ export function defaultDisabledModulePaths(): string[] {
   return MODULES.filter(m => m.defaultOff).map(m => m.path);
 }
 
+/** Display order of module groups — shared by every module manager UI. */
+export const MODULE_GROUP_ORDER: ModuleDef['group'][] = ['CRM', 'Shitje', 'Operacione', 'Financa', 'Komunikim', 'Marketing'];
+
+/** Optional modules bucketed by group, in display order (empty groups omitted). */
+export function groupedOptionalModules(): Array<{ group: ModuleDef['group']; modules: ModuleDef[] }> {
+  const map = new Map<ModuleDef['group'], ModuleDef[]>();
+  for (const mod of MODULES) {
+    if (!mod.optional) continue;
+    if (!map.has(mod.group)) map.set(mod.group, []);
+    map.get(mod.group)!.push(mod);
+  }
+  return MODULE_GROUP_ORDER.filter(g => map.has(g)).map(g => ({ group: g, modules: map.get(g)! }));
+}
+
+/**
+ * Turn "which modules did the operator switch ON" into the `disabledModules` value
+ * to store. Only optional modules can be off; a core module is never written to the
+ * list even if the caller left it out, and unknown paths are ignored — so a stale
+ * selection from an older UI cannot switch off something that no longer exists or
+ * that a tenant may not lose.
+ */
+export function disabledPathsFor(enabledPaths: Iterable<string>): string[] {
+  const on = new Set(enabledPaths);
+  return MODULES.filter(m => m.optional && !on.has(m.path)).map(m => m.path);
+}
+
 /** Does `plan` include a module requiring at least `minPlan`? */
 export function planIncludes(plan: PlanKey | string | undefined, minPlan: PlanKey): boolean {
   // Unknown/missing plan → treat as trial (evaluation), never as "locked out"; a

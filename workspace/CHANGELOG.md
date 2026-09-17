@@ -20,6 +20,12 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 <changelog>
 <!-- NEXT_ENTRY_HERE -->
 
+### [2026-09-17] — Super-admin: per-module switches when creating a tenant
+- Gap: `CreateTenantDialog` sent no `disabledModules`, so a console-created tenant was born with EVERY module on (shop/hosting/gmb/landing included) while the self-serve `/signup` path honoured `defaultOff`
+- `src/lib/modules.ts`: `disabledPathsFor(enabledPaths)` (only optional modules, unknown paths ignored, core never written) + `groupedOptionalModules()` / `MODULE_GROUP_ORDER`; 5 new tests in `modules.test.ts`
+- `CreateTenantDialog.tsx`: "Modulet" section — a Switch per optional module grouped by area, presets Të gjitha / Standard (registry default) / Asnjë, plan-lock badge per module + a warning count for modules switched on above the chosen plan
+- `api/_platformAdmin.ts` `create-tenant`: validates the list (strings, `/app/…`, dedup, ≤200), stamps `businesses.disabledModules` and records it in the `platform.tenant_created` audit meta; client `createTenantFromConsole({ disabledModules })`
+
 ### [2026-09-15] — WhatsApp (Baileys): agents follow Firestore, honest send status
 - Root cause of "shows sent, not on my phone": a `whatsappAccounts` doc deleted in Cilësimet left its agent alive on the VPS and `getAgent()` (first connected) kept routing sends through it — messages left from the OLD number (…6087), not the new "Puna" account
 - `vps/server.ts`: `whatsappAccounts` onSnapshot → `reconcileAgents()` / `unloadAgent()` (deleted = logout + wipe session, disabled = close socket; `agent.unloading` stops the reconnect); `/reload` reconciles both ways

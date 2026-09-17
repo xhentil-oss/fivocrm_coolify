@@ -173,8 +173,11 @@ between them). Full architecture + deploy runbook: `workspace/TENANT_ISOLATION_E
 - `useModules()` reads/writes that state; `<ModuleGate moduleId="…">` guards routes
   (use it **instead of** `<PermissionGate>` — the permission check is in the registry).
 - Consumers: Sidebar, MobileBottomNav, CommandPalette, TenantsView (super-admin
-  per-tenant chips), Cilësimet → **Modulet** (owner self-service via
-  `ModulesSettingsPanel`). Adding a module to the registry wires all of them.
+  per-tenant chips), `CreateTenantDialog` (super-admin picks every module ON/OFF at
+  creation — `disabledPathsFor()` → `create-tenant` `disabledModules`; the server
+  has NO registry copy, so the client must always send the list), Cilësimet →
+  **Modulet** (owner self-service via `ModulesSettingsPanel`). Adding a module to
+  the registry wires all of them.
 - Firestore rules only let the business **owner** write `businesses/{id}`, so a
   non-owner admin gets a read-only module manager.
 

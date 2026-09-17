@@ -217,6 +217,18 @@ async function createTenantAction(
     return res.status(400).json({ error: 'Email-i i pronarit është i pavlefshëm.' });
   }
 
+  // Per-tenant module switches, chosen by the operator at creation. Same shape and
+  // limits as `set-modules`. The registry (which modules exist, which are off by
+  // default) lives in `src/lib/modules.ts` and has no server copy, so the console
+  // computes the list and the server only validates it. Omitted → every module on,
+  // the same as toggling them all in the console afterwards.
+  if (body.disabledModules !== undefined) {
+    if (!Array.isArray(body.disabledModules) || body.disabledModules.some((p: any) => typeof p !== 'string' || !p.startsWith('/app/'))) {
+      return res.status(400).json({ error: 'disabledModules duhet të jetë listë rrugësh (/app/…).' });
+    }
+  }
+  const disabledModules = Array.from(new Set(((body.disabledModules as string[] | undefined) || []).map(p => p.trim()))).slice(0, 200);
+
   // Refuse a second tenant for the same owner email unless explicitly forced — the
   // common mistake is creating a duplicate for a customer who already signed up.
   if (body.force !== true) {
@@ -245,6 +257,7 @@ async function createTenantAction(
       ? { trialEndsAt: admin.firestore.Timestamp.fromMillis(Date.now() + trialDays * 86_400_000) }
       : {}),
     seats: seatsForPlan(plan),
+    disabledModules,
     memberCount: 0,
     teamCount: 1,
     defaultTeamId: teamRef.id,
@@ -305,7 +318,7 @@ async function createTenantAction(
     actorEmail: decoded.email || null,
     action: 'platform.tenant_created',
     target: `business:${bizRef.id}`,
-    meta: { name, ownerEmail, plan, trialDays },
+    meta: { name, ownerEmail, plan, trialDays, disabledModules },
   });
 
   return res.status(200).json({

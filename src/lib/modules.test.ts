@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest';
 import {
   MODULES,
   MODULE_BY_ID,
+  MODULE_GROUP_ORDER,
   defaultDisabledModulePaths,
+  disabledPathsFor,
+  groupedOptionalModules,
   findModuleForPath,
   isModuleEnabled,
   isPathEnabled,
@@ -29,6 +32,37 @@ describe('registry integrity', () => {
 
   it('starts the shop disabled for brand-new tenants', () => {
     expect(defaultDisabledModulePaths()).toContain('/app/products');
+  });
+});
+
+describe('disabledPathsFor (console tenant creation)', () => {
+  it('disables exactly the optional modules that were not switched on', () => {
+    const on = MODULES.filter(m => m.optional && m.id !== 'shop' && m.id !== 'hosting').map(m => m.path);
+    expect(disabledPathsFor(on).sort()).toEqual(['/app/hosting', '/app/products'].sort());
+  });
+
+  it('reproduces the self-serve default when the default-off modules are left off', () => {
+    const on = MODULES.filter(m => m.optional && !m.defaultOff).map(m => m.path);
+    expect(disabledPathsFor(on).sort()).toEqual(defaultDisabledModulePaths().sort());
+  });
+
+  it('writes nothing when every optional module is on, and ignores unknown paths', () => {
+    const on = [...MODULES.filter(m => m.optional).map(m => m.path), '/app/does-not-exist'];
+    expect(disabledPathsFor(on)).toEqual([]);
+  });
+
+  it('never lists a core module, even when the caller left it out', () => {
+    const core = MODULES.filter(m => !m.optional).map(m => m.path);
+    const out = disabledPathsFor([]);
+    for (const p of core) expect(out).not.toContain(p);
+    expect(out.length).toBe(MODULES.filter(m => m.optional).length);
+  });
+
+  it('buckets optional modules by group in display order', () => {
+    const groups = groupedOptionalModules();
+    expect(groups.map(g => g.group)).toEqual(MODULE_GROUP_ORDER.filter(g => groups.some(x => x.group === g)));
+    expect(groups.flatMap(g => g.modules).length).toBe(MODULES.filter(m => m.optional).length);
+    for (const g of groups) expect(g.modules.length).toBeGreaterThan(0);
   });
 });
 

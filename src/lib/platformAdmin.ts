@@ -70,6 +70,13 @@ export function createTenantFromConsole(input: {
   ownerEmail: string;
   plan?: string;
   trialDays?: number;
+  /**
+   * Module paths the tenant starts WITHOUT (`businesses.disabledModules`). The
+   * console always sends it — computed with `disabledPathsFor()` from the registry —
+   * because the server has no copy of the registry and would otherwise create the
+   * tenant with every module on.
+   */
+  disabledModules?: string[];
   force?: boolean;
 }): Promise<CreateTenantResult> {
   return post({ action: 'create-tenant', ...input }) as Promise<CreateTenantResult>;
