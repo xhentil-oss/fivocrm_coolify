@@ -107,7 +107,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
   {
     id: 'masazh',
     title: 'Qendra Masazhesh',
-    description: 'Paketa SEO + Social Media për qendra masazhesh dhe wellness — nga 800€/muaj.',
+    description: 'Paketa SEO + Social Media për qendra masazhesh dhe wellness — nga 80.000 Lekë/muaj.',
     path: '/masazh',
     category: 'SEO + Social Media',
     icon: Leaf,
@@ -118,7 +118,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
   {
     id: 'agroturizem',
     title: 'Agroturizëm',
-    description: 'Paketa SEO + Social Media për agroturizme dhe ferma — me 2 fotoshooting profesionale/muaj, nga 800€/muaj.',
+    description: 'Paketa SEO + Social Media për agroturizme dhe ferma — me 2 fotoshooting profesionale/muaj, nga 80.000 Lekë/muaj.',
     path: '/agroturizem',
     category: 'SEO + Social Media',
     icon: Trees,
@@ -129,7 +129,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
   {
     id: 'website',
     title: 'Faqe Interneti (Website)',
-    description: 'Paketa zhvillimi website-i në 3 gjuhë (EN · IT · SQ) — Bazike, Standard, Avancuar, Premium. Çmim një herë nga €550.',
+    description: 'Paketa zhvillimi website-i në 3 gjuhë (EN · IT · SQ) — Bazike, Standard, Avancuar, Premium. Çmim një herë nga 99.000 Lekë.',
     path: '/website',
     category: 'Website',
     icon: Code2,
@@ -140,7 +140,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
   {
     id: 'rezidenca',
     title: 'Rezidenca & Shitje Pronash',
-    description: 'Marketing për zhvillues rezidencash dhe vilash — lead-e të kualifikuar, jo rezervime. Start (1.200 €/muaj), Business (1.900 €/muaj), Premium (3.200 €/muaj) + Sipas Projektit.',
+    description: 'Marketing për zhvillues rezidencash dhe vilash — lead-e të kualifikuar, jo rezervime. Start (120.000 Lekë/muaj), Business (190.000 Lekë/muaj), Premium (320.000 Lekë/muaj) + Sipas Projektit.',
     path: '/rezidenca',
     category: 'Real Estate',
     icon: Building2,
@@ -151,7 +151,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
   {
     id: 'rindertim-website',
     title: 'Rindërtim Faqe Interneti B2B',
-    description: 'Paketat e rindërtimit për faqe interneti B2B dhe katalog produktesh — Corporate Rebuild (1.490 €), B2B Growth (2.490 €), Brand & Content 360 (4.190 €).',
+    description: 'Paketat e rindërtimit për faqe interneti B2B dhe katalog produktesh — Corporate Rebuild (149.000 Lekë), B2B Growth (249.000 Lekë), Brand & Content 360 (419.000 Lekë).',
     path: '/rindertim-website',
     category: 'Website',
     icon: Layers,

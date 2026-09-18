@@ -45,7 +45,7 @@ const SQ: Copy = {
     kicker: 'Paketat e mirëmbajtjes',
     title: 'Zgjidh nivelin e duhur të mbrojtjes',
     sub: 'Çdo paketë përfshin orë të dedikuara mbështetjeje — kur të duhen, jemi aty. Nëse nevojiten më tepër, na kontakto.',
-    monthly: '€/muaj',
+    monthly: 'Lekë/muaj',
     choose: 'Zgjidh këtë paketë →',
     chosen: '✓ I zgjedhur',
     note: '✓ Të gjitha paketat: Monitorim 24/7 · Backup të sigurta · Riparim i shpejtë · Mbështetje gjatë orarit të punës',
@@ -54,7 +54,7 @@ const SQ: Copy = {
         id: 'maintenance-starter',
         name: 'Starter',
         tagline: 'Për faqe të reja ose blogje të vogla',
-        price: 50,
+        price: 5000,
         badge: 'Zgjidhja më e mirë për fillestarët',
         included: ['✓ Përditësime mujore të platformës dhe shtojcave', '✓ Backup javor të sigurt', '✓ Monitorim të disponueshmërisë 24/7', '✓ Përditësime bazë të sigurisë', '✓ 3 orë mbështetje/muaj', '✓ Mbështetje me email gjatë ditës'],
         excluded: ['Optimizim i shpejtësisë', 'Mbështetje premium 24/7', 'Backup ditor'],
@@ -63,7 +63,7 @@ const SQ: Copy = {
         id: 'maintenance-basic',
         name: 'Themelore',
         tagline: 'Për biznesin që po rritet',
-        price: 120,
+        price: 12000,
         included: ['✓ Përditësime dhe riparime prioritarë', '✓ Backup javor + backup ekstrë mujore', '✓ Monitorim dhe alarme për disponueshmërinë', '✓ Përforcim i sigurisë', '✓ 8 orë mbështetje/muaj', '✓ Raport mujor performancë'],
         excluded: ['Optimizim i avancuar', 'Monitorim premium'],
       },
@@ -71,7 +71,7 @@ const SQ: Copy = {
         id: 'maintenance-standard',
         name: 'Profesional',
         tagline: 'Faqe të rëndësishme për tregtinë',
-        price: 220,
+        price: 22000,
         badge: 'Më e zgjedhura e bizneseve',
         popular: true,
         included: ['✓ Gjithçka nga Themelore, plus:', '✓ Backup ditor automatik', '✓ Optimizim mujor i shpejtësisë dhe SEO', '✓ Audit sigurie i rregullt', '✓ 15 orë mbështetje/muaj', '✓ Chat + mbështetje me email'],
@@ -81,7 +81,7 @@ const SQ: Copy = {
         id: 'maintenance-premium',
         name: 'Enterprise',
         tagline: 'Për faqet kritike — asnjë rrezik',
-        price: 420,
+        price: 42000,
         included: ['✓ Gjithçka nga Profesional, plus:', '✓ Monitorim 24/7 dhe reagim emergjent', '✓ Backup ditor me rezervë', '✓ Optimizim të vazhdueshëm dhe testime A/B', '✓ 28 orë mbështetje/muaj', '✓ Mbështetje telefonike prioritare 24/7'],
         excluded: [],
       },
@@ -150,7 +150,7 @@ const EN: Copy = {
     kicker: 'Maintenance plans',
     title: 'Choose your level of protection',
     sub: 'Every plan includes dedicated support hours — when you need us, we\'re there. Need more? We\'re just a call away.',
-    monthly: '/month',
+    monthly: 'ALL/month',
     choose: 'Choose this plan →',
     chosen: '✓ Selected',
     note: '✓ All plans: 24/7 monitoring · Secure backups · Fast repairs · Daytime support',
@@ -159,7 +159,7 @@ const EN: Copy = {
         id: 'maintenance-starter',
         name: 'Starter',
         tagline: 'New sites or small blogs',
-        price: 50,
+        price: 5000,
         badge: 'Best for beginners',
         included: ['✓ Monthly CMS/plugin updates', '✓ Weekly secure backups', '✓ 24/7 uptime monitoring', '✓ Basic security patches', '✓ 3 hours support/month', '✓ Email support during business hours'],
         excluded: ['Speed optimization', 'Premium 24/7 support', 'Daily backups'],
@@ -168,7 +168,7 @@ const EN: Copy = {
         id: 'maintenance-basic',
         name: 'Essential',
         tagline: 'Growing businesses',
-        price: 120,
+        price: 12000,
         included: ['✓ Priority updates & patches', '✓ Weekly backups + monthly extra', '✓ Uptime monitoring & alerts', '✓ Security hardening', '✓ 8 hours support/month', '✓ Monthly performance report'],
         excluded: ['Advanced optimization', 'Premium monitoring'],
       },
@@ -176,7 +176,7 @@ const EN: Copy = {
         id: 'maintenance-standard',
         name: 'Professional',
         tagline: 'Mission-critical sales websites',
-        price: 220,
+        price: 22000,
         badge: 'Most chosen by businesses',
         popular: true,
         included: ['✓ Everything in Essential, plus:', '✓ Daily automated backups', '✓ Monthly speed & SEO optimization', '✓ Security audits', '✓ 15 hours support/month', '✓ Chat + email support'],
@@ -186,7 +186,7 @@ const EN: Copy = {
         id: 'maintenance-premium',
         name: 'Enterprise',
         tagline: 'Zero downtime = non-negotiable',
-        price: 420,
+        price: 42000,
         included: ['✓ Everything in Professional, plus:', '✓ 24/7 monitoring & emergency response', '✓ Continuous optimization & A/B tests', '✓ Daily backups with redundancy', '✓ 28 hours support/month', '✓ 24/7 phone support priority'],
         excluded: [],
       },
@@ -255,7 +255,7 @@ const IT: Copy = {
     kicker: 'Piani di manutenzione',
     title: 'Scegli il tuo livello di protezione',
     sub: 'Ogni piano include ore di supporto dedicate — quando ti serve, siamo lì. Hai bisogno di più? Siamo una telefonata di distanza.',
-    monthly: '/mese',
+    monthly: 'ALL/mese',
     choose: 'Scegli questo piano →',
     chosen: '✓ Selezionato',
     note: '✓ Tutti i piani: Monitoraggio 24/7 · Backup sicuri · Riparazioni veloci · Supporto durante l\'orario lavorativo',
@@ -264,7 +264,7 @@ const IT: Copy = {
         id: 'maintenance-starter',
         name: 'Starter',
         tagline: 'Siti nuovi o blog piccoli',
-        price: 50,
+        price: 5000,
         badge: 'Ideale per iniziare',
         included: ['✓ Aggiornamenti mensili CMS/plugin', '✓ Backup settimanali sicuri', '✓ Monitoraggio uptime 24/7', '✓ Patch di sicurezza di base', '✓ 3 ore supporto/mese', '✓ Email support durante orario lavoro'],
         excluded: ['Ottimizzazione velocità', 'Supporto premium 24/7', 'Backup giornalieri'],
@@ -273,7 +273,7 @@ const IT: Copy = {
         id: 'maintenance-basic',
         name: 'Essenziale',
         tagline: 'Aziende in crescita',
-        price: 120,
+        price: 12000,
         included: ['✓ Aggiornamenti prioritari', '✓ Backup settimanali + extra mensile', '✓ Monitoraggio uptime e alert', '✓ Hardening sicurezza', '✓ 8 ore supporto/mese', '✓ Report mensile prestazioni'],
         excluded: ['Ottimizzazione avanzata', 'Monitoraggio premium'],
       },
@@ -281,7 +281,7 @@ const IT: Copy = {
         id: 'maintenance-standard',
         name: 'Professionale',
         tagline: 'Siti web critici per vendite',
-        price: 220,
+        price: 22000,
         badge: 'La più scelta dalle aziende',
         popular: true,
         included: ['✓ Tutto da Essenziale, più:', '✓ Backup automatici giornalieri', '✓ Ottimizzazione velocità e SEO mensile', '✓ Audit di sicurezza', '✓ 15 ore supporto/mese', '✓ Chat + email support'],
@@ -291,7 +291,7 @@ const IT: Copy = {
         id: 'maintenance-premium',
         name: 'Enterprise',
         tagline: 'Tempo di inattività zero = non negoziabile',
-        price: 420,
+        price: 42000,
         included: ['✓ Tutto da Professionale, più:', '✓ Monitoraggio 24/7 e risposta emergenza', '✓ Ottimizzazione continua e test A/B', '✓ Backup giornalieri con ridondanza', '✓ 28 ore supporto/mese', '✓ Supporto telefonico 24/7 priorità'],
         excluded: [],
       },
@@ -343,6 +343,7 @@ const ACCENTS = ['from-slate-500 to-gray-600', 'from-blue-600 to-indigo-600', 'f
 export default function WebsiteMaintenanceLandingPage() {
   const [lang, setLang] = useLandingLang();
   const t = COPY[lang];
+  const money = (n: number) => n.toLocaleString(lang === 'en' ? 'en-US' : 'de-DE');
   const [selected, setSelected] = useState<Pkg | null>(null);
   const [formData, setFormData] = useState({ name: '', email: '', phone: '', website: '', message: '' });
   const [formSent, setFormSent] = useState(false);
@@ -374,7 +375,7 @@ export default function WebsiteMaintenanceLandingPage() {
           ...formData,
           category: 'Website Maintenance',
           packageId: selected?.id || '',
-          packageName: selected ? `Maintenance — ${selected.name} (€${selected.price}/mo)` : 'Website Maintenance',
+          packageName: selected ? `Maintenance — ${selected.name} (${money(selected.price)} ALL/mo)` : 'Website Maintenance',
           message: `[${lang.toUpperCase()}] ${formData.message}`,
         }),
       });
@@ -498,7 +499,7 @@ export default function WebsiteMaintenanceLandingPage() {
                   ) : null}
                 </div>
                 <div className="mt-8 flex items-end gap-2">
-                  <span className="text-4xl font-bold text-slate-900">€{pkg.price}</span>
+                  <span className="text-4xl font-bold text-slate-900">{money(pkg.price)}</span>
                   <span className="text-sm text-slate-500">{t.maintenance.monthly}</span>
                 </div>
                 <div className="mt-6 space-y-3">

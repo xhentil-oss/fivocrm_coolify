@@ -54,8 +54,8 @@ const PACKAGES: Pkg[] = [
   {
     id: 'starter',
     name: 'Starter',
-    price: '120.000 Lekë',
-    priceNote: '/ muaj + buxheti i reklamave',
+    price: '120.000',
+    priceNote: 'Lekë / muaj + buxheti i reklamave',
     audience: ['Projekte në fazë ndërtimi', 'Profile pa aktivitet të rregullt', 'Shitje që ecin me rekomandime'],
     groups: [
       {
@@ -93,8 +93,8 @@ const PACKAGES: Pkg[] = [
   {
     id: 'growth',
     name: 'Growth',
-    price: '190.000 Lekë',
-    priceNote: '/ muaj + buxheti i reklamave',
+    price: '190.000',
+    priceNote: 'Lekë / muaj + buxheti i reklamave',
     badge: 'Popullor',
     audience: ['Projekte në shitje aktive', 'Shitje ndaj Shqipërisë, Kosovës dhe diasporës', 'Ekipe shitjeje që kërkojnë kontakte të vazhdueshme'],
     groups: [
@@ -138,8 +138,8 @@ const PACKAGES: Pkg[] = [
   {
     id: 'pro',
     name: 'Pro',
-    price: '320.000 Lekë',
-    priceNote: '/ muaj + buxheti i reklamave',
+    price: '320.000',
+    priceNote: 'Lekë / muaj + buxheti i reklamave',
     popular: true,
     badge: 'Më i zgjedhuri',
     audience: ['Hedhje në shitje e një faze të re', 'Shitje ndaj investitorëve', 'Objektiva mujore shitjeje'],
@@ -185,8 +185,8 @@ const PACKAGES: Pkg[] = [
   {
     id: 'agency',
     name: 'Agency',
-    price: '490.000 Lekë',
-    priceNote: '/ muaj + buxheti i reklamave',
+    price: '490.000',
+    priceNote: 'Lekë / muaj + buxheti i reklamave',
     badge: 'Shërbim i plotë',
     audience: ['Zhvillime me disa faza ose projekte', 'Shitje në tregje të jashtme', 'Kompani që duan ekip të dedikuar'],
     groups: [
@@ -289,7 +289,7 @@ export default function RezidencaLandingPage() {
           ...formData,
           category: 'Rezidenca / Shitje Pronash',
           packageId: selected?.id || '',
-          packageName: selected ? `Rezidenca — ${selected.name} (${selected.price}${selected.priceNote})` : 'Rezidenca / Shitje Pronash',
+          packageName: selected ? `Rezidenca — ${selected.name} (${selected.price} ${selected.priceNote})` : 'Rezidenca / Shitje Pronash',
         }),
       });
       const data = await res.json();
@@ -501,7 +501,7 @@ export default function RezidencaLandingPage() {
                     {PACKAGES.map((pkg, i) => (
                       <th key={pkg.id} className={`px-5 py-4 font-bold ${i === 2 ? 'text-emerald-700 bg-emerald-50/60' : 'text-gray-900'}`}>
                         {pkg.name}
-                        <span className="block text-xs font-medium text-gray-500 mt-0.5">{pkg.price} / muaj</span>
+                        <span className="block text-xs font-medium text-gray-500 mt-0.5">{pkg.price} Lekë / muaj</span>
                       </th>
                     ))}
                   </tr>
@@ -597,7 +597,7 @@ export default function RezidencaLandingPage() {
                     <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-emerald-500/20 border border-emerald-500/30">
                       <div>
                         <p className="text-xs text-emerald-300">Paketa e zgjedhur</p>
-                        <p className="font-semibold text-white">{selected.name} — {selected.price}</p>
+                        <p className="font-semibold text-white">{selected.name} — {selected.price} {selected.priceNote}</p>
                       </div>
                       <button type="button" onClick={() => setSelected(null)} className="text-emerald-300 hover:text-white text-sm underline">Ndrysho</button>
                     </div>

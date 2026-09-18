@@ -38,7 +38,7 @@ interface Pkg {
   id: string;
   name: string;
   tagline: string;
-  price: number;          // EUR, një herë
+  price: number;          // ALL (Lekë), një herë
   deadline: string;       // afati i realizimit
   badge?: string;
   popular?: boolean;
@@ -51,7 +51,7 @@ const PACKAGES: Pkg[] = [
     id: 'corporate-rebuild',
     name: 'Corporate Rebuild',
     tagline: 'Baza e duhur: strukturë, dizajn dhe SEO të rindërtuara nga fillimi, me përmbajtjen aktuale të riorganizuar profesionalisht.',
-    price: 1490,
+    price: 149000,
     deadline: '18–22 ditë pune',
     included: [
       'Strategjia dhe struktura:',
@@ -95,7 +95,7 @@ const PACKAGES: Pkg[] = [
     id: 'b2b-growth',
     name: 'B2B Growth',
     tagline: 'Platformë B2B që paraqet produktet me specifikime dhe sjell kërkesa konkrete për ofertë.',
-    price: 2490,
+    price: 249000,
     deadline: '25–30 ditë pune',
     popular: true,
     badge: 'E rekomanduar',
@@ -138,7 +138,7 @@ const PACKAGES: Pkg[] = [
     id: 'brand-content-360',
     name: 'Brand & Content 360',
     tagline: 'Rindërtim i plotë i pranisë dixhitale: faqe interneti, fotografi, video dhe materiale prezantuese.',
-    price: 4190,
+    price: 419000,
     deadline: '35–45 ditë pune',
     badge: 'Zgjidhja e plotë',
     included: [
@@ -220,7 +220,7 @@ export default function RindertimWebsiteLandingPage() {
           ...formData,
           category: 'Rindërtim Faqe Interneti B2B',
           packageId: selected?.id || '',
-          packageName: selected ? `Rindërtim Faqe Interneti — ${selected.name} (€${selected.price})` : 'Rindërtim Faqe Interneti B2B',
+          packageName: selected ? `Rindërtim Faqe Interneti — ${selected.name} (${selected.price.toLocaleString('de-DE')} Lekë)` : 'Rindërtim Faqe Interneti B2B',
         }),
       });
       const data = await res.json();
@@ -343,7 +343,7 @@ export default function RindertimWebsiteLandingPage() {
                       <h3 className="text-xl font-bold">{pkg.name}</h3>
                       <p className="text-xs text-gray-500 mt-1.5 min-h-[3.5rem] leading-relaxed">{pkg.tagline}</p>
                       <div className="mt-4 flex items-baseline gap-1.5">
-                        <span className={`text-4xl font-bold bg-gradient-to-r ${accent} bg-clip-text text-transparent`}>€{pkg.price.toLocaleString()}</span>
+                        <span className={`text-4xl font-bold bg-gradient-to-r ${accent} bg-clip-text text-transparent`}>{pkg.price.toLocaleString('de-DE')} Lekë</span>
                         <span className="text-xs text-gray-500">një herë</span>
                       </div>
                       <p className="mt-2 text-xs text-gray-500 flex items-center gap-1.5">
@@ -403,7 +403,7 @@ export default function RindertimWebsiteLandingPage() {
                     {PACKAGES.map((pkg, i) => (
                       <th key={pkg.id} className={`px-5 py-4 font-bold ${i === 1 ? 'text-blue-700 bg-blue-50/60' : 'text-gray-900'}`}>
                         {pkg.name}
-                        <span className="block text-xs font-medium text-gray-500 mt-0.5">€{pkg.price.toLocaleString()}</span>
+                        <span className="block text-xs font-medium text-gray-500 mt-0.5">{pkg.price.toLocaleString('de-DE')} Lekë</span>
                       </th>
                     ))}
                   </tr>
@@ -469,7 +469,7 @@ export default function RindertimWebsiteLandingPage() {
                     <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-blue-500/20 border border-blue-500/30">
                       <div>
                         <p className="text-xs text-blue-300">Paketa e zgjedhur</p>
-                        <p className="font-semibold text-white">{selected.name} — €{selected.price.toLocaleString()}</p>
+                        <p className="font-semibold text-white">{selected.name} — {selected.price.toLocaleString('de-DE')} Lekë</p>
                       </div>
                       <button type="button" onClick={() => setSelected(null)} className="text-blue-300 hover:text-white text-sm underline">Ndrysho</button>
                     </div>

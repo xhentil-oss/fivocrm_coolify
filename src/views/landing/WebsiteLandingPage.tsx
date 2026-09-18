@@ -39,7 +39,7 @@ interface Pkg {
   id: string;
   name: string;
   tagline: string;
-  price: number;      // EUR, one-time
+  price: number;      // ALL (Lekë), one-time
   badge?: string;
   included: string[];
   excluded: string[];
@@ -114,26 +114,26 @@ const SQ: Copy = {
   },
   packages: {
     kicker: 'Paketat', title: 'Zgjidh paketën që i përshtatet biznesit', sub: 'Çmim një herë — pa kosto mujore të fshehura. TVSH nuk përfshihet.',
-    oneTime: 'një herë', choose: 'Zgjidhni Këtë Paketë', chosen: '✓ Zgjedhur', note: 'Të gjitha paketat: dizajn responsive, hosting dhe trajnim bazë për përdorim. Çmimet në Euro (€).',
+    oneTime: 'një herë', choose: 'Zgjidhni Këtë Paketë', chosen: '✓ Zgjedhur', note: 'Të gjitha paketat: dizajn responsive, hosting dhe trajnim bazë për përdorim. Çmimet në Lekë (ALL).',
     included: 'Përfshihet', notIncluded: 'Nuk përfshihet',
     list: [
       {
-        id: 'basic', name: 'Bazike', tagline: 'Prania juaj e parë profesionale online', price: 990,
+        id: 'basic', name: 'Bazike', tagline: 'Prania juaj e parë profesionale online', price: 99000,
         included: ['Dizajn profesional & responsive', 'Deri në 10 faqe', 'Gjuha kryesore sipas zgjedhjes', 'SEO bazike', 'Google Analytics', 'Hosting bazik', 'Formular kontakti + Google Maps', 'Lidhje me rrjetet sociale', 'Siguri bazike', 'Mbështetje teknike 1 muaj'],
         excluded: ['SEO Premium', 'Reklama Google & Social', 'SSL & siguri e avancuar', 'Hosting Premium'],
       },
       {
-        id: 'standard', name: 'Standard', tagline: 'Për biznese që duan të rriten seriozisht', price: 1490, popular: true, badge: 'Më e zgjedhura',
+        id: 'standard', name: 'Standard', tagline: 'Për biznese që duan të rriten seriozisht', price: 149000, popular: true, badge: 'Më e zgjedhura',
         included: ['Gjithçka nga Bazike, plus:', 'Dizajn i personalizuar me brandin tuaj', 'Deri në 15 faqe', 'SEO Premium', 'Integrim me rrjetet sociale', 'Gati për shumë gjuhë', 'Certifikatë SSL', 'Hosting Premium', 'Siguri e avancuar', 'Mbështetje teknike 3 muaj'],
         excluded: ['SEO Plus', 'Sistem rezervimesh ndërkombëtar', 'Integrim CDN', 'Hosting Plus'],
       },
       {
-        id: 'advanced', name: 'Avancuar', tagline: 'Faqja që rezervon dhe shet vetë', price: 1990, badge: 'Vlera më e mirë',
+        id: 'advanced', name: 'Avancuar', tagline: 'Faqja që rezervon dhe shet vetë', price: 199000, badge: 'Vlera më e mirë',
         included: ['Gjithçka nga Standard, plus:', 'Elemente vizuale të personalizuara', 'Deri në 20 faqe', 'Sistem rezervimesh online', 'SEO Plus', 'Analiza të avancuara', 'Integrim CDN', 'Hosting Plus', 'Backup ditor', 'Pagesa online', 'Mbështetje teknike 6 muaj'],
         excluded: ['Integrim Google Reviews', 'SEO me analizë konkurruese', 'Hosting Premium Plus'],
       },
       {
-        id: 'premium', name: 'Premium', tagline: 'Zgjidhja totale, pa kompromise', price: 2900,
+        id: 'premium', name: 'Premium', tagline: 'Zgjidhja totale, pa kompromise', price: 290000,
         included: ['Gjithçka nga Avancuar, plus:', 'Dizajn unik plotësisht i personalizuar', 'Faqe të pakufizuara + përditësime', 'Sistem i plotë rezervimesh & pagesash', 'SEO me analizë konkurruese', 'Reklama Google & Social + gjurmim', 'Integrim Google Reviews', 'Hosting Premium Plus', 'Siguri + monitorim 24/7', 'Mbështetje teknike 12 muaj'],
         excluded: [],
       },
@@ -144,17 +144,17 @@ const SQ: Copy = {
     monthly: '/muaj', choose: 'Zgjidhni Këtë Paketë', chosen: '✓ Zgjedhur', note: 'Të gjitha paketat përfshijnë monitorim, backup dhe riparime të shpejta.',
     list: [
       {
-        id: 'maintenance-basic', name: 'Bazike', tagline: 'Mbështetje themelore dhe siguri bazike', price: 120,
+        id: 'maintenance-basic', name: 'Bazike', tagline: 'Mbështetje themelore dhe siguri bazike', price: 12000,
         included: ['Përditësime mujore të CMS-së dhe plugin-eve', 'Backup javor', 'Monitorim uptime', 'Patch-e sigurie bazike', '1 orë ndryshime të vogla në muaj', 'Raport mujor i performancës'],
         excluded: ['Përditësime ditore', 'Optimizim i performancës', 'Mbështetje urgjente 24/7'],
       },
       {
-        id: 'maintenance-standard', name: 'Standard', tagline: 'Optimizim dhe shërbim proaktiv', price: 220, popular: true, badge: 'Më e zgjedhura',
+        id: 'maintenance-standard', name: 'Standard', tagline: 'Optimizim dhe shërbim proaktiv', price: 22000, popular: true, badge: 'Më e zgjedhura',
         included: ['Gjithçka nga Bazike, plus:', 'Backup ditor', 'Monitorim i performancës dhe sigurisë', '3 orë ndryshime të vogla në muaj', 'Raport mujor SEO', 'Përditësime prioritare'],
         excluded: ['Redaktime të mëdha të përmbajtjes', 'Optimizim i avancuar i konvertimit'],
       },
       {
-        id: 'maintenance-premium', name: 'Premium', tagline: 'Mbështetje 24/7 dhe përmirësim i vazhdueshëm', price: 420,
+        id: 'maintenance-premium', name: 'Premium', tagline: 'Mbështetje 24/7 dhe përmirësim i vazhdueshëm', price: 42000,
         included: ['Gjithçka nga Standard, plus:', 'Monitorim 24/7 dhe reagim emergjent', 'Përmirësime të performancës dhe sigurisë', 'Konsultim strategjik mujor', 'Ndryshime të vogla të pakufizuara', 'Audit teknik çdo muaj'],
         excluded: [],
       },
@@ -233,26 +233,26 @@ const EN: Copy = {
   },
   packages: {
     kicker: 'Packages', title: 'Choose the package that fits your business', sub: 'One-time price — no hidden monthly costs. VAT not included.',
-    oneTime: 'one-time', choose: 'Choose This Plan', chosen: '✓ Selected', note: 'All packages: responsive design, hosting, and basic training. Prices in Euro (€).',
+    oneTime: 'one-time', choose: 'Choose This Plan', chosen: '✓ Selected', note: 'All packages: responsive design, hosting, and basic training. Prices in Albanian Lek (ALL).',
     included: 'Included', notIncluded: 'Not included',
     list: [
       {
-        id: 'basic', name: 'Basic', tagline: 'Your first professional presence online', price: 990,
+        id: 'basic', name: 'Basic', tagline: 'Your first professional presence online', price: 99000,
         included: ['Professional & responsive design', 'Up to 10 pages', 'Primary language of your choice', 'Basic SEO', 'Google Analytics', 'Basic hosting', 'Contact form + Google Maps', 'Social media links', 'Basic security', '1-month technical support'],
         excluded: ['Premium SEO', 'Google & Social ads', 'SSL & advanced security', 'Premium hosting'],
       },
       {
-        id: 'standard', name: 'Standard', tagline: 'For businesses ready to grow seriously', price: 1490, popular: true, badge: 'Most popular',
+        id: 'standard', name: 'Standard', tagline: 'For businesses ready to grow seriously', price: 149000, popular: true, badge: 'Most popular',
         included: ['Everything in Basic, plus:', 'Custom branded design', 'Up to 15 pages', 'Premium SEO', 'Social media integration', 'Multi-language ready', 'SSL certificate', 'Premium hosting', 'Advanced security', '3-month technical support'],
         excluded: ['SEO Plus', 'International booking system', 'CDN integration', 'Hosting Plus'],
       },
       {
-        id: 'advanced', name: 'Advanced', tagline: 'A site that books and sells on its own', price: 1990, badge: 'Best value',
+        id: 'advanced', name: 'Advanced', tagline: 'A site that books and sells on its own', price: 199000, badge: 'Best value',
         included: ['Everything in Standard, plus:', 'Custom visual elements', 'Up to 20 pages', 'Online booking system', 'SEO Plus', 'Advanced analytics', 'CDN integration', 'Hosting Plus', 'Daily backup', 'Online payments', '6-month technical support'],
         excluded: ['Google Reviews integration', 'SEO with competitor analysis', 'Premium Plus hosting'],
       },
       {
-        id: 'premium', name: 'Premium', tagline: 'The complete solution, no compromises', price: 2900,
+        id: 'premium', name: 'Premium', tagline: 'The complete solution, no compromises', price: 290000,
         included: ['Everything in Advanced, plus:', 'Fully custom unique design', 'Unlimited pages + updates', 'Full booking & payment system', 'SEO with competitor analysis', 'Google & Social ads + tracking', 'Google Reviews integration', 'Premium Plus hosting', '24/7 security & monitoring', '12-month technical support'],
         excluded: [],
       },
@@ -263,17 +263,17 @@ const EN: Copy = {
     monthly: '/month', choose: 'Choose This Plan', chosen: '✓ Selected', note: 'All plans include monitoring, backups and fast fix support.',
     list: [
       {
-        id: 'maintenance-basic', name: 'Basic', tagline: 'Essential care and baseline security', price: 120,
+        id: 'maintenance-basic', name: 'Basic', tagline: 'Essential care and baseline security', price: 12000,
         included: ['Monthly CMS/plugin updates', 'Weekly backups', 'Uptime monitoring', 'Basic security patching', '1 hour of small edits per month', 'Monthly health report'],
         excluded: ['Daily updates', 'Performance tuning', '24/7 emergency support'],
       },
       {
-        id: 'maintenance-standard', name: 'Standard', tagline: 'Proactive upkeep and performance care', price: 220, popular: true, badge: 'Most popular',
+        id: 'maintenance-standard', name: 'Standard', tagline: 'Proactive upkeep and performance care', price: 22000, popular: true, badge: 'Most popular',
         included: ['Everything in Basic, plus:', 'Daily backups', 'Performance and security monitoring', '3 hours of small edits per month', 'Monthly SEO report', 'Priority updates'],
         excluded: ['Large content revisions', 'Advanced conversion optimization'],
       },
       {
-        id: 'maintenance-premium', name: 'Premium', tagline: '24/7 care and continuous improvement', price: 420,
+        id: 'maintenance-premium', name: 'Premium', tagline: '24/7 care and continuous improvement', price: 42000,
         included: ['Everything in Standard, plus:', '24/7 monitoring and emergency response', 'Performance & security tuning', 'Monthly strategy session', 'Unlimited small edits', 'Technical audit every month'],
         excluded: [],
       },
@@ -352,26 +352,26 @@ const IT: Copy = {
   },
   packages: {
     kicker: 'Pacchetti', title: 'Scegli il pacchetto adatto alla tua attività', sub: 'Prezzo una tantum — nessun costo mensile nascosto. IVA esclusa.',
-    oneTime: 'una tantum', choose: 'Scegli Questo Pacchetto', chosen: '✓ Selezionato', note: 'Tutti i pacchetti: design responsive, hosting e formazione di base. Prezzi in Euro (€).',
+    oneTime: 'una tantum', choose: 'Scegli Questo Pacchetto', chosen: '✓ Selezionato', note: 'Tutti i pacchetti: design responsive, hosting e formazione di base. Prezzi in Lek albanesi (ALL).',
     included: 'Incluso', notIncluded: 'Non incluso',
     list: [
       {
-        id: 'basic', name: 'Base', tagline: 'La tua prima presenza professionale online', price: 990,
+        id: 'basic', name: 'Base', tagline: 'La tua prima presenza professionale online', price: 99000,
         included: ['Design professionale & responsive', 'Fino a 10 pagine', 'Lingua principale a scelta', 'SEO di base', 'Google Analytics', 'Hosting di base', 'Modulo contatti + Google Maps', 'Collegamento ai social', 'Sicurezza di base', 'Supporto tecnico 1 mese'],
         excluded: ['SEO Premium', 'Pubblicità Google & Social', 'SSL & sicurezza avanzata', 'Hosting Premium'],
       },
       {
-        id: 'standard', name: 'Standard', tagline: 'Per attività pronte a crescere sul serio', price: 1490, popular: true, badge: 'Più scelto',
+        id: 'standard', name: 'Standard', tagline: 'Per attività pronte a crescere sul serio', price: 149000, popular: true, badge: 'Più scelto',
         included: ['Tutto ciò che c\'è in Base, più:', 'Design personalizzato sul tuo brand', 'Fino a 15 pagine', 'SEO Premium', 'Integrazione social', 'Pronto per più lingue', 'Certificato SSL', 'Hosting Premium', 'Sicurezza avanzata', 'Supporto tecnico 3 mesi'],
         excluded: ['SEO Plus', 'Sistema di prenotazione internazionale', 'Integrazione CDN', 'Hosting Plus'],
       },
       {
-        id: 'advanced', name: 'Avanzato', tagline: 'Un sito che prenota e vende da solo', price: 1990, badge: 'Miglior valore',
+        id: 'advanced', name: 'Avanzato', tagline: 'Un sito che prenota e vende da solo', price: 199000, badge: 'Miglior valore',
         included: ['Tutto ciò che c\'è in Standard, più:', 'Elementi visivi personalizzati', 'Fino a 20 pagine', 'Sistema di prenotazione online', 'SEO Plus', 'Analisi avanzate', 'Integrazione CDN', 'Hosting Plus', 'Backup giornaliero', 'Pagamenti online', 'Supporto tecnico 6 mesi'],
         excluded: ['Integrazione Google Reviews', 'SEO con analisi della concorrenza', 'Hosting Premium Plus'],
       },
       {
-        id: 'premium', name: 'Premium', tagline: 'La soluzione totale, senza compromessi', price: 2900,
+        id: 'premium', name: 'Premium', tagline: 'La soluzione totale, senza compromessi', price: 290000,
         included: ['Tutto ciò che c\'è in Avanzato, più:', 'Design unico totalmente personalizzato', 'Pagine illimitate + aggiornamenti', 'Sistema completo prenotazioni & pagamenti', 'SEO con analisi della concorrenza', 'Pubblicità Google & Social + tracking', 'Integrazione Google Reviews', 'Hosting Premium Plus', 'Sicurezza & monitoraggio 24/7', 'Supporto tecnico 12 mesi'],
         excluded: [],
       },
@@ -382,17 +382,17 @@ const IT: Copy = {
     monthly: '/mese', choose: 'Scegli Questo Pacchetto', chosen: '✓ Selezionato', note: 'Tutti i piani includono monitoraggio, backup e interventi rapidi.',
     list: [
       {
-        id: 'maintenance-basic', name: 'Base', tagline: 'Cura essenziale e sicurezza di base', price: 120,
+        id: 'maintenance-basic', name: 'Base', tagline: 'Cura essenziale e sicurezza di base', price: 12000,
         included: ['Aggiornamenti mensili di CMS e plugin', 'Backup settimanali', 'Monitoraggio uptime', 'Patch di sicurezza di base', '1 ora di modifiche minori al mese', 'Report mensile sullo stato'],
         excluded: ['Aggiornamenti giornalieri', 'Ottimizzazione delle prestazioni', 'Supporto d\'emergenza 24/7'],
       },
       {
-        id: 'maintenance-standard', name: 'Standard', tagline: 'Manutenzione proattiva e cura delle prestazioni', price: 220, popular: true, badge: 'Più scelto',
+        id: 'maintenance-standard', name: 'Standard', tagline: 'Manutenzione proattiva e cura delle prestazioni', price: 22000, popular: true, badge: 'Più scelto',
         included: ['Tutto ciò che c\'è in Base, più:', 'Backup giornalieri', 'Monitoraggio di prestazioni e sicurezza', '3 ore di modifiche minori al mese', 'Report mensile SEO', 'Aggiornamenti prioritari'],
         excluded: ['Revisioni importanti dei contenuti', 'Ottimizzazione avanzata delle conversioni'],
       },
       {
-        id: 'maintenance-premium', name: 'Premium', tagline: 'Assistenza 24/7 e miglioramento continuo', price: 420,
+        id: 'maintenance-premium', name: 'Premium', tagline: 'Assistenza 24/7 e miglioramento continuo', price: 42000,
         included: ['Tutto ciò che c\'è in Standard, più:', 'Monitoraggio 24/7 e risposta d\'emergenza', 'Ottimizzazione di prestazioni e sicurezza', 'Sessione strategica mensile', 'Modifiche minori illimitate', 'Audit tecnico ogni mese'],
         excluded: [],
       },
@@ -430,6 +430,7 @@ const IT: Copy = {
 };
 
 const COPY: Record<Lang, Copy> = { sq: SQ, en: EN, it: IT };
+const CUR: Record<Lang, string> = { sq: 'Lekë', en: 'ALL', it: 'ALL' };
 const PKG_ACCENTS = [
   'from-slate-500 to-gray-600',
   'from-blue-600 to-indigo-600',
@@ -440,6 +441,8 @@ const PKG_ACCENTS = [
 export default function WebsiteLandingPage() {
   const [lang, setLang] = useLandingLang();
   const t = COPY[lang];
+  const cur = CUR[lang];
+  const money = (n: number) => n.toLocaleString(lang === 'en' ? 'en-US' : 'de-DE');
   const [openFaq, setOpenFaq] = useState<number | null>(null);
   const [selected, setSelected] = useState<Pkg | null>(null);
   const [formData, setFormData] = useState({ name: '', email: '', phone: '', website: '', message: '' });
@@ -464,7 +467,7 @@ export default function WebsiteLandingPage() {
           ...formData,
           category: selected?.id.startsWith('maintenance') ? 'Website Maintenance' : 'Website',
           packageId: selected?.id || '',
-          packageName: selected ? `${selected.id.startsWith('maintenance') ? 'Maintenance' : 'Website'} — ${selected.name} (${selected.id.startsWith('maintenance') ? '€' + selected.price + '/mo' : '€' + selected.price})` : 'Website',
+          packageName: selected ? `${selected.id.startsWith('maintenance') ? 'Maintenance' : 'Website'} — ${selected.name} (${selected.id.startsWith('maintenance') ? money(selected.price) + ' ' + cur + '/mo' : money(selected.price) + ' ' + cur})` : 'Website',
           message: `[${lang.toUpperCase()}] ${formData.message}`,
         }),
       });
@@ -673,7 +676,7 @@ export default function WebsiteLandingPage() {
                       <h3 className="text-xl font-bold">{pkg.name}</h3>
                       <p className="text-xs text-gray-500 mt-1 min-h-[2.5rem]">{pkg.tagline}</p>
                       <div className="mt-4 flex items-baseline gap-1.5">
-                        <span className={`text-4xl font-bold bg-gradient-to-r ${accent} bg-clip-text text-transparent`}>€{pkg.price.toLocaleString()}</span>
+                        <span className={`text-4xl font-bold bg-gradient-to-r ${accent} bg-clip-text text-transparent`}>{money(pkg.price)} {cur}</span>
                         <span className="text-xs text-gray-500">{t.packages.oneTime}</span>
                       </div>
                       <button onClick={() => scrollTo('contact', pkg)}
@@ -730,7 +733,7 @@ export default function WebsiteLandingPage() {
                       <h3 className="text-xl font-bold">{pkg.name}</h3>
                       <p className="text-xs text-gray-500 mt-1 min-h-[2.5rem]">{pkg.tagline}</p>
                       <div className="mt-4 flex items-baseline gap-1.5">
-                        <span className={`text-4xl font-bold bg-gradient-to-r ${accent} bg-clip-text text-transparent`}>€{pkg.price.toLocaleString()}</span>
+                        <span className={`text-4xl font-bold bg-gradient-to-r ${accent} bg-clip-text text-transparent`}>{money(pkg.price)} {cur}</span>
                         <span className="text-xs text-gray-500">{t.maintenance.monthly}</span>
                       </div>
                       <button onClick={() => scrollTo('contact', pkg)}
@@ -854,7 +857,7 @@ export default function WebsiteLandingPage() {
                     <div className="flex items-center justify-between px-4 py-3 rounded-xl bg-blue-500/20 border border-blue-500/30">
                       <div>
                         <p className="text-xs text-blue-300">{t.contact.selected}</p>
-                        <p className="font-semibold text-white">{selected.name} — €{selected.price.toLocaleString()}</p>
+                        <p className="font-semibold text-white">{selected.name} — {money(selected.price)} {cur}</p>
                       </div>
                       <button type="button" onClick={() => setSelected(null)} className="text-blue-300 hover:text-white text-sm underline">{t.contact.change}</button>
                     </div>
