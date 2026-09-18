@@ -5,6 +5,7 @@ import { useCollection } from '../hooks/useFirestore';
 import { Skeleton } from '../components/ui/skeleton';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '../components/ui/tabs';
 import { cn, formatALL, formatCompact, toAll } from '../lib/utils';
+import { saveOrShareFile } from '../lib/native';
 import {
   AlertTriangle, ChevronDown, ChevronRight, Clock, Download, Info, Landmark,
   Percent, TrendingDown, TrendingUp, Wallet,
@@ -710,15 +711,12 @@ const FinancesView: React.FC = () => {
       .map(r => r.map(c => `"${String(c ?? '').replace(/"/g, '""')}"`).join(','))
       .join('\r\n');
     // BOM so Excel opens Albanian diacritics correctly.
+    // saveOrShareFile, not a blob <a download>: on native the anchor download is a
+    // no-op, so this button did nothing at all in the Android app - no file, no error.
     const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `financat-${hero.title.toLowerCase().replace(/\s+/g, '-')}.csv`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    URL.revokeObjectURL(url);
+    void saveOrShareFile(blob, `financat-${hero.title.toLowerCase().replace(/\s+/g, '-')}.csv`, {
+      shareTitle: 'Financat - FivoCRM',
+    });
   }, [hero, receivables, departmentRows, staffRevenue, clientPnl, periodLabel]);
 
   if (!allowed) {

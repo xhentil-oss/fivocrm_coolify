@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { ExternalLink, Copy, Globe, Building2, Waves, Search, Sparkles, Briefcase, Paintbrush, GraduationCap, Share2, Leaf, Trees, Code2, Shield, Sun, Camera, Car, Croissant, Store, Layers, HardHat } from 'lucide-react';
 import { Badge } from '../components/ui/badge';
 import { toast } from '../hooks/use-toast';
+import { copyText } from '../lib/clipboard';
 
 interface LandingPageEntry {
   id: string;
@@ -263,10 +264,11 @@ export default function LandingPagesView() {
     return matchesSearch && matchesCategory;
   });
 
-  const copyUrl = (path: string) => {
+  const copyUrl = async (path: string) => {
     const url = `${window.location.origin}${path}`;
-    navigator.clipboard.writeText(url);
-    toast({ title: 'URL u kopjua', description: url });
+    // Only claim the URL is on the clipboard once the write has actually resolved.
+    if (await copyText(url)) toast({ title: 'URL u kopjua', description: url });
+    else toast({ title: 'Nuk u kopjua dot', description: url, variant: 'destructive' });
   };
 
   return (

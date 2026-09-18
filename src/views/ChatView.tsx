@@ -30,6 +30,7 @@ import ConversationOwnerBar from '../components/chat/ConversationOwnerBar';
 // Lazy-loaded so the ~260KB Daily.co video SDK only loads when a call starts.
 const VideoCallModal = React.lazy(() => import('../components/VideoCallModal'));
 import { useToast } from '../hooks/use-toast';
+import { copyWithToast } from '../lib/clipboard';
 import { ToastAction } from '../components/ui/toast';
 import { useFileUpload } from '../hooks/useFileUpload';
 import { getTimestampMs } from '../lib/utils';
@@ -2569,9 +2570,11 @@ const ChatView: React.FC = () => {
     textareaRef.current?.focus();
   };
 
+  // Await the write and toast the real outcome — writeText() rejects without a
+  // fresh user gesture and on several Android WebView builds, and this used to
+  // claim success regardless.
   const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toast({ title: 'Kopjuar!', description: 'Teksti u kopjua në clipboard.' });
+    void copyWithToast(text, toast, 'Kopjuar!');
   };
 
   const resetAiChat = () => {
@@ -5033,7 +5036,7 @@ const ChatView: React.FC = () => {
             )}
             {!summaryLoading && summaryText && (
               <div className="flex justify-end gap-2">
-                <Button variant="outline" size="sm" onClick={() => { navigator.clipboard.writeText(summaryText); toast({ title: 'U kopjua' }); }}>
+                <Button variant="outline" size="sm" onClick={() => { void copyWithToast(summaryText, toast); }}>
                   <Copy className="h-3.5 w-3.5 mr-1" /> Kopjo
                 </Button>
                 <Button variant="outline" size="sm" onClick={handleSummarizeChat}>

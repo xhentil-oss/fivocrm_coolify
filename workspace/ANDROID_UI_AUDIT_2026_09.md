@@ -145,3 +145,98 @@ fushë për fushë me trupin e lexuar me `arrayBuffer()`.
 `npm run typecheck` nuk është portë pastër/e ndotur — kishte dhe ka gabime
 ekzistuese (206 pas këtij ndryshimi). Asnjë prej tyre nuk është në kodin e prekur
 këtu; `UserProfileView` kaloi nga 16 gabime në 0.
+
+---
+
+# Raundi 2 — analizë e thellë (i njëjti datë)
+
+Fusha që raundi 1 nuk i preku: rrjedhje kujtese, kosto Firestore, gara asinkrone,
+performancë, siguri në shtresën UI. 10 gjetje, të gjitha të rregulluara.
+Verifikim: build ✅, 1463/1463 teste ✅.
+
+## Tema: daljet native ekzistojnë, por shtatë vende i anashkalojnë
+
+`saveOrShareFile()` dhe `openExternal()` janë në `src/lib/native.ts` pikërisht sepse
+`<a download>` dhe `window.open` janë no-op në WebView. Shtatë thirrje nuk i përdornin,
+dhe secila ishte një buton që në Android nuk bënte absolutisht asgjë — pa file, pa
+gabim, pa toast.
+
+| # | Vendi | Ishte | Tani |
+|---|---|---|---|
+| 1 | `CustomersView` eksport CSV | `<a download>` | `saveOrShareFile()` |
+| 2 | `ExpensesView` eksport CSV | `<a download>` | `saveOrShareFile()` |
+| 3 | `FinancesView` eksport CSV | `<a download>` | `saveOrShareFile()` |
+| 4 | `TenantDetailView` eksport GDPR | `<a download>` | `saveOrShareFile()` |
+| 5 | `HostingView` → Hyr në cPanel | `window.open` | `openExternal()` |
+| 6 | `PortalHostingView` → Hyr në cPanel | `window.open` | `openExternal()` |
+| 7 | `GmbReviewsView` → raporti Google | `window.open` | `openExternal()` |
+
+`installExternalLinkHandler()` nuk i mbulonte këto: ai dëgjon klikime mbi `<a>`, kurse
+`window.open` shkon drejt e te WebView.
+
+## 8. Portali nuk i kishte marrë rregullimet e aplikacionit të stafit
+
+`PortalLayout` u soll në të njëjtin model si `App.tsx`: një kolonë `h-[100dvh] flex flex-col`,
+me navin e poshtëm si fëmijë **në rrjedhë** dhe jo `position: fixed` — modeli që stafi e
+braktisi sepse mospërputhja layout-vs-visual viewport e Android WebView e shtyn një
+shirit fiks jashtë ekranit në faqen e chat-it. Ana anësore tani ndalon mbi navin
+(`bottom-[calc(4rem_+_var(--safe-area-bottom))] lg:bottom-0`), përndryshe navi i mbulonte
+zërat e fundit — e njëjta gjë që u rregullua te `Sidebar` në raundin 1.
+
+`PortalChatView` hoqi `h-[calc(100dvh-140px)]`. Numri nuk qëndronte: kroma reale është
+4rem header + 4rem nav + 2rem padding = **160px pa insete**, dhe me një notch 40px +
+gesture bar 20px shkon në **220px** — pra composer-i dilte 20px poshtë faqes në një
+telefon të thjeshtë dhe ~80px nën navin në një Android edge-to-edge. Modaliteti
+"shiko si klient" shtonte edhe 40px banner që formula s'i njihte fare. Tani është
+`flex-1 min-h-0` brenda kolonës së layout-it, pra nuk ka numra për t'u mbajtur në sinkron.
+
+## 9. `WhatsappInboxView` — i njëjti familje gabimi
+
+`h-[calc(100dvh-180px)]` → kroma e numëruar: header + inset lart, padding-u i kolonës,
+dhe (nën `lg`) navi + inset poshtë.
+
+## 10. "U kopjua" shfaqej pa e ditur nëse u kopjua
+
+`navigator.clipboard.writeText()` kthen Promise dhe refuzon pa një gjest të freskët
+përdoruesi, në kontekst jo të sigurt, dhe në disa versione të Android WebView. Pesë nga
+nëntë thirrjet nuk e prisnin fare rezultatin dhe shfaqnin toast-in në rreshtin tjetër —
+përdoruesi lexonte "U kopjua", ngjiste, dhe s'kishte gjë. Refuzimi dilte vetëm si
+`unhandled promise rejection`.
+
+I ri: `src/lib/clipboard.ts` — `copyText()` (me fallback `execCommand` për WebView pa
+Clipboard API) dhe `copyWithToast()`. Thirrësit: `ChatView` (×2), `LandingPagesView`,
+`SettingsView`.
+
+## 11. XSS brenda tenantit te pamja paraprake e email-eve
+
+`EmailCampaigns` (×2) dhe `EmailTemplateManager` renderonin `dangerouslySetInnerHTML`
+**pa sanitizim** — 3 nga 11 vendet; 8 të tjerat kalojnë nga DOMPurify ose `sanitizeHtml`.
+
+Rëndësia: `emailTemplates` / `emailCampaigns` shkruhen nga `canCreateBusinessDoc()`
+(= `isBusinessMember`, çdo rol). Një Member ruan `<script>` në një shabllon, Admini e
+hap për ta parë, dhe kodi ekzekutohet në sesionin e Adminit me të drejtat e tij.
+
+Zgjidhja **nuk** është `sanitizeHtml` — ai heq `<style>` dhe atributet e tabelave, pra
+do t'i tregonte Adminit një pamje që s'përputhet me email-in që merr marrësi. I ri:
+`src/components/EmailHtmlPreview.tsx` — `<iframe sandbox="" srcDoc={html}>`. Pa
+`allow-scripts` dhe pa `allow-same-origin`: skriptet nuk ekzekutohen, frame-i nuk e
+prek origin-in, cookie-t apo sesionin tonë Firebase, dhe layout-i del saktësisht si do
+të dërgohet. **Mos i shto asnjërën nga ato dy vlera** — pa to kjo është dekor, jo kufi.
+
+## Çfarë u kontrollua dhe doli e shëndetshme
+
+- **Cache-i i listener-ave** (`useFirestore.ts`) është korrekt. Dyshimi fillestar —
+  `teamScopedWhere` jashtë çelësit — ishte i pabazuar: është i palosur brenda `whereKey`
+  si `tsw`, dhe `skipBusinessFilter` ndryshon `scopeId`, që gjithashtu është në çelës.
+  `Sidebar` dhe `MobileBottomNav` **ndajnë** listener-in, nuk e dublojnë.
+- `PriceSummary.handlePrint` u raportua gabimisht si bug në analizën e parë: dega
+  `Capacitor.isNativePlatform()` me PDF + share ekziston që më parë; `window.open` është
+  vetëm rruga web.
+- Asnjë `catch {}` bosh në `src/`. `useFileUpload` përdor URL absolute (punon native).
+  `addEventListener` pa `remove` vetëm në dy instalime globale njëhershe.
+- Listat e mëdha nuk janë të virtualizuara por paginohen.
+
+## Mbeten
+
+Tregues offline/online · 8 × `window.confirm/alert/prompt` → `AlertDialog` ·
+`aria-label` për 71 nga 83 butonat vetëm-ikonë.

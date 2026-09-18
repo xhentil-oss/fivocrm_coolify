@@ -175,7 +175,11 @@ const WhatsappInboxView: React.FC = () => {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100dvh-180px)] lg:h-[calc(100dvh-7rem)]">
+    // The chrome around this page is counted, not guessed: 72px header + top inset,
+    // the content column's own p-3/lg:p-8 padding, and (below lg) the 4rem bottom nav
+    // + bottom inset. `100dvh-180px` ignored both insets, so on a notched Android the
+    // conversation ran ~40px past the bottom of the screen.
+    <div className="flex flex-col h-[calc(100dvh_-_72px_-_var(--safe-area-top)_-_1.5rem_-_4rem_-_var(--safe-area-bottom))] lg:h-[calc(100dvh_-_72px_-_var(--safe-area-top)_-_4rem)]">
       <div className="flex items-center justify-between gap-2 mb-3">
         <div className="flex items-center gap-2 min-w-0">
           <h1 className="text-xl sm:text-2xl font-bold truncate">WhatsApp Inbox</h1>

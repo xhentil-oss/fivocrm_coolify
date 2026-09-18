@@ -1,4 +1,5 @@
 import React, { useState, useMemo } from 'react';
+import EmailHtmlPreview from './EmailHtmlPreview';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { usePermissions } from '../contexts/PermissionsContext';
@@ -355,7 +356,7 @@ const EmailCampaigns: React.FC = () => {
             {effectiveHtml.trim() && (
               <div>
                 <p className="text-[11px] text-muted-foreground mb-1">Pamja paraprake:</p>
-                <div className="border border-border rounded-md p-3 bg-white max-h-48 overflow-auto" dangerouslySetInnerHTML={{ __html: effectiveHtml }} />
+                <EmailHtmlPreview html={effectiveHtml} className="h-48" />
               </div>
             )}
 
@@ -509,7 +510,7 @@ const EmailCampaigns: React.FC = () => {
                       className="w-full px-3 py-2 bg-muted rounded-md text-xs font-mono focus:outline-none focus:ring-2 focus:ring-primary/40" />
                   )}
                   {stepHtml(s).trim() && (
-                    <div className="border border-border rounded-md p-2 bg-white max-h-32 overflow-auto" dangerouslySetInnerHTML={{ __html: stepHtml(s) }} />
+                    <EmailHtmlPreview html={stepHtml(s)} className="h-32" title="Pamja paraprake e hapit" />
                   )}
                 </div>
               ))}

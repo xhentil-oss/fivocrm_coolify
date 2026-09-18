@@ -24,6 +24,7 @@ import { useCollection, getGlobalTeamId, getGlobalBusinessId } from '../hooks/us
 import { useTeamSettingsData, saveTeamSettings } from '../hooks/useTeamSettings';
 import { saveTenantSecrets } from '../lib/tenantSecrets';
 import { toDate } from '../lib/utils';
+import { openExternal } from '../lib/native';
 import type { GmbReview, GmbPost } from '../types';
 
 /**
@@ -280,7 +281,7 @@ const GmbReviewsView: React.FC = () => {
         text: 'U shënua si i raportuar. Google s\'ka API raportimi — dërgojeni te vegla zyrtare me argumentimin e përgatitur.',
         link: googleReportUrl,
       });
-      if (googleReportUrl) window.open(googleReportUrl, '_blank', 'noopener');
+      if (googleReportUrl) void openExternal(googleReportUrl);
     } catch (e) {
       setBanner({ kind: 'err', text: (e as Error).message });
     } finally {

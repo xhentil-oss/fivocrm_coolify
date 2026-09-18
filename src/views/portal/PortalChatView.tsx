@@ -586,7 +586,12 @@ const PortalChatView: React.FC = () => {
   }
 
   return (
-    <div className="flex flex-col h-[calc(100dvh-140px)] sm:h-[calc(100dvh-160px)] max-w-3xl mx-auto">
+    // flex-1 inside the layout's content column, NOT a hand-counted viewport slice.
+    // `100dvh - 140px` ignored both safe-area insets and the real chrome around it
+    // (4rem header + 4rem nav + 2rem padding = 160px before insets), so the composer
+    // sat 20px below the fold on a plain phone and ~80px under the nav on a notched
+    // Android — and the admin-preview banner added 40px it never knew about.
+    <div className="flex flex-col flex-1 min-h-0 w-full max-w-3xl mx-auto">
       {/* Chat Header */}
       <div className="flex items-center gap-3 pb-3 sm:pb-4 border-b mb-0">
         <div className="relative">

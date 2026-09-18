@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useCollection, useMutation, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useUnsavedChanges } from '../hooks/useUnsavedChanges';
 import { phoneKeyDown, formatCurrency } from '../lib/utils';
+import { saveOrShareFile } from '../lib/native';
 import { getInvoiceCollectedAll, getInvoiceTotalAll, getInvoiceOutstandingAll } from '../lib/finance/financialAnalytics';
 import { findContactMatch, matchFieldLabel } from '../lib/contactIdentity';
 import { useAuth } from '../contexts/AuthContext';
@@ -366,11 +367,12 @@ const CustomersView: React.FC = () => {
       return [c.name, c.email, c.phone, c.company, c.industry, c.status || 'Active', parseTags(c.tags).join('; '), c.taxId, Math.round(r.collected), Math.round(r.billed), Math.round(r.outstanding)].map(esc).join(',');
     });
     const csv = '﻿' + [headers.join(','), ...lines].join('\n'); // BOM for Excel UTF-8
+    // saveOrShareFile, not a blob <a download>: on native the anchor download is a
+    // no-op, so this button did nothing at all in the Android app - no file, no error.
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `kliente-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click(); URL.revokeObjectURL(url);
+    void saveOrShareFile(blob, `kliente-${new Date().toISOString().slice(0, 10)}.csv`, {
+      shareTitle: 'Klientet - FivoCRM',
+    });
   };
 
   // Bulk selection helpers

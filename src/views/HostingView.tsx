@@ -29,6 +29,7 @@ import { useCollection, useMutation, useGlobalTeamId } from '../hooks/useFiresto
 import { usePermissions } from '../contexts/PermissionsContext';
 import { useToast } from '../hooks/use-toast';
 import { formatCurrency, getTimestampMs } from '../lib/utils';
+import { openExternal } from '../lib/native';
 import { saveTeamSettings, useTeamSettingsData } from '../hooks/useTeamSettings';
 import { hostingApi, checkDomains, type DomainCheckRow } from '../lib/hosting/api';
 import {
@@ -340,7 +341,7 @@ const SubscriptionDialog: React.FC<{
         {isOurs && (
           <>
             <div className="flex flex-wrap gap-2">
-              {isAdmin && <Button size="sm" variant="outline" disabled={sub.status !== 'Active' || !!busy} title="Klienti njoftohet për çdo hyrje të stafit" onClick={() => call('sso', async () => { const r = await hostingApi<{ url: string }>('sub.sso', { subscriptionId: sub.id }); window.open(r.url, '_blank', 'noopener'); })}><ExternalLink className="w-4 h-4 mr-1" />Hyr në cPanel</Button>}
+              {isAdmin && <Button size="sm" variant="outline" disabled={sub.status !== 'Active' || !!busy} title="Klienti njoftohet për çdo hyrje të stafit" onClick={() => call('sso', async () => { const r = await hostingApi<{ url: string }>('sub.sso', { subscriptionId: sub.id }); await openExternal(r.url); })}><ExternalLink className="w-4 h-4 mr-1" />Hyr në cPanel</Button>}
               <Button size="sm" variant="outline" disabled={!!busy || !sub.cpanelUsername} onClick={() => call('usage', async () => { const r = await hostingApi<{ usage: any }>('sub.usage', { subscriptionId: sub.id }); setUsage(r.usage || { missing: true }); })}><Activity className="w-4 h-4 mr-1" />Përdorimi</Button>
               {isAdmin && <Button size="sm" variant="outline" disabled={sub.status !== 'Active' || !!busy} title="Klienti njoftohet" onClick={() => call('pw', async () => { const r = await hostingApi<{ password: string }>('sub.resetPassword', { subscriptionId: sub.id }); setPassword(r.password); })}><KeyRound className="w-4 h-4 mr-1" />Fjalëkalim i ri</Button>}
               {canEdit && sub.status === 'Active' && <Button size="sm" variant="outline" disabled={!!busy} onClick={() => act('sub.suspend', { reason: 'manual' }, 'Llogaria u pezullua')}><Pause className="w-4 h-4 mr-1" />Pezullo</Button>}

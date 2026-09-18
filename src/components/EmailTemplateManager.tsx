@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import EmailHtmlPreview from './EmailHtmlPreview';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { useAuth } from '../contexts/AuthContext';
 import { useToast } from '../hooks/use-toast';
@@ -133,7 +134,7 @@ const EmailTemplateManager: React.FC = () => {
               </div>
               <div>
                 <p className="text-[11px] text-muted-foreground mb-1">Pamja paraprake:</p>
-                <div className="border border-border rounded-md p-3 bg-white max-h-56 overflow-auto" dangerouslySetInnerHTML={{ __html: html }} />
+                <EmailHtmlPreview html={html} className="h-56" />
               </div>
             </div>
             <div className="flex justify-end gap-2 px-4 py-3 border-t border-border">

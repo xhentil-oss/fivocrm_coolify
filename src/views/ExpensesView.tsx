@@ -1,6 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useCollection, useMutation } from '../hooks/useFirestore';
 import { toAll, currencySymbol } from '../lib/utils';
+import { saveOrShareFile } from '../lib/native';
 import { projectPickerLabel, sortArchivedLast } from '../lib/projectArchive';
 import { MONTH_LABELS_SQ, getExpenseDate } from '../lib/finance/financialAnalytics';
 import { useAuth } from '../contexts/AuthContext';
@@ -897,12 +898,12 @@ const ExpensesView: React.FC = () => {
       }),
     ];
     const csv = rows.map(r => r.map(c => `"${String(c).replace(/"/g, '""')}"`).join(',')).join('\n');
-    const url = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `shpenzime-${new Date().toISOString().slice(0, 10)}.csv`;
-    a.click();
-    URL.revokeObjectURL(url);
+    // saveOrShareFile, not a blob <a download>: on native the anchor download is a
+    // no-op, so this button did nothing at all in the Android app - no file, no error.
+    const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+    void saveOrShareFile(blob, `shpenzime-${new Date().toISOString().slice(0, 10)}.csv`, {
+      shareTitle: 'Shpenzimet - FivoCRM',
+    });
   };
   const monthlyExpenses = useMemo(() => {
     const totals = new Array(12).fill(0) as number[];

@@ -15,6 +15,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import { useToast } from '../../hooks/use-toast';
 import { doc, setDoc, updateDoc, deleteDoc, Timestamp } from 'firebase/firestore';
 import { db } from '../../lib/firebase';
+import { saveOrShareFile } from '../../lib/native';
 import ModuleAccessEditor from './ModuleAccessEditor';
 import {
   updateTenantPlan, setTenantModules, tenantMrr, daysUntil, tenantHealth, lastSeenLabel, HEALTH_META,
@@ -283,12 +284,11 @@ const TenantDetailView: React.FC = () => {
       if (job === 'tenant-export') {
         // Hand the operator a file rather than a wall of JSON in a toast.
         const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-        const url = URL.createObjectURL(blob);
-        const a = document.createElement('a');
-        a.href = url;
-        a.download = `tenant-${biz.name || businessId}-${new Date().toISOString().slice(0, 10)}.json`;
-        a.click();
-        URL.revokeObjectURL(url);
+        // saveOrShareFile, not a blob <a download>: the anchor download is a no-op on
+        // native, so the export silently produced nothing in the app.
+        await saveOrShareFile(blob, `tenant-${biz.name || businessId}-${new Date().toISOString().slice(0, 10)}.json`, {
+          shareTitle: 'Eksport tenanti - FivoCRM',
+        });
         toast({ title: 'Eksporti u shkarkua' });
       } else {
         toast({ title: 'Tenanti u fshi', description: 'Të dhënat u hoqën.' });

@@ -25,6 +25,7 @@ import { useClientPortal } from '../../hooks/useClientPortal';
 import { useCollection } from '../../hooks/useFirestore';
 import { useToast } from '../../hooks/use-toast';
 import { formatCurrency, getTimestampMs } from '../../lib/utils';
+import { openExternal } from '../../lib/native';
 import { hostingApi, checkDomains, type DomainCheckRow } from '../../lib/hosting/api';
 import { CYCLE_LABELS, ORDER_ERROR_LABELS, availableCycles, daysBetween, parseDomain, priceOrder, type BillingCycle, type OrderLineInput, type TldPricing } from '../../lib/hosting/engine';
 import type { Domain, DomainTld, HostingOrder, HostingProduct, Subscription, HostingBackup } from '../../types';
@@ -153,7 +154,7 @@ const PortalSubscriptionDialog: React.FC<{ sub: Subscription; products: HostingP
         {isOurs ? (
           <>
             <div className="flex flex-wrap gap-2">
-              <Button size="sm" disabled={sub.status !== 'Active' || !!busy} onClick={() => run('sso', async () => { const r = await hostingApi<{ url: string }>('sub.sso', { subscriptionId: sub.id }); window.open(r.url, '_blank', 'noopener'); })}>{busy === 'sso' ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <ExternalLink className="w-4 h-4 mr-1" />}Hyr në cPanel</Button>
+              <Button size="sm" disabled={sub.status !== 'Active' || !!busy} onClick={() => run('sso', async () => { const r = await hostingApi<{ url: string }>('sub.sso', { subscriptionId: sub.id }); await openExternal(r.url); })}>{busy === 'sso' ? <Loader2 className="w-4 h-4 mr-1 animate-spin" /> : <ExternalLink className="w-4 h-4 mr-1" />}Hyr në cPanel</Button>
               <Button size="sm" variant="outline" disabled={!!busy || !sub.cpanelUsername} onClick={() => run('usage', async () => { const r = await hostingApi<{ usage: any }>('sub.usage', { subscriptionId: sub.id }); setUsage(r.usage || { missing: true }); })}><Activity className="w-4 h-4 mr-1" />Përdorimi i diskut</Button>
               <Button size="sm" variant="outline" disabled={sub.status !== 'Active' || !!busy} onClick={() => run('pw', async () => { const r = await hostingApi<{ password: string }>('sub.resetPassword', { subscriptionId: sub.id }); setPassword(r.password); })}><KeyRound className="w-4 h-4 mr-1" />Fjalëkalim i ri</Button>
             </div>

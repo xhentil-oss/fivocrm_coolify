@@ -57,6 +57,7 @@ import { getDocs, getDoc, setDoc, query, where, collection, writeBatch, doc, Tim
 import { db } from '../lib/firebase';
 import { dndZoneStamp } from '../lib/notificationPrefs';
 import { toast } from '../hooks/use-toast';
+import { copyText } from '../lib/clipboard';
 import { useWhatsAppStatus, type AgentStatus } from '../hooks/useWhatsAppStatus';
 import { reportingCapabilitiesFor } from '../lib/reporting/permissions';
 import { safeSenderName, safeSenderAddress, senderNameIssue } from '../lib/emailIdentity';
@@ -697,8 +698,12 @@ const SettingsView: React.FC = () => {
   };
 
   const copyToClipboard = (text: string) => {
-    navigator.clipboard.writeText(text);
-    toast({ title: 'U kopjua!', description: text.slice(0, 60) + '...' });
+    // See src/lib/clipboard.ts — the async write can reject, so the toast follows it.
+    void copyText(text).then(ok => toast(
+      ok
+        ? { title: 'U kopjua!', description: text.slice(0, 60) + '...' }
+        : { title: 'Nuk u kopjua dot', description: 'Kopjoje me dorë.', variant: 'destructive' },
+    ));
   };
 
   const addBankAccount = () => {

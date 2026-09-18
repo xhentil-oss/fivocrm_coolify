@@ -170,9 +170,19 @@ const PortalLayout: React.FC = () => {
   const headerTop = 'calc(4rem + var(--safe-area-top))';
   const headerPlusBanner = 'calc(4rem + var(--safe-area-top) + 40px)';
   const contentTop = previewCustomerId ? headerPlusBanner : headerTop;
+  // The chat manages its own scrolling and must fill the content column exactly.
+  const isFullBleedRoute = location.pathname.startsWith('/portal/chat');
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    // Single fixed-height flex column, mirroring the staff shell (App.tsx): the
+    // fixed header overlays the reserved top padding and the bottom nav is the LAST
+    // flex child. The nav used to be position:fixed — the exact pattern the staff app
+    // abandoned, because the Android WebView's layout-vs-visual viewport mismatch
+    // pushes a fixed bar off-screen on the chat page.
+    <div
+      className="h-[100dvh] flex flex-col overflow-hidden bg-background text-foreground"
+      style={{ paddingTop: contentTop }}
+    >
       {/* Top Bar — grows by the top safe-area inset so it clears the notch/status bar */}
       <header
         style={{ height: 'calc(4rem + var(--safe-area-top))', paddingTop: 'var(--safe-area-top)' }}
@@ -244,7 +254,7 @@ const PortalLayout: React.FC = () => {
       {/* Sidebar — top tracks the header height (incl. top safe-area inset) */}
       <aside
         style={{ top: contentTop }}
-        className={`fixed left-0 bottom-0 z-40 w-[262px] bg-card border-r transition-transform duration-200 lg:translate-x-0 flex flex-col ${
+        className={`fixed left-0 bottom-[calc(4rem_+_var(--safe-area-bottom))] lg:bottom-0 z-40 w-[262px] bg-card border-r transition-transform duration-200 lg:translate-x-0 flex flex-col ${
           mobileOpen ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -303,8 +313,15 @@ const PortalLayout: React.FC = () => {
 
       {/* Main content — top clears the (inset-grown) header, bottom clears the
           (inset-grown) mobile nav. */}
-      <main className="lg:ml-[262px]" style={{ paddingTop: contentTop }}>
-        <div className="p-4 sm:p-6 lg:p-8" style={{ paddingBottom: 'calc(5rem + var(--safe-area-bottom))' }}>
+      <main className="flex-1 min-h-0 flex flex-col lg:ml-[262px]">
+        {/* The chat needs a definite height to put its composer at the bottom, so its
+            route gets a flex context instead of page scroll (same split as the staff
+            app's isFullBleedRoute). Every other page scrolls here. */}
+        <div
+          className={`flex-1 min-h-0 p-4 sm:p-6 lg:p-8 ${
+            isFullBleedRoute ? 'flex flex-col' : 'overflow-y-auto'
+          }`}
+        >
           <PortalPushPrompt />
           <Outlet />
         </div>
@@ -315,7 +332,7 @@ const PortalLayout: React.FC = () => {
           gesture bar / home indicator. */}
       <nav
         style={{ height: 'calc(4rem + var(--safe-area-bottom))', paddingBottom: 'var(--safe-area-bottom)' }}
-        className="fixed bottom-0 left-0 right-0 z-40 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 border-t flex items-stretch lg:hidden"
+        className="shrink-0 w-full z-40 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/80 border-t flex items-stretch lg:hidden"
       >
         {bottomNavItems.map(item => {
           const Icon = item.icon;

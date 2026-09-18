@@ -19,8 +19,8 @@ Rules:
 <!-- Add tasks here only when there are real next steps. -->
 
 <todo>
-Auditi Android/UI/UX (18 Shtator 2026) — rregullimet e mbetura
-14 gjetje, P0-P2 u rregulluan (shih workspace/ANDROID_UI_AUDIT_2026_09.md). Mbeten: (a) tregues offline/online — Firestore i vendos shkrimet ne radhe heshtazi ne celular dhe perdoruesi merr toast "u ruajt" per dicka qe s'ka mbritur ne server; (b) zevendeso 8 window.confirm/alert/prompt me AlertDialog — ne WebView shfaqen si dialogje sistemi me titullin "localhost"; (c) aria-label per 71 nga 83 butonat vetem-ikone. Pas rregullimeve: `npm run android:sync` dhe nje build i ri (versionCode u ngrit ne 31 sepse ndryshoi AndroidManifest).
+Mbetjet e auditeve Android/UI/UX (te dy raundet, 18 Shtator 2026)
+workspace/ANDROID_UI_AUDIT_2026_09.md. Te 21 gjetjet e te dy raundeve jane rregulluar. Keto tri mbeten sepse jane pune me e gjere, jo rregullime pikesore: (a) tregues offline/online - Firestore i vendos shkrimet ne radhe heshtazi ne celular, keshtu qe perdoruesi merr toast "u ruajt" per dicka qe s'ka mbritur ne server; (b) zevendeso 8 window.confirm/alert/prompt me AlertDialog - ne WebView shfaqen si dialogje sistemi me titullin "localhost"; (c) aria-label per 71 nga 83 butonat vetem-ikone. Pas cdo ndryshimi web: npm run android:sync.
 </todo>
 
 <todo>
