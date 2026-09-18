@@ -428,12 +428,16 @@ const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Sidebar — dark navy shell (design v2) */}
       <aside
-        // Offset/height track the header, which grows by the top safe-area inset.
-        style={{
-          top: 'calc(72px + var(--safe-area-top))',
-          height: 'calc(100vh - 72px - var(--safe-area-top))',
-        }}
+        // Offset tracks the header, which grows by the top safe-area inset.
+        style={{ top: 'calc(72px + var(--safe-area-top))' }}
         className={cn(
+          // Height: below lg the drawer must ALSO clear MobileBottomNav, which is
+          // `4rem + safe-bottom` tall and paints above this (same z-40, later in
+          // the DOM) — so the user footer (Profili / Cilësimet) sat completely
+          // hidden behind the tab bar on every phone. dvh, not vh, so it matches
+          // the app shell's own height basis when the keyboard resizes the view.
+          'h-[calc(100dvh_-_72px_-_var(--safe-area-top)_-_4rem_-_var(--safe-area-bottom))]',
+          'lg:h-[calc(100dvh_-_72px_-_var(--safe-area-top))]',
           'fixed left-0 bg-[#08183A] transition-all duration-300 z-40 flex flex-col',
           collapsed ? 'w-16' : 'w-64',
           mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0'

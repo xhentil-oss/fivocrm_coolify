@@ -50,8 +50,8 @@ const NOTIFY_ICON = path.join(RES, 'drawable', 'ic_stat_notify.xml');
  * folder is regenerated, and Play then rejects the upload as a duplicate
  * versionCode. Bump VERSION_CODE by 1 for every upload.
  */
-const VERSION_CODE = 30;
-const VERSION_NAME = '1.8.2';
+const VERSION_CODE = 31;
+const VERSION_NAME = '1.8.3';
 
 const done = [];
 const warnings = [];
@@ -219,6 +219,13 @@ function patchProguard() {
 
 // ── 3. AndroidManifest.xml ───────────────────────────────────────────────────
 
+/**
+ * Must match PUSH_CHANNEL_ID in src/hooks/usePushNotifications.ts, which is what
+ * actually CREATES the channel (Android only lets the app do that, not the
+ * manifest). Keep the two in sync.
+ */
+const PUSH_CHANNEL_ID = 'fivocrm_default';
+
 const FCM_META = `
         <!-- FCM push: status-bar icon (monochrome white "X") + brand tint, so
              notifications show our mark like WhatsApp/Maps instead of a generic
@@ -229,6 +236,16 @@ const FCM_META = `
         <meta-data
             android:name="com.google.firebase.messaging.default_notification_color"
             android:resource="@color/notification_color" />
+        <!-- Android 8+ delivers every notification through a channel, and the
+             channel — not the payload — owns sound, vibration and heads-up.
+             Without this line FCM falls back to its own "Miscellaneous" channel,
+             which several OEM skins (Xiaomi, Samsung) create at LOW importance:
+             the notification arrived silently, with no banner, and the user only
+             saw it by pulling down the shade. The app creates the channel itself
+             on first launch (usePushNotifications.ts). -->
+        <meta-data
+            android:name="com.google.firebase.messaging.default_notification_channel_id"
+            android:value="${PUSH_CHANNEL_ID}" />
 `;
 
 const PERMISSIONS = `    <!-- Push notifications (Android 13+ runtime permission) -->
@@ -244,8 +261,16 @@ function patchManifest() {
   // A CRM holds client data — never let adb/cloud backup pull it off the device.
   src = src.replace(/android:allowBackup="true"/, 'android:allowBackup="false"');
 
+  // Re-check EVERY key, not just the first: a project configured by an older
+  // version of this script already has the icon, so a guard on the icon alone
+  // would silently skip the channel id added later.
   if (!src.includes('default_notification_icon')) {
     src = src.replace(/\n(\s*)<\/application>/, `\n${FCM_META}$1</application>`);
+  } else if (!src.includes('default_notification_channel_id')) {
+    src = src.replace(
+      /\n(\s*)<\/application>/,
+      `\n        <meta-data\n            android:name="com.google.firebase.messaging.default_notification_channel_id"\n            android:value="${PUSH_CHANNEL_ID}" />\n$1</application>`
+    );
   }
   if (!src.includes('POST_NOTIFICATIONS')) {
     src = src.replace(/\n<\/manifest>/, `\n${PERMISSIONS}</manifest>`);

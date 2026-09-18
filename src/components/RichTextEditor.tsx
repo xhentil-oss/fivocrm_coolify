@@ -23,7 +23,11 @@ import { toast } from '../hooks/use-toast';
 import { htmlForPastedText, normalizeToHtml, plainTextToHtml } from '../lib/richText';
 
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5 MB
-const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/svg+xml'];
+// No image/svg+xml: an SVG is a document, not a picture — it can carry <script>
+// and inline event handlers, and it is served back from the storage origin, so an
+// uploaded one is stored XSS against everyone who opens the note. Removed from
+// chat uploads in May 2026; these two call sites were missed.
+const ALLOWED_IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 
 interface RichTextEditorProps {
   content: string;
@@ -331,7 +335,7 @@ const RichTextEditor: React.FC<RichTextEditorProps> = ({
         <input
           ref={fileInputRef}
           type="file"
-          accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+          accept="image/png,image/jpeg,image/gif,image/webp"
           className="hidden"
           onChange={onImageInputChange}
         />

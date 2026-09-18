@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { NavLink } from 'react-router-dom';
 import {
   LayoutDashboard,
@@ -26,9 +26,17 @@ import { usePermissions } from '../contexts/PermissionsContext';
 import { useAuth } from '../contexts/AuthContext';
 import { useCollection, useGlobalBusinessId } from '../hooks/useFirestore';
 import { useModules } from '../hooks/useModules';
+import { registerBackDismiss } from './AndroidBackButton';
 
 const MobileBottomNav: React.FC = () => {
   const [showMore, setShowMore] = useState(false);
+
+  // The sheet lives outside <Routes>, so an Android Back press used to navigate
+  // the page underneath and leave it hanging open over the new view.
+  useEffect(() => {
+    if (!showMore) return;
+    return registerBackDismiss(() => setShowMore(false));
+  }, [showMore]);
   const { user } = useAuth();
   const permissions = usePermissions();
   // Mobile nav previously ignored per-tenant module toggles, so a disabled module
@@ -201,9 +209,14 @@ const MobileBottomNav: React.FC = () => {
         })}
 
         {/* "Më shumë" button */}
+        {/* `relative` is load-bearing: the active dot below is absolutely
+            positioned, and without it the dot resolved against the viewport and
+            rendered at the very bottom of the screen instead of under the icon. */}
         <button
           onClick={() => setShowMore(prev => !prev)}
-          className={`flex-1 flex flex-col items-center justify-center gap-0.5 transition-colors ${
+          aria-expanded={showMore}
+          aria-label="Të gjitha seksionet"
+          className={`relative flex-1 flex flex-col items-center justify-center gap-0.5 transition-colors ${
             showMore ? 'text-primary' : 'text-muted-foreground'
           }`}
         >

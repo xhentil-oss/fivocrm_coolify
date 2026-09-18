@@ -26,6 +26,34 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+/**
+ * "The user closed the sign-in sheet" is not an error worth showing.
+ *
+ * On the web that is a Firebase `auth/popup-*` code, but on Android the flow goes
+ * through Credential Manager (@capacitor-firebase/authentication), which reports a
+ * cancellation as a plain plugin error — no `auth/` code at all. So dismissing the
+ * Google sheet with a swipe showed "Gabim gjatë hyrjes me Google" in red on the
+ * login screen, as if something had actually failed.
+ */
+const CANCEL_CODES = new Set([
+  'auth/popup-closed-by-user',
+  'auth/cancelled-popup-request',
+  'auth/user-cancelled',
+  '12501', // Google Play Services: SIGN_IN_CANCELLED
+  '16', // Credential Manager: activity cancelled
+]);
+
+function isSignInCancellation(error: any): boolean {
+  const code = error?.code != null ? String(error.code) : '';
+  if (CANCEL_CODES.has(code)) return true;
+  const message = String(error?.message ?? '').toLowerCase();
+  return (
+    message.includes('cancel') || // "canceled" / "cancelled" / "sign in canceled"
+    message.includes('user closed') ||
+    message.includes('no credential') // sheet dismissed with nothing chosen
+  );
+}
+
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
@@ -54,7 +82,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         await signInWithPopup(auth, googleProvider);
       }
     } catch (error: any) {
-      if (error?.code !== 'auth/popup-closed-by-user' && error?.code !== 'auth/cancelled-popup-request') {
+      if (!isSignInCancellation(error)) {
         console.error('Google sign-in error:', error);
         throw error;
       }

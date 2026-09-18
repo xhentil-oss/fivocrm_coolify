@@ -246,16 +246,44 @@
     .text-body { font-size: 16px; line-height: 24px; }
   }
 
-  /* Touch-friendly minimum sizes for interactive elements */
+  /*
+   * Touch-friendly minimum sizes for interactive elements.
+   *
+   * Radix renders Switch, Checkbox and Radio as a <button role="…">, so the
+   * blanket rule below used to inflate a 16x16 checkbox and a 36x20 switch into
+   * 44x44 blocks on EVERY touch device — min-height/min-width always beat the
+   * h-4 w-4 / h-5 w-9 utilities, whatever the @layer order. The switch thumb
+   * then had nowhere to travel (translate-x-4 inside a 44px track), so on and
+   * off looked identical in the Android app. Those roles opt out and keep the
+   * size their component declares; their label is the large tap target.
+   */
   @media (pointer: coarse) {
-    button, a, [role="button"], [role="tab"], [type="checkbox"], [type="radio"] {
+    button:not([role="checkbox"]):not([role="switch"]):not([role="radio"]):not([data-touch-target="none"]),
+    a,
+    [role="button"],
+    [role="tab"] {
       min-height: 44px;
       min-width: 44px;
     }
-    input, select, textarea {
+    input:not([type="checkbox"]):not([type="radio"]),
+    select,
+    textarea {
       min-height: 44px;
-      font-size: 16px; /* Prevents iOS zoom on focus */
     }
+  }
+
+  /*
+   * iOS (Safari and WKWebView) zooms the page whenever a focused field renders
+   * below 16px, and never zooms back out. The old rule lived on a bare `input`
+   * selector, which loses to every Tailwind `text-sm` / `text-xs` class — so it
+   * protected nothing. This one outranks a single class (element + :not() attribute)
+   * and is scoped to iOS by the plt-ios flag set in src/index.tsx, so Android and
+   * desktop keep their compact dense tables.
+   */
+  html.plt-ios input:not([type="checkbox"]):not([type="radio"]),
+  html.plt-ios select,
+  html.plt-ios textarea {
+    font-size: 16px;
   }
 
   /* Safe area insets for notched devices */

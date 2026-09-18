@@ -13,6 +13,19 @@ installNativeApiBase();
 // On native, open external links in the in-app browser instead of the WebView.
 installExternalLinkHandler();
 
+// iOS (native WKWebView AND mobile Safari) zooms in whenever a focused field
+// renders below 16px and never zooms back out. index.css raises the font size
+// behind this flag only — Android/desktop keep their dense sizing. Set before
+// render so the first paint is already correct.
+if (
+  typeof navigator !== 'undefined' &&
+  (/iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    // iPadOS 13+ reports itself as a Mac; the touch points give it away.
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1))
+) {
+  document.documentElement.classList.add('plt-ios');
+}
+
 // Initialize error tracking
 initSentry();
 

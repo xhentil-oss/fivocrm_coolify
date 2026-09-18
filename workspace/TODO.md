@@ -19,6 +19,21 @@ Rules:
 <!-- Add tasks here only when there are real next steps. -->
 
 <todo>
+Auditi Android/UI/UX (18 Shtator 2026) — rregullimet e mbetura
+14 gjetje, P0-P2 u rregulluan (shih workspace/ANDROID_UI_AUDIT_2026_09.md). Mbeten: (a) tregues offline/online — Firestore i vendos shkrimet ne radhe heshtazi ne celular dhe perdoruesi merr toast "u ruajt" per dicka qe s'ka mbritur ne server; (b) zevendeso 8 window.confirm/alert/prompt me AlertDialog — ne WebView shfaqen si dialogje sistemi me titullin "localhost"; (c) aria-label per 71 nga 83 butonat vetem-ikone. Pas rregullimeve: `npm run android:sync` dhe nje build i ri (versionCode u ngrit ne 31 sepse ndryshoi AndroidManifest).
+</todo>
+
+<todo>
+Rregullo 6 P0-të e financave (audit 18 Shtator 2026)
+Lista e plotë: workspace/FINANCE_BUGS_2026_09_18.md. (1) `invoice-reminders`/`overdue-reminders`/`recurring-expenses` pa skop biznesi në nisje manuale — një Admin i një qiraxhiu u dërgon email/WhatsApp klientëve të të gjithëve; (2) çelësat e periudhave llogariten në zonën e makinës, por cron-i ekzekutohet në UTC në Vercel dhe UI-ja në Europe/Tirane — seritë e shpenzimeve ose ngecin ose dyfishohen; (3) /app/bonus e hapur për çdo rol dhe shkarkon të gjitha rrogat; (4) porositë e dyqanit nga portali vijnë me çmim e status pagese nga shfletuesi; (5) klienti i portalit mund të rishkruajë çmimin e ofertës së vet.
+</todo>
+
+<todo>
+Rregullo P1-të e financave: parashikimi, faturat dhe rrogat
+workspace/FINANCE_BUGS_2026_09_18.md §P1. Parashikimi/MRR nuk pyet `isRecurring` dhe nuk normalizon frekuencën javore; projectPnl/departmentPnl numërojnë retainerë të anuluar; email-i i vonesës kërkon totalin bruto; `paidAt` humbet kur fatura krijohet e paguar; data e afatit zhvendoset një ditë në ruajtje; koleksionet `payments` dhe `expenseCategories` mungojnë te listat e skopit (query e mohuar); `status !== 'Active'` i zeron rrogat edhe në muajt e shkuar.
+</todo>
+
+<todo>
 Deploy WHMCS payment write-back + WhatsApp invoice reminders
 Code shipped 2026-09-14 (workspace/WHMCS_SYNC.md). Left: `firebase deploy --only firestore:indexes` (new `invoices (status, dueDate)`), push to main (Vercel: /api/whmcs-payment + cron logic + UI), then Cilësimet → Automatizime → Kujtesa → switch on "Kujtesa faturash në WhatsApp" (burimi WHMCS, kanali, fazat) and — for Meta — an approved Utility template. Smoke test: mark a WHMCS test invoice Paid → badge `WHMCS ✓`, transid `fivocrm-…` visible in WHMCS.
 </todo>

@@ -16,6 +16,38 @@ import { db } from '../lib/firebase';
  * now removes this device's entry.
  */
 
+/**
+ * Android 8+ delivers every notification through a channel, and the CHANNEL owns
+ * sound, vibration and whether it shows as a heads-up banner — the payload cannot
+ * override that. With no channel of our own, FCM used its fallback
+ * ("Miscellaneous"), which several OEM skins create at low importance: pushes
+ * arrived silently and with no banner.
+ *
+ * Must match PUSH_CHANNEL_ID in scripts/android-configure.cjs, which points the
+ * manifest's `default_notification_channel_id` at it. iOS ignores channels.
+ */
+const PUSH_CHANNEL_ID = 'fivocrm_default';
+
+async function ensureAndroidChannel(): Promise<void> {
+  if (Capacitor.getPlatform() !== 'android') return;
+  try {
+    await PushNotifications.createChannel({
+      id: PUSH_CHANNEL_ID,
+      name: 'Njoftime FivoCRM',
+      description: 'Detyra, mesazhe, fatura dhe kujtesa',
+      importance: 5, // IMPORTANCE_HIGH → heads-up banner + sound
+      visibility: 1, // VISIBILITY_PUBLIC → readable on the lock screen
+      sound: 'default',
+      vibration: true,
+      lights: true,
+    });
+  } catch (err) {
+    // Creating a channel that already exists is a no-op; anything else here must
+    // not stop registration — a push with a bad channel still beats no push.
+    console.warn('[Push] channel setup skipped:', err);
+  }
+}
+
 // Deterministic per-token document id. The raw FCM token cannot be a document id
 // (length + reserved patterns), so we combine a hash of the whole token with its
 // sanitised tail — stable across reloads, so re-registering updates the same row
@@ -123,6 +155,11 @@ export function usePushNotifications(userId?: string) {
           window.location.hash = url.startsWith('#') ? url : `#${url}`;
         }
       });
+
+      // Before register(): the channel must exist by the time the first push
+      // lands, and Android silently drops a notification aimed at a channel id
+      // that was never created.
+      await ensureAndroidChannel();
 
       const perm = await PushNotifications.requestPermissions();
       if (perm.receive !== 'granted') return;

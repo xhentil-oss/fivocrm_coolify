@@ -34,16 +34,49 @@ export function installNativeApiBase(): void {
   installed = true;
 
   const originalFetch = window.fetch.bind(window);
+  const SAME_ORIGIN_API = `${window.location.origin}/api/`;
 
   window.fetch = (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
     // String URL — the common case for the app's `fetch('/api/...')` calls.
-    if (typeof input === 'string' && input.startsWith('/api/')) {
-      return originalFetch(API_BASE + input, init);
+    if (typeof input === 'string') {
+      if (input.startsWith('/api/')) return originalFetch(API_BASE + input, init);
+      if (input.startsWith(SAME_ORIGIN_API)) {
+        return originalFetch(API_BASE + input.slice(window.location.origin.length), init);
+      }
+      return originalFetch(input, init);
     }
-    // Request object with a same-origin /api path.
-    if (input instanceof Request && input.url.startsWith(`${window.location.origin}/api/`)) {
-      const rewritten = input.url.replace(window.location.origin, API_BASE);
-      return originalFetch(new Request(rewritten, input), init);
+    // A URL object was not handled at all before, so `fetch(new URL('/api/x',
+    // location.origin))` went straight to https://localhost/api/x and failed.
+    if (input instanceof URL) {
+      return originalFetch(
+        input.href.startsWith(SAME_ORIGIN_API)
+          ? API_BASE + input.href.slice(window.location.origin.length)
+          : input,
+        init
+      );
+    }
+    // Request object with a same-origin /api path. Rebuilding it field by field:
+    // `new Request(url, oldRequest)` reads `body` off the old request as a
+    // ReadableStream, which Chrome rejects without `duplex: 'half'` — so every
+    // POST made through a Request object threw instead of being rewritten.
+    if (input instanceof Request && input.url.startsWith(SAME_ORIGIN_API)) {
+      const rewritten = API_BASE + input.url.slice(window.location.origin.length);
+      const hasBody = input.method !== 'GET' && input.method !== 'HEAD';
+      return (hasBody ? input.clone().arrayBuffer() : Promise.resolve(undefined)).then((body) =>
+        originalFetch(rewritten, {
+          method: input.method,
+          headers: input.headers,
+          body: body ?? null,
+          mode: input.mode === 'navigate' ? undefined : input.mode,
+          credentials: input.credentials,
+          cache: input.cache,
+          redirect: input.redirect,
+          referrer: input.referrer,
+          integrity: input.integrity,
+          signal: input.signal,
+          ...init,
+        })
+      );
     }
     return originalFetch(input as any, init);
   };

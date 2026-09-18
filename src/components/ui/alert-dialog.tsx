@@ -52,7 +52,9 @@ const AlertDialogFooter = ({
   className,
   ...props
 }: React.HTMLAttributes<HTMLDivElement>) => (
-  <div className={cn("flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2", className)} {...props} />
+  // gap-2, not sm:space-x-2 alone — see DialogFooter: below `sm` the stacked
+  // buttons had no spacing at all.
+  <div className={cn("flex flex-col-reverse gap-2 sm:flex-row sm:justify-end", className)} {...props} />
 )
 AlertDialogFooter.displayName = "AlertDialogFooter"
 

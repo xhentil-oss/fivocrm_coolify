@@ -12,7 +12,7 @@ import LoginView from './views/LoginView';
 import RegisterView from './views/RegisterView';
 import WorkspaceSignupView from './views/WorkspaceSignupView';
 import MobileBottomNav from './components/MobileBottomNav';
-import { AndroidBackButton } from './components/AndroidBackButton';
+import { AndroidBackButton, registerBackDismiss } from './components/AndroidBackButton';
 import DailyReportPopup from './components/DailyReportPopup';
 import RequirePositionDialog from './components/RequirePositionDialog';
 import CommandPalette from './components/CommandPalette';
@@ -207,6 +207,12 @@ function AppContent() {
   }, []);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  // The mobile sidebar is rendered outside <Routes>, so an Android Back press
+  // used to navigate the page under it and leave the drawer open on top.
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    return registerBackDismiss(() => setMobileMenuOpen(false));
+  }, [mobileMenuOpen]);
   const { user } = useAuth();
   const { isOwner, previewRole, isLoading: permissionsLoading } = usePermissions();
   const location = useLocation();

@@ -2302,6 +2302,15 @@ export interface UserProfile {
   displayName?: string;
   avatarUrl?: string;
   bio?: string;
+  /** The five fields below are written AND read by UserProfileView's form; they
+   *  were simply never declared here, which is where 16 of the app's typecheck
+   *  errors came from. `skills` is a JSON-encoded string[] (that is what the
+   *  form stores), not an array — do not "fix" the type without a migration. */
+  jobTitle?: string;
+  department?: string;
+  location?: string;
+  phoneNumber?: string;
+  skills?: string;
   lastSeen?: Date;
   customStatus?: string;
   customStatusEmoji?: string;

@@ -20,6 +20,15 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 <changelog>
 <!-- NEXT_ENTRY_HERE -->
 
+### [2026-09-18] — Audit Android/UI/UX: 11 bugs të rregulluara (workspace/ANDROID_UI_AUDIT_2026_09.md)
+- P0 `src/index.css`: `@media (pointer: coarse)` vendoste `min-width/height: 44px` mbi çdo `<button>` — Radix i jep Switch/Checkbox/Radio si button, pra çdo checkbox bëhej katror 44×44 dhe track-u i switch-it 44×44 me `translate-x-4` që s'shkonte askund (**on/off dukeshin njësoj në Android**); rolet dalin jashtë rregullit. Rregulli `font-size:16px` humbte ndaj çdo klase `text-sm`, pra s'mbronte nga zoom-i i iOS — u zhvendos te `html.plt-ios` (flamur i ri në `src/index.tsx`), Android/desktop pa ndryshim
+- P0 `AndroidBackButton.tsx` rishkruar: varej nga `location.pathname` + regjistrim async me cleanup sinkron → dëgjues jetimë, një Back kërcente 2-3 ekrane. Tani regjistrim një herë me `ref` + flamur `cancelled`; `registerBackDismiss()` (i lidhur në `App.tsx` dhe `MobileBottomNav.tsx`) e bën Back të mbyllë së pari overlay-t; pa histori shkon në dashboard, nuk mbyll aplikacionin
+- P1: `Sidebar.tsx` lartësia zbret edhe bottom nav-in nën `lg` (footer-i Profili/Cilësimet ishte plotësisht i mbuluar); `ui/toast.tsx` `top-[76px]` → `calc(76px + var(--safe-area-top))` (toast-i dilte nën header në pajisje me notch); kanal FCM `fivocrm_default` në `android-configure.cjs` + `usePushNotifications.ts` (pa të, OEM-të e vinin në importance të ulët → push pa zë e pa banner); `AuthContext.isSignInCancellation()` (anulimi i Google në Android nxirrte gabim të kuq)
+- P2: `gap-2` te Dialog/AlertDialog footer (butonat ngjiteshin në telefon); X-i i dialogut në shirit `sticky` (rrëshqiste jashtë në formularët e gjatë) + `max-h` me safe-area; `relative` te butoni "Më shumë"; `image/svg+xml` hequr nga RichTextEditor + TaskDetailPanel (XSS i ruajtur); "Demo Mode" te `UserProfileView` vetëm në DEV; `nativeApi.ts` mbulon `URL` + rindërton `Request` (trupi humbte pa `duplex`); `UserProfile` + 5 fusha → 16 gabime typecheck më pak
+- Verifikim: build ✅, 1409/1409 teste ✅, `android-configure.cjs` idempotent ✅. `VERSION_CODE` 30→31 / `1.8.2`→`1.8.3` (ndryshoi manifesti). Mbeten: tregues offline, 8 × `window.confirm`, aria-label
+
+
+
 ### [2026-09-17] — Super-admin: per-module switches when creating a tenant
 - Gap: `CreateTenantDialog` sent no `disabledModules`, so a console-created tenant was born with EVERY module on (shop/hosting/gmb/landing included) while the self-serve `/signup` path honoured `defaultOff`
 - `src/lib/modules.ts`: `disabledPathsFor(enabledPaths)` (only optional modules, unknown paths ignored, core never written) + `groupedOptionalModules()` / `MODULE_GROUP_ORDER`; 5 new tests in `modules.test.ts`

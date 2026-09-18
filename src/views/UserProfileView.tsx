@@ -104,7 +104,11 @@ const stripHtml = (html?: string): string => {
 const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
   const { user: currentUser } = useAuth();
   const { isAdmin, isOwner, isManager } = usePermissions();
-  const canUseDemoMode = isAdmin || isOwner || isManager;
+  // Development only. This shows a "Demo Mode" switch that swaps the page for
+  // fabricated people ("Admin Demo", admin@demo.com) — every paying tenant's
+  // owner and managers were seeing it on their own profile in production, where
+  // it reads as leftover scaffolding rather than a feature.
+  const canUseDemoMode = import.meta.env.DEV && (isAdmin || isOwner || isManager);
   const [isEditing, setIsEditing] = useState(false);
   const [skills, setSkills] = useState<string[]>([]);
   const [newSkill, setNewSkill] = useState('');
@@ -525,7 +529,7 @@ const UserProfileView: React.FC<UserProfileViewProps> = ({ userId }) => {
               handleSaveProfile(new FormData(e.currentTarget));
             }} className="space-y-4">
               <div>
-                <Label htmlFor="jobTitle">Job Title</Label>
+                <Label htmlFor="jobTitle">Titulli i punës</Label>
                 <Input id="jobTitle" name="jobTitle" defaultValue={profile?.jobTitle} />
               </div>
 

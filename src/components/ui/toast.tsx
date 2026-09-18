@@ -14,7 +14,11 @@ const ToastViewport = React.forwardRef<
   <ToastPrimitives.Viewport
     ref={ref}
     className={cn(
-      "fixed top-[76px] z-[100] flex max-h-screen w-full flex-col-reverse p-4 sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col md:max-w-[420px]",
+      // Mobile: below the fixed TopNavBar, which is `72px + safe-area-top` tall —
+      // a bare top-[76px] put the toast UNDER the header on every edge-to-edge
+      // Android/notched device (a 40px status-bar inset hid its top 36px).
+      // Desktop: bottom-right, clearing the home indicator.
+      "fixed top-[calc(76px_+_var(--safe-area-top))] z-[100] flex max-h-screen w-full flex-col-reverse p-4 sm:bottom-0 sm:right-0 sm:top-auto sm:flex-col sm:pb-[max(1rem,var(--safe-area-bottom))] md:max-w-[420px]",
       className
     )}
     {...props}

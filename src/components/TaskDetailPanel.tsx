@@ -2681,7 +2681,7 @@ const TaskDetailPanel: React.FC<TaskDetailPanelProps> = ({
                 <input
                   ref={commentFileInputRef}
                   type="file"
-                  accept="image/png,image/jpeg,image/gif,image/webp,image/svg+xml"
+                  accept="image/png,image/jpeg,image/gif,image/webp"
                   className="hidden"
                   onChange={async (e) => {
                     const f = e.target.files?.[0];
