@@ -19,6 +19,13 @@ You MUST maintain this file to track your work across messages. This is NON-NEGO
 
 <changelog>
 <!-- NEXT_ENTRY_HERE -->
+### [2026-09-18] — Financat/Fitimi: tabela shpjegon vetveten (`src/views/FinancesView.tsx`)
+- Kolona `Arkëtuar` → `Kosto` te "Fitimi sipas departamentit" + "…sipas përgjegjësit": në bazën default ("Paguar") arkëtimi ËSHTË kolona e të ardhurave nga vetë ndërtimi (`revenueAttribution` dhe `departmentPnl` lexojnë të njëjtat fatura të paguara), pra ishin dy kolona identike dhe kostoja askund — fitimi dukej se vinte nga hiçi. Arkëtimi tani është nënrresht nën emrin e rreshtit, i shfaqur vetëm kur ndryshon (baza "Buxhet"); CSV-ja i nxjerr të dyja
+- I ri `ProjectLines` + `PnlLine`: projektet pa të ardhura palosen në një rresht të vetëm ("18 projekte pa të ardhura") me arsyen përpara listës — kostoja e tyre është feta e pagës (`departmentPnl` e ndan pagën barazi mes projekteve të një personi), jo humbje e re. Hapet vetë kur s'ka asnjë projekt fitimprurës, përndryshe drill-down-i do të zbulonte vetëm përmbledhjen. Shkaku #1 është faturë e paguar pa `projectId` → lidhje te `/app/invoices?project=none`
+- Nën çdo projekt: `paga · direkte · fikse` (te tabela e përgjegjësit `fikse+paga`, se aty pagat janë brenda pool-it fiks të `projectPnl`, jo linjë më vete). Butoni "Si llogaritet" me 4 përkufizime, teksti i të ardhurave ndjek Buxhet/Paguar
+- I njëjti palosje te `ProjectPnlBlock` (tabela e detajuar), me `PnlTableRow` të nxjerrë jashtë
+- Verifikim: 1465/1465 teste ✅ (2 të reja për palosjen + 1 e përditësuar për kolonat), typecheck 199 = baseline, lint pastër, `android:sync` ✅
+
 ### [2026-09-18] — Auditi i thellë Android/UI/UX: 10 bugs (raundi 2)
 - Temë: `saveOrShareFile()`/`openExternal()` ekzistojnë pikërisht sepse `<a download>` dhe `window.open` janë no-op në WebView, por 7 thirrje i anashkalonin — eksportet CSV (CustomersView/ExpensesView/FinancesView) + eksporti GDPR (TenantDetailView), dhe "Hyr në cPanel" (HostingView + PortalHostingView) + raporti GMB. Secila ishte një buton që në Android **nuk bënte asgjë**: pa file, pa gabim, pa toast. `installExternalLinkHandler` s'i kapte — ai dëgjon klikime mbi `<a>`, jo `window.open`
 - `PortalLayout` u soll në modelin e `App.tsx`: kolonë `h-[100dvh] flex flex-col` me navin si fëmijë NË RRJEDHË, jo `position: fixed` — modeli që stafi e braktisi sepse mospërputhja layout-vs-visual viewport e Android WebView e shtyn një shirit fiks jashtë ekranit në chat. Ana anësore ndalon mbi navin (e njëjta gjë si Sidebar në raundin 1). `PortalChatView` hoqi `h-[calc(100dvh-140px)]` → `flex-1 min-h-0`: kroma reale është 160px pa insete dhe 220px me notch, pra composer-i dilte 20–80px jashtë; `WhatsappInboxView` e njëjta familje

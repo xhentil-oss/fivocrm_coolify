@@ -470,6 +470,7 @@ const FinancesView: React.FC = () => {
 
   // ── Department (service-line) P&L — real profit per Social/SEO/Web… ──
   const [expandedDept, setExpandedDept] = useState<string | null>(null);
+  const [showPnlHelp, setShowPnlHelp] = useState(false);
   const departmentPnl = useMemo(
     () => computeDepartmentPnl(projects, teamMembers, expenses, { ...periodOpts, revenueBasis, invoices, teams }),
     [projects, teamMembers, expenses, invoices, periodOpts, revenueBasis, teams],
@@ -503,9 +504,10 @@ const FinancesView: React.FC = () => {
       (t, r) => ({
         revenue: t.revenue + r.revenue,
         collected: t.collected + r.collected,
+        cost: t.cost + r.cost,
         profit: t.profit + r.profit,
       }),
-      { revenue: 0, collected: 0, profit: 0 },
+      { revenue: 0, collected: 0, cost: 0, profit: 0 },
     );
     const max = Math.max(...rows.map(r => Math.max(r.revenue, r.collected)), 1);
     return { rows, totals, max };
@@ -537,8 +539,8 @@ const FinancesView: React.FC = () => {
   const [expandedStaff, setExpandedStaff] = useState<string | null>(null);
   const staffRevenue = useMemo(() => {
     type StaffRow = {
-      userId: string; name: string; revenue: number; collected: number; profit: number;
-      projects: { id: string; name: string; revenue: number; profit: number }[];
+      userId: string; name: string; revenue: number; collected: number; cost: number; profit: number;
+      projects: PnlLine[];
     };
     const pnl = computeProjectPnl(projects, teamMembers, expenses, { ...periodOpts, revenueBasis, invoices });
     const map = new Map<string, StaffRow>();
@@ -548,11 +550,17 @@ const FinancesView: React.FC = () => {
       if (!uid) { unattributed += r.revenue; continue; }
       const row = map.get(uid) || {
         userId: uid, name: memberNameById.get(uid) || 'I panjohur',
-        revenue: 0, collected: 0, profit: 0, projects: [],
+        revenue: 0, collected: 0, cost: 0, profit: 0, projects: [],
       };
       row.revenue += r.revenue;
+      row.cost += r.cost;
       row.profit += r.profit;
-      row.projects.push({ id: r.id, name: r.name, revenue: r.revenue, profit: r.profit });
+      // The cost split travels with the line so the expanded row can show WHY a
+      // project profited or lost, instead of only that it did.
+      row.projects.push({
+        id: r.id, name: r.name, revenue: r.revenue, cost: r.cost, profit: r.profit,
+        directCost: r.directCost, overhead: r.overhead,
+      });
       map.set(uid, row);
     }
     // Attach cash, and merge in anyone who only has cash in this window (their
@@ -562,7 +570,7 @@ const FinancesView: React.FC = () => {
       if (row) { row.collected = amount; continue; }
       map.set(uid, {
         userId: uid, name: memberNameById.get(uid) || 'I panjohur',
-        revenue: 0, collected: amount, profit: 0, projects: [],
+        revenue: 0, collected: amount, cost: 0, profit: 0, projects: [],
       });
     }
     const rows = Array.from(map.values())
@@ -572,9 +580,10 @@ const FinancesView: React.FC = () => {
       (t, r) => ({
         revenue: t.revenue + r.revenue,
         collected: t.collected + r.collected,
+        cost: t.cost + r.cost,
         profit: t.profit + r.profit,
       }),
-      { revenue: 0, collected: 0, profit: 0 },
+      { revenue: 0, collected: 0, cost: 0, profit: 0 },
     );
     return { rows, totals, unattributed };
   }, [projects, teamMembers, expenses, invoices, periodOpts, revenueBasis, memberNameById, collected]);
@@ -692,15 +701,15 @@ const FinancesView: React.FC = () => {
       ['Të pambledhura', Math.round(receivables.outstanding)],
       ['Të vonuara', Math.round(receivables.overdueAmount), `${receivables.overdueCount} fatura`],
       [],
-      [`Departamenti (${periodLabel})`, 'Të ardhura', 'Arkëtuar', 'Fitimi', 'Marzhi %'],
+      [`Departamenti (${periodLabel})`, 'Të ardhura', 'Kosto', 'Fitimi', 'Marzhi %', 'Arkëtuar'],
       ...departmentRows.rows.map(d => [
-        d.department, Math.round(d.revenue), Math.round(d.collected), Math.round(d.profit),
-        d.margin == null ? '' : Math.round(d.margin * 100),
+        d.department, Math.round(d.revenue), Math.round(d.cost), Math.round(d.profit),
+        d.margin == null ? '' : Math.round(d.margin * 100), Math.round(d.collected),
       ]),
-      ['Gjithsej', Math.round(departmentRows.totals.revenue), Math.round(departmentRows.totals.collected), Math.round(departmentRows.totals.profit), ''],
+      ['Gjithsej', Math.round(departmentRows.totals.revenue), Math.round(departmentRows.totals.cost), Math.round(departmentRows.totals.profit), '', Math.round(departmentRows.totals.collected)],
       [],
-      ['Përgjegjësi', 'Të ardhura', 'Arkëtuar', 'Fitimi'],
-      ...staffRevenue.rows.map(r => [r.name, Math.round(r.revenue), Math.round(r.collected), Math.round(r.profit)]),
+      ['Përgjegjësi', 'Të ardhura', 'Kosto', 'Fitimi', 'Arkëtuar'],
+      ...staffRevenue.rows.map(r => [r.name, Math.round(r.revenue), Math.round(r.cost), Math.round(r.profit), Math.round(r.collected)]),
       [],
       ['Klienti', 'Të ardhura', 'Kosto', 'Marzhi'],
       ...[...clientPnl.winners, ...clientPnl.losers].map(c => [
@@ -1083,8 +1092,60 @@ const FinancesView: React.FC = () => {
             {/* ── Departments ── */}
             <section className={cn(CARD, 'overflow-hidden')}>
               <div className="px-5 pb-1 pt-5 sm:px-6">
-                <h2 className={cn('text-base font-extrabold', INK_NAVY)}>Fitimi sipas departamentit</h2>
-                <p className={cn('mt-0.5 text-[12.5px]', INK_MUTED)}>Kliko një rresht për projektet e tij.</p>
+                <div className="flex flex-wrap items-start justify-between gap-x-4 gap-y-1.5">
+                  <div className="min-w-0">
+                    <h2 className={cn('text-base font-extrabold', INK_NAVY)}>Fitimi sipas departamentit</h2>
+                    <p className={cn('mt-0.5 text-[12.5px]', INK_MUTED)}>
+                      Fitim i plotë: të ardhurat minus pagat, shpenzimet e projektit dhe kostot fikse.
+                      Kliko një rresht për projektet e tij.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setShowPnlHelp(v => !v)}
+                    aria-expanded={showPnlHelp}
+                    className={cn(
+                      'inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-[#e3e9f2] px-2.5 py-1 text-[11.5px] font-bold transition-colors hover:bg-[#f6f9fd] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#2f6fe0]',
+                      showPnlHelp ? 'bg-[#e3ecfb] text-[#2258bb]' : INK_MUTED,
+                    )}
+                  >
+                    <Info className="h-3.5 w-3.5" />
+                    Si llogaritet
+                  </button>
+                </div>
+
+                {showPnlHelp && (
+                  <dl className="mt-2.5 grid gap-x-6 gap-y-2 rounded-xl border border-[#e3e9f2] bg-[#f6f9fd] px-4 py-3 text-[12px] leading-relaxed sm:grid-cols-2">
+                    <div>
+                      <dt className={cn('font-extrabold', INK_NAVY)}>Të ardhura</dt>
+                      <dd className={INK_MUTED}>
+                        {revenueBasis === 'invoiced'
+                          ? 'Paratë e arkëtuara në këtë periudhë nga faturat e lidhura me projektet e departamentit. Faturat e palaguara nuk numërohen.'
+                          : 'Buxheti i projekteve aktive në periudhë (tarifa mujore × muajt aktivë për abonimet).'}
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className={cn('font-extrabold', INK_NAVY)}>Kosto</dt>
+                      <dd className={INK_MUTED}>
+                        Paga e secilit pjesëmarrës, e ndarë barazi mes projekteve ku punon
+                        · shpenzimet e lidhura me projektin · pjesa e kostove fikse të biznesit.
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className={cn('font-extrabold', INK_NAVY)}>Fitimi dhe marzhi</dt>
+                      <dd className={INK_MUTED}>
+                        Të ardhura − Kosto. Marzhi është fitimi si përqindje e të ardhurave.
+                      </dd>
+                    </div>
+                    <div>
+                      <dt className={cn('font-extrabold', INK_NAVY)}>Pse një projekt del negativ</dt>
+                      <dd className={INK_MUTED}>
+                        Sepse mbajti kohë të paguar pa faturë të arkëtuar në këtë periudhë — jo
+                        sepse humbi para. Lidhe faturën me projektin ose arkivoje projektin e mbyllur.
+                      </dd>
+                    </div>
+                  </dl>
+                )}
                 {/* `expense.departmentId` is finally read by this table. When a
                     tagged team matches no department that has projects here, the
                     cost silently becomes business-wide overhead — say so, or the
@@ -1129,13 +1190,23 @@ const FinancesView: React.FC = () => {
                               <ChevronRight className={cn('h-3.5 w-3.5 shrink-0 text-[#94a5bd] transition-transform', open && 'rotate-90')} />
                               <div className="min-w-0 flex-1">
                                 <p className={cn('truncate text-[13.5px] font-bold', INK_NAVY)}>{d.department}</p>
+                                {/* Cash, shown only where it can differ from the
+                                    accrual column — on the paid-invoices basis the
+                                    two are the same number by construction. */}
+                                {Math.round(d.collected) !== Math.round(d.revenue) && (
+                                  <p className={cn('truncate text-[11px] font-semibold', INK_MUTED)}>
+                                    arkëtuar {formatALL(d.collected)}
+                                    {d.revenue > d.collected
+                                      && ` · ${formatALL(d.revenue - d.collected)} pa arkëtuar`}
+                                  </p>
+                                )}
                                 <div className="mt-1.5 h-[5px] max-w-[210px] overflow-hidden rounded-full bg-[#edf1f7]">
                                   <div className="h-full rounded-full bg-[#2f6fe0]" style={{ width: `${Math.max(2, pct)}%` }} />
                                 </div>
                               </div>
                             </div>
                             <Num value={d.revenue} strong />
-                            <Num value={d.collected} muted />
+                            <Num value={d.cost} muted />
                             <Num value={d.profit} strong tone={d.profit >= 0 ? 'pos' : 'neg'} />
                             <div className="text-right">
                               <MarginPill margin={d.margin} />
@@ -1144,22 +1215,18 @@ const FinancesView: React.FC = () => {
 
                           {open && (
                             <div className="border-b border-[#eef2f8] bg-[#f6f9fd] px-5 py-2 sm:px-6">
-                              {d.projects.length === 0 ? (
-                                <p className={cn('py-2 pl-[26px] text-xs', INK_MUTED)}>
-                                  Pa projekte në këtë periudhë — vetëm arkëtime për punë të mëparshme.
-                                </p>
-                              ) : d.projects.map(p => (
-                                // Same five-column ruler as the parent row, so a
-                                // project's revenue and profit sit UNDER their own
-                                // headers instead of one column to the left.
-                                <div key={p.id} className={cn(COLS, 'items-center py-1.5 text-[12.5px]')}>
-                                  <span className="min-w-0 truncate pl-[26px] font-semibold text-[#24344d]">{p.name}</span>
-                                  <Num value={p.revenue} muted />
-                                  <span />
-                                  <Num value={p.profit} strong tone={p.profit >= 0 ? 'pos' : 'neg'} />
-                                  <span />
-                                </div>
-                              ))}
+                              {/* Same five-column ruler as the parent row, so a
+                                  project's revenue and profit sit UNDER their own
+                                  headers instead of one column to the left. */}
+                              <ProjectLines
+                                lines={d.projects}
+                                indent="pl-[26px]"
+                                basis={revenueBasis}
+                                emptyText="Pa projekte në këtë periudhë — vetëm arkëtime për punë të mëparshme."
+                                onFixUnlinked={collected.unlinked.count > 0
+                                  ? () => navigate('/app/invoices?project=none')
+                                  : undefined}
+                              />
                             </div>
                           )}
                         </div>
@@ -1167,9 +1234,16 @@ const FinancesView: React.FC = () => {
                     })}
 
                     <div className={cn(COLS, 'items-center bg-[#f6f9fd] px-5 py-3.5 text-[13px] font-extrabold sm:px-6', INK_NAVY)}>
-                      <span className="pl-[26px]">Gjithsej</span>
+                      <span className="pl-[26px]">
+                        Gjithsej
+                        {Math.round(departmentRows.totals.collected) !== Math.round(departmentRows.totals.revenue) && (
+                          <span className={cn('ml-2 text-[11px] font-semibold', INK_MUTED)}>
+                            arkëtuar {formatALL(departmentRows.totals.collected)}
+                          </span>
+                        )}
+                      </span>
                       <Num value={departmentRows.totals.revenue} strong />
-                      <Num value={departmentRows.totals.collected} strong />
+                      <Num value={departmentRows.totals.cost} strong />
                       <Num value={departmentRows.totals.profit} strong tone={departmentRows.totals.profit >= 0 ? 'pos' : 'neg'} />
                       <span />
                     </div>
@@ -1187,7 +1261,8 @@ const FinancesView: React.FC = () => {
                     <p className={cn('text-xs leading-relaxed', INK_MUTED)}>
                       <strong className={NUM}>{formatALL(collected.unlinked.amount)}</strong> arkëtuar nga{' '}
                       <strong>{collected.unlinked.count}</strong> faturë pa projekt të lidhur — nuk i takon
-                      asnjë departamenti apo personi, ndaj kolona "Arkëtuar" nuk arrin totalin e faqes.{' '}
+                      asnjë departamenti apo personi. Kjo është arsyeja më e shpeshtë pse një projekt
+                      del me fitim negativ pa pasur asnjë humbje reale.{' '}
                       <button
                         onClick={() => navigate('/app/invoices?project=none')}
                         className="font-bold text-[#2f6fe0] underline hover:no-underline"
@@ -1244,15 +1319,22 @@ const FinancesView: React.FC = () => {
                               >
                                 {initialsOf(r.name)}
                               </span>
-                              <span className={cn('min-w-0 truncate text-[13.5px] font-bold', INK_NAVY)}>
-                                {r.name}
-                                <span className={cn('ml-1.5 text-xs font-medium', INK_MUTED)}>
-                                  · {r.projects.length} {r.projects.length === 1 ? 'projekt' : 'projekte'}
+                              <span className="min-w-0">
+                                <span className={cn('block truncate text-[13.5px] font-bold', INK_NAVY)}>
+                                  {r.name}
+                                  <span className={cn('ml-1.5 text-xs font-medium', INK_MUTED)}>
+                                    · {r.projects.length} {r.projects.length === 1 ? 'projekt' : 'projekte'}
+                                  </span>
                                 </span>
+                                {Math.round(r.collected) !== Math.round(r.revenue) && (
+                                  <span className={cn('block truncate text-[11px] font-semibold', INK_MUTED)}>
+                                    arkëtuar {formatALL(r.collected)}
+                                  </span>
+                                )}
                               </span>
                             </div>
                             <Num value={r.revenue} strong />
-                            <Num value={r.collected} muted />
+                            <Num value={r.cost} muted />
                             <Num value={r.profit} strong tone={r.profit >= 0 ? 'pos' : 'neg'} />
                             <div className="text-right">
                               <MarginPill margin={r.revenue > 0 ? r.profit / r.revenue : null} />
@@ -1261,15 +1343,19 @@ const FinancesView: React.FC = () => {
 
                           {open && r.projects.length > 0 && (
                             <div className="border-b border-[#eef2f8] bg-[#f6f9fd] px-5 py-2 sm:px-6">
-                              {r.projects.map(p => (
-                                <div key={p.id} className={cn(COLS, 'items-center py-1.5 text-[12.5px]')}>
-                                  <span className="min-w-0 truncate pl-11 font-semibold text-[#24344d]">{p.name}</span>
-                                  <Num value={p.revenue} muted />
-                                  <span />
-                                  <Num value={p.profit} strong tone={p.profit >= 0 ? 'pos' : 'neg'} />
-                                  <span />
-                                </div>
-                              ))}
+                              <ProjectLines
+                                lines={r.projects}
+                                indent="pl-11"
+                                basis={revenueBasis}
+                                // Here payroll is inside the shared fixed pool, not a
+                                // separate labour line — say so, or "fikse" reads as
+                                // rent only and the salary looks unaccounted for.
+                                overheadLabel="fikse+paga"
+                                emptyText="Pa projekte në këtë periudhë."
+                                onFixUnlinked={collected.unlinked.count > 0
+                                  ? () => navigate('/app/invoices?project=none')
+                                  : undefined}
+                              />
                             </div>
                           )}
                         </div>
@@ -1277,9 +1363,16 @@ const FinancesView: React.FC = () => {
                     })}
 
                     <div className={cn(COLS, 'items-center bg-[#f6f9fd] px-5 py-3.5 text-[13px] font-extrabold sm:px-6', INK_NAVY)}>
-                      <span className="pl-11">Gjithsej</span>
+                      <span className="pl-11">
+                        Gjithsej
+                        {Math.round(staffRevenue.totals.collected) !== Math.round(staffRevenue.totals.revenue) && (
+                          <span className={cn('ml-2 text-[11px] font-semibold', INK_MUTED)}>
+                            arkëtuar {formatALL(staffRevenue.totals.collected)}
+                          </span>
+                        )}
+                      </span>
                       <Num value={staffRevenue.totals.revenue} strong />
-                      <Num value={staffRevenue.totals.collected} strong />
+                      <Num value={staffRevenue.totals.cost} strong />
                       <Num value={staffRevenue.totals.profit} strong tone={staffRevenue.totals.profit >= 0 ? 'pos' : 'neg'} />
                       <span />
                     </div>
@@ -1305,14 +1398,15 @@ const FinancesView: React.FC = () => {
               )}
 
               <div className="px-5 pb-4 sm:px-6">
-                <Explain label="Pse 'Të ardhura' dhe 'Arkëtuar' nuk përputhen">
+                <Explain label="Çfarë do të thotë «arkëtuar» nën emrin e rreshtit">
                   <p>
-                    <strong>Të ardhura</strong> = {revenueBasis === 'invoiced' ? 'faturat e paguara' : 'buxheti i projektit'}
-                    {' '}brenda periudhës — ajo që u <em>fitua</em> (accrual). Kjo kolonë ndjek toggle-in lart.
+                    Kolona <strong>Të ardhura</strong> = {revenueBasis === 'invoiced' ? 'faturat e paguara' : 'buxheti i projektit'}
+                    {' '}brenda periudhës — ajo që u <em>fitua</em> (accrual). Ndjek toggle-in lart.
                   </p>
                   <p>
-                    <strong>Arkëtuar</strong> = paraja që <em>hyri</em> realisht në të njëjtën periudhë
-                    (cash), atribuar faturë → projekt → person/departament.
+                    Rreshti i vogël <em>arkëtuar</em> = paraja që <em>hyri</em> realisht në të njëjtën
+                    periudhë (cash), atribuar faturë → projekt → person/departament. Shfaqet vetëm kur
+                    ndryshon nga kolona e të ardhurave: në bazën «Paguar» të dyja janë e njëjta shifër.
                   </p>
                   <p>
                     Diferenca mes tyre është e pambledhur. Negative kur në këtë periudhë u arkëtua
@@ -1721,7 +1815,16 @@ const KpiCard: React.FC<{
   </div>
 );
 
-/** Column header for the department / responsible tables. */
+/**
+ * Column header for the department / responsible tables.
+ *
+ * The columns read as the arithmetic they are — `Të ardhura − Kosto = Fitimi` —
+ * because profit appearing next to revenue with nothing between them is the one
+ * thing nobody could check. "Arkëtuar" used to sit in the middle instead, and on
+ * the (default) paid-invoices basis it is the revenue column by construction:
+ * two identical columns of the same number, and no cost anywhere. Cash is still
+ * shown, under the row's own name, on the basis where it can actually differ.
+ */
 const TableHead: React.FC<{ first: string }> = ({ first }) => (
   <div className={cn(
     COLS,
@@ -1729,7 +1832,7 @@ const TableHead: React.FC<{ first: string }> = ({ first }) => (
   )}>
     <div>{first}</div>
     <div className="text-right">Të ardhura</div>
-    <div className="text-right">Arkëtuar</div>
+    <div className="text-right">Kosto</div>
     <div className="text-right">Fitimi</div>
     <div className="text-right">Marzhi</div>
   </div>
@@ -1765,6 +1868,166 @@ const MarginPill: React.FC<{ margin: number | null }> = ({ margin }) => {
     )}>
       {pct}%
     </span>
+  );
+};
+
+/** An amount with no currency tag — for the dense breakdown lines, where the
+ *  column above has already established the unit. */
+const plainAmount = (v: number) => Math.round(v).toLocaleString('sq-AL');
+
+/**
+ * One project inside an expanded department / person row.
+ *
+ * `labor` is optional because only the department P&L separates it: the
+ * per-person table costs a project from the business-wide fixed pool, where
+ * payroll is already inside `overhead`.
+ */
+export interface PnlLine {
+  id: string;
+  name: string;
+  revenue: number;
+  cost: number;
+  profit: number;
+  labor?: number;
+  directCost?: number;
+  overhead?: number;
+}
+
+/** "paga 5.646 · direkte 2.400 · fikse 2.290" — where the cost went. */
+const CostSplit: React.FC<{ line: PnlLine; overheadLabel: string }> = ({ line, overheadLabel }) => {
+  const parts: string[] = [];
+  if (line.labor) parts.push(`paga ${plainAmount(line.labor)}`);
+  if (line.directCost) parts.push(`direkte ${plainAmount(line.directCost)}`);
+  if (line.overhead) parts.push(`${overheadLabel} ${plainAmount(line.overhead)}`);
+  if (parts.length === 0) return null;
+  return (
+    <p className={cn('truncate text-[10.5px] font-medium leading-tight', INK_MUTED)}>
+      {parts.join(' · ')}
+    </p>
+  );
+};
+
+const ProjectLine: React.FC<{
+  line: PnlLine;
+  indent: string;
+  overheadLabel: string;
+}> = ({ line, indent, overheadLabel }) => {
+  const margin = line.revenue > 0 ? Math.round((line.profit / line.revenue) * 100) : null;
+  return (
+    <div className={cn(COLS, 'items-center py-1.5 text-[12.5px]')}>
+      <div className={cn('min-w-0', indent)}>
+        <p className="truncate font-semibold text-[#24344d]">{line.name}</p>
+        <CostSplit line={line} overheadLabel={overheadLabel} />
+      </div>
+      <Num value={line.revenue} muted />
+      <Num value={line.cost} muted />
+      <Num value={line.profit} strong tone={line.profit >= 0 ? 'pos' : 'neg'} />
+      <span className={cn(
+        'text-right text-[11.5px] font-bold tabular-nums',
+        margin == null ? INK_MUTED : margin >= 0 ? INK_POS : INK_NEG,
+      )}>
+        {margin == null ? '—' : `${margin}%`}
+      </span>
+    </div>
+  );
+};
+
+/**
+ * The projects inside an expanded department / person row.
+ *
+ * A project that billed nothing in the period still carries its slice of
+ * somebody's salary, so it shows a loss exactly the size of that slice. The
+ * arithmetic is right; what was missing is the REASON — and twenty identical
+ * negative rows in a row read as a broken table, while burying the handful of
+ * projects that actually earned. They are folded into one summary line that
+ * names them and stays expandable, with the causes spelled out: a paid invoice
+ * that was never linked to its project is by far the most common, and it is the
+ * one the owner can fix.
+ */
+const ProjectLines: React.FC<{
+  lines: PnlLine[];
+  indent: string;
+  emptyText: string;
+  basis: 'budget' | 'invoiced';
+  overheadLabel?: string;
+  onFixUnlinked?: () => void;
+}> = ({ lines, indent, emptyText, basis, overheadLabel = 'fikse', onFixUnlinked }) => {
+  const earning = lines.filter(l => l.revenue > 0);
+  const idle = lines.filter(l => l.revenue <= 0);
+  const idleCost = idle.reduce((s, l) => s + l.cost, 0);
+  // Folded by default — but only when there is something to fold it AWAY from.
+  // A department whose projects all read zero would otherwise open into a single
+  // summary line, hiding its entire contents behind a second click.
+  const [showIdle, setShowIdle] = useState(earning.length === 0);
+
+  if (lines.length === 0) {
+    return <p className={cn('py-2 text-xs', indent, INK_MUTED)}>{emptyText}</p>;
+  }
+
+  return (
+    <>
+      {earning.map(l => (
+        <ProjectLine key={l.id} line={l} indent={indent} overheadLabel={overheadLabel} />
+      ))}
+
+      {idle.length > 0 && (
+        <>
+          <button
+            type="button"
+            onClick={() => setShowIdle(v => !v)}
+            aria-expanded={showIdle}
+            className={cn(
+              COLS,
+              'w-full items-center rounded-lg py-1.5 text-left text-[12.5px] transition-colors hover:bg-[#e9eff8]',
+              earning.length > 0 && 'mt-1 border-t border-dashed border-[#dde5f0] pt-2',
+            )}
+          >
+            <span className={cn('flex min-w-0 items-center gap-1.5', indent)}>
+              <ChevronRight className={cn(
+                'h-3 w-3 shrink-0 text-[#94a5bd] transition-transform',
+                showIdle && 'rotate-90',
+              )} />
+              <span className={cn('truncate font-bold', INK_MUTED)}>
+                {idle.length} {idle.length === 1 ? 'projekt' : 'projekte'} pa të ardhura
+              </span>
+            </span>
+            <span className={cn('text-right text-[13px]', NUM, INK_MUTED)}>—</span>
+            <Num value={idleCost} muted />
+            <Num value={-idleCost} strong tone={idleCost > 0 ? 'neg' : 'pos'} />
+            <span />
+          </button>
+
+          {showIdle && (
+            <>
+              <div className={cn('py-1.5', indent)}>
+                <p className={cn('max-w-[560px] text-[11px] leading-relaxed', INK_MUTED)}>
+                  Nuk kanë {basis === 'invoiced' ? 'asnjë faturë të paguar' : 'buxhet'} në këtë
+                  periudhë, por thithin një pjesë të pagës së stafit që punon mbi to — pra kjo nuk
+                  është një humbje e re, është kohë e paguar pa të ardhura përkundrejt saj.
+                  Zakonisht: faturë e paguar pa projektin e lidhur, punë e mbyllur e faturuar më
+                  parë, ose projekt i brendshëm.
+                  {onFixUnlinked && (
+                    <>
+                      {' '}
+                      <button
+                        type="button"
+                        onClick={onFixUnlinked}
+                        className="font-bold text-[#2f6fe0] underline hover:no-underline"
+                      >
+                        Shih faturat pa projekt
+                      </button>
+                    </>
+                  )}
+                </p>
+              </div>
+              {idle.map(l => (
+                <ProjectLine key={l.id} line={l} indent={indent} overheadLabel={overheadLabel} />
+              ))}
+            </>
+          )}
+        </>
+      )}
+    </>
   );
 };
 
@@ -2051,11 +2314,45 @@ const DepartmentTrend: React.FC<{
   );
 };
 
+/** One project row of the detailed table — the earning list and the folded
+ *  zero-revenue list render identically, so they share this. */
+const PnlTableRow: React.FC<{
+  row: ReturnType<typeof computeProjectPnl>['rows'][number];
+  customerNameById: Map<string, string>;
+}> = ({ row: r, customerNameById }) => (
+  <tr className="border-b border-[#eef2f8] last:border-0 hover:bg-[#f6f9fd]">
+    <td className="max-w-[180px] px-1 py-2">
+      <p className={cn('truncate font-bold', INK_NAVY)}>{r.name}</p>
+      <p className={cn('truncate text-[11px]', INK_MUTED)}>
+        {r.customerId ? (customerNameById.get(r.customerId) || 'Pa klient') : 'Pa klient'}
+        {r.billingType === 'monthly' ? ` · mujore ×${r.activeMonths}` : ' · njëherëshe'}
+      </p>
+    </td>
+    <td className={cn('px-1 py-2 text-right', NUM, INK_NAVY)}>{formatALL(r.revenue)}</td>
+    <td className={cn('px-1 py-2 text-right', NUM, INK_MUTED)}>{formatALL(r.directCost)}</td>
+    <td className={cn('px-1 py-2 text-right', NUM, INK_MUTED)}>{formatALL(r.overhead)}</td>
+    <td className={cn('px-1 py-2 text-right font-bold', NUM, r.profit >= 0 ? INK_POS : INK_NEG)}>
+      {formatALL(r.profit)}
+    </td>
+    <td className={cn(
+      'px-1 py-2 text-right',
+      NUM,
+      r.margin == null ? INK_MUTED : r.margin >= 0 ? INK_POS : INK_NEG,
+    )}>
+      {r.margin == null ? '—' : `${Math.round(r.margin * 100)}%`}
+    </td>
+  </tr>
+);
+
 const ProjectPnlBlock: React.FC<{
   pnl: ReturnType<typeof computeProjectPnl>;
   customerNameById: Map<string, string>;
 }> = ({ pnl, customerNameById }) => {
   const { fixedPool, totals, allocationBasis } = pnl;
+  const earning = pnl.rows.filter(r => r.revenue > 0);
+  const idle = pnl.rows.filter(r => r.revenue <= 0);
+  const idleProfit = idle.reduce((s, r) => s + r.profit, 0);
+  const [showIdle, setShowIdle] = useState(earning.length === 0);
 
   // No projects in the period does NOT mean no cost: payroll and overhead were
   // still paid. Returning an empty state here hid the whole fixed pool, so the
@@ -2116,30 +2413,30 @@ const ProjectPnlBlock: React.FC<{
             </tr>
           </thead>
           <tbody>
-            {pnl.rows.map(r => (
-              <tr key={r.id} className="border-b border-[#eef2f8] last:border-0 hover:bg-[#f6f9fd]">
-                <td className="max-w-[180px] px-1 py-2">
-                  <p className={cn('truncate font-bold', INK_NAVY)}>{r.name}</p>
-                  <p className={cn('truncate text-[11px]', INK_MUTED)}>
-                    {r.customerId ? (customerNameById.get(r.customerId) || 'Pa klient') : 'Pa klient'}
-                    {r.billingType === 'monthly' ? ` · mujore ×${r.activeMonths}` : ' · njëherëshe'}
-                  </p>
-                </td>
-                <td className={cn('px-1 py-2 text-right', NUM, INK_NAVY)}>{formatALL(r.revenue)}</td>
-                <td className={cn('px-1 py-2 text-right', NUM, INK_MUTED)}>{formatALL(r.directCost)}</td>
-                <td className={cn('px-1 py-2 text-right', NUM, INK_MUTED)}>{formatALL(r.overhead)}</td>
-                <td className={cn('px-1 py-2 text-right font-bold', NUM, r.profit >= 0 ? INK_POS : INK_NEG)}>
-                  {formatALL(r.profit)}
-                </td>
-                <td className={cn(
-                  'px-1 py-2 text-right',
-                  NUM,
-                  r.margin == null ? INK_MUTED : r.margin >= 0 ? INK_POS : INK_NEG,
-                )}>
-                  {r.margin == null ? '—' : `${Math.round(r.margin * 100)}%`}
+            {earning.map(r => <PnlTableRow key={r.id} row={r} customerNameById={customerNameById} />)}
+
+            {/* Same reasoning as the department drill-down: a project with no
+                revenue in the period absorbs overhead and shows a loss the size
+                of that share. Listed one by one they bury every project that
+                earned, so they are summarised — and openable. */}
+            {idle.length > 0 && (
+              <tr className="border-b border-[#eef2f8] last:border-0">
+                <td colSpan={6} className="px-1 py-1.5">
+                  <button
+                    type="button"
+                    onClick={() => setShowIdle(v => !v)}
+                    aria-expanded={showIdle}
+                    className={cn('flex items-center gap-1.5 rounded-lg py-1 text-[12px] font-bold', INK_MUTED)}
+                  >
+                    <ChevronRight className={cn('h-3 w-3 transition-transform', showIdle && 'rotate-90')} />
+                    {idle.length} {idle.length === 1 ? 'projekt' : 'projekte'} pa të ardhura
+                    {' · '}
+                    <span className={cn(NUM, INK_NEG)}>{formatALL(idleProfit)}</span>
+                  </button>
                 </td>
               </tr>
-            ))}
+            )}
+            {showIdle && idle.map(r => <PnlTableRow key={r.id} row={r} customerNameById={customerNameById} />)}
           </tbody>
         </table>
       </div>

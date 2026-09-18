@@ -241,10 +241,14 @@ describe('FinancesView', () => {
     selectTab('Fitimi');
 
     // Both tables carry the same column ruler, so "who brought in what" reads
-    // the same either way you slice it: 2 headers × 3 shared measures.
-    for (const label of ['Të ardhura', 'Arkëtuar', 'Fitimi']) {
+    // the same either way you slice it: 2 headers × 3 shared measures. The ruler
+    // spells out the arithmetic (revenue − cost = profit); cash is reported on
+    // the row itself, since on the paid-invoices basis it IS the revenue column.
+    for (const label of ['Të ardhura', 'Kosto', 'Fitimi']) {
       expect(screen.getAllByText(label).length).toBeGreaterThanOrEqual(2);
     }
+    expect(screen.getByText('Departamenti').parentElement?.textContent)
+      .toBe('DepartamentiTë ardhuraKostoFitimiMarzhi');
     // …and both foot in a totals row rather than leaving the columns unanchored.
     expect(screen.getAllByText('Gjithsej').length).toBeGreaterThanOrEqual(2);
 
@@ -284,6 +288,55 @@ describe('FinancesView', () => {
     fireEvent.click(row);
     expect(row).toHaveAttribute('aria-expanded', 'true');
     expect(screen.queryAllByText('Retainer Social').length).toBeGreaterThan(before);
+  });
+
+  it('folds the projects that billed nothing behind one explained row', () => {
+    // "Web" now holds a project that billed (p1, via invoice i2) and one that did
+    // not. A project with no revenue still carries its slice of somebody's pay,
+    // so it shows a loss the size of that slice — correct arithmetic that reads
+    // as a broken table when twenty identical negative rows bury the projects
+    // that actually earned.
+    collections.projects.push({
+      id: 'p3', name: 'Projekt i Brendshëm', customerId: 'c1', budget: 0, currency: 'ALL',
+      status: 'Active', department: 'Web', responsibleUserId: 'u1',
+      billingType: 'monthly', isRecurring: true,
+    });
+    render(<FinancesView />);
+    selectTab('Fitimi');
+
+    // Every project name also appears in the folded project-by-project table, so
+    // what proves anything here is the CHANGE in how often it appears.
+    const before = screen.queryAllByText('Projekt i Brendshëm').length;
+    fireEvent.click(screen.getByRole('button', { name: /^Web/ }));
+    expect(screen.queryAllByText('Projekt i Brendshëm').length).toBe(before);
+
+    // Scoped: the detailed project-by-project table folds its own zero-revenue
+    // rows away under the same wording.
+    const deptCard = screen.getByRole('heading', { name: 'Fitimi sipas departamentit' })
+      .closest('section') as HTMLElement;
+    const fold = within(deptCard).getByRole('button', { name: /1 projekt pa të ardhura/ });
+    expect(fold).toHaveAttribute('aria-expanded', 'false');
+
+    fireEvent.click(fold);
+    expect(screen.queryAllByText('Projekt i Brendshëm').length).toBe(before + 1);
+    // Opened WITH the reason — the cost is paid time, not money lost.
+    expect(screen.getByText(/thithin një pjesë të pagës/)).toBeInTheDocument();
+  });
+
+  it('opens a department that billed nothing at all, instead of folding it away', () => {
+    render(<FinancesView />);
+    selectTab('Fitimi');
+
+    // "Social" has one project and no paid invoice behind it, so EVERY line in it
+    // is a zero-revenue line. Folding by default would hide the drill-down's
+    // whole contents behind a second click.
+    const before = screen.queryAllByText('Retainer Social').length;
+    fireEvent.click(screen.getByRole('button', { name: /^Social/ }));
+    expect(screen.queryAllByText('Retainer Social').length).toBe(before + 1);
+    const deptCard = screen.getByRole('heading', { name: 'Fitimi sipas departamentit' })
+      .closest('section') as HTMLElement;
+    expect(within(deptCard).getByRole('button', { name: /1 projekt pa të ardhura/ }))
+      .toHaveAttribute('aria-expanded', 'true');
   });
 
   it('stays owner-only', () => {
