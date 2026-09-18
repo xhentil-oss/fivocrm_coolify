@@ -4,31 +4,37 @@ What is in the tree, in what order it must reach production, and how to tell
 whether each step worked. The findings themselves are in
 `workspace/FINANCE_BUGS_2026_09_18.md`.
 
-Nothing here has run against production data. Every step below is something a
-human has to do, because each one needs an account, a console or a judgement
-call that code cannot make for you.
-
 ---
 
-## 0. Before anything
+## 0. What has already happened
 
-The work is committed on the branch `finance-audit-2026-09-18`, not on `main`.
-Read the diff before merging. It is large on purpose: it closes a cross-tenant
-mailing bug, a whole class of timezone bugs in billing, and two portal holes.
+The work is commit `d95d91f` on `main`, pushed and built by Vercel. It is large
+on purpose: it closes a cross-tenant mailing bug, a whole class of timezone bugs
+in billing, and two portal holes.
 
 ```bash
-git log --oneline main..finance-audit-2026-09-18
-git diff main...finance-audit-2026-09-18 --stat
+git show --stat d95d91f
 ```
 
-The branch also carries in-progress work that was already in the tree before the
+That commit also carries in-progress work that was already in the tree before the
 audit (the module registry, the super-admin tenant console, tenant provisioning).
 That was not mine to separate, and splitting it by hand risked breaking it.
-If you want the finance work alone, take it file by file rather than by commit.
+
+Indexes and rules were deployed on 18 Sep 2026, in the order section 1 describes.
+What remains is section 3: the compensation backfill, which needs a human,
+because its acceptance test is comparing a payroll figure in the running app.
 
 ---
 
-## 1. The order matters
+## 1. The order matters — DONE on 18 Sep 2026
+
+> **Status: steps 1–3 are done.** Commit `d95d91f` is on `main`, Vercel built it,
+> and both `firestore:indexes` and `firestore:rules` were deployed after the app
+> went live. Verified before deploying: the live `PortalQuotesView` and
+> `PortalDashboard` chunks both send the `status in [...]` constraint the new rule
+> requires, and the emulator suite passed 127/127. The site answers 200 after the
+> deploy. What is left is section 3 (the pay backfill), which needs a human.
+
 
 **Push the app BEFORE deploying the rules.** The portal quote screens now send a
 `status in ['Sent','Accepted','Rejected']` constraint, and the new rule *requires*
@@ -47,17 +53,16 @@ So:
    probably belt-and-braces — the queries are equality-only and Firestore can
    serve them by merge join — but deploy them so nothing depends on that.
 
-2. **The app** — merge the branch and push. Vercel builds from `main`.
-   ```bash
-   git checkout main && git merge finance-audit-2026-09-18 && git push
-   ```
-   Wait for the Vercel deployment to go green before step 3.
+2. **The app** — push to `main`; Vercel builds from it. Wait for the deployment
+   before step 3. To confirm it really is live rather than trusting a timer,
+   fetch the live `PortalQuotesView` chunk and check it carries
+   `field:"status",operator:"in"` — that is the constraint the new rule needs.
 
 3. **Rules**
    ```bash
    firebase deploy --only firestore:rules
    ```
-   123 rules tests pass in the emulator. To re-run them yourself, note that the
+   127 rules tests pass in the emulator. To re-run them yourself, note that the
    default `java` on this machine is 17 and firebase-tools refuses anything below
    21; the Android Studio JBR is 21:
    ```powershell
@@ -133,6 +138,8 @@ readable by a determined member — the exposure is reduced, not closed.
   back-office list and the revenue card still display what the client sent. The
   durable fix is a server action on the existing `api/email.ts` rewrite hatch,
   which avoids adding a 13th Vercel function.
-- **Nothing has been exercised against a live app.** The verification behind this
-  work is 1449 unit tests, 123 rules tests in the emulator, a clean API
-  typecheck and a green production build. That is not the same as using it.
+- **Almost nothing has been exercised against a live app.** The verification
+  behind this work is 1463 unit tests, 127 rules tests in the emulator, a clean
+  API typecheck and a green production build, plus a check that the deployed
+  bundle and the deployed rules agree on the portal query shape. That is not the
+  same as somebody using the product.
