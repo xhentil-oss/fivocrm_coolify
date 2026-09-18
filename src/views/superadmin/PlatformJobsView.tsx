@@ -39,6 +39,7 @@ const PlatformJobsView: React.FC = () => {
    */
   const [dryRun, setDryRun] = useState(false);
   const [compBackfilling, setCompBackfilling] = useState(false);
+  const [compResult, setCompResult] = useState<{ ok: boolean; text: string } | null>(null);
 
   const linkedTeams = useMemo(() => (teams || []).filter(t => (t as any).businessId).length, [teams]);
 
@@ -244,11 +245,34 @@ const PlatformJobsView: React.FC = () => {
               variant="outline"
               disabled={compBackfilling}
               onClick={async () => {
+                // This row answers for itself instead of relying on a toast that
+                // is gone in four seconds. A job that writes pay records has to
+                // leave its outcome — especially its ERROR — on the screen.
                 setCompBackfilling(true);
-                await runJob('backfill-member-compensation', 'Backfill i pagave', (d) =>
-                  `${d.written} të shkruara · ${d.skippedExisting} ekzistuese · ${d.skippedNoPay} pa pagë`
-                  + (d.errors?.length ? ` · ${d.errors.length} gabime` : ''));
-                setCompBackfilling(false);
+                setCompResult(null);
+                try {
+                  if (!user) throw new Error('Nuk je i kyçur.');
+                  const token = await user.getIdToken(true);
+                  const res = await fetch(
+                    `/api/cron/run?job=backfill-member-compensation&manual=1${dryRun ? '&dryRun=1' : ''}`,
+                    { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+                  );
+                  const d = await res.json().catch(() => ({}));
+                  if (!res.ok || d.error) {
+                    throw new Error(d.error || `Gabim serveri (${res.status})`);
+                  }
+                  const text = `${d.written ?? 0} të shkruara · ${d.skippedExisting ?? 0} ekzistuese `
+                    + `· ${d.skippedNoPay ?? 0} pa pagë · ${d.total ?? 0} anëtarë gjithsej`
+                    + (d.errors?.length ? ` · ${d.errors.length} gabime` : '');
+                  setCompResult({ ok: true, text: dryRun ? `Provë (asgjë nuk u shkrua) — ${text}` : text });
+                  toast({ title: dryRun ? 'Provë e backfill-it të pagave' : 'Backfill i pagave u krye', description: text });
+                } catch (err: any) {
+                  const msg = err?.message || 'Provo përsëri.';
+                  setCompResult({ ok: false, text: msg });
+                  toast({ title: 'Backfill i pagave dështoi', description: msg, variant: 'destructive' });
+                } finally {
+                  setCompBackfilling(false);
+                }
               }}
             >
               {compBackfilling ? <>{spin} Po ekzekuton…</> : 'Ekzekuto backfill-in'}
@@ -261,6 +285,23 @@ const PlatformJobsView: React.FC = () => {
           mbeten identike. Idempotent. <strong>Pas ekzekutimit</strong>: hap Financat për një muaj pa pagesa
           rroge të regjistruara dhe kontrollo që shifra e pagave nuk ndryshoi. Vetëm atëherë mund të fshihen
           fushat e vjetra dhe të shtrëngohet rregulli i <code>teamMembers</code>.
+          {compResult && (
+            <div
+              className={`mt-2 rounded-md border px-3 py-2 text-xs ${
+                compResult.ok
+                  ? 'border-green-500/40 bg-green-50 dark:bg-green-950/30 text-green-900 dark:text-green-200'
+                  : 'border-red-500/40 bg-red-50 dark:bg-red-950/30 text-red-900 dark:text-red-200'
+              }`}
+            >
+              {compResult.ok ? compResult.text : `Dështoi: ${compResult.text}`}
+              {!compResult.ok && /super-admin|Forbidden|Unauthorized/i.test(compResult.text) && (
+                <div className="mt-1 opacity-90">
+                  Kjo punë kërkon claim-in e super-adminit. Shtyp «Vendos claim-in» më poshtë, dil dhe hyr
+                  sërish, pastaj provo përsëri.
+                </div>
+              )}
+            </div>
+          )}
         </Row>
 
         <Row
@@ -394,7 +435,10 @@ const JobRunHistory: React.FC = () => {
       .slice(0, 25);
   }, [runs]);
 
-  if (loading || error) return null;
+  // NEVER return null on error: this panel is where a failed run is read, and a
+  // super-admin whose claim is missing would otherwise see an empty page with no
+  // history AND no explanation — the exact state that hides the reason.
+  if (loading) return null;
 
   return (
     <Card className="p-4 mt-4">
@@ -404,7 +448,12 @@ const JobRunHistory: React.FC = () => {
         <span className="text-xs text-muted-foreground">{rows.length ? `${rows.length} të fundit` : ''}</span>
       </div>
 
-      {rows.length === 0 ? (
+      {error ? (
+        <p className="text-xs text-amber-700 dark:text-amber-300">
+          Historiku nuk u lexua dot: {String((error as any)?.message || error)}. Zakonisht do të thotë që
+          token-i yt nuk mban claim-in e super-adminit — shtyp «Vendos claim-in» më lart, dil dhe hyr sërish.
+        </p>
+      ) : rows.length === 0 ? (
         <p className="text-xs text-muted-foreground">
           Asnjë ekzekutim i regjistruar ende. Çdo punë (manuale ose cron) shkruan një zë këtu.
         </p>
