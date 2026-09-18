@@ -38,6 +38,7 @@ const PlatformJobsView: React.FC = () => {
    * the safe option existed and was unreachable.
    */
   const [dryRun, setDryRun] = useState(false);
+  const [compBackfilling, setCompBackfilling] = useState(false);
 
   const linkedTeams = useMemo(() => (teams || []).filter(t => (t as any).businessId).length, [teams]);
 
@@ -232,6 +233,34 @@ const PlatformJobsView: React.FC = () => {
         >
           Stampon <code>businessId</code> te çdo dokument sipas <code>teamId</code> → biznesit të ekipit.
           Idempotent. {backfilling && backfillProgress && <span className="text-primary">Po përpunon: {backfillProgress}…</span>}
+        </Row>
+
+        <Row
+          icon={<Layers className="h-4 w-4 text-primary" />}
+          title="Pagat — kalimi te teamMemberComp"
+          actions={
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={compBackfilling}
+              onClick={async () => {
+                setCompBackfilling(true);
+                await runJob('backfill-member-compensation', 'Backfill i pagave', (d) =>
+                  `${d.written} të shkruara · ${d.skippedExisting} ekzistuese · ${d.skippedNoPay} pa pagë`
+                  + (d.errors?.length ? ` · ${d.errors.length} gabime` : ''));
+                setCompBackfilling(false);
+              }}
+            >
+              {compBackfilling ? <>{spin} Po ekzekuton…</> : 'Ekzekuto backfill-in'}
+            </Button>
+          }
+        >
+          Kopjon <code>monthlySalary</code>, <code>salaryHistory</code> dhe <code>hourlyCostRate</code> nga
+          <code>teamMembers</code> te <code>teamMemberComp</code>, të cilin e lexon vetëm vetë personi dhe një
+          admin i atij biznesi. Fushat e vjetra NUK preken — leximi është i dyfishtë, ndaj shifrat duhet të
+          mbeten identike. Idempotent. <strong>Pas ekzekutimit</strong>: hap Financat për një muaj pa pagesa
+          rroge të regjistruara dhe kontrollo që shifra e pagave nuk ndryshoi. Vetëm atëherë mund të fshihen
+          fushat e vjetra dhe të shtrëngohet rregulli i <code>teamMembers</code>.
         </Row>
 
         <Row
