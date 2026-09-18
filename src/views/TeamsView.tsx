@@ -818,11 +818,66 @@ const TeamsView: React.FC = () => {
             <EditMemberForm 
               member={editingMember} 
               onSubmit={async (data) => {
+                // PAY IS WRITTEN TO ONE PLACE NOW.
+                //
+                // The dual write is over: `teamMemberComp/{teamId}_{userId}` is the
+                // only home for monthlySalary / salaryHistory / hourlyCostRate, and
+                // those keys are stripped from what goes to `teamMembers` — that
+                // roster row is readable by the whole business, which is exactly why
+                // pay left it. The legacy fields still on existing rows are cleared
+                // by `?job=clear-legacy-member-pay`, which refuses to clear anyone
+                // whose comp document does not already match.
+                //
+                // Compensation is written FIRST and a failure aborts before the
+                // roster row is touched: if the pay write is going to fail, nothing
+                // should have moved at all. The reverse order would save the role
+                // and lose the salary, with a success toast on screen.
+                const compFields: Record<string, unknown> = {};
+                if ('monthlySalary' in data) compFields.monthlySalary = (data as any).monthlySalary;
+                if ('hourlyCostRate' in data) compFields.hourlyCostRate = (data as any).hourlyCostRate;
+                if ('salaryHistory' in data) compFields.salaryHistory = (data as any).salaryHistory;
+                const hasPayEdit = Object.keys(compFields).length > 0;
+                if (hasPayEdit) {
+                  if (!editingMember.teamId || !editingMember.userId) {
+                    toast({
+                      title: 'Rroga nuk u ruajt',
+                      description: 'Këtij anëtari i mungon ekipi ose përdoruesi, ndaj paga nuk ka ku të shkruhet. '
+                        + 'Rregullo anëtarësimin së pari.',
+                      variant: 'destructive',
+                    });
+                    return;
+                  }
+                  try {
+                    await saveMemberCompensation({
+                      teamId: editingMember.teamId,
+                      userId: editingMember.userId,
+                      businessId: (editingMember as any).businessId || businessId || undefined,
+                      actorUserId: user?.uid || null,
+                      fields: compFields,
+                    });
+                  } catch (err) {
+                    toast({
+                      title: 'Rroga nuk u ruajt',
+                      description: 'Paga shkruhet te dosja e mbrojtur (teamMemberComp) dhe ajo shkrim dështoi, '
+                        + 'ndaj asgjë tjetër nuk u ndryshua. Provo përsëri. '
+                        + `[${(err as Error)?.message || 'gabim i panjohur'}]`,
+                      variant: 'destructive',
+                    });
+                    return;
+                  }
+                }
+                // Whatever the form collected, minus the pay — the roster row must
+                // not carry a salary again.
+                const rosterData: Record<string, unknown> = { ...(data as any) };
+                delete rosterData.monthlySalary;
+                delete rosterData.hourlyCostRate;
+                delete rosterData.salaryHistory;
+
                 // The success toast used to fire before anything could reject, so a
                 // rules denial (e.g. an owner editing their own row) looked like a
                 // save that simply did not stick. Report what actually happened.
                 try {
-                  await memberMutation.update(editingMember.id, data);
+                  await memberMutation.update(editingMember.id, rosterData as any);
                 } catch (err) {
                   const denied = (err as any)?.code === 'permission-denied';
                   const isSelf = editingMember.userId === user?.uid;
@@ -844,41 +899,6 @@ const TeamsView: React.FC = () => {
                   }
                   toast({ title: 'Ruajtja dështoi', description: why, variant: 'destructive' });
                   return;
-                }
-                // DUAL WRITE, on purpose. Pay now lives in
-                // `teamMemberComp/{teamId}_{userId}` (readable by the member and by
-                // the tenant's admins/managers only), but the legacy fields on
-                // `teamMembers` are still the fallback everywhere until the backfill
-                // has run and been verified — so both halves must stay in step.
-                // Dropping the legacy write before that point silently zeroes
-                // payroll for every reader that has not migrated; dropping this one
-                // leaves the comp document STALE, and a stale comp document WINS
-                // over the corrected legacy field. That is why a failure here is
-                // reported loudly instead of being swallowed. The follow-up order is
-                // written above the teamMembers read rule in firestore.rules.
-                const compFields: Record<string, unknown> = {};
-                if ('monthlySalary' in data) compFields.monthlySalary = (data as any).monthlySalary;
-                if ('hourlyCostRate' in data) compFields.hourlyCostRate = (data as any).hourlyCostRate;
-                if ('salaryHistory' in data) compFields.salaryHistory = (data as any).salaryHistory;
-                if (Object.keys(compFields).length && editingMember.teamId && editingMember.userId) {
-                  try {
-                    await saveMemberCompensation({
-                      teamId: editingMember.teamId,
-                      userId: editingMember.userId,
-                      businessId: (editingMember as any).businessId || businessId || undefined,
-                      actorUserId: user?.uid || null,
-                      fields: compFields,
-                    });
-                  } catch (err) {
-                    toast({
-                      title: 'Pagesa nuk u ruajt plotësisht',
-                      description: 'Të dhënat e anëtarit u ruajtën, por rroga nuk u shkrua te dosja e mbrojtur (teamMemberComp). '
-                        + 'Provo përsëri — ndryshimi i rrogës mund të mos jetë aktiv. '
-                        + `[${(err as Error)?.message || 'gabim i panjohur'}]`,
-                      variant: 'destructive',
-                    });
-                    return;
-                  }
                 }
                 toast({
                   title: 'Anëtari u përditësua',

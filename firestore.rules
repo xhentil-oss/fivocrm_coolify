@@ -1476,20 +1476,20 @@ service cloud.firestore {
       // │                                                                      │
       // │ The read rule below still grants every `isBusinessMember` the whole   │
       // │ staff row, INCLUDING monthlySalary / salaryHistory / hourlyCostRate.  │
-      // │ Compensation now also lives in `teamMemberComp` (above), which is     │
-      // │ correctly restricted — but the legacy fields are still written (dual  │
-      // │ write) and still read as the fallback (dual read), so tightening this │
-      // │ rule today would change nothing and clearing the fields today would   │
-      // │ zero every tenant's payroll.                                          │
+      // │ Compensation lives in `teamMemberComp` (above), which is correctly    │
+      // │ restricted. The legacy fields are no longer written, but any that are │
+      // │ still present are still READ as the fallback — so the leak is closed  │
+      // │ only once step 3 has actually removed them.                           │
       // │                                                                      │
-      // │   1. Run `?job=backfill-member-compensation` (super-admin, idempotent)│
-      // │      and verify: one teamMemberComp doc per member that has pay, and  │
-      // │      Financat / Bonuset / project labour unchanged to the lek.        │
-      // │   2. Stop the dual WRITE: TeamsView writes pay only to teamMemberComp.│
-      // │   3. Clear monthlySalary / salaryHistory / hourlyCostRate from        │
-      // │      `teamMembers` (a second, separate job) — the merge in            │
-      // │      src/lib/finance/compensation.ts then resolves from the comp doc  │
-      // │      alone, with nothing left to fall back to.                        │
+      // │   1. DONE — `?job=backfill-member-compensation` ran on 18 Sep 2026;   │
+      // │      a later dry run reported 0 left to write.                        │
+      // │   2. DONE — TeamsView writes pay ONLY to teamMemberComp, and strips   │
+      // │      the three keys from what it sends to the roster row.             │
+      // │   3. `?job=clear-legacy-member-pay` (super-admin, dryRun first) —     │
+      // │      removes the three fields from `teamMembers`. It clears a member  │
+      // │      ONLY when a comp document exists and agrees field for field, and │
+      // │      refuses everyone else by name, so it cannot zero a payroll it    │
+      // │      has not already seen preserved.                                  │
       // │   4. ONLY THEN is this read rule the last thing standing: leave it as │
       // │      is (the roster is legitimately readable by the business) — the   │
       // │      salary simply is not in it any more.                             │

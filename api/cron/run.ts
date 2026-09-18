@@ -4371,6 +4371,123 @@ async function runBackfillMemberCompensation(opts?: { dryRun?: boolean }) {
   };
 }
 
+// ── JOB: clear-legacy-member-pay ─────────────────────────────────────────────
+// Remove `monthlySalary`, `salaryHistory` and `hourlyCostRate` from `teamMembers`
+// once `teamMemberComp` holds them.
+//
+// WHY THIS IS THE STEP THAT ACTUALLY CLOSES THE LEAK: the roster row is readable
+// by every member of the business — legitimately, it is the staff list — so as
+// long as pay sits inside it, restricting the comp collection changes nothing.
+// Only when the fields are gone is the salary genuinely out of reach.
+//
+// IT REFUSES RATHER THAN RISKS. A member is cleared only when a comp document
+// exists AND agrees with the legacy values field for field. Anything else — no
+// comp document, a different salary, a different history — is SKIPPED and
+// reported by name. That is the whole safety property: this job cannot zero a
+// payroll it has not already seen preserved somewhere else, so it does not
+// depend on anyone having eyeballed a figure first.
+//
+// Run it with `dryRun=1` first: it reports exactly who would be cleared and who
+// would be refused, and writes nothing.
+async function runClearLegacyMemberPay(opts?: { dryRun?: boolean }) {
+  const PAY_FIELDS = ['monthlySalary', 'salaryHistory', 'hourlyCostRate'] as const;
+
+  const [membersSnap, compSnap] = await Promise.all([
+    db.collection('teamMembers').get(),
+    db.collection('teamMemberComp').get(),
+  ]);
+  const compById = new Map(compSnap.docs.map((d) => [d.id, d.data() as any]));
+
+  /** Milliseconds for a Timestamp | Date | string | number, else null. */
+  const ms = (v: any): number | null => {
+    if (!v) return null;
+    if (typeof v?.toDate === 'function') return v.toDate().getTime();
+    const d = v instanceof Date ? v : new Date(v);
+    const t = d.getTime();
+    return Number.isFinite(t) ? t : null;
+  };
+  const num = (v: any): number | null => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+
+  /** Does the comp document carry the same pay as the legacy row? */
+  const agrees = (legacy: any, comp: any): string | null => {
+    if (num(legacy.monthlySalary) !== num(comp.monthlySalary)) return 'monthlySalary';
+    if (num(legacy.hourlyCostRate) !== num(comp.hourlyCostRate)) return 'hourlyCostRate';
+    const a = Array.isArray(legacy.salaryHistory) ? legacy.salaryHistory : [];
+    const b = Array.isArray(comp.salaryHistory) ? comp.salaryHistory : [];
+    if (a.length !== b.length) return 'salaryHistory.length';
+    for (let i = 0; i < a.length; i++) {
+      if (num(a[i]?.monthlySalary) !== num(b[i]?.monthlySalary)) return `salaryHistory[${i}].monthlySalary`;
+      if (ms(a[i]?.effectiveFrom) !== ms(b[i]?.effectiveFrom)) return `salaryHistory[${i}].effectiveFrom`;
+    }
+    return null;
+  };
+
+  let cleared = 0, nothingToClear = 0;
+  const refusedNoComp: string[] = [];
+  const refusedMismatch: string[] = [];
+  const refusedNoIds: string[] = [];
+  const errors: string[] = [];
+
+  let batch = db.batch();
+  let pending = 0;
+  const flush = async () => {
+    if (!pending || opts?.dryRun) { pending = 0; batch = db.batch(); return; }
+    await batch.commit();
+    pending = 0;
+    batch = db.batch();
+  };
+
+  for (const docSnap of membersSnap.docs) {
+    const m = docSnap.data() as any;
+    const carries = PAY_FIELDS.filter((f) => m[f] !== undefined);
+    if (carries.length === 0) { nothingToClear++; continue; }
+
+    const who = m.name || m.email || docSnap.id;
+    if (!m.teamId || !m.userId) { refusedNoIds.push(who); continue; }
+
+    const comp = compById.get(`${m.teamId}_${m.userId}`);
+    if (!comp) { refusedNoComp.push(who); continue; }
+
+    const disagreement = agrees(m, comp);
+    if (disagreement) { refusedMismatch.push(`${who} (${disagreement})`); continue; }
+
+    try {
+      const patch: Record<string, unknown> = {};
+      for (const f of carries) patch[f] = admin.firestore.FieldValue.delete();
+      // `updatedAt` is deliberately NOT touched: nothing about the person changed,
+      // and other jobs use that timestamp to decide what to recompute.
+      batch.update(docSnap.ref, patch);
+      pending++;
+      cleared++;
+      if (pending >= 400) await flush();
+    } catch (err: any) {
+      errors.push(`${who}: ${String(err?.message || err).slice(0, 160)}`);
+    }
+  }
+
+  try {
+    await flush();
+  } catch (err: any) {
+    const msg = String(err?.message || err);
+    console.error('[clear-legacy-member-pay] commit failed:', msg);
+    errors.push(`commit: ${msg.slice(0, 200)}`);
+  }
+
+  return {
+    total: membersSnap.size,
+    cleared,
+    nothingToClear,
+    refusedNoCompDoc: refusedNoComp,
+    refusedValuesDiffer: refusedMismatch,
+    refusedNoTeamOrUserId: refusedNoIds,
+    errors,
+    dryRun: !!opts?.dryRun,
+    note: refusedNoComp.length || refusedMismatch.length || refusedNoIds.length
+      ? 'Some members were REFUSED and still carry their pay — nothing was lost. Fix them, then run again.'
+      : 'Every member with pay now keeps it only in teamMemberComp.',
+  };
+}
+
 // ── JOB: tenant-usage-rollup (platform console: is this tenant alive?) ───────
 // Writes `businesses.usage` so the console can tell an engaged trial from a dead one,
 // and see which tenant's volume drives platform cost — WITHOUT the operator's browser
@@ -5915,6 +6032,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
           return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
         }
         result = await runBackfillMemberKeys({ dryRun: req.query.dryRun === '1' });
+        break;
+      }
+      case 'clear-legacy-member-pay': {
+        // Deletes pay from every tenant's roster rows, so super-admin only — the
+        // same gate as the backfill it must run after.
+        if (isManual && !(await callerIsSuperAdmin(req))) {
+          return res.status(403).json({ error: 'Forbidden: super-admin claim required' });
+        }
+        result = await runClearLegacyMemberPay({ dryRun: req.query.dryRun === '1' });
         break;
       }
       case 'backfill-member-compensation': {

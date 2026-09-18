@@ -40,6 +40,8 @@ const PlatformJobsView: React.FC = () => {
   const [dryRun, setDryRun] = useState(false);
   const [compBackfilling, setCompBackfilling] = useState(false);
   const [compResult, setCompResult] = useState<{ ok: boolean; text: string } | null>(null);
+  const [clearing, setClearing] = useState(false);
+  const [clearResult, setClearResult] = useState<{ ok: boolean; text: string; detail?: string } | null>(null);
 
   const linkedTeams = useMemo(() => (teams || []).filter(t => (t as any).businessId).length, [teams]);
 
@@ -300,6 +302,73 @@ const PlatformJobsView: React.FC = () => {
                   sërish, pastaj provo përsëri.
                 </div>
               )}
+            </div>
+          )}
+        </Row>
+
+        <Row
+          icon={<Layers className="h-4 w-4 text-primary" />}
+          title="Pagat — hiq fushat e vjetra nga teamMembers"
+          actions={
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={clearing}
+              onClick={async () => {
+                setClearing(true);
+                setClearResult(null);
+                try {
+                  if (!user) throw new Error('Nuk je i kyçur.');
+                  const token = await user.getIdToken(true);
+                  const res = await fetch(
+                    `/api/cron/run?job=clear-legacy-member-pay&manual=1${dryRun ? '&dryRun=1' : ''}`,
+                    { method: 'GET', headers: { Authorization: `Bearer ${token}` } },
+                  );
+                  const d = await res.json().catch(() => ({}));
+                  if (!res.ok || d.error) throw new Error(d.error || `Gabim serveri (${res.status})`);
+                  const refused = [
+                    ...(d.refusedNoCompDoc || []),
+                    ...(d.refusedValuesDiffer || []),
+                    ...(d.refusedNoTeamOrUserId || []),
+                  ];
+                  const head = dryRun
+                    ? `Provë: ${d.cleared ?? 0} do të pastroheshin · ${refused.length} të refuzuar`
+                    : `${d.cleared ?? 0} u pastruan · ${refused.length} të refuzuar`;
+                  setClearResult({
+                    ok: refused.length === 0 && !(d.errors?.length),
+                    text: head,
+                    detail: refused.length ? `Të refuzuar (paga u mbetet): ${refused.join(', ')}` : undefined,
+                  });
+                  toast({ title: dryRun ? 'Provë e pastrimit' : 'Pastrimi u krye', description: head });
+                } catch (err: any) {
+                  const msg = err?.message || 'Provo përsëri.';
+                  setClearResult({ ok: false, text: msg });
+                  toast({ title: 'Pastrimi dështoi', description: msg, variant: 'destructive' });
+                } finally {
+                  setClearing(false);
+                }
+              }}
+            >
+              {clearing ? <>{spin} Po ekzekuton…</> : (dryRun ? 'Provo pastrimin' : 'Pastro fushat e vjetra')}
+            </Button>
+          }
+        >
+          Hapi i fundit, dhe i vetmi që e mbyll vërtet leximin e pagave nga kolegët: heq
+          <code>monthlySalary</code>, <code>salaryHistory</code> dhe <code>hourlyCostRate</code> nga rreshtat e
+          <code>teamMembers</code>, të cilët i lexon i gjithë biznesi. Anëtari nuk fshihet — vetëm ato tri
+          fusha. <strong>Nuk prek askënd pa u siguruar</strong>: pastron vetëm ata që kanë dokument te
+          <code>teamMemberComp</code> me të njëjtat vlera, fushë për fushë; kushdo tjetër refuzohet dhe
+          raportohet me emër, me pagën e paprekur. Ekzekutoje së pari me «Provë (dryRun)».
+          {clearResult && (
+            <div
+              className={`mt-2 rounded-md border px-3 py-2 text-xs ${
+                clearResult.ok
+                  ? 'border-green-500/40 bg-green-50 dark:bg-green-950/30 text-green-900 dark:text-green-200'
+                  : 'border-amber-500/40 bg-amber-50 dark:bg-amber-950/30 text-amber-900 dark:text-amber-200'
+              }`}
+            >
+              {clearResult.text}
+              {clearResult.detail && <div className="mt-1 opacity-90">{clearResult.detail}</div>}
             </div>
           )}
         </Row>
