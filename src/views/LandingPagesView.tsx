@@ -96,7 +96,7 @@ const LANDING_PAGES: LandingPageEntry[] = [
   {
     id: 'social-media',
     title: 'Rrjete Sociale',
-    description: 'Paketa Social Media për çdo biznes — Starter, Growth, Pro, Agency.',
+    description: 'Paketa Social Media për çdo biznes — Growth, Pro, Agency. Nga 90.000 Lekë/muaj.',
     path: '/social-media',
     category: 'Social Media',
     icon: Share2,
